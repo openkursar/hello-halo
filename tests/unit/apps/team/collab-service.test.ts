@@ -39,16 +39,19 @@ const SPACE = 'space-a'
 const CONVERSATION = 'conv-1'
 
 function makeAppManager() {
-  const apps = new Map<string, { id: string; spaceId: string | null; spec: { name: string } }>()
+  const apps = new Map<string, { id: string; spaceId: string | null; spec: { name: string }; userOverrides: Record<string, unknown> }>()
   let counter = 0
   return {
     apps,
     install: vi.fn(async (spaceId: string | null, spec: { name: string }) => {
       const id = `app-${++counter}`
-      apps.set(id, { id, spaceId, spec: { ...spec } })
+      apps.set(id, { id, spaceId, spec: { ...spec }, userOverrides: {} })
       return id
     }),
     getApp: vi.fn((appId: string) => apps.get(appId) ?? null),
+    updateOverrides: vi.fn((appId: string, overrides: Record<string, unknown>) => {
+      Object.assign(apps.get(appId)!.userOverrides, overrides)
+    }),
     uninstall: vi.fn(async () => {}),
     deleteApp: vi.fn(async (appId: string) => {
       apps.delete(appId)
@@ -137,6 +140,7 @@ const collabInput = () => ({
   conversationId: CONVERSATION,
   name: 'Research crew',
   goal: 'Compare competitors',
+  modelSelection: { modelSourceId: 'parent-source', modelId: 'parent-model' },
   members: [
     { memberName: 'researcher', role: 'Researcher', responsibility: 'Collect sources' },
     { memberName: 'writer', role: 'Writer', responsibility: 'Draft the brief' },
@@ -180,6 +184,45 @@ describe('temporary space collaborations', () => {
     const epoch = ctx.store.getEpochById(epochId)
     expect(epoch?.lifecycle).toBe('conversation')
     expect(epoch?.chatKey).toBe(spaceCollabChatKey(CONVERSATION))
+  })
+
+  it('pins every member before dispatch and keeps the captured selection across creation awaits', async () => {
+    const input = collabInput()
+    const originalInstall = ctx.appManager.install.getMockImplementation()!
+    ctx.appManager.install.mockImplementation(async (spaceId, spec) => {
+      input.modelSelection.modelSourceId = 'other-source'
+      input.modelSelection.modelId = 'other-model'
+      return originalInstall(spaceId, spec)
+    })
+    const { team } = await ctx.service.createCollab(input)
+    for (const member of ctx.store.listMembersByTeam(team.id).filter(m => m.aiProvisioned)) {
+      expect(ctx.appManager.getApp(member.appId)?.userOverrides).toEqual({
+        modelSourceId: 'parent-source', modelId: 'parent-model',
+      })
+    }
+    expect(ctx.appManager.updateOverrides).toHaveBeenCalledTimes(2)
+    expect(ctx.appManager.updateOverrides.mock.invocationCallOrder.at(-1))
+      .toBeLessThan(ctx.runtime.ensureConversationEpoch.mock.invocationCallOrder[0])
+    ctx.service.saveCollab(team.id)
+    expect(ctx.appManager.getApp('app-1')?.userOverrides.modelId).toBe('parent-model')
+  })
+
+  it('refuses a missing coordinator model before installing members', async () => {
+    const input = collabInput()
+    input.modelSelection.modelId = ''
+    await expect(ctx.service.createCollab(input)).rejects.toThrow(/coordinator source and model/)
+    expect(ctx.appManager.install).not.toHaveBeenCalled()
+    expect(ctx.store.listTeams()).toEqual([])
+  })
+
+  it('rolls back all provisioned members when persisting the model fails', async () => {
+    ctx.appManager.updateOverrides.mockImplementationOnce(() => {}).mockImplementationOnce(() => {
+      throw new Error('model write failed')
+    })
+    await expect(ctx.service.createCollab(collabInput())).rejects.toThrow('model write failed')
+    expect(ctx.appManager.apps.size).toBe(0)
+    expect(ctx.store.listTeams()).toEqual([])
+    expect(ctx.runtime.ensureConversationEpoch).not.toHaveBeenCalled()
   })
 
   it('refuses a second collaboration while one is live, replaces a finished ephemeral one', async () => {
@@ -344,6 +387,10 @@ describe('temporary space collaborations', () => {
     expect(members.some(m => m.appId === spaceCoordinatorAppId(CONVERSATION))).toBe(false)
     expect(members.some(m => m.appId === after.leadAppId && m.isLead)).toBe(true)
     expect(ctx.runtime.startEpoch).toHaveBeenCalledWith(team.id, { type: 'manual' }, 'Compare pricing this time')
+    // The provisioned lead runs on the model the collaboration was pinned to.
+    expect(ctx.appManager.getApp(after.leadAppId!)?.userOverrides).toEqual({
+      modelSourceId: 'parent-source', modelId: 'parent-model',
+    })
   })
 
   it('a live saved collaboration cannot be run standalone yet', async () => {

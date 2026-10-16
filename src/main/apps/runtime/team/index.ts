@@ -4,7 +4,7 @@
  * (app-chat imports the accessor from here).
  */
 
-import { createMessageBus } from './message-bus'
+import { createMessageBus, isPersonsOwnDelivery } from './message-bus'
 import { createBlackboard } from './blackboard'
 import { createOrchestration } from './orchestration'
 import { createCoordinatorDelivery } from './space-coordinator'
@@ -45,10 +45,11 @@ import type { ImSessionContext } from '../im-channels/im-prompt'
 import { resolveImFileSend } from '../im-channels/file-send-resolve'
 import type { FileSendFn } from '../im-channels/file-send-mcp'
 import type { ImChannelInstance } from '../../../../shared/types/im-channel'
-import { beginAppChatTurnStart, isAppChatConversationGenerating, injectIntoAppChat } from '../app-chat-live-turn'
+import { beginAppChatTurnStart, isAppChatConversationGenerating, getAppChatTurnIdentity, injectIntoAppChatBatch, keepStoppedInputs } from '../app-chat-live-turn'
 import { withTurnEndingNote, type AppChatTurnEnding } from '../turn-ending'
 import { getAppManager } from '../../manager'
 import { getSpaceDir } from '../../../services/space.service'
+import { onAgentEvent } from '../../../services/agent'
 
 const LOG_TAG = '[TeamRuntime]'
 
@@ -209,6 +210,12 @@ export interface TeamRuntime {
    * could not be reached at all.
    */
   stopMemberTurn(params: { appId: string; teamId: string; epochId: string }): Promise<boolean>
+  /**
+   * A person stopped this member session: what teammates sent waits for its next
+   * turn instead of starting one. Returns the person's own messages that were
+   * still waiting, now void, for the caller to keep in the record.
+   */
+  holdSessionAfterStop(sessionKey: string): Array<{ text: string; teamOrigin: Pick<TeamTriggerContext, 'kind' | 'correlationId'> }>
   /**
    * …and ended, however it ended — normally, on an error, or killed by hand.
    * This is what tells the lead a teammate stopped when the teammate itself did
@@ -392,21 +399,7 @@ export interface CreateTeamRuntimeDeps {
    * and any runtime built before the space-collaboration feature is wired).
    */
   deliverToSpaceCoordinator?: DeliverToSpaceConversation
-  /**
-   * The turn-end report's busy probe. See `TurnReportDeps.isLeadGenerating`
-   * for what it must be and why. Required, not optional: `createTeamRuntime`
-   * has exactly one production caller (`bootstrap/extended.ts`) and no test
-   * caller at all, so an optional field with a silent fallback here is
-   * precisely what let this dependency go unwired — and unnoticed — before.
-   * A caller that forgets to pass it now gets a type error, not a silently
-   * dead busy-gate.
-   */
-  isLeadGenerating: (sessionKey: string) => boolean
-  /**
-   * The directory holding every team folder on this machine. Required for the
-   * same reason as `isLeadGenerating`: its one caller must not be able to forget
-   * it and silently send members back to writing reports into the project.
-   */
+  /** Root for per-collaboration scratch folders. */
   teamFolderRoot: string
 }
 
@@ -440,7 +433,9 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
         if (!orchestration) throw new Error('Team orchestration not initialized')
         return orchestration.wakeTarget(params)
       },
+      getTurnIdentity: (sessionKey) => session.getTurnIdentity?.(sessionKey),
       isBusy: (sessionKey) => (orchestration ? orchestration.isBusy(sessionKey) : false),
+      deliverRemote: (params) => orchestration?.deliverRemote(params),
       deliverMidTurn: (params) => (orchestration ? orchestration.deliverMidTurn(params) : false),
       ...(deps.checkMemberReachable ? { checkReachable: deps.checkMemberReachable } : {}),
       ...(deps.deliverToSpaceCoordinator
@@ -455,10 +450,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     reservationTtlMs: (deps.turnTimeoutMs ?? TEAM_DEFAULT_TURN_TIMEOUT_MS) * 2,
   })
 
-  // No forward shim needed here (unlike the bus's own `hooks.isBusy` above):
-  // `isLeadGenerating` does not depend on `orchestration`, so it is available
-  // before that is constructed.
-  const turnReport = createTurnReport({ store, bus, isLeadGenerating: deps.isLeadGenerating })
+  const turnReport = createTurnReport({ store, bus })
 
   orchestration = createOrchestration({
     store,
@@ -493,11 +485,6 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     store,
     scheduler: deps.scheduler ?? null,
     wake: (params) => orchestration!.wakeForCheck(params),
-    // The gate's answer, not the session probe: a round waking a member whose
-    // slot is already reserved is refused one layer down anyway, and counting it
-    // as "target was free" put a round in the log that never ran.
-    isBusy: (teamId, epochId, appId) =>
-      orchestration!.isSessionOccupied(buildTeamSessionKey(appId, teamId, epochId)),
     ...(deps.publishCheck ? { publish: deps.publishCheck } : {}),
     ...(deps.onChecksChanged ? { onChanged: deps.onChecksChanged } : {}),
     ...(deps.checkMemberReachable ? { isReachable: deps.checkMemberReachable } : {}),
@@ -556,6 +543,10 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     noteMemberStatusChanged: (teamId) => orchestration!.noteMemberStatusChanged(teamId),
     noteMemberTurnStarted: (params) => turnReport.noteTurnStarted(params),
     stopMemberTurn: ({ appId, teamId, epochId }) => session.stopTeamSession(appId, teamId, epochId),
+    holdSessionAfterStop: (sessionKey) => bus.holdSession(sessionKey).map(({ envelope, trigger }) => ({
+      text: envelope.body,
+      teamOrigin: { kind: trigger.kind, correlationId: trigger.correlationId },
+    })),
     noteMemberTurnEnded: (params) => {
       orchestration!.noteMemberTurnEnded(params)
       turnReport.noteTurnEnded(params)
@@ -622,24 +613,38 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
         getSpaceDir(request.spaceId)
       )
 
-      // Held in a box, not a `let`: the assignment happens inside `onReply`, which
+      // Held in a box, not a `let`: the assignments happen inside callbacks, which
       // TypeScript's flow analysis does not see, so a plain local reads as `null`
       // below and silently types the IM push away.
-      const captured: { reply: string | null; ending?: AppChatTurnEnding } = { reply: null }
+      const captured: { reply: string | null; ending?: AppChatTurnEnding; delivers: boolean; heldBack?: { recorded: boolean } } = { reply: null, delivers: false }
       try {
         await sendAppChatMessage({
           appId: request.appId,
           spaceId: request.spaceId,
           message: request.message,
+          recordedMessages: request.recordedMessages,
+          coalescingKey: request.coalescingKey,
           conversationId: request.conversationId,
           teamContext: request.teamContext,
           ...(request.turnStart ? { turnStart: request.turnStart } : {}),
           // Both halves of the IM route, or neither: the framing and the tool set
           // must match what dispatch-inbound gives this same session.
           ...(imRoute ? { imSession: imRoute.imSession, imFileSend: imRoute.imFileSend } : {}),
-          onReply: (finalContent, ending) => {
+          onResult: (finalContent, ending) => {
             captured.reply = finalContent
             captured.ending = ending
+          },
+          // Withheld when this message joined a turn whose reply another caller
+          // already sends to the chat; the team still gets the answer above.
+          onReply: () => {
+            captured.delivers = true
+          },
+          // A person's stop held the turn back before the member read it: their
+          // own words already written are marked; the bus decides the rest.
+          onHeldBack: (records) => {
+            captured.heldBack = { recorded: records.length > 0 }
+            keepStoppedInputs(request.conversationId, (request.recordedMessages ?? []).flatMap((record, index) =>
+              records[index] && isPersonsOwnDelivery({ ...request.teamContext, kind: record.teamOrigin?.kind }) ? [records[index]] : []))
           },
         })
       } catch (err) {
@@ -653,34 +658,34 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
         throw err
       }
 
+      if (captured.heldBack) return { finalMessage: null, heldBack: captured.heldBack }
       const finalMessage = captured.reply
       // The chat reads a turn that stopped short the way a person's own turn
       // reads in dispatch-inbound; the team gets the text as written.
       const pushed = captured.ending ? withTurnEndingNote(finalMessage ?? '', captured.ending) : finalMessage
-      if (imRoute && pushed && pushed.trim()) pushToFrontDesk(imRoute, pushed, 'front-desk reply')
+      if (imRoute && captured.delivers && pushed && pushed.trim()) pushToFrontDesk(imRoute, pushed, 'front-desk reply')
       return { finalMessage }
     },
     holdTurn(sessionKey) {
       return beginAppChatTurnStart(sessionKey)
     },
     isSessionActive(sessionKey) {
-      // A team turn runs through app-chat's consumer model, which never writes
-      // the legacy `activeSessions` map — asking that map answered `false` for
-      // every team session that has ever run. Nothing failed loudly: the gate's
-      // reservation still queued mail correctly, so the only visible effect was
-      // everything this probe is FOR quietly not happening (mid-turn delivery
-      // refused, quiescence counting a streaming member as idle, the slot
-      // watchdog willing to reclaim a session mid-stream).
-      //
-      // Same source as `isLeadGenerating`, which bootstrap already wires to the
-      // truthful probe — one answer to "is this session busy", not two.
       return isAppChatConversationGenerating(sessionKey)
     },
-    injectIntoSession(sessionKey, message) {
+    getTurnIdentity: getAppChatTurnIdentity,
+    injectIntoSession(sessionKey, message, messages, trigger, onTakenBack) {
       // Statically imported, unlike app-chat above: this must answer within the
       // caller's synchronous window, and it is a leaf module (the live session
       // plus the transcript sink) that closes no cycle with the team runtime.
-      return injectIntoAppChat(sessionKey, message)
+      const batch = (messages ?? [{ text: message }]).map((item) => {
+        const kind = 'recorded' in item ? item.recorded.teamOrigin?.kind : undefined
+        // A person's own 1:1 words: void after their stop; the team's wait for the next turn.
+        return { ...item, personal: !!trigger && isPersonsOwnDelivery({ ...trigger, kind }) }
+      })
+      return injectIntoAppChatBatch(sessionKey, batch, (indexes) => onTakenBack?.(indexes))
+    },
+    recordStoppedInputs(sessionKey, records) {
+      keepStoppedInputs(sessionKey, [], records)
     },
     async closeTeamSession(appId, teamId, epochId) {
       const { closeTeamSession } = await import('../app-chat')
@@ -712,6 +717,20 @@ export function setActiveTeamRuntime(runtime: TeamRuntime | null): void {
 
 export function getActiveTeamRuntime(): TeamRuntime | null {
   return _activeRuntime
+}
+
+/**
+ * A member's turn starting takes in the mail that waited for it: what arrived
+ * while its session started, and what a person's stop held back.
+ *
+ * @returns unsubscribe
+ */
+export function releaseTeamMailOnTurnStart(): () => void {
+  const subscription = onAgentEvent((event) => {
+    if (event.channel !== 'agent:turn-start' || event.relayed || !parseTeamSessionKey(event.conversationId)) return
+    _activeRuntime?.bus.notifySessionReady(event.conversationId)
+  })
+  return () => subscription.dispose()
 }
 
 export { buildTeamSessionKey }

@@ -107,6 +107,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   getRunningConsumerIds: () => [],
   markTurnDispatched: vi.fn(),
   updateConsumerDisplayModel: vi.fn(),
+  hasPendingSessionInput: () => false,
   acquireV2Session: vi.fn(async (
     _spaceId: string, _conversationId: string, sdkOptions: Record<string, any>,
     _resume?: string, _workDir?: string, _consumer?: unknown, _kbIds?: unknown,
@@ -120,14 +121,21 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
     }
     state.sessions.push(sdkOptions)
     const session = { send: vi.fn((message: string) => state.sent.push(message)), setMaxThinkingTokens: vi.fn(), close: vi.fn() }
-    return { session, isCurrent: true, send: session.send, close: session.close, release: vi.fn() }
+    return { session, isCurrent: true, isUsable: true, onRetired: () => () => {}, send: session.send, close: session.close, release: vi.fn() }
   }),
 }))
 vi.mock('../../../../src/main/services/agent/control', () => ({
   stopGeneration: vi.fn(async () => {}),
   getSessionState: () => ({ isActive: false, thoughts: [] }),
 }))
-vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/events', () => ({
+  emitAgentEvent: vi.fn(),
+  onAgentEvent: () => ({ dispose: () => {} }),
+}))
+vi.mock('../../../../src/main/services/agent/live-turn', () => ({
+  hasLiveTurn: () => false,
+  sendIntoLiveTurn: () => false,
+}))
 vi.mock('../../../../src/main/services/agent/reasoning-effort', () => ({ applyReasoningEffort: () => 0, pickReasoningEffort: () => undefined }))
 vi.mock('../../../../src/main/services/agent/message-utils', () => ({
   buildMessageContent: (text: string) => text,
@@ -269,7 +277,7 @@ vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({ getImSessionRegistry: () => null }))
 vi.mock('../../../../src/main/apps/runtime/im-auto-sync', () => ({ autoSyncRunResult: vi.fn(async () => ({})) }))
 vi.mock('../../../../src/main/apps/runtime/active-runs', () => ({
-  registerActiveRun: vi.fn(), unregisterActiveRun: vi.fn(), listActiveRuns: vi.fn(() => []),
+  registerActiveRun: vi.fn(), unregisterActiveRun: vi.fn(), notifyActiveRunReady: vi.fn(), listActiveRuns: vi.fn(() => []),
 }))
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
   openSessionWriter: vi.fn(() => ({ writeTrigger: vi.fn(), writeEvent: vi.fn() })),
@@ -289,6 +297,24 @@ const sink = vi.hoisted(() => ({
     done: Promise.resolve(), cancel: vi.fn(), noteAskedUser: vi.fn(),
     onProgress: undefined, onMessageAccepted: undefined, onReply: undefined,
   })),
+  setTurnIdentity: vi.fn(),
+  cancel: vi.fn(),
+  setSpaceId: vi.fn(),
+  announceLiveInputs: vi.fn(),
+  prepareLiveInput: vi.fn(() => false),
+  getTurnIdentity: vi.fn(),
+  canObserveLiveTurn: vi.fn(() => false),
+  observeLiveTurn: vi.fn(() => ({ done: Promise.resolve(), cancel: vi.fn() })),
+  hasActiveRound: vi.fn(() => false),
+  writePush: vi.fn(),
+  writePreInitFailure: vi.fn(),
+  noteAskedUser: vi.fn(),
+  onTurnStart: vi.fn(),
+  onRawMessage: vi.fn(),
+  onTurnComplete: vi.fn(),
+  onTurnError: vi.fn(),
+  onConsumerStopped: vi.fn(),
+  dispose: vi.fn(),
 }))
 vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
   getAppChatSink: () => sink,
@@ -296,6 +322,7 @@ vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
   hasActiveAppChatRound: () => false,
   getConversationsWithActiveRound: () => [],
   disposeAppChatSink: vi.fn(),
+  onAppChatRoundChange: () => () => {},
 }))
 
 vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({

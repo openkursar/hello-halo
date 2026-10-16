@@ -6,7 +6,7 @@
  * only here; all consuming components get the label automatically.
  */
 
-import type { HTTP_SESSION_CHANNEL, ImChannelType } from '../../../shared/types/im-channel'
+import type { HTTP_SESSION_CHANNEL, ImChannelType, ImChannelInstanceStatus } from '../../../shared/types/im-channel'
 
 interface ImChannelDisplay {
   label: string
@@ -30,4 +30,14 @@ export const CHANNEL_LABELS: Record<string, string> = Object.fromEntries(
 export function getImChannelDisplay(channel: string): ImChannelDisplay {
   return (IM_CHANNEL_DISPLAY as Record<string, ImChannelDisplay | undefined>)[channel]
     ?? { label: channel, color: 'text-muted-foreground' }
+}
+
+export function getImBotLabel(
+  instance: Pick<ImChannelInstanceStatus, 'type' | 'ordinal'>,
+  t: (text: string, options?: Record<string, unknown>) => string,
+): string {
+  const channel = t(getImChannelDisplay(instance.type).label)
+  return instance.ordinal === undefined
+    ? channel
+    : t('{{channel}} bot {{number}}', { channel, number: instance.ordinal })
 }

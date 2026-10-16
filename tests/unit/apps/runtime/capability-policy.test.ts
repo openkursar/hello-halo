@@ -194,6 +194,11 @@ describe('who a delegated policy holds', () => {
     expect(isBorrowedTeamTurn(undefined, false, false)).toBe(false)
   })
 
+  it('cannot treat omitted or invalid external presentation kinds as the owner', () => {
+    expect(isBorrowedTeamTurn(undefined, false, true)).toBe(true)
+    expect(isBorrowedTeamTurn('invalid' as never, false, true)).toBe(true)
+  })
+
   it('restricts another PERSON reaching it from a different machine', () => {
     expect(isBorrowedTeamTurn('human_message', false, true)).toBe(true)
   })
@@ -452,4 +457,15 @@ describe('the switches and the withheld list are one definition', () => {
     expect(withheld).not.toContain('Task')
     expect(withheld).not.toContain('Skill')
   })
+})
+
+
+it('removes self-API administrator credentials when delegated policy withholds its manual', () => {
+  const options: Record<string, any> = {
+    env: { HALO_API_URL: 'http://127.0.0.1:1234', HALO_API_TOKEN: 'test-secret', HALO_SPACE_ID: 'space', PATH: '/bin' },
+    mcpServers: { 'halo-api-ref': {} },
+  }
+  applyCapabilityPolicy(options, { policy: undefined, mode: 'strict', mcpServers: options.mcpServers, dbMcpServers: null })
+  expect(options.env).toEqual({ PATH: '/bin' })
+  expect(options.mcpServers).not.toHaveProperty('halo-api-ref')
 })

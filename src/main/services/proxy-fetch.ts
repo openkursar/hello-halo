@@ -405,18 +405,19 @@ function makeRequest(
       }
     }
 
-    // Write request body
-    if (init?.body != null) {
-      bodyToBuffer(init.body).then(buf => {
+    // Write nothing until a socket is assigned. ProxyAgent passes the request
+    // on asynchronously; on a reused keep-alive connection the HTTP-proxy agent
+    // only rewrites headers not yet generated, so an earlier write reaches the
+    // proxy as `POST /path` and is rejected with 400.
+    nodeReq.once('socket', () => {
+      bodyToBuffer(init?.body).then(buf => {
         if (buf) nodeReq.write(buf)
         nodeReq.end()
       }).catch(err => {
         nodeReq.destroy(err)
         reject(err)
       })
-    } else {
-      nodeReq.end()
-    }
+    })
   })
 }
 
@@ -508,6 +509,10 @@ export async function proxyFetch(
  * usually accepts an `agent`, and handing it this one keeps it on the same
  * route as every other outbound request in the app: app-level proxy first,
  * then Chromium's system resolution, then direct.
+ *
+ * A plain-http request through it must write nothing before it has a socket,
+ * as makeRequest does: otherwise a reused connection sends it to an HTTP proxy
+ * without the full URL, and the proxy answers 400.
  *
  * Returns undefined for a direct route, which is also what an `agent` option
  * expects to mean "use the default".

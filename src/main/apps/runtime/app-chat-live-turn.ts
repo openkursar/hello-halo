@@ -17,19 +17,28 @@
  */
 
 import { hasLiveTurn, sendIntoLiveTurn } from '../../services/agent/live-turn'
-import { formatReferencesBlock } from '../../services/agent'
-import type { TranscriptProvenance } from '../../../shared/types/transcript'
+import { createHash } from 'crypto'
+import { formatReferencesBlock, type StopReason, type V2SessionLease } from '../../services/agent'
+import type { TranscriptMessage, TranscriptProvenance } from '../../../shared/types/transcript'
 import type { ContentReference } from '../../../shared/types/content-reference'
-import { hasActiveAppChatRound, onAppChatRoundChange, peekAppChatSink } from './app-chat-sink'
+import type { ImageAttachment } from '../../../shared/types/image-attachment'
+import type { ImPermissionContext } from './im-permission-registry'
+import type { TeamTriggerContext } from '../../../shared/apps/team-types'
+import { createTurnGate } from '../../platform/turn-gate'
+import { hasActiveAppChatRound, onAppChatRoundChange, peekAppChatSink, type PreparedAppChatInput } from './app-chat-sink'
 
 const LOG_TAG = '[AppChatLiveTurn]'
 
 /** A message on its way to the engine: accepted for a new turn, its round not queued yet. */
 interface StartEntry {
   cancelled: boolean
+  stoppedBy?: StopReason
+  isUsable?: () => boolean
+  retire?: () => void
 }
 
 const startingTurns = new Map<string, Set<StartEntry>>()
+const boundSessions = new Map<string, Set<StartEntry>>()
 
 /** A person's addition waiting for a turn to begin; see {@link injectIntoAppChatWhenLive}. */
 interface LiveTurnWaiter {
@@ -82,6 +91,12 @@ function followSinkRounds(): void {
 export interface AppChatTurnStart {
   /** Stopped on the way: the turn must send nothing to the engine. */
   readonly cancelled: boolean
+  /** Who stopped it on the way: a person's stop voids a person's message. */
+  readonly stoppedBy: StopReason | undefined
+  /** A failed acquired instance must not hold up its successor while preparation unwinds. */
+  bindSession(lease: Pick<V2SessionLease, 'isUsable'>, retire: () => void): void
+  /** Stops tracking the acquired instance when this caller finishes or retires. */
+  releaseSession(): void
   /** The round is queued, or the turn gave up. Idempotent. */
   end(): void
 }
@@ -107,12 +122,37 @@ export function beginAppChatTurnStart(conversationId: string): AppChatTurnStart 
     get cancelled() {
       return entry.cancelled
     },
+    get stoppedBy() {
+      return entry.stoppedBy
+    },
+    bindSession: (lease, retire) => {
+      entry.isUsable = () => lease.isUsable
+      entry.retire = retire
+      const bound = boundSessions.get(conversationId) ?? new Set<StartEntry>()
+      bound.add(entry)
+      boundSessions.set(conversationId, bound)
+      refreshAppChatTurnStarts(conversationId)
+    },
+    releaseSession: () => {
+      const bound = boundSessions.get(conversationId)
+      if (!bound?.delete(entry)) return
+      if (bound.size === 0) boundSessions.delete(conversationId)
+    },
     end: () => {
       const current = startingTurns.get(conversationId)
       if (!current?.delete(entry)) return
       if (current.size === 0) startingTurns.delete(conversationId)
       notifyConversationChange(conversationId)
     },
+  }
+}
+
+/** Reconcile this conversation's acquired instances before admitting more work. */
+export function refreshAppChatTurnStarts(conversationId: string): void {
+  for (const entry of [...(boundSessions.get(conversationId) ?? [])]) {
+    if (!entry.isUsable || entry.isUsable()) continue
+    console.warn(`${LOG_TAG} Retiring turn whose acquired engine is unavailable: conversation=${conversationId}`)
+    entry.retire?.()
   }
 }
 
@@ -125,10 +165,13 @@ export function beginAppChatTurnStart(conversationId: string): AppChatTurnStart 
  *
  * @returns whether any message was on its way
  */
-export function cancelAppChatTurnStarts(conversationId: string): boolean {
+export function cancelAppChatTurnStarts(conversationId: string, reason: StopReason): boolean {
   const entries = startingTurns.get(conversationId)
   if (entries) {
-    for (const entry of entries) entry.cancelled = true
+    for (const entry of entries) {
+      entry.cancelled = true
+      entry.stoppedBy ??= reason
+    }
   }
   for (const waiter of liveTurnWaiters.get(conversationId) ?? []) waiter.stopped = true
   notifyConversationChange(conversationId)
@@ -165,7 +208,133 @@ export function isAppChatTurnDispatched(conversationId: string): boolean {
  * autonomous one, which occupies the session just as much as a solicited one.
  */
 export function isAppChatConversationGenerating(conversationId: string): boolean {
+  refreshAppChatTurnStarts(conversationId)
   return startingTurns.has(conversationId) || isAppChatTurnDispatched(conversationId)
+}
+
+/** Permission identity belongs to the assembled turn, never the chat's latest sender. */
+export function getAppChatTurnIdentity(conversationId: string): string | undefined {
+  return isAppChatConversationGenerating(conversationId)
+    ? peekAppChatSink(conversationId)?.getTurnIdentity()
+    : undefined
+}
+
+/**
+ * Who a turn's input answers to. Inputs merge into one turn only when this
+ * matches. A borrowed team turn (a teammate putting this digital human to work,
+ * held to the owner's delegated policy) is 'delegated', never 'owner': both
+ * start here, but they run under different permissions.
+ */
+export function appChatMessageIdentity(permission?: ImPermissionContext, external = false, borrowed = false): string {
+  if (permission?.isOwner === false) {
+    const canonical = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.every(item => typeof item === 'string') ? [...value].sort() : value.map(canonical)
+      if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)]))
+      }
+      return value
+    }
+    return `guest:${createHash('sha256').update(JSON.stringify(canonical(permission.guestPolicy ?? {}))).digest('hex')}`
+  }
+  return external ? 'external' : borrowed ? 'delegated' : 'owner'
+}
+
+export interface AppChatLiveMessage {
+  text: string
+  recorded?: { content: string; provenance?: TranscriptProvenance; teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'> }
+  references?: ContentReference[]
+  images?: ImageAttachment[]
+  recordedMessages?: Array<{ content: string; images?: ImageAttachment[]; provenance?: TranscriptProvenance; references?: ContentReference[]; teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'> }>
+  /** Taken back after a stop and handed over again: its record already stands where it first arrived. */
+  inputRecorded?: boolean
+  /** The owner's own words: a stop before they are read voids them, marked where they stand. */
+  personal?: boolean
+}
+
+/** A person stopped the turn before it read these messages (indexes into the batch), none of them the person's own. */
+export type AppChatBatchTakenBack = (indexes: readonly number[]) => void
+
+/** A person's own message a stop voided before anything was written for it. */
+export interface UnwrittenStoppedInput {
+  content: string
+  images?: ImageAttachment[]
+  provenance?: TranscriptProvenance
+  references?: ContentReference[]
+  teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'>
+}
+
+/**
+ * A person's own words their stop voided before the engine read them stay in
+ * the chat's record, marked as never handled: `records` already written are
+ * marked, `unwritten` ones are written marked.
+ */
+export function keepStoppedInputs(
+  conversationId: string,
+  records: readonly TranscriptMessage[],
+  unwritten: readonly UnwrittenStoppedInput[] = []
+): void {
+  if (!records.length && !unwritten.length) return
+  const sink = peekAppChatSink(conversationId)
+  if (!sink) {
+    console.warn(`${LOG_TAG} Voided messages have no transcript to stay in: conversation=${conversationId} count=${records.length + unwritten.length}`)
+    return
+  }
+  if (records.length) sink.markInputsStopped(records)
+  for (const input of unwritten) sink.writeStoppedInput(input.content, input.images, input.provenance, input.references, input.teamOrigin)
+}
+
+function prepareLiveInput(conversationId: string, text: string, images?: ImageAttachment[]): PreparedAppChatInput | false {
+  const sink = peekAppChatSink(conversationId)
+  if (sink?.prepareLiveInput) return sink.prepareLiveInput(text, images)
+  // A text-only engine turn predating this surface needs no image preparation.
+  return images?.length ? false : { text }
+}
+
+/** A teammate's or another conversation's message read mid-turn is shown inside the reply it arrived in. */
+function readMidTurn(provenance: TranscriptProvenance | undefined): TranscriptProvenance | undefined {
+  return provenance?.source === 'team-message' || provenance?.source === 'cross-conversation'
+    ? { ...provenance, metadata: { ...provenance.metadata, inputMode: 'live' } }
+    : provenance
+}
+
+/** One engine handoff, with each original message retained in the transcript. */
+export function injectIntoAppChatBatch(
+  conversationId: string,
+  messages: readonly AppChatLiveMessage[],
+  onTakenBack: AppChatBatchTakenBack
+): boolean {
+  if (messages.length === 0) return false
+  const text = messages.map(message => formatReferencesBlock(message.references, undefined) + message.text).join('\n\n')
+  const images = messages.flatMap(message => message.images ?? [])
+  const prepared = prepareLiveInput(conversationId, text, images.length > 0 ? images : undefined)
+  const written: TranscriptMessage[][] = messages.map(() => [])
+  const onWithdrawn = (): void => {
+    const takenBack: number[] = []
+    messages.forEach((message, index) => {
+      if (message.personal) keepStoppedInputs(conversationId, written[index])
+      else takenBack.push(index)
+    })
+    if (takenBack.length) onTakenBack(takenBack)
+  }
+  if (!prepared || !sendIntoLiveTurn(conversationId, prepared.text, prepared.images, { onWithdrawn })) return false
+  try {
+    const sink = peekAppChatSink(conversationId)
+    messages.forEach((message, index) => {
+      if (message.inputRecorded) return
+      const originals = message.recordedMessages ?? [{
+        content: message.recorded?.content ?? message.text, images: message.images, teamOrigin: message.recorded?.teamOrigin,
+        provenance: message.recorded?.provenance, references: message.references,
+      }]
+      for (const original of originals) {
+        const record = sink?.writeUserMessage(original.content, original.images, original.teamOrigin, readMidTurn(original.provenance), original.references)
+        if (record) written[index].push(record)
+      }
+    })
+    sink?.announceLiveInputs?.(written.flat())
+  } catch (error) {
+    console.error(`${LOG_TAG} Accepted live messages could not be recorded: conversation=${conversationId} count=${messages.length}`, error)
+  }
+  return true
 }
 
 /**
@@ -194,7 +363,13 @@ export function injectIntoAppChat(
   references?: ContentReference[]
 ): boolean {
   const engineText = references && references.length > 0 ? formatReferencesBlock(references, undefined) + text : text
-  if (!sendIntoLiveTurn(conversationId, engineText)) return false
+  const prepared = prepareLiveInput(conversationId, engineText)
+  let recorded: TranscriptMessage | undefined
+  // The person's own words: a stop before they were read voids them, marked where they stand.
+  const onWithdrawn = (): void => {
+    if (recorded) keepStoppedInputs(conversationId, [recorded])
+  }
+  if (!prepared || !sendIntoLiveTurn(conversationId, prepared.text, prepared.images, { onWithdrawn })) return false
 
   // Written only once the engine has taken it, and deliberately after: the
   // transcript is a record of what happened, and until the send returns nothing
@@ -202,8 +377,10 @@ export function injectIntoAppChat(
   // here, so this ordering costs the reader nothing.
   try {
     const sink = peekAppChatSink(conversationId)
-    if (provenance || references) sink?.writeUserMessage(text, undefined, undefined, provenance, references)
-    else sink?.writeUserMessage(text)
+    recorded = provenance || references
+      ? sink?.writeUserMessage(text, undefined, undefined, provenance, references)
+      : sink?.writeUserMessage(text)
+    if (recorded) sink?.announceLiveInputs?.([recorded])
   } catch (err) {
     // The message DID arrive; only the record of it failed. Reporting failure
     // now would hand the caller's fallback a second copy of a message the member
@@ -211,7 +388,6 @@ export function injectIntoAppChat(
     console.error(`${LOG_TAG} Delivered, but recording it in the transcript failed:`, err)
   }
 
-  console.log(`${LOG_TAG} Delivered into the running turn of ${conversationId} (${text.length} chars)`)
   return true
 }
 
@@ -222,6 +398,14 @@ export function injectIntoAppChat(
  * to them rather than starting work they just halted.
  */
 export type AppChatAdditionOutcome = 'delivered' | 'no_turn' | 'stopped'
+
+const ownerAdditions = createTurnGate<{ text: string; provenance?: TranscriptProvenance; references?: ContentReference[] }>({
+  isBusy: isAppChatConversationGenerating,
+  getJobIdentity: () => 'owner',
+  getActiveIdentity: getAppChatTurnIdentity,
+  deliverMidTurn: (key, message) => injectIntoAppChat(key, message.text, message.provenance, message.references),
+  dispatch: async () => { throw new Error('An addition requires a live turn') },
+})
 
 /**
  * {@link injectIntoAppChat} for a person adding to their own turn, which may not
@@ -261,7 +445,7 @@ export async function injectIntoAppChatWhenLive(
       return 'stopped'
     }
   }
-  return hasLiveTurn(conversationId) && injectIntoAppChat(conversationId, text, provenance, references)
+  return ownerAdditions.tryDeliverLive(conversationId, { text, provenance, references })
     ? 'delivered'
     : 'no_turn'
 }

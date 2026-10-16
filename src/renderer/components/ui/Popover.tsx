@@ -121,6 +121,8 @@ interface PopoverContentProps {
   /** Gap between trigger and content (px) */
   sideOffset?: number
   className?: string
+  /** Intercept outside input above embedded documents, whose events cannot bubble here. */
+  dismissOverlay?: boolean
   /** The content is portalled out of the trigger's tree, so hover-driven triggers track it here. */
   onPointerEnter?: (e: React.PointerEvent<HTMLDivElement>) => void
   onPointerLeave?: (e: React.PointerEvent<HTMLDivElement>) => void
@@ -132,6 +134,7 @@ export function PopoverContent({
   side = 'bottom',
   sideOffset = 4,
   className,
+  dismissOverlay = false,
   onPointerEnter,
   onPointerLeave,
 }: PopoverContentProps) {
@@ -220,20 +223,34 @@ export function PopoverContent({
   if (!open) return null
 
   return createPortal(
-    <div
-      ref={contentRef}
-      role="dialog"
-      className={cn(
-        'fixed z-50 rounded-lg border border-border bg-popover text-popover-foreground shadow-pop outline-none',
-        ready ? 'animate-pop-in' : 'opacity-0',
-        className,
+    <>
+      {dismissOverlay && (
+        <div
+          aria-hidden="true"
+          data-popover-dismiss-overlay=""
+          className="fixed inset-0 z-50 no-drag"
+          onPointerDown={event => {
+            event.preventDefault()
+            event.stopPropagation()
+            setOpen(false)
+          }}
+        />
       )}
-      style={{ top: pos.top, left: pos.left }}
-      onPointerEnter={onPointerEnter}
-      onPointerLeave={onPointerLeave}
-    >
-      {children}
-    </div>,
+      <div
+        ref={contentRef}
+        role="dialog"
+        className={cn(
+          'fixed z-50 rounded-lg border border-border bg-popover text-popover-foreground shadow-pop outline-none',
+          ready ? 'animate-pop-in' : 'opacity-0',
+          className,
+        )}
+        style={{ top: pos.top, left: pos.left }}
+        onPointerEnter={onPointerEnter}
+        onPointerLeave={onPointerLeave}
+      >
+        {children}
+      </div>
+    </>,
     document.body,
   )
 }

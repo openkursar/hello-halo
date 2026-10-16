@@ -33,9 +33,8 @@ export { computeDisallowedBuiltins }
  * The question is WHO started it, not whether a person or a model typed it: a
  * colleague reaching in by hand does the same damage as their digital human.
  *
- * An absent `kind` can only be the owner: the owner's own chat goes straight to
- * the session, and the office credential that reaches the cross-machine 1:1
- * endpoint is denied that local path (`http/auth/route-scope`).
+ * Local owner chat carries no kind. External origin remains authoritative even
+ * when an incoming request omits that presentation hint.
  *
  * In a chat a member fronts over IM, the person's own message answers to that
  * channel's owner/guest rules instead. A turn woken there to continue work
@@ -47,6 +46,7 @@ export function isBorrowedTeamTurn(
   overImChannel: boolean,
   external: boolean
 ): boolean {
+  if (!overImChannel && external) return true
   if (!teamTurnKind) return false
   if (!overImChannel) return true
   return teamTurnKind !== 'human_message' && external
@@ -181,6 +181,12 @@ export function applyCapabilityPolicy(
   sdkOptions.disallowedTools = [...new Set([...(sdkOptions.disallowedTools ?? []), ...disallowedTools])]
   sdkOptions.allowedTools = buildAllowedToolRules(policy, mode)
   sdkOptions.mcpServers = filtered
+  // A withheld manual must not leave an administrator credential reachable through Bash.
+  if (!filtered['halo-api-ref'] && sdkOptions.env) {
+    delete sdkOptions.env.HALO_API_URL
+    delete sdkOptions.env.HALO_API_TOKEN
+    delete sdkOptions.env.HALO_SPACE_ID
+  }
   // Both must go: the flag and the mode each bypass the permission engine on
   // their own, and the engine is what evaluates the command rules.
   if (sdkOptions.extraArgs) delete sdkOptions.extraArgs['dangerously-skip-permissions']

@@ -89,7 +89,7 @@ describe('materializeCordisConfig', () => {
 
     expect(mountedTools(text)).toEqual([])
     // The runtime still has to boot and answer: a guest gets a chat, not a crash.
-    expect(text).toContain("name: 'cordis:dsh-sdk-jsonrpc-server'")
+    expect(text).toContain("name: 'cordis:halo-sdk-jsonrpc-server'")
     expect(text).toContain("name: 'cordis:dsh-agent'")
   })
 

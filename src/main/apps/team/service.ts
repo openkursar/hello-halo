@@ -31,6 +31,7 @@ import type { AppSpec } from '../spec'
 import type { AutomationSpec } from '../../../shared/apps/spec-types'
 import type { Artifact } from '../../services/artifact.service'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
+import type { AgentModelSelection } from '../../../shared/types/ai-sources'
 import type { TeamStore } from './types'
 import type {
   CollabSummary,
@@ -201,6 +202,7 @@ export interface CreateCollabInput {
   name: string
   goal: string
   members: ProposedMember[]
+  modelSelection: AgentModelSelection
 }
 
 export interface TeamService {
@@ -421,7 +423,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   async function createAiMember(
     team: Team,
-    proposed: ProposedMember
+    proposed: ProposedMember,
+    modelSelection?: AgentModelSelection
   ): Promise<TeamMember> {
     const memberName = uniqueMemberName(team.id, proposed.memberName)
     const spaceId = spaces.createMemberSpace({
@@ -448,6 +451,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       addedAt: Date.now(),
     }
     store.addMember(member)
+    // Register ownership first so failed configuration is covered by team rollback.
+    if (modelSelection) appManager.updateOverrides(appId, { ...modelSelection })
     return member
   }
 
@@ -610,6 +615,18 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     return `${base} ${randomUUID().slice(0, 8)}`
   }
 
+  /** The source and model the collaboration pinned on the members it built. */
+  function collabModelSelection(teamId: string): AgentModelSelection | null {
+    for (const member of store.listMembersByTeam(teamId)) {
+      if (!member.aiProvisioned) continue
+      const overrides = appManager.getApp(member.appId)?.userOverrides
+      if (overrides?.modelSourceId && overrides.modelId) {
+        return { modelSourceId: overrides.modelSourceId, modelId: overrides.modelId }
+      }
+    }
+    return null
+  }
+
   /** The collaboration's one long-lived conversation epoch, open first. */
   function collabEpoch(team: Team): ReturnType<TeamStore['getLatestConversationEpoch']> {
     if (!team.coordinatorConversationId) return null
@@ -624,10 +641,11 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   const collabCreationChain = new Map<string, Promise<unknown>>()
 
   function createCollab(input: CreateCollabInput): Promise<{ team: Team; epochId: string }> {
+    const capturedInput = { ...input, modelSelection: { ...input.modelSelection } }
     const prior = collabCreationChain.get(input.conversationId) ?? Promise.resolve()
     const run = prior.then(
-      () => createCollabExclusive(input),
-      () => createCollabExclusive(input)
+      () => createCollabExclusive(capturedInput),
+      () => createCollabExclusive(capturedInput)
     )
     const settled = run.catch(() => undefined)
     collabCreationChain.set(input.conversationId, settled)
@@ -645,6 +663,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
     if (input.members.length === 0) {
       throw new Error('A collaboration needs at least one member role.')
+    }
+    if (!input.modelSelection.modelSourceId || !input.modelSelection.modelId) {
+      console.warn(`${LOG_TAG} createCollab refused: conversation=${input.conversationId} missing coordinator model`)
+      throw new Error('A collaboration requires the coordinator source and model.')
     }
 
     // One collaboration per conversation. A live one must be completed first; a
@@ -721,7 +743,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         addedAt: now,
       })
       for (const proposed of input.members.slice(0, AI_MEMBER_HARD_LIMIT)) {
-        await createAiMember(team, proposed)
+        await createAiMember(team, proposed, input.modelSelection)
       }
     } catch (err) {
       console.error(`${LOG_TAG} createCollab failed, rolling back team=${team.id}:`, err)
@@ -1144,8 +1166,16 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       if (liveCollab) {
         throw new Error('The collaboration this team came from is still in progress. Finish it first.')
       }
+      // The collaboration's members carry the coordinator's model; read it
+      // before the sentinel row goes so the new lead runs on the same one.
+      const inherited = collabModelSelection(teamId)
       if (team.leadAppId) store.removeMember(teamId, team.leadAppId)
       team.leadAppId = await provisionLead(team)
+      if (inherited) {
+        appManager.updateOverrides(team.leadAppId, inherited)
+      } else {
+        console.warn(`${LOG_TAG} runTeam: no member model to inherit for saved collaboration team=${teamId}; lead uses the global selection`)
+      }
       if (team.collabMode === 'structured') {
         regenerateStructuredEdges(requireTeam(teamId))
       }

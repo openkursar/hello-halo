@@ -58,12 +58,29 @@ function parseFilePath(text: string, pathChars: RegExp, fileName: RegExp): FileM
   return range ? { path, range } : { path }
 }
 
-/** A Markdown destination, not a URL: decoding never grants access to the resulting path. */
+/** `file:///repo/a.md` → `/repo/a.md`, `file:///C:/a.md` → `C:/a.md`; a file on another host is not local. */
+function localFileUrlPath(href: string): string | null {
+  let url: URL
+  try {
+    url = new URL(href)
+  } catch {
+    return null
+  }
+  if (url.protocol !== 'file:' || (url.host && url.host !== 'localhost')) return null
+  return /^\/[A-Za-z]:\//.test(url.pathname) ? url.pathname.slice(1) : url.pathname
+}
+
+/**
+ * A Markdown destination naming a file — a path, or a local `file://` URL.
+ * Decoding never grants access to the resulting path.
+ */
 export function detectFileLink(href: string): FileMention | null {
   if (!href || href.length > MAX_MENTION_CHARS * 3 || /[?#]/.test(href)) return null
+  const target = /^file:/i.test(href) ? localFileUrlPath(href) : href
+  if (!target) return null
   let decoded: string
   try {
-    decoded = decodeURIComponent(href)
+    decoded = decodeURIComponent(target)
   } catch {
     return null
   }

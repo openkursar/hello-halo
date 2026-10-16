@@ -54,6 +54,7 @@ interface MessageItemProps {
   isWorking?: boolean  // True when AI is still generating (not yet complete)
   isWaitingMore?: boolean  // True when content paused (e.g., during tool call), show "..." animation
   hideBrowserLiveView?: boolean  // Hide the "View live feed" button in BrowserTaskCard (no live browser view for this conversation)
+  allowViewChanges?: boolean
   hideTerminalOpen?: boolean  // Hide the "Open" button in TerminalTaskCard (no canvas to open a terminal in)
 }
 
@@ -249,7 +250,7 @@ function ThoughtItem({ thought }: { thought: Thought }) {
   )
 }
 
-export const MessageItem = memo(function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false, hideBrowserLiveView = false, hideTerminalOpen = false }: MessageItemProps) {
+export const MessageItem = memo(function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false, hideBrowserLiveView = false, hideTerminalOpen = false, allowViewChanges = false }: MessageItemProps) {
   const isUser = message.role === 'user'
   const isStreaming = (message as any).isStreaming
   const [copied, setCopied] = useState(false)
@@ -280,6 +281,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
   const task = isUser ? message.metadata?.task : undefined
   const userReferences = userParts?.references ?? []
   const userHasCards = !!task || userReferences.length > 0
+  const stoppedUnhandled = isUser && message.metadata?.inputOutcome === 'stopped'
   const spaceRoot = useSpaceStore(s => (s.currentSpace ? s.currentSpace.workingDir || s.currentSpace.path : undefined))
 
   // A finished reply in the main chat can be pointed at, passage by passage.
@@ -362,7 +364,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
         // Assistant bubbles hold the column width so the layout does not shift when
         // the streaming bubble is replaced; user bubbles shrink to their content
         // (within the cards' column when the message carries cards).
-        isInContainer ? 'w-full' : isUser ? (userHasCards ? 'max-w-full' : 'max-w-[85%]') : 'w-[85%]'
+        isInContainer ? 'w-full' : isUser ? (userHasCards || stoppedUnhandled ? 'max-w-full' : 'max-w-[85%]') : 'w-[85%]'
       }`}
     >
       {/* Working indicator - shows when AI is working */}
@@ -470,7 +472,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
           fileChangesSummary={fileChangesSummary}
           thoughts={message.thoughts}
           reply={
-            currentSpaceId && currentConversationId
+            allowViewChanges && currentSpaceId && currentConversationId
               ? { spaceId: currentSpaceId, conversationId: currentConversationId, messageId: message.id, timestamp: message.timestamp }
               : undefined
           }
@@ -506,11 +508,20 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
 
   // A user message's task card and reference chips sit above its bubble; a message of references alone shows no empty bubble.
   const userBubbleEmpty = isUser && !userParts?.text.trim() && !message.images?.length && !message.metadata?.goal && !message.error
+  const stoppedNote = stoppedUnhandled && (
+    <span className="text-[11px] leading-4 text-muted-foreground">{t('Stopped, not handled')}</span>
+  )
   const content = userHasCards ? (
     <div className={`flex flex-col items-end gap-1.5 ${isInContainer ? 'w-full' : 'max-w-[85%]'}`}>
       {task && <MessageTaskCard task={task} />}
       <MessageReferenceChips references={userReferences} baseDir={spaceRoot} className="max-w-full justify-end" />
       {!userBubbleEmpty && bubble}
+      {stoppedNote}
+    </div>
+  ) : stoppedUnhandled ? (
+    <div className={`flex flex-col items-end gap-1 ${isInContainer ? 'w-full' : 'max-w-[85%]'}`}>
+      {bubble}
+      {stoppedNote}
     </div>
   ) : bubble
 

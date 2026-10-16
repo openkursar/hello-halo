@@ -125,9 +125,14 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   The report carries the observed fate, filed acts, a request excerpt (200 codepoints) and final reply
   excerpt (500 codepoints), never a full-session retrieval link or a completion
   claim. Errors remain visible; a manual stop must not be automatically restarted
-  or reassigned. Reports coalesce while the lead is busy. Its next ending, even a
-  human conversation ending, releases existing collaboration notices. Completed
-  tasks are checked both before flush and before buffered/in-flight-gated delivery.
+  or reassigned. Endings go to the shared delivery core at once, one notice per
+  permission standing for whatever piled up meanwhile; no ending supersedes
+  another. Same-authority notices join a working lead; different-authority
+  notices merge into a following turn. A lead on another machine gets a
+  15-second coalescing window instead, because its busyness is not visible here
+  and an older build runs each notice as a turn of its own. Completed tasks are
+  checked before handoff and again before a deferred turn starts. Only failed
+  handoffs have retry timers.
   An ending carries the origin of the turn it describes (`external`, resolved
   the way the turn itself resolved it), and a notice that reports any outside
   ending wakes the lead as outside work — the lead reads that work's outcome, so
@@ -138,14 +143,12 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   computer, and an away owner simply does not wake), and the row is office-shared
   through an injected `publish` seam (so every node's board shows the same list
   and any member — or the user — can stop one it did not set). A due RECURRING
-  check whose target is mid-turn is SKIPPED, never queued (probed here, then
-  enforced again at the bus's dispatch gate, which also sees wakes in flight).
-  Because that second gate can still refuse, the injected `wake` returns the
-  bus's `WakeDisposition` and a skipped round leaves no trace — `runCount`,
-  `lastRunAt` and the replicated row are what the panel and the agent read. A
-  `once` check inverts both rules, having no next round: it QUEUES on a busy
-  target (`onBusy: 'buffer'`), and once handed over it is RETIRED — row dropped,
-  delete replicated, because the turn it starts is the record of it. Retiring
+  check reaches a working target through the same permission-aware gate as a
+  teammate message. Repeated due events use the check id as a coalescing key,
+  so waiting events retain the latest instruction. The injected `wake` returns
+  the bus's `WakeDisposition`; accepted rounds update `runCount` and
+  `lastRunAt`. A `once` check is retired after handoff — row dropped and delete
+  replicated — because the accepted message is its continuing record. Retiring
   its alarm is left to the scheduler, which disables a one-shot job by itself:
   deleting a job from inside its own due handler pulls it out from under the run
   log written on the way out, so leftovers are swept at `rehydrate()`. Checks
@@ -309,7 +312,7 @@ coordination status is independent of permission to receive message content.
 Excerpts and content-bearing act/error descriptions require both the executing
 member and the original requester to be contactable by the lead. Structured
 teams with an unknown requester therefore send status only. The check runs when
-the notice is delivered, including after a busy-lead coalescing delay.
+the notice is delivered, at the time each notice is handed to the mailbox.
 
 This deliberately accepts a bounded duplicate of an explicitly sent result for
 coordination context; it does not convert a final reply into another team message
@@ -334,13 +337,30 @@ member's ending is announced twice, once by its owner and once by whoever was
 waiting for it. The exception is the pair above: nothing ran anywhere, so the
 waiting side is the only witness there will ever be.
 
-Endings that land while the lead is still reading the last notice merge into the
-next one, rather than each waking it — the trigger is the lead's own turn ending,
-which this module is already told about, so no timer and no second queue. It
-holds nothing back for a lead on ANOTHER machine, which can never tell us it has
-read one; that lead gets a notice per ending. A notice shed by mailbox overflow
-also strands whatever had accumulated behind it, which is a bound worth knowing
-and not worth machinery until it is seen.
+Each ending is handed to the delivery core immediately; endings that arrive
+while a notice is going out ride the next one, every one of them kept (bounded
+by the per-notice summary cap, whose overflow is counted in the notice). There
+is no lead-busy probe; only a lead on another machine is paced, by the remote
+coalescing window. The core merges compatible messages at live boundaries or in
+the next safe turn. A failed handoff keeps its unsent facts ahead of later ones,
+retries on a timer a bounded number of times (one log line per outage, no
+activity row per attempt), then waits for the next ending to try again; already
+accepted facts are never replayed by a partial retry. Task closure cancels
+pending retries. The independent notice cap counts only notices that woke the
+lead: a coordinating conversation reports whether a notice started a turn,
+joined its running one or was queued; a remote lead's notice counts once.
+
+A person stopping a member session (`holdSessionAfterStop`, called by app-chat's
+stop path) voids their own 1:1 messages still waiting in the bus (kept in the
+member's record, marked) and holds everything else for the session's next turn.
+Deliveries the stopped turn accepted and never read come back through
+`returnDeliveries` marked `inputRecorded`, so their records are not written again
+when they are delivered. A woken turn the stop caught before the member read it —
+while it waited for a concurrency slot, or while its session was being set up —
+is not settled as undelivered: `returnHeldBack` hands the slot back, voids the
+person's own words (receipt settled; written marked through `recordStoppedInputs`
+when nothing was written yet) and returns the rest, whose waiting receipts read
+`queued`. No turn-end report is made for it until it has actually run.
 
 ## The two channels (do not conflate)
 
@@ -430,7 +450,7 @@ Why the gate is bypassed whole rather than adapted: the gate's slot is repaid
 only by `completeTurn`, and no space turn ever reports back through this bus —
 a reserved slot would sit until the TTL watchdog on every single message. The
 space conversation has its own exclusivity domain (conversation-interop's turn
-gate: wake when idle, queue behind a busy turn), and two queues for one
+gate: start when idle, join matching-authority work, defer other identities), and two queues for one
 conversation would be one queue too many. For the same reason a receipted send
 to the coordinator settles on hand-over (`status: 'ok'`), never waits.
 
@@ -541,7 +561,7 @@ completes nothing; the gate decides when it is allowed to be called at all
 (`platform/turn-gate` §8), and a false answer falls straight back to the
 mailbox.
 
-Mailbox liveness has three drains, because a team session also runs turns the
+Mailbox liveness has four triggers, because a team session also runs turns the
 bus never sees (a human 1:1 chat with a member uses the same session key):
 1. `completeTurn` — after every BUS-driven turn (the primary path);
 2. the session layer's turn-end nudge — app-chat calls `bus.drainMailbox` when
@@ -552,7 +572,10 @@ bus never sees (a human 1:1 chat with a member uses the same session key):
    the target is still busy and stops once the mailbox is empty, so mail behind a
    turn that hangs for minutes is not held hostage to that turn ending.
 
-None of the three can free a slot: they all drain, and a drain refuses a session
+4. `notifySessionReady` — session startup completed, so compatible waiting mail
+   joins immediately without waiting for its first ending.
+
+None of these can free a slot: they all drain, and a drain refuses a session
 that still reads occupied. The slot itself is freed only by `completeTurn`, so a
 completion that never happens locks the session — see "A stuck slot must be
 recoverable, and must never read as idle" below.
@@ -600,20 +623,16 @@ recoverable, and must never read as idle" below.
   component that knows a session already has a turn running or one in flight.
   A path that calls `wakeTarget` directly starts a second concurrent turn on one
   session key, and the loser's subprocess is torn down mid-stream.
-  `onBusy` picks the semantics, and only the caller knows which applies:
-  `'buffer'` (mailbox it, deliver at turn end) for a wake that must not be lost
-  — an escalation answer is the member's ONLY way back to life, and a one-shot
-  check has no second chance; `'skip'` for one that comes round again on its own
-  rhythm (a recurring check).
+  `onBusy: 'buffer'` means permission-aware live delivery, with a merged
+  following turn when authority differs or the engine cannot accept it.
+  Recurring checks use `coalescingKey: check:<id>`; they are never skipped
+  merely because a member is working. `skip` is reserved for whole-run restarts.
+- `notifySessionReady(sessionKey)`
+  Rechecks waiting messages when a held turn becomes live. The sender does not
+  have to wait for that turn to finish before compatible mail can land.
 - `runRelayedTurn({ sessionKey, run }) → Promise<T>`
-  The **owner-side** gate for a federation wake (see "One turn per session" below).
-  Same slot, same mailbox, same cap as everything else; it does NOT go through
-  `wakeTarget`, because the turn's input was rendered and booked on the sending
-  node and re-entering the session layer here would render a second header, file a
-  duplicate act, and start a quiescence sweep on a node that does not own the run.
-  `run` is invoked once the slot is free; its promise settles the caller's and
-  releases the slot. A `resetEpoch` (or a mailbox overflow) rejects a still-queued
-  one rather than leaving the remote caller on its hours-long backstop.
+  An explicit exclusive callback barrier retained for non-message callers.
+  Federation message delivery now uses app-chat's permission-aware admission.
 - `completeTurn({ sessionKey, trigger, outcome, sealPending? })`
   Called by the session layer when a woken team turn ends. It **delivers
   nothing** (see "Output is not delivery"). It releases the session's slot,
@@ -873,7 +892,7 @@ office looks stopped.
 
 It cannot be written only where the escalation is RAISED. That happens inside
 `wakeTarget`'s completion, and most turns never pass through it: a member woken
-by a teammate on ANOTHER machine runs through `runRelayedTurn`, an IM-backed
+by a teammate on ANOTHER machine uses the common app-chat mailbox, an IM-backed
 team turn comes from `dispatch-inbound`, a person's 1:1 goes straight to the
 session. All three left the member unmarked — the office saw nothing, and so did
 the one screen that could have answered.
@@ -1092,34 +1111,17 @@ bound to know: a wake that times out while still queued keeps its hold until it
 reaches a slot and bails, so the chat's messages wait — buffered, not lost —
 until then.
 
-**A mid-turn delivery does not reach an IM front-desk turn today, and whether it
-should is open.** The mechanism is incidental rather than a decision: an IM turn
-is started by `dispatch-inbound` calling `sendAppChatMessage` directly, so the
-gate sees a session busy with a turn it did not dispatch and falls back to the
-mailbox (see `platform/turn-gate` §8 — the guard is aimed at a member's owner
-chatting privately, and this path merely looks the same from there).
+**IM front-desk turns follow the same permission rule.** A teammate message may
+join an owner-authorized IM turn. A guest-authorized turn receives only messages
+with exactly that guest policy; owner or external messages wait as a separate
+merged turn. The turn's entry path never decides delivery timing.
 
-Both answers are defensible and the trade is real, so it is recorded rather than
-settled. Against entering: the turn's final message is what a real person reads,
-and an envelope arriving mid-way could redirect it. For entering: a teammate's
-answer reaching this member ALREADY ends up in that chat — it wakes a later turn
-whose reply is pushed there (next paragraph), so the choice is not whether the
-person hears teammate-derived content but whether they hear it inside the answer
-they are waiting for or as a second message afterwards. Nothing about the current
-behavior depends on having decided.
 
-What must not happen is deciding it by accident: routing IM inbound through the
-bus would flip this silently, since the only thing standing between the two
-today is which code path starts the turn.
-
-This is **the one place a final message IS a delivery**, and only because the IM
-reply handle is attached to this turn — it still reaches no teammate. The bridge
-says so explicitly, so the exemption cannot be read as "your output is visible
-after all". It also tells the serving member that a teammate's answer cannot
-arrive inside this turn: a handed-over question becomes two messages to the
-person (an acknowledgement now, the answer when the teammate's `team_send` wakes
-it again) rather than one long silence. That is a deliberate trade for the sender
-knowing which listener it is talking to.
+This is the one place a final message is delivered without an explicit send,
+because the IM reply handle belongs to this turn. A teammate's answer can now
+join that turn when permissions match; the prompt no longer promises that it
+must arrive in a later turn. The member still addresses the person directly and
+keeps internal coordination out of its final answer.
 
 ## Conversations & run outcomes (office-shared session model)
 
@@ -1239,10 +1241,20 @@ From there it travels two ways, and both were necessary:
   members launders it into a local one.
 - **across wakes** — `team/external-origin.ts` keeps it per team session until a
   person types into that session HERE as the owner (at Halo, or in an IM chat
-  whose rules count them as one). A runtime wake is authored on this
+  whose rules count them as one), or the task is explicitly completed or cleared.
+  Pausing and auto-sealing preserve it. Only external sessions occupy the bounded
+  set: at 2,000 entries a new external session is refused, while accepted sessions
+  retain their authority. An entry is never evicted to admit another request.
+  Permanent closure releases all epoch entries, including removed members.
+  A runtime wake is authored on this
   machine and so can carry no origin of its own; without stickiness, asking for
   something that needs a decision and waiting for the owner to answer their own
   digital human's question would resume the work unrestricted.
+
+Checks and decision continuations persist their external origin with their own
+records and restore it when waking after a restart. Quiescence timers and pending
+turn-end notices are process-local; startup seals interrupted hosted runs instead
+of replaying those unstamped wakes.
 
 ### The three layers, and why none of them holds alone
 
@@ -1287,9 +1299,9 @@ Four consequences worth stating, because each was a hole:
   turn included, while that member's policy withholds anything. A message
   added to a turn already running is not reworded on that account: a
   teammate's arrives framed and never starts with "/", the owner's own is
-  theirs to run, and words from outside this machine never join a running turn
-  (the bus buffers them for the next wake; `renderMidTurnEnvelope` neutralizes
-  them should any path bring them there).
+  theirs to run. Words from outside this machine may join only an external
+  turn; `renderMidTurnEnvelope` neutralizes command-shaped text before that
+  handoff, just as the separately started external turn does.
 
 ### The owner's record (`team_tool_audit`)
 
@@ -1380,20 +1392,18 @@ into live reasoning, and rendering it would advance the member's watermark past
 facts it may never see. A person's words stay verbatim, exactly as when they type
 into the same chat locally.
 
-**Where it does not apply**, and the fallback is always the mailbox:
+**Delivery eligibility** is determined only by equal, known permission identities.
+Owner, external and guest-policy identities remain distinct. A human-started
+turn is eligible when its identity matches. Existing queued messages of that
+identity join in arrival order. During session startup they wait for the
+ready notification, then join the live turn. If the model has finished tool
+use, accepted input runs in the immediately following engine turn.
 
-- A member owned by ANOTHER machine: its turn runs there, and reaching into it
-  would need the wake protocol to carry a delivery that expects no completion.
-  Deliberately not attempted; `injectIntoSession` finds no local session and the
-  message queues as before.
-- A turn this runtime did not start — the gate refuses, see `platform/turn-gate`
-  §8. Two paths land here for different reasons: a member's owner chatting in the
-  same session key (which the guard is FOR), and an IM front-desk turn started by
-  `dispatch-inbound` (which it merely catches — see "Team as an IM backend" for
-  why that one is unsettled rather than decided).
-- A member with mail already queued: order first.
-- A stretch of output with no tool call in it. The floor is one model output,
-  not zero.
+A member on another machine receives messages immediately on the durable ctrl
+feed. Internal completion receipts preserve failure visibility without making
+the sending AI wait or holding a sender-side turn reservation. The owner applies
+the same gate, stamping incoming work external regardless of the sender's
+claimed identity.
 
 **The known cost.** A message handed to a running turn is context, not a queued
 item: if the model reads it and does nothing, nothing records that it was read.
@@ -1406,9 +1416,10 @@ built for it up front.
 
 A team session key (`app-chat:{appId}:team:{teamId}:{epochId}`) runs **at most
 one turn at a time**, no matter who asked for it or from which machine. The
-bus's `tryReserve` is that rule; everything else queues in the session's single
-mailbox (FIFO, cap 128 shedding oldest, drained at turn end plus a re-arming
-recheck).
+shared gate owns that rule. Its mailbox groups equal identities in arrival
+order; capacity 128 rejects new overflow explicitly rather than losing accepted
+messages. Ready/ending notifications drive delivery; a recheck timer covers
+missed transitions.
 
 Two turns on one session key is not a slowdown, it is corruption, and it is
 worth knowing exactly why. Both turns resolve to the **same live CC subprocess**
@@ -1425,21 +1436,14 @@ the delegated policy — `isBorrowedTeamTurn`), the input fingerprint changes an
 that would defer that rebuild all read the `consumers` map, which app-chat
 deliberately never populates.
 
-Hence: **every path that starts a team turn goes through the bus.** Envelopes via
-`deliver`, runtime wakes via `deliverRuntimeWake`, and a federation wake landing
-on the member's owner via `runRelayedTurn`. The last one is the one that used to
-be missing — `bootstrap`'s `runLocalTurn` called `sendAppChatMessage` directly,
-so a cross-machine message walked straight into a session a local one already
-owned. The gate belongs on the OWNER because busyness is only knowable, and only
-still true, on the machine that runs the turn: the sender's view is stale by the
-time the wake crosses the network, and `remote-busy-overlay` is a display
-projection, not a lock.
-
-One consequence to keep in mind when reading `federation/coordinator.ts`: with a
-queue, two wakes for one session no longer collapse into a single turn, so each
-gets its own `turn-complete`. The batch-ack that once answered a whole
-conversation's wakes with the first outcome was removed — under a queue it hands
-wake #2 the outcome of turn #1 before turn #2 has even started.
+Team and runtime envelopes use the team gate; direct, IM and federated entries
+use app-chat's permission-aware gate. Both share the same authoritative live-turn
+identity and synchronous start hold. A team dispatch adopts its hold instead of
+being admitted a second time by app-chat. Federation resolves timing only on the
+owner, with every arriving message stamped external. Completion-requesting
+wakes retain their own callback, including when several messages join one
+physical turn. Asynchronous sends keep internal receipt observers so admission
+failures remain visible in the shared record.
 
 ### A stuck slot must be recoverable, and must never read as idle
 
@@ -1522,11 +1526,23 @@ Resource-only seals retain unanswered decisions.
 
 The automation runtime persists an answer and continuation atomically before
 calling `resumeFromEscalation`. Its optional `continuationId` makes the wake
-identifiable and idempotent within the process. A busy session defers to the
-persistent outbox via `onDeferred`; it does not put this durable wake in the
-bounded transient mailbox or inject it into an unrelated running turn.
-`onStarted` fires after the team concurrency slot is acquired; `onSettled` records
-the actual outcome. Closed/cleared tasks reject continuations, including after a
-restart. Other team messages retain their existing buffering and mid-turn behavior.
+identifiable and idempotent within the process. Equal-authority answers join
+the running turn; other answers wait in the gate. `onStarted` fires once the
+message is accepted into the live turn or its new turn starts. `onSettled`
+follows that turn's actual ending, including stop/failure. A merged turn retains
+each continuation callback. Closed/cleared tasks reject continuations, including
+after restart. The persistent continuation remains recovery truth; accepting it
+into memory does not erase the saved answer.
 Resource-only cleanup keeps questions; explicit business closure cancels pending
 continuations as well as unresolved questions. Stored answers remain audit facts.
+
+### External work and a space coordinator
+
+A space conversation runs with its owner's capabilities only. Content from
+another machine, or from a sender no longer in the collaboration, is delivered
+with the `external` identity: it never joins the owner's running turn and runs
+as a turn of its own right after it, which is how every team message reached a
+space coordinator before live delivery. Local member reports keep the live path.
+Such a later turn still runs with owner capabilities, as it always did; scoping
+it is separate work. Existing custom lead prompts are not rewritten; the
+current runtime team prompt supplies the live-delivery contract.

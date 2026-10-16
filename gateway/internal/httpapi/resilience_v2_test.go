@@ -48,6 +48,48 @@ func TestHigherTermTakesRoomOverImmediately(t *testing.T) {
 	}
 }
 
+func TestHostOriginStampChangesOnExistingMemberConnection(t *testing.T) {
+	srv, _ := newGateway(t, gatewayOpts{room: room.Config{HostRetention: time.Hour}})
+	oldHost, newHost := gwtest.NewNode(t, 1), gwtest.NewNode(t, 2)
+	memberNode := gwtest.NewNode(t, 3)
+
+	a := gwtest.Dial(t, srv)
+	a.Auth(oldHost, office)
+	hostAttachTerm(a, office, 1)
+	a.Expect(wire.TypeGwAttached, 2*time.Second)
+
+	member := gwtest.Dial(t, srv)
+	member.Auth(memberNode, office)
+	a.SendFederation(memberNode.ID, map[string]any{
+		"kind": "join-grant", "officeId": office, "assignedNodeId": memberNode.ID,
+	})
+	grant := member.Expect(wire.TypeFederation, 2*time.Second)
+	if grant.From != oldHost.ID {
+		t.Fatalf("grant origin = %q, want proven host %q", grant.From, oldHost.ID)
+	}
+
+	_ = a.Conn.Close()
+	member.Expect(wire.TypeGwHostLost, 2*time.Second)
+
+	b := gwtest.Dial(t, srv)
+	b.Auth(newHost, office)
+	hostAttachTerm(b, office, 2)
+	b.Expect(wire.TypeGwAttached, 2*time.Second)
+	b.Send(map[string]any{
+		"type": "federation", "to": memberNode.ID, "from": oldHost.ID,
+		"payload": map[string]any{
+			"kind": "turn-complete", "officeId": office, "correlationId": "completion",
+		},
+	})
+	completion := member.Expect(wire.TypeFederation, 2*time.Second)
+	if payloadKind(t, completion) != "turn-complete" {
+		t.Fatalf("expected turn-complete, got %q", payloadKind(t, completion))
+	}
+	if completion.From != newHost.ID {
+		t.Fatalf("completion origin = %q, want proven successor %q", completion.From, newHost.ID)
+	}
+}
+
 func TestStaleTermCannotReclaimRoom(t *testing.T) {
 	srv, _ := newGateway(t, gatewayOpts{room: room.Config{HostRetention: time.Hour}})
 	oldHost, newHost := gwtest.NewNode(t, 1), gwtest.NewNode(t, 2)

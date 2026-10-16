@@ -3,7 +3,8 @@
  *
  * Behavior under test:
  *   - Aborts the active generation for a single IM session conversationId.
- *   - Calls clearSupplementBuffer() to drop buffered follow-ups.
+ *   - Holds the chat's waiting supplements (holdSupplementsAfterStop): the
+ *     owner's are void, a guest's wait for the next turn.
  *   - Does NOT call closeV2Session() (history preserved, V2 session reused).
  *   - Returns { stopped: true } when a generation was active.
  *   - Returns { stopped: false } (idempotent) when nothing was active.
@@ -54,8 +55,8 @@ function markGenerating(conversationId: string): void {
   })
 }
 
-const { clearSupplementBuffer } = vi.hoisted(() => ({
-  clearSupplementBuffer: vi.fn(),
+const { holdSupplementsAfterStop } = vi.hoisted(() => ({
+  holdSupplementsAfterStop: vi.fn(),
 }))
 
 const { getImStreamHandle, clearImStreamHandle } = vi.hoisted(() => {
@@ -75,6 +76,8 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   getRunningConsumerIds: () => Array.from(consumers.keys()),
   markTurnDispatched: vi.fn(),
   updateConsumerDisplayModel: vi.fn(),
+  activeSessions: new Map(),
+  hasPendingSessionInput: () => false,
 }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({
@@ -149,7 +152,7 @@ vi.mock('../../../../src/main/apps/runtime/index', () => ({
 }))
 
 vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({
-  clearSupplementBuffer,
+  holdSupplementsAfterStop,
 }))
 
 vi.mock('../../../../src/main/apps/runtime/im-stream-registry', () => ({
@@ -182,7 +185,7 @@ describe('stopImSession', () => {
     v2Sessions.clear()
     closeV2Session.mockClear()
     stopGeneration.mockClear()
-    clearSupplementBuffer.mockClear()
+    holdSupplementsAfterStop.mockClear()
     getImStreamHandle.mockClear()
     clearImStreamHandle.mockClear()
   })
@@ -195,17 +198,17 @@ describe('stopImSession', () => {
 
     expect(result).toEqual({ stopped: true })
     expect(stopGeneration).toHaveBeenCalledTimes(1)
-    expect(stopGeneration).toHaveBeenCalledWith(conversationId)
+    expect(stopGeneration).toHaveBeenCalledWith(conversationId, { reason: 'user' })
   })
 
-  it('drops buffered supplements for the conversation', async () => {
+  it('holds the waiting supplements of the conversation', async () => {
     const conversationId = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
     markGenerating(conversationId)
 
     await stopImSession('app-1', 'wecom-bot', 'group', 'room-1')
 
-    expect(clearSupplementBuffer).toHaveBeenCalledTimes(1)
-    expect(clearSupplementBuffer).toHaveBeenCalledWith(conversationId)
+    expect(holdSupplementsAfterStop).toHaveBeenCalledTimes(1)
+    expect(holdSupplementsAfterStop).toHaveBeenCalledWith(conversationId)
   })
 
   it('does NOT close the V2 session (history preserved)', async () => {
@@ -224,9 +227,9 @@ describe('stopImSession', () => {
 
     expect(result).toEqual({ stopped: false })
     expect(stopGeneration).not.toHaveBeenCalled()
-    // Supplements are still cleared even when not active — a stale buffer
-    // from a previously-aborted round should not leak into the next.
-    expect(clearSupplementBuffer).toHaveBeenCalledTimes(1)
+    // Supplements are still held even when not active — a stale buffer
+    // from a previously-aborted round should not start a turn of its own.
+    expect(holdSupplementsAfterStop).toHaveBeenCalledTimes(1)
   })
 
   it('only stops the targeted session, not siblings', async () => {
@@ -238,7 +241,7 @@ describe('stopImSession', () => {
     await stopImSession('app-1', 'wecom-bot', 'group', 'room-1')
 
     expect(stopGeneration).toHaveBeenCalledTimes(1)
-    expect(stopGeneration).toHaveBeenCalledWith(targetKey)
+    expect(stopGeneration).toHaveBeenCalledWith(targetKey, { reason: 'user' })
     expect(consumers.has(siblingKey)).toBe(true)
   })
 
@@ -268,7 +271,7 @@ describe('stopImSession', () => {
     const result = await stopImSession('app-1', 'wecom-bot', 'group', 'room-1')
 
     expect(result).toEqual({ stopped: true })
-    expect(stopGeneration).toHaveBeenCalledWith(conversationId)
+    expect(stopGeneration).toHaveBeenCalledWith(conversationId, { reason: 'user' })
     expect(clearImStreamHandle).toHaveBeenCalledWith(conversationId)
   })
 
@@ -302,13 +305,13 @@ describe('stop entry points share the same cleanup', () => {
     consumers.clear()
     v2Sessions.clear()
     stopGeneration.mockClear()
-    clearSupplementBuffer.mockClear()
+    holdSupplementsAfterStop.mockClear()
     getImStreamHandle.mockClear()
     clearImStreamHandle.mockClear()
     getImStreamHandle.mockReturnValue(undefined)
   })
 
-  it('stopAppChatConversation drops the buffer and disposes the stream', async () => {
+  it('stopAppChatConversation holds the buffer and disposes the stream', async () => {
     const conversationId = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
     markGenerating(conversationId)
     const dispose = vi.fn()
@@ -316,8 +319,8 @@ describe('stop entry points share the same cleanup', () => {
 
     await stopAppChatConversation(conversationId)
 
-    expect(stopGeneration).toHaveBeenCalledWith(conversationId)
-    expect(clearSupplementBuffer).toHaveBeenCalledWith(conversationId)
+    expect(stopGeneration).toHaveBeenCalledWith(conversationId, { reason: 'user' })
+    expect(holdSupplementsAfterStop).toHaveBeenCalledWith(conversationId)
     expect(dispose).toHaveBeenCalledTimes(1)
     expect(clearImStreamHandle).toHaveBeenCalledWith(conversationId)
   })
@@ -330,10 +333,10 @@ describe('stop entry points share the same cleanup', () => {
 
     await stopAppChat('app-1')
 
-    expect(stopGeneration).toHaveBeenCalledWith(nativeKey)
-    expect(stopGeneration).toHaveBeenCalledWith(imKey)
-    expect(clearSupplementBuffer).toHaveBeenCalledWith(nativeKey)
-    expect(clearSupplementBuffer).toHaveBeenCalledWith(imKey)
+    expect(stopGeneration).toHaveBeenCalledWith(nativeKey, { reason: 'user' })
+    expect(stopGeneration).toHaveBeenCalledWith(imKey, { reason: 'user' })
+    expect(holdSupplementsAfterStop).toHaveBeenCalledWith(nativeKey)
+    expect(holdSupplementsAfterStop).toHaveBeenCalledWith(imKey)
     expect(clearImStreamHandle).toHaveBeenCalledWith(imKey)
   })
 
@@ -346,7 +349,7 @@ describe('stop entry points share the same cleanup', () => {
     await stopAppChat('app-1')
 
     expect(stopGeneration).toHaveBeenCalledTimes(1)
-    expect(stopGeneration).toHaveBeenCalledWith(ownKey)
+    expect(stopGeneration).toHaveBeenCalledWith(ownKey, { reason: 'user' })
     expect(consumers.has(otherKey)).toBe(true)
   })
 })

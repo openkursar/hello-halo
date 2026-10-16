@@ -168,6 +168,22 @@ describe('beginRegistration', () => {
     expect(new URL(authUrl).host).toBe('accounts.larksuite.com')
   })
 
+  it('accepts a verification URI on another official Feishu/Lark subdomain', async () => {
+    // Feishu does not always serve this page from accounts.*: the
+    // app-creation confirmation has been observed on open.feishu.cn. The
+    // check is by root domain, not an exact host, so any subdomain of
+    // feishu.cn / larksuite.com must pass.
+    for (const [uri, host] of [
+      ['https://open.feishu.cn/oauth/page?user_code=X', 'open.feishu.cn'],
+      ['https://open.larksuite.com/oauth/page?user_code=X', 'open.larksuite.com'],
+    ] as const) {
+      httpState.queue = []
+      queue({ status: 200, body: { device_code: 'dev-code-1', verification_uri_complete: uri } })
+      const { authUrl } = await beginRegistration()
+      expect(new URL(authUrl).host).toBe(host)
+    }
+  })
+
   it('refuses to build a QR code for a non-https verification URI', async () => {
     queue({
       status: 200,
@@ -185,6 +201,9 @@ describe('beginRegistration', () => {
     for (const uri of [
       'https://evil.example.com/oauth/page?user_code=X',
       'https://accounts.feishu.cn.evil.example.com/page',
+      // Root-domain matching must require the leading dot: a host that merely
+      // ends with the root domain's characters is not a subdomain of it.
+      'https://evilfeishu.cn/page',
       'not a url',
     ]) {
       httpState.queue = []

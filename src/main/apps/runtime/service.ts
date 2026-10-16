@@ -17,7 +17,8 @@ import type { AutomationSpec, SubscriptionDef } from '../spec'
 import { usesWorkdayCalendar } from '../../../shared/apps/spec-types'
 import type { SchedulerService, SchedulerJob, SchedulerJobCreate } from '../../platform/scheduler'
 import type { EventRouter } from './event-router'
-import type { EventFilter } from './event-types'
+import type { EventFilter, AutomationEvent } from './event-types'
+import { createTurnGate } from '../../platform/turn-gate'
 import { sourceConfigToEventFilter } from './event-filter-mapping'
 import type { MemoryService } from '../../platform/memory'
 import type { BackgroundService } from '../../platform/background'
@@ -49,7 +50,8 @@ import type {
 import { AppNotRunnableError, EscalationNotFoundError, ConcurrencyLimitError } from './errors'
 import { Semaphore } from './concurrency'
 import { executeRun } from './execute'
-import { injectIntoActiveRun, isRunActive } from './active-runs'
+import { eventPayloadForModel, renderEventInput } from './event-input'
+import { tryInjectIntoActiveRun, isRunActive, listActiveRuns, onActiveRunReady, getActiveRun, markRunInputsStopped, type RunSupplement } from './active-runs'
 import { automaticEnabled, blockedReason, deriveRuntimeStatus } from './app-state'
 import { getActiveTeamRuntime } from './team'
 import { getEscalationQuestions, formatEscalationAnswer, totalRunTokens, type RunTokenUsage } from '../../../shared/apps/app-types'
@@ -177,6 +179,82 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
    * queued run acquires its slot.
    */
   const pendingTriggers = new Map<string, number>()
+  const liveDecisionEntries = new Map<string, ActivityEntry[]>()
+
+  const eventGate = createTurnGate<TriggerContext[]>({
+    isBusy: (appId) => isAppBusy(appId) || store.hasPendingSoloEscalation(appId) || store.hasQueuedSoloContinuation(appId),
+    getJobIdentity: () => 'owner',
+    getActiveIdentity: (appId) => listActiveRuns(appId).length === 1 ? 'owner' : undefined,
+    mergeJobs: (jobs) => jobs.flat(),
+    deliverMidTurn: (appId, triggers) => {
+      const runs = listActiveRuns(appId)
+      // Unread when a person stopped the run: they wait for the app's next run.
+      return runs.length === 1 && tryInjectIntoActiveRun(appId, runs[0].runId, triggers.map((trigger) => ({ text: renderEventInput(trigger) })),
+        () => eventGate.putBack(appId, [triggers]))
+    },
+    dispatch: async (appId, triggers) => {
+      const admission = admitAutomaticRun(appId)
+      if ('skipReason' in admission) throw new Error(admission.skipReason)
+      const trigger: TriggerContext = triggers.length === 1 ? triggers[0] : {
+        type: 'event', description: triggers.map(renderEventInput).join('\n\n'),
+        eventPayload: { events: triggers.map((entry) => ({ description: entry.description, payload: entry.eventPayload && eventPayloadForModel(entry.eventPayload) })) },
+      }
+      void executeWithConcurrency(admission.app, trigger, {
+        ...(triggers.length > 1 ? { recordedInputs: triggers.map((entry) => ({ text: renderEventInput(entry) })) } : {}),
+      }).catch((error) => {
+        console.error('[Runtime] Event execution failed', { appId, error })
+      }).finally(() => {
+        eventGate.release(appId)
+        eventGate.drain(appId)
+      })
+    },
+  }, {
+    retryDispatch: () => false,
+    onDiscard: (triggers, reason) => console.warn('[Runtime] Pending events cancelled', { count: triggers.length, reason }),
+  })
+
+  let readySubscription: ReturnType<typeof onActiveRunReady> | undefined
+  function watchRunReadiness(): void {
+    readySubscription ??= onActiveRunReady(({ appId }) => {
+      eventGate.notifyReady(appId)
+      drainContinuations()
+    })
+  }
+
+  /**
+   * A person stopped this run: what it accepted and had not read is withdrawn
+   * (their own words marked in the run's record, events back to the waiting
+   * list), and waiting events start nothing until the app's next run.
+   */
+  async function stopForPerson(appId: string, runId: string): Promise<void> {
+    eventGate.park(appId)
+    try {
+      await getActiveRun(runId)?.session.withdrawUnreadInput?.()
+    } catch (error) {
+      console.error('[Runtime] Unread run input could not be withdrawn before the stop', { appId, runId, error })
+    }
+  }
+
+  async function deliverAutomationEvent(appId: string, event: AutomationEvent, subscription: string): Promise<void> {
+    const app = appManager.getApp(appId)
+    if (!app || !['active', 'waiting_user'].includes(app.status)) {
+      console.warn('[Runtime] Event ignored for unavailable automation', { appId, eventType: event.type, status: app?.status })
+      return
+    }
+    if (!isAppBusy(appId)) {
+      const admission = admitAutomaticRun(appId)
+      if ('skipReason' in admission) {
+        console.log('[Runtime] Event execution paused', { appId, reason: admission.skipReason })
+        return
+      }
+    }
+    try {
+      await eventGate.deliver(appId, [buildEventTriggerContext(event.type, event.payload, app, subscription)])
+    } catch (error) {
+      console.error('[Runtime] Event delivery failed', { appId, eventType: event.type, error })
+    }
+  }
+
   /** Interval handle for escalation timeout checker */
   let escalationCheckInterval: ReturnType<typeof setInterval> | null = null
   /** Timestamp of last successful prune (avoid running too frequently) */
@@ -480,6 +558,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     options?: {
       existingRunId?: string
       existingSessionKey?: string
+      recordedInputs?: RunSupplement[]
       /** Fired when no global slot was free and the run entered the queue. */
       onQueued?: () => void
       /** Fired once the run row exists and execution is underway. */
@@ -550,11 +629,13 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       throw new Error('The original task was closed before continuing')
     }
     let executingRunId: string | undefined
+    let pendingInputAbandoned = false
     const abortController = new AbortController()
     // Use a unique per-run key so concurrent runs of the same App
     // each get their own abort controller entry.
     const executionKey = `${app.id}:${++executionCounter}`
     runningRuns.add(app.id, executionKey, abortController)
+    watchRunReadiness()
 
     // Broadcast run-start status (app transitions from 'queued'/'idle' to 'running')
     broadcastAppStatus(app.id)
@@ -570,6 +651,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         emitEntry: emitActivityEntry,
         existingRunId: options?.existingRunId,
         existingSessionKey: options?.existingSessionKey,
+        recordedInputs: options?.recordedInputs,
+        onPendingInputAbandoned: () => { pendingInputAbandoned = true },
         // Fire the `onRunStarted` lifecycle event at the *real* start of the
         // run (after DB row insertion, before AI session build). This keeps
         // the started/finished event pair semantically meaningful for
@@ -599,6 +682,22 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
           options?.onStarted?.({ runId, sessionKey, startedAt })
         },
       })
+
+      if (executingRunId) {
+        const decisions = liveDecisionEntries.get(executingRunId) ?? []
+        liveDecisionEntries.delete(executingRunId)
+        for (const entry of decisions) {
+          if (pendingInputAbandoned && !abortController.signal.aborted) {
+            continuationDispatches.delete(entry.id)
+            store.updateContinuation(entry.id, 'queued')
+            publishDecision(store.getEntry(entry.id)!)
+            console.warn('[Runtime] Decision input retained after an escalation cut', { appId: app.id, runId: executingRunId, entryId: entry.id })
+          } else {
+            finishContinuation(entry, abortController.signal.aborted ? 'Execution stopped before the decision follow-up completed'
+              : result.outcome === 'error' ? result.errorMessage || 'Continuation failed' : undefined)
+          }
+        }
+      }
 
       // ── Emit finished lifecycle event (analytics subscribers) ──
       // executeRun() finalizes the DB row before returning, so we can emit
@@ -724,6 +823,11 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
       return result
     } catch (error) {
+      if (executingRunId) {
+        const decisions = liveDecisionEntries.get(executingRunId) ?? []
+        liveDecisionEntries.delete(executingRunId)
+        for (const entry of decisions) finishContinuation(entry, error instanceof Error ? error.message : String(error))
+      }
       if (options?.existingRunId) {
         const message = error instanceof Error ? error.message : String(error)
         for (const failed of store.failRuns([options.existingRunId], message)) {
@@ -742,7 +846,12 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       runningRuns.remove(app.id, executionKey)
       semaphore.release()
       drainContinuations()
+      eventGate.drain(app.id)
 
+      if (runningRuns.counts().size === 0 && pendingTriggers.size === 0) {
+        readySubscription?.dispose()
+        readySubscription = undefined
+      }
       // Broadcast run-end status (app transitions back to 'idle' or other state)
       broadcastAppStatus(app.id)
     }
@@ -800,11 +909,25 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     for (const entry of store.getQueuedContinuations()) {
       if (continuationDispatches.has(entry.id)) continue
       const team = entry.content.teamContext
-      if (!team && isAppBusy(entry.appId)) continue
       const app = appManager.getApp(entry.appId)
       if (!app || !entry.userResponse || entry.content.resolution || store.isRunClosed(entry.runId)) {
         console.warn('[Runtime] Cancelled unavailable continuation', { entryId: entry.id, appId: entry.appId })
         store.updateContinuation(entry.id, 'cancelled')
+        continue
+      }
+      if (!team && store.getEntriesForRun(entry.runId).some(question =>
+        question.type === 'escalation' && !question.userResponse && !question.content.resolution)) continue
+      if (!team && isAppBusy(entry.appId)) {
+        const answer = formatEscalationAnswer(getEscalationQuestions(entry.content), entry.userResponse)
+        // A stop settles the decision with the run it joined (see executeWithConcurrency).
+        if (tryInjectIntoActiveRun(entry.appId, entry.runId, [{ text: answer }], () => {})) {
+          continuationDispatches.add(entry.id)
+          store.updateContinuation(entry.id, 'running')
+          const entries = liveDecisionEntries.get(entry.runId) ?? []
+          entries.push(entry)
+          liveDecisionEntries.set(entry.runId, entries)
+          publishDecision(store.getEntry(entry.id)!)
+        }
         continue
       }
       if (team && !getActiveTeamRuntime()) continue
@@ -1057,23 +1180,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         const sub = subscriptions[i]
         const filter = subscriptionToEventFilter(sub)
         if (filter) {
-          const unsub = eventRouter.on(filter, async (event) => {
-            const admission = admitAutomaticRun(appId)
-            if ('skipReason' in admission) {
-              console.log(`[Runtime] Skipping event-triggered run: app=${appId}, ${admission.skipReason}`)
-              return
-            }
-            const currentApp = admission.app
-
-            console.log(`[Runtime] Event triggered: type=${event.type}, app=${appId}`)
-            const trigger = buildEventTriggerContext(event.type, event.payload, currentApp, describeSubscription(sub, i))
-
-            try {
-              await executeWithConcurrency(currentApp, trigger)
-            } catch (err) {
-              console.error(`[Runtime] Event-triggered run failed: app=${appId}:`, err)
-            }
-          })
+          const unsub = eventRouter.on(filter, (event) => deliverAutomationEvent(appId, event, describeSubscription(sub, i)))
           state.eventUnsubscribers.push(unsub)
         }
       }
@@ -1103,6 +1210,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       }
 
       console.log(`[Runtime] Deactivating app: ${appId}`)
+      eventGate.discard((key) => key === appId, 'automation deactivated')
 
       // Remove scheduler jobs
       for (const jobId of state.schedulerJobIds) {
@@ -1199,23 +1307,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         const sub = subscriptions[i]
         const filter = subscriptionToEventFilter(sub)
         if (filter) {
-          const unsub = eventRouter.on(filter, async (event) => {
-            const admission = admitAutomaticRun(appId)
-            if ('skipReason' in admission) {
-              console.log(`[Runtime] Skipping event-triggered run: app=${appId}, ${admission.skipReason}`)
-              return
-            }
-            const currentApp = admission.app
-
-            console.log(`[Runtime] Event triggered: type=${event.type}, app=${appId}`)
-            const trigger = buildEventTriggerContext(event.type, event.payload, currentApp, describeSubscription(sub, i))
-
-            try {
-              await executeWithConcurrency(currentApp, trigger)
-            } catch (err) {
-              console.error(`[Runtime] Event-triggered run failed: app=${appId}:`, err)
-            }
-          })
+          const unsub = eventRouter.on(filter, (event) => deliverAutomationEvent(appId, event, describeSubscription(sub, i)))
           state.eventUnsubscribers.push(unsub)
         }
       }
@@ -1443,6 +1535,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       if (!controller) throw new Error('This execution is no longer running')
       intentionallyStoppedRuns.add(runId)
       store.markRunStopped(runId)
+      await stopForPerson(appId, runId)
       controller.abort()
       console.log('[Runtime] Execution attempt stopped; decisions retained', { appId, runId })
     },
@@ -1451,7 +1544,10 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       const run = store.getRun(runId)
       if (!run || run.appId !== appId) throw new Error('Task not found')
       for (const entry of store.closeRun(runId)) publishDecision(entry)
-      if (activeExecutions.has(runId)) intentionallyStoppedRuns.add(runId)
+      if (activeExecutions.has(runId)) {
+        intentionallyStoppedRuns.add(runId)
+        await stopForPerson(appId, runId)
+      }
       activeExecutions.get(runId)?.controller.abort()
       console.log('[Runtime] Task closed', { appId, runId })
       broadcastAppStatus(appId)
@@ -1519,8 +1615,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
       // Live run → inject into the current turn; the AI absorbs it at the next
       // tool boundary (steer an in-progress run).
-      if (isRunActive(runId)) {
-        injectIntoActiveRun(appId, runId, trimmed, references)
+      if (tryInjectIntoActiveRun(appId, runId, [{ text: trimmed, references }], inputIds => markRunInputsStopped(runId, inputIds))) {
         console.log(`[Runtime] Injected into live run: app=${appId}, run=${runId.slice(0, 8)}`)
         return
       }
@@ -1644,6 +1739,9 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     async deactivateAll(): Promise<void> {
       shuttingDown = true
+      readySubscription?.dispose()
+      readySubscription = undefined
+      eventGate.discard(() => true, 'runtime shutting down')
       if (continuationInterval) { clearInterval(continuationInterval); continuationInterval = null }
       runningRuns.abortAll()
       console.log('[Runtime] Deactivating all apps...')

@@ -8,7 +8,7 @@
  * view — full-screen on mobile, side-by-side on desktop.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from '../i18n'
 import { ArrowLeft } from 'lucide-react'
 import { Header } from '../components/layout/Header'
@@ -17,6 +17,7 @@ import { useSearchStore } from '../stores/search.store'
 import { useTlonStore } from '../stores/tlon.store'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { useLayoutPreferences } from '../hooks/useLayoutPreferences'
+import { usePointerDrag } from '../hooks/usePointerDrag'
 import { KBList } from '../components/tlon/KBList'
 import { KBDetail } from '../components/tlon/KBDetail'
 import { CreateKBDialog } from '../components/tlon/CreateKBDialog'
@@ -53,29 +54,23 @@ export function TlonPage() {
     if (!isDraggingChat) setDragChatWidth(effectiveChatWidth)
   }, [effectiveChatWidth, isDraggingChat])
 
-  const handleChatDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    setIsDraggingChat(true)
-  }, [])
-
-  useEffect(() => {
-    if (!isDraggingChat) return
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!detailRef.current) return
-      const rect = detailRef.current.getBoundingClientRect()
-      setDragChatWidth(Math.max(chatWidthMin, Math.min(chatWidthMax, e.clientX - rect.left)))
-    }
-    const handleMouseUp = () => {
+  const chatWidthAt = (clientX: number) => {
+    const detail = detailRef.current
+    return detail
+      ? Math.max(chatWidthMin, Math.min(chatWidthMax, clientX - detail.getBoundingClientRect().left))
+      : dragChatWidth
+  }
+  const handleChatDragStart = usePointerDrag({
+    enabled: !isMobile && canvasOpen && !!selectedKBId,
+    onStart: () => setIsDraggingChat(true),
+    onMove: ({ clientX }) => setDragChatWidth(chatWidthAt(clientX)),
+    onEnd: ({ clientX }) => {
+      const width = chatWidthAt(clientX)
+      setDragChatWidth(width)
       setIsDraggingChat(false)
-      setChatWidth(dragChatWidth)
-    }
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [isDraggingChat, dragChatWidth, chatWidthMin, chatWidthMax, setChatWidth])
+      setChatWidth(width)
+    },
+  })
 
   useEffect(() => {
     loadKBs()
@@ -145,8 +140,8 @@ export function TlonPage() {
                 {/* Resize handle for Content Canvas (desktop only) */}
                 {canvasOpen && !isMobile && (
                   <div
-                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize z-20 hover:bg-primary/50 transition-colors"
-                    onMouseDown={handleChatDragStart}
+                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize touch-none z-20 hover:bg-primary/50 transition-colors"
+                    onPointerDown={handleChatDragStart}
                     title={t('Drag to resize')}
                   />
                 )}

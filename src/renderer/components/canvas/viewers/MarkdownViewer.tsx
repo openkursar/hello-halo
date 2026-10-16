@@ -16,10 +16,13 @@ import { Streamdown } from 'streamdown'
 import 'streamdown/styles.css'
 import { useCodePlugin } from '../../../lib/streamdown-plugins'
 import { splitMarkdownIntoChunks } from '../../../lib/markdown-chunks'
+import { MARKDOWN_REHYPE_PLUGINS } from '../../../lib/markdown-link-policy'
+import { conversationReferenceShortId } from '../../../../shared/conversation-reference'
 import { api } from '../../../api'
 import type { CanvasTab } from '../../../stores/canvas.store'
 import { useCanvasActions } from '../../../hooks/useCanvasLifecycle'
 import { useTranslation } from '../../../i18n'
+import { toHaloFileUrl } from '../../../../shared/halo-file-url'
 import {
   notifyRevealOutcome,
   openCommentCardAtComposer,
@@ -29,6 +32,7 @@ import {
   revealInElement,
   useTextReferences,
 } from '../../references'
+import { ConversationReferenceLink } from '../../chat/cross-conversation'
 import { CodeMirrorEditor, type CodeMirrorEditorRef } from './CodeMirrorEditor'
 import { countLines } from './count-lines'
 
@@ -61,9 +65,9 @@ function resolveImageSrc(src: string | undefined, basePath: string): string {
   // No base path available, return original
   if (!basePath) return src
 
-  // Resolve relative paths to halo-file:// protocol
+  // Resolve relative paths against the file's directory, then encode
   if (src.startsWith('./')) {
-    return `halo-file://${basePath}/${src.slice(2)}`
+    return toHaloFileUrl(`${basePath}/${src.slice(2)}`)
   }
 
   if (src.startsWith('../')) {
@@ -73,15 +77,15 @@ function resolveImageSrc(src: string | undefined, basePath: string): string {
       parts.pop()
       srcParts.shift()
     }
-    return `halo-file://${parts.join('/')}/${srcParts.join('/')}`
+    return toHaloFileUrl(`${parts.join('/')}/${srcParts.join('/')}`)
   }
 
   if (src.startsWith('/')) {
-    return `halo-file://${src}`
+    return toHaloFileUrl(src)
   }
 
   // Relative path without prefix
-  return `halo-file://${basePath}/${src}`
+  return toHaloFileUrl(`${basePath}/${src}`)
 }
 
 const STREAMDOWN_CONTROLS = { code: true } as const
@@ -102,8 +106,12 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
   const [copied, setCopied] = useState(false)
   const codePlugin = useCodePlugin()
 
-  // Get the base directory of the markdown file for resolving relative paths
-  const basePath = tab.path ? tab.path.substring(0, tab.path.lastIndexOf('/')) : ''
+  // Get the base directory of the markdown file for resolving relative paths.
+  // tab.path uses the platform separator; normalize so lastIndexOf finds the
+  // directory cut on Windows too.
+  const basePath = tab.path
+    ? tab.path.replace(/\\/g, '/').replace(/\/[^/]*$/, '')
+    : ''
 
   const content = tab.content || ''
   const chunks = useMemo(
@@ -230,6 +238,8 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
       },
       // Links - add target="_blank" (styling from tailwind.config.cjs)
       a({ href, children }: any) {
+        const conversation = typeof href === 'string' ? conversationReferenceShortId(href) : null
+        if (conversation) return <ConversationReferenceLink shortId={conversation}>{children}</ConversationReferenceLink>
         return (
           <a href={href} target="_blank" rel="noopener noreferrer">
             {children}
@@ -376,6 +386,7 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
                   controls={STREAMDOWN_CONTROLS}
                   plugins={streamdownPlugins}
                   components={markdownComponents}
+                  rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
                 >
                   {chunk}
                 </Streamdown>
@@ -396,6 +407,7 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
               controls={STREAMDOWN_CONTROLS}
               plugins={streamdownPlugins}
               components={markdownComponents}
+              rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
             >
               {content}
             </Streamdown>

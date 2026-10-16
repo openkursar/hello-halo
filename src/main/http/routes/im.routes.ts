@@ -356,9 +356,15 @@ export function registerImRoutes(app: Express): void {
   app.post('/api/im-channels/set-instance-app', async (req: Request, res: Response) => {
     try {
       const { setInstanceApp } = await import('../../apps/runtime/im-channels/binding')
-      const { instanceId, appId } = req.body ?? {}
-      res.json(setInstanceApp(String(instanceId ?? ''), String(appId ?? '')))
+      const { instanceId, appId, expectedAppId } = req.body ?? {}
+      if (expectedAppId !== undefined && typeof expectedAppId !== 'string') {
+        console.warn('[ImChannels] Rebinding rejected: expectedAppId must be a string')
+        res.status(400).json({ success: false, error: 'expectedAppId must be a string' })
+        return
+      }
+      res.json(setInstanceApp(String(instanceId ?? ''), String(appId ?? ''), expectedAppId))
     } catch (error) {
+      console.warn('[ImChannels] Rebinding failed over HTTP', { error })
       res.json({ success: false, error: (error as Error).message })
     }
   })

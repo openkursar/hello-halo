@@ -65,14 +65,14 @@ export function listSpaces(): ControllerResponse {
 /**
  * Create a new space
  */
-export function createSpace(input: {
+export async function createSpace(input: {
   name: string
   icon: string
   color?: string
   customPath?: string
-}): ControllerResponse {
+}): Promise<ControllerResponse> {
   try {
-    const space = serviceCreateSpace(input)
+    const space = await serviceCreateSpace(input)
     return { success: true, data: space }
   } catch (error: unknown) {
     const err = error as Error
@@ -134,12 +134,12 @@ export function openSpaceFolder(spaceId: string): ControllerResponse {
 /**
  * Update space metadata
  */
-export function updateSpace(
+export async function updateSpace(
   spaceId: string,
   updates: { name?: string; icon?: string; color?: string }
-): ControllerResponse {
+): Promise<ControllerResponse> {
   try {
-    const space = serviceUpdateSpace(spaceId, updates)
+    const space = await serviceUpdateSpace(spaceId, updates)
     if (space) {
       return { success: true, data: space }
     }
@@ -192,7 +192,7 @@ export async function changeSpaceWorkingDir(spaceId: string, workingDir: unknown
     if (isSpaceBusy(spaceId)) return { success: false, error: SPACE_BUSY }
     if (countSessionAcquisitions(spaceId) !== acquisitions) return { success: false, error: STARTED_WHILE_COPYING }
 
-    const updated = setSpaceWorkingDir(spaceId, target)
+    const updated = await setSpaceWorkingDir(spaceId, target)
     if (!updated) return { success: false, error: 'Space not found' }
     const repointed = repointSpaceEnvironments(spaceId, target)
     retireWorkingDirs(spaceId, previous, target)
@@ -258,9 +258,9 @@ export function consolidateSpaceMemory(spaceId: string): ControllerResponse {
 /**
  * Persist a user-defined space ordering.
  */
-export function reorderSpaces(spaceIds: string[]): ControllerResponse {
+export async function reorderSpaces(spaceIds: string[]): Promise<ControllerResponse> {
   try {
-    const spaces = serviceReorderSpaces(spaceIds)
+    const spaces = await serviceReorderSpaces(spaceIds)
     return { success: true, data: spaces }
   } catch (error: unknown) {
     const err = error as Error
@@ -271,9 +271,9 @@ export function reorderSpaces(spaceIds: string[]): ControllerResponse {
 /**
  * Remove an unreachable space's registry entry (does not touch disk).
  */
-export function forgetSpace(spaceId: string): ControllerResponse {
+export async function forgetSpace(spaceId: string): Promise<ControllerResponse> {
   try {
-    const result = serviceForgetSpace(spaceId)
+    const result = await serviceForgetSpace(spaceId)
     return { success: result }
   } catch (error: unknown) {
     const err = error as Error

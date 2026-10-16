@@ -17,7 +17,7 @@ import { useTranslation } from '../../i18n'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useAppImInstances } from '../../hooks/useAppImInstances'
 import { AppBotSessionsView } from './AppBotSessionsView'
-import { CHANNEL_LABELS } from './im-channel-labels'
+import { getImBotLabel } from './im-channel-labels'
 
 export function AppSessionsView({ appId, spaceId }: { appId: string; spaceId: string | null }) {
   const { t } = useTranslation()
@@ -69,7 +69,7 @@ export function AppSessionsView({ appId, spaceId }: { appId: string; spaceId: st
               }`}
             >
               <span className={`h-1.5 w-1.5 rounded-full ${instance.connected ? 'bg-halo-success' : 'bg-muted-foreground/30'}`} />
-              {CHANNEL_LABELS[instance.type] ?? instance.type}
+              {getImBotLabel(instance, t)}
             </button>
           ))}
         </div>

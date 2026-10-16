@@ -133,6 +133,8 @@ describe('survivor election over direct legs (3-node host loss self-heal)', () =
       updatedAt: now,
       hostNodeId: NODE_A,
     })
+    team.insertEpoch({ id: 'epoch-s1', teamId: OFFICE, startedAt: now, endedAt: null,
+      endReason: null, summary: null, lifecycle: 'conversation' })
     team.addMember({
       teamId: OFFICE,
       appId: ownMember,

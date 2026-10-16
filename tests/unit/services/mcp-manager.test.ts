@@ -31,11 +31,16 @@ vi.mock('../../../src/main/services/agent/helpers', () => ({
 vi.mock('../../../src/main/services/agent/events', () => ({
   emitAgentBroadcast: vi.fn()
 }))
-const sdk = vi.hoisted(() => ({ resolveCredentialsForSdk: vi.fn(), buildSdkEnv: vi.fn() }))
+const sdk = vi.hoisted(() => ({
+  resolveCredentialsForSdk: vi.fn(),
+  buildSdkEnv: vi.fn(),
+  resolveClaudeCodeCliPath: vi.fn(() => '/Halo.app/Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-code/cli.js'),
+}))
 vi.mock('../../../src/main/services/agent/sdk-config', () => ({
   getCleanUserEnv: vi.fn(() => ({})),
   resolveCredentialsForSdk: sdk.resolveCredentialsForSdk,
   buildSdkEnv: sdk.buildSdkEnv,
+  resolveClaudeCodeCliPath: sdk.resolveClaudeCodeCliPath,
 }))
 const { track } = vi.hoisted(() => ({ track: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('../../../src/main/services/analytics/analytics.service', () => ({
@@ -291,6 +296,8 @@ describe('testMcpConnections telemetry', () => {
       const options = vi.mocked(query).mock.calls[0][0].options
       expect(options.apiCredentials).toBe(credentials)
       expect(options.credentialsGeneration).toBe('captured-a')
+      // The same CLI conversations run, not the SDK's default copy inside the archive.
+      expect(options.pathToClaudeCodeExecutable).toBe(sdk.resolveClaudeCodeCliPath())
     } finally {
       removeServerStatus('srv')
       vi.clearAllTimers()

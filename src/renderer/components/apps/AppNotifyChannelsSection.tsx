@@ -37,7 +37,7 @@ import type {
 import { NOTIFICATION_CHANNEL_META } from '../../../shared/types/notification-channels'
 import type { ImSessionRecord, ImChannelInstanceStatus } from '../../../shared/types/im-channel'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
-import { getImChannelDisplay } from './im-channel-labels'
+import { getImChannelDisplay, getImBotLabel } from './im-channel-labels'
 import { ImPushTargetPicker } from './ImPushTargetPicker'
 
 // ============================================
@@ -681,7 +681,8 @@ function ContactsSection({ appId }: { appId: string }) {
                     <span className={`text-xs shrink-0 ${channelInfo.color}`}>{channelInfo.label}</span>
                   </div>
                   {!orphaned ? (
-                    <div className="text-xs text-muted-foreground/60 mt-0.5">
+                    <div className="text-xs text-muted-foreground/60 mt-0.5 break-words">
+                      {bot && <>{getImBotLabel(bot, t)} · </>}
                       {bot?.appName
                         ? t('Pushed through the bot of {{name}}, which also gets the replies', { name: bot.appName })
                         : t('Pushed through the bot of another digital human')}

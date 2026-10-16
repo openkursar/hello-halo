@@ -306,7 +306,7 @@ export interface BrowserConfig {
 
 // Office federation configuration
 export interface FederationConfig {
-  gatewayUrl?: string;  // Federation gateway base URL. Empty = pure-LAN offices.
+  gatewayUrl?: string;  // Empty inherits the build default; LAN-only when neither is set.
 }
 
 export interface HaloConfig {
@@ -951,3 +951,5 @@ export const FILE_ICON_IDS: Record<string, string> = {
 export function getFileIconId(extension: string): string {
   return FILE_ICON_IDS[extension.toLowerCase()] || FILE_ICON_IDS.default;
 }
+
+export type { LiveInput } from './live-input'

@@ -13,9 +13,10 @@ import {
   isConfigUnreadable as serviceIsConfigUnreadable
 } from '../foundation/config.service'
 import { maskConfigFields, unmaskSentinels } from '../foundation/config-encryption'
+import { getProductFederationGatewayUrl } from '../foundation/product-config'
 import { validateApiConnection, fetchModelsFromApi } from '../services/api-validator.service'
 import { ModelFetchError } from '../../shared/model-fetch-error'
-import { CONFIG_RELOAD_REQUIRED_CODE, CONFIG_UNREADABLE_CODE } from '../../shared/rpc/contracts/config.contract'
+import { CONFIG_RELOAD_REQUIRED_CODE, CONFIG_UNREADABLE_CODE, type ConfigReadMetadata } from '../../shared/rpc/contracts/config.contract'
 import type { AISourcesConfig } from '../../shared/types/ai-sources'
 
 export interface ControllerResponse<T = unknown> {
@@ -25,18 +26,23 @@ export interface ControllerResponse<T = unknown> {
   code?: string
 }
 
-/**
- * Get current configuration. Sensitive fields (API keys, tokens,
- * passwords) are replaced with '***' so the HTTP / IPC boundary never
- * leaks credentials.
- */
-export function getConfig(): ControllerResponse & { configEpoch?: number } {
+export function getConfigReadMetadata(): ConfigReadMetadata {
+  return {
+    configEpoch: configSnapshotEpoch(),
+    productDefaults: {
+      federation: { gatewayUrl: getProductFederationGatewayUrl()?.trim() || null },
+    },
+  }
+}
+
+/** Credentials stay masked; build defaults stay outside the user-config payload. */
+export function getConfig(): ControllerResponse & ConfigReadMetadata {
   try {
     const config = serviceGetConfig()
     return {
       success: true,
       data: maskConfigFields(config as unknown as Record<string, unknown>),
-      configEpoch: configSnapshotEpoch(),
+      ...getConfigReadMetadata(),
     }
   } catch (error: unknown) {
     const err = error as Error

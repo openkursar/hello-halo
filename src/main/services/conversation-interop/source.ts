@@ -47,6 +47,8 @@ export interface DispatchedMessage {
   turnInput: string
   /** What the recipient's transcript keeps for the message. */
   record: { content: string; source: TranscriptSource; metadata: TranscriptProvenanceMetadata }
+  /** Taken back after a person's stop and delivered again: the transcript already holds its record. */
+  inputRecorded?: boolean
 }
 
 export interface DispatchOutcome {
@@ -94,6 +96,8 @@ export interface ConversationSource {
 
   /** A turn is running or about to (a dispatched message not yet picked up counts). */
   isBusy(conversationId: string): boolean
+  /** Permissions of the active turn; absent means delivery must wait safely. */
+  getActiveIdentity?(conversationId: string): string | undefined
   /**
    * Whether the engine still has ANY live session for the conversation, busy or
    * idle. Used to tell a turn genuinely still starting from a reservation left
@@ -107,6 +111,15 @@ export interface ConversationSource {
    * could not be started.
    */
   dispatch(spaceId: string, conversationId: string, message: DispatchedMessage): Promise<DispatchOutcome>
+  /** One model input, with each original message retained separately in the transcript. */
+  dispatchBatch?(spaceId: string, conversationId: string, messages: readonly DispatchedMessage[]): Promise<DispatchOutcome[]>
+  /**
+   * Accept the entire batch synchronously, or leave it unrecorded for a subsequent
+   * dispatch. `onWithdrawn` runs if a person stops the turn before it read the batch.
+   */
+  deliverMidTurn?(spaceId: string, conversationId: string, messages: readonly DispatchedMessage[], onWithdrawn: () => void): DispatchOutcome[] | false
+  /** Fires after the consumer can actually accept a live delivery. */
+  onTurnReady?(listener: (conversationId: string) => void): IDisposable
   /**
    * Fires for every turn ending on one of this source's conversations —
    * success, failure, or abort — after `isBusy` can already read false.

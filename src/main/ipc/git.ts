@@ -18,6 +18,7 @@ export function registerGitHandlers(): void {
     gitGetChanges: (spaceId, repoRoot, scope) => gitController.getGitChanges(spaceId, repoRoot, scope),
     gitGetFileContents: (spaceId, repoRoot, request) => gitController.getGitFileContents(spaceId, repoRoot, request),
     gitListRevisionOptions: (spaceId, repoRoot) => gitController.listGitRevisionOptions(spaceId, repoRoot),
+    gitGetCommitGraph: (spaceId, repoRoot, query) => gitController.getGitCommitGraph(spaceId, repoRoot, query),
     gitStage: (spaceId, repoRoot, paths) => gitController.stageGitPaths(spaceId, repoRoot, paths),
     gitUnstage: (spaceId, repoRoot, paths) => gitController.unstageGitPaths(spaceId, repoRoot, paths),
     gitDiscard: (spaceId, repoRoot, paths) => gitController.discardGitPaths(spaceId, repoRoot, paths),

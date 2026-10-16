@@ -11,14 +11,17 @@
 
 import { memo, useContext, useMemo, useRef, useState } from 'react'
 import { Maximize2 } from 'lucide-react'
-import { Streamdown, defaultRehypePlugins } from 'streamdown'
+import { Streamdown } from 'streamdown'
 import type { PluginConfig } from 'streamdown'
 import 'streamdown/styles.css'
 import 'katex/dist/katex.min.css'
 import { useCodePlugin, useMathPlugin } from '../../lib/streamdown-plugins'
 import { createStreamingMarkdown } from '../../lib/streaming-markdown'
+import { MARKDOWN_REHYPE_PLUGINS, markdownRaw, markdownSanitize, rehypeLinkPolicy } from '../../lib/markdown-link-policy'
 import { useTranslation } from '../../i18n'
+import { conversationReferenceShortId } from '../../../shared/conversation-reference'
 import { OpenTableContext } from './open-table-context'
+import { ConversationReferenceLink } from './cross-conversation'
 import { fileLinkHandlers, rehypeFileMentions, rehypeLocalFileLinks, rehypeRestoreFileLinks, useFileLinkOptions, useFileMentionLinks } from '../references'
 
 function tableToCsv(table: HTMLTableElement): string {
@@ -102,16 +105,18 @@ const components = {
   ),
 
   // Links
-  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-primary hover:underline underline-offset-2"
-    >
-      {children}
-    </a>
-  ),
+  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => {
+    const className = 'text-primary hover:underline underline-offset-2'
+    const conversation = href ? conversationReferenceShortId(href) : null
+    if (conversation) {
+      return <ConversationReferenceLink shortId={conversation} className={className}>{children}</ConversationReferenceLink>
+    }
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
+        {children}
+      </a>
+    )
+  },
 
   // Tables
   table: ({ children }: { children?: React.ReactNode }) => <TableBlock>{children}</TableBlock>,
@@ -157,13 +162,13 @@ const components = {
 // re-render every code block, link and table on each parent render.
 const CONTROLS = { code: true } as const
 const LINK_SAFETY = { enabled: true } as const
-// File targets become inert before URL hardening; HTML still passes the unchanged sanitizer.
+// File targets are set aside before sanitizing and restored as file mentions after it.
 const FILE_LINK_REHYPE_PLUGINS = [
-  defaultRehypePlugins.raw,
+  markdownRaw,
   rehypeLocalFileLinks,
-  defaultRehypePlugins.sanitize,
+  markdownSanitize,
   rehypeRestoreFileLinks,
-  defaultRehypePlugins.harden,
+  rehypeLinkPolicy,
 ]
 const FILE_MENTION_REHYPE_PLUGINS = [...FILE_LINK_REHYPE_PLUGINS, rehypeFileMentions]
 
@@ -211,7 +216,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         controls={CONTROLS}
         linkSafety={LINK_SAFETY}
         plugins={plugins}
-        rehypePlugins={providedFileLinks ? (streaming ? FILE_LINK_REHYPE_PLUGINS : FILE_MENTION_REHYPE_PLUGINS) : undefined}
+        rehypePlugins={providedFileLinks ? (streaming ? FILE_LINK_REHYPE_PLUGINS : FILE_MENTION_REHYPE_PLUGINS) : MARKDOWN_REHYPE_PLUGINS}
       >
         {markdown}
       </Streamdown>

@@ -153,6 +153,8 @@ export default function App() {
   // chat store commits once per streaming token for every conversation in the
   // app (digital humans and team members included). A whole-store subscription
   // here re-rendered the entire tree at token rate.
+  const handleAgentInputArrived = useChatStore(s => s.handleAgentInputArrived)
+  const handleAgentInputStopped = useChatStore(s => s.handleAgentInputStopped)
   const handleAgentMessage = useChatStore(s => s.handleAgentMessage)
   const handleAgentToolCall = useChatStore(s => s.handleAgentToolCall)
   const handleAgentToolResult = useChatStore(s => s.handleAgentToolResult)
@@ -625,6 +627,9 @@ export default function App() {
       })
     })
 
+    const unsubInputArrived = api.onAgentInputArrived(handleAgentInputArrived)
+    const unsubInputStopped = api.onAgentInputStopped(handleAgentInputStopped)
+
     // Message events (with session IDs)
     const unsubMessage = api.onAgentMessage((data) => {
       handleAgentMessage(data as AgentEventBase & { content: string; isComplete: boolean })
@@ -697,6 +702,8 @@ export default function App() {
       unsubThought()
       unsubThoughtDelta()
       unsubMessage()
+      unsubInputArrived()
+      unsubInputStopped()
       unsubToolCall()
       unsubToolResult()
       unsubError()
@@ -711,6 +718,8 @@ export default function App() {
       unsubToolsetReq()
     }
   }, [
+    handleAgentInputArrived,
+    handleAgentInputStopped,
     handleAgentMessage,
     handleAgentToolCall,
     handleAgentToolResult,

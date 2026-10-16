@@ -64,6 +64,8 @@ import { dispatchInboundMessage, clearSupplementBuffersForInstance, releaseSuppl
 import { clearAllImPermissionContexts } from './im-permission-registry'
 import { clearAllImStreamHandles } from './im-stream-registry'
 import { destroyAllChatBrowserContexts } from './app-chat-browser'
+import { disposeAppChatDelivery } from './app-chat'
+import { shutdownPendingRelayDelivery } from './pending-relay-delivery'
 import { getConfig, getHaloDir } from '../../foundation/config.service'
 import { onMcpAppsChange } from '../manager/service'
 import { createHaloAppsMcpServer, createSpaceTeamMcpServer, TEAM_TOOLSET_GUIDE } from '../conversation-mcp'
@@ -143,7 +145,7 @@ export {
   renameChatSession,
 } from './app-chat'
 export type { AppChatRequest, NativeSessionResult } from './app-chat'
-export { injectIntoAppChatWhenLive } from './app-chat-live-turn'
+export { injectIntoAppChatWhenLive, getAppChatTurnIdentity } from './app-chat-live-turn'
 export { createDigitalHumanConversationSource } from './conversation-source'
 export { createRunConversationSource } from './run-conversation-source'
 
@@ -287,6 +289,7 @@ export async function initAppRuntime(
         spaceId: scope.spaceId,
         conversationId: scope.conversationId,
         workDir: scope.workDir,
+        modelSelection: scope.modelSelection,
       }),
   })
   // Keep the shared MCP status cache honest: probe on enable/install/update,
@@ -389,7 +392,10 @@ export async function initAppRuntime(
   // ── IM Channel Manager (multi-instance) ─────────────────────────────
   // Manages all IM channel instances (WeCom Bot, Feishu Bot, DingTalk Bot, etc.)
   // Each instance is a separate connection bound to a specific digital human.
-  const imChannelManager = new ImChannelManager()
+  const imChannelManager = new ImChannelManager((appId) => {
+    const app = deps.appManager.getApp(appId)
+    return app && app.status !== 'uninstalled' ? app.spec.name : undefined
+  })
   imChannelManagerInstance = imChannelManager
 
   // Expose via module-level accessor so dispatch-inbound.ts can resolve
@@ -606,6 +612,8 @@ export async function shutdownAppRuntime(): Promise<void> {
   }
   stopReleasingSupplements?.()
   stopReleasingSupplements = null
+  disposeAppChatDelivery()
+  shutdownPendingRelayDelivery()
 
   imSessionRegistryInstance = null
   activityStoreRef = null

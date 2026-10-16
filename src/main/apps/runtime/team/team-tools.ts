@@ -217,9 +217,10 @@ function buildSendTool(resolve: ResolveTeamMcpContext) {
     'Send a message directly to a teammate. Use this to answer the requester; ' +
       'the separate turn-end notification to the lead is not a substitute for ' +
       'sending your result to the teammate who needs it.\n\n' +
-      "The message becomes the input of the teammate's next turn. This call " +
-      'returns as soon as the message is handed over; if they answer, it arrives ' +
-      'later as a new turn of yours — so do not sit and wait for it.\n\n' +
+      "The message reaches a working teammate after their current tool call. This call " +
+      'returns as soon as the message is handed over. Replies and other incoming messages reach you ' +
+      'after your current tool call; you do not need to poll or end your turn to receive them. ' +
+      'End your turn when your own work is finished.\n\n' +
       'Put large outputs on disk and share the path, not the text.\n\n' +
       'Example: { "to": "researcher", "message": "Do task T1, details on the board" }',
     {
@@ -229,9 +230,6 @@ function buildSendTool(resolve: ResolveTeamMcpContext) {
     async (input) => {
       const ctx = resolve()
       if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
-      console.log(
-        `${LOG_TAG} ${TEAM_TOOL_NAMES.send}: team=${ctx.teamId} from=${ctx.callerAppId} to="${input.to}"`
-      )
       try {
         const toAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.to)
         ctx.bus.assertCanContact(ctx.teamId, ctx.callerAppId, toAppId, ctx.collabMode)
@@ -274,7 +272,7 @@ function buildSendTool(resolve: ResolveTeamMcpContext) {
           return textResult(
             `Message delivered to "${input.to}" (id: ${result.messageId}) while they were working — they ` +
               `see it at their next step, without being interrupted. They may be part-way through ` +
-              `something, so give them room to react; if they answer, it arrives later as a new turn.`
+              `something, so give them room to react; if they answer while you work, it arrives after your current tool call.`
           )
         }
         if (result.remoteTarget) {
@@ -291,7 +289,7 @@ function buildSendTool(resolve: ResolveTeamMcpContext) {
         }
         return textResult(
           `Message delivered to "${input.to}" (id: ${result.messageId}). If they answer, it will arrive ` +
-            `later as a new turn — carry on with other work.`
+            `after your current tool call while you continue working.`
         )
       } catch (err) {
         return busErrorResult(err)

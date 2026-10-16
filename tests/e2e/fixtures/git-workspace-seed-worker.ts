@@ -20,7 +20,7 @@ import { extractFileChangesSummaryFromThoughts } from '../../../src/shared/file-
 import type { Thought } from '../../../src/shared/types/transcript'
 import type { GitWorkspaceSeed, GitWorkspaceSeedRequest } from './git-workspace'
 
-function main(): void {
+async function main(): Promise<void> {
   const raw = process.argv[2]
   if (!raw) throw new Error('git-workspace-seed-worker: missing argv[2] payload')
   const request = JSON.parse(raw) as GitWorkspaceSeedRequest
@@ -28,7 +28,7 @@ function main(): void {
   const references = parseReferences(request.followUp.references)
   if (!references.ok) throw new Error(`git-workspace-seed-worker: invalid references: ${references.error}`)
 
-  const space = createSpace({ name: request.spaceName, icon: 'folder', customPath: request.repoRoot })
+  const space = await createSpace({ name: request.spaceName, icon: 'folder', customPath: request.repoRoot })
   const conversation = createConversation(space.id, request.conversationTitle, undefined, { keepTitle: true })
   addMessage(space.id, conversation.id, { role: 'user', content: request.userMessage })
 
@@ -73,4 +73,4 @@ function main(): void {
   process.exit(0)
 }
 
-main()
+void main()

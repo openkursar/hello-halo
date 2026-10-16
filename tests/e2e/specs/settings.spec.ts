@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { test, expect } from '../fixtures/electron'
+import type { HaloAPI } from '../../../src/preload'
 import { navigateToChat, navigateToSettings } from '../fixtures/helpers'
 
 test.describe('Settings Page', () => {
@@ -60,6 +63,47 @@ test.describe('Settings Page', () => {
 
     await window.screenshot({ path: 'tests/e2e/results/settings-theme.png' })
   })
+
+  for (const width of [1280, 375]) {
+    test(`the built-in federation gateway is visible without becoming a user override at ${width}px`, async ({ window, electronApp }) => {
+      await navigateToChat(window)
+      const response = await window.evaluate(async () => {
+        return (globalThis.window as unknown as { halo: HaloAPI }).halo.getConfig()
+      })
+      expect(response.success).toBe(true)
+      expect(response.productDefaults?.federation).toHaveProperty('gatewayUrl')
+      const dataDir = await electronApp.evaluate(() => process.env.HALO_DATA_DIR!)
+      const configFile = join(dataDir, 'config.json')
+      const before = readFileSync(configFile, 'utf8')
+      const defaultUrl = 'https://relay.example.test/'
+      await electronApp.evaluate(({ ipcMain }, data) => {
+        ipcMain.removeHandler('config:get')
+        ipcMain.handle('config:get', () => ({
+          ...data.response,
+          productDefaults: { federation: { gatewayUrl: data.defaultUrl } },
+        }))
+      }, { response, defaultUrl })
+      const cdp = await window.context().newCDPSession(window)
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false })
+
+      await navigateToSettings(window)
+      const section = window.locator('#remote')
+      const gateway = section.getByRole('textbox', { name: 'Federation Gateway', exact: true })
+      await gateway.scrollIntoViewIfNeeded()
+      await expect(gateway).toHaveValue('')
+      await expect(gateway).toHaveAttribute('placeholder', defaultUrl)
+      await expect(section.getByText('Using the built-in gateway:', { exact: false })).toBeVisible()
+      await expect(section.getByText('Leave empty to use the built-in gateway.', { exact: true })).toBeVisible()
+      await expect(section.getByText('Leave empty for LAN-only teams.', { exact: true })).toHaveCount(0)
+      const box = await gateway.boundingBox()
+      expect(box).not.toBeNull()
+      expect(box!.x).toBeGreaterThanOrEqual(0)
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width)
+      expect(await gateway.evaluate(element => element.parentElement!.scrollWidth <= element.parentElement!.clientWidth)).toBe(true)
+      expect(readFileSync(configFile, 'utf8')).toBe(before)
+      await window.screenshot({ path: `tests/e2e/results/federation-gateway-${width}.png` })
+    })
+  }
 
   test('the header back button returns to the previous conversation view', async ({ window }) => {
     await navigateToChat(window)

@@ -129,13 +129,17 @@ function resolveModelSource() {
     'https://open.bigmodel.cn/api/coding/paas/v4'
   const modelId = process.env.HALO_TEST_MODEL_ID || process.env.HALO_TEST_MODEL || 'glm-5.2'
   const provider = process.env.HALO_TEST_MODEL_PROVIDER || process.env.HALO_TEST_PROVIDER || 'custom'
+  const apiType = process.env.HALO_TEST_API_TYPE || 'chat_completions'
+  if (!['chat_completions', 'responses', 'anthropic_passthrough', 'kiro'].includes(apiType)) FAIL('HALO_TEST_API_TYPE must name a supported API type')
+  const sdkEngine = process.env.HALO_TEST_SDK_ENGINE || 'anthropic'
+  if (!['anthropic', 'halo', 'codex', 'dsh'].includes(sdkEngine)) FAIL('HALO_TEST_SDK_ENGINE must name a supported engine')
   if (!apiKey && !signedIn) {
     WARN(
       'No model API key found (HALO_TEST_API_KEY / HALO_TEST_MODEL_API_KEY).\n' +
       '          Set it in .env.local — nodes will start but agents cannot run without it.'
     )
   }
-  return { apiKey, baseUrl, modelId, provider, signedIn }
+  return { apiKey, baseUrl, modelId, provider, signedIn, apiType, sdkEngine }
 }
 
 /**
@@ -245,7 +249,7 @@ function seedNodeConfig(nodeDir, index, port, model, gatewayUrl) {
       provider: model.provider,
       authType: 'api-key',
       apiUrl: model.baseUrl,
-      apiType: 'chat_completions',
+      apiType: model.apiType,
       apiKey: model.apiKey,
       model: model.modelId,
       availableModels: [{ id: model.modelId, name: model.modelId }],
@@ -285,7 +289,7 @@ function seedNodeConfig(nodeDir, index, port, model, gatewayUrl) {
     },
     appearance: { theme: 'dark' },
     system: { autoLaunch: false },
-    agent: { maxTurns: 999, promptProfile: 'halo' },
+    agent: { maxTurns: 999, promptProfile: 'halo', sdkEngine: model.sdkEngine },
     // Remote access pre-enabled: the extended-init idle task auto-restores the
     // HTTP server on this port using the plaintext PIN below as the token.
     remoteAccess: { enabled: true, port, password: nodePin(index) },

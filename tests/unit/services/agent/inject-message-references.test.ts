@@ -12,6 +12,7 @@ const m = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({ v2Sessions: m.sessions }))
+vi.mock('../../../../src/main/services/agent/live-turn', () => ({ sendIntoLiveTurn: (_id: string, text: string) => { m.send(text); return true } }))
 vi.mock('../../../../src/main/services/conversation.service', () => ({ addMessage: m.addMessage }))
 vi.mock('../../../../src/main/services/agent/helpers', () => ({ getWorkingDir: () => '/work' }))
 

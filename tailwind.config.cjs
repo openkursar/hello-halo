@@ -66,6 +66,8 @@ module.exports = {
       },
       // Text may take a darker shade of these than fills, dots and borders (light does; see globals.css).
       textColor: {
+        // Object form so text-primary-foreground / -hover keep coming from colors.primary.
+        primary: { DEFAULT: 'hsl(var(--primary-text))' },
         'halo-success': 'hsl(var(--halo-success-text))',
         'halo-warning': 'hsl(var(--halo-warning-text))',
       },
@@ -96,7 +98,7 @@ module.exports = {
             '--tw-prose-body': 'hsl(var(--foreground))',
             '--tw-prose-headings': 'hsl(var(--foreground))',
             '--tw-prose-lead': 'hsl(var(--muted-foreground))',
-            '--tw-prose-links': 'hsl(var(--primary))',
+            '--tw-prose-links': 'hsl(var(--primary-text))',
             '--tw-prose-bold': 'hsl(var(--foreground))',
             '--tw-prose-counters': 'hsl(var(--muted-foreground))',
             '--tw-prose-bullets': 'hsl(var(--muted-foreground))',
@@ -113,7 +115,7 @@ module.exports = {
             '--tw-prose-invert-body': 'hsl(var(--foreground))',
             '--tw-prose-invert-headings': 'hsl(var(--foreground))',
             '--tw-prose-invert-lead': 'hsl(var(--muted-foreground))',
-            '--tw-prose-invert-links': 'hsl(var(--primary))',
+            '--tw-prose-invert-links': 'hsl(var(--primary-text))',
             '--tw-prose-invert-bold': 'hsl(var(--foreground))',
             '--tw-prose-invert-counters': 'hsl(var(--muted-foreground))',
             '--tw-prose-invert-bullets': 'hsl(var(--muted-foreground))',

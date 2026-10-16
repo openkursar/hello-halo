@@ -111,8 +111,14 @@ additive-not-rewrite discipline the rest of `runtime/federation` follows.
 ## Status
 
 The substrate is the **single** transport for the control plane: `ctrl-feed`
-carries every wake / turn-complete over this log (no raw fire-and-forget path,
+carries every wake / turn-complete over this log, including internal completion
+receipts for asynchronous messages delivered into a running turn (no raw fire-and-forget path,
 no capability gate). Retention pruning and ctrl-plane give-up are wired (above).
+Control-feed frames bind their feed author and target to the authenticated peer:
+entries must be authored by that peer and addressed to this node; subscribe,
+ack, nack and unsubscribe may only address this node's feed for that peer. The
+payload's claimed sender never supplies wake authority. This prevents one office
+member from publishing as another node or subscribing to another peer's receipts.
 The session plane (`../session-feed.ts`) is the second consumer: per-session
 transcript feeds. The office authority keeps a copy of every one and serves it
 from its mirror. A joiner copies only the feeds a local viewer shows.

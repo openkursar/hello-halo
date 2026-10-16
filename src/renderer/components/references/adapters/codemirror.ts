@@ -163,8 +163,14 @@ const referenceTheme = EditorView.baseTheme({
     backgroundColor: 'hsl(var(--primary) / 0.18)',
     borderBottom: '1.5px solid hsl(var(--primary) / 0.7)',
   },
+  // Unwrapped long lines make the content wider than the editor: a card keeps to
+  // the visible text area beside the gutters, however far the lines are scrolled.
   '.cm-haloComment': {
     padding: '4px 12px 6px 8px',
+    boxSizing: 'border-box',
+    position: 'sticky',
+    left: 'var(--halo-comment-left, 0)',
+    maxWidth: 'var(--halo-comment-width, none)',
   },
   // The merge-view selectors outrank a diff theme's changed-line tint, which would hide the flash.
   // An editor with its own line tints may set --halo-reveal-alpha to soften it (see index.ts).
@@ -294,6 +300,9 @@ class ReferencePlugin {
   private cancelRelease: (() => void) | null = null
   private syncFrame: number | null = null
   private shown = false
+  private hasCards = false
+  /** The visible text area last given to the cards, as `left/width`. */
+  private cardArea: string | null = null
   private lastLines: string | null = null
   private destroyed = false
   private readonly unsubscribe: Array<() => void>
@@ -320,6 +329,26 @@ class ReferencePlugin {
   update(update: ViewUpdate): void {
     if (update.selectionSet || update.focusChanged) this.scheduleOffer()
     if (update.docChanged && this.shown) this.scheduleSync()
+    // Doc changes count as geometry changes too: the gutters widen with the line count.
+    if (this.hasCards && update.geometryChanged) this.fitCards()
+  }
+
+  /** Gives the cards the editor's visible text area (see `.cm-haloComment`). */
+  private fitCards(): void {
+    this.view.requestMeasure({
+      key: this,
+      read: view => {
+        const left = view.contentDOM.offsetLeft
+        return { left, width: view.scrollDOM.clientWidth - left }
+      },
+      write: ({ left, width }, view) => {
+        const area = `${left}/${width}`
+        if (area === this.cardArea) return
+        this.cardArea = area
+        view.scrollDOM.style.setProperty('--halo-comment-left', `${left}px`)
+        view.scrollDOM.style.setProperty('--halo-comment-width', `${width}px`)
+      },
+    })
   }
 
   destroy(): void {
@@ -532,6 +561,8 @@ class ReferencePlugin {
       this.shown = hasAny
       view.dispatch({ effects: setReferenceDecorations.of({ marks: Decoration.set(marks, true), cards: this.buildCards(cards) }) })
     }
+    this.hasCards = cards.length > 0
+    if (this.hasCards) this.fitCards()
     this.reportLines(lines)
   }
 

@@ -45,13 +45,13 @@ vi.mock('../../../../src/main/services/space.service', () => ({
 vi.mock('../../../../src/main/foundation/window.service', () => ({ sendToRenderer: sentToRenderer }))
 vi.mock('../../../../src/main/http/websocket', () => ({ broadcastToAll: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/control', () => ({ stopGeneration: vi.fn() }))
-vi.mock('../../../../src/main/services/agent', () => ({ listResidentSessions: () => [] }))
+vi.mock('../../../../src/main/services/agent', () => ({ listResidentSessions: () => [], hasPendingSessionInput: () => false }))
 vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({ getActiveImChannelManager: () => null }))
 
 import { writeChatPush } from '../../../../src/main/apps/runtime/chat-record'
 import { chatPushConversationId, recordChatPush } from '../../../../src/main/apps/runtime/chat-push'
 import { disposeAppChatSink, getAppChatSink } from '../../../../src/main/apps/runtime/app-chat-sink'
-import { openSessionWriter, readSessionMessages } from '../../../../src/main/apps/runtime/session-store'
+import { openSessionWriter, readSessionMessages, readSessionTranscript, readSessionMessageThoughts } from '../../../../src/main/apps/runtime/session-store'
 import { convertEventsToMessages, type StoredEvent } from '../../../../src/main/apps/runtime/session-transcript'
 import { buildImSessionKey } from '../../../../src/shared/apps/im-keys'
 import { buildTeamSessionKey } from '../../../../src/shared/apps/team-types'
@@ -359,38 +359,45 @@ describe('a push that comes while a turn of the chat is running', () => {
     sink.onTurnComplete(turnResult as never)
   }
 
-  it('is written once the turn ends, so the turn reads whole, and keeps the time it was sent', () => {
+  it('is written at arrival and keeps tool results linked across the push', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-10-07T10:00:01.000Z'))
     const sink = startTurn()
     vi.setSystemTime(new Date('2026-10-07T10:00:04.000Z'))
 
     writeChatPush(push)
-    expect(readChat(spaceDir(), conversationId).map(m => m.content)).not.toContain('FYI: deploy started')
+    expect(readChat(spaceDir(), conversationId).map(m => m.content)).toContain('FYI: deploy started')
 
     vi.setSystemTime(new Date('2026-10-07T10:00:09.000Z'))
+    sink.onRawMessage({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'two errors found' }] } })
     endTurn(sink)
 
     const messages = readChat(spaceDir(), conversationId)
     expect(messages.map(m => [m.role, m.content, m.source])).toEqual([
       ['user', 'Summarize the logs', undefined],
-      ['assistant', 'Two errors, both fixed.', undefined],
+      ['assistant', '', undefined],
       ['assistant', 'FYI: deploy started', 'push'],
+      ['assistant', 'Two errors, both fixed.', undefined],
     ])
-    // The turn kept its tool call: the push did not cut it in two.
     expect(messages[1].thoughts?.map(t => t.type)).toEqual(['tool_use'])
+    expect(messages[1].thoughts?.[0].toolResult?.output).toBe('two errors found')
     expect(messages[2].timestamp).toBe('2026-10-07T10:00:04.000Z')
     expect(messages[2].metadata?.pushedByName).toBe('Ops Bot')
+    const run = appChatRunId(conversationId, 'dh')
+    const newest = readSessionTranscript(spaceDir(), 'dh', run, { limit: 2 })
+    const older = readSessionTranscript(spaceDir(), 'dh', run, { limit: 2, before: newest.cursor! })
+    expect([...older.messages, ...newest.messages].map(item => item.id)).toEqual(messages.map(item => item.id))
+    expect(readSessionMessageThoughts(spaceDir(), 'dh', run, messages[1].id)[0].toolResult?.output).toBe('two errors found')
   })
 
-  it('is not written into a chat whose history was cleared before the turn ended', () => {
+  it('does not defer or duplicate the already recorded push when its sink is disposed', () => {
     const sink = startTurn()
     writeChatPush(push)
 
     disposeAppChatSink(conversationId)
     endTurn(sink)
 
-    expect(readChat(spaceDir(), conversationId).map(m => m.content)).not.toContain('FYI: deploy started')
+    expect(readChat(spaceDir(), conversationId).filter(m => m.content === 'FYI: deploy started')).toHaveLength(1)
   })
 })
 

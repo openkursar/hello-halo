@@ -444,6 +444,8 @@ export function onEvent<T = unknown>(channel: string, callback: (data: T) => voi
     // Use IPC in Electron
     const methodMap: Record<string, keyof typeof window.halo> = {
       'agent:message': 'onAgentMessage',
+      'agent:input-arrived': 'onAgentInputArrived',
+      'agent:input-stopped': 'onAgentInputStopped',
       'agent:tool-call': 'onAgentToolCall',
       'agent:tool-result': 'onAgentToolResult',
       'agent:error': 'onAgentError',

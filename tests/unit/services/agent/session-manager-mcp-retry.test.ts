@@ -30,8 +30,9 @@ vi.mock('../../../../src/main/services/agent/knowledge-context', () => ({
   resolveConversationKnowledgeBases: vi.fn(() => []),
   resolveConversationKnowledgeBaseIds: vi.fn(() => []),
 }))
+const { toolsetRebuild } = vi.hoisted(() => ({ toolsetRebuild: { listener: null as ((id: string) => void) | null } }))
 vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({
-  setSessionInvalidator: vi.fn(),
+  setSessionInvalidator: (listener: (id: string) => void) => { toolsetRebuild.listener = listener },
   buildCreationTimeServers: vi.fn(() => ({})),
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/capability-index', () => ({ buildToolsetSection: vi.fn(() => '') }))
@@ -56,6 +57,7 @@ vi.mock('../../../../src/main/services/agent/mcp-manager', () => ({
 
 import {
   getOrCreateV2Session,
+  acquireV2Session,
   closeAllV2Sessions,
   closeV2Session,
   evictIdleSession,
@@ -63,11 +65,25 @@ import {
   consumePendingRebuild,
   noteSessionMcpStatus,
   handleMcpAppsChange,
+  invalidateAllSessions,
+  invalidateImSessions,
+  registerActiveSession,
+  unregisterActiveSession,
+  createSessionState,
+  markTurnDispatched,
+  markTurnInitReceived,
+  activeSessions,
   v2Sessions,
 } from '../../../../src/main/services/agent/session-manager'
+import { sendIntoLiveTurn } from '../../../../src/main/services/agent/live-turn'
+import { buildImSessionKey } from '../../../../src/shared/apps/im-keys'
 
 function fakeSession() {
-  return { query: { transport: { isReady: () => true, onExit: () => () => {} } }, close: vi.fn() }
+  return {
+    query: { transport: { isReady: () => true, onExit: () => () => {} } },
+    sendIntoLiveTurn: vi.fn((_message: unknown) => true),
+    close: vi.fn(),
+  }
 }
 
 interface ConsumerState { isRunning: boolean; turn: unknown }
@@ -80,7 +96,6 @@ async function open(conversationId: string, consumer: ConsumerState = { isRunnin
     get isRunning() { return consumer.isRunning },
     getActiveSessionState: () => consumer.turn,
     getTeamLifecycleThoughts: () => [],
-    hasRunningTasks: () => false,
     stop: vi.fn(),
   })
   await getOrCreateV2Session('space', conversationId, { systemPrompt: 'p', model: 'm' }, undefined, undefined, {} as never)
@@ -97,6 +112,7 @@ const recovered = (name: string) => recovery.listener!(name)
 
 afterEach(() => {
   closeAllV2Sessions()
+  activeSessions.clear()
   createSession.mockReset()
   startConsumer.mockReset()
   handleMcpAppsChange(null)
@@ -167,6 +183,22 @@ describe('rebuild after an MCP server failed to connect', () => {
     noteSessionMcpStatus('conv', third as never, init(['local', 'failed']))
     recovered('local')
     expect(third.close).not.toHaveBeenCalled()
+  })
+
+  it('keeps live input available while a recovered server waits for a safe rebuild', async () => {
+    const first = await open('conv')
+    noteSessionMcpStatus('conv', first as never, init(['local', 'failed']))
+    const consumer: ConsumerState = { isRunning: true, turn: null }
+    const second = await open('conv', consumer)
+    noteSessionMcpStatus('conv', second as never, init(['local', 'failed']))
+    consumer.turn = { thoughts: [] }
+
+    recovered('local')
+
+    expect(second.close).not.toHaveBeenCalled()
+    expect(sendIntoLiveTurn('conv', 'recovery update', undefined, { onWithdrawn: () => {} })).toBe(true)
+    expect(second.sendIntoLiveTurn.mock.calls.map((call: any[]) => call[0])).toEqual(['recovery update'])
+    expect(consumePendingRebuild('conv')).toBe(true)
   })
 
   it('leaves sessions that could use the recovered server alone', async () => {
@@ -272,6 +304,121 @@ describe('rebuild after an MCP server failed to connect', () => {
   })
 })
 
+describe.each(['consumer', 'legacy'] as const)('live input during MCP reconnect (%s)', (lifecycle) => {
+  async function openRunning(conversationId: string) {
+    const session = await open(conversationId, {
+      isRunning: true, turn: lifecycle === 'consumer' ? { thoughts: [] } : null,
+    })
+    if (lifecycle === 'legacy') {
+      registerActiveSession(conversationId, createSessionState('space', conversationId, new AbortController()))
+    }
+    return session
+  }
+
+  it('delivers into the running session without cancelling its deferred reconnect', async () => {
+    const session = await openRunning('conv')
+    noteSessionMcpStatus('conv', session as never, init(['local', 'failed']))
+
+    expect(sendIntoLiveTurn('conv', 'teammate update', undefined, { onWithdrawn: () => {} })).toBe(true)
+    expect(session.sendIntoLiveTurn.mock.calls.map((call: any[]) => call[0])).toEqual(['teammate update'])
+    expect(session.close).not.toHaveBeenCalled()
+    if (lifecycle === 'consumer') {
+      expect(consumePendingRebuild('conv')).toBe(true)
+    } else {
+      unregisterActiveSession('conv')
+      expect(session.close).toHaveBeenCalledOnce()
+      expect(v2Sessions.has('conv')).toBe(false)
+    }
+  })
+
+  describe.each([
+    { name: 'API configuration', invalidate: (_id: string) => invalidateAllSessions() },
+    { name: 'MCP configuration', invalidate: (_id: string) => handleMcpAppsChange('space') },
+    { name: 'IM permissions', invalidate: (_id: string) => invalidateImSessions() },
+    { name: 'toolset selection', invalidate: (id: string) => toolsetRebuild.listener!(id) },
+  ])('$name changes', ({ invalidate }) => {
+    it.each(['before', 'after'] as const)('still joins the running turn and rebuilds after it when configuration changes %s the MCP failure', async (order) => {
+      const id = buildImSessionKey('app', 'wecom-bot', 'direct', 'chat')
+      const session = await openRunning(id)
+      if (order === 'before') invalidate(id)
+      noteSessionMcpStatus(id, session as never, init(['local', 'failed']))
+      if (order === 'after') invalidate(id)
+
+      // The running turn keeps the permissions it started with; an addition
+      // joins it, exactly as before live delivery. The new envelope applies
+      // from the next turn's session.
+      expect(sendIntoLiveTurn(id, 'addition during the turn', undefined, { onWithdrawn: () => {} })).toBe(true)
+      expect(session.sendIntoLiveTurn.mock.calls.map((call: any[]) => call[0])).toEqual(['addition during the turn'])
+      expect(session.close).not.toHaveBeenCalled()
+
+      if (lifecycle === 'legacy') {
+        unregisterActiveSession(id)
+        expect(session.close).toHaveBeenCalledOnce()
+      } else {
+        expect(consumePendingRebuild(id)).toBe(true)
+        closeV2Session(id)
+      }
+      const replacement = await openRunning(id)
+      expect(sendIntoLiveTurn(id, 'fresh session', undefined, { onWithdrawn: () => {} })).toBe(true)
+      expect(replacement.sendIntoLiveTurn.mock.calls.map((call: any[]) => call[0])).toEqual(['fresh session'])
+    })
+  })
+})
+
+describe('acquisition while an MCP reconnect is pending', () => {
+  it('does not treat a failure reported before turn init as a configuration change', async () => {
+    const consumer: ConsumerState = { isRunning: true, turn: null }
+    const session = await open('conv', consumer)
+    markTurnDispatched('conv')
+    noteSessionMcpStatus('conv', session as never, init(['local', 'failed']))
+    expect(session.close).not.toHaveBeenCalled()
+    expect(consumePendingRebuild('conv')).toBe(false)
+
+    consumer.turn = { thoughts: [] }
+    markTurnInitReceived('conv')
+    expect(sendIntoLiveTurn('conv', 'startup update', undefined, { onWithdrawn: () => {} })).toBe(true)
+    expect(session.sendIntoLiveTurn.mock.calls.map((call: any[]) => call[0])).toEqual(['startup update'])
+    expect(consumePendingRebuild('conv')).toBe(true)
+  })
+
+  it('keeps joining the running turn when reuse defers a rebuild for changed session options', async () => {
+    const session = await open('conv', { isRunning: true, turn: { thoughts: [] } })
+    noteSessionMcpStatus('conv', session as never, init(['local', 'failed']))
+
+    await getOrCreateV2Session('space', 'conv', { systemPrompt: 'changed', model: 'm' }, undefined, undefined, {} as never)
+
+    expect(sendIntoLiveTurn('conv', 'addition', undefined, { onWithdrawn: () => {} })).toBe(true)
+    expect(session.sendIntoLiveTurn.mock.calls.map((call: any[]) => call[0])).toEqual(['addition'])
+    expect(session.close).not.toHaveBeenCalled()
+    expect(consumePendingRebuild('conv')).toBe(true)
+  })
+
+  it('allows live additions and rebuilds before the next turn', async () => {
+    const consumer: ConsumerState = { isRunning: true, turn: { thoughts: [] } }
+    const first = await open('conv', consumer)
+    noteSessionMcpStatus('conv', first as never, init(['local', 'failed']))
+    const second = fakeSession()
+    createSession.mockResolvedValueOnce(second)
+    startConsumer.mockReturnValueOnce({
+      isRunning: true, getActiveSessionState: () => null,
+      getTeamLifecycleThoughts: () => [], stop: vi.fn(),
+    })
+    expect(sendIntoLiveTurn('conv', 'still working', undefined, { onWithdrawn: () => {} })).toBe(true)
+    expect(first.sendIntoLiveTurn.mock.calls.map((call: any[]) => call[0])).toEqual(['still working'])
+    consumer.turn = null
+    expect(consumePendingRebuild('conv')).toBe(true)
+    consumer.isRunning = false
+
+    const lease = await acquireV2Session('space', 'conv', { systemPrompt: 'p', model: 'm' }, undefined, undefined, {} as never)
+    try {
+      expect(lease.session).toBe(second)
+      expect(first.close).toHaveBeenCalledOnce()
+    } finally {
+      lease.release()
+    }
+  })
+})
+
 /** A tool result frame as the engine emits it; the text is Claude Code CLI 2.1.89's. */
 const toolResults = (...blocks: Array<{ is_error?: boolean; content: unknown }>) => ({
   type: 'user',
@@ -293,6 +440,8 @@ describe('rebuild after a tool call found an MCP server gone mid-session', () =>
     noteSessionMcpStatus('conv', first as never, toolResults(notConnected('local'), notConnected('local')))
 
     expect(first.close).not.toHaveBeenCalled()
+    expect(sendIntoLiveTurn('conv', 'continue without that server', undefined, { onWithdrawn: () => {} })).toBe(true)
+    expect(first.sendIntoLiveTurn.mock.calls.map((call: any[]) => call[0])).toEqual(['continue without that server'])
     expect(consumePendingRebuild('conv')).toBe(true)
     consumer.isRunning = false
     const second = await open('conv')

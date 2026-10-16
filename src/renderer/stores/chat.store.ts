@@ -477,3 +477,6 @@ export function initChatMemoryPressureListener(): () => void {
     console.warn('[ChatStore] Could not read memory pressure:', error))
   return api.onMemoryPressure(({ level }) => onLevel(level))
 }
+
+/** Reconcile native transcript pages with accepted input records in auxiliary conversation views. */
+export { reconcileTranscript } from './chat/backend/reconcile'

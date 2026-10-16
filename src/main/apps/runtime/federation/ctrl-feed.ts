@@ -63,7 +63,7 @@ export interface CtrlFeedDeps {
   /** A wake addressed to THIS node arrived (drive the local turn). */
   onWake: (msg: { correlationId: string; request: SerializedWakeRequest; from: NodeId }) => void
   /** A turn-complete addressed to THIS node arrived (resolve the authority waiter). */
-  onTurnComplete: (msg: { correlationId: string; outcome: TurnCompletion }) => void
+  onTurnComplete: (msg: { correlationId: string; outcome: TurnCompletion; from: NodeId }) => void
   /**
    * A published wake could not be delivered: the target never acked before the
    * give-up deadline. The authority resolves the sender's completion waiter as
@@ -193,18 +193,18 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
   }
 
   /** Domain apply: an inbound ctrl entry from a remote author, in seq order. */
-  function applyCtrl(_feedKey: string, entry: FeedEntry): void {
+  function applyCtrl(feedKey: string, entry: FeedEntry): void {
     if (entry.type === ENTRY_WAKE) {
       const p = entry.payload as CtrlWakePayload
       // Only the addressed owner acts; other subscribers consumed-but-ignore.
       if (p.target !== selfNodeId) return
-      onWake({ correlationId: p.correlationId, request: p.request, from: p.from })
+      onWake({ correlationId: p.correlationId, request: p.request, from: parseFeedIdKey(officeId, feedKey).author })
       return
     }
     if (entry.type === ENTRY_TURN_COMPLETE) {
       const p = entry.payload as CtrlTurnCompletePayload
       if (p.target !== selfNodeId) return
-      onTurnComplete({ correlationId: p.correlationId, outcome: p.outcome })
+      onTurnComplete({ correlationId: p.correlationId, outcome: p.outcome, from: parseFeedIdKey(officeId, feedKey).author })
       return
     }
     // Unknown ctrl entry types are consumed (cursor advances) but not acted on, so
@@ -349,7 +349,19 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
     subscribePeer,
     ensureSubscribedToPeer,
     ensurePeerSubscribed,
-    handleFrame: (from, frame) => feed.handleInbound(from, frame),
+    handleFrame: (from, frame) => {
+      if (!('feedKey' in frame)) return
+      const id = parseFeedIdKey(officeId, frame.feedKey)
+      const incoming = frame.kind === 'feed-entries'
+      const valid = frame.officeId === officeId && (incoming
+        ? id.author === from && id.kind === kindFor(selfNodeId)
+        : id.author === selfNodeId && id.kind === kindFor(from))
+      if (!valid) {
+        console.warn(`[CtrlFeed] frame refused office=${officeId} peer=${from} kind=${frame.kind} reason=feed ownership mismatch`)
+        return
+      }
+      feed.handleInbound(from, frame)
+    },
     dropPeer: (peer) => feed.dropPeer(peer),
     deliveredUpTo,
     peerDelivery,

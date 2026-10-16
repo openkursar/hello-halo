@@ -152,6 +152,32 @@ describe('ctrl-feed — reliable control-plane delivery', () => {
     expect(h.wakesAtOwner[0]).toMatchObject({ correlationId: 'corr-1', from: AUTH, appId: 'app-a' })
   })
 
+  it('refuses a peer publishing entries under another author identity', () => {
+    h.ownerFeed.handleFrame('untrusted-peer', {
+      kind: 'feed-entries', officeId: OFFICE, feedKey: AUTH_CTRL_KEY, more: false, upToSeq: 1,
+      entries: [{ seq: 1, hlc: '0'.repeat(16), fid: 'spoofed-author', type: 'wake', ts: 1,
+        payload: { target: OWNER, from: AUTH, correlationId: 'spoofed', request: makeRequest() } }],
+    })
+    expect(h.wakesAtOwner).toEqual([])
+  })
+
+  it('uses the authenticated feed author instead of a claimed payload sender', () => {
+    h.ownerFeed.handleFrame(AUTH, {
+      kind: 'feed-entries', officeId: OFFICE, feedKey: AUTH_CTRL_KEY, more: false, upToSeq: 1,
+      entries: [{ seq: 1, hlc: '0'.repeat(16), fid: 'payload-sender', type: 'wake', ts: 1,
+        payload: { target: OWNER, from: 'claimed-other-authority', correlationId: 'sender-check', request: makeRequest() } }],
+    })
+    expect(h.wakesAtOwner).toEqual([{ correlationId: 'sender-check', from: AUTH, appId: 'app-x' }])
+  })
+
+  it('refuses subscriptions to control traffic addressed to a different peer', () => {
+    h.dropOnce(OWNER, frame => frame.kind === 'feed-entries')
+    h.authFeed.publishWake(OWNER, 'private-wake', makeRequest())
+    h.authFeed.handleFrame('untrusted-peer', { kind: 'feed-subscribe', officeId: OFFICE, feedKey: AUTH_CTRL_KEY, afterSeq: 0 })
+    expect(h.authStore.getPeerCursor(OFFICE, AUTH_CTRL_KEY, 'untrusted-peer')).toBe(0)
+    expect(h.wakesAtOwner).toEqual([])
+  })
+
   it('refluxes turn-complete to the authority exactly once', () => {
     h.ownerFeed.publishTurnComplete(AUTH, 'corr-1', { kind: 'result', content: 'done' })
     expect(h.completionsAtAuth).toHaveLength(1)

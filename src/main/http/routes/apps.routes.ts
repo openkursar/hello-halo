@@ -1078,8 +1078,8 @@ export function registerAppsRoutes(app: Express): void {
 
   // POST /api/apps/:appId/chat/inject — the user adds a message to the turn a
   // digital human is running, or is about to run (a starting turn is waited for).
-  // Only the user's own chats (default and local sessions) accept it: an HTTP,
-  // IM or team session is not theirs to interject in.
+  // Native chats and locally owned team sessions accept owner additions.
+  // The runtime keeps them separate from a turn with different permissions.
   app.post('/api/apps/:appId/chat/inject', async (req: Request, res: Response) => {
     try {
       const { appId } = req.params

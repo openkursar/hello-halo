@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkRehype from 'remark-rehype'
-import { defaultRehypePlugins } from 'streamdown'
+import { markdownRaw, markdownSanitize, rehypeLinkPolicy } from '../../../../src/renderer/lib/markdown-link-policy'
 import { detectFileLink, detectFileMention, FILE_MENTION_PROPERTY, rehypeFileMentions, rehypeLocalFileLinks, rehypeRestoreFileLinks } from '../../../../src/renderer/components/references/file-mentions'
 
 describe('detectFileMention', () => {
@@ -75,8 +75,19 @@ describe('Markdown file destinations', () => {
     expect(detectFileLink('%E6%8A%A5%E5%91%8A%EF%BC%88%E7%BB%88%E7%A8%BF%EF%BC%89.docx')).toEqual({ path: '报告（终稿）.docx' })
   })
 
+  it('reads a local file URL as its path', () => {
+    expect(detectFileLink('file:///repo/a.md')).toEqual({ path: '/repo/a.md' })
+    expect(detectFileLink('FILE:///repo/a.md')).toEqual({ path: '/repo/a.md' })
+    expect(detectFileLink('file://localhost/repo/a.md')).toEqual({ path: '/repo/a.md' })
+    expect(detectFileLink('file:///C:/repo/a.md')).toEqual({ path: 'C:/repo/a.md' })
+    expect(detectFileLink('file:///repo/%E6%8A%A5%E5%91%8A.md:3')).toEqual({ path: '/repo/报告.md', range: { startLine: 3, endLine: 3 } })
+    for (const href of ['file://host/share/a.md', 'file:////host/share/a.md', 'file:///repo/a.md?x', 'file:///repo/', 'file:']) {
+      expect(detectFileLink(href), href).toBeNull()
+    }
+  })
+
   it('never treats URLs, network paths or malformed destinations as files', () => {
-    for (const href of ['https://example.com/a.md', 'mailto:user@example.com', 'javascript:alert(1)', 'file:///repo/a.md',
+    for (const href of ['https://example.com/a.md', 'mailto:user@example.com', 'javascript:alert(1)',
       'data:text/html,hello', 'vbscript:run', '//host/a.md', '\\\\host\\share\\a.md', '#intro', 'a.md?download', 'a.md#heading',
       'java%73cript:alert(1).md', '%2F%2Fhost/a.md', 'a%00.md', 'a%0A.md', '%E0%A4%A.md', '%E2%80%AEdm.exe.md', 'a%E3%80%80b.md']) {
       expect(detectFileLink(href), href).toBeNull()
@@ -85,22 +96,22 @@ describe('Markdown file destinations', () => {
 
   async function render(markdown: string, files = true) {
     const processor = unified().use(remarkParse).use(remarkRehype, { allowDangerousHtml: true })
-      .use([defaultRehypePlugins.raw])
+      .use([markdownRaw])
     if (files) processor.use(rehypeLocalFileLinks)
-    processor.use([defaultRehypePlugins.sanitize])
+    processor.use([markdownSanitize])
     if (files) processor.use(rehypeRestoreFileLinks)
-    processor.use([defaultRehypePlugins.harden]).use(rehypeFileMentions)
+    processor.use(rehypeLinkPolicy).use(rehypeFileMentions)
     return processor.run(processor.parse(markdown))
   }
   function elements(tree: any): any[] {
     return [tree, ...(tree.children ?? []).flatMap(elements)].filter(node => node.type === 'element')
   }
 
-  it('preserves named files through the real sanitizer and hardener, without navigable URLs', async () => {
-    const tree = await render('[Report](.halo/tmp/report.final.md) [Windows](C:/repo/report.md) [Code](src/app.ts:3) [Unicode](docs/%E8%AF%84%E5%AE%A1%20(1).md)')
+  it('preserves named files through the real sanitizer and link policy, without navigable URLs', async () => {
+    const tree = await render('[Report](.halo/tmp/report.final.md) [Windows](C:/repo/report.md) [Code](src/app.ts:3) [Unicode](docs/%E8%AF%84%E5%AE%A1%20(1).md) [URL](file:///repo/notes.md)')
     const files = elements(tree).filter(node => node.properties?.[FILE_MENTION_PROPERTY])
     expect(files.map(node => node.properties[FILE_MENTION_PROPERTY])).toEqual([
-      '.halo/tmp/report.final.md', 'C:/repo/report.md', 'src/app.ts:3', 'docs/%E8%AF%84%E5%AE%A1%20(1).md',
+      '.halo/tmp/report.final.md', 'C:/repo/report.md', 'src/app.ts:3', 'docs/%E8%AF%84%E5%AE%A1%20(1).md', 'file:///repo/notes.md',
     ])
     expect(files.every(node => node.tagName === 'span' && !node.properties.href && !node.properties.dataFileLink)).toBe(true)
     expect(JSON.stringify(tree)).not.toContain('[blocked]')
@@ -109,7 +120,7 @@ describe('Markdown file destinations', () => {
   it('retains external links and sanitizes dangerous HTML and forged file metadata', async () => {
     const tree = await render('[Web](https://example.com) [Bad](javascript:alert) <span data-file-link="/outside/secret.md" data-file-mention="fake.md" onclick="alert(1)">spoof</span> <a href=".halo/tmp/report.md" onclick="alert(1)"><b>Report</b><script>alert(1)</script></a>')
     const nodes = elements(tree)
-    expect(nodes.find(node => node.tagName === 'a' && node.properties.href === 'https://example.com/')?.properties.href).toBe('https://example.com/')
+    expect(nodes.some(node => node.tagName === 'a' && node.properties.href === 'https://example.com')).toBe(true)
     expect(nodes.filter(node => node.properties?.[FILE_MENTION_PROPERTY])).toHaveLength(1)
     expect(nodes.some(node => node.tagName === 'script' || node.properties?.onClick || node.properties?.onclick || node.properties?.dataFileLink)).toBe(false)
     expect(JSON.stringify(tree)).not.toContain('javascript:')
@@ -129,8 +140,8 @@ describe('Markdown file destinations', () => {
     const tree = await render('[`src/app.ts`](notes/todo.md) [`src/util.ts`](https://example.com)')
     expect(elements(tree).filter(node => node.properties?.[FILE_MENTION_PROPERTY])).toHaveLength(1)
     const plain = await render('[Report](.halo/tmp/report.md)', false)
-    expect(JSON.stringify(plain)).toContain('[blocked]')
-    expect(elements(plain).some(node => node.properties?.[FILE_MENTION_PROPERTY])).toBe(false)
+    expect(JSON.stringify(plain)).not.toContain('[blocked]')
+    expect(elements(plain).some(node => node.tagName === 'a' || node.properties?.[FILE_MENTION_PROPERTY])).toBe(false)
   })
 })
 

@@ -31,6 +31,8 @@ export interface DiffEditorSpec {
   path: string
   /** False for fragments whose line numbers are not the file's. */
   lineNumbers: boolean
+  /** Whether long lines wrap; unwrapped, they scroll sideways (see `wrapsLines`). */
+  lineWrapping: boolean
   /** Translations of CodeMirror's own phrases ("$ unchanged lines"). */
   phrases: Record<string, string>
   /** Accessible names of the editors: one per side, `both` for the unified layout's single editor. */
@@ -151,7 +153,32 @@ function scrollWithin(parent: NonNullable<DiffEditorSpec['scrollParent']>): Exte
     else if (rect.top < top + yMargin) delta = rect.top - top - yMargin
     else if (rect.bottom > box.bottom - yMargin) delta = rect.bottom - box.bottom + yMargin
     if (Math.abs(delta) >= 1) target.element.scrollBy({ top: delta })
+    revealAcross(view, range.head)
     return true
+  })
+}
+
+/**
+ * Unwrapped lines scroll sideways in the editor itself: brings `pos` into view
+ * across, a third of the way in, when it is out of sight.
+ */
+export function revealAcross(view: EditorView, pos: number): void {
+  if (view.lineWrapping) return
+  view.requestMeasure({
+    read: () => {
+      const scroller = view.scrollDOM
+      const box = scroller.getBoundingClientRect()
+      const from = box.left + view.contentDOM.offsetLeft
+      const to = box.left + scroller.clientWidth
+      // The stretches of a very long line out of sight are not drawn; there the column places `pos`.
+      const drawn = view.visibleRanges.some((range) => range.from <= pos && pos <= range.to)
+      const x = (drawn ? view.coordsAtPos(pos)?.left : undefined)
+        ?? view.contentDOM.getBoundingClientRect().left + (pos - view.state.doc.lineAt(pos).from) * view.defaultCharacterWidth
+      return x >= from && x <= to - view.defaultCharacterWidth ? 0 : x - from - (to - from) / 3
+    },
+    write: (delta) => {
+      if (Math.abs(delta) >= 1) view.scrollDOM.scrollLeft += delta
+    },
   })
 }
 
@@ -165,7 +192,7 @@ function commonExtensions(spec: DiffEditorSpec): Extension[] {
     spec.lineNumbers ? lineNumbers() : [],
     highlightSpecialChars(),
     drawSelection(),
-    EditorView.lineWrapping,
+    spec.lineWrapping ? EditorView.lineWrapping : [],
     syntaxHighlighting(diffHighlightStyle),
     language ?? [],
     markField,

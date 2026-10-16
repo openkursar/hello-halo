@@ -46,6 +46,8 @@ export interface DshRuntimeClient {
   initialize(params: DshInitializeParams): Promise<void>
   /** Enqueue receipt only — it does not identify a later assistant message. */
   prompt(sessionId: string, contentBlocks: unknown[]): Promise<{ messageId: string }>
+  /** Accepted input reaches the next model step, or wakes an idle agent. */
+  steer?(sessionId: string, contentBlocks: unknown[]): Promise<{ messageId: string }>
   /** Returns an unsubscribe function. */
   onNotification(handler: (notification: DshNotification) => void): () => void
   /**

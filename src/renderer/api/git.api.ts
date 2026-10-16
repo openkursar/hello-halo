@@ -9,11 +9,13 @@ import { httpRequest, isElectron } from './_shared'
 import type { GitRpcResponse } from '../../shared/rpc/contracts/git.contract'
 import type {
   GitChangeList,
+  GitCommitGraph,
   GitCommitRequest,
   GitCommitResult,
   GitCompareScope,
   GitFileContents,
   GitFileContentsRequest,
+  GitGraphQuery,
   GitRepositoryList,
   GitRevisionOption,
   GitSnapshot,
@@ -49,6 +51,11 @@ export const gitApi = {
   gitListRevisionOptions: async (spaceId: string, repoRoot: string): Promise<GitRpcResponse<GitRevisionOption[]>> => {
     if (isElectron()) return window.halo.gitListRevisionOptions(spaceId, repoRoot)
     return httpRequest('POST', '/api/git/revision-options', { spaceId, repoRoot })
+  },
+
+  gitGetCommitGraph: async (spaceId: string, repoRoot: string, query: GitGraphQuery): Promise<GitRpcResponse<GitCommitGraph>> => {
+    if (isElectron()) return window.halo.gitGetCommitGraph(spaceId, repoRoot, query)
+    return httpRequest('POST', '/api/git/commit-graph', { spaceId, repoRoot, query })
   },
 
   gitStage: async (spaceId: string, repoRoot: string, paths: string[]): Promise<GitRpcResponse<void>> => {

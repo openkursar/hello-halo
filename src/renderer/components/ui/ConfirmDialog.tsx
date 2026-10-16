@@ -120,7 +120,7 @@ export function ConfirmDialog({
         <div className="mb-6 space-y-2">
           <p id="confirm-dialog-title" className="text-base font-semibold text-foreground">{title}</p>
           {message && (
-            <p className="text-xs text-muted-foreground">{message}</p>
+            <p className="text-xs text-muted-foreground break-words">{message}</p>
           )}
         </div>
 

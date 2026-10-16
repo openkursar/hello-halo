@@ -14,7 +14,7 @@
  * who never opens the Digital Humans screen only ever sees an assignment.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowLeft, ChevronRight, ExternalLink, Timer } from 'lucide-react'
 import type { TeamCheckView, TeamDetail, TeamMember, TeamDelegatedPolicy, TeamToolAudit } from '../../../shared/apps/team-types'
 import { checksForMember, isRemoteMember } from '../../../shared/apps/team-types'
@@ -27,6 +27,7 @@ import { useTeamStore, useTeamView, detailOf } from '../../stores/team.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
+import { useAutosaveDraft } from '../../hooks/useAutosaveDraft'
 import { describeRhythm } from './check-format'
 import { epochWorkLabel } from './run-history'
 
@@ -60,14 +61,11 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
   // walk in from: the member's live panel is where a single conversation's are.
   const checks = checksForMember(detail.checks ?? [], member.appId)
 
-  const [duty, setDuty] = useState(member.duty ?? '')
-  useEffect(() => { setDuty(member.duty ?? '') }, [member.appId, member.duty])
-
-  const saveDuty = useCallback(() => {
-    const next = duty.trim()
-    if (next === (member.duty ?? '')) return
-    void updateMember(detail.team.id, member.appId, { duty: next })
-  }, [duty, member.duty, member.appId, detail.team.id, updateMember])
+  const [duty, setDuty, saveDuty] = useAutosaveDraft(
+    member.duty ?? '',
+    next => updateMember(detail.team.id, member.appId, { duty: next }),
+    { allowEmpty: true },
+  )
 
   return (
     <div className="flex h-full flex-col bg-background">

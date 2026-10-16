@@ -80,6 +80,8 @@ office it joined; both wrap a `Federation` (coordinator + link).
   sides (every JoinReject reason is terminal for the request as sent), so the
   confirmed-offline recovery paths (heartbeat re-drive / rejoin nudge) stop
   instead of looping; an explicit `requestJoin` or an admitted join re-arms them.
+- `wake-admission.ts` — binds a received wake to its authenticated office,
+  roster members and exact team-session key before it can run or be forwarded.
 - `protocol-m2.ts` — SSOT for M2 frame shapes, reject reasons and the version
   gate (`isSameProtocol`). The version itself is `FEDERATION_PROTOCOL_VERSION`
   in `src/shared/federation/protocol-version.ts`; see "Compatibility policy".
@@ -304,17 +306,26 @@ the `update-required` office status as `versionMismatch` (`shared/apps/team-type
 (`onOfficeAccessLost`) — so the renderer shows "you are behind, update" with a
 working check-for-updates action only when THIS machine is the one behind, and
 names the lagging teammate with no such action (checking for updates here
-cannot fix a mismatch on someone else's machine) when they are. `versionMismatch`
-is absent — and the renderer falls back to the old direction-less copy — when
-the far side predates the `pv` field. The `joinTeamOffice` IPC/HTTP response
-already carries `detail` structurally (both routes pass the controller's
-result through unchanged), but the one-time manual "join a team" dialog
-(`TeamJoinDialog.tsx`) does not read it yet and still shows the plain generic
-message on `VERSION_INCOMPATIBLE`.
+cannot fix a mismatch on someone else's machine) when they are. A reject
+without `pv` is resolved the same way, as the far side being behind: only a
+reject can arrive without it (a grant without `pv` is admitted), and it comes
+from a build older than the field, on an older protocol. The `joinTeamOffice`
+IPC/HTTP response already carries `detail` structurally (both routes pass the
+controller's result through unchanged), but the one-time manual "join a team"
+dialog (`TeamJoinDialog.tsx`) does not read it yet and still shows the plain
+generic message on `VERSION_INCOMPATIBLE`.
+
+The exact gate (2026-10-03) replaced a negotiated range (current 3, minimum 3)
+with 4, so builds from before it (2.1.16-dev.0-rc.35 and earlier) and builds
+after it refuse each other; until the direction above existed, the newer
+joiner refused by an older host was the one told to update.
 
 This holds because federation ships only on internal experience builds whose
 users upgrade together. A breaking wire or semantic change ships by bumping the
-constant; nothing else is needed.
+constant; nothing else is needed. A bump cuts every updated node off from every
+node not yet updated, so it is a release decision, not part of a feature
+change. An added optional field is not breaking — nodes ignore fields they do
+not know — and does not bump.
 
 Revisit before either of these happens: federation ships to users who cannot be
 made to upgrade together, or two released versions must work in one office. At
@@ -343,24 +354,53 @@ Shared per-node state (all keyed by officeId): `hosted`, `joined`,
   WS auth handshake (`getSessionIdentity`) — closing same-office node spoofing.
   `stream-frames`/`turn-complete` (no source node) are asserted by session
   ownership instead. Relayed (gateway) frames trust the gateway's session binding.
+  A directly joined LAN socket retains the host identity from its first roster;
+  changing the believed authority does not relabel that socket. Gateway member
+  sockets instead retain the gateway's authenticated `from` stamp on every frame,
+  including after host replacement. A deployed gateway that predates host-origin
+  stamping forwards host frames without `from`; those are read as the earlier
+  client read them — the frame's own sender claim, else the believed authority
+  (a relayed request is attributed to the authority that relayed it) — so the
+  client never requires a gateway upgrade first. Dialed peer connections use the identity the
+  dialer supplied and reject conflicting payload claims. Roster and member-status
+  projections are accepted only from the current authority; ordinary peers cannot
+  rewrite the membership metadata used to authorize a wake. Before the initial
+  upstream identity is known, control feeds are not acknowledged and replay after
+  the roster arrives; the raw-transport fallback returns an undelivered receipt.
 - **Wake dispatch** — `sendWakeToMember` + `runOrForwardWakeOnHost` (a joiner→
   joiner wake is relayed through the host to the real owner and refluxed back).
-  **The busy gate is on the OWNER, not the sender.** `runLocalTurn` (injected by
-  bootstrap) runs the landed wake through `bus.runRelayedTurn`, so it queues
-  behind whatever that member is already doing — a teammate's message, or its own
-  owner chatting with it on the same session key. It must not go through
-  `wakeTarget`: the turn's input was already rendered and booked on the sending
-  node. Putting the gate on the sender instead is not an option — its view of a
-  remote member is stale by the time the wake crosses the network, and for a
-  member it does not own it has no view at all (`session-deps.isSessionActive`
-  answers false by design; `remote-busy-overlay` is a display projection, not a
-  lock). Skipping the gate entirely is what let a relayed wake start a second
-  turn on one session key: see `team/DESIGN.md` "One turn per session" for what
-  that does to the shared SDK iterator.
-  Consequence for `coordinator.handleWake`: wakes for one session no longer
-  collapse into a single turn, so each acks its own `turn-complete`. The old
-  batch-ack keyed by `conversationId` was removed — with a queue it answers the
-  second wake with the first turn's outcome.
+  Admission binds the inner office to the authenticated transport office, checks
+  epoch ownership, and requires `buildTeamSessionKey(appId, officeId, epochId)`.
+  A peer cannot select an owner's private chat or another office's policy. The
+  first receiving authority verifies the sender member belongs to the sending
+  node and may contact the target under its office scope; the target owner
+  accepts a relay only from its current authority. Both roles check that the
+  target is a member, and an owner executes only a member it owns.
+  Metadata can arrive after the wake. A coordinator holds up to 128 such wakes,
+  rechecks every 250 ms, and returns an undelivered receipt after 30 seconds or
+  on teardown. Known policy or session mismatches fail immediately. This wait is
+  an in-memory admission buffer; durable feed receipt means received, not executed.
+  Completion deduplication is scoped to the authenticated sender. An authority
+  forwarding to another owner allocates its own correlation id, then returns the
+  original receipt to the original peer. Each outgoing receipt waiter binds its
+  office and expected peer before dispatch, so another peer cannot resolve it.
+  **The permission-aware gate is on the OWNER.** `runLocalTurn` stamps every
+  arriving request as external and resolves the member's local workspace, then
+  calls app-chat's common mailbox. Equal-authority work joins a running turn;
+  other work waits as a merged following turn. Sender-side roster state is never
+  a lock or a permission source.
+  Asynchronous messages bypass the sender's turn reservation and concurrency
+  semaphore, so every message reaches the owner immediately. They retain internal
+  per-correlation completion observers over the durable control feed: successful
+  delivery clears the observer and busy overlay; admission errors and failures
+  reach the sender and become failure records. The sending AI need not wait for
+  that receipt. Relaying through an authority preserves failures instead of
+  converting them into an empty successful answer.
+  Live delivery keeps protocol version 4. Coalescing keys and original transcript
+  records are optional request fields: an owner on an earlier build ignores them
+  and runs each message as its own turn, as it always did, and an earlier sender's
+  wakes satisfy wake admission unchanged (same correlation id, exact team-session
+  key). Teammates on mixed builds keep working together.
 - **Roster egress** — `broadcastRosterFor` (immediate) / `scheduleRosterRefresh`
   (coalesced during a run) / `projectMemberRemoved` / `projectOfficeDissolved`.
 - **Transport re-form seam** — after a host loss the authority moves to a peer;
@@ -499,3 +539,10 @@ in-process links; `_fake-gateway.ts` / `gateway-interop.ts` exercise the real Go
 binary). Federation/team changes additionally require the multi-process cluster
 tier in `tests/decentralized/` (`npm run test:team -- federation`) — build first,
 never run suites in parallel.
+
+### Conversation-led collaboration boundary
+
+A team coordinated by a space conversation can be shared as before. Content from
+another machine never joins the owner's running space turn: the coordinator
+delivers it with the `external` identity, so it runs as its own turn afterwards
+(see team DESIGN "External work and a space coordinator").

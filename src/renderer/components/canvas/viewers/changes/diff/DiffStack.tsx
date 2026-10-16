@@ -6,7 +6,7 @@ import type { Extension } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { useTranslation } from '../../../../../i18n'
 import { useViewerResources } from '../../../viewer-resources'
-import { goToChunk, type DiffEditorHandle, type DiffLayout, type DiffSide } from './diff-editor'
+import { goToChunk, revealAcross, type DiffEditorHandle, type DiffLayout, type DiffSide } from './diff-editor'
 import type { DiffPart, LoadedDiff } from './diff-content'
 import { CARD_HEADER_HEIGHT, FileDiffCard, type CardGate } from './FileDiffCard'
 import { StackContext, type StackContextValue } from './stack-context'
@@ -175,6 +175,7 @@ export const DiffStack = forwardRef<DiffStackHandle, DiffStackProps>(function Di
       },
       write: (delta) => { if (Math.abs(delta) > 1) scrollerRef.current?.scrollBy({ top: delta }) },
     })
+    revealAcross(view, pos)
   }, [])
   const enterCard = useCallback((handles: DiffEditorHandle[], direction: 1 | -1) => {
     const ordered = direction > 0 ? handles : [...handles].reverse()

@@ -989,10 +989,80 @@ function validateWindowsConsoleBootstrap(context, pkg) {
   console.log('[afterPack] Windows Claude Code console bootstrap present');
 }
 
+/**
+ * Halo launches the Claude Code CLI from its real file on disk (app.asar.unpacked
+ * in an archived build): the CLI runs programs found next to its own file
+ * (ripgrep behind Grep and Glob), and no OS can execute a file inside an
+ * archive. Assert that copy is complete for this target whenever the CLI ships.
+ */
+function validateClaudeCodeCliOnDisk(context, pkg) {
+  const packageDir = 'node_modules/@anthropic-ai/claude-code';
+  if (!pkg.exists(`${packageDir}/package.json`)) {
+    console.log('[afterPack] Claude Code CLI not bundled — skipping its on-disk check');
+    return;
+  }
+
+  const platform = context.electronPlatformName;
+  const target = `${ARCH_NAMES[context.arch] || String(context.arch)}-${platform}`;
+  const resourcesDir = getResourcesDir(context);
+  const diskRoot = fs.existsSync(path.join(resourcesDir, 'app.asar')) ? getUnpackedDir(context) : path.join(resourcesDir, 'app');
+  const required = [`${packageDir}/cli.js`, `${packageDir}/vendor/ripgrep/${target}/${platform === 'win32' ? 'rg.exe' : 'rg'}`];
+  const cliPath = path.join(diskRoot, packageDir, 'cli.js');
+  if (fs.existsSync(cliPath) && fs.readFileSync(cliPath, 'utf-8').includes("import '../claude-code/windows-hide.cjs';")) {
+    required.push(`${packageDir}/windows-hide.cjs`);
+  }
+
+  const missing = required.filter(rel => !fs.existsSync(path.join(diskRoot, ...rel.split('/'))));
+  if (missing.length > 0) {
+    throw new Error(
+      `[afterPack] ${target}: the Claude Code CLI ships but is not on disk in ${path.basename(diskRoot)}: ${missing.join(', ')}. ` +
+      `Check the "${packageDir}/**/*" asarUnpack rule.`
+    );
+  }
+  console.log(`[afterPack] ${target}: Claude Code CLI and its ripgrep are on disk in ${path.basename(diskRoot)}`);
+}
+
+/**
+ * The Office runtime behind the built-in document skills (`halo-node`) ships
+ * through extraResources. electron-builder 26 silently drops a node_modules
+ * folder at the root of a copied directory, so assert every library and font
+ * its manifest declares actually arrived.
+ */
+function validateOfficeRuntime(context) {
+  const runtimeDir = path.join(getResourcesDir(context), 'office-runtime');
+  const manifestPath = path.join(runtimeDir, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error(`[afterPack] Office runtime missing from resources (no ${manifestPath}). Run "npm run runtime:office".`);
+  }
+
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  const libraries = Object.keys(manifest.packages ?? {});
+  const fonts = manifest.fonts ?? [];
+  if (libraries.length === 0) {
+    throw new Error(`[afterPack] Office runtime manifest lists no libraries: ${manifestPath}`);
+  }
+
+  const missing = [
+    ...libraries
+      .filter(name => !fs.existsSync(path.join(runtimeDir, 'node_modules', ...name.split('/'), 'package.json')))
+      .map(name => `node_modules/${name}`),
+    ...fonts.filter(file => !fs.existsSync(path.join(runtimeDir, 'fonts', file))).map(file => `fonts/${file}`),
+  ];
+  if (missing.length > 0) {
+    throw new Error(
+      `[afterPack] Office runtime is incomplete in resources/office-runtime: ${missing.join(', ')}. ` +
+      'Check the office-runtime extraResources entries.'
+    );
+  }
+  console.log(`[afterPack] Office runtime present (${libraries.length} libraries, ${fonts.length} font files)`);
+}
+
 function validatePackagedArtifact(context) {
   console.log('[afterPack] Validating packaged artifact...');
   const pkg = createPackageReader(context);
   validateEngineRuntimes(pkg);
+  validateClaudeCodeCliOnDisk(context, pkg);
+  validateOfficeRuntime(context);
   validateWindowsConsoleBootstrap(context, pkg);
   const product = validateProductConfig(pkg);
   validateUpdaterConfig(context);

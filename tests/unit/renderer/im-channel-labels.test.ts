@@ -11,7 +11,7 @@ import { readFileSync, readdirSync, statSync } from 'fs'
 import { join, relative } from 'path'
 import { fileURLToPath } from 'url'
 import { IM_CHANNEL_TYPES } from '../../../src/shared/types/im-channel'
-import { CHANNEL_LABELS, getImChannelDisplay } from '../../../src/renderer/components/apps/im-channel-labels'
+import { CHANNEL_LABELS, getImChannelDisplay, getImBotLabel } from '../../../src/renderer/components/apps/im-channel-labels'
 
 const RENDERER = fileURLToPath(new URL('../../../src/renderer', import.meta.url))
 
@@ -38,6 +38,22 @@ describe('IM channel names', () => {
 
   it('shows a type it does not know as itself, muted', () => {
     expect(getImChannelDisplay('future-bot')).toEqual({ label: 'future-bot', color: 'text-muted-foreground' })
+  })
+
+  it('uses the server ordinal rather than numbering a filtered bot list', () => {
+    const t = (text: string, options?: Record<string, unknown>) => text.replace(/\{\{(\w+)\}\}/g, (_, key) => String(options?.[key] ?? ''))
+    expect(getImBotLabel({ type: 'wecom-bot', ordinal: 3 }, t)).toBe('WeCom bot 3')
+    expect(getImBotLabel({ type: 'feishu-bot', ordinal: 1 }, t)).toBe('Feishu bot 1')
+    expect(getImBotLabel({ type: 'wecom-bot' }, t)).toBe('WeCom')
+  })
+
+  it('translates both the channel and the numbered bot label', () => {
+    const t = (text: string, options?: Record<string, unknown>) => {
+      if (text === 'WeCom') return '企业微信'
+      if (text === '{{channel}} bot {{number}}') return `${options?.channel}机器人 ${options?.number}`
+      return text
+    }
+    expect(getImBotLabel({ type: 'wecom-bot', ordinal: 2 }, t)).toBe('企业微信机器人 2')
   })
 
   it('is the only channel map in the renderer', () => {

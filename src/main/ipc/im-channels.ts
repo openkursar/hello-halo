@@ -108,10 +108,11 @@ export function registerImChannelHandlers(): void {
       }
     },
 
-    imChannelsSetInstanceApp: async (instanceId: string, appId: string) => {
+    imChannelsSetInstanceApp: async (instanceId: string, appId: string, expectedAppId?: string) => {
       try {
-        return setInstanceApp(instanceId, appId)
+        return setInstanceApp(instanceId, appId, expectedAppId)
       } catch (error: unknown) {
+        console.warn('[ImChannels] Rebinding failed', { instanceId, appId, error })
         return { success: false, error: (error as Error).message }
       }
     },

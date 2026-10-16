@@ -126,6 +126,13 @@ taken before the owner's latest edit reached the authority must not undo it.
   - `runTeam` refuses an ephemeral team; "save as team" (`saveCollab`) only
     clears the flag — the real lead is provisioned lazily on the saved team's
     first standalone run, so saving never disturbs the live collaboration.
+  - collaboration creation requires the coordinator session's captured source and
+    model, passed through the toolset scope (never read again from global selection
+    or a conversation whose picker may have changed mid-turn). Before any member
+    can be dispatched, the service persists both in its existing app overrides.
+    Missing capture refuses creation; no credentials are copied. Saving preserves
+    the pins, and the later standalone lead inherits the saved members' selection.
+    Existing, independently configured digital humans are not rewritten.
   - a member the team BUILT is disposable: the app dies with the collaboration,
     so what only pays off over a longer life is withheld from its turns — its
     memory, and managing other digital humans (it would otherwise be creating
@@ -274,3 +281,4 @@ Rendering, navigation and audience rules are owned by
 The public store exposes a single lightweight directory-membership projection for
 cross-team people filtering. It returns local app/team IDs, names and coordinator
 flags without loading every team's tasks, transcripts or full member specs.
+

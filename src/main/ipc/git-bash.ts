@@ -3,7 +3,6 @@
  */
 
 import { ipcMain } from 'electron'
-import open from 'open'
 import {
   resolveGitBashAvailability,
   setGitBashPathEnv,
@@ -13,6 +12,7 @@ import {
 } from '../services/git-bash'
 import { getConfig, saveConfig } from '../foundation/config.service'
 import { getMainWindow } from '../foundation/window.service'
+import { openExternalLink } from '../services/external-link.service'
 import { gitBashRpc } from '../../shared/rpc/contracts/git-bash.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -56,9 +56,8 @@ export function registerGitBashHandlers(): void {
       }
     },
 
-    // Open external URL (for manual download link)
     openExternal: async (url: string) => {
-      await open(url)
+      await openExternalLink(url, getMainWindow())
     },
   })
 

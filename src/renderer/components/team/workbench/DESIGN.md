@@ -10,7 +10,10 @@ member must not change the task or grant access to another person's private chat
 
 `TaskRoom` composes the conversation, decisions and execution observation.
 `TaskConversation` and `model.ts` project persisted messages into human exchanges
-and compact coordination. `TeamSessionChat` remains the shared team session
+and compact coordination. The owner's additions to running work belong to that
+work: drawn on the reply they joined, as in the chat transcript, or on their own
+where no shown reply carries them — they never start a human exchange, so a
+background turn keeps its live range after reload. `TeamSessionChat` remains the shared team session
 transport and streaming surface. `TaskExecutionView` reuses the chat thought/tool
 components; it does not implement another tool renderer. The task activity drawer
 contains the selected task's team record, not a cross-task notification feed.
@@ -43,8 +46,9 @@ explicit decision entry instead selects the relevant member and question.
 New-task guidance explains this scope and links to active tasks. Member work
 links navigate to that task and, when owned, that member; status does not inject
 another task's context into the current conversation.
-Internal member conversations expose the latest execution as a collapsed row
-below collaboration messages, with the existing thought/tool rendering on expansion.
+Internal member conversations expose the latest execution as a row below
+collaboration messages, open while it runs, with the existing thought/tool
+rendering inline at full width under the row's own status (no second frame).
 Human-facing conversations use their normal process display without a duplicate
 status row. Completed internal execution stays collapsed; older rounds remain in
 execution history. Task activity can drill into a member's execution inputs, persisted results and live work using

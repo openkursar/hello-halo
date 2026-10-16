@@ -69,7 +69,6 @@ function makeHarness(store: TeamStore, opts?: { busy?: boolean; wake?: WakeDispo
       wakes.push({ appId: p.appId, body: p.body, onBusy: p.onBusy, external: p.external })
       return opts?.wake ?? 'dispatched'
     },
-    isBusy: () => opts?.busy ?? false,
     publish: (change) => { published.push({ op: change.op, check: change.check }) },
   })
   checks.registerHandler()
@@ -144,7 +143,7 @@ describe('team periodic checks', () => {
     expect(await h.fireDue(check.id)).toBe('useful')
     expect(h.wakes).toHaveLength(1)
     expect(h.wakes[0].appId).toBe(TARGET)
-    expect(h.wakes[0].onBusy).toBe('skip')
+    expect(h.wakes[0].onBusy).toBe('buffer')
     expect(h.wakes[0].body).toContain('set by reviewer')
     expect(h.wakes[0].body).toContain('run #1')
     expect(h.wakes[0].body).toContain('Look for open bugs and fix them.')
@@ -199,13 +198,13 @@ describe('team periodic checks', () => {
     expect(h.wakes[0].external).toBe(true)
   })
 
-  it('skips the round when the target is mid-turn instead of queueing it', async () => {
-    const h = makeHarness(store, { busy: true })
+  it('delivers a recurring check even while the target is working', async () => {
+    const h = makeHarness(store, { busy: true, wake: 'mid_turn' })
     const check = h.checks.schedule(baseInput())
-
-    expect(await h.fireDue(check.id)).toBe('skipped')
-    expect(h.wakes).toHaveLength(0)
-    expect(store.getCheckById(check.id)!.runCount).toBe(0)
+    expect(await h.fireDue(check.id)).toBe('useful')
+    expect(h.wakes).toHaveLength(1)
+    expect(h.wakes[0].onBusy).toBe('buffer')
+    expect(store.getCheckById(check.id)!.runCount).toBe(1)
   })
 
   it('does not count a round the bus skipped after this module let it through', async () => {
@@ -418,7 +417,6 @@ describe('team periodic checks', () => {
     const checks = createTeamChecks({
       store: store2,
       wake: async () => 'dispatched',
-      isBusy: () => false,
       isReachable: (appId) => appId !== REMOTE,
     })
     checks.schedule({ ...baseInput(), targetAppId: REMOTE })

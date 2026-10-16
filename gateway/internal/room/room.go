@@ -218,9 +218,9 @@ func (r *Room) routeFromMember(s *session.Session, hdr *wire.FederationHeader, e
 // admission gate.
 func (r *Room) routeFromHost(s *session.Session, hdr *wire.FederationHeader, env *wire.Envelope) {
 	plane := wire.ResolvePlane(env.Plane, hdr.Kind)
-	// Host→member frames need no from stamp: the member's single upstream peer
-	// IS the host, so origin is unambiguous.
-	data := marshalForward(env, "")
+	// A member keeps its gateway socket across host changes, so the socket
+	// alone cannot identify which authority sent a frame.
+	data := marshalForward(env, s.IdentityID())
 	if data == nil {
 		s.SendGwError(wire.CodeMalformed, "unencodable frame")
 		return

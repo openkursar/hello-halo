@@ -1,7 +1,7 @@
 /**
- * The changes view of a space's Git repositories: top bar, the "Changes" and
- * "Overview & review" sub-pages, the detail page opened from the overview,
- * and the file list with the commit box.
+ * The changes view of a space's Git repositories: top bar, the "Changes",
+ * "Graph" and "Overview & review" sub-pages, the detail page opened from the
+ * overview, and the file list with the commit box.
  */
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
@@ -39,6 +39,7 @@ import { diffFromGit, type DiffPart, type LoadedDiff } from './diff/diff-content
 import { expandCollapsedAt, originalLines, revealBeforeInUnified, unfoldReferencedLines, type DiffEditorHandle, type DiffSide } from './diff/diff-editor'
 import type { CardGate } from './diff/FileDiffCard'
 import { TopBar } from './top-bar/TopBar'
+import { GitGraphPage } from './graph/GitGraphPage'
 import { FilePanel } from './panel/FilePanel'
 import { FileDrawer } from './panel/FileDrawer'
 import { ResizableFilePanel } from './panel/ResizableFilePanel'
@@ -630,7 +631,10 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
       />
     )
   } else if (listError) {
-    page = <LoadErrorState message={gitErrorMessage(listError, t, memory.scope.kind === 'revision' ? memory.scope.revision : undefined)} onRetry={() => void controller.load()} />
+    page = <LoadErrorState message={gitErrorMessage(listError, t, memory.scope.kind === 'revision' || memory.scope.kind === 'commit' ? memory.scope.revision : undefined)} onRetry={() => void controller.load()} />
+  } else if (!list && refreshing) {
+    // A repository switch or a commit picked in the graph dropped the old list; the next one is on its way.
+    page = <LoadingState />
   } else if (stackFiles.length === 0) {
     page = shown.length === 0 && files.length > 0
       ? <NoMatchState onClear={() => { setFilter(''); if (prefs.hideGenerated) setHideGenerated(false) }} />
@@ -659,6 +663,9 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
       />
     )
   }
+
+  // Until a repository is ready (loading, no git, no repository, a failed first load) the graph sub-page shows that state instead.
+  const graphShown = memory.page === 'graph' && phase === 'ready'
 
   const changeScope = (scope: StoredCompareScope) => {
     update({ forced: [] })
@@ -693,6 +700,7 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
         <CommitBox
           repo={repo}
           stagedCount={status?.staged.length ?? 0}
+          viewedSubject={memory.scope.kind === 'commit' ? memory.scope.subject : undefined}
           initialMessage={memory.commitMessage}
           onDraftChange={keepDraft}
           operation={operation}
@@ -719,7 +727,7 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
           onScope={changeScope}
           totals={totals}
           page={memory.page}
-          onPage={(next) => update({ page: next, detail: null })}
+          onPage={(next) => update({ page: next, detail: null, ...(next === 'graph' ? { graphOpened: true } : {}) })}
           tools={memory.page === 'changes' || detail ? tools : null}
           panelToggle={panelToggle}
           layout={layout}
@@ -739,7 +747,25 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
           {newChanges > 0 && (memory.page === 'changes' || detail) && (
             <NewChangesBar count={newChanges} onRefresh={() => void controller.refresh()} onDismiss={controller.dismissNewChanges} />
           )}
-          {page}
+          {repoRoot && (memory.graphOpened || memory.page === 'graph') && (
+            // The graph stands on its own: a failed change list (a gone branch, a pruned snapshot) must not hide it.
+            // Once opened it stays mounted, hidden, so filters, scroll and loaded pages survive page switches.
+            // Its branches and filters belong to one repository: another one starts a new graph.
+            <div hidden={!graphShown} className="h-full">
+              <GitGraphPage
+                key={repoRoot}
+                spaceId={source.spaceId}
+                repoRoot={repoRoot}
+                active={graphShown}
+                selected={memory.scope.kind === 'commit' ? memory.scope.revision : null}
+                onCompare={(oid, subject) => {
+                  update({ page: 'changes', detail: null, forced: [] })
+                  void controller.setScope({ kind: 'commit', revision: oid, subject })
+                }}
+              />
+            </div>
+          )}
+          {!graphShown && page}
         </section>
         {panel && layout.dockedPanel && prefs.panelOpen && (
           <ResizableFilePanel containerRef={rootRef} preferredWidth={prefs.panelWidth} onWidthChange={prefs.setPanelWidth}>

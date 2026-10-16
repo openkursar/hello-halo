@@ -9,18 +9,14 @@
  */
 
 import type { Message } from '../../../types'
+import { isTeamTranscriptMessage as isTeamMessage } from '../../../../shared/transcript'
+export { isTeamMessage }
 
 export interface TeamMessageProvenance {
   teamId: string
   teamName: string
   /** Null for system-authored notices (turn-end reports). */
   fromMemberName: string | null
-}
-
-export function isTeamMessage(message: Message): boolean {
-  // Provenance is required: without a teamId the team bubble has nothing to
-  // render, so the message falls back to the default bubble instead of vanishing.
-  return message.role === 'system' && message.source === 'team-message' && readTeamProvenance(message) !== null
 }
 
 export function readTeamProvenance(message: Message): TeamMessageProvenance | null {

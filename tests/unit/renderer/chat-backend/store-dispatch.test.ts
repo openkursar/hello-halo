@@ -222,6 +222,54 @@ describe('opening a digital-human conversation', () => {
     expect(store.getState().conversationCache.get(DH)!.messages.map(x => x.id)).toEqual(['session-msg-1'])
   })
 
+  it('holds back every segment of the running turn when input it received split its reply', async () => {
+    const store = makeStore()
+    const earlier = m('session-msg-2', 'assistant', 'earlier reply')
+    const live = m('session-msg-9', 'system', 'report', { source: 'team-message', metadata: { teamId: 'team', inputMode: 'live', inputReplyId: 'session-msg-5' } })
+    apiMock.appChatTranscript.mockResolvedValue(page([
+      m('session-msg-1', 'user', 'earlier'), earlier, m('session-msg-3', 'user', 'go'),
+      m('session-msg-5', 'assistant', 'first half'), m('session-msg-8', 'user', 'and this'), m('session-msg-10', 'assistant', 'second half'), live,
+    ], { openTurnFrom: 'session-msg-5' }))
+    apiMock.getSessionState.mockResolvedValue({
+      success: true,
+      data: { isActive: true, thoughts: [{ id: 't1', type: 'thinking', content: 'x', timestamp: 't' }] },
+    })
+    selectDigitalHuman(store)
+    await vi.waitFor(() => expect(store.getState().conversationCache.has(DH)).toBe(true))
+
+    expect(store.getState().conversationCache.get(DH)!.messages.map(x => x.id))
+      .toEqual(['session-msg-1', 'session-msg-2', 'session-msg-3', 'session-msg-8', 'session-msg-9'])
+  })
+
+  it('keeps a message the running turn already pushed while holding back its reply', async () => {
+    const store = makeStore()
+    apiMock.appChatTranscript.mockResolvedValue(page([
+      m('session-msg-1', 'user', 'go'), m('session-msg-3', 'assistant', 'first half'),
+      m('session-msg-4', 'assistant', 'I am checking, one moment', { source: 'push' }), m('session-msg-6', 'assistant', 'second half'),
+    ], { openTurnFrom: 'session-msg-3' }))
+    apiMock.getSessionState.mockResolvedValue({
+      success: true,
+      data: { isActive: true, thoughts: [{ id: 't1', type: 'thinking', content: 'x', timestamp: 't' }] },
+    })
+    selectDigitalHuman(store)
+    await vi.waitFor(() => expect(store.getState().conversationCache.has(DH)).toBe(true))
+
+    expect(store.getState().conversationCache.get(DH)!.messages.map(x => x.id)).toEqual(['session-msg-1', 'session-msg-4'])
+  })
+
+  it('holds back the whole page when the running turn began before it', async () => {
+    const store = makeStore()
+    apiMock.appChatTranscript.mockResolvedValue(page([m('session-msg-40', 'assistant', 'part'), m('session-msg-41', 'user', 'more'), m('session-msg-42', 'assistant', 'part two')], { openTurnFrom: 'session-msg-12' }))
+    apiMock.getSessionState.mockResolvedValue({
+      success: true,
+      data: { isActive: true, thoughts: [{ id: 't1', type: 'thinking', content: 'x', timestamp: 't' }] },
+    })
+    selectDigitalHuman(store)
+    await vi.waitFor(() => expect(store.getState().conversationCache.has(DH)).toBe(true))
+
+    expect(store.getState().conversationCache.get(DH)!.messages.map(x => x.id)).toEqual(['session-msg-41'])
+  })
+
   it('still shows the conversation when the running-turn lookup fails', async () => {
     const store = makeStore()
     apiMock.appChatTranscript.mockResolvedValue(page([m('session-msg-1', 'user', 'hi')]))
@@ -263,6 +311,32 @@ describe('a digital-human turn', () => {
     expect(first.generating).toBe(true)
     expect(first.last?.content).toBe('build it')
     expect(apiMock.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('marks what a Stop voided — an addition shown live and a send still held — without moving either', async () => {
+    const store = await opened()
+    await store.getState().sendMessage('one more thing')
+    const addition = m('pending-live-1', 'user', 'also B', { source: 'injection', timestamp: '2026-09-01T10:00:05.000Z' })
+    store.getState().handleAgentInputArrived({ spaceId: SPACE, conversationId: DH, messages: [addition], live: true })
+    const before = store.getState().conversationCache.get(DH)!.messages.map(x => x.clientKey ?? x.id)
+
+    store.getState().handleAgentInputStopped({ spaceId: SPACE, conversationId: DH, messages: [
+      { ...addition, metadata: { inputOutcome: 'stopped' } },
+      m('pending-live-2', 'user', 'one more thing', { timestamp: '2026-09-01T10:00:09.000Z', metadata: { inputOutcome: 'stopped' } }),
+    ] })
+
+    const messages = store.getState().conversationCache.get(DH)!.messages
+    expect(messages.map(x => x.clientKey ?? x.id)).toEqual(before)
+    expect(messages.filter(x => x.metadata?.inputOutcome === 'stopped').map(x => x.content)).toEqual(['one more thing', 'also B'])
+    expect(store.getState().sessions.get(DH)!.liveInputs![0].message.metadata?.inputOutcome).toBe('stopped')
+  })
+
+  it('ignores a Stop outcome for a conversation this window does not hold', () => {
+    const store = makeStore()
+    const before = store.getState()
+    store.getState().handleAgentInputStopped({ spaceId: SPACE, conversationId: DH, messages: [m('x', 'user', 'y', { metadata: { inputOutcome: 'stopped' } })] })
+    expect(store.getState().conversationCache).toBe(before.conversationCache)
+    expect(store.getState().sessions).toBe(before.sessions)
   })
 
   it('withdraws the bubble and reports a refusal, so the composer can hand the draft back', async () => {
@@ -582,6 +656,35 @@ describe('sessions the chat board does not show', () => {
     expect(store.getState().sessions.get(im)).toMatchObject({ isGenerating: false, streamingContent: '' })
     expect(apiMock.appChatTranscript).not.toHaveBeenCalled()
     expect(apiMock.getConversation).not.toHaveBeenCalled()
+  })
+
+  it('picks up the steps so far and the retry a running turn is waiting on', async () => {
+    const store = makeStore()
+    const im = `app-chat:${APP}:wecom:direct:someone`
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: im })
+    apiMock.getSessionState.mockResolvedValue({
+      success: true,
+      data: {
+        isActive: true,
+        spaceId: SPACE,
+        thoughts: [{ id: 't1', type: 'thinking', content: 'x', timestamp: 't' }],
+        apiRetry: { attempt: 5, maxRetries: 10, delayMs: 9000, errorStatus: 429, errorKind: 'rate_limit' },
+      },
+    })
+
+    await store.getState().recoverRunningTurn(im)
+
+    const session = store.getState().sessions.get(im)!
+    expect(session.thoughts.map(t => t.id)).toEqual(['t1'])
+    expect(session.apiRetry).toMatchObject({ attempt: 5, maxRetries: 10, errorStatus: 429 })
+  })
+
+  it('reads nothing for a session this window does not hold as running', async () => {
+    const store = makeStore()
+
+    await store.getState().recoverRunningTurn(`app-chat:${APP}:wecom:direct:someone`)
+
+    expect(apiMock.getSessionState).not.toHaveBeenCalled()
   })
 })
 

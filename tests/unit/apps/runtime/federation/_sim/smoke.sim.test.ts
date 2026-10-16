@@ -34,8 +34,10 @@ import {
 import type {
   FederationMessage,
   SerializedWakeRequest,
-  TurnCompletion,
 } from '../../../../../../src/main/apps/runtime/federation/types'
+import type { TurnCompletion } from '../../../../../../src/main/apps/runtime/team/message-bus'
+import { DEFAULT_OFFICE_SCOPE } from '../../../../../../src/main/apps/federation/types'
+import { buildTeamSessionKey } from '../../../../../../src/shared/apps/im-keys'
 
 const OFFICE = 'office-sim'
 const H = 'node-host'
@@ -128,7 +130,7 @@ function buildNode(
     teamStore: team,
     authorityStore: auth,
     feedStore: feed,
-    verifyCredential: (tok) => (tok === TOKEN ? { officeId: OFFICE } : null),
+    verifyCredential: (tok) => (tok === TOKEN ? { officeId: OFFICE, scope: DEFAULT_OFFICE_SCOPE } : null),
     getLocalNodeId: () => id,
     getLocalAdvertisedUrl: () => `sim://${id}`,
     getLocalDisplayName: () => id,
@@ -235,10 +237,21 @@ describe('SimCluster smoke — two managers, join + wake over a deterministic bu
     host.manager.registerTurnComplete('corr-1', (o) => {
       outcome = o
     })
+    // The joiner owns and admits the member's turn, so the epoch the wake
+    // references must already exist in the joiner's own team store.
+    const EPOCH = 'epoch-1'
+    joiner.team.insertEpoch({
+      id: EPOCH, teamId: OFFICE, startedAt: Date.now(), endedAt: null,
+      endReason: null, summary: null, lifecycle: 'run',
+    })
     const sent = host.manager.sendWakeToMember({
       officeId: OFFICE,
       ownerNodeId: J,
-      request: { appId: MEMBER, spaceId: 'space-j-1', message: 'hi', conversationId: 'c1' } as unknown as SerializedWakeRequest,
+      request: {
+        appId: MEMBER, spaceId: 'space-j-1', message: 'hi',
+        conversationId: buildTeamSessionKey(MEMBER, OFFICE, EPOCH),
+        teamContext: { teamId: OFFICE, epochId: EPOCH, correlationId: 'corr-1', fromAppId: null, wait: true },
+      } as unknown as SerializedWakeRequest,
       correlationId: 'corr-1',
     })
     expect(sent).toBe(true)

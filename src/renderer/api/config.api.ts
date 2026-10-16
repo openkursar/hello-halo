@@ -11,7 +11,7 @@ import type {
 } from './_shared'
 import type { ModelOption, ModelRefreshSummary } from '../../shared/types'
 import type { CatalogModelCapability, ModelCapabilityOverride } from '../../shared/types/model-capabilities'
-import { CONFIG_RELOAD_REQUIRED_CODE, CONFIG_UNREADABLE_CODE } from '../../shared/rpc/contracts/config.contract'
+import { CONFIG_RELOAD_REQUIRED_CODE, CONFIG_UNREADABLE_CODE, type ConfigReadMetadata } from '../../shared/rpc/contracts/config.contract'
 
 /**
  * Window event raised when a settings write came back unsaved: config.json
@@ -57,8 +57,8 @@ export interface FetchModelsResult {
 export const configApi = {
   // ===== Config =====
   /** `snapshot`: the caller keeps this read as the client's settings (the app store does). */
-  getConfig: async (options?: { snapshot?: boolean }): Promise<ApiResponse> => {
-    const response: ApiResponse & { configEpoch?: number } = isElectron()
+  getConfig: async (options?: { snapshot?: boolean }): Promise<ApiResponse & ConfigReadMetadata> => {
+    const response: ApiResponse & ConfigReadMetadata = isElectron()
       ? await window.halo.getConfig()
       : await httpRequest('GET', '/api/config')
     if (options?.snapshot && response?.success && typeof response.configEpoch === 'number') {

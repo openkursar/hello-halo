@@ -33,10 +33,10 @@ vi.mock('../../../../../src/main/services/analytics/analytics.service', () => ({
 
 import { CodexAppServerSession } from '../../../../../src/main/services/agent/codex/session-adapter'
 
-function makeAdapter(): InstanceType<typeof CodexAppServerSession> {
+function makeAdapter(): CodexAppServerSession {
   const Ctor = CodexAppServerSession as unknown as new (
     options: any, sessionId: string, opts: any,
-  ) => InstanceType<typeof CodexAppServerSession>
+  ) => CodexAppServerSession
   return new Ctor(
     {
       env: {}, cwd: '/tmp', model: 'm', displayModel: 'm',
@@ -144,5 +144,228 @@ describe('CodexAppServerSession.stream() per-turn contract', () => {
 
     const r5 = await iter.next()
     expect(r5.done).toBe(true)
+  })
+})
+
+describe('Codex live input', () => {
+  function wiredAdapter() {
+    const adapter = makeAdapter() as any
+    const handlers = new Map<string, (params: any) => void>()
+    const request = vi.fn(async (_method: string, _params: any): Promise<any> => ({ turn: { id: 'turn-1' } }))
+    adapter.threadId = 'thread-1'
+    adapter.rpc = { request, isOpen: () => true, onNotification: (name: string, handler: (params: any) => void) => handlers.set(name, handler) }
+    adapter.connection = { isAlive: () => true }
+    adapter.subscribeNotifications(adapter.rpc)
+    return { adapter, request, handlers }
+  }
+
+  async function flush() {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
+
+  it('steers the current turn without resetting its output state and batches ordered inputs', async () => {
+    const { adapter, request, handlers } = wiredAdapter()
+    adapter.send('start')
+    await flush()
+    handlers.get('turn/started')!({ threadId: 'thread-1', turn: { id: 'turn-1' } })
+    const reset = vi.spyOn(adapter.normalizer, 'resetTurn')
+    expect(adapter.sendIntoLiveTurn('first')).toBe(true)
+    expect(adapter.sendIntoLiveTurn('second')).toBe(true)
+    await flush()
+    expect(request.mock.calls.map(([method]: any[]) => method)).toEqual(['turn/start', 'turn/steer'])
+    expect(request.mock.calls[1]).toEqual(['turn/steer', {
+      threadId: 'thread-1', expectedTurnId: 'turn-1',
+      input: [{ type: 'text', text: 'first', text_elements: [] }, { type: 'text', text: 'second', text_elements: [] }],
+    }])
+    expect(reset).not.toHaveBeenCalled()
+  })
+
+  it('retains rejected steering and starts one combined continuation after completion', async () => {
+    const { adapter, request, handlers } = wiredAdapter()
+    adapter.send('start')
+    await flush()
+    request.mockRejectedValueOnce(new Error('No active turn supports steering'))
+    adapter.send('first')
+    await flush()
+    adapter.send('second')
+    await flush()
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(adapter.hasPendingInput()).toBe(true)
+    handlers.get('turn/completed')!({ threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } })
+    await flush()
+    expect(request).toHaveBeenCalledTimes(3)
+    expect(request.mock.calls[2]).toEqual(['turn/start', {
+      threadId: 'thread-1', input: [
+        { type: 'text', text: 'first', text_elements: [] },
+        { type: 'text', text: 'second', text_elements: [] },
+      ],
+    }])
+  })
+
+  it('does not dispatch a new turn while a steering response races completion', async () => {
+    const { adapter, request, handlers } = wiredAdapter()
+    adapter.send('start')
+    await flush()
+    let rejectSteer!: (error: Error) => void
+    request.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSteer = reject }))
+    adapter.send('during final answer')
+    await flush()
+    handlers.get('turn/completed')!({ threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } })
+    await flush()
+    expect(request).toHaveBeenCalledTimes(2)
+    rejectSteer(new Error('No active turn'))
+    await flush()
+    expect(request.mock.calls.map(([method]: any[]) => method)).toEqual(['turn/start', 'turn/steer', 'turn/start'])
+  })
+
+  it('holds a terminal frame until an accepted steering response settles its ownership', async () => {
+    const { adapter, request, handlers } = wiredAdapter()
+    adapter.send('start')
+    await flush()
+    let acceptSteer!: (result: any) => void
+    request.mockImplementationOnce(() => new Promise(resolve => { acceptSteer = resolve }))
+    adapter.sendIntoLiveTurn('finishing input')
+    await flush()
+    handlers.get('turn/completed')!({ threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } })
+    const stream = adapter.stream()[Symbol.asyncIterator]()
+    let terminalReturned = false
+    const result = (async () => {
+      for (;;) {
+        const frame = await stream.next()
+        if (frame.value?.type === 'result') { terminalReturned = true; return frame.value }
+      }
+    })()
+    await flush()
+    expect(terminalReturned).toBe(false)
+    acceptSteer({ turnId: 'turn-1' })
+    await result
+    expect(adapter.hasPendingInput()).toBe(false)
+  })
+
+  it('keeps a buffered fast continuation busy until its stream is consumed', async () => {
+    const { adapter, handlers } = wiredAdapter()
+    adapter.send('start')
+    await flush()
+    handlers.get('turn/started')!({ threadId: 'thread-1', turn: { id: 'turn-1' } })
+    handlers.get('turn/completed')!({ threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } })
+    adapter.sendIntoLiveTurn('late')
+    await flush()
+    handlers.get('turn/started')!({ threadId: 'thread-1', turn: { id: 'turn-2' } })
+    handlers.get('turn/completed')!({ threadId: 'thread-1', turn: { id: 'turn-2', status: 'completed' } })
+    await collectUntilDone(adapter.stream()[Symbol.asyncIterator]())
+    expect(adapter.hasPendingInput()).toBe(true)
+    await collectUntilDone(adapter.stream()[Symbol.asyncIterator]())
+    expect(adapter.hasPendingInput()).toBe(false)
+  })
+
+  it('keeps init pending until the reader resumes after its iterator.next handoff', async () => {
+    const { adapter, handlers } = wiredAdapter()
+    adapter.send('start')
+    await flush()
+    handlers.get('turn/started')!({ threadId: 'thread-1', turn: { id: 'turn-1' } })
+    handlers.get('turn/completed')!({ threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } })
+    const iterator = adapter.stream()[Symbol.asyncIterator]()
+    const init = await iterator.next()
+    expect(init.value).toMatchObject({ type: 'system', subtype: 'init' })
+    await Promise.resolve()
+    expect(adapter.hasPendingInput()).toBe(true)
+    await iterator.next()
+    expect(adapter.hasPendingInput()).toBe(false)
+    await iterator.return()
+  })
+
+  it('keeps image content in steering requests', async () => {
+    const { adapter, request } = wiredAdapter()
+    adapter.send('start')
+    await flush()
+    adapter.sendIntoLiveTurn({ message: { content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aW1hZ2U=' } }] } })
+    await flush()
+    expect(request.mock.calls[1][1].input).toEqual([{ type: 'image', url: 'data:image/png;base64,aW1hZ2U=' }])
+  })
+})
+
+describe('Codex live-input withdrawal', () => {
+  function wiredAdapter() {
+    const adapter = makeAdapter() as any
+    const handlers = new Map<string, (params: any) => void>()
+    const request = vi.fn(async (_method: string, _params: any): Promise<any> => ({ turn: { id: 'turn-1' } }))
+    adapter.threadId = 'thread-1'
+    adapter.rpc = { request, isOpen: () => true, onNotification: (name: string, handler: (params: any) => void) => handlers.set(name, handler) }
+    adapter.connection = { isAlive: () => true }
+    adapter.subscribeNotifications(adapter.rpc)
+    return { adapter, request, handlers }
+  }
+
+  async function flush() {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  }
+
+  it('withdraws steering the server refused and never starts it after completion', async () => {
+    const { adapter, request, handlers } = wiredAdapter()
+    adapter.send('start')
+    await flush()
+    request.mockRejectedValueOnce(new Error('No active turn supports steering'))
+    const onWithdrawn = vi.fn()
+    adapter.sendIntoLiveTurn('deferred addition', { onWithdrawn })
+    await flush()
+    expect(adapter.hasPendingInput()).toBe(true)
+    expect(await adapter.withdrawUnreadInput()).toBe(1)
+    expect(onWithdrawn).toHaveBeenCalledTimes(1)
+    handlers.get('turn/completed')!({ threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } })
+    await flush()
+    expect(request.mock.calls.map(([method]: any[]) => method)).toEqual(['turn/start', 'turn/steer'])
+    expect(adapter.hasPendingInput()).toBe(false)
+  })
+
+  it('withdraws live input before it is dispatched, but keeps ordinary sends', async () => {
+    const { adapter, request, handlers } = wiredAdapter()
+    adapter.send('start')
+    await flush()
+    handlers.get('turn/started')!({ threadId: 'thread-1', turn: { id: 'turn-1' } })
+    const onWithdrawn = vi.fn()
+    adapter.sendIntoLiveTurn('unread addition', { onWithdrawn })
+    adapter.send('ordinary follow-up')
+    expect(await adapter.withdrawUnreadInput()).toBe(1)
+    expect(onWithdrawn).toHaveBeenCalledTimes(1)
+    await flush()
+    expect(request.mock.calls[1]).toEqual(['turn/steer', {
+      threadId: 'thread-1', expectedTurnId: 'turn-1',
+      input: [{ type: 'text', text: 'ordinary follow-up', text_elements: [] }],
+    }])
+  })
+
+  it('treats steering the server accepted as read', async () => {
+    const { adapter, request, handlers } = wiredAdapter()
+    adapter.send('start')
+    await flush()
+    handlers.get('turn/started')!({ threadId: 'thread-1', turn: { id: 'turn-1' } })
+    let acceptSteer!: (result: any) => void
+    request.mockImplementationOnce(() => new Promise(resolve => { acceptSteer = resolve }))
+    const onWithdrawn = vi.fn()
+    adapter.sendIntoLiveTurn('in flight', { onWithdrawn })
+    await flush()
+    const withdrawal = adapter.withdrawUnreadInput()
+    acceptSteer({ turnId: 'turn-1' })
+    expect(await withdrawal).toBe(0)
+    expect(onWithdrawn).not.toHaveBeenCalled()
+  })
+
+  it('withdraws an in-flight steer the server then refuses', async () => {
+    const { adapter, request, handlers } = wiredAdapter()
+    adapter.send('start')
+    await flush()
+    handlers.get('turn/started')!({ threadId: 'thread-1', turn: { id: 'turn-1' } })
+    let rejectSteer!: (error: Error) => void
+    request.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSteer = reject }))
+    const onWithdrawn = vi.fn()
+    adapter.sendIntoLiveTurn('in flight', { onWithdrawn })
+    await flush()
+    const withdrawal = adapter.withdrawUnreadInput()
+    rejectSteer(new Error('No active turn'))
+    expect(await withdrawal).toBe(1)
+    expect(onWithdrawn).toHaveBeenCalledTimes(1)
+    handlers.get('turn/completed')!({ threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } })
+    await flush()
+    expect(request.mock.calls.map(([method]: any[]) => method)).toEqual(['turn/start', 'turn/steer'])
   })
 })

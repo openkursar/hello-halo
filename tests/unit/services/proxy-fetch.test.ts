@@ -161,6 +161,64 @@ describe('proxyFetch — body decompression on the proxy path', () => {
   })
 })
 
+describe('proxyFetch — keep-alive connections through an HTTP proxy', () => {
+  // Answers the way Clash/mihomo's HTTP inbound does: a request carrying the
+  // full target URL is forwarded (here: echoed), one carrying only a path gets
+  // an empty 400 and a closed connection.
+  let proxyServer: http.Server
+  const received: Array<{ connection: number | undefined; target: string; body: string }> = []
+
+  beforeEach(async () => {
+    received.length = 0
+    let connectionCount = 0
+    const connectionOf = new WeakMap<object, number>()
+    proxyServer = http.createServer((req, res) => {
+      const chunks: Buffer[] = []
+      req.on('data', (chunk: Buffer) => chunks.push(chunk))
+      req.on('end', () => {
+        const target = req.url ?? ''
+        const body = Buffer.concat(chunks).toString()
+        received.push({ connection: connectionOf.get(req.socket), target, body })
+        if (!/^https?:\/\//.test(target)) {
+          res.writeHead(400, { connection: 'close' }).end()
+          return
+        }
+        res.writeHead(200, { 'content-type': 'text/plain' }).end(body)
+      })
+    })
+    proxyServer.on('connection', (socket) => connectionOf.set(socket, ++connectionCount))
+    await new Promise<void>((resolve) => proxyServer.listen(0, '127.0.0.1', resolve))
+    const { port } = proxyServer.address() as AddressInfo
+    networkChangeHandler?.({ proxy: `http://127.0.0.1:${port}`, browserUseProxy: false })
+  })
+
+  afterEach(() => {
+    networkChangeHandler?.({ proxy: '', browserUseProxy: false })
+    proxyServer.closeAllConnections()
+    proxyServer.close()
+  })
+
+  it('sends requests on a reused connection with the full target URL', async () => {
+    const chat = 'http://gateway.example.com/v1/chat/completions'
+    const models = 'http://gateway.example.com/v1/models'
+
+    for (const body of ['{"turn":1}', '{"turn":2}']) {
+      const res = await proxyFetch(chat, { method: 'POST', headers: { 'content-type': 'application/json' }, body })
+      expect(res.status).toBe(200)
+      expect(await res.text()).toBe(body)
+    }
+    const res = await proxyFetch(models)
+    expect(res.status).toBe(200)
+    await res.text()
+
+    expect(received).toEqual([
+      { connection: 1, target: chat, body: '{"turn":1}' },
+      { connection: 1, target: chat, body: '{"turn":2}' },
+      { connection: 1, target: models, body: '' },
+    ])
+  })
+})
+
 describe('proxyFetch — hosts listed to bypass the proxy', () => {
   // Nothing listens here: a request routed through it would fail.
   const deadProxy = 'http://127.0.0.1:9'

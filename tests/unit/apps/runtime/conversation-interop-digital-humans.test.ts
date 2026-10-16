@@ -36,7 +36,9 @@ const h = vi.hoisted(() => {
   const emit = (channel: string, conversationId: string) => {
     for (const l of [...state.listeners]) l({ channel, conversationId })
   }
-  return { state, emit, sendAppChatMessage: vi.fn(), sendChat: vi.fn() }
+  // A busy space chat between turns has no live turn to join, so live delivery declines by default.
+  const sendIntoLiveTurn = vi.fn((_id: string, _text: string, _images?: unknown, _options?: { onWithdrawn: () => void }) => false)
+  return { state, emit, sendAppChatMessage: vi.fn(), sendChat: vi.fn(), sendIntoLiveTurn, emitAgentEvent: vi.fn() }
 })
 
 vi.mock('../../../../src/main/foundation/config.service', () => ({ getConfig: () => h.state.config }))
@@ -92,6 +94,7 @@ vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
 }))
 vi.mock('../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
   isAppChatConversationGenerating: (id: string) => h.state.dhBusy.has(id),
+  getAppChatTurnIdentity: () => undefined,
 }))
 vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
   hasActiveAppChatRound: () => false,
@@ -99,7 +102,12 @@ vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
 }))
 vi.mock('../../../../src/main/services/agent', () => ({
   sendMessage: (...args: unknown[]) => h.sendChat(...args),
+  sendIntoLiveTurn: (id: string, text: string, images?: unknown, options?: { onWithdrawn: () => void }) => h.sendIntoLiveTurn(id, text, images, options),
+  emitAgentEvent: (...args: unknown[]) => h.emitAgentEvent(...args),
   v2Sessions: { has: (id: string) => h.state.dhSessions.has(id) },
+  hasPendingSessionInput: () => false,
+  onUserStop: () => ({ dispose: () => {} }),
+  onUserStopSettled: () => ({ dispose: () => {} }),
   onAgentEvent: (listener: Listener) => {
     h.state.listeners.add(listener)
     return { dispose: () => h.state.listeners.delete(listener) }
@@ -172,6 +180,8 @@ beforeEach(async () => {
   s.chats.clear(); s.chatBusy.clear(); s.apps.clear(); s.records = []; s.dhBusy.clear(); s.dhSessions.clear(); s.dhTranscripts.clear(); s.listeners.clear()
   h.sendAppChatMessage.mockReset()
   h.sendChat.mockReset()
+  h.sendIntoLiveTurn.mockReset().mockReturnValue(false)
+  h.emitAgentEvent.mockClear()
 
   // The fake chat send: persists the turn input like the real one, then the turn runs.
   h.sendChat.mockImplementation(async (params: { conversationId: string; message: string }) => {
@@ -593,6 +603,8 @@ describe('a scheduled run as the sender', () => {
     openRun()
     h.state.chatBusy.add(NOTES)
     expect((await tools(RUN).send({ target: NOTES, message: 'late report', summary: 's' })).content[0].text).toContain('queued')
+    // Offered to the busy chat's turn first; queued because that turn could not take it.
+    expect(h.sendIntoLiveTurn).toHaveBeenCalledWith(NOTES, expect.stringContaining('late report'), undefined, { onWithdrawn: expect.any(Function) })
     runSenders.closeRunSender(RUN)
 
     await endChatTurn(NOTES)
@@ -600,6 +612,20 @@ describe('a scheduled run as the sender', () => {
     const delivered = h.state.chats.get(NOTES)!.messages.at(-1)!
     expect(delivered.content).toBe('late report')
     expect(delivered.metadata.fromConversationTitle).toMatch(/^Analyst · scheduled run \(/)
+  })
+
+  it('keeps its name on a notice the running turn reads at once', async () => {
+    openRun()
+    h.state.chatBusy.add(NOTES)
+    h.sendIntoLiveTurn.mockReturnValue(true)
+    expect((await tools(RUN).send({ target: NOTES, message: 'live report', summary: 's' })).content[0].text).not.toContain('queued')
+    runSenders.closeRunSender(RUN)
+
+    const delivered = h.state.chats.get(NOTES)!.messages.at(-1)!
+    expect(delivered.content).toBe('live report')
+    expect(delivered.metadata).toMatchObject({ inputMode: 'live', fromConversationTitle: expect.stringMatching(/^Analyst · scheduled run \(/) })
+    expect(h.emitAgentEvent).toHaveBeenCalledWith('agent:input-arrived', SPACE, NOTES, expect.objectContaining({ live: true }))
+    expect(h.sendChat).not.toHaveBeenCalled()
   })
 
   it('stops accepting even the awaited reply once its digital human\'s collaboration is switched off', async () => {

@@ -219,10 +219,6 @@ export interface StreamCallbacks {
   onComplete?(result: StreamResult): void
   /** Called for each raw SDK message (for JSONL persistence in automation) */
   onRawMessage?(sdkMessage: any): void
-  /** Called when continuing for an injected mid-turn message.
-   *  Caller should persist the user message to the conversation between turns.
-   *  @deprecated Used only by legacy do-while loop path. Consumer handles injection externally. */
-  onInjectionContinue?(userMessage: string): void
   /** Called when CC emits `system:init` — signals the start of a new turn.
    *  Consumer uses this to create the assistant placeholder message.
    *  Fires once per stream() call (first system:init only). */

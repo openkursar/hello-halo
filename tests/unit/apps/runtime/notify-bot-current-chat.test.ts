@@ -30,7 +30,7 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
 }))
 const {
   pushToChat, sendFile, recordChatPush, appendRelay, sessions, configs, available, teamState,
-  ensureConversationEpoch, findSession, setTeamContext,
+  ensureConversationEpoch, findSession, setTeamContext, offerLive,
 } = vi.hoisted(() => ({
   pushToChat: vi.fn(() => true),
   sendFile: vi.fn(async () => true),
@@ -43,6 +43,7 @@ const {
   ensureConversationEpoch: vi.fn(),
   findSession: vi.fn(),
   setTeamContext: vi.fn(),
+  offerLive: vi.fn(async () => {}),
 }))
 vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({
   getActiveImChannelManager: () => available.manager ? {
@@ -69,6 +70,7 @@ vi.mock('../../../../src/main/apps/runtime/team', () => ({
 vi.mock('../../../../src/main/apps/runtime/pending-relays', () => ({
   getPendingRelayStore: () => available.spool ? { append: appendRelay } : null,
 }))
+vi.mock('../../../../src/main/apps/runtime/pending-relay-delivery', () => ({ offerPendingRelaysToLiveTurn: offerLive }))
 vi.mock('../../../../src/main/apps/runtime/chat-push', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../src/main/apps/runtime/chat-push')>()),
   recordChatPush,
@@ -90,13 +92,13 @@ function session(chatId: string, chatType: 'direct' | 'group'): ImSessionRecord 
 }
 
 /** notify_bot of a turn answering the group "ops-group". */
-function notifyBot(exportGate = new FileExportGate([])) {
+function notifyBot(exportGate = new FileExportGate([]), permissionIdentity?: () => string | undefined) {
   const server = createNotifyToolServer({
     appId: 'dh', appName: 'Desk', runId: 'run-1',
     imSessions: sessions.map(s => ({ ...s, teamContext: s.teamContext && { ...s.teamContext } })),
     usesImPush: true,
     exportGate,
-    relay: { sessionKey: 'app-chat:dh:wecom-bot:group:ops-group', contact: 'inst-1:ops-group', isOwner: true },
+    relay: { sessionKey: 'app-chat:dh:wecom-bot:group:ops-group', contact: 'inst-1:ops-group', isOwner: true, permissionIdentity },
   }) as unknown as { tools: Array<{ name: string; handler: (input: Record<string, unknown>) => Promise<{ content: Array<{ text: string }>; isError?: boolean }> }> }
   return server.tools.find(tool => tool.name === 'notify_bot')!.handler
 }
@@ -106,6 +108,7 @@ beforeEach(() => {
   sendFile.mockReset().mockResolvedValue(true)
   recordChatPush.mockReset()
   appendRelay.mockReset()
+  offerLive.mockClear()
   sessions.splice(0, sessions.length,
     { ...session('ops-group', 'group'), instanceId: 'inst-2' },
     session('boss', 'direct'),
@@ -158,6 +161,26 @@ describe('notify_bot and the chat a turn is answering', () => {
 })
 
 describe('what notify_bot sent, in the record of the chat it went to', () => {
+  it('keeps the sending turn authority when a file completes after its source was replaced', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'notify-bot-authority-'))
+    try {
+      const file = join(dir, 'report.txt')
+      writeFileSync(file, 'report')
+      let authority = 'external'
+      let finishFile!: (accepted: boolean) => void
+      sendFile.mockImplementationOnce(() => new Promise<boolean>(resolve => { finishFile = resolve }))
+      const pending = notifyBot(new FileExportGate([dir]), () => authority)({ to: 'inst-1:boss', file })
+      await vi.waitFor(() => expect(sendFile).toHaveBeenCalledOnce())
+      authority = 'owner'
+      finishFile(true)
+      await pending
+      await vi.waitFor(() => expect(offerLive).toHaveBeenCalledOnce())
+      expect(offerLive).toHaveBeenCalledWith(expect.any(String), expect.any(Object), { id: expect.any(String), identity: 'external' })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('is kept as a message the digital human sent on its own', async () => {
     await notifyBot()({ to: 'inst-1:boss', message: 'FYI: the ops group asked about the release' })
 

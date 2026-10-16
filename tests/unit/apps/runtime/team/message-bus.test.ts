@@ -107,8 +107,8 @@ interface MakeHooksOptions {
 
 /** A mock hooks implementation that records wakes and lets the test drive busyness. */
 function makeHooks(options: MakeHooksOptions = {}) {
-  const wakes: Array<{ sessionKey: string; appId: string; envelope: any; trigger: any }> = []
-  const midTurnDeliveries: Array<{ sessionKey: string; appId: string; envelope: any; trigger: any }> = []
+  const wakes: Array<{ sessionKey: string; appId: string; envelope: any; trigger: any; deliveries?: readonly any[] }> = []
+  const midTurnDeliveries: Array<{ sessionKey: string; appId: string; envelope: any; trigger: any; deliveries?: readonly any[] }> = []
   const busy = new Set<string>()
   // Members whose owner is unreachable (empty by default → everything reachable, so
   // existing tests are unaffected by the wait=false reachability gate).
@@ -120,9 +120,12 @@ function makeHooks(options: MakeHooksOptions = {}) {
         appId: params.appId,
         envelope: params.envelope,
         trigger: params.trigger,
+        deliveries: params.deliveries,
       })
       if (options.midTurn) busy.add(params.sessionKey)
     }),
+    // A turn a teammate woke runs delegated; see appChatMessageIdentity.
+    getTurnIdentity: () => 'delegated',
     isBusy: (sessionKey: string) => busy.has(sessionKey),
     checkReachable: (appId: string) => !unreachable.has(appId),
     ...(options.midTurn
@@ -133,6 +136,7 @@ function makeHooks(options: MakeHooksOptions = {}) {
               appId: params.appId,
               envelope: params.envelope,
               trigger: params.trigger,
+        deliveries: params.deliveries,
             })
             return true
           }),
@@ -337,6 +341,29 @@ describe('MessageBus', () => {
       expect('messageId' in result && result.delivery).toBeUndefined()
       expect('messageId' in result && result.remoteTarget).toBeUndefined()
       expect(wakes).toHaveLength(1)
+    })
+
+    it('hands all remote messages over without reserving a sender turn and records asynchronous failure', async () => {
+      seedTeam(store, 'free')
+      store.addMember({
+        teamId: TEAM_ID, appId: 'remote-app', memberName: 'remote', role: 'Reviewer',
+        isLead: false, aiProvisioned: false, addedAt: Date.now(), ownerNodeId: 'remote-node', origin: 'remote',
+      })
+      const { hooks, wakes } = makeHooks()
+      const callbacks: Array<(outcome: TurnCompletion) => void> = []
+      hooks.deliverRemote = vi.fn(params => { callbacks.push(params.onCompletion); return true })
+      const acts: any[] = []
+      const bus = createMessageBus({ store, hooks, recordActivity: input => acts.push(input) })
+      for (const message of ['first', 'second']) await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID,
+        fromAppId: LEAD_APP, to: 'remote', message })
+      expect(hooks.deliverRemote).toHaveBeenCalledTimes(2)
+      expect(wakes).toHaveLength(0)
+      expect(bus.isSessionOccupied(buildTeamSessionKey('remote-app', TEAM_ID, EPOCH_ID))).toBe(false)
+      callbacks[0]({ kind: 'result', content: 'handled' })
+      callbacks[1]({ kind: 'undelivered', reason: 'owner mailbox full' })
+      expect(acts.filter(act => act.kind === 'reply')).toEqual([expect.objectContaining({
+        actorAppId: 'remote-app', targetAppId: LEAD_APP, status: 'undelivered',
+      })])
     })
 
     it('flags a hand-over to another machine, because none of the three states is knowable there', async () => {
@@ -674,6 +701,78 @@ describe('MessageBus', () => {
       expect(wakes[1].trigger.external).toBe(true)
     })
 
+    it('injects external messages into an external turn, including a turn started outside this bus', async () => {
+      seedTeam(store, 'free')
+      const { hooks, busy, wakes, midTurnDeliveries } = makeHooks({ midTurn: true })
+      hooks.getTurnIdentity = () => 'external'
+      const sessionKey = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID)
+      busy.add(sessionKey)
+      const bus = createMessageBus({ store, hooks })
+      const sent = await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP,
+        to: 'researcher', message: 'external update', external: true })
+      expect('messageId' in sent && sent.delivery).toBe('mid_turn')
+      expect(wakes).toHaveLength(0)
+      expect(midTurnDeliveries).toHaveLength(1)
+      expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(false)
+    })
+
+    it("queues a teammate's message behind the owner's own turn instead of joining it", async () => {
+      // The owner's own chat runs with the owner's reach; a teammate's request is
+      // held to the delegated policy. Merging them would hand the teammate the
+      // owner's permissions (HEAD refused this too).
+      seedTeam(store, 'free')
+      const { hooks, busy, wakes, midTurnDeliveries } = makeHooks({ midTurn: true })
+      hooks.getTurnIdentity = () => 'owner'
+      const sessionKey = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID)
+      busy.add(sessionKey)
+      const bus = createMessageBus({ store, hooks })
+      const sent = await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP,
+        to: 'researcher', message: 'teammate request' })
+      expect('messageId' in sent && sent.delivery).toBe('queued')
+      expect(midTurnDeliveries).toHaveLength(0)
+      expect(wakes).toHaveLength(0)
+      expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(true)
+    })
+
+    it('holds unknown-authority work until ready, then injects all compatible mail in order', async () => {
+      seedTeam(store, 'free')
+      const { hooks, busy, wakes, midTurnDeliveries } = makeHooks({ midTurn: true })
+      let identity: string | undefined
+      hooks.getTurnIdentity = () => identity
+      const sessionKey = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID)
+      busy.add(sessionKey)
+      const bus = createMessageBus({ store, hooks })
+      for (const message of ['first', 'second']) await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID,
+        fromAppId: LEAD_APP, to: 'researcher', message })
+      expect(midTurnDeliveries).toHaveLength(0)
+      identity = 'delegated'
+      bus.notifySessionReady(sessionKey)
+      expect(wakes).toHaveLength(0)
+      expect(midTurnDeliveries).toHaveLength(1)
+      expect(midTurnDeliveries[0].deliveries?.map(item => item.envelope.body)).toEqual(['first', 'second'])
+      expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(false)
+    })
+
+    it('keeps only the latest waiting recurring check without losing other messages', async () => {
+      seedTeam(store, 'free')
+      const { hooks, busy, wakes } = makeHooks()
+      const sessionKey = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID)
+      busy.add(sessionKey)
+      const bus = createMessageBus({ store, hooks })
+      for (const message of ['old check', 'latest check']) await bus.deliverRuntimeWake({
+        envelope: { id: message, teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP,
+          toAppId: RESEARCHER_APP, body: message, correlationId: message, createdAt: Date.now() },
+        trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, wait: false,
+          correlationId: message, kind: 'periodic_check' },
+        onBusy: 'buffer', coalescingKey: 'check:one',
+      })
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'keep me' })
+      busy.delete(sessionKey)
+      bus.drainMailbox(sessionKey)
+      expect(wakes).toHaveLength(1)
+      expect(wakes[0].deliveries?.map(item => item.envelope.body)).toEqual(['latest check', 'keep me'])
+    })
+
     it('charges the circuit breaker for a mid-turn delivery like any other send', async () => {
       // The budget is the only backstop against members interrupting each other
       // without end, and interrupting is exactly what this path does. A route
@@ -837,7 +936,7 @@ describe('MessageBus', () => {
       expect(wakes[0].appId).toBe(RESEARCHER_APP)
     })
 
-    it('caps the per-session mailbox, shedding the OLDEST when the bound is exceeded (M-4)', async () => {
+    it('rejects overflow without discarding already accepted messages', async () => {
       seedTeam(store, 'free')
       const { hooks, wakes, busy } = makeHooks()
       // Raise the circuit ceiling so this test exercises the mailbox bound, not
@@ -847,21 +946,22 @@ describe('MessageBus', () => {
       const researcherSession = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID)
       busy.add(researcherSession) // researcher stays mid-turn the whole time
 
-      // Buffer more than the cap (128). The first two must be shed as oldest.
-      const total = 130
+      const total = 128
       for (let i = 0; i < total; i++) {
         await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: `msg-${i}`, wait: false })
       }
-      expect(wakes).toHaveLength(0) // all buffered, none woken while busy
+      await expect(bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'overflow' })).rejects.toThrow('mailbox is full')
+      expect(wakes).toHaveLength(0)
 
-      // Drain one: the oldest SURVIVOR is msg-2 (msg-0 and msg-1 were shed).
       busy.delete(researcherSession)
       bus.completeTurn({
         sessionKey: researcherSession,
         trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'c0', fromAppId: null, wait: false },
         outcome: { kind: 'result', content: '' },
       })
-      expect(wakes[0].envelope.body).toBe('msg-2')
+      expect(wakes[0].deliveries).toHaveLength(128)
+      expect(wakes[0].deliveries?.[0].envelope.body).toBe('msg-0')
+      expect(wakes[0].deliveries?.[127].envelope.body).toBe('msg-127')
     })
   })
 
@@ -947,13 +1047,10 @@ describe('MessageBus', () => {
       expect(wakes).toHaveLength(1)
       expect(wakes[0].envelope.body).toBe('done 1')
 
-      // One envelope per turn: the second drains when the first turn completes.
-      // (completeTurn also re-wakes the original SENDER with a completion — an
-      // unrelated, pre-existing behaviour — so assert on the lead's wakes only.)
       bus.completeTurn({ sessionKey: LEAD_KEY, trigger: wakes[0].trigger, outcome: { kind: 'result', content: 'ok' } })
       const leadWakes = wakes.filter((w) => w.sessionKey === LEAD_KEY)
-      expect(leadWakes).toHaveLength(2)
-      expect(leadWakes[1].envelope.body).toBe('done 2')
+      expect(leadWakes).toHaveLength(1)
+      expect(leadWakes[0].deliveries?.map(item => item.envelope.body)).toEqual(['done 1', 'done 2'])
     })
 
     it('two deliveries inside the wake-dispatch window run ONE turn (second buffers)', async () => {
@@ -1207,6 +1304,77 @@ describe('MessageBus', () => {
       // now beats an hours-long backstop.
       bus.resetEpoch(EPOCH_ID)
       await expect(relayed).rejects.toThrow(/run was stopped/)
+    })
+  })
+
+  describe('a person stopping a member session', () => {
+    const MEMBER_KEY = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID)
+    const TESTER_KEY = buildTeamSessionKey(TESTER_APP, TEAM_ID, EPOCH_ID)
+
+    it("voids the person's own waiting message and holds a teammate's for the next turn", async () => {
+      seedTeam(store, 'free')
+      const { hooks, busy, wakes } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+      busy.add(MEMBER_KEY)
+      const personal = bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: null, to: 'researcher', message: 'my own words', wait: true })
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'from the lead', wait: false })
+      await Promise.resolve()
+
+      // Its receipt already answered "queued" when it had to wait.
+      expect(receipt(await personal).status).toBe('queued')
+      const voided = bus.holdSession(MEMBER_KEY)
+      expect(voided.map((delivery) => delivery.envelope.body)).toEqual(['my own words'])
+
+      busy.delete(MEMBER_KEY)
+      bus.completeTurn({ sessionKey: MEMBER_KEY, trigger: voided[0].trigger, outcome: { kind: 'error', message: 'stopped' } })
+      await Promise.resolve()
+      expect(wakes).toHaveLength(0)
+
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'after the stop', wait: false })
+      expect(wakes).toHaveLength(1)
+      expect(wakes[0].deliveries?.map((delivery) => delivery.envelope.body)).toEqual(['from the lead', 'after the stop'])
+    })
+
+    it('puts deliveries the stopped turn never read back ahead of later mail, marked as already recorded', async () => {
+      seedTeam(store, 'free')
+      const { hooks, busy, wakes } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+      const envelope = { id: 'm1', teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, toAppId: RESEARCHER_APP, body: 'unread report', correlationId: 'c1', createdAt: Date.now() }
+      bus.holdSession(MEMBER_KEY)
+      bus.returnDeliveries(MEMBER_KEY, [{ envelope, trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'c1', fromAppId: LEAD_APP, wait: false, kind: 'message' }, inputRecorded: true }])
+      busy.delete(MEMBER_KEY)
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'new mail', wait: false })
+      expect(wakes).toHaveLength(1)
+      expect(wakes[0].deliveries?.map((delivery) => [delivery.envelope.body, delivery.inputRecorded])).toEqual([
+        ['unread report', true], ['new mail', undefined],
+      ])
+    })
+
+    it('hands back a woken turn a stop held before the member read it: slot free, own words void, the rest held', async () => {
+      seedTeam(store, 'free')
+      const { hooks, wakes } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+      const personal = bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: null, to: 'researcher', message: 'my own words', wait: true })
+      await Promise.resolve()
+      const fromLead = bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'tester', message: 'waiting answer', wait: true })
+      await Promise.resolve()
+      expect(wakes.map((wake) => wake.envelope.body)).toEqual(['my own words', 'waiting answer'])
+
+      // The member's person stops it while the lead's wake is still on its way.
+      bus.holdSession(TESTER_KEY)
+      const voided = bus.returnHeldBack(TESTER_KEY, [{ envelope: wakes[1].envelope, trigger: wakes[1].trigger }])
+      expect(voided).toEqual([])
+      expect(receipt(await fromLead).status).toBe('queued')
+      expect(bus.isSessionOccupied(TESTER_KEY)).toBe(false)
+      expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(true)
+
+      const ownVoided = bus.returnHeldBack(MEMBER_KEY, [{ envelope: wakes[0].envelope, trigger: wakes[0].trigger }])
+      expect(ownVoided.map((delivery) => delivery.envelope.body)).toEqual(['my own words'])
+      expect(receipt(await personal).message).toContain('Stopped before it was read')
+
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'tester', message: 'after the stop', wait: false })
+      expect(wakes).toHaveLength(3)
+      expect(wakes[2].deliveries?.map((delivery) => delivery.envelope.body)).toEqual(['waiting answer', 'after the stop'])
     })
   })
 })

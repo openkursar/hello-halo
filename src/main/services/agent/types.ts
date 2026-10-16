@@ -240,6 +240,12 @@ export interface PendingApiRetry {
 // V2 Session Types
 // ============================================
 
+/** Per-input options of an engine's synchronous live-input primitive. */
+export interface SessionLiveInputOptions {
+  /** At most once, only when `withdrawUnreadInput` took this input back before the engine read it. */
+  onWithdrawn?: () => void
+}
+
 /**
  * V2 SDK Session interface
  *
@@ -247,7 +253,19 @@ export interface PendingApiRetry {
  * using minimal interface for type safety and maintainability, avoiding inference to never.
  */
 export type V2SDKSession = {
+  /** Native identifier used to resume after a configuration rebuild. Available after init. */
+  readonly sessionId?: string
   send: (message: any) => void | Promise<void>
+  /** Synchronous acceptance; owns input through the next step or an immediate continuation. */
+  sendIntoLiveTurn?: (message: any, options?: SessionLiveInputOptions) => boolean
+  /** Accepted work not yet consumed, including the gap before its continuation starts. */
+  hasPendingInput?: () => boolean
+  /**
+   * Takes back every live input accepted before this call that the engine has
+   * not read, so it is never run, and calls each one's `onWithdrawn`. Resolves
+   * with how many were withdrawn, after their callbacks ran.
+   */
+  withdrawUnreadInput?: () => Promise<number>
   stream: () => AsyncIterable<any>
   close: () => void
   interrupt?: () => Promise<void> | void

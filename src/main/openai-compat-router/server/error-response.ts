@@ -1,11 +1,14 @@
 /**
  * Error replies — how the router answers a request it cannot fulfil.
  *
- * Every client of the router (Claude Code, the Halo SDK, Codex) retries on its
- * own and decides from the status and the retry headers. So an error reply
- * must keep what the upstream said: its status, its `retry-after`, and whether
- * retrying can help at all. A spent quota answered as a transient 500 turns
- * into many minutes of pointless retries before the user sees the reason.
+ * When to retry is the client's decision, never the backend's. The engines
+ * behind the router retry on their own rhythm but obey a backend's retry
+ * hints when they see one, and a backend can ask for hours: a subscription
+ * limit answers with a `retry-after` pointing at its reset, and the turn then
+ * waits that long in silence. So no error reply carries a backend's retry
+ * hints, and the router adds no wait of its own. It keeps the upstream's
+ * status, so a 429 stays a 429, and makes one judgment itself: a spent quota
+ * or an unpaid account is not retried at all.
  */
 
 import type { Response as ExpressResponse } from 'express'
@@ -35,11 +38,8 @@ const STATUS_ERROR_MAP: Record<number, string> = {
   529: 'overloaded_error'
 }
 
-/**
- * Wait suggested for failures of the server-side kind when the upstream gave
- * none: short, because such blips usually clear within seconds.
- */
-const TRANSIENT_RETRY_AFTER_SECONDS = '3'
+/** Response headers through which a backend steers when, or whether, its client retries. */
+const BACKEND_RETRY_HINTS = ['retry-after', 'retry-after-ms', 'x-should-retry']
 
 /**
  * Wording of a spent quota or an unpaid account — limits that retrying within
@@ -89,10 +89,6 @@ function resolveStatus(errorType: string, upstreamStatus: number | undefined): n
   return 500
 }
 
-function isTransientStatus(status: number): boolean {
-  return status === 408 || status >= 500
-}
-
 /** True when the failure is a spent quota or billing problem, not a passing condition. */
 export function isQuotaExhausted(status: number, errorType: string, message: string): boolean {
   if (status === 402) return true
@@ -101,46 +97,37 @@ export function isQuotaExhausted(status: number, errorType: string, message: str
 }
 
 /**
- * Set the retry headers of an error reply: the upstream's own hints when it
- * sent any, `x-should-retry: false` for a spent quota, and a short
- * `retry-after` for server-side failures that came without one.
+ * Give an error reply the router's retry headers: none of the backend's
+ * hints, and `x-should-retry: false` for a spent quota. Anything else is
+ * retried on the client's own rhythm.
  */
-export function applyRetryHints(
+export function applyRetryPolicy(
   res: ExpressResponse,
   status: number,
   errorType: string,
-  message: string,
-  upstreamHeaders?: Headers
+  message: string
 ): void {
-  const upstreamRetryAfter = upstreamHeaders?.get('retry-after')
-  const upstreamShouldRetry = upstreamHeaders?.get('x-should-retry')
+  const relayedHints = BACKEND_RETRY_HINTS.filter((header) => res.hasHeader(header))
+  for (const header of relayedHints) res.removeHeader(header)
 
-  if (upstreamRetryAfter) {
-    res.setHeader('retry-after', upstreamRetryAfter)
-  }
+  const refused = isQuotaExhausted(status, errorType, message)
+  if (refused) res.setHeader('x-should-retry', 'false')
 
-  if (upstreamShouldRetry) {
-    res.setHeader('x-should-retry', upstreamShouldRetry)
-  } else if (!upstreamRetryAfter && isQuotaExhausted(status, errorType, message)) {
-    res.setHeader('x-should-retry', 'false')
-    return
-  }
-
-  if (!upstreamRetryAfter && isTransientStatus(status)) {
-    res.setHeader('retry-after', TRANSIENT_RETRY_AFTER_SECONDS)
+  if (relayedHints.length > 0 || refused) {
+    console.log(`[RequestHandler] retry_policy status=${status} backend_hints_dropped=${relayedHints.join(',') || 'none'} retry=${refused ? 'refused_quota_or_billing' : 'client_rhythm'}`)
   }
 }
 
 /**
  * Send an error in Anthropic JSON format (HTTP error status + JSON body, not
- * SSE). Pass the upstream status and headers when relaying an upstream
- * failure, so its status and retry hints survive the relay.
+ * SSE). Pass the upstream status when relaying an upstream failure, so a 429
+ * stays a 429.
  */
 export function sendError(
   res: ExpressResponse,
   errorType: string,
   message: string,
-  upstream?: { status: number; headers: Headers }
+  upstream?: { status: number }
 ): void {
   const status = resolveStatus(errorType, upstream?.status)
   console.log(`[RequestHandler] Sending error: HTTP ${status} ${errorType} - ${message.slice(0, 100)}`)
@@ -148,7 +135,7 @@ export function sendError(
   res.status(status)
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('request-id', `req_${Date.now()}`)
-  applyRetryHints(res, status, errorType, message, upstream?.headers)
+  applyRetryPolicy(res, status, errorType, message)
   res.json({
     type: 'error',
     error: { type: errorType, message }

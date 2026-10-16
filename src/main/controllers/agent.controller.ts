@@ -117,7 +117,7 @@ export function stopGeneration(conversationId?: string): ControllerResponse {
     // kills its CC subprocess outright, surfacing the same way a crash does,
     // and this is the only thing that tells turn-report.ts the difference.
     if (conversationId) markIntentionalStop(conversationId)
-    agentStopGeneration(conversationId)
+    agentStopGeneration(conversationId, { reason: 'user' })
     return { success: true }
   } catch (error: unknown) {
     const err = error as Error

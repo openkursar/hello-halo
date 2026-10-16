@@ -38,7 +38,7 @@ vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
 const { stopGeneration } = vi.hoisted(() => ({ stopGeneration: vi.fn(async () => {}) }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({ stopGeneration }))
-vi.mock('../../../../src/main/services/agent', () => ({ listResidentSessions: () => [] }))
+vi.mock('../../../../src/main/services/agent', () => ({ listResidentSessions: () => [], hasPendingSessionInput: () => false }))
 
 import {
   getAppChatSink,
@@ -409,6 +409,73 @@ describe('app-chat sink: a turn that stopped short', () => {
     const pushed = (pushToChat.mock.calls[0] as unknown[])[1] as string
     expect(pushed).toBe('background follow-up\n\n（已达到单次最多 3 步的上限，回复“继续”可接着做）')
   })
+  it('answers a message that joined the turn with the same single reply, never a second push', async () => {
+    const sink = makeSink()
+    const askerReply = vi.fn()
+    const joinedReply = vi.fn()
+    const round = sink.beginRound({ onReply: askerReply })
+    sink.onTurnStart()
+    const joined = sink.observeLiveTurn({ onReply: joinedReply })
+    feedText(sink, 'one answer')
+    sink.onTurnComplete(makeResult())
+    await round.done
+    await joined.done
+    expect(askerReply).toHaveBeenCalledTimes(1)
+    expect(joinedReply).not.toHaveBeenCalled()
+    expect(pushToChat).not.toHaveBeenCalled()
+  })
+
+  it('tells every joined message the answer even when its delivery is withheld', async () => {
+    const sink = makeSink()
+    const askerResult = vi.fn()
+    const joinedReply = vi.fn()
+    const joinedResult = vi.fn()
+    const round = sink.beginRound({ onReply: vi.fn(), onResult: askerResult })
+    sink.onTurnStart()
+    const joined = sink.observeLiveTurn({ onReply: joinedReply, onResult: joinedResult })
+    feedText(sink, 'one answer')
+    sink.onTurnComplete(makeResult())
+    await round.done
+    await joined.done
+    expect(joinedReply).not.toHaveBeenCalled()
+    expect(joinedResult).toHaveBeenCalledWith('one answer')
+    expect(askerResult).toHaveBeenCalledWith('one answer')
+    expect(pushToChat).not.toHaveBeenCalled()
+  })
+
+  it('settles an addition a stop took back unread without the reply of the turn it never reached', async () => {
+    const sink = makeSink()
+    const askerReply = vi.fn()
+    const joinedReply = vi.fn()
+    const joinedResult = vi.fn()
+    const round = sink.beginRound({ onReply: askerReply })
+    sink.onTurnStart()
+    const joined = sink.observeLiveTurn({ onReply: joinedReply, onResult: joinedResult, onProgress: vi.fn() })
+    joined.cancel()
+    await expect(joined.done).resolves.toBeUndefined()
+    feedText(sink, 'partial answer to the first message')
+    sink.onTurnComplete(makeResult({ wasAborted: true }))
+    await round.done
+    expect(askerReply.mock.calls[0]?.[0]).toBe('partial answer to the first message')
+    expect(joinedReply).not.toHaveBeenCalled()
+    expect(joinedResult).not.toHaveBeenCalled()
+    expect(sink.hasActiveRound()).toBe(false)
+  })
+
+  it('lets one joined message deliver the reply of a turn nobody asked for', async () => {
+    const sink = makeSink()
+    const first = vi.fn()
+    const second = vi.fn()
+    sink.onTurnStart()
+    const a = sink.observeLiveTurn({ onReply: first })
+    const b = sink.observeLiveTurn({ onReply: second })
+    feedText(sink, 'one answer')
+    sink.onTurnComplete(makeResult())
+    await Promise.all([a.done, b.done])
+    expect(first).toHaveBeenCalledTimes(1)
+    expect(second).not.toHaveBeenCalled()
+    expect(pushToChat).not.toHaveBeenCalled()
+  })
 })
 
 /**
@@ -436,6 +503,19 @@ describe('app-chat sink undelivered messages', () => {
     await vi.advanceTimersByTimeAsync(90_000)
 
     await expect(round.done).rejects.toThrow(/stopped waiting/i)
+  })
+
+  it('bounds a continuation observer added after the preceding turn already completed', async () => {
+    const sink = makeSink()
+    const round = sink.beginRound({})
+    sink.onTurnStart()
+    sink.onTurnComplete(makeResult())
+    await round.done
+    const continuation = sink.observeLiveTurn({})
+    expect(sink.hasActiveRound()).toBe(true)
+    await vi.advanceTimersByTimeAsync(90_000)
+    await expect(continuation.done).rejects.toThrow(/stopped waiting/i)
+    expect(sink.hasActiveRound()).toBe(false)
   })
 
   it('announces every moment the conversation can stop awaiting an answer', async () => {
@@ -619,7 +699,7 @@ describe('app-chat sink escalation cut', () => {
 
     feedToolResult(sink, 'call-1')
 
-    expect(stopGeneration).toHaveBeenCalledWith(IM_KEY)
+    expect(stopGeneration).toHaveBeenCalledWith(IM_KEY, { reason: 'internal' })
   })
 
   it('leaves a turn that asked nothing alone', () => {
@@ -676,5 +756,34 @@ describe('idle sink release', () => {
     expect(makeSink('app-chat:app-1:wecom-bot:group:idle')).not.toBe(idle)
     disposeAppChatSink('app-chat:app-1:wecom-bot:group:idle')
     disposeAppChatSink('app-chat:app-1:wecom-bot:group:resident')
+  })
+})
+
+
+describe('app-chat sink live-input envelope', () => {
+  beforeEach(() => disposeAppChatSink(IM_KEY))
+
+  it('uses captured preparation and refuses it after configuration changes', () => {
+    const sink = makeSink()
+    let current = true
+    const prepare = vi.fn((text: string) => ({ text: `prepared ${text}` }))
+    sink.setTurnIdentity('owner', () => current, prepare)
+    expect(sink.prepareLiveInput('new message')).toEqual({ text: 'prepared new message' })
+    current = false
+    expect(sink.getTurnIdentity()).toBeUndefined()
+    expect(sink.prepareLiveInput('later message')).toBe(false)
+    expect(prepare).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears captured preparation when the session ends or its sink is disposed', () => {
+    const sink = makeSink()
+    const prepare = vi.fn((text: string) => ({ text }))
+    sink.setTurnIdentity('owner', () => true, prepare)
+    sink.onConsumerStopped()
+    expect(sink.prepareLiveInput('ended')).toBe(false)
+    sink.setTurnIdentity('owner', () => true, prepare)
+    sink.dispose()
+    expect(sink.prepareLiveInput('disposed')).toBe(false)
+    expect(prepare).not.toHaveBeenCalled()
   })
 })

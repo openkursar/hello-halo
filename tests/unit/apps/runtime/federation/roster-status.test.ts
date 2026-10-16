@@ -170,6 +170,9 @@ describe('joined office: member-status by version (manager)', () => {
     initFederationStore({ db: dbm })
     dbm.runMigrations(db, TEAM_NS, teamMigrations)
     const teamStore = new TeamStore(db)
+    teamStore.insertTeam({ id: OFFICE, name: 'o', owningSpaceId: 's', goal: 'g', leadAppId: null,
+      memberSourcing: 'manual', collabMode: 'structured', escalationRouting: 'user', status: 'idle',
+      currentEpochId: null, createdAt: Date.now(), updatedAt: Date.now(), hostNodeId: HOST })
     const joiner = createFederationManager({
       hostSend: () => false,
       hostListOfficeClients: () => [],

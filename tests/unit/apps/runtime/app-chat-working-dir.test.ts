@@ -56,6 +56,8 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   getRunningConsumerIds: () => Array.from(consumers.keys()),
   markTurnDispatched: vi.fn(),
   updateConsumerDisplayModel: vi.fn(),
+  activeSessions: new Map(),
+  hasPendingSessionInput: () => false,
 }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({
@@ -88,7 +90,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
 
-vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn(), onAgentEvent: vi.fn(() => () => {}) }))
 vi.mock('../../../../src/main/services/agent/stream-processor', () => ({ processStream: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/message-utils', () => ({ buildMessageContent: vi.fn(), formatCanvasContext: () => '' }))
 

@@ -38,6 +38,8 @@ const engine = vi.hoisted(() => {
   interface Turn { inputs: string[]; started: boolean }
   const state = {
     sinks: new Map<string, any>(),
+    sessions: new Map<string, any>(),
+    eventListeners: new Set<(event: any) => void>(),
     turns: new Map<string, Turn>(),
     answered: [] as string[][],
     coldStart: null as Promise<void> | null,
@@ -65,6 +67,7 @@ const engine = vi.hoisted(() => {
       const sink = state.sinks.get(conversationId)
       next.started = true
       sink.onTurnStart()
+      for (const listener of state.eventListeners) listener({ channel: 'agent:turn-start', conversationId })
       const answer = `answer to: ${next.inputs.join(' + ')}`
       sink.onRawMessage({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: answer }] } })
       state.turns.delete(conversationId)
@@ -82,6 +85,7 @@ const engine = vi.hoisted(() => {
   }
   function reset(): void {
     state.sinks.clear()
+    state.sessions.clear()
     state.turns.clear()
     state.answered.length = 0
     state.coldStart = null
@@ -92,15 +96,24 @@ const engine = vi.hoisted(() => {
 })
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
-  v2Sessions: new Map(),
   activeSessions: new Map(),
+  hasPendingSessionInput: () => false,
+  v2Sessions: engine.state.sessions,
   closeV2Session: vi.fn(),
   acquireV2Session: vi.fn(async (_spaceId: string, conversationId: string, _options: unknown, _resume: unknown, _workDir: unknown, consumer: { sink: unknown }) => {
     engine.state.sinks.set(conversationId, consumer.sink)
     if (engine.state.coldStart) await engine.state.coldStart
+    const session = {
+      send: (content: string) => engine.send(conversationId, content),
+      sendIntoLiveTurn: (content: string) => { engine.send(conversationId, content); return true },
+      setMaxThinkingTokens: vi.fn(),
+    }
+    engine.state.sessions.set(conversationId, { session, spaceId: 'space-1' })
     return {
-      session: { send: vi.fn(), setMaxThinkingTokens: vi.fn() },
+      session,
       isCurrent: true,
+      isUsable: true,
+      onRetired: () => () => {},
       send: async (content: string) => engine.send(conversationId, content),
       release: vi.fn(),
     }
@@ -169,7 +182,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getDbMcpServers: vi.fn(() => null),
 }))
-vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ onAgentEvent: (listener: (event: any) => void) => { engine.state.eventListeners.add(listener); return { dispose: () => engine.state.eventListeners.delete(listener) } }, emitAgentEvent: vi.fn() }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
@@ -365,6 +378,7 @@ import { beginAppChatTurnStart, isAppChatConversationGenerating } from '../../..
 import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'
 import { clearAllImStreamHandles, getImStreamHandle } from '../../../../src/main/apps/runtime/im-stream-registry'
 import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/inbound-message'
+import { emitAgentEvent } from '../../../../src/main/services/agent/events'
 
 // ============================================
 // Helpers
@@ -429,7 +443,7 @@ afterEach(() => {
 // ============================================
 
 describe('a second IM message arriving while the first is still starting', () => {
-  it('is answered on its own, and the chat never receives a late error', async () => {
+  it('joins the first answer without creating an unclaimed second round or a late error', async () => {
     engine.holdColdStart()
     const first = replyTo()
     const second = replyTo()
@@ -441,8 +455,7 @@ describe('a second IM message arriving while the first is still starting', () =>
 
     engine.state.releaseColdStart()
     await vi.waitFor(() => expect(first.sent.some(isAnswer)).toBe(true))
-    // Every chance for the second message to be answered before the session goes.
-    await vi.waitFor(() => expect(second.sent.some(isAnswer)).toBe(true), { timeout: 500 }).catch(() => {})
+    expect(second.sent.some(isAnswer)).toBe(false)
 
     // The session goes away later — idle cleanup, a rebuild, a crash.
     engine.stopConsumer(CHAT)
@@ -450,12 +463,11 @@ describe('a second IM message arriving while the first is still starting', () =>
 
     expect(everythingSent(first, second).filter((text) => text.includes('Error'))).toEqual([])
     expect(engine.state.answered).toEqual([
-      [expect.stringContaining('report.docx')],
-      [expect.stringContaining('summarize the file')],
+      [expect.stringContaining('report.docx'), expect.stringContaining('summarize the file')],
     ])
   })
 
-  it('is acknowledged as an addition and answered right after the first', async () => {
+  it('is acknowledged during startup and included when the first turn becomes ready', async () => {
     engine.holdColdStart()
     const first = replyTo()
     const second = replyTo()
@@ -469,7 +481,7 @@ describe('a second IM message arriving while the first is still starting', () =>
     expect(engine.state.answered).toHaveLength(0)
 
     engine.state.releaseColdStart()
-    await vi.waitFor(() => expect(second.sent.some(isAnswer)).toBe(true))
+    await vi.waitFor(() => expect(first.sent.some(text => text.includes('summarize the file'))).toBe(true))
   })
 
   it('runs under its own sender: a guest’s message is not run as the owner who wrote right after', async () => {
@@ -507,6 +519,74 @@ describe('a message stopped or failing on its way to the engine', () => {
     expect(engine.state.answered).toEqual([])
     expect(first.sent.some(isAnswer)).toBe(false)
     expect(first.sent.filter((text) => text.includes('Error'))).toEqual([])
+  })
+
+  it("/stop voids the person's follow-up that was waiting, instead of running it after the stop", async () => {
+    engine.holdColdStart()
+    void dispatchInboundMessage(message('[file] report.docx'), replyTo(), 'app-1', 'inst-1')
+    await settle()
+    void dispatchInboundMessage(message('and summarize it'), replyTo(), 'app-1', 'inst-1')
+    await settle()
+    void dispatchInboundMessage(message('/stop'), replyTo(), 'app-1', 'inst-1')
+    await settle()
+
+    engine.state.releaseColdStart()
+    await settle()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(engine.state.answered).toEqual([])
+
+    // Void, not waiting: the next message runs alone.
+    const next = replyTo()
+    void dispatchInboundMessage(message('just say hi'), next, 'app-1', 'inst-1')
+    await vi.waitFor(() => expect(next.sent.some(isAnswer)).toBe(true))
+    expect(engine.state.answered).toEqual([[expect.stringContaining('just say hi')]])
+  })
+
+  it("keeps a guest's message a stop caught on its way, and answers it through its own reply after the chat's next turn", async () => {
+    channel.config = { ...channel.config, permissionEnabled: true, owners: ['boss'], guestPolicy: { allowedTools: ['Read'] } }
+    engine.holdColdStart()
+    const guest = replyTo()
+    void dispatchInboundMessage(message('read my notes', 'stranger'), guest, 'app-1', 'inst-1')
+    await settle()
+    const stop = replyTo()
+    void dispatchInboundMessage(message('/stop', 'boss'), stop, 'app-1', 'inst-1')
+    await settle()
+    expect(stop.sent).toContain('Generation stopped.')
+
+    engine.state.releaseColdStart()
+    await settle()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    // Neither run after the stop nor lost.
+    expect(engine.state.answered).toEqual([])
+
+    const owner = replyTo()
+    void dispatchInboundMessage(message('and tidy the repo', 'boss'), owner, 'app-1', 'inst-1')
+    await vi.waitFor(() => expect(owner.sent.some(isAnswer)).toBe(true))
+    await vi.waitFor(() => expect(guest.sent.some(isAnswer)).toBe(true))
+    // A guest never joins the owner's turn: it runs as its own turn right after.
+    expect(engine.state.answered).toEqual([
+      [expect.stringContaining('tidy the repo')],
+      [expect.stringContaining('read my notes')],
+    ])
+  })
+
+  it("voids the owner's own message a stop caught on its way, and tells whoever shows the chat", async () => {
+    vi.mocked(emitAgentEvent).mockClear()
+    engine.holdColdStart()
+    void dispatchInboundMessage(message('summarize the file'), replyTo(), 'app-1', 'inst-1')
+    await settle()
+    void dispatchInboundMessage(message('/stop'), replyTo(), 'app-1', 'inst-1')
+    await settle()
+    engine.state.releaseColdStart()
+    await settle()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    const stopped = vi.mocked(emitAgentEvent).mock.calls.filter(([channelName]) => channelName === 'agent:input-stopped')
+    expect(stopped).toHaveLength(1)
+    expect(stopped[0][3]).toMatchObject({ messages: [expect.objectContaining({
+      content: expect.stringContaining('summarize the file'), metadata: expect.objectContaining({ inputOutcome: 'stopped' }),
+    })] })
+    expect(engine.state.answered).toEqual([])
   })
 
   it('a message sent after the stop is answered once the stopped one has unwound', async () => {
@@ -587,10 +667,10 @@ describe('a relay action whose listener is still starting', () => {
     expect(channel.pushed.some(text => text.includes('已收到补充'))).toBe(true)
     expect(engine.state.answered).toEqual([])
     relays.release()
-    await vi.waitFor(() => expect(second.sent.some(isAnswer)).toBe(true))
-    expect(engine.state.answered).toHaveLength(2)
+    await vi.waitFor(() => expect(first.sent.some(isAnswer)).toBe(true))
+    expect(engine.state.answered).toHaveLength(1)
     expect(engine.state.answered[0][0]).toContain('华东吧')
-    expect(engine.state.answered[1][0]).toContain('按刚才说的继续')
+    expect(engine.state.answered[0][1]).toContain('按刚才说的继续')
   })
 
   it.each([
@@ -663,10 +743,9 @@ describe('a turn decided before it could start', () => {
       appId: 'app-1', spaceId: 'space-1', message: 'a teammate asks', conversationId: CHAT, turnStart: hold,
     })
 
-    await vi.waitFor(() => expect(waiting.sent.some(isAnswer)).toBe(true))
+    expect(waiting.sent.some(isAnswer)).toBe(false)
     expect(engine.state.answered).toEqual([
-      [expect.stringContaining('a teammate asks')],
-      [expect.stringContaining('are you there?')],
+      [expect.stringContaining('a teammate asks'), expect.stringContaining('are you there?')],
     ])
   })
 })

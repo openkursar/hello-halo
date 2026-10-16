@@ -103,6 +103,7 @@ const PLUGIN_PACKAGES = [
  */
 const HALO_PLUGINS = [
   { id: 'halo-assistant-stream', source: 'runtimes/dsh/plugins/assistant-stream.ts' },
+  { id: 'halo-sdk-jsonrpc-server', source: 'runtimes/dsh/plugins/sdk-jsonrpc-server.ts' },
 ];
 
 /** The boot helper the generated entry drives the Loader through. */

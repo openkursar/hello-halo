@@ -56,7 +56,7 @@ import { createAIBrowserMcpServer } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { acquireChatBrowserContext, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
-import { acquireV2Session, formatTurnAttachments, workingDirErrorDetail, type V2SessionLease } from '../../services/agent'
+import { acquireV2Session, formatTurnAttachments, workingDirErrorDetail, hasPendingSessionInput, hasLiveTurn, type V2SessionLease } from '../../services/agent'
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
@@ -68,7 +68,7 @@ import {
   updateConsumerDisplayModel,
   v2Sessions
 } from '../../services/agent/session-manager'
-import { stopGeneration, getSessionState } from '../../services/agent/control'
+import { stopGeneration, getSessionState, type StopReason } from '../../services/agent/control'
 import {
   getAppChatSink,
   peekAppChatSink,
@@ -83,6 +83,9 @@ import {
   isAppChatConversationGenerating,
   isAppChatTurnDispatched,
   onAppChatConversationChange,
+  appChatMessageIdentity,
+  getAppChatTurnIdentity,
+  keepStoppedInputs,
   type AppChatTurnStart,
 } from './app-chat-live-turn'
 // Re-exported, not defined here: the team runtime needs the same answer
@@ -130,6 +133,7 @@ import { resolveNotifyAvailability } from './notify-availability'
 import { FileExportGate } from './file-export-gate'
 import { truncateUtf16Safe } from './text-truncate'
 import { getImSessionRegistry } from './im-session-registry'
+import { getActiveImChannelManager } from './im-channels'
 import {
   collectAppConversationIds,
   describeSelfInstance,
@@ -143,7 +147,7 @@ import { createEmailMcpServer } from '../../services/email-mcp'
 import { createConversationCollabMcpServer, resolveConversationCollab } from './conversation-collab'
 import { getSpace, getSpaceDir, isSpaceMemoryEnabled } from '../../services/space.service'
 import { readSessionMessages, readSessionTranscript, readSessionMessageThoughts, saveChatSessionId, loadChatSessionId, deleteChatSessionId, copySessionJsonl } from './session-store'
-import type { Thought, TranscriptPage, TranscriptPageRequest, TranscriptProvenance } from '../../../shared/types/transcript'
+import type { Thought, TranscriptMessage, TranscriptPage, TranscriptPageRequest, TranscriptProvenance } from '../../../shared/types/transcript'
 import { getAppMemoryService, getActivityStore } from './index'
 import { resolveExecutionEnvironment, validateExecutionEnvironment, legacySessionEnvironmentKey, resolveChatEnvironment, appChatRunId, validateEnvironmentConnections } from './execution-environment'
 import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
@@ -172,8 +176,10 @@ import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import { ProgressEventParser } from './progress-formatter'
 import { ReplyTextAccumulator } from './reply-accumulator'
-import { clearSupplementBuffer } from './dispatch-inbound'
+import { holdSupplementsAfterStop } from './dispatch-inbound'
+import { holdConversationAfterStop } from '../../services/conversation-interop'
 import { getImStreamHandle, clearImStreamHandle } from './im-stream-registry'
+import { createAppChatDelivery, isPersonRequest } from './app-chat-delivery'
 export { getAppChatConversationId, buildImSessionKey }
 
 // ============================================
@@ -236,6 +242,8 @@ export interface AppChatRequest {
    * Errors in this callback are caught and logged — they must not interrupt execution.
    */
   onProgress?: (event: ProgressEvent) => void
+  /** Releases this dispatch's mailbox reservation when its acquired engine retires. */
+  onSessionRetired?: () => void
   /**
    * Optional callback invoked with the AI's final response text.
    * Used by external bridges (e.g., WeCom Bot) to auto-reply
@@ -244,6 +252,12 @@ export interface AppChatRequest {
    * written, possibly nothing.
    */
   onReply?: (finalContent: string, ending?: AppChatTurnEnding) => void
+  /**
+   * The final response text for a caller that needs the answer but delivers it
+   * nowhere. Unlike `onReply`, it fires even when this message joined a turn
+   * whose reply another caller delivers.
+   */
+  onResult?: (finalContent: string, ending?: AppChatTurnEnding) => void
   /**
    * Optional override for the conversation/session ID.
    * When provided, this is used instead of the default "app-chat:{appId}".
@@ -311,6 +325,30 @@ export interface AppChatRequest {
   onMessageAccepted?: () => void
   /** The human-readable message, without instructions appended only for the model. */
   recorded?: { content: string; provenance?: TranscriptProvenance }
+  /** Original messages retained separately when one engine input combines deliveries. */
+  recordedMessages?: Array<{
+    content: string
+    images?: ImageAttachment[]
+    provenance?: TranscriptProvenance
+    references?: ContentReference[]
+    teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'>
+  }>
+  /** Taken back after a person's stop and delivered again: its record already stands where it first arrived. */
+  inputRecorded?: boolean
+  /**
+   * A person's stop held this message back before the engine got it; its sender
+   * decides what becomes of it. `records` are the transcript records written for
+   * it so far (none when it was stopped before they were written), in the order
+   * `recordedMessages` lists them. Without it, a person's own words stay in the
+   * record marked as never handled.
+   */
+  onHeldBack?: (records: readonly TranscriptMessage[]) => void
+  /** Repeating runtime notices replace older pending notices with the same key. */
+  coalescingKey?: string
+  /** Revalidate runtime-authored work immediately before delivery. */
+  canStart?: () => boolean
+  /** Resolve current destination and authority when a deferred runtime notice is actually delivered. */
+  refreshBeforeDelivery?: () => AppChatRequest | undefined
 }
 
 // ============================================
@@ -450,9 +488,24 @@ interface ChatTurnContext {
   failureHandled: boolean
   /** This message's hold on the conversation until its round is queued. */
   start: AppChatTurnStart
+  /** A person's stop held the message back and its sender was told; no turn of it ran. */
+  heldBack?: boolean
 }
 
-export async function sendAppChatMessage(request: AppChatRequest): Promise<void> {
+let chatDelivery: ReturnType<typeof createAppChatDelivery> | undefined
+
+export function disposeAppChatDelivery(): void {
+  chatDelivery?.dispose()
+  chatDelivery = undefined
+}
+
+export function sendAppChatMessage(request: AppChatRequest): Promise<void> {
+  if (request.turnStart) return startAppChatMessage(request)
+  chatDelivery ??= createAppChatDelivery(startAppChatMessage)
+  return chatDelivery.send(request)
+}
+
+async function startAppChatMessage(request: AppChatRequest): Promise<void> {
   const conversationId = request.conversationId ?? getAppChatConversationId(request.appId)
   // Taken before the first await, unless the caller already holds it: from
   // here the conversation reads busy.
@@ -474,6 +527,10 @@ export async function sendAppChatMessage(request: AppChatRequest): Promise<void>
     if (turnContext.start.cancelled && !turnContext.failureHandled) {
       // Stopped on its way, then failed setting up: the stop already answered.
       console.warn(`[AppChat][${request.appId}] A message stopped on its way then failed (not reported): ${message}`)
+      if (turnContext.start.stoppedBy === 'user' && request.onHeldBack && !turnContext.heldBack) {
+        turnContext.heldBack = true
+        handBackHeldMessage(request, conversationId, [])
+      }
       emitAgentEvent('agent:complete', request.spaceId, conversationId, { type: 'complete', duration: 0 })
       return
     }
@@ -643,6 +700,14 @@ async function runAppChatTurn(
   // ── Merge config_schema defaults into userConfig ────
   const mergedConfig = mergeConfigWithDefaults(app.userConfig, app.spec.config_schema)
 
+  // Where the work this turn continues was asked for. Resolved once, here,
+  // because the answer is needed in several places that cannot each re-derive
+  // it: whose turn this is, the team tools this turn sends with, what the turn
+  // is allowed to do, and the owner's record of it. Not read from the trigger
+  // alone — a wake authored by the runtime here (an answered question, a
+  // periodic check) carries no origin of its own; see team/external-origin.ts.
+  const externalOrigin = teamContext ? resolveTurnOrigin(conversationId, teamContext) : false
+
   // permCtx (fixed at the top) shapes both the system prompt (ownerIds) and the
   // SDK options (guest tool restrictions); undefined for native Halo chat.
   const personCaller: PersonContextCaller = {
@@ -650,7 +715,7 @@ async function runAppChatTurn(
     capabilityMode: 'chat',
     environmentSpaceId: spaceId,
     authority: permCtx?.isOwner === false ? 'guest'
-      : teamContext && (teamContext.kind !== undefined || !!imSession) ? 'team' : 'owner',
+      : teamContext && (externalOrigin || teamContext.kind !== undefined || !!imSession) ? 'team' : 'owner',
     ...(teamContext ? { teamId: teamContext.teamId, epochId: teamContext.epochId } : {}),
   }
 
@@ -663,15 +728,7 @@ async function runAppChatTurn(
   // credentials and the usage guide have to be withheld here too — otherwise
   // an outside sender gets a prompt describing a tool the session does not have.
   const usesHaloApi =
-    resolvePermission(app, HALO_API_TOOLSET_ID, false) && permCtx?.isOwner !== false
-
-  // Where the work this turn continues was asked for. Resolved once, here,
-  // because the answer is needed in several places that cannot each re-derive
-  // it: whose turn this is, the team tools this turn sends with, what the turn
-  // is allowed to do, and the owner's record of it. Not read from the trigger
-  // alone — a wake authored by the runtime here (an answered question, a
-  // periodic check) carries no origin of its own; see team/external-origin.ts.
-  const externalOrigin = teamContext ? resolveTurnOrigin(conversationId, teamContext) : false
+    resolvePermission(app, HALO_API_TOOLSET_ID, false) && permCtx?.isOwner !== false && !externalOrigin
 
   // Off unless the owner switched it on, and never on someone else's turn (an IM
   // guest, a teammate borrowing this digital human), in a team channel, or in an
@@ -783,6 +840,7 @@ async function runAppChatTurn(
       contact: imSession?.sessionId,
       subject: relayOrigin?.subject ?? senderIdentity,
       isOwner: permCtx ? permCtx.isOwner : true,
+      permissionIdentity: () => getAppChatTurnIdentity(conversationId),
       quote: relayOrigin?.quote ?? buildQuoteFromMessage(message, senderIdentity?.name),
     },
   })
@@ -1061,7 +1119,40 @@ async function runAppChatTurn(
   // The sink outlives individual V2 sessions: it owns the transcript writer and
   // the queue of messages awaiting an answer, so a session rebuild underneath it
   // never orphans a caller.
-  const sink = getAppChatSink({ appId, conversationId, runId: chatRunId, spacePath })
+  const sink = getAppChatSink({ appId, conversationId, runId: chatRunId, spacePath, spaceId })
+  const instanceId = imSession?.sessionId?.split(':', 1)[0]
+  const imChatId = instanceId && imSession ? imSession.sessionId.slice(instanceId.length + 1) : undefined
+  const authorizationRevision = instanceId ? getActiveImChannelManager()?.getAuthorizationRevision(instanceId) : undefined
+  const imSessionRevision = imSession && imChatId ? getImSessionRegistry()?.getSessionRevision(appId, imSession.channel, imChatId) : undefined
+  const isImEnvelopeCurrent = () => !imSession || (instanceId && imChatId && authorizationRevision !== undefined && imSessionRevision !== undefined &&
+    getActiveImChannelManager()?.getAuthorizationRevision(instanceId) === authorizationRevision &&
+    getImSessionRegistry()?.getSessionRevision(appId, imSession.channel, imChatId) === imSessionRevision)
+  const imStandingConfiguration = () => {
+    const channel = instanceId ? getActiveImChannelManager()?.getInstanceConfig(instanceId) : undefined
+    return channel ? [channel.enabled, channel.appId, channel.teamId, channel.permissionEnabled, channel.owners, channel.guestPolicy, channel.replyScope] : null
+  }
+  const delegatedConfiguration = () => permCtx?.isOwner !== false && borrowedTeamTurn && teamContext
+    ? getActiveTeamRuntime()?.getDelegatedPolicy(teamContext.teamId, appId) ?? null
+    : null
+  // Only what decides who may do what. A model, reasoning-effort or notification
+  // edit leaves the running turn's permissions intact, so it must not stop
+  // additions from joining it (they did not before live delivery either).
+  const permissionEnvelope = (target: typeof app) => JSON.stringify([
+    target.permissions, target.userOverrides?.spaceMemoryAccess === true, imStandingConfiguration(), delegatedConfiguration(),
+  ])
+  const configurationAtStart = permissionEnvelope(app)
+  const stampTurnIdentity = () => sink.setTurnIdentity(appChatMessageIdentity(permCtx, externalOrigin, borrowedTeamTurn), () => {
+    const current = manager.getApp(appId)
+    return !!current && !!isImEnvelopeCurrent() && permissionEnvelope(current) === configurationAtStart
+  }, (text, liveImages) => {
+    const fallback = prepareNonVisionImageFallback({
+      scope: { spaceId, conversationId, workDir }, credentials, images: liveImages,
+    })
+    if (applied?.enforced && fallback?.filePaths.length) return false
+    const input = (fallback?.contextBlock ?? '') + text
+    return { text: applied?.enforced ? inertCommandText(input) : input, images: fallback ? undefined : liveImages }
+  })
+  stampTurnIdentity()
 
   // Put this turn's terms in force for the per-call gate and the owner's
   // record. Registered before the session is touched: a session build can
@@ -1096,6 +1187,24 @@ async function runAppChatTurn(
 
   let round: AppChatRoundHandle | undefined
   let sessionLease: V2SessionLease | undefined
+  let stopObservingRetirement: (() => void) | undefined
+  let sessionRetired = false
+  const retireSession = () => {
+    if (sessionRetired) return
+    sessionRetired = true
+    turnContext.start.releaseSession()
+    turnContext.failureHandled = true
+    if (sessionLease?.isCurrent && !sessionLease.isUsable) sessionLease.close()
+    turnContext.start.end()
+    sessionLease?.release()
+    if (turnContext.browserHeld) {
+      turnContext.browserHeld = false
+      endChatBrowserTurn(conversationId)
+    }
+    try { request.onSessionRetired?.() } catch (error) {
+      console.error(`[AppChat][${appId}] Retired dispatch could not release its mailbox: conversation=${conversationId}`, error)
+    }
+  }
   // Carried to the finally below, which is where a team turn's ending is
   // reported: the block runs for every exit, but only the catch knows which one.
   let turnFailure: string | null = null
@@ -1109,16 +1218,42 @@ async function runAppChatTurn(
   let dispatchAttempted = false
   let dispatchAccepted = false
   let userMessageRecorded = false
+  const userRecords: TranscriptMessage[] = []
   const recordUserMessage = () => {
     if (userMessageRecorded) return
     userMessageRecorded = true
-    sink.writeUserMessage(
+    if (request.inputRecorded) return
+    if (request.recordedMessages) {
+      for (const original of request.recordedMessages) {
+        userRecords.push(sink.writeUserMessage(original.content, original.images, original.teamOrigin, original.provenance, original.references))
+      }
+      return
+    }
+    userRecords.push(sink.writeUserMessage(
       request.recorded?.content ?? message,
       images,
       teamContext ? { kind: teamContext.kind ?? 'human_message', correlationId: teamContext.correlationId } : undefined,
       request.recorded?.provenance,
       request.references
-    )
+    ))
+  }
+  // Held back on its way by a person's stop: its sender decides what becomes of
+  // it; a person's own words with nobody to tell stay in the record, marked.
+  let stoppedHandled = false
+  const holdBackStopped = (): void => {
+    if (turnContext.start.stoppedBy !== 'user' || stoppedHandled) return
+    stoppedHandled = true
+    if (request.onHeldBack) {
+      turnContext.heldBack = true
+      handBackHeldMessage(request, conversationId, userRecords)
+      return
+    }
+    if (!isPersonRequest(request)) {
+      console.warn(`[AppChat][${appId}] A message held back by a stop has no sender to return to: conversation=${conversationId}`)
+      return
+    }
+    recordUserMessage()
+    sink.markInputsStopped(userRecords)
   }
   let failureReported = false
   const reportFailure = (error: unknown): void => {
@@ -1180,6 +1315,10 @@ async function runAppChatTurn(
       reportPreInitFailure
     )
     const v2Session = sessionLease.session
+    stopObservingRetirement = sessionLease.onRetired(retireSession)
+    turnContext.start.bindSession(sessionLease, retireSession)
+    if (!sessionLease.isUsable) throw new Error('The acquired session is no longer available')
+    stampTurnIdentity()
 
     // A reused session keeps the consumer it was created with; refresh the model
     // label so thought parsing stays correct after a model switch that did not
@@ -1252,6 +1391,7 @@ async function runAppChatTurn(
     // sends nothing, so nothing is owed — a stop means send nothing.
     if (turnContext.start.cancelled) {
       console.log(`[AppChat][${appId}] Stopped before reaching the engine: ${conversationId}`)
+      holdBackStopped()
       endStoppedOnTheWay()
       return
     }
@@ -1261,7 +1401,7 @@ async function runAppChatTurn(
     // claim this round — is as narrow as the SDK allows. From here the queued
     // round, not the start, is what holds the conversation.
     round = sink.beginRound({
-      onProgress, onMessageAccepted,
+      onProgress, onMessageAccepted, onResult: request.onResult,
       onReply: (content, ending) => {
         finalReply = content
         if (ending) onReply?.(content, ending)
@@ -1285,6 +1425,7 @@ async function runAppChatTurn(
     }
 
     await round.done
+    while (hasPendingSessionInput(conversationId)) await sink.observeLiveTurn({}).done
 
     console.log(`[AppChat][${appId}] Chat message processed successfully`)
   } catch (error: unknown) {
@@ -1293,6 +1434,7 @@ async function runAppChatTurn(
     // back is not news to them.
     if (turnContext.start.cancelled && !dispatchAttempted) {
       console.warn(`[AppChat][${appId}] A message stopped on its way then failed (not reported): ${err.message}`)
+      holdBackStopped()
       endStoppedOnTheWay()
       return
     }
@@ -1311,6 +1453,8 @@ async function runAppChatTurn(
     // Let the caller close out its transport (IM stream, HTTP client).
     throw err
   } finally {
+    stopObservingRetirement?.()
+    turnContext.start.releaseSession()
     sessionLease?.release()
     // Native chats keep their browser context (and its pages) for the next
     // message, failed turn or not; every other session's ends with the turn.
@@ -1352,8 +1496,9 @@ async function runAppChatTurn(
       // words reach no teammate, so a turn that ends without a team_send — the
       // ordinary shape of a model that quit early, crashed, or was stopped by
       // hand — otherwise leaves the run frozen with nobody woken to notice.
+      // A message a stop held back ran no turn; it is reported once it has run.
       try {
-        getActiveTeamRuntime()?.noteMemberTurnEnded({
+        if (!turnContext.heldBack) getActiveTeamRuntime()?.noteMemberTurnEnded({
           ...endedTeamSession,
           // A hard stop (team mode kills the CC subprocess outright — see
           // control.ts's stopGeneration) lands in the same unconditional-
@@ -1365,9 +1510,9 @@ async function runAppChatTurn(
               : { kind: 'error', message: turnFailure }
             : stoppedOnTheWay ? { kind: 'stopped' } : { kind: 'ended' },
           ...(teamContext?.correlationId ? { correlationId: teamContext.correlationId } : {}),
-          triggerKind: teamContext?.kind ?? 'human_message',
+          triggerKind: teamContext?.personalChat ? 'human_message' : teamContext?.kind ?? 'human_message',
           ...(externalOrigin ? { external: true } : {}),
-          ...(teamContext?.kind && teamContext.kind !== 'human_message' ? {
+          ...(teamContext?.kind && teamContext.kind !== 'human_message' && !teamContext.personalChat ? {
             requestSummary: message.replace(/^\[[^\]\n]+\]\s*/, ''),
             requestFromAppId: teamContext.fromAppId,
             finalReply,
@@ -1405,27 +1550,35 @@ async function runAppChatTurn(
   }
 }
 
+/** Tell a held-back message's sender; it decides what becomes of the message. */
+function handBackHeldMessage(request: AppChatRequest, conversationId: string, records: readonly TranscriptMessage[]): void {
+  if (!request.onHeldBack) return
+  try {
+    request.onHeldBack(records)
+  } catch (error) {
+    console.error(`[AppChat][${request.appId}] A held-back message could not be returned to its sender: conversation=${conversationId}`, error)
+  }
+}
+
 /**
- * Abort one conversation's turn and release the resources that would otherwise
- * outlive it. The single stop path for every caller — every entry point below
- * delegates here so no route can forget a step.
+ * A person stops one conversation's turn, and the resources that would otherwise
+ * outlive it are released. The single stop path for every person's stop — every
+ * entry point below delegates here so no route can forget a step.
  *
- * Three things must happen together, in this order:
- *   1. Drop buffered supplements. `sendAppChatMessage`'s finally block flushes
- *      them, so leaving them queued restarts a round right after the stop.
- *   2. Dispose (not finish) the IM stream. Stop means "send nothing"; finish()
+ * Two things must happen together, in this order:
+ *   1. Dispose (not finish) the IM stream. Stop means "send nothing"; finish()
  *      would push a final message into the chat.
- *   3. Abort the generation.
+ *   2. Abort as a person's stop: their own unsent words are void (kept in the
+ *      record, marked), what others sent waits for the next turn instead of
+ *      starting one right after the stop, and the engine withdraws what it had
+ *      accepted and not yet read.
  *
- * Steps 1–2 run even when nothing is generating: a crashed round can leave a
- * buffer entry or stream handle behind, and the next inbound message would pick
- * it up. Both are no-ops for native conversations, which never register either.
+ * Both run even when nothing is generating: a crashed round can leave a buffer
+ * entry or stream handle behind, and the next inbound message would pick it up.
  *
  * @returns whether a generation was actually running
  */
 async function stopConversation(conversationId: string): Promise<boolean> {
-  clearSupplementBuffer(conversationId)
-
   const streamHandle = getImStreamHandle(conversationId)
   if (streamHandle) {
     try {
@@ -1436,22 +1589,46 @@ async function stopConversation(conversationId: string): Promise<boolean> {
   }
   clearImStreamHandle(conversationId)
 
-  return abortAppChatTurn(conversationId)
+  return abortAppChatTurn(conversationId, 'user')
 }
 
 /**
  * Stop whatever turn this conversation has in flight, wherever it is: a message
  * still on its way is held back before it reaches the engine, and a turn the
- * engine already has is stopped there. Nothing else — callers decide what
- * happens to buffered messages and open streams.
+ * engine already has is stopped there. Callers decide what happens to open
+ * streams.
+ *
+ * `reason` says who stopped it. A person (`'user'`): their own waiting messages
+ * are void, what others sent waits for the next turn, and the engine withdraws
+ * what it had not read. The system (`'internal'`: clear, restart, closing a
+ * task): waiting messages from others stay queued as before, and the engine
+ * runs unread input after the stop.
  *
  * @returns whether anything was in flight
  */
-export async function abortAppChatTurn(conversationId: string): Promise<boolean> {
-  const starting = cancelAppChatTurnStarts(conversationId)
+export async function abortAppChatTurn(conversationId: string, reason: StopReason): Promise<boolean> {
+  if (reason === 'user') holdAfterPersonStop(conversationId)
+  else chatDelivery?.discard(conversationId)
+  const starting = cancelAppChatTurnStarts(conversationId, reason)
   const dispatched = isAppChatTurnDispatched(conversationId)
-  if (dispatched) await stopGeneration(conversationId)
+  if (dispatched) {
+    await stopGeneration(conversationId, { reason })
+    // Withdrawing a continuation nothing had started leaves no turn end to answer its waiters.
+    if (reason === 'user' && !hasLiveTurn(conversationId)) peekAppChatSink(conversationId)?.releaseLiveObservers()
+  }
   return starting || dispatched
+}
+
+/** Every mailbox that holds messages for this conversation, held as a person's stop requires. */
+function holdAfterPersonStop(conversationId: string): void {
+  chatDelivery?.holdAfterStop(conversationId)
+  holdSupplementsAfterStop(conversationId)
+  // Other conversations' mail; the engine's own stop signal never fires when
+  // only a message on its way was stopped.
+  holdConversationAfterStop(conversationId)
+  if (!parseTeamSessionKey(conversationId)) return
+  const voided = getActiveTeamRuntime()?.holdSessionAfterStop(conversationId) ?? []
+  keepStoppedInputs(conversationId, [], voided.map(({ text, teamOrigin }) => ({ content: text, teamOrigin })))
 }
 
 /**
@@ -1665,7 +1842,7 @@ async function clearSessionByConversationId(
   // 1. Abort active generation (if any) before closing
   if (isAppChatConversationGenerating(conversationId)) {
     console.log(`[AppChat][${appId}] Session is generating, aborting first...`)
-    await abortAppChatTurn(conversationId)
+    await abortAppChatTurn(conversationId, 'internal')
   }
   // Taken after the abort, which would mark it stopped as well.
   const hold = beginAppChatTurnStart(conversationId)
@@ -1843,7 +2020,7 @@ export async function restartAppChat(
 
       // 1. Abort any in-flight generation before closing the underlying session.
       if (isActive) {
-        await abortAppChatTurn(convId)
+        await abortAppChatTurn(convId, 'internal')
       }
 
       // 2. Close the V2 session — next message will create a fresh CC process
@@ -1936,7 +2113,7 @@ export async function closeTeamSession(
 
   // Abort any in-flight generation before tearing down the underlying session.
   if (isAppChatConversationGenerating(conversationId)) {
-    try { await abortAppChatTurn(conversationId) } catch { /* best-effort */ }
+    try { await abortAppChatTurn(conversationId, 'internal') } catch { /* best-effort */ }
   }
   // Close the V2 process; the saved sessionId on disk allows SDK resume later.
   closeV2Session(conversationId)

@@ -36,12 +36,12 @@ describe('setSpaceWorkingDir', () => {
     await initializeApp()
   })
 
-  it('points the space at the new folder, in the record and meta.json, across a reload', () => {
+  it('points the space at the new folder, in the record and meta.json, across a reload', async () => {
     const before = folder('before')
     const after = folder('after')
-    const space = createSpace({ name: 'Project', icon: 'folder', customPath: before })
+    const space = await createSpace({ name: 'Project', icon: 'folder', customPath: before })
 
-    const updated = setSpaceWorkingDir(space.id, after)
+    const updated = await setSpaceWorkingDir(space.id, after)
 
     expect(updated?.workingDir).toBe(after)
     expect(getSpaceDir(space.id)).toBe(after)
@@ -55,47 +55,47 @@ describe('setSpaceWorkingDir', () => {
     expect(getSpace(space.id)?.path).toBe(space.path)
   })
 
-  it('gives a space in the default location a folder of its own', () => {
+  it('gives a space in the default location a folder of its own', async () => {
     const chosen = folder('chosen')
-    const space = createSpace({ name: 'Default location', icon: 'folder' })
+    const space = await createSpace({ name: 'Default location', icon: 'folder' })
     expect(getSpaceDir(space.id)).toBe(space.path)
 
-    setSpaceWorkingDir(space.id, chosen)
+    await setSpaceWorkingDir(space.id, chosen)
 
     expect(getSpaceDir(space.id)).toBe(chosen)
   })
 
-  it('refuses a folder that is missing, not a folder, or not a full path — creating nothing', () => {
-    const space = createSpace({ name: 'Project', icon: 'folder', customPath: folder('kept') })
+  it('refuses a folder that is missing, not a folder, or not a full path — creating nothing', async () => {
+    const space = await createSpace({ name: 'Project', icon: 'folder', customPath: folder('kept') })
     const missing = path.join(getHaloDir(), '..', 'never-created')
     const file = path.join(folder('holder'), 'notes.txt')
     fs.writeFileSync(file, 'x')
 
-    expect(() => setSpaceWorkingDir(space.id, missing)).toThrow('That folder does not exist.')
+    await expect(setSpaceWorkingDir(space.id, missing)).rejects.toThrow('That folder does not exist.')
     expect(fs.existsSync(missing)).toBe(false)
-    expect(() => setSpaceWorkingDir(space.id, file)).toThrow('That is not a folder.')
-    expect(() => setSpaceWorkingDir(space.id, 'relative/folder')).toThrow('Choose a folder by its full path.')
+    await expect(setSpaceWorkingDir(space.id, file)).rejects.toThrow('That is not a folder.')
+    await expect(setSpaceWorkingDir(space.id, 'relative/folder')).rejects.toThrow('Choose a folder by its full path.')
     expect(getSpace(space.id)?.workingDir).toBe(folder('kept'))
     expect(workingDirProblem(folder('fine'))).toBeNull()
   })
 
-  it('leaves the default space and unknown spaces alone', () => {
+  it('leaves the default space and unknown spaces alone', async () => {
     const halo = getHaloSpace()
 
-    expect(setSpaceWorkingDir(halo.id, folder('elsewhere'))).toBeNull()
-    expect(setSpaceWorkingDir('no-such-space', folder('elsewhere'))).toBeNull()
+    expect(await setSpaceWorkingDir(halo.id, folder('elsewhere'))).toBeNull()
+    expect(await setSpaceWorkingDir('no-such-space', folder('elsewhere'))).toBeNull()
     expect(getSpaceDir(halo.id)).not.toBe(folder('elsewhere'))
   })
 
-  it('changes nothing when meta.json cannot be written', () => {
+  it('changes nothing when meta.json cannot be written', async () => {
     const before = folder('before')
-    const space = createSpace({ name: 'Project', icon: 'folder', customPath: before })
+    const space = await createSpace({ name: 'Project', icon: 'folder', customPath: before })
     const metaPath = path.join(space.path, '.halo', 'meta.json')
     const metaBefore = fs.readFileSync(metaPath, 'utf8')
     // A folder where the new meta.json is staged makes the write fail.
     fs.mkdirSync(`${metaPath}.tmp`)
 
-    expect(() => setSpaceWorkingDir(space.id, folder('after'))).toThrow()
+    await expect(setSpaceWorkingDir(space.id, folder('after'))).rejects.toThrow()
 
     expect(getSpaceDir(space.id)).toBe(before)
     expect(fs.readFileSync(metaPath, 'utf8')).toBe(metaBefore)
@@ -103,26 +103,26 @@ describe('setSpaceWorkingDir', () => {
     expect(getSpaceDir(space.id)).toBe(before)
   })
 
-  it('refuses a space whose own data went with its folder, saying why', () => {
+  it('refuses a space whose own data went with its folder, saying why', async () => {
     const before = folder('before')
-    const space = createSpace({ name: 'Project', icon: 'folder', customPath: before })
+    const space = await createSpace({ name: 'Project', icon: 'folder', customPath: before })
     fs.rmSync(path.join(space.path, '.halo'), { recursive: true })
 
     expect(workingDirChangeProblem(space.id, folder('after'))).toMatch(/no longer there/)
-    expect(() => setSpaceWorkingDir(space.id, folder('after'))).toThrow(/no longer there/)
+    await expect(setSpaceWorkingDir(space.id, folder('after'))).rejects.toThrow(/no longer there/)
     expect(getSpaceDir(space.id)).toBe(before)
   })
 
-  it('refuses folders where Halo and the engine keep their data, but takes the space’s own data folder', () => {
-    const space = createSpace({ name: 'Project', icon: 'folder', customPath: folder('before') })
+  it('refuses folders where Halo and the engine keep their data, but takes the space’s own data folder', async () => {
+    const space = await createSpace({ name: 'Project', icon: 'folder', customPath: folder('before') })
     const engineFolder = path.join(resolveClaudeConfigDir(), 'projects')
     fs.mkdirSync(engineFolder, { recursive: true })
 
     expect(workingDirProblem(getHaloDir())).toBe('That folder holds Halo’s own data. Choose a project folder.')
-    expect(() => setSpaceWorkingDir(space.id, getSpacesDir())).toThrow('That folder holds Halo’s own data.')
-    expect(() => setSpaceWorkingDir(space.id, engineFolder)).toThrow('That folder holds Halo’s own data.')
+    await expect(setSpaceWorkingDir(space.id, getSpacesDir())).rejects.toThrow('That folder holds Halo’s own data.')
+    await expect(setSpaceWorkingDir(space.id, engineFolder)).rejects.toThrow('That folder holds Halo’s own data.')
 
-    setSpaceWorkingDir(space.id, space.path)
+    await setSpaceWorkingDir(space.id, space.path)
     expect(getSpaceDir(space.id)).toBe(space.path)
   })
 })

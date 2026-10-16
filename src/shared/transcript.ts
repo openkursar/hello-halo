@@ -28,6 +28,11 @@ export function roleForTranscriptSource(source: TranscriptSource | undefined): T
     : 'user'
 }
 
+/** Team records without provenance stay visible as ordinary system messages. */
+export function isTeamTranscriptMessage(message: TranscriptMessage): boolean {
+  return message.role === 'system' && message.source === 'team-message' && !!message.metadata?.teamId
+}
+
 export function clampTranscriptLimit(limit: number | undefined): number {
   if (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 1) return DEFAULT_TRANSCRIPT_PAGE_SIZE
   return Math.min(Math.floor(limit), MAX_TRANSCRIPT_PAGE_SIZE)
@@ -43,10 +48,14 @@ export function clampTranscriptLimit(limit: number | undefined): number {
  * further back than `MAX_TRANSCRIPT_THROUGH` is out of reach and leaves the page
  * as it is: widening to the cap would ship that many messages without holding
  * the one asked for.
+ *
+ * `openTurnFrom` (the reader's first message of an unfinished engine turn) is
+ * passed on to newest pages only; an older page holds no part of that turn.
  */
 export function pageTranscript(
   messages: readonly TranscriptMessage[],
-  request: TranscriptPageRequest = {}
+  request: TranscriptPageRequest = {},
+  openTurnFrom?: string
 ): TranscriptPage {
   const limit = clampTranscriptLimit(request.limit)
   let end = messages.length
@@ -67,6 +76,7 @@ export function pageTranscript(
     hasMoreBefore: start > 0,
     cursor: slice.length > 0 ? slice[0].id : null,
     total: messages.length,
+    ...(openTurnFrom !== undefined && request.before === undefined ? { openTurnFrom } : {}),
   }
 }
 
@@ -115,4 +125,32 @@ export function tailStartWithinBudget<T>(
     start -= 1
   }
   return start
+}
+
+/**
+ * Match an accepted input to its persisted twin without relying on a provisional
+ * id. The reply anchor and the outcome are learned after the input is announced,
+ * so they never tell two inputs apart.
+ */
+export function sameTranscriptInput(left: TranscriptMessage, right: TranscriptMessage): boolean {
+  return left.role === right.role && left.source === right.source
+    && left.content.trim() === right.content.trim()
+    && (left.images?.length ?? 0) === (right.images?.length ?? 0)
+    && sameInputMetadata(left.metadata, right.metadata)
+}
+
+function sameInputMetadata(left: TranscriptMessage['metadata'], right: TranscriptMessage['metadata']): boolean {
+  const comparable = (metadata: TranscriptMessage['metadata']) => Object.entries(metadata ?? {})
+    .filter(([key, value]) => value !== undefined && key !== 'inputReplyId' && key !== 'inputOutcome')
+  const leftEntries = comparable(left)
+  const rightEntries = comparable(right)
+  if (leftEntries.length !== rightEntries.length) return false
+  const rightValues = new Map(rightEntries)
+  return leftEntries.every(([key, value]) => rightValues.has(key) && canonicalJson(value) === canonicalJson(rightValues.get(key)))
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+    : item)
 }

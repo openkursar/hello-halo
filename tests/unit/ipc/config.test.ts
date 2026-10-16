@@ -23,6 +23,10 @@ vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfigPath: vi.fn(() => '/home/user/.halo/config.json')
 }))
 
+vi.mock('../../../src/main/foundation/product-config', () => ({
+  getProductFederationGatewayUrl: vi.fn(),
+}))
+
 vi.mock('../../../src/main/services/ai-sources', () => ({
   getAISourceManager: vi.fn()
 }))
@@ -69,6 +73,7 @@ import {
   saveConfig
 } from '../../../src/main/foundation/config.service'
 import { getAISourceManager } from '../../../src/main/services/ai-sources'
+import { getProductFederationGatewayUrl } from '../../../src/main/foundation/product-config'
 
 describe('config IPC model fetching', () => {
   beforeEach(() => {
@@ -165,6 +170,23 @@ describe('config IPC model fetching', () => {
     } finally {
       vi.mocked(getConfigReadFailureCount).mockReturnValue(0)
     }
+  })
+
+  it('returns the same read-only build defaults as HTTP without changing user settings', async () => {
+    const user = { federation: { gatewayUrl: 'https://custom.example.test/' } }
+    vi.mocked(getConfig).mockReturnValue(user as any)
+    vi.mocked(getProductFederationGatewayUrl).mockReturnValueOnce(' https://relay.example.test/ ')
+    vi.mocked(saveConfig).mockClear()
+    registerConfigHandlers()
+    const handlers = registerRawRpcHandlersMock.mock.calls[0][1]
+
+    await expect(handlers.getConfig()).resolves.toMatchObject({
+      success: true,
+      data: user,
+      productDefaults: { federation: { gatewayUrl: 'https://relay.example.test/' } },
+    })
+    expect(user.federation.gatewayUrl).toBe('https://custom.example.test/')
+    expect(saveConfig).not.toHaveBeenCalled()
   })
 
   it('delegates to the config controller so structured errors reach Electron', async () => {

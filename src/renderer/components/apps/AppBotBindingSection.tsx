@@ -14,13 +14,15 @@
  * here: they describe what the bot is, not what this digital human uses.
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Bot, Plus, Link2, Loader2, AlertTriangle, ExternalLink, Unlink, ChevronRight } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { api } from '../../api'
-import { CHANNEL_LABELS } from './im-channel-labels'
+import { getImBotLabel } from './im-channel-labels'
+import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
+import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { WecomScanAuthDialog } from '../settings/WecomScanAuthDialog'
 import { WeixinIlinkScanDialog } from '../settings/WeixinIlinkScanDialog'
 import { FeishuScanAuthDialog } from '../settings/FeishuScanAuthDialog'
@@ -41,6 +43,8 @@ export function AppBotBindingSection({ appId, appName, spaceId }: AppBotBindingS
   const { t } = useTranslation()
   const { navigate, refreshConfig } = useAppStore()
   const openBotSessions = useAppsPageStore(s => s.openBotSessions)
+  const { showConfirm, DialogComponent } = useConfirmDialog()
+  const bindingBusy = useRef(false)
 
   const [instances, setInstances] = useState<ImChannelInstanceStatus[]>([])
   const [sessions, setSessions] = useState<ImSessionRecord[]>([])
@@ -56,34 +60,74 @@ export function AppBotBindingSection({ appId, appName, spaceId }: AppBotBindingS
   const [ilinkInstanceId, setIlinkInstanceId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    const [statusRes, sessionsRes] = await Promise.all([
-      api.imChannelsStatus(),
-      api.imSessionsList(appId),
-    ])
-    if (statusRes.success && Array.isArray(statusRes.data)) {
-      setInstances(statusRes.data as ImChannelInstanceStatus[])
+    try {
+      const [statusRes, sessionsRes] = await Promise.all([
+        api.imChannelsStatus(),
+        api.imSessionsList(appId),
+      ])
+      if (!statusRes.success || !sessionsRes.success) {
+        throw new Error(statusRes.error ?? sessionsRes.error ?? t('Failed to load bot connections'))
+      }
+      if (Array.isArray(statusRes.data)) {
+        setInstances(statusRes.data as ImChannelInstanceStatus[])
+      }
+      if (Array.isArray(sessionsRes.data)) {
+        setSessions((sessionsRes.data as ImSessionRecord[]).filter(s => s.source === 'im'))
+      }
+    } catch (error) {
+      console.warn('[AppBotBindingSection] Bot connections could not be loaded', { appId, error })
+      setError(t('Failed to load bot connections'))
+    } finally {
+      setLoading(false)
     }
-    if (sessionsRes.success && Array.isArray(sessionsRes.data)) {
-      setSessions((sessionsRes.data as ImSessionRecord[]).filter(s => s.source === 'im'))
-    }
-    setLoading(false)
-  }, [appId])
+  }, [appId, t])
 
   useEffect(() => { void load() }, [load])
 
   const bound = instances.filter(i => i.appId === appId)
   const bindable = instances.filter(i => i.appId !== appId)
 
-  const handleBind = useCallback(async (instanceId: string) => {
-    setBusyId(instanceId)
+  const handleBind = useCallback(async (instance: ImChannelInstanceStatus) => {
+    if (bindingBusy.current) return
+    bindingBusy.current = true
+    setBusyId(instance.id)
     setError(null)
-    const res = await api.imChannelsSetInstanceApp(instanceId, appId)
-    if (!res.success) setError(res.error ?? t('Failed to bind'))
-    setBusyId(null)
-    setShowPicker(false)
-    void load()
-    void refreshConfig()
-  }, [appId, load, refreshConfig, t])
+    try {
+      if (instance.appId) {
+        const confirmed = await showConfirm({
+          title: t('Rebind this bot?'),
+          message: t('Move {{bot}} from "{{from}}" to "{{to}}"? "{{from}}" will stop receiving new messages from this bot.', {
+            bot: getImBotLabel(instance, t),
+            from: instance.appName || t('Binding unavailable'),
+            to: appName,
+          }),
+          confirmLabel: t('Rebind'),
+          cancelLabel: t('Cancel'),
+          variant: 'default',
+        })
+        if (!confirmed) return
+      }
+      const res = await api.imChannelsSetInstanceApp(instance.id, appId, instance.appId)
+      if (!res.success) {
+        if (res.code !== 'BINDING_CHANGED') {
+          console.warn('[AppBotBindingSection] Bot binding was rejected', { instanceId: instance.id, appId, error: res.error })
+        }
+        setError(res.code === 'BINDING_CHANGED'
+          ? t('The bot binding changed. Refresh and confirm again.')
+          : res.error ?? t('Failed to bind'))
+        await load()
+        return
+      }
+      setShowPicker(false)
+      await Promise.all([load(), refreshConfig()])
+    } catch (error) {
+      console.warn('[AppBotBindingSection] Bot binding failed', { instanceId: instance.id, appId, error })
+      setError(t('Failed to bind'))
+    } finally {
+      bindingBusy.current = false
+      setBusyId(null)
+    }
+  }, [appId, appName, showConfirm, load, refreshConfig, t])
 
   const handleUnbind = useCallback(async (instanceId: string) => {
     setBusyId(instanceId)
@@ -165,7 +209,7 @@ export function AppBotBindingSection({ appId, appName, spaceId }: AppBotBindingS
   if (!spaceId) return null
 
   return (
-    <div className="space-y-2">
+    <section aria-label={t('Bot Access')} className="space-y-2">
       <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
         <Bot className="w-3.5 h-3.5" />
         {t('Bot Access')}
@@ -194,17 +238,15 @@ export function AppBotBindingSection({ appId, appName, spaceId }: AppBotBindingS
                   className="flex items-center gap-2.5 flex-1 min-w-0 text-left"
                 >
                   <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${instance.connected ? 'bg-halo-success' : 'bg-muted-foreground/30'}`} />
-                  <span className="text-sm text-foreground truncate">
-                    {CHANNEL_LABELS[instance.type] ?? instance.type}
-                  </span>
-                  <span className="text-xs text-muted-foreground flex-shrink-0">
-                    {t('{{count}} contacts', { count: contactCount })}
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-sm text-foreground truncate">{getImBotLabel(instance, t)}</span>
+                    <span className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+                      <span>{t('{{count}} contacts', { count: contactCount })}</span>
+                      <span className="break-words min-w-0">{instance.connected ? t('Connected') : instance.reason || t('Not connected')}</span>
+                    </span>
                   </span>
                   <ChevronRight className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
                 </button>
-                <span className="text-xs text-muted-foreground flex-shrink-0">
-                  {instance.connected ? t('Connected') : instance.reason || t('Not connected')}
-                </span>
                 <button
                   onClick={() => handleUnbind(instance.id)}
                   disabled={busyId !== null}
@@ -224,40 +266,44 @@ export function AppBotBindingSection({ appId, appName, spaceId }: AppBotBindingS
       )}
 
       <div className="flex flex-wrap items-center gap-2 pt-0.5">
-        <div className="relative">
-          <button
-            onClick={() => { setError(null); setShowAddMenu(v => !v) }}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-foreground border border-border rounded-lg hover:border-primary/60 transition-colors"
-          >
+        <Popover
+          open={showAddMenu}
+          onOpenChange={(open) => {
+            setShowAddMenu(open)
+            if (open) { setError(null); setShowPicker(false) }
+          }}
+        >
+          <PopoverTrigger className="items-center gap-1.5 px-3 py-1.5 text-sm text-foreground border border-border rounded-lg hover:border-primary/60 transition-colors">
             <Plus className="w-3.5 h-3.5" />
             {t('Scan to add a bot')}
-          </button>
-          {showAddMenu && (
-            <div className="absolute left-0 top-full mt-1 z-20 w-48 bg-popover border border-border rounded-lg shadow-lg overflow-hidden">
-              <button
-                onClick={() => { setShowAddMenu(false); setShowScan(true) }}
-                className="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors"
-              >
-                {t('WeCom bot')}
-              </button>
-              <button
-                onClick={() => { setShowAddMenu(false); setShowFeishuScan(true) }}
-                className="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors"
-              >
-                {t('Feishu bot')}
-              </button>
-              <button
-                onClick={handleAddWechat}
-                className="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors"
-              >
-                {t('WeChat bot')}
-              </button>
-            </div>
-          )}
-        </div>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-48 max-w-[calc(100vw-16px)] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => { setShowAddMenu(false); setShowScan(true) }}
+              className="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors"
+            >
+              {t('WeCom bot')}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setShowAddMenu(false); setShowFeishuScan(true) }}
+              className="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors"
+            >
+              {t('Feishu bot')}
+            </button>
+            <button
+              type="button"
+              onClick={handleAddWechat}
+              className="w-full px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors"
+            >
+              {t('WeChat bot')}
+            </button>
+          </PopoverContent>
+        </Popover>
         {bindable.length > 0 && (
           <button
-            onClick={() => { setError(null); setShowPicker(v => !v) }}
+            onClick={() => { setError(null); setShowAddMenu(false); setShowPicker(v => !v) }}
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground border border-border rounded-lg transition-colors"
           >
             <Link2 className="w-3.5 h-3.5" />
@@ -271,21 +317,21 @@ export function AppBotBindingSection({ appId, appName, spaceId }: AppBotBindingS
           {bindable.map(instance => (
             <button
               key={instance.id}
-              onClick={() => handleBind(instance.id)}
+              onClick={() => { void handleBind(instance) }}
               disabled={busyId !== null}
               className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-secondary/60 transition-colors disabled:opacity-60"
             >
               {busyId === instance.id
                 ? <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground flex-shrink-0" />
                 : <Bot className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />}
-              <span className="text-sm text-foreground flex-1 min-w-0 truncate">
-                {CHANNEL_LABELS[instance.type] ?? instance.type}
-              </span>
-              {instance.appName && (
-                <span className="text-xs text-halo-warning flex-shrink-0">
-                  {t('now bound to {{name}}', { name: instance.appName })}
+              <span className="flex-1 min-w-0 text-left">
+                <span className="block text-sm text-foreground truncate">{getImBotLabel(instance, t)}</span>
+                <span className={`block text-xs break-words ${instance.appId ? 'text-halo-warning' : 'text-muted-foreground'}`}>
+                  {instance.appId
+                    ? t('now bound to {{name}}', { name: instance.appName || t('Binding unavailable') })
+                    : t('Not bound')}
                 </span>
-              )}
+              </span>
             </button>
           ))}
           <p className="px-3 py-2 text-xs text-muted-foreground">
@@ -301,6 +347,8 @@ export function AppBotBindingSection({ appId, appName, spaceId }: AppBotBindingS
         {t('Bot connection settings')}
         <ExternalLink className="w-3 h-3" />
       </button>
+
+      {DialogComponent}
 
       <WeixinIlinkScanDialog
         open={ilinkInstanceId !== null}
@@ -324,6 +372,6 @@ export function AppBotBindingSection({ appId, appName, spaceId }: AppBotBindingS
         targetAppName={appName}
         onComplete={handleFeishuScanComplete}
       />
-    </div>
+    </section>
   )
 }

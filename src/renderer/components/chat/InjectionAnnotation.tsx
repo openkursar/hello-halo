@@ -39,6 +39,9 @@ export function InjectionAnnotation({ messages }: InjectionAnnotationProps) {
               <span className="flex min-w-0 flex-col gap-1 break-words">
                 {text.trim() && <span className="whitespace-pre-wrap">{text.trimEnd()}</span>}
                 <MessageReferenceChips references={references} />
+                {msg.metadata?.inputOutcome === 'stopped' && (
+                  <span className="text-[11px] leading-4 text-muted-foreground">{t('Stopped, not handled')}</span>
+                )}
               </span>
             </div>
           )

@@ -58,7 +58,7 @@ export function CapabilityStoreDialog({ type, spaceId, onClose, onInstalled }: {
           } catch { console.warn('[CapabilityStoreDialog] Store detail failed', { slug: item.slug }); setError(t('Could not load this item. Please retry.')) } finally { if (request.current === current) setLoading(false) }
         }} className="block w-full rounded-lg border border-border p-3 text-left hover:bg-secondary"><span className="block text-sm font-medium">{text.name}</span><span className="mt-1 block text-xs text-muted-foreground">{text.description}</span></button>
       })}</div>}
-      <div className="flex justify-between text-sm"><button disabled={page === 1 || loading} onClick={() => setPage(value => value - 1)} className="text-primary disabled:text-muted-foreground">{t('Previous')}</button><button disabled={!hasMore || loading} onClick={() => setPage(value => value + 1)} className="text-primary disabled:text-muted-foreground">{t('Next')}</button></div>
+      <div className="flex justify-between text-sm"><button disabled={page === 1 || loading} onClick={() => setPage(value => value - 1)} className="text-primary disabled:text-muted-foreground">{t('Previous page')}</button><button disabled={!hasMore || loading} onClick={() => setPage(value => value + 1)} className="text-primary disabled:text-muted-foreground">{t('Next page')}</button></div>
     </div>
   </CapabilityDialog>
 }

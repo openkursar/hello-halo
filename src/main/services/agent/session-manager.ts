@@ -12,7 +12,7 @@ import path from 'path'
 import os from 'os'
 import { existsSync, copyFileSync, mkdirSync } from 'fs'
 import { app } from 'electron'
-import { createSession } from './resolved-sdk'
+import { createSession, getActiveEngine } from './resolved-sdk'
 import { onApiConfigChange, getCredentialsGeneration, type ApiConfigChange } from '../../foundation/config.service'
 import { getConversation } from '../conversation.service'
 import type {
@@ -146,8 +146,8 @@ function requestSessionRebuild(conversationId: string, reason = 'session rebuild
     return
   }
 
-  // Background results arrive through this same consumer as later turns.
-  if (consumer?.isRunning && (consumer.hasRunningTasks() || hasActiveTeamTasks(consumer.getTeamLifecycleThoughts()))) {
+  // Team agents report back through this same consumer as later turns.
+  if (consumer?.isRunning && hasActiveTeamTasks(consumer.getTeamLifecycleThoughts())) {
     pendingConsumerRebuilds.add(conversationId)
     return
   }
@@ -211,12 +211,17 @@ interface ManagedSessionLease extends V2SessionLease {
 
 const sessionLeases = new Map<string, Set<V2SessionLease>>()
 const pendingSessionTurns = new WeakMap<V2SDKSession, Set<ManagedSessionLease>>()
+const sessionRetirementListeners = new WeakMap<V2SDKSession, Set<() => void>>()
 
 /** Holds the acquired instance through preparation; dispatch transfers protection to the consumer. */
 export interface V2SessionLease {
   readonly session: V2SDKSession
   /** Instance ownership, independent of whether dispatch released its reservation. */
   readonly isCurrent: boolean
+  /** Current instance whose native transport can still accept input. */
+  readonly isUsable: boolean
+  /** Runs after this exact instance is removed; unsubscribe when the caller finishes. */
+  onRetired(listener: () => void): () => void
   /** Reports a rejection synchronously before cleanup, only while this instance is current. */
   send(message: Parameters<V2SDKSession['send']>[0], onFailure?: (error: unknown) => void): Promise<void>
   release(): void
@@ -242,6 +247,21 @@ function leaseSession(
     session,
     get isCurrent() {
       return !failed && v2Sessions.get(conversationId)?.session === session
+    },
+    get isUsable() {
+      return !failed && v2Sessions.get(conversationId)?.session === session && isSessionTransportReady(session)
+    },
+    onRetired(listener) {
+      if (v2Sessions.get(conversationId)?.session !== session) {
+        try { listener() } catch (error) {
+          console.error(`[Agent][${conversationId}] Late retired-session listener failed:`, error)
+        }
+        return () => {}
+      }
+      const listeners = sessionRetirementListeners.get(session) ?? new Set<() => void>()
+      listeners.add(listener)
+      sessionRetirementListeners.set(session, listeners)
+      return () => { listeners.delete(listener) }
     },
     get awaitingInit() { return dispatched && !acknowledged },
     acknowledge() {
@@ -300,7 +320,8 @@ function leaseSession(
     close() {
       if (sessionLeases.get(conversationId) === holders && holders.has(lease) &&
         v2Sessions.get(conversationId)?.session === session) {
-        closeV2SessionForRebuild(conversationId, 'leased session cleanup')
+        closeV2SessionForRebuild(conversationId, 'leased session cleanup',
+          isSessionTransportReady(session) ? undefined : new Error('Chat session ended before the message was processed.'))
       }
     },
   }
@@ -348,7 +369,16 @@ export function markTurnInitReceived(conversationId: string): void {
  * results.
  */
 export function isSessionBusy(conversationId: string): boolean {
-  if (sessionLeases.has(conversationId) || activeSessions.has(conversationId)) return true
+  return turnsAwaitingInit.has(conversationId) || isSessionWorking(conversationId)
+}
+
+/**
+ * Busy without counting a dispatched turn that has not inited yet. The idle
+ * sweep uses this so a turn that never inits is still recycled after the idle
+ * timeout (see turnsAwaitingInit) instead of pinning its process forever.
+ */
+function isSessionWorking(conversationId: string): boolean {
+  if (sessionLeases.has(conversationId) || activeSessions.has(conversationId) || hasPendingSessionInput(conversationId)) return true
   const consumer = consumers.get(conversationId)
   if (!consumer?.isRunning) return false
   // Actively processing a turn — definitely busy.
@@ -417,6 +447,13 @@ function cleanupSession(conversationId: string, reason: string, failure?: Error)
   // conversation record is preserved and rehydrated on the next session, so
   // this is safe on rebuild.
   dropConversationState(conversationId)
+  const retired = sessionRetirementListeners.get(info.session)
+  sessionRetirementListeners.delete(info.session)
+  for (const listener of [...(retired ?? [])]) {
+    try { listener() } catch (error) {
+      console.error(`[Agent][${conversationId}] Retired-session listener failed:`, error)
+    }
+  }
 }
 
 // ============================================
@@ -573,7 +610,7 @@ function startSessionCleanup(): void {
       // Check 2: Clean up idle sessions (not used for 30 minutes)
       // Skip sessions with an in-flight request — they are not idle.
       // Covers both legacy activeSessions and consumer-based conversations.
-      if (isSessionBusy(convId)) {
+      if (isSessionWorking(convId)) {
         info.lastUsedAt = now // keep the clock fresh so timeout resets after task ends
         continue
       }
@@ -600,24 +637,12 @@ export interface ResidentSessionInfo {
   conversationId: string
   spaceId: string
   lastUsedAt: number
-  /** Mid-turn, awaiting init, holding team agents or background tasks, or being created — never evicted. */
+  /** Mid-turn, awaiting init, holding team agents, or being created — never evicted. */
   busy: boolean
-}
-
-/**
- * A task CC started in the background (a shell, agent or workflow) reports back
- * as a later turn of this session; evicting it would kill the task. The idle
- * sweep does not consult this, so a task whose completion never arrives cannot
- * pin the process forever.
- */
-function hasRunningTasks(conversationId: string): boolean {
-  const consumer = consumers.get(conversationId)
-  return !!consumer?.isRunning && consumer.hasRunningTasks()
 }
 
 function isEvictionUnsafe(conversationId: string): boolean {
   return isSessionBusy(conversationId)
-    || hasRunningTasks(conversationId)
     || turnsAwaitingInit.has(conversationId)
     || sessionsUnderCreation.has(conversationId)
     || inFlightSessionCreations.has(conversationId)
@@ -811,16 +836,16 @@ function closeV2SessionForRebuild(conversationId: string, reason = 'rebuild requ
 /**
  * True when a deferred rebuild is flagged for this conversation AND the session
  * is safely idle (no dispatched-but-unacknowledged turn, no active turn, no
- * running background or team tasks) — i.e. the flag can be applied right now instead of
+ * running team agents) — i.e. the flag can be applied right now instead of
  * waiting for the consumer's next turn boundary.
  */
 function hasConsumablePendingRebuild(conversationId: string): boolean {
   if (!pendingConsumerRebuilds.has(conversationId)) return false
   if (sessionLeases.has(conversationId) || activeSessions.has(conversationId)) return false
-  if (turnsAwaitingInit.has(conversationId)) return false
+  if (turnsAwaitingInit.has(conversationId) || hasPendingSessionInput(conversationId)) return false
   const consumer = consumers.get(conversationId)
   if (consumer?.isRunning && consumer.getActiveSessionState()) return false
-  if (consumer?.isRunning && (consumer.hasRunningTasks() || hasActiveTeamTasks(consumer.getTeamLifecycleThoughts()))) return false
+  if (consumer?.isRunning && hasActiveTeamTasks(consumer.getTeamLifecycleThoughts())) return false
   return true
 }
 
@@ -1088,13 +1113,18 @@ export interface SessionGates {
 export class SessionOptionsStaleError extends Error {
   constructor(conversationId: string, reason: 'restricted-inputs' | 'source-switch') {
     super(reason === 'source-switch'
-      ? 'This conversation is still busy on its previous account (a reply or background task is running), ' +
+      ? 'This conversation is still busy on its previous account (a reply or team task is running), ' +
         'so this message was not sent. Send it again when that finishes, stop the running task, ' +
         'or start a new conversation to use the new account now.'
       : `The digital human is still busy with earlier work, so this request was not started. ` +
         `Try again once it finishes (conversation ${conversationId}).`)
     this.name = 'SessionOptionsStaleError'
   }
+}
+
+/** True while an engine owns accepted input awaiting consumption or continuation. */
+export function hasPendingSessionInput(conversationId: string): boolean {
+  return v2Sessions.get(conversationId)?.session.hasPendingInput?.() === true
 }
 
 /**
@@ -1107,23 +1137,21 @@ export class SessionOptionsStaleError extends Error {
 function assessRebuildDeferral(
   conversationId: string,
   consumer: ConsumerHandle | undefined
-): { leased: boolean; awaitingInit: boolean; activeTurn: boolean; idleWithTeamTasks: boolean; backgroundTasks: boolean; any: boolean } {
+): { leased: boolean; awaitingInit: boolean; activeTurn: boolean; idleWithTeamTasks: boolean; any: boolean } {
   const leased = sessionLeases.has(conversationId)
   const awaitingInit = turnsAwaitingInit.has(conversationId)
-  const activeTurn = activeSessions.has(conversationId) || Boolean(consumer?.isRunning && consumer.getActiveSessionState() !== null)
+  const activeTurn = activeSessions.has(conversationId) || hasPendingSessionInput(conversationId) || Boolean(consumer?.isRunning && consumer.getActiveSessionState() !== null)
   const idleWithTeamTasks = Boolean(
     consumer?.isRunning &&
       !consumer.getActiveSessionState() &&
       hasActiveTeamTasks(consumer.getTeamLifecycleThoughts())
   )
-  const backgroundTasks = Boolean(consumer?.isRunning && consumer.hasRunningTasks())
   return {
     leased,
     awaitingInit,
     activeTurn,
     idleWithTeamTasks,
-    backgroundTasks,
-    any: leased || awaitingInit || activeTurn || idleWithTeamTasks || backgroundTasks,
+    any: leased || awaitingInit || activeTurn || idleWithTeamTasks,
   }
 }
 
@@ -1253,18 +1281,18 @@ async function getOrCreateV2SessionInner(
           return existing.session
         }
 
-        // Idle background work still needs this receiver for its autonomous completion turns.
-        if (deferral.idleWithTeamTasks || deferral.backgroundTasks) {
+        // Idle team agents still need this receiver for their autonomous completion turns.
+        if (deferral.idleWithTeamTasks) {
           console.log(
-            `[Agent][${conversationId}] Session rebuild deferred — background or team work still needs its receiver ` +
-            `(gen ${existing.credentialsGeneration}→${currentGen}). Will rebuild after tasks complete.`
+            `[Agent][${conversationId}] Session rebuild deferred — active team agents still need their receiver ` +
+            `(gen ${existing.credentialsGeneration}→${currentGen}). Will rebuild after team tasks complete.`
           )
           pendingConsumerRebuilds.add(conversationId)
           existing.lastUsedAt = Date.now()
           return existing.session
         }
 
-        // No active processing or outstanding tasks — safe to rebuild now.
+        // No active processing or team agents — safe to rebuild now.
         console.log(`[Agent][${conversationId}] Session inputs changed (gen ${existing.credentialsGeneration}→${currentGen}, fp ${existing.credentialsFingerprint}→${currentFingerprint}, kb ${existing.knowledgeFingerprint}→${currentKnowledgeFingerprint}, tools ${existing.inputsFingerprint ?? '∅'}→${currentInputsFingerprint ?? '∅'}), recreating session`)
         closeV2SessionForRebuild(conversationId)
         // Fall through to create new session
@@ -1308,7 +1336,7 @@ async function getOrCreateV2SessionInner(
 
   // Handle session resumption with migration support
   let effectiveSessionId = sessionId
-  if (sessionId && workDir) {
+  if (sessionId && workDir && getActiveEngine() !== 'codex' && getActiveEngine() !== 'dsh') {
     // Attempt to migrate session file from old config directory if needed
     const sessionExists = migrateSessionIfNeeded(workDir, sessionId)
     if (sessionExists) {
@@ -1447,7 +1475,12 @@ export async function ensureSessionWarm(
   const buildMcpServers = (): Record<string, unknown> | null => {
     const dbMcpServers = getDbMcpServers(spaceId)
     const record: Record<string, unknown> = dbMcpServers ? { ...dbMcpServers } : {}
-    Object.assign(record, buildCreationTimeServers({ spaceId, conversationId, workDir }))
+    Object.assign(record, buildCreationTimeServers({
+      spaceId, conversationId, workDir,
+      modelSelection: credentials.sourceId
+        ? { modelSourceId: credentials.sourceId, modelId: credentials.model }
+        : undefined,
+    }))
     return Object.keys(record).length > 0 ? record : null
   }
 
@@ -1584,9 +1617,9 @@ export function updateConsumerDisplayModel(
  */
 export function consumePendingRebuild(conversationId: string): boolean {
   if (sessionLeases.has(conversationId) || turnsAwaitingInit.has(conversationId) ||
-    inFlightSessionCreations.has(conversationId)) return false
+    inFlightSessionCreations.has(conversationId) || hasPendingSessionInput(conversationId)) return false
   const consumer = consumers.get(conversationId)
-  if (consumer?.isRunning && (consumer.hasRunningTasks() || hasActiveTeamTasks(consumer.getTeamLifecycleThoughts()))) return false
+  if (consumer?.isRunning && hasActiveTeamTasks(consumer.getTeamLifecycleThoughts())) return false
   if (pendingConsumerRebuilds.has(conversationId)) {
     pendingConsumerRebuilds.delete(conversationId)
     return true
@@ -1713,9 +1746,8 @@ export function invalidateSessionsForSpace(spaceId: string, reason = 'MCP change
 
 /**
  * Whether anything in the space is running or about to: a turn being created,
- * prepared, dispatched or answered, or background work whose results come back
- * as later turns. Synchronous, so a caller can act on a "no" before anything
- * else starts.
+ * prepared, dispatched or answered. Synchronous, so a caller can act on a "no"
+ * before anything else starts.
  */
 export function isSpaceBusy(spaceId: string): boolean {
   for (const state of activeSessions.values()) {
@@ -1727,8 +1759,6 @@ export function isSpaceBusy(spaceId: string): boolean {
   for (const [conversationId, info] of v2Sessions) {
     if (info.spaceId !== spaceId) continue
     if (isSessionBusy(conversationId) || turnsAwaitingInit.has(conversationId)) return true
-    const consumer = consumers.get(conversationId)
-    if (consumer?.isRunning && consumer.hasRunningTasks()) return true
   }
   return false
 }

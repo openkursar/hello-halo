@@ -5,6 +5,7 @@ import {
   clampTranscriptLimit,
   pageTranscript,
   roleForTranscriptSource,
+  sameTranscriptInput,
   summarizeThoughts,
   tailStartWithinBudget,
   withThoughtsUnloaded,
@@ -65,6 +66,13 @@ describe('pageTranscript', () => {
     const edge = pageTranscript(messages(3000), { through: 'm1001' })
     expect(edge.messages.some(m => m.id === 'm1001')).toBe(true)
     expect(edge.messages.length).toBeLessThanOrEqual(2000)
+  })
+
+  it('names the unfinished turn on newest pages only', () => {
+    expect(pageTranscript(messages(10), { limit: 3 }, 'm9').openTurnFrom).toBe('m9')
+    expect(pageTranscript(messages(10), { limit: 3, through: 'm2' }, 'm9').openTurnFrom).toBe('m9')
+    expect(pageTranscript(messages(10), { before: 'm8', limit: 3 }, 'm9')).not.toHaveProperty('openTurnFrom')
+    expect(pageTranscript(messages(10), { limit: 3 })).not.toHaveProperty('openTurnFrom')
   })
 
   it('handles an empty transcript', () => {
@@ -143,5 +151,28 @@ describe('tailStartWithinBudget', () => {
 
   it('takes nothing from an empty range', () => {
     expect(start(0, 10)).toBe(0)
+  })
+})
+
+describe('sameTranscriptInput', () => {
+  const input: TranscriptMessage = {
+    id: 'pending-live-1', role: 'system', source: 'team-message', content: 'report', timestamp: 't',
+    metadata: { teamId: 'team', teamName: 'Crew', fromMemberName: 'Reviewer', inputMode: 'live' },
+  }
+
+  it('matches the stored twin, which learned its reply and outcome later, in any key order', () => {
+    const stored: TranscriptMessage = {
+      ...input, id: 'session-msg-9',
+      metadata: { inputReplyId: 'session-msg-5', inputMode: 'live', fromMemberName: 'Reviewer', teamName: 'Crew', teamId: 'team', inputOutcome: 'stopped' },
+    }
+    expect(sameTranscriptInput(input, stored)).toBe(true)
+    expect(sameTranscriptInput({ ...input, metadata: { ...input.metadata, references: [{ kind: 'file', path: 'a', name: 'a' }] } as never }, { ...input, metadata: { references: [{ name: 'a', path: 'a', kind: 'file' }], ...input.metadata } as never })).toBe(true)
+  })
+
+  it('still tells different inputs apart', () => {
+    expect(sameTranscriptInput(input, { ...input, metadata: { ...input.metadata, fromMemberName: 'Writer' } })).toBe(false)
+    expect(sameTranscriptInput(input, { ...input, metadata: { ...input.metadata, inputMode: 'turn' } })).toBe(false)
+    expect(sameTranscriptInput(input, { ...input, content: 'other' })).toBe(false)
+    expect(sameTranscriptInput(input, { ...input, metadata: { teamId: 'team' } })).toBe(false)
   })
 })

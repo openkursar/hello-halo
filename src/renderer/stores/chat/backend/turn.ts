@@ -45,6 +45,7 @@ export function finishedTurnState(session: SessionState): SessionState {
     compactInfo: null,
     pendingQuestion: null,
     queuedMessages: [],
+    liveInputs: [],
     error: keepError ? session.error : null,
     errorType: keepError ? session.errorType : null,
   }

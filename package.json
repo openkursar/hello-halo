@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "3.0.0-rc.9",
+  "version": "3.0.0-rc.15",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.cjs",
@@ -254,10 +254,19 @@
       },
       {
         "from": "resources/office-runtime",
-        "to": "office-runtime"
+        "to": "office-runtime",
+        "filter": [
+          "**/*",
+          "!node_modules{,/**/*}"
+        ]
+      },
+      {
+        "from": "resources/office-runtime/node_modules",
+        "to": "office-runtime/node_modules"
       }
     ],
     "asarUnpack": [
+      "node_modules/@anthropic-ai/claude-code/**/*",
       "node_modules/@openai/codex/bin/**/*",
       "node_modules/@openai/codex/vendor/**/*",
       "node_modules/@openai/codex-*/vendor/**/*",

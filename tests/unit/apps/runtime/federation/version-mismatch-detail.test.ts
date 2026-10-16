@@ -1,12 +1,11 @@
 /**
  * Unit tests for resolveVersionMismatchDetail (apps/runtime/federation/manager).
  *
- * Given a TeamStore and a peer's reported protocol version — the only two
- * inputs a VERSION_INCOMPATIBLE join-reject/grant-mismatch actually carries —
- * decides which side is behind and, when it is the team's current host,
- * resolves that person's display name from the last-synced roster. The
- * function takes the store explicitly, so this needs no coordinator, socket,
- * or FederationManager instance.
+ * Given a TeamStore and the version the other side reported (or nothing, from
+ * a build too old to report it), decides which side is behind and, when it is
+ * the team's current host, resolves that person's display name from the
+ * last-synced roster. The function takes the store explicitly, so this needs
+ * no coordinator, socket, or FederationManager instance.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -78,8 +77,11 @@ describe('resolveVersionMismatchDetail', () => {
     dbManager.closeAll()
   })
 
-  it('is undefined when the peer reported no version at all (predates the pv field)', () => {
-    expect(resolveVersionMismatchDetail(teamStore, OFFICE, undefined)).toBeUndefined()
+  it('a reject that reports no version came from an older build: the host is behind, named', () => {
+    // The case that told the newest user to update: an older host refuses the
+    // join without saying its own version.
+    expect(resolveVersionMismatchDetail(teamStore, OFFICE, undefined))
+      .toEqual({ direction: 'peer', peerName: 'Alice' })
   })
 
   it('is undefined when the versions actually match (gate should not have rejected)', () => {

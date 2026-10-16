@@ -26,6 +26,7 @@ vi.mock('../../../../src/renderer/i18n', () => ({
 vi.mock('../../../../src/renderer/components/canvas/viewers/TerminalViewer', () => ({ TerminalViewer: () => null }))
 vi.mock('../../../../src/renderer/components/canvas/viewers/TeamViewer', () => ({ TeamViewer: () => null }))
 vi.mock('../../../../src/renderer/components/goal', () => ({ GoalEditor: () => null }))
+vi.mock('../../../../src/renderer/components/chat/cross-conversation', () => ({ ConversationReferenceLink: () => null }))
 
 const { VIEWERS, viewerFor, viewerBringsFileList } = await import('../../../../src/renderer/components/canvas/viewer-registry')
 const { CONTENT_TYPES, canvasLifecycle } = await import('../../../../src/renderer/services/canvas-lifecycle')

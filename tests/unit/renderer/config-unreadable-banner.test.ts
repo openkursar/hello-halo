@@ -130,6 +130,29 @@ describe('the stamp a settings save carries', () => {
   })
 })
 
+describe('read-only product defaults', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    httpRequest.mockReset()
+  })
+
+  it.each([true, false])('passes build metadata through with Electron=%s, outside user settings', async electron => {
+    const response = {
+      success: true,
+      data: { federation: { gatewayUrl: '' } },
+      productDefaults: { federation: { gatewayUrl: 'https://relay.example.test/' } },
+    }
+    const getConfig = vi.fn().mockResolvedValue(response)
+    stubWindow(electron ? { getConfig } : undefined)
+    httpRequest.mockResolvedValue(response)
+
+    expect(await configApi.getConfig()).toEqual(response)
+    expect(response.data.federation.gatewayUrl).toBe('')
+    if (electron) expect(httpRequest).not.toHaveBeenCalled()
+    else expect(httpRequest).toHaveBeenCalledWith('GET', '/api/config')
+  })
+})
+
 describe('watching the config file', () => {
   function watchWith(responses: Array<{ success: boolean; data?: { path: string } | null }>) {
     const fetchFailure = vi.fn()

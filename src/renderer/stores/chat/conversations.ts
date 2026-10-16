@@ -11,7 +11,7 @@ import { useGoalUiStore } from '../goal-ui.store'
 import { cacheConversation } from './backend/cache'
 import { deleteAppChatSession, digitalHumanSpaceId, backendFor, openOnce } from './backend'
 import i18n from '../../i18n'
-import { readEngineSessionState } from './backend/recover'
+import { readEngineSessionState, recoverSessionState } from './backend/recover'
 
 /**
  * Optimistically write a conversation's knowledgeBaseIds into the cache, then
@@ -68,7 +68,7 @@ function warnNoSpace(action: string, conversationId: string): void {
   console.warn(`[ChatStore] ${action}: space of ${conversationId} unknown, skipped`)
 }
 
-export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConversation' | 'loadEarlierMessages' | 'ensureMessageLoaded' | 'refreshConversation' | 'clearConversation' | 'deleteAppChatSession' | 'loadConversations' | 'preloadAllSpaceConversations' | 'createConversation' | 'selectConversation' | 'deleteConversation' | 'renameConversation' | 'toggleStarConversation' | 'setConversationModel' | 'setConversationReasoningEffort' | 'attachKnowledgeBase' | 'detachKnowledgeBase'> = (set, get) => ({
+export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConversation' | 'loadEarlierMessages' | 'ensureMessageLoaded' | 'refreshConversation' | 'recoverRunningTurn' | 'clearConversation' | 'deleteAppChatSession' | 'loadConversations' | 'preloadAllSpaceConversations' | 'createConversation' | 'selectConversation' | 'deleteConversation' | 'renameConversation' | 'toggleStarConversation' | 'setConversationModel' | 'setConversationReasoningEffort' | 'attachKnowledgeBase' | 'detachKnowledgeBase'> = (set, get) => ({
   setCurrentSpace: (spaceId: string) => {
     set({ currentSpaceId: spaceId })
   },
@@ -288,6 +288,11 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
       console.log(`[ChatStore] Backend session inactive — settling stale turn for ${conversationId}`)
       await get().handleAgentComplete({ spaceId: ref.spaceId, conversationId })
     }
+  },
+
+  recoverRunningTurn: async (conversationId) => {
+    if (!get().sessions.get(conversationId)?.isGenerating) return
+    await recoverSessionState({ set, get }, conversationId)
   },
 
   clearConversation: async (conversationId) => {

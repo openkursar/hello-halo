@@ -71,6 +71,7 @@ export { injectMessage } from './inject-message'
 // Turn-in-flight probe + persistence-free mid-turn delivery, for callers that
 // own their own record of the message (an app chat's transcript)
 export { hasLiveTurn, sendIntoLiveTurn } from './live-turn'
+export type { LiveInputOptions } from './live-turn'
 
 // Stream processor (shared core for main agent + app chat)
 export { processStream } from './stream-processor'
@@ -79,10 +80,13 @@ export type { ProcessStreamParams, StreamCallbacks, StreamResult } from './strea
 // Generation control
 export {
   stopGeneration,
+  onUserStop,
+  onUserStopSettled,
   isGenerating,
   getActiveSessions,
   getSessionState
 } from './control'
+export type { StopReason, StopGenerationOptions } from './control'
 
 // ============================================
 // Session Management
@@ -171,8 +175,11 @@ export type { V2SessionLease } from './session-manager'
 /** Headless callers protect manager-owned sessions until their execution reaches its release boundary. */
 export { createSessionState, registerActiveSession, unregisterActiveSession } from './session-manager'
 // Whether a conversation's session must not be disturbed: a turn in flight, or team agents still working between turns.
-export { isSessionBusy } from './session-manager'
+export { isSessionBusy, hasPendingSessionInput } from './session-manager'
 export { listResidentSessions, evictIdleSession, setResidentSessionLimit, getSessionEvictionCount, getResidentSessionLimit } from './session-manager'
 export type { ResidentSessionInfo } from './session-manager'
 export type { SessionGates } from './session-manager'
 export { broadcastMcpStatus } from './mcp-manager'
+
+/** Materialize accepted input images for the desktop event transport. */
+export { withInputImageFiles } from './image-attachments'

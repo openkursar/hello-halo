@@ -34,6 +34,7 @@ import { createRemoteBusyOverlay } from './remote-busy-overlay'
 import type { FederationStore, OfficeCredentialLike } from './deps'
 import type { TeamStore, BlackboardTask } from '../../team'
 import { createOfficeAuthority, type OfficeAuthority } from './authority/office-authority'
+import { createScopeGate } from './authority/scope-gate'
 import type { ReadMemberHistory } from './authority/history-fetch'
 import { STOP_ERR_OWNER_UNREACHABLE, type StopMemberTurn } from './authority/stop-turn'
 import type { OwnerStatus } from './authority/reconcile'
@@ -342,7 +343,7 @@ export interface FederationManagerDeps {
    * settled — this node lost office membership (e.g. the authority no longer
    * recognizes it). Fired once per loss (re-armed by a later grant) so
    * bootstrap can tell the user instead of failing silently. `detail` is set
-   * only when `reason` is VERSION_INCOMPATIBLE and direction was resolvable.
+   * only when `reason` is VERSION_INCOMPATIBLE.
    */
   onOfficeAccessLost?: (officeId: string, reason: string, detail?: TeamVersionMismatch) => void
   /**
@@ -388,21 +389,26 @@ export interface JoinOfficeParams {
 }
 
 /**
- * Resolves a VERSION_INCOMPATIBLE reject into which side is behind and, when
+ * Resolves a VERSION_INCOMPATIBLE refusal into which side is behind and, when
  * it is the team's current host, that person's display name — read from this
- * node's last-synced roster, since the reject frame itself carries no
- * identity. Undefined when the peer did not report its own version (an older
- * build that predates the `pv` field on join-reject/join-grant). Takes
- * `teamStore` explicitly (rather than closing over `deps`) so it is a plain
- * function a unit test can call directly, with no coordinator/socket needed.
+ * node's last-synced roster, since neither frame carries an identity.
+ *
+ * An absent `peerPv` still means the far side is behind: only a reject can
+ * arrive without it (a grant without `pv` is admitted), every build that has
+ * this function also reports its version on reject, and protocol versions only
+ * go up — so a refusal without a version came from an older build. Undefined
+ * only for an equal version, which the gate never refuses.
+ *
+ * Takes `teamStore` explicitly so a unit test can call it without a
+ * coordinator or socket.
  */
 export function resolveVersionMismatchDetail(
   teamStore: TeamStore,
   officeId: string,
   peerPv: number | undefined
 ): TeamVersionMismatch | undefined {
-  if (peerPv === undefined || peerPv === FEDERATION_PROTOCOL_VERSION) return undefined
-  if (peerPv > FEDERATION_PROTOCOL_VERSION) return { direction: 'self' }
+  if (peerPv === FEDERATION_PROTOCOL_VERSION) return undefined
+  if (peerPv !== undefined && peerPv > FEDERATION_PROTOCOL_VERSION) return { direction: 'self' }
   const hostNodeId = teamStore.getTeamById(officeId)?.hostNodeId
   const peerName = hostNodeId
     ? teamStore.listMembersByTeam(officeId).find((m) => m.ownerNodeId === hostNodeId)?.ownerDisplayName ?? null
@@ -616,7 +622,7 @@ export interface FederationManager {
    * PeerDialer). `fromNode` is the dialed peer's identity, used to attribute
    * frames that carry no payload source (feed-sync). Drops when the office is gone.
    */
-  deliverInbound(officeId: string, frame: FederationMessage, fromNode?: NodeId): void
+  deliverInbound(officeId: string, frame: FederationMessage, fromNode: NodeId): void
   /**
    * OS resume: grant every hosted and joined office a presence grace window so a
    * machine waking from sleep re-baselines its peers instead of mass-confirming
@@ -739,7 +745,8 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   // Remote member appId → spaceId, cached at join for later wake addressing.
   const remoteMemberSpaceIds = new Map<string, string>()
   // Authority role: correlationId → one-shot turn-complete callback.
-  const turnCompleteWaiters = new Map<string, (outcome: TurnCompletion) => void>()
+  const turnCompleteWaiters = new Map<string, { callback: (outcome: TurnCompletion) => void; officeId?: string; peerId?: NodeId }>()
+  const wakeScope = createScopeGate({ store: deps.teamStore })
   // Viewer-side replay: re-fires received activity frames as local agent events
   // (renderer zero-change). Shared across offices; dedup is keyed per-sessionKey.
   const streamReplay: StreamReplay = createStreamReplay()
@@ -1149,7 +1156,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           `${LOG_TAG} health office=${officeId} role=joined via=${dialedPeers.has(officeId) ? 'direct-leg' : 'join-link'}` +
             ` link=${link.url} ${link.connected ? 'up' : `down(${link.failedAttempts})`}` +
             ` shed=${link.dropped.control}/${link.dropped.stream}/${link.dropped.feed}/${link.dropped.artifact}` +
-            ` acked[${describeDelivery(officeId, entry.ctrlFeed)}]` +
+            ` acked[${describeDelivery(officeId, entry.ctrlFeed)}] nodePendingReceipts=${turnCompleteWaiters.size} pendingAdmission=${entry.federation.coordinator.pendingWakeAdmissions()}` +
             ` rx=${describeReceived(link.received)}` +
             ` rxKinds=${describeReceived(link.receivedByKind)}` +
             describeReplicationLog(officeId)
@@ -1166,7 +1173,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         console.log(
           `${LOG_TAG} health office=${officeId} role=host relay=${relay}` +
             ` lanClients=${entry.nodeToClient.size} relayed=${entry.nodeToGateway.size} lanShed=${entry.lanShed}` +
-            ` acked[${describeDelivery(officeId, entry.ctrlFeed)}]` +
+            ` acked[${describeDelivery(officeId, entry.ctrlFeed)}] nodePendingReceipts=${turnCompleteWaiters.size} pendingAdmission=${entry.federation.coordinator.pendingWakeAdmissions()}` +
             describeReplicationLog(officeId)
         )
       } catch (err) {
@@ -1186,22 +1193,26 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   )
   if (typeof livenessTimer.unref === 'function') livenessTimer.unref()
 
-  function dispatchTurnComplete(correlationId: string, outcome: TurnCompletion): void {
+  function dispatchTurnComplete(correlationId: string, outcome: TurnCompletion, from?: NodeId, officeId?: string): void {
+    const pending = turnCompleteWaiters.get(correlationId)
+    if (from !== undefined && pending && (pending.peerId !== from || pending.officeId !== officeId)) {
+      console.warn(`${LOG_TAG} turn-complete refused office=${officeId} peer=${from} reason=receipt owner mismatch`)
+      return
+    }
     remoteBusy.clear(correlationId)
-    const cb = turnCompleteWaiters.get(correlationId)
-    if (!cb) {
+    if (!pending) {
       console.warn(`${LOG_TAG} turn-complete with no waiter corr=${correlationId}; dropping`)
       return
     }
     turnCompleteWaiters.delete(correlationId)
-    cb(outcome)
+    pending.callback(outcome)
   }
 
   function registerTurnComplete(
     correlationId: string,
     cb: (outcome: TurnCompletion) => void
   ): () => void {
-    turnCompleteWaiters.set(correlationId, cb)
+    turnCompleteWaiters.set(correlationId, { callback: cb })
     return () => {
       turnCompleteWaiters.delete(correlationId)
       // Caller gave up on this wake (timeout/teardown) → its member is no longer
@@ -1322,7 +1333,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       sendToPeer: (peer, frame) => link.send(peer, frame),
       onWake: ({ correlationId, request, from }) =>
         link.deliver(from, { kind: 'wake', officeId, correlationId, request, fromNode: from }),
-      onTurnComplete: ({ correlationId, outcome }) => dispatchTurnComplete(correlationId, outcome),
+      onTurnComplete: ({ correlationId, outcome, from }) => dispatchTurnComplete(correlationId, outcome, from, officeId),
       // An undelivered wake (target gone before ack) resolves the sender's
       // completion waiter as `undelivered` — the sender learns "never arrived" in
       // bounded time instead of hanging on the long completion backstop.
@@ -1419,6 +1430,31 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   }
 
   /**
+   * Sender of a host frame from a relay that does not stamp one: the host's own
+   * claim, else the authority it holds the room for. A relayed request names its
+   * requester, so it is attributed to the authority that relayed it.
+   */
+  function unstampedRelayOrigin(officeId: string, frame: FederationMessage): NodeId | null {
+    const relayed = (frame.kind === 'history-request' || frame.kind === 'stop-turn-request' || frame.kind === 'artifact-fetch') &&
+      frame.relayed === true
+    return (relayed ? null : resolveFromNode(frame)) ?? believedAuthorityNode(officeId)
+  }
+
+  function matchesTransportSource(officeId: string, from: NodeId, frame: FederationMessage): boolean {
+    // History relays preserve the original viewer; replies still use the authenticated hop.
+    if (frame.kind === 'history-request' && frame.relayed === true) {
+      return frame.teamId === officeId && from === believedAuthorityNode(officeId)
+    }
+    // Stop and artifact-fetch relays keep the requester's fromNode the same way
+    // (authority/stop-turn.ts, authority/artifact-fetch.ts); only the authority relays.
+    if ((frame.kind === 'stop-turn-request' || frame.kind === 'artifact-fetch') && frame.relayed === true) {
+      return frame.officeId === officeId && from === believedAuthorityNode(officeId)
+    }
+    const claimed = resolveFromNode(frame)
+    return !claimed || claimed === from
+  }
+
+  /**
    * Split one inbound feed-sync frame between the two feed planes: session
    * feeds (transcript replication) vs the ctrl feed (wake/turn-complete).
    */
@@ -1429,17 +1465,8 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     from: NodeId,
     frame: FeedSyncFrame
   ): void {
-    // A joined office's single upstream leg labels inbound frames with THIS
-    // node's own id (the transport has no per-frame source there). Feed cursors
-    // are keyed by the label, while delivery accounting (deliveredUpTo /
-    // give-up) queries by the peer's REAL node id — so normalize the self label
-    // to the serving authority. Without this a joiner never credits the
-    // authority's acks: every wake it publishes is falsely declared
-    // undeliverable at the give-up backstop, its completion waiter is consumed,
-    // and the real turn-complete later drops as "no waiter".
-    const src = from === deps.getLocalNodeId() ? (believedAuthorityNode(officeId) ?? from) : from
-    if (isSessionFeedFrame(officeId, frame)) sessionFeed?.handleFrame(src, frame)
-    else ctrlFeed?.handleFrame(src, frame)
+    if (isSessionFeedFrame(officeId, frame)) sessionFeed?.handleFrame(from, frame)
+    else ctrlFeed?.handleFrame(from, frame)
   }
 
   /**
@@ -1463,6 +1490,14 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       return true
     }
     return false
+  }
+
+  function canDispatchWake(officeId: string, from: NodeId, request: SerializedWakeRequest): boolean {
+    const candidates = request.teamContext.fromAppId
+      ? [request.teamContext.fromAppId]
+      : deps.teamStore.listMembersByTeam(officeId).filter(member => member.ownerNodeId === from).map(member => member.appId)
+    return candidates.some(appId => wakeScope.canCoordinationWrite(officeId, appId)
+      && wakeScope.canContact(officeId, appId, request.appId))
   }
 
   function hostOffice(officeId: string): Federation {
@@ -1554,8 +1589,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       // Owner role on the HOST: a joiner woke a member this host OWNS. Run the turn
       // locally and reflux turn-complete to the joiner (symmetric with the joiner's
       // owner role). Absent → a wake for a host-owned member would log+drop.
+      getWakeAuthority: () => believedAuthorityNode(officeId) ?? deps.getLocalNodeId(),
+      canDispatchWake: (from, request) => canDispatchWake(officeId, from, request),
       onWake: deps.runLocalTurn ? (request) => runOrForwardWakeOnHost(officeId, request) : undefined,
-      onTurnComplete: (correlationId, outcome) => dispatchTurnComplete(correlationId, outcome),
+      onTurnComplete: (correlationId, outcome, from) => dispatchTurnComplete(correlationId, outcome, from, officeId),
       // Host role: a joiner left → drop the members it brought and re-converge.
       onMemberLeave: (from, appIds) => handleMemberLeaveOnHost(officeId, from, appIds),
       // Host: a join changed the roster → refresh the authority's renderer.
@@ -1721,14 +1758,14 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         // correlation — a peer must not be able to forge another member's turn
         // outcome. An unknown correlation passes through (the dispatcher warns
         // and drops it as a no-waiter completion).
-        const expected = remoteBusy.ownerNodeId(frame.correlationId)
+        const expected = turnCompleteWaiters.get(frame.correlationId)?.peerId ?? remoteBusy.ownerNodeId(frame.correlationId)
         if (sessionIdentity !== null && expected !== undefined && expected !== sessionIdentity) {
           console.warn(
             `${LOG_TAG} turn-complete origin mismatch office=${ctx.officeId} corr=${frame.correlationId} session=${sessionIdentity} expected=${expected}; dropping`
           )
           return
         }
-        ;(entry.federation.link as LanMeshLink).deliver(ctx.clientId, frame)
+        ;(entry.federation.link as LanMeshLink).deliver(sessionIdentity ?? expected ?? ctx.clientId, frame)
         return
       }
       console.warn(`${LOG_TAG} inbound frame without source node office=${ctx.officeId}; dropping`)
@@ -1852,7 +1889,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     }
     const sessionIdentity = deps.getSessionIdentity?.(ctx.clientId) ?? null
     const fromNode = resolveFromNode(frame)
-    if (fromNode && sessionIdentity !== null && fromNode !== sessionIdentity) {
+    if (sessionIdentity !== null && !matchesTransportSource(ctx.officeId, sessionIdentity, frame)) {
       console.warn(
         `${LOG_TAG} joined inbound fromNode spoof office=${ctx.officeId} claimed=${fromNode} session=${sessionIdentity}; dropping`
       )
@@ -1885,7 +1922,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     }
     // Frames without a payload source (feed-sync et al) are attributed to the
     // proven session identity, so feed cursors key on the real peer node.
-    ;(entry.federation.link as LanMeshLink).deliver(fromNode ?? peer ?? deps.getLocalNodeId(), frame)
+    ;(entry.federation.link as LanMeshLink).deliver(peer ?? deps.getLocalNodeId(), frame)
     if (frame.kind === 'join-request' && peer) announceFeedsAfterJoin(ctx.officeId, entry.sessionFeed, peer)
   }
 
@@ -1929,6 +1966,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     correlationId: string
   }): boolean {
     const selfNode = deps.getLocalNodeId()
+    const expectReceipt = (peerId: NodeId): void => {
+      const pending = turnCompleteWaiters.get(params.correlationId)
+      if (pending) { pending.officeId = params.officeId; pending.peerId = peerId }
+    }
     // HOST role: the office is hosted here and the owner is a joiner → resolve its
     // per-node client and send down the host link (host → owner wake).
     const host = hosted.get(params.officeId)
@@ -1951,6 +1992,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           return false
         }
       }
+      expectReceipt(params.ownerNodeId)
       host.federation.link.send(params.ownerNodeId, {
         kind: 'wake',
         officeId: params.officeId,
@@ -1983,6 +2025,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         // router (peer session / dial leg) — addressing it to "the authority"
         // would loop it back to ourselves. Mirrors the hosted branch, including
         // the remote-busy overlay + the turn-complete origin assertion it feeds.
+        expectReceipt(params.ownerNodeId)
         join.federation.link.send(params.ownerNodeId, {
           kind: 'wake',
           officeId: params.officeId,
@@ -2001,6 +2044,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         console.warn(`${LOG_TAG} sendWake: authority unreachable node=${relayNode} office=${params.officeId}`)
         return false
       }
+      expectReceipt(relayNode)
       join.federation.link.send(relayNode, {
         kind: 'wake',
         officeId: params.officeId,
@@ -2079,18 +2123,20 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     request: SerializedWakeRequest
   ): Promise<{ finalMessage: string | null; undelivered?: { reason: string } }> {
     const self = deps.getLocalNodeId()
-    const owner = deps.teamStore.listMembersByTeam(officeId).find((m) => m.appId === request.appId)?.ownerNodeId
+    const member = deps.teamStore.getMember(officeId, request.appId)
+    if (!member) {
+      console.warn(`${LOG_TAG} relay wake refused office=${officeId} app=${request.appId} reason=recipient-not-member`)
+      return { finalMessage: null, undelivered: { reason: 'recipient-not-member' } }
+    }
+    const owner = member.ownerNodeId
     // A host-owned member is stored SELF-relative (SELF sentinel), not under the
     // host's absolute node id — both mean "run it here".
     if (!owner || owner === SELF_NODE_ID || owner === self) return deps.runLocalTurn!(request)
 
-    const correlationId = request.teamContext?.correlationId
-    if (!correlationId) {
-      console.warn(`${LOG_TAG} relay wake without correlation app=${request.appId} owner=${owner}; running locally`)
-      return deps.runLocalTurn!(request)
-    }
+    const correlationId = randomUUID()
+    const forwardedRequest = { ...request, teamContext: { ...request.teamContext, correlationId } }
     console.log(`${LOG_TAG} relay wake app=${request.appId} → owner=${owner} office=${officeId} corr=${correlationId}`)
-    return await new Promise<{ finalMessage: string | null; undelivered?: { reason: string } }>((resolve) => {
+    return await new Promise<{ finalMessage: string | null; undelivered?: { reason: string } }>((resolve, reject) => {
       let done = false
       let timer: ReturnType<typeof setTimeout>
       const finish = (finalMessage: string | null) => {
@@ -2115,13 +2161,22 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           finishUndelivered(outcome.reason)
           return
         }
-        finish(outcome.kind === 'result' ? outcome.content : null)
+        if (outcome.kind === 'error') {
+          if (done) return
+          done = true
+          clearTimeout(timer)
+          unregister()
+          reject(new Error(outcome.message))
+          return
+        }
+        if (outcome.kind === 'timeout') { finishUndelivered('owner-turn-timeout'); return }
+        finish(outcome.kind === 'result' || outcome.kind === 'escalation' ? outcome.content : null)
       })
       timer = setTimeout(() => {
         console.warn(`${LOG_TAG} relay wake timed out app=${request.appId} owner=${owner} corr=${correlationId}`)
         finishUndelivered('relay-wake-timeout')
       }, RELAY_WAKE_TIMEOUT_MS)
-      const sent = sendWakeToMember({ officeId, ownerNodeId: owner, request, correlationId })
+      const sent = sendWakeToMember({ officeId, ownerNodeId: owner, request: forwardedRequest, correlationId })
       if (!sent) {
         console.warn(`${LOG_TAG} relay wake unsent app=${request.appId} owner=${owner}; reporting undelivered`)
         finishUndelivered('owner-unreachable')
@@ -2191,6 +2246,8 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       // Set after createFederation; referenced by the link's ctrl shim + onFeedFrame.
       let ctrlFeed: CtrlFeed | undefined
       let sessionFeed: SessionFeed | undefined
+      let upstreamNodeId: NodeId | null = null
+      let unboundFrameLogged = false
       // Per-peer return paths (see the JoinedOffice fields for semantics). Bound
       // into the router closure below, then stored on the office entry.
       const peerClients = new Map<NodeId, string>()
@@ -2284,7 +2341,33 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         // Node-identity handshake: answer the host's auth challenge with a
         // device-key signature so the session binds this node's portable id.
         makeAuthProof: deps.makeAuthProof,
-        onFrame: (frame) => link.deliver(selfContext.selfNodeId, frame),
+        onFrame: (frame, stampedFrom) => {
+          if (frame.officeId !== officeId) {
+            console.warn(`${LOG_TAG} upstream frame refused office=${officeId} reason=office-mismatch`)
+            return
+          }
+          // A LAN socket stays bound to its original host after an election.
+          if (!upstreamNodeId && frame.kind === 'roster') upstreamNodeId = stampedFrom ?? frame.snapshot.team.hostNodeId
+          // A relay that predates host-origin stamping keeps this socket across a
+          // host change but names no sender, so the first host's id would refuse
+          // every successor frame. Read it as the shipped client does instead.
+          const unstampedRelay = stampedFrom === undefined && client.isGatewaySession
+          const from = stampedFrom ?? (unstampedRelay ? unstampedRelayOrigin(officeId, frame) ?? upstreamNodeId : upstreamNodeId)
+          if (!from && (frame.kind === 'wake' || frame.kind === 'turn-complete' || isFeedSyncFrame(frame))) {
+            if (!unboundFrameLogged) {
+              unboundFrameLogged = true
+              console.warn(`${LOG_TAG} upstream identity pending office=${officeId}; control feeds await roster and retransmit`)
+            }
+            if (frame.kind === 'wake') client.send({ kind: 'turn-complete', officeId, correlationId: frame.correlationId,
+              outcome: { kind: 'undelivered', reason: 'upstream-identity-pending' } })
+            return
+          }
+          if (from && !matchesTransportSource(officeId, from, frame)) {
+            console.warn(`${LOG_TAG} upstream frame refused office=${officeId} peer=${from} reason=sender-mismatch`)
+            return
+          }
+          link.deliver(from ?? selfContext.selfNodeId, frame)
+        },
         onStateChange: (state) => {
           if (state === 'open') authedOnce = true
           // A close before any successful auth means the host rejected the
@@ -2393,15 +2476,18 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           }
           finish({ ok: false, reason, detail })
         },
+        getWakeAuthority: () => believedAuthorityNode(officeId),
+        getRosterAuthority: () => believedAuthorityNode(officeId) ?? upstreamNodeId,
+        canDispatchWake: (from, request) => canDispatchWake(officeId, from, request),
         onWake: deps.runLocalTurn
-          ? (request) => deps.runLocalTurn!(request)
+          ? (request) => runOrForwardWakeOnHost(officeId, request)
           : undefined,
         // JOINED office: the joiner woke a HOST-owned member over its upstream link;
         // the host ran it and refluxed turn-complete back here. Dispatch it to the
         // one-shot waiter registered by the joiner's session-deps (the manager-level
         // waiter map is shared across host/joined roles). Without this a joiner →
         // host-member reply would log "turn-complete for non-authority; dropping".
-        onTurnComplete: (correlationId, outcome) => dispatchTurnComplete(correlationId, outcome),
+        onTurnComplete: (correlationId, outcome, from) => dispatchTurnComplete(correlationId, outcome, from, officeId),
         // JOINED office: stream-frames from the host (another node's member,
         // relayed via the host) → replay so this joiner's renderer sees it.
         // As elected authority it also passes a peer's batch on, as the first host did.
@@ -2938,19 +3024,17 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
 
   /**
    * Inbound entry for frames arriving over a DIALED peer connection (the
-   * production PeerDialer's WsFederationClient). Source attribution, best
-   * first: the frame's own fromNode, then the DIALED PEER's identity supplied
-   * by the caller (the dialer knows which node it connected to), then the
-   * legacy self label (normalized to the believed authority downstream).
-   * Passing the peer matters for source-labelled frames without a payload
-   * fromNode (feed-sync): during an election window the believed authority is
-   * still the DEAD node, so the legacy label mis-attributed a live peer's
-   * subscribe/ack to it and its feeds were never served.
+   * production PeerDialer's WsFederationClient). The caller supplies the peer
+   * it dialed; a payload cannot replace that transport identity.
    */
-  function deliverInbound(officeId: string, frame: FederationMessage, fromNode?: NodeId): void {
+  function deliverInbound(officeId: string, frame: FederationMessage, fromNode: NodeId): void {
     const office = hosted.get(officeId) ?? joined.get(officeId)
     if (!office) {
       console.warn(`${LOG_TAG} deliverInbound: office not present office=${officeId}; dropping ${frame.kind}`)
+      return
+    }
+    if (frame.officeId !== officeId || !fromNode || !matchesTransportSource(officeId, fromNode, frame)) {
+      console.warn(`${LOG_TAG} dialed frame refused office=${officeId} peer=${fromNode} reason=origin-mismatch`)
       return
     }
     // A leg this node dialed: `fromNode` is the peer it dialed. Serving the office,
@@ -2962,8 +3046,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       })
       return
     }
-    const label = resolveFromNode(frame) ?? fromNode ?? deps.getLocalNodeId()
-    ;(office.federation.link as LanMeshLink).deliver(label, frame)
+    ;(office.federation.link as LanMeshLink).deliver(fromNode, frame)
   }
 
   /** M2: route to the replication layer (assign seq, append log, fan-out to standbys). */
@@ -3403,8 +3486,14 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       // Shutdown, not an exit: keep every re-join record for next-start recovery.
       teardownOffice(officeId)
     }
+    const pendingCompletions = [...turnCompleteWaiters.entries()]
+    for (const [correlationId] of pendingCompletions) {
+      try { dispatchTurnComplete(correlationId, { kind: 'undelivered', reason: 'federation-stopped' }) } catch (error) {
+        console.error(`${LOG_TAG} completion cleanup failed corr=${correlationId}`, error)
+      }
+    }
     remoteMemberSpaceIds.clear()
-    console.log(`${LOG_TAG} stopped all offices`)
+    console.log(`${LOG_TAG} stopped all offices; settledReceipts=${pendingCompletions.length}`)
   }
 
   return {
@@ -3463,8 +3552,6 @@ function resolveFromNode(frame: FederationMessage): NodeId | null {
       // turn-complete back over the same link. A host→joiner wake never reaches
       // the host inbound path, so this branch only sees the joiner→host case.
       return frame.fromNode ?? null
-    case 'presence-update':
-      return frame.nodeId
     // M2 control/artifact frames all carry their own fromNode.
     case 'authority-claim':
     case 'authority-confirm':

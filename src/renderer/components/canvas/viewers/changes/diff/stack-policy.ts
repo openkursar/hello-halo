@@ -1,10 +1,52 @@
 import type { ViewFile } from '../model/view-files'
-import type { LoadedDiff } from './diff-content'
+import type { DiffPart, LoadedDiff } from './diff-content'
+import { languageForPath } from './diff-editor'
 
 export const MAX_STACK_FILES = 8
 export const MAX_STACK_LINES = 800
 export const MAX_STACK_PARTS = 12
 export const MAX_STACK_CHARS = 256 * 1024
+
+/**
+ * A file other than prose with a line longer than this does not wrap at all:
+ * wrapped, a line is drawn whole (up to 20,000 characters) whenever any of it
+ * shows, which takes more than a frame; unwrapped, only the stretch in view is
+ * drawn.
+ */
+export const MAX_WRAPPED_LINE_CHARS = 5_000
+/**
+ * Unwrapped, each line in view is drawn up to about 4,000 characters, so a
+ * file with more lines than this over `LONG_LINE_CHARS` stays wrapped, where
+ * only the few long lines that fit the height are drawn.
+ */
+export const MAX_UNWRAPPED_LONG_LINES = 10
+export const LONG_LINE_CHARS = 1_000
+
+/** Languages (`languageForPath`) of text written to be read. A path with none (README, LICENSE) is read as such too. */
+const PROSE_LANGUAGES = new Set(['md', 'markdown', 'mdx', 'txt', 'text', 'rst', 'adoc', 'asciidoc', 'org', 'tex'])
+
+/**
+ * Whether the diff of the file at `path` wraps its lines, so it reads without
+ * scrolling sideways. Prose always does, whatever lines it holds; any other
+ * file does unless a few lines are too long to wrap (a bundle, one-line data),
+ * and then scrolls sideways instead.
+ */
+export function wrapsLines(path: string, part: Pick<DiffPart, 'before' | 'after'>): boolean {
+  const language = languageForPath(path)
+  if (language === null || PROSE_LANGUAGES.has(language)) return true
+  let overlong = false
+  let long = 0
+  for (const text of [part.before, part.after]) {
+    for (let start = 0; start <= text.length;) {
+      const newline = text.indexOf('\n', start)
+      const end = newline < 0 ? text.length : newline
+      if (end - start > LONG_LINE_CHARS && ++long > MAX_UNWRAPPED_LONG_LINES) return true
+      if (end - start > MAX_WRAPPED_LINE_CHARS) overlong = true
+      start = end + 1
+    }
+  }
+  return !overlong
+}
 
 /** The file list already has these costs; choosing a presentation never reads file contents. */
 export function showOneFile(files: readonly ViewFile[]): boolean {

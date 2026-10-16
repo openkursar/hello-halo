@@ -7,7 +7,7 @@
  * Shared across: MessageList (space and digital-human chat), ImChatView, SessionDetailView.
  */
 
-import { memo, type ReactNode } from 'react'
+import { memo, useMemo, type ReactNode } from 'react'
 import { MessageItem } from './MessageItem'
 import { CollapsedThoughtProcess, LazyCollapsedThoughtProcess } from './CollapsedThoughtProcess'
 import { InjectionAnnotation } from './InjectionAnnotation'
@@ -18,6 +18,8 @@ import {
   isCrossConversationNotice,
 } from './cross-conversation'
 import { TeamMemberMessage, isTeamMessage } from './team-collab'
+import { ArrivalCard } from './ArrivalCard'
+import { mergeArrivalThoughts, toArrivalThought } from './transcript'
 import { PushedMessageLabel, isPushedMessage } from './PushedMessageLabel'
 import type { Message, Thought } from '../../types'
 
@@ -48,9 +50,16 @@ export interface MessageRowProps {
    *  Set true where there is no canvas to open a terminal in. */
   hideTerminalOpen?: boolean
 
+  /** Enable only when this transcript can open its replies in the space canvas. */
+  allowViewChanges?: boolean
+
   /** Mid-turn injection messages associated with this assistant message.
    *  Rendered as a permanent annotation at the bottom of the assistant bubble. */
   injectionMessages?: Message[]
+
+  /** Records received while this reply was written (see transcript/arrivals): drawn in
+   *  its process, or after it as their own cards when it has none. */
+  arrivals?: Message[]
 
   /** Additional className for the outer wrapper (e.g., width constraints from the list) */
   className?: string
@@ -72,10 +81,17 @@ export const MessageRow = memo(function MessageRow({
   onLoadThoughts,
   hideBrowserLiveView = false,
   hideTerminalOpen = false,
+  allowViewChanges = false,
   injectionMessages,
+  arrivals,
   className = '',
   senderName,
 }: MessageRowProps) {
+  const hasInlineThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0
+  const processThoughts = useMemo(() => hasInlineThoughts && arrivals?.length
+    ? mergeArrivalThoughts(message.thoughts as Thought[], arrivals.map(toArrivalThought))
+    : message.thoughts as Thought[], [hasInlineThoughts, message.thoughts, arrivals])
+
   // System-sourced rows are routed before the bubble branches below: MessageItem
   // only distinguishes user from assistant, so anything reaching it would be
   // dressed as one of the two. This is the only place that decision is made.
@@ -103,13 +119,19 @@ export const MessageRow = memo(function MessageRow({
     )
   }
 
-  const hasInlineThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0
   const hasSeparatedThoughts = message.thoughts === null && !!message.thoughtsSummary
 
   // Reply-sender label — plain text, always the topmost element of
   // the reply (above thoughts, above the bubble), assistant messages only.
   const senderLabel = message.role === 'assistant' && senderName ? (
     <div className="mb-1 text-xs font-medium text-muted-foreground">{senderName}</div>
+  ) : null
+
+  // A reply without a process of its own shows what it received as cards after it.
+  const trailingArrivals = arrivals?.length && !hasInlineThoughts && !hasSeparatedThoughts ? (
+    <div className="mt-3 space-y-2">
+      {arrivals.map(arrival => <ArrivalCard key={arrival.clientKey ?? arrival.id} message={arrival} />)}
+    </div>
   ) : null
 
   // Assistant messages with thoughts: show collapsed thoughts above message bubble
@@ -120,7 +142,7 @@ export const MessageRow = memo(function MessageRow({
           {senderLabel}
           {hasInlineThoughts ? (
             <CollapsedThoughtProcess
-              thoughts={message.thoughts as Thought[]}
+              thoughts={processThoughts}
               messageId={message.id}
               defaultExpanded={defaultThoughtsExpanded}
               defaultMaximized={defaultThoughtsMaximized}
@@ -128,6 +150,7 @@ export const MessageRow = memo(function MessageRow({
           ) : (
             <LazyCollapsedThoughtProcess
               thoughtsSummary={message.thoughtsSummary!}
+              arrivals={arrivals}
               onLoadThoughts={
                 onLoadThoughts
                   ? () => onLoadThoughts(message.id)
@@ -148,6 +171,7 @@ export const MessageRow = memo(function MessageRow({
               isInContainer
               hideBrowserLiveView={hideBrowserLiveView}
               hideTerminalOpen={hideTerminalOpen}
+              allowViewChanges={allowViewChanges}
             />
           )}
 
@@ -174,11 +198,13 @@ export const MessageRow = memo(function MessageRow({
               previousCost={previousCost}
               hideBrowserLiveView={hideBrowserLiveView}
               hideTerminalOpen={hideTerminalOpen}
+              allowViewChanges={allowViewChanges}
               isInContainer
             />
             <InjectionAnnotation messages={injectionMessages} />
           </div>
         </div>
+        {trailingArrivals}
       </div>
     )
   }
@@ -192,7 +218,9 @@ export const MessageRow = memo(function MessageRow({
         previousCost={previousCost}
         hideBrowserLiveView={hideBrowserLiveView}
         hideTerminalOpen={hideTerminalOpen}
+        allowViewChanges={allowViewChanges}
       />
+      {trailingArrivals}
     </div>
   )
 })

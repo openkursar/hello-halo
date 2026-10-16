@@ -236,6 +236,18 @@ describe('CodexEventNormalizer (app-server protocol)', () => {
     expect(completed).toEqual([])
   })
 
+  it('keeps a recoverable native error inside the active turn until its actual result', () => {
+    const n = createNormalizer()
+    n.handle(ServerNotifications.TurnStarted, { threadId: 't', turn: { id: 'r1' } })
+    expect(n.handle(ServerNotifications.Error, { threadId: 't', turnId: 'r1', error: { message: 'upstream unavailable' }, willRetry: true })).toEqual([])
+    expect(n.isTerminal()).toBe(false)
+    const item = { id: 'after-retry', type: 'agentMessage', text: 'Recovered and read the update.' }
+    n.handle(ServerNotifications.ItemStarted, { threadId: 't', turnId: 'r1', item })
+    n.handle(ServerNotifications.ItemCompleted, { threadId: 't', turnId: 'r1', item })
+    const final = n.handle(ServerNotifications.TurnCompleted, { threadId: 't', turn: { id: 'r1', status: 'completed' } })
+    expect(final.at(-1)).toMatchObject({ type: 'result', is_error: false, result: item.text })
+  })
+
   it('drops notifications after terminal to prevent duplicate result(success) trailing an error', () => {
     const n = createNormalizer()
     n.handle(ServerNotifications.TurnStarted, { threadId: 't', turnId: 'r1' })

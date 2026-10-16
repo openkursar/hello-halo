@@ -16,6 +16,7 @@ import type { CanvasTab } from '../../../stores/canvas.store'
 import { useViewerResources } from '../viewer-resources'
 import { useTranslation } from '../../../i18n'
 import { subscribeArtifactVersions, getArtifactVersion } from '../../../services/artifact-version'
+import { toHaloFileUrl } from '../../../../shared/halo-file-url'
 import { downloadArtifact } from '../../../services/artifact-download'
 
 interface ImageViewerProps {
@@ -60,7 +61,7 @@ export function ImageViewer({ tab }: ImageViewerProps) {
   const fileUrl = tab.path
     ? (api.isRemoteMode()
         ? api.getArtifactDownloadUrl(tab.path)
-        : `halo-file://${tab.path}`)
+        : toHaloFileUrl(tab.path))
     : ''
   const imageUrl = fileUrl
     ? `${fileUrl}${fileUrl.includes('?') ? '&' : '?'}v=${reloadToken}`

@@ -19,11 +19,9 @@ import "encoding/json"
 type Envelope struct {
 	Type string  `json:"type"`
 	To   *string `json:"to,omitempty"`
-	// From is stamped by the gateway on member→host forwards: the proven
-	// session identity of the sender. Frames whose kind carries no fromNode
-	// (presence-update uses nodeId; stream-frames/turn-complete carry none)
-	// would otherwise lose their origin across the relay. The host treats it
-	// as authoritative — the gateway already asserted it (§9.1/§9.2).
+	// From is stamped on every forwarded frame with the sender's proven
+	// session identity, including host→member traffic across host changes.
+	// Payloads without fromNode retain their authenticated origin this way.
 	From  string `json:"from,omitempty"`
 	Error string `json:"error,omitempty"`
 	// Plane is the sender's outbound plane for a federation frame (optional;

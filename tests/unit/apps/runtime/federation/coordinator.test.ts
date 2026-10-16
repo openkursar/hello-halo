@@ -112,6 +112,23 @@ describe('FederationCoordinator', () => {
     onWake?: (request: { conversationId: string }) => Promise<{ finalMessage: string | null }>
     onM2Frame?: (from: string, frame: FederationMessage) => void
   }) {
+    if (opts?.onWake) {
+      if (!teamStore.getTeamById(OFFICE)) teamStore.insertTeam({
+        id: OFFICE, name: 'Wake office', owningSpaceId: 'space', goal: 'work', leadAppId: 'app-m',
+        memberSourcing: 'manual', collabMode: 'free', escalationRouting: 'user', status: 'idle',
+        currentEpochId: null, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+      if (!teamStore.getMember(OFFICE, 'app-m')) teamStore.addMember({
+        teamId: OFFICE, appId: 'app-m', memberName: 'Receiver', role: 'Member', isLead: true,
+        aiProvisioned: false, addedAt: Date.now(),
+      })
+      if (!teamStore.getMember(OFFICE, 'app-bob-1')) teamStore.addMember({
+        teamId: OFFICE, appId: 'app-bob-1', memberName: 'Sender', role: 'Member', isLead: false,
+        aiProvisioned: false, addedAt: Date.now(), ownerNodeId: BOB, origin: 'remote',
+      })
+      if (!teamStore.getEpochById('e1')) teamStore.insertEpoch({ id: 'e1', teamId: OFFICE,
+        startedAt: Date.now(), endedAt: null, endReason: null, summary: null, lifecycle: 'conversation' })
+    }
     const hostLink = new InMemoryFederationLink(HOST, hub)
     const coordinator = createFederationCoordinator({
       context: { officeId: OFFICE, selfNodeId: HOST },

@@ -19,6 +19,10 @@ import path from 'node:path'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 const SUITES = {
+  'live-turn': {
+    file: 'checklist-live-turn.mjs',
+    blurb: 'Real model, three-member space review: next-step delivery, original records, no queued wake storm (--engine, --model, --env-file)',
+  },
   people: {
     file: 'checklist-people.mjs',
     blurb: 'Digital human live decisions, duplicate answers, default workspace retention and authorized self-awareness',

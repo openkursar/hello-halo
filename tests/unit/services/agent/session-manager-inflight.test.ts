@@ -426,19 +426,18 @@ describe('independent account session lifecycle', () => {
     expect(second.close).not.toHaveBeenCalled()
   })
 
-  it.each(['turn', 'awaiting-init', 'team', 'background'])('defers an account change at the %s boundary until safely idle', async (boundary) => {
+  it.each(['turn', 'awaiting-init', 'team'])('defers an account change at the %s boundary until safely idle', async (boundary) => {
     const first = fakeSession('old-a')
     const replacement = fakeSession('new-a')
     const state = {
       turn: boundary === 'turn' ? { thoughts: [] } : null,
-      background: boundary === 'background',
       teamThoughts: boundary === 'team'
         ? [{ type: 'tool_use', toolName: 'Agent', id: 'task', toolInput: { team_name: 'crew' } }]
         : [],
     }
     startConsumer.mockReturnValueOnce({
       isRunning: true, getActiveSessionState: () => state.turn,
-      getTeamLifecycleThoughts: () => state.teamThoughts, hasRunningTasks: () => state.background, stop: vi.fn(),
+      getTeamLifecycleThoughts: () => state.teamThoughts, stop: vi.fn(),
     })
     createSession.mockResolvedValueOnce(first).mockResolvedValueOnce(replacement)
     await getOrCreateV2Session('space', 'conv-busy-a', accountOptions('account-a'), undefined, undefined, {} as never)
@@ -450,19 +449,18 @@ describe('independent account session lifecycle', () => {
 
     state.turn = null
     state.teamThoughts = []
-    state.background = false
     markTurnInitReceived('conv-busy-a')
     await expect(getOrCreateV2Session('space', 'conv-busy-a', accountOptions('account-a', 'test-refreshed-a'))).resolves.toBe(replacement)
     expect(first.close).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['turn', 'background'])('a gated caller defers a same-account credential change at the %s boundary and refuses only changed inputs', async (boundary) => {
+  it('a gated caller defers a same-account credential change mid-turn and refuses only changed inputs', async () => {
     const first = fakeSession('gated-a')
     const replacement = fakeSession('gated-a-refreshed')
-    const state = { turn: boundary === 'turn' ? { thoughts: [] } : null, background: boundary === 'background' }
+    const state: { turn: { thoughts: never[] } | null } = { turn: { thoughts: [] } }
     startConsumer.mockReturnValueOnce({
       isRunning: true, getActiveSessionState: () => state.turn,
-      getTeamLifecycleThoughts: () => [], hasRunningTasks: () => state.background, stop: vi.fn(),
+      getTeamLifecycleThoughts: () => [], stop: vi.fn(),
     })
     createSession.mockResolvedValueOnce(first).mockResolvedValueOnce(replacement)
     const gated = (options: Record<string, unknown>) => getOrCreateV2Session(
@@ -478,33 +476,7 @@ describe('independent account session lifecycle', () => {
     expect(first.close).not.toHaveBeenCalled()
 
     state.turn = null
-    state.background = false
     await expect(gated(refreshed)).resolves.toBe(replacement)
-    expect(first.close).toHaveBeenCalledTimes(1)
-  })
-
-  it('background work blocks fingerprint-only rebuild, source switches and restricted reuse even after lease release', async () => {
-    const first = fakeSession('background-a')
-    const replacement = fakeSession('after-background-a')
-    let background = true
-    startConsumer.mockReturnValueOnce({
-      isRunning: true, getActiveSessionState: () => null,
-      getTeamLifecycleThoughts: () => [], hasRunningTasks: () => background, stop: vi.fn(),
-    })
-    createSession.mockResolvedValueOnce(first).mockResolvedValueOnce(replacement)
-    const initial = accountOptions('account-a')
-    await getOrCreateV2Session('space', 'conv-background', initial, undefined, undefined, {} as never)
-    const changed = { ...initial, systemPrompt: 'Changed caller context' }
-    await expect(getOrCreateV2Session('space', 'conv-background', changed)).resolves.toBe(first)
-    const lease = await acquireV2Session('space', 'conv-background', changed)
-    lease.release()
-    expect(first.close).not.toHaveBeenCalled()
-    expect(consumePendingRebuild('conv-background')).toBe(false)
-    await expect(getOrCreateV2Session('space', 'conv-background', accountOptions('account-b'))).rejects.toBeInstanceOf(SessionOptionsStaleError)
-    await expect(getOrCreateV2Session('space', 'conv-background', changed, undefined, undefined, undefined, undefined, undefined, undefined, { requireFreshInputs: true })).rejects.toBeInstanceOf(SessionOptionsStaleError)
-    expect(first.close).not.toHaveBeenCalled()
-    background = false
-    await expect(getOrCreateV2Session('space', 'conv-background', changed)).resolves.toBe(replacement)
     expect(first.close).toHaveBeenCalledTimes(1)
   })
 
@@ -789,5 +761,26 @@ describe('independent account session lifecycle', () => {
     await expect(refused).rejects.toBeInstanceOf(SessionOptionsStaleError)
     await expect(refused).rejects.toThrow('still busy on its previous account')
     expect(first.close).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('lease retirement', () => {
+  it('exposes native liveness and retires its listeners after removing the exact instance', async () => {
+    let ready = true
+    const original = fakeSession('retiring')
+    original.query.transport.isReady = () => ready
+    createSession.mockResolvedValueOnce(original)
+    const lease = await acquireV2Session('space', 'conv-retiring', accountOptions('account-a'))
+    const retired = vi.fn(() => expect(v2Sessions.has('conv-retiring')).toBe(false))
+    lease.onRetired(retired)
+    expect(lease.isUsable).toBe(true)
+    ready = false
+    expect(lease.isCurrent).toBe(true)
+    expect(lease.isUsable).toBe(false)
+    lease.close()
+    expect(retired).toHaveBeenCalledOnce()
+    closeAllV2Sessions()
+    expect(retired).toHaveBeenCalledOnce()
   })
 })

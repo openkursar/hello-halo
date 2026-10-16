@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowRight, ChevronDown, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 import type { Message } from '../../../types'
 import { useTranslation } from '../../../i18n'
@@ -15,7 +15,9 @@ export function ExecutionStatus({ teamId, epochId, appId, remote, busy, latestRe
   const { t } = useTranslation()
   const state = useExecutionState(teamId, epochId, appId, remote)
   const browserTools = useBrowserToolCalls(state.thoughts)
-  const [expanded, setExpanded] = useState(false)
+  // Open while it runs, so the work is visible on arrival; folded once it ends.
+  const [expanded, setExpanded] = useState(state.active)
+  useEffect(() => { setExpanded(state.active) }, [state.active])
   if (!busy && !state.active && !state.failed && !state.live.error && !latestResult) return null
   const last = state.thoughts[state.thoughts.length - 1]
   const at = taskTime(last?.timestamp)
@@ -26,10 +28,12 @@ export function ExecutionStatus({ teamId, epochId, appId, remote, busy, latestRe
     : state.active ? pendingTool ? t('Executing tool: {{name}}', { name: pendingTool.toolName ?? t('Tool') }) : t('Processing this task')
       : t('Execution ended')
   const duration = latestResult?.thoughtsSummary?.duration
+  const sinceLast = state.active && at !== null ? Math.max(0, Math.floor((state.now - at) / 1000)) : null
   return <details open={expanded} onToggle={event => setExpanded(event.currentTarget.open)} className="group/execution mt-3 min-w-0 rounded-xl border border-border text-xs">
     <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-3 py-3 hover:bg-secondary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
       {executionError || unavailable ? <AlertCircle size={14} className="shrink-0 text-halo-warning" /> : state.active ? <Loader2 size={14} className="shrink-0 animate-spin text-primary" /> : <CheckCircle2 size={14} className="shrink-0 text-muted-foreground" />}
       <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
+      {sinceLast !== null && <span title={t('Last execution event {{seconds}} seconds ago', { seconds: sinceLast })} className="shrink-0 text-[11px] text-muted-foreground">{t('{{seconds}}s ago', { seconds: sinceLast })}</span>}
       {!state.active && duration !== undefined && Number.isFinite(duration) && <span className="text-muted-foreground">{t('{{seconds}}s', { seconds: Math.round(duration) })}</span>}
       {!state.active && latestResult && <TaskTimestamp value={latestResult.timestamp} recordId={latestResult.id} format="datetime" className="shrink-0 text-[11px] text-muted-foreground" />}
       <ChevronDown size={14} className="shrink-0 text-muted-foreground -rotate-90 transition-transform group-open/execution:rotate-0" />
@@ -37,8 +41,8 @@ export function ExecutionStatus({ teamId, epochId, appId, remote, busy, latestRe
     {executionError && <p role="alert" className="px-3 pb-3 text-halo-warning">{executionError}</p>}
     {expanded && <div className="min-w-0 space-y-3 border-t border-border p-3 [overflow-wrap:anywhere]">
       {state.active ? <>
-        <p className="text-[11px] text-muted-foreground">{at === null ? t('No execution events received yet') : t('Last execution event {{seconds}} seconds ago', { seconds: Math.max(0, Math.floor((state.now - at) / 1000)) })}</p>
-        <StreamingSection streamingContent={state.live.streamingContent} isStreaming={state.live.isStreaming} thoughts={state.thoughts} isThinking={state.live.isThinking} browserToolCalls={browserTools} showBrowserViewButton={false} />
+        {at === null && <p className="text-[11px] text-muted-foreground">{t('No execution events received yet')}</p>}
+        <StreamingSection embedded streamingContent={state.live.streamingContent} isStreaming={state.live.isStreaming} thoughts={state.thoughts} isThinking={state.live.isThinking} browserToolCalls={browserTools} showBrowserViewButton={false} />
       </> : latestResult ? <MessageRow message={latestResult} hideBrowserLiveView hideTerminalOpen defaultThoughtsExpanded /> : <p className="text-muted-foreground">{t('No execution events received yet')}</p>}
       <button onClick={onOpen} className="flex min-h-9 w-full items-center justify-center gap-1 rounded text-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">{t('View execution history')}<ArrowRight size={13} /></button>
     </div>}

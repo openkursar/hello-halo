@@ -426,15 +426,26 @@ export async function beginRegistration(
 }
 
 /**
- * Hosts a verification URI is allowed to point at. The URI comes from a TLS
- * response we initiated ourselves, but it is rendered as a QR code the user is
- * told to scan — defense in depth demands we never encode anything but an
- * official Feishu/Lark account page, even if the response was tampered with.
+ * Root domains a verification URI's host must be, or a subdomain of. The URI
+ * comes from a TLS response we initiated ourselves, but it is rendered as a
+ * QR code the user is told to scan — defense in depth demands we never encode
+ * anything but Feishu/Lark's own infrastructure, even if the response was
+ * tampered with.
+ *
+ * Checked by root domain rather than an exact host list: Feishu already
+ * serves this page from more than one subdomain (`accounts.feishu.cn` for the
+ * device code, `open.feishu.cn` for the app-creation confirmation), and an
+ * exact list goes stale the next time they add one. Any subdomain is still
+ * infrastructure Feishu/Lark controls — the same trust boundary the rest of
+ * this codebase already extends to `open.feishu.cn` / `open.larksuite.com`
+ * for actual bot API calls (see feishu-bot.provider.ts, notify-channels/feishu.ts).
  */
-const ALLOWED_VERIFICATION_HOSTS: ReadonlySet<string> = new Set([
-  FEISHU_ACCOUNTS_HOST,
-  LARK_ACCOUNTS_HOST,
-])
+const ALLOWED_VERIFICATION_ROOT_DOMAINS: readonly string[] = ['feishu.cn', 'larksuite.com']
+
+/** True if `host` is exactly one of the root domains above, or a subdomain of one. */
+function isAllowedVerificationHost(host: string): boolean {
+  return ALLOWED_VERIFICATION_ROOT_DOMAINS.some((root) => host === root || host.endsWith(`.${root}`))
+}
 
 /**
  * Append Halo's identification, the creation-page prefill and the requested
@@ -456,7 +467,7 @@ function decorateAuthUrl(verificationUri: string, preset: FeishuScanAuthAppPrese
       'Feishu returned an unusable verification URL',
     )
   }
-  if (url.protocol !== 'https:' || !ALLOWED_VERIFICATION_HOSTS.has(url.host)) {
+  if (url.protocol !== 'https:' || !isAllowedVerificationHost(url.host)) {
     logEvent('error', 'begin_bad_verification_uri', {
       reason: 'disallowed',
       scheme: url.protocol,

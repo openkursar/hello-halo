@@ -170,6 +170,34 @@ describe('git changes controller', () => {
     expect(gitApi.gitGetChanges).toHaveBeenLastCalledWith('space', '/w/repo', { kind: 'since-review', snapshot: 'tree1' })
   })
 
+  it('keeps the list on screen while another scope loads, but not for a commit picked in the graph', async () => {
+    const controller = createGitChangesController('space', createViewMemory(), undefined)
+    await controller.load({ relist: true })
+    const shown = controller.store.getState().list
+    const switching = controller.setScope({ kind: 'staged' })
+    expect(controller.store.getState().list).toBe(shown)
+    await switching
+    const picking = controller.setScope({ kind: 'commit', revision: 'c'.repeat(40) })
+    expect(controller.store.getState().list).toBeNull()
+    await picking
+    expect(controller.store.getState().list?.scope).toEqual({ kind: 'commit', revision: 'c'.repeat(40) })
+  })
+
+  it('keeps a named revision across a repository switch, but not a commit picked in the graph', async () => {
+    const other = { ...status().repo, root: '/w/other', name: 'other' }
+    gitApi.gitListRepositories.mockImplementation(() => ok({ ...repositories, repositories: [status().repo, other] }))
+    const memory = { ...createViewMemory(), scope: { kind: 'revision' as const, revision: 'main', mergeBase: true } }
+    const controller = createGitChangesController('space', memory, undefined)
+    await controller.load({ relist: true })
+    await controller.selectRepository('/w/other')
+    expect(memory.scope).toEqual({ kind: 'revision', revision: 'main', mergeBase: true })
+    expect(gitApi.gitGetChanges).toHaveBeenLastCalledWith('space', '/w/other', { kind: 'revision', revision: 'main', mergeBase: true })
+
+    await controller.setScope({ kind: 'commit', revision: 'c'.repeat(40) })
+    await controller.selectRepository('/w/repo')
+    expect(memory.scope).toEqual({ kind: 'uncommitted' })
+  })
+
   it('looks for the repositories again when the chosen one is gone', async () => {
     const memory = { ...createViewMemory(), repoRoot: '/w/old' }
     gitApi.gitGetStatus.mockImplementationOnce(() => Promise.resolve({ success: false, error: 'gone', code: 'GIT_NOT_A_REPOSITORY' }))

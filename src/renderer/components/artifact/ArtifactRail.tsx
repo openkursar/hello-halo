@@ -23,6 +23,7 @@ import { useCanvasStore } from '../../stores/canvas.store'
 import { ChevronRight, X } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { usePointerDrag } from '../../hooks/usePointerDrag'
 import { capCount, msBucket, trackHome } from '../../services/home-telemetry'
 import type { ArtifactRailTab as RailTab } from '../../types'
 
@@ -126,12 +127,9 @@ export function ArtifactRail({
   const isExpanded = isControlled ? externalExpanded : internalExpanded
 
   const [width, setWidth] = useState(initialWidth != null ? clampWidth(initialWidth) : DEFAULT_WIDTH)
-  const widthRef = useRef(width)
   const [isDragging, setIsDragging] = useState(false)
   const [mobileOverlayOpen, setMobileOverlayOpen] = useState(false)
   const railRef = useRef<HTMLDivElement>(null)
-  const onWidthChangeRef = useRef(onWidthChange)
-  onWidthChangeRef.current = onWidthChange
   const isMobile = useIsMobile()
 
   // The rail never gets narrower than its tab labels in the current language.
@@ -203,7 +201,6 @@ export function ArtifactRail({
     if (initialWidth !== undefined && !isDragging) {
       const clamped = clampWidth(initialWidth)
       setWidth(clamped)
-      widthRef.current = clamped
     }
   }, [initialWidth, isDragging])
 
@@ -229,37 +226,19 @@ export function ArtifactRail({
     }
   }, [isExpanded, isControlled, onExpandedChange, isCanvasOpen, effectiveWidth])
 
-  // Handle drag resize (desktop only)
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (isMobile) return
-    e.preventDefault()
-    setIsDragging(true)
-  }, [isMobile])
-
-  useEffect(() => {
-    if (!isDragging || isMobile) return
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!railRef.current) return
-      const newWidth = window.innerWidth - e.clientX
-      const clampedWidth = Math.min(MAX_WIDTH, Math.max(minWidthRef.current, newWidth))
-      setWidth(clampedWidth)
-      widthRef.current = clampedWidth
-    }
-
-    const handleMouseUp = () => {
+  const railWidthAt = (clientX: number) =>
+    Math.min(MAX_WIDTH, Math.max(minWidthRef.current, window.innerWidth - clientX))
+  const handlePointerDown = usePointerDrag({
+    enabled: !isMobile && isExpanded,
+    onStart: () => setIsDragging(true),
+    onMove: ({ clientX }) => setWidth(railWidthAt(clientX)),
+    onEnd: ({ clientX }) => {
+      const nextWidth = railWidthAt(clientX)
+      setWidth(nextWidth)
       setIsDragging(false)
-      onWidthChangeRef.current?.(widthRef.current)
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [isDragging, isMobile])
+      onWidthChange?.(nextWidth)
+    },
+  })
 
   // Close mobile overlay when switching to desktop
   useEffect(() => {
@@ -378,10 +357,10 @@ export function ArtifactRail({
       {/* Drag handle - only show when expanded */}
       {isExpanded && (
         <div
-          className={`absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/50 transition-colors z-20 ${
+          className={`absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize touch-none hover:bg-primary/50 transition-colors z-20 ${
             isDragging ? 'bg-primary/50' : ''
           }`}
-          onMouseDown={handleMouseDown}
+          onPointerDown={handlePointerDown}
           title={t('Drag to resize')}
         />
       )}

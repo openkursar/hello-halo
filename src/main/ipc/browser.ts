@@ -6,7 +6,9 @@
  */
 
 import { ipcMain, BrowserWindow, Menu, clipboard, nativeImage, shell, nativeTheme, MenuItemConstructorOptions } from 'electron'
-import { browserViewManager, type BrowserViewBounds, type DeviceMode } from '../services/browser-view.service'
+import { clearBrowserData, browserViewManager, type BrowserViewBounds, type DeviceMode } from '../services/browser-view.service'
+import { browserRpc } from '../../shared/rpc/contracts/browser.contract'
+import { registerRpcHandlers } from './rpc'
 import { resolveUserAgent } from '../services/user-agent-resolver'
 import { getConfig } from '../foundation/config.service'
 import { getDefaultBrowserHomepage } from '../services/browser-policy.service'
@@ -38,6 +40,7 @@ export function registerBrowserHandlers(mainWindow: BrowserWindow | null) {
 
   // Initialize the browser page manager
   browserViewManager.initialize(mainWindow)
+  registerRpcHandlers(browserRpc, { clearBrowserData }, 'Browser IPC')
 
   // ============================================
   // Lifecycle

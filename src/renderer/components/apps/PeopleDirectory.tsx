@@ -131,7 +131,7 @@ export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<strin
           {renderRows(group.apps)}
         </section>
       ))}
-      {total > 24 && <div className="mt-5 flex items-center justify-between text-sm"><button disabled={page === 1} onClick={() => prefs.setFilters({ page: page - 1 })} className="rounded-lg border border-border px-3 py-2 disabled:opacity-40">{t('Previous')}</button><span className="text-muted-foreground">{t('Page {{page}} of {{count}}', { page, count: Math.ceil(total / 24) })}</span><button disabled={page * 24 >= total} onClick={() => prefs.setFilters({ page: page + 1 })} className="rounded-lg border border-border px-3 py-2 disabled:opacity-40">{t('Next')}</button></div>}
+      {total > 24 && <div className="mt-5 flex items-center justify-between text-sm"><button disabled={page === 1} onClick={() => prefs.setFilters({ page: page - 1 })} className="rounded-lg border border-border px-3 py-2 disabled:opacity-40">{t('Previous page')}</button><span className="text-muted-foreground">{t('Page {{page}} of {{count}}', { page, count: Math.ceil(total / 24) })}</span><button disabled={page * 24 >= total} onClick={() => prefs.setFilters({ page: page + 1 })} className="rounded-lg border border-border px-3 py-2 disabled:opacity-40">{t('Next page')}</button></div>}
       {removedTotal > 0 && (
         <RemovedPeopleSection
           total={removedTotal}

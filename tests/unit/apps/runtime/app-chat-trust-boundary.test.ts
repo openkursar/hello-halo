@@ -66,6 +66,8 @@ const { registry, createLocalSession } = vi.hoisted(() => {
 })
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
+  activeSessions: new Map(),
+  hasPendingSessionInput: () => false,
   v2Sessions,
   closeV2Session,
   acquireV2Session: vi.fn(),

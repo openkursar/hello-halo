@@ -297,7 +297,8 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
   // Selectors are English UI labels, so the renderer must not follow the OS language.
   fs.writeFileSync(bootstrap, `const { app } = require('electron');\napp.commandLine.appendSwitch('lang', 'en-US');\napp.setPath('appData',${JSON.stringify(appData)});\napp.setPath('userData', ${JSON.stringify(userData)});\nimport(${JSON.stringify(pathToFileURL(appEntryPath).href)});\n`)
   const identityModule = process.env.PERF_CONTENT_IDENTITY_RUN ? await import('../../perf/build-identity/index.mjs') : undefined
-  const launchArgs = [...(process.env.HALO_E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : []), bootstrap]
+  // Pixel assertions compare CSS sRGB values, not the host monitor's color profile.
+  const launchArgs = ['--force-color-profile=srgb', ...(process.env.HALO_E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : []), bootstrap]
   let identityFile: string | undefined
   if (identityModule) {
     try {

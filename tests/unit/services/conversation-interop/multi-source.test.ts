@@ -25,6 +25,9 @@ vi.mock('../../../../src/main/services/agent/send-message', () => ({ sendMessage
 // chat-source reaches the engine through the services/agent barrel; without this
 // every module reset would load the whole engine graph.
 vi.mock('../../../../src/main/services/agent', async () => ({
+  hasPendingSessionInput: () => false,
+  onUserStop: () => ({ dispose: () => {} }),
+  onUserStopSettled: () => ({ dispose: () => {} }),
   onAgentEvent: (await import('../../../../src/main/services/agent/events')).onAgentEvent,
   sendMessage: (await import('../../../../src/main/services/agent/send-message')).sendMessage,
 }))

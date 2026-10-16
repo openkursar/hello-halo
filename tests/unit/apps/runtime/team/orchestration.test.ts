@@ -38,6 +38,8 @@ import type { OrchestrationSessionDeps } from '../../../../../src/main/apps/runt
 import type { NoteTurnEndedInput } from '../../../../../src/main/apps/runtime/team/turn-report'
 import { buildTeamEntry } from '../../../../../src/main/apps/runtime/team/team-prompt'
 import { buildTeamSessionKey } from '../../../../../src/shared/apps/team-types'
+import type { TeamTriggerContext } from '../../../../../src/shared/apps/team-types'
+import { forgetTurnOrigin, peekTurnOrigin, resolveTurnOrigin } from '../../../../../src/main/apps/runtime/team/external-origin'
 import type { Team, TeamMember, TeamEpoch, TeamEdge } from '../../../../../src/main/apps/team/types'
 
 // ============================================
@@ -110,7 +112,12 @@ function makeSession(options: { acceptMidTurn?: boolean } = {}) {
   const cleared: Array<{ appId: string; teamId: string }> = []
   const stopped: Array<{ appId: string; teamId: string }> = []
   // What was handed to a turn already running, in the form the member reads it.
-  const injected: Array<{ sessionKey: string; message: string }> = []
+  const injected: Array<{
+    sessionKey: string
+    message: string
+    messages?: Parameters<OrchestrationSessionDeps['injectIntoSession']>[2]
+    onTakenBack?: Parameters<OrchestrationSessionDeps['injectIntoSession']>[4]
+  }> = []
   type Pending = {
     resolve: (finalMessage?: string | null) => void
     reject: (e: unknown) => void
@@ -137,13 +144,15 @@ function makeSession(options: { acceptMidTurn?: boolean } = {}) {
         })
       })
     }),
+    // A turn a teammate woke runs delegated; see appChatMessageIdentity.
+    getTurnIdentity: () => 'delegated',
     isSessionActive: (key) => active.has(key),
     // Off unless a test asks for it: without a live session there is nothing to
     // hand a message to, which is also how a remote member answers — so the
     // default keeps every other test on the mailbox path it was written for.
-    injectIntoSession: (sessionKey, message) => {
+    injectIntoSession: (sessionKey, message, messages, _trigger, onTakenBack) => {
       if (!options.acceptMidTurn || !active.has(sessionKey)) return false
-      injected.push({ sessionKey, message })
+      injected.push({ sessionKey, message, messages, onTakenBack })
       return true
     },
     closeTeamSession: vi.fn(async (appId, teamId, _epochId) => {
@@ -194,6 +203,7 @@ describe('TeamOrchestration', () => {
       store,
       hooks: {
         wakeTarget: (p) => orchestration.wakeTarget(p),
+        getTurnIdentity: (k) => session.getTurnIdentity?.(k),
         isBusy: (k) => orchestration.isBusy(k),
         deliverMidTurn: (p) => orchestration.deliverMidTurn(p),
       },
@@ -457,6 +467,65 @@ describe('TeamOrchestration', () => {
   // ===========================================================================
   // team_complete deferred seal
   // ===========================================================================
+
+  describe('external authority lifecycle', () => {
+    const markedSessions = new Set<string>()
+
+    function markExternal(epochId: string, appId: string): { sessionKey: string; wake: TeamTriggerContext } {
+      const sessionKey = buildTeamSessionKey(appId, TEAM_ID, epochId)
+      const wake: TeamTriggerContext = {
+        teamId: TEAM_ID, epochId, correlationId: 'origin-wake', fromAppId: null,
+        wait: false, kind: 'periodic_check',
+      }
+      resolveTurnOrigin(sessionKey, { ...wake, external: true })
+      markedSessions.add(sessionKey)
+      return { sessionKey, wake }
+    }
+
+    afterEach(() => {
+      for (const sessionKey of markedSessions) forgetTurnOrigin(sessionKey)
+      markedSessions.clear()
+    })
+
+    it.each(['run', 'conversation'] as const)('retains external authority while a %s epoch is resting', async lifecycle => {
+      seedTeam(store)
+      const { deps } = makeSession()
+      const orch = build(deps)
+      const epoch = lifecycle === 'run'
+        ? await orch.startEpoch(TEAM_ID)
+        : orch.ensureConversationEpoch(TEAM_ID, 'native:resting')
+      const { sessionKey, wake } = markExternal(epoch.id, RESEARCHER_APP)
+
+      if (lifecycle === 'run') await orch.sealEpoch(TEAM_ID, 'completed', 'resting')
+      else await orch.sealConversationEpoch(TEAM_ID, epoch.id)
+
+      expect(store.getEpochById(epoch.id)?.endedAt).not.toBeNull()
+      expect(store.getEpochById(epoch.id)?.workItem?.status).toBe('open')
+      expect(peekTurnOrigin(sessionKey, wake)).toBe(true)
+      expect(orch.noteEpochTurn(TEAM_ID, epoch.id)).toBe(true)
+      expect(resolveTurnOrigin(sessionKey, wake)).toBe(true)
+    })
+
+    it.each(['completed', 'cleared'] as const)('releases every external session only when a task is %s', async status => {
+      seedTeam(store)
+      const { deps } = makeSession()
+      const orch = build(deps)
+      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:closed-origin')
+      const other = orch.ensureConversationEpoch(TEAM_ID, 'native:retained-origin')
+      const current = markExternal(epoch.id, RESEARCHER_APP)
+      const removed = markExternal(epoch.id, TESTER_APP)
+      const retained = markExternal(other.id, RESEARCHER_APP)
+      store.removeMember(TEAM_ID, TESTER_APP)
+
+      if (status === 'completed') store.updateWorkItem(epoch.id, { status: 'completed' })
+      else store.endEpoch(epoch.id, Date.now(), 'cleared', null)
+      await orch.closeEpochResources(TEAM_ID, epoch.id)
+
+      expect(peekTurnOrigin(current.sessionKey, current.wake)).toBe(false)
+      expect(peekTurnOrigin(removed.sessionKey, removed.wake)).toBe(false)
+      expect(peekTurnOrigin(retained.sessionKey, retained.wake)).toBe(true)
+    })
+  })
 
   describe('requestSeal (team_complete)', () => {
     it('completes a direct lead conversation without touching another task', async () => {
@@ -943,6 +1012,20 @@ describe('TeamOrchestration', () => {
         '[Arrived while you were working — from lead (lead)]\n\nstop, the plan changed'
       )
 
+      // The record keeps exactly what the member read, as the original input.
+      expect(injected[0].messages?.[0].recorded).toEqual({
+        content: '[Arrived while you were working — from lead (lead)]\n\nstop, the plan changed',
+        teamOrigin: { kind: 'message', correlationId: expect.any(String) },
+        provenance: { source: 'team-message', metadata: {
+          teamId: TEAM_ID, epochId: epoch.id, teamName: store.getTeamById(TEAM_ID)!.name,
+          fromMemberName: 'lead', teamTriggerKind: 'message', summary: 'stop, the plan changed',
+        } },
+      })
+      const original = vi.mocked(deps.sendAppChatMessage).mock.calls[0][0]
+      expect(original.message).toBe('[Team message from lead]\n\ndo T1')
+      expect(original.recordedMessages?.[0].content).toBe('[Team message from lead]\n\ndo T1')
+      expect(original.recordedMessages?.[0].provenance?.source).toBe('team-message')
+
       pendings[0].resolve('done')
       await flush()
     })
@@ -1002,6 +1085,7 @@ describe('TeamOrchestration', () => {
       })
 
       expect(injected[0].message).toBe('hold on a second')
+      expect(injected[0].messages?.[0].recorded.provenance).toBeUndefined()
       // Delivered, but it started no turn — so the receipt says exactly that
       // rather than waiting for a completion that answers something else.
       await expect(sent).resolves.toMatchObject({ status: 'mid_turn' })
@@ -1284,12 +1368,15 @@ describe('TeamOrchestration', () => {
      */
     function holdRecorder(deps: OrchestrationSessionDeps) {
       const held = new Map<string, number>()
-      const holds: Array<{ cancelled: boolean; end(): void }> = []
+      const holds: Array<{ cancelled: boolean; stoppedBy: 'user' | 'internal' | undefined; end(): void }> = []
       deps.holdTurn = (sessionKey) => {
         let ended = false
         held.set(sessionKey, (held.get(sessionKey) ?? 0) + 1)
         const hold = {
           cancelled: false,
+          stoppedBy: undefined as 'user' | 'internal' | undefined,
+          bindSession: vi.fn(),
+          releaseSession: vi.fn(),
           end: () => {
             if (ended) return
             ended = true
@@ -1366,9 +1453,9 @@ describe('TeamOrchestration', () => {
     })
 
     it('a turn stopped while queued gives the session back on reaching a slot, without setting up', async () => {
-      // A person's stop reaches a wake still waiting for its slot. Running it
-      // anyway only to halt it at the last step would keep the chat busy — and
-      // the person's next message waiting — through a whole session setup.
+      // A system stop (task closed, chat cleared) reaches a wake still waiting
+      // for its slot. Running it anyway only to halt it at the last step would
+      // keep the chat busy through a whole session setup.
       seedTeam(store, { collabMode: 'free' })
       const epoch = makeEpoch(store)
       const { deps, pendings } = makeSession()
@@ -1381,6 +1468,7 @@ describe('TeamOrchestration', () => {
       await wakeMember(orch, epoch.id, TESTER_APP, 'c2')
       await flush()
       holds[1].cancelled = true
+      holds[1].stoppedBy = 'internal'
 
       pendings[0].resolve('done')
       await flush()
@@ -1388,6 +1476,90 @@ describe('TeamOrchestration', () => {
       expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
       expect(isHeld(testerKey)).toBe(false)
       expect(lastOutcome(completeTurn, testerKey)).toEqual({ kind: 'undelivered', reason: 'Stopped before it could run' })
+    })
+
+    it("keeps a teammate's wake a person's stop caught waiting for a slot, for the member's next turn", async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      const { isHeld, holds } = holdRecorder(deps)
+      const noteTurnEnded = vi.fn()
+      const orch = build(deps, undefined, 1, undefined, noteTurnEnded)
+      const testerKey = buildTeamSessionKey(TESTER_APP, TEAM_ID, epoch.id)
+      const completeTurn = spyCompleteTurn(bus)
+      deps.recordStoppedInputs = vi.fn()
+
+      await wakeMember(orch, epoch.id, RESEARCHER_APP, 'c1')
+      await wakeMember(orch, epoch.id, TESTER_APP, 'c2')
+      await flush()
+      // What app-chat does for a person's stop: hold the member's mail, cancel the start.
+      bus.holdSession(testerKey)
+      holds[1].cancelled = true
+      holds[1].stoppedBy = 'user'
+
+      pendings[0].resolve('done')
+      await flush()
+
+      expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
+      expect(isHeld(testerKey)).toBe(false)
+      expect(lastOutcome(completeTurn, testerKey)).toBeUndefined()
+      expect(noteTurnEnded).not.toHaveBeenCalledWith(expect.objectContaining({ appId: TESTER_APP }))
+      expect(deps.recordStoppedInputs).not.toHaveBeenCalled()
+      expect(bus.hasBufferedMessages(epoch.id)).toBe(true)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'tester', message: 'after the stop', wait: false })
+      await flush()
+      const woken = vi.mocked(deps.sendAppChatMessage).mock.calls[1][0]
+      expect(woken.conversationId).toBe(testerKey)
+      expect(woken.message).toMatch(/go[\s\S]*after the stop/)
+      expect(woken.recordedMessages).toHaveLength(2)
+    })
+
+    it('returns a wake a person stopped during its setup without writing its record twice', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps } = makeSession()
+      const orch = build(deps)
+      const testerKey = buildTeamSessionKey(TESTER_APP, TEAM_ID, epoch.id)
+      vi.mocked(deps.sendAppChatMessage).mockImplementationOnce(async () => ({ finalMessage: null, heldBack: { recorded: true } }))
+
+      bus.holdSession(testerKey)
+      await wakeMember(orch, epoch.id, TESTER_APP, 'c2')
+      await flush()
+      expect(bus.hasBufferedMessages(epoch.id)).toBe(true)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'tester', message: 'after the stop', wait: false })
+      await flush()
+      const woken = vi.mocked(deps.sendAppChatMessage).mock.calls[1][0]
+      expect(woken.message).toMatch(/go[\s\S]*after the stop/)
+      expect(woken.recordedMessages?.map((record) => record.content)).toEqual([expect.stringContaining('after the stop')])
+    })
+
+    it("voids the person's own 1:1 a stop caught waiting for a slot, keeping it in the record", async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      const { holds } = holdRecorder(deps)
+      const orch = build(deps, undefined, 1)
+      const testerKey = buildTeamSessionKey(TESTER_APP, TEAM_ID, epoch.id)
+      deps.recordStoppedInputs = vi.fn()
+
+      await wakeMember(orch, epoch.id, RESEARCHER_APP, 'c1')
+      const receiptOf = bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: null, to: 'tester', message: 'my own words', wait: true })
+      await flush()
+      bus.holdSession(testerKey)
+      holds[1].cancelled = true
+      holds[1].stoppedBy = 'user'
+
+      pendings[0].resolve('done')
+      await flush()
+
+      expect(deps.recordStoppedInputs).toHaveBeenCalledWith(testerKey, [expect.objectContaining({
+        content: 'my own words', teamOrigin: expect.objectContaining({ kind: 'human_message' }),
+      })])
+      const settled = await receiptOf
+      expect('status' in settled && settled.message).toContain('Stopped before it was read')
+      expect(bus.hasBufferedMessages(epoch.id)).toBe(false)
     })
   })
 
@@ -1852,7 +2024,7 @@ describe('TeamOrchestration', () => {
       return buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epochId)
     }
 
-    it('defers a durable answer without putting it in a transient mailbox, then acknowledges its own turn', async () => {
+    it('starts a durable decision answer inside the live turn and settles at its ending', async () => {
       seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
       const epoch = makeEpoch(store)
       const { deps, pendings, injected } = makeSession({ acceptMidTurn: true })
@@ -1864,19 +2036,50 @@ describe('TeamOrchestration', () => {
       const params = { teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'go ahead',
         continuationId: 'saved-answer', onDeferred, onStarted, onSettled }
       expect(await orch.resumeFromEscalation(params)).toBe(true)
-      expect(onDeferred).toHaveBeenCalledTimes(1)
-      expect(onStarted).not.toHaveBeenCalled()
-      expect(injected).toHaveLength(0)
-      expect(bus.hasBufferedMessages(epoch.id)).toBe(false)
-      pendings[0].resolve('done')
-      await flush()
-      await orch.resumeFromEscalation(params)
-      await flush()
+      expect(onDeferred).not.toHaveBeenCalled()
       expect(onStarted).toHaveBeenCalledTimes(1)
+      expect(injected).toHaveLength(1)
+      expect(injected[0].message).toContain('go ahead')
+      expect(onSettled).not.toHaveBeenCalled()
       await orch.resumeFromEscalation(params)
-      const answerTurn = pendings.find(p => p.teamContext.correlationId === 'decision:saved-answer')!
-      expect(answerTurn).toBeTruthy()
-      answerTurn.resolve('continued')
+      expect(injected).toHaveLength(1)
+      orch.noteMemberTurnEnded({ appId: RESEARCHER_APP, teamId: TEAM_ID, epochId: epoch.id, fate: { kind: 'ended' } })
+      pendings[0].resolve('continued')
+      await flush()
+      expect(onSettled).toHaveBeenCalledTimes(1)
+      expect(onSettled).toHaveBeenCalledWith(undefined)
+      expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
+    })
+
+    it('settles a decision answer a stop took back unread with the turn that reads it, not the stopped one', async () => {
+      seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings, injected } = makeSession({ acceptMidTurn: true })
+      const orch = build(deps)
+      const researcherKey = await startResearcherTurn(epoch.id)
+      const onSettled = vi.fn()
+      expect(await orch.resumeFromEscalation({
+        teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'go ahead',
+        continuationId: 'saved-answer', onDeferred: vi.fn(), onStarted: vi.fn(), onSettled,
+      })).toBe(true)
+      expect(injected).toHaveLength(1)
+
+      // The member's owner stops before the member reads the answer.
+      bus.holdSession(researcherKey)
+      injected[0].onTakenBack?.([0])
+      orch.noteMemberTurnEnded({ appId: RESEARCHER_APP, teamId: TEAM_ID, epochId: epoch.id, fate: { kind: 'ended' } })
+      pendings[0].resolve('stopped')
+      await flush()
+      expect(onSettled).not.toHaveBeenCalled()
+      expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
+
+      // A teammate's next message starts the member's next turn, which reads the held answer.
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'next step', wait: false })
+      await flush()
+      expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(2)
+      expect((deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls[1][0].message).toContain('go ahead')
+      expect(onSettled).not.toHaveBeenCalled()
+      pendings[1].resolve('continued')
       await flush()
       expect(onSettled).toHaveBeenCalledTimes(1)
       expect(onSettled).toHaveBeenCalledWith(undefined)

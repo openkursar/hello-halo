@@ -31,7 +31,9 @@ Three kinds, three backends:
 - `virtual` — `backend/virtual.ts`: every other `app-chat:` key (IM, HTTP, team
   member). Only their live turn is tracked here; the transcript belongs to the
   view that shows it (`ImChatView`, team chat). `settleTurn` retires the streamed
-  state and nothing else.
+  state and nothing else. Nothing opens them through the store, so a view that
+  shows one picks up a turn already running with `recoverRunningTurn` — a read
+  made only while the store holds the session as running.
 
 Adding a conversation store means adding a backend, not a branch in a slice.
 
@@ -165,3 +167,46 @@ purpose: the two answer different questions and must not be read as one.
 Space-conversation storage, the transcript reader (`shared/transcript`,
 `apps/runtime/session-store`), and the scroll primitives
 (`components/chat/transcript/DESIGN.md`).
+
+
+## Inputs arriving during work
+
+`agent:input-arrived` is a detail-only batch of original `TranscriptMessage`
+records, with `live` distinguishing a current-turn addition from an idle push.
+It uses the same IPC/WS retention rule as thoughts and text. The API validates
+relayed event shapes before subscribers see them. No input causes a transcript
+reload: the chat store merges records into an already-held conversation; IM and
+team views merge the same delta into their own held transcript.
+
+The store captures the current thought id and text offset at receipt. Its
+`liveInputs` placement overlay is limited to 128 records / 8 MiB; records outside
+that overlay remain in the held transcript. Ordinary inputs take budget priority
+over team reports so team traffic cannot evict a person's live annotation.
+`StreamingSection` interleaves a person's IM messages and pushes at those
+boundaries. Owner additions stay below the live reply as annotations without
+splitting its thoughts/text or changing its React identity; teammate and
+cross-conversation arrivals join the existing work process without cutting reply
+text (see `components/chat/transcript/DESIGN.md`).
+The view combines the canonical arrival tail with the bounded overlay, using the
+writer's reply association rather than renderer clock comparisons. Thought
+partitions retain unchanged array identities and are not rebuilt for ordinary
+text deltas. Confirmed owner additions replace their optimistic queued note with
+the existing injection annotation.
+
+Space records already have permanent IDs. App JSONL records retain the writer's
+exact original timestamp and use temporary `pending-live-*` IDs until the normal
+transcript read confirms their file-line IDs. Reconciliation preserves the row's
+client key and source metadata. Concurrent reads match a live row by id or its
+original timestamp plus source/content, so repeated older messages stay visible
+and one arrival is never shown twice. The placement overlay ends with the turn;
+its records remain in the canonical transcript.
+
+Desktop input-image deltas use content-addressed `halo-file` references; remote
+clients retain the portable image payload. Hidden relay action context belongs
+only to the engine input and never to this event.
+
+`agent:input-stopped` (detail-only, same transport rule) carries the person's
+inputs a Stop voided, as announced, now with `inputOutcome: 'stopped'`. The store
+marks them in place — the held record, the overlay entry, or the sender's own
+optimistic bubble — and adds one it never showed; it does not reload. A window
+that does not hold the conversation sees the stored outcome on its next read.

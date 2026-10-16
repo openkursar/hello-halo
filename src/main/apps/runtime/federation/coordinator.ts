@@ -41,6 +41,7 @@ import {
   PRESENCE_SUSPECT_AFTER_MS,
 } from './presence-constants'
 import type { TurnCompletion } from '../team/message-bus'
+import { validateWakeAdmission } from './wake-admission'
 
 const LOG_TAG = '[Federation]'
 
@@ -101,10 +102,9 @@ export interface FederationCoordinatorDeps {
    */
   onJoinGrant?: (assignedNodeId: NodeId) => void
   /**
-   * `peerPv` is the other side's own FEDERATION_PROTOCOL_VERSION when the
-   * reason is VERSION_INCOMPATIBLE (from the reject frame's `pv`, or from the
-   * mismatched grant's `pv` when we refused their grant) — undefined for every
-   * other reason, and also undefined if the other side predates this field.
+   * `peerPv` is the other side's own FEDERATION_PROTOCOL_VERSION as it reported
+   * it — the reject frame's `pv`, or the refused grant's `pv` — and undefined
+   * when the other side is too old to report it on a reject.
    */
   onJoinReject?: (reason: JoinReject['reason'], peerPv?: number) => void
   /**
@@ -122,14 +122,17 @@ export interface FederationCoordinatorDeps {
    * third node and it never arrived. It must stay distinguishable from a turn
    * that ran and produced nothing, or the original sender is told it was answered.
    */
-  onWake?: (
-    request: SerializedWakeRequest
-  ) => Promise<{ finalMessage: string | null; undelivered?: { reason: string } }>
+  onWake?: (request: SerializedWakeRequest) => Promise<{ finalMessage: string | null; undelivered?: { reason: string } }>
+  /** Current authority, including after an election; queried again while metadata catches up. */
+  getWakeAuthority?: () => NodeId | null
+  getRosterAuthority?: () => NodeId | null
+  canDispatchWake?: (fromNode: NodeId, request: SerializedWakeRequest) => boolean
+  wakeAdmissionTimeoutMs?: number
   /**
    * Authority role: a remote turn finished. Set only on the authority node so the
    * pending wait keyed by correlationId resolves; elsewhere logs+drops.
    */
-  onTurnComplete?: (correlationId: string, outcome: TurnCompletion) => void
+  onTurnComplete?: (correlationId: string, outcome: TurnCompletion, fromNode?: NodeId) => void
   /**
    * Host role: a joiner is leaving and asks to drop the members it brought.
    * Set only on the host coordinator; the manager re-checks ownership against
@@ -255,6 +258,7 @@ export interface FederationCoordinatorDeps {
 export interface FederationCoordinator {
   start(): void
   stop(): void
+  pendingWakeAdmissions(): number
   /** Client-side helper: send a join-request to the host via the link. */
   requestJoin(req: JoinRequest): void
   /** Broadcast one heartbeat for this node. Exposed for deterministic tests. */
@@ -338,6 +342,7 @@ export function createFederationCoordinator(
   const { officeId } = context
 
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  let joinedAuthorityNode: NodeId | null = null
 
   // Per-node debounce flag: a node confirmed-offline only acts ONCE and only
   // returns to online via a fresh join. The office_nodes row carries the
@@ -898,22 +903,7 @@ export function createFederationCoordinator(
 
   // ── Owner side: run a remote member's turn, then report completion ──
 
-  // One wake, one turn, one ack: wakes for the same member session never
-  // overlap, because the owner runs them through the kernel's busy gate — a
-  // second wake QUEUES and gets its own turn with its own completion.
-  //
-  // Idempotency ledger so a RE-delivered wake (a network duplicate, or a future
-  // sender-side retransmit) never starts a second turn — double execution is a
-  // correctness bug, not just waste. A correlationId is at most once "run":
-  //   · in flight        → the turn is already running; swallow the duplicate.
-  //   · recently completed → replay the stored turn-complete (the sender's ack
-  //                          was lost) instead of re-running.
-  // recentlyCompleted evicts by AGE, not by count: a purely count-capped FIFO
-  // could, in a busy office, drop a correlationId while a delayed duplicate wake
-  // is still arriving → the duplicate would re-run (double execution). A TTL
-  // retains each outcome long past any realistic duplicate/retransmit window
-  // (sender retransmit tops out ~10s), so a late duplicate re-acks instead. The
-  // count cap is only a memory backstop for a pathological burst.
+  // Receipt identity includes the authenticated peer, so another peer cannot replay its result.
   const inFlightWakes = new Set<string>()
   const recentlyCompleted = new Map<string, { outcome: TurnCompletion; at: number }>()
   const COMPLETED_LEDGER_TTL_MS = 10 * 60_000
@@ -933,67 +923,90 @@ export function createFederationCoordinator(
     }
   }
 
+  const pendingAdmissions = new Map<string, { from: NodeId; msg: WakeFrame; deadline: number }>()
+  const ADMISSION_LIMIT = 128
+  const ADMISSION_RECHECK_MS = 250
+  let admissionTimer: ReturnType<typeof setTimeout> | undefined
+
+  function wakeKey(from: NodeId, correlationId: string): string { return `${from}\0${correlationId}` }
+
+  function checkWake(from: NodeId, msg: WakeFrame) {
+    return validateWakeAdmission({
+      officeId, outerOfficeId: msg.officeId, correlationId: msg.correlationId, fromNode: from,
+      selfNodeId: context.selfNodeId,
+      authorityNodeId: deps.getWakeAuthority?.() ?? joinedAuthorityNode ?? teamStore.getTeamById(officeId)?.hostNodeId ?? context.selfNodeId,
+      request: msg.request, store: teamStore, canDispatch: deps.canDispatchWake,
+    })
+  }
+
+  function finishWake(from: NodeId, msg: WakeFrame, outcome: TurnCompletion): void {
+    const key = wakeKey(from, msg.correlationId)
+    inFlightWakes.delete(key)
+    pendingAdmissions.delete(key)
+    rememberCompleted(key, outcome)
+    try { link.send(from, { kind: 'turn-complete', officeId, correlationId: msg.correlationId, outcome }) } catch (error) {
+      console.error(`${LOG_TAG} wake receipt send failed office=${officeId} peer=${from}`, error)
+    }
+  }
+
+  function refuseWake(from: NodeId, msg: WakeFrame, reason: string): void {
+    console.warn(`${LOG_TAG} wake refused office=${officeId} peer=${from} reason=${reason}`)
+    finishWake(from, msg, { kind: 'undelivered', reason })
+  }
+
+  function runAdmittedWake(from: NodeId, msg: WakeFrame): void {
+    console.log(`${LOG_TAG} wake admitted office=${officeId} app=${msg.request.appId}`)
+    let running: ReturnType<NonNullable<FederationCoordinatorDeps['onWake']>>
+    try { running = onWake!(msg.request) } catch (error) {
+      finishWake(from, msg, { kind: 'error', message: error instanceof Error ? error.message : String(error) })
+      return
+    }
+    void running.then((result): TurnCompletion => result.undelivered
+      ? { kind: 'undelivered', reason: result.undelivered.reason }
+      : { kind: 'result', content: result.finalMessage ?? '' })
+      .catch((error): TurnCompletion => ({ kind: 'error', message: error instanceof Error ? error.message : String(error) }))
+      .then(outcome => finishWake(from, msg, outcome))
+  }
+
+  function scheduleAdmissionCheck(): void {
+    if (admissionTimer || pendingAdmissions.size === 0) return
+    admissionTimer = setTimeout(() => {
+      admissionTimer = undefined
+      for (const [key, pending] of pendingAdmissions) {
+        const check = checkWake(pending.from, pending.msg)
+        if (check.ok) {
+          pendingAdmissions.delete(key)
+          runAdmittedWake(pending.from, pending.msg)
+        } else if (!check.metadataPending || Date.now() >= pending.deadline) {
+          refuseWake(pending.from, pending.msg, check.reason ?? 'wake-admission-failed')
+        }
+      }
+      scheduleAdmissionCheck()
+    }, ADMISSION_RECHECK_MS)
+    admissionTimer.unref?.()
+  }
+
   function handleWake(from: NodeId, msg: WakeFrame): void {
-    if (!onWake) {
-      // Answer, never just drop. This node consumed the wake off the durable
-      // feed, which retires the sender's give-up deadline — so a silent return
-      // left the sender believing it was delivered, forever, with no record of
-      // the failure on either machine. The member simply read "online, idle"
-      // while the message that was supposed to start it no longer existed
-      // anywhere. An explicit non-delivery is filed as a failed act by the
-      // sender's bus, which is office-shared, so both sides can see it.
-      console.warn(
-        `${LOG_TAG} wake for non-owner office=${officeId} app=${msg.request.appId} ` +
-          `corr=${msg.correlationId}; reporting undelivered`
-      )
-      link.send(from, {
-        kind: 'turn-complete',
-        officeId,
-        correlationId: msg.correlationId,
-        outcome: { kind: 'undelivered', reason: 'not-the-owner' },
-      })
-      return
-    }
-    const corr = msg.correlationId
-
-    // Duplicate after completion: re-ack with the stored outcome, do NOT re-run.
-    const done = recentlyCompleted.get(corr)
+    if (!onWake) { refuseWake(from, msg, 'not-the-owner'); return }
+    const check = checkWake(from, msg)
+    if (!check.ok && !check.metadataPending) { refuseWake(from, msg, check.reason ?? 'wake-admission-failed'); return }
+    const key = wakeKey(from, msg.correlationId)
+    const done = recentlyCompleted.get(key)
     if (done) {
-      console.log(`${LOG_TAG} duplicate wake after completion office=${officeId} corr=${corr}; re-acking`)
-      link.send(from, { kind: 'turn-complete', officeId, correlationId: corr, outcome: done.outcome })
+      if (!check.ok) { refuseWake(from, msg, check.reason ?? 'wake-admission-failed'); return }
+      link.send(from, { kind: 'turn-complete', officeId, correlationId: msg.correlationId, outcome: done.outcome })
       return
     }
-    // Duplicate while in flight: the turn is already running and will ack on
-    // completion; swallow the resend (no second execution, no second injection).
-    if (inFlightWakes.has(corr)) {
-      console.log(`${LOG_TAG} duplicate wake in flight office=${officeId} corr=${corr}; swallowing`)
+    if (inFlightWakes.has(key)) return
+    inFlightWakes.add(key)
+    if (check.metadataPending) {
+      if (pendingAdmissions.size >= ADMISSION_LIMIT) { refuseWake(from, msg, 'wake-admission-full'); return }
+      pendingAdmissions.set(key, { from, msg, deadline: Date.now() + (deps.wakeAdmissionTimeoutMs ?? 30000) })
+      console.log(`${LOG_TAG} wake awaiting office metadata office=${officeId} peer=${from} pending=${pendingAdmissions.size}`)
+      scheduleAdmissionCheck()
       return
     }
-
-    console.log(`${LOG_TAG} wake received office=${officeId} app=${msg.request.appId} corr=${corr}`)
-    inFlightWakes.add(corr)
-    void onWake(msg.request)
-      // A relayed wake that never reached its owner is not a turn that ran and
-      // said nothing: reporting it as a result told the original sender it had
-      // been answered, and the failure left no trace on any machine.
-      .then((res): TurnCompletion =>
-        res.undelivered
-          ? { kind: 'undelivered', reason: res.undelivered.reason }
-          : { kind: 'result', content: res.finalMessage ?? '' }
-      )
-      .catch((err): TurnCompletion => ({
-        kind: 'error',
-        message: err instanceof Error ? err.message : String(err),
-      }))
-      .then((outcome) => {
-        inFlightWakes.delete(corr)
-        // Remember the outcome so a late duplicate of this wake re-acks instead
-        // of re-running (its sender's turn-complete may have been lost).
-        rememberCompleted(corr, outcome)
-        // The joiner link routes only to its single host peer, so the target
-        // node id is a label; each wake's origin keeps its own reflux address.
-        link.send(from, { kind: 'turn-complete', officeId, correlationId: corr, outcome })
-      })
+    runAdmittedWake(from, msg)
   }
 
   // ── Inbound dispatch ──
@@ -1012,6 +1025,7 @@ export function createFederationCoordinator(
           onJoinReject?.('VERSION_INCOMPATIBLE', msg.pv)
           break
         }
+        joinedAuthorityNode = from
         console.log(`${LOG_TAG} join granted assignedNodeId=${msg.assignedNodeId}`)
         // A grant is a fresh handshake: clear this node's confirmed-offline
         // latches on its peers. Without it a host confirmed-offline during a
@@ -1055,6 +1069,10 @@ export function createFederationCoordinator(
         }
         break
       case 'presence-update':
+        if (deps.getRosterAuthority && from !== deps.getRosterAuthority()) {
+          console.warn(`${LOG_TAG} presence-update refused office=${officeId} peer=${from} reason=authority-mismatch`)
+          break
+        }
         // Presence is host-authoritative and projected from office_nodes; most
         // inbound frames are observational (the local FSM owns this node's own
         // view). PEER nodes with no local ledger row adopt the host's projection
@@ -1096,7 +1114,8 @@ export function createFederationCoordinator(
         handleWake(from, msg)
         break
       case 'turn-complete':
-        if (onTurnComplete) onTurnComplete(msg.correlationId, msg.outcome)
+        if (msg.officeId !== officeId) { console.warn(`${LOG_TAG} turn completion refused office=${officeId} reason=office mismatch`); break }
+        if (onTurnComplete) onTurnComplete(msg.correlationId, msg.outcome, from)
         else console.warn(`${LOG_TAG} turn-complete for non-authority office=${officeId} corr=${msg.correlationId}; dropping`)
         break
       case 'stream-frames':
@@ -1107,10 +1126,19 @@ export function createFederationCoordinator(
         // Joiner role: materialize the shadow office from the host's projection.
         // A host never receives roster frames (it is the sole authority), so a
         // roster with no handler is dropped with a warning.
+        if (deps.getRosterAuthority && (from !== deps.getRosterAuthority()
+          || msg.snapshot.team.id !== officeId || msg.snapshot.team.hostNodeId !== from)) {
+          console.warn(`${LOG_TAG} roster refused office=${officeId} peer=${from} reason=authority-mismatch`)
+          break
+        }
         if (onRoster) onRoster(msg.snapshot, msg.version)
         else console.warn(`${LOG_TAG} roster with no handler office=${officeId}; dropping`)
         break
       case 'member-status':
+        if (deps.getRosterAuthority && from !== deps.getRosterAuthority()) {
+          console.warn(`${LOG_TAG} member-status refused office=${officeId} peer=${from} reason=authority-mismatch`)
+          break
+        }
         if (onMemberStatus) onMemberStatus(msg)
         else console.warn(`${LOG_TAG} member-status with no handler office=${officeId}; dropping`)
         break
@@ -1347,6 +1375,8 @@ export function createFederationCoordinator(
   }
 
   function stop(): void {
+    if (admissionTimer) { clearTimeout(admissionTimer); admissionTimer = undefined }
+    for (const pending of [...pendingAdmissions.values()]) refuseWake(pending.from, pending.msg, 'coordinator-stopped')
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer)
       heartbeatTimer = null
@@ -1358,6 +1388,7 @@ export function createFederationCoordinator(
   return {
     start,
     stop,
+    pendingWakeAdmissions: () => pendingAdmissions.size,
     requestJoin,
     sendHeartbeat,
     sweepPresence,

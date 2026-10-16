@@ -20,7 +20,7 @@ const h = vi.hoisted(() => {
   const addMessage = vi.fn()
   const updateMessageById = vi.fn()
   const sendMessage = vi.fn()
-  return { conversations, addMessage, updateMessageById, sendMessage }
+  return { conversations, addMessage, updateMessageById, sendMessage, sendIntoLiveTurn: vi.fn(() => true), emitAgentEvent: vi.fn() }
 })
 
 vi.mock('../../../../src/main/services/conversation.service', () => ({
@@ -35,6 +35,9 @@ vi.mock('../../../../src/main/services/agent/send-message', () => ({ sendMessage
 // chat-source reaches the engine through the services/agent barrel; without this
 // every module reset would load the whole engine graph.
 vi.mock('../../../../src/main/services/agent', async () => ({
+  hasPendingSessionInput: () => false,
+  sendIntoLiveTurn: h.sendIntoLiveTurn,
+  emitAgentEvent: h.emitAgentEvent,
   onAgentEvent: (await import('../../../../src/main/services/agent/events')).onAgentEvent,
   sendMessage: (await import('../../../../src/main/services/agent/send-message')).sendMessage,
 }))
@@ -58,6 +61,8 @@ describe('chat conversation source', () => {
     h.addMessage.mockReset()
     h.updateMessageById.mockReset()
     h.sendMessage.mockReset()
+    h.sendIntoLiveTurn.mockReset().mockReturnValue(true)
+    h.emitAgentEvent.mockClear()
   })
 
   it('is readable and writable', () => {
@@ -110,6 +115,49 @@ describe('chat conversation source', () => {
   it('leaves a system notice through the conversation store', () => {
     source.writeNotice('space-1', 'c1', 'paused')
     expect(h.addMessage).toHaveBeenCalledWith('space-1', 'c1', { role: 'system', content: 'paused', source: 'cross-conversation-notice' })
+  })
+
+  it('announces one accepted batch with original source records before the turn ends', () => {
+    h.conversations.set('c1', { id: 'c1', title: 'One', updatedAt: 'x', messages: [message('reply', 'assistant', '')] })
+    h.addMessage.mockImplementation((_space, _conversation, record) => ({ ...record, id: `record-${record.content}`, timestamp: '2026-10-09T10:00:00.000Z' }))
+    const outcomes = source.deliverMidTurn!('space-1', 'c1', [
+      { turnInput: 'framed first', record: { content: 'first', source: 'team-message', metadata: { fromMemberName: 'Reviewer' } } },
+      { turnInput: 'framed second', record: { content: 'second', source: 'cross-conversation', metadata: { fromConversationId: 'other' } } },
+    ], () => {})
+    expect(outcomes).toEqual([{ messageId: 'record-first' }, { messageId: 'record-second' }])
+    expect(h.emitAgentEvent).toHaveBeenCalledOnce()
+    expect(h.emitAgentEvent.mock.calls[0]).toEqual(['agent:input-arrived', 'space-1', 'c1', {
+      live: true, messages: [
+        expect.objectContaining({ content: 'first', source: 'team-message', metadata: { fromMemberName: 'Reviewer', inputMode: 'live', inputReplyId: 'reply' } }),
+        expect.objectContaining({ content: 'second', source: 'cross-conversation', metadata: { fromConversationId: 'other', inputMode: 'live', inputReplyId: 'reply' } }),
+      ],
+    }])
+  })
+
+  it('does not attribute a continuation-gap delivery to an already completed reply', () => {
+    h.conversations.set('c1', { id: 'c1', title: 'One', updatedAt: 'x', messages: [message('done', 'assistant', 'finished')] })
+    h.addMessage.mockImplementation((_space, _conversation, record) => ({ ...record, id: 'late', timestamp: 'now' }))
+    source.deliverMidTurn!('space-1', 'c1', [{ turnInput: 'late', record: { content: 'late', source: 'team-message', metadata: { teamId: 'team' } } }], () => {})
+    expect(h.addMessage.mock.calls[0][2].metadata).toEqual({ teamId: 'team', inputMode: 'live' })
+  })
+
+  it('does not persist refused live deliveries', () => {
+    h.sendIntoLiveTurn.mockReturnValue(false)
+    expect(source.deliverMidTurn!('space-1', 'c1', [{ turnInput: 'report', record: { content: 'report', source: 'team-message', metadata: {} } }], () => {})).toBe(false)
+    expect(h.addMessage).not.toHaveBeenCalled()
+    expect(h.emitAgentEvent).not.toHaveBeenCalled()
+  })
+
+  it('marks every record opening a batch as input to the following turn', async () => {
+    const conv = { id: 'c1', title: 'One', updatedAt: 'x', messages: [] as FakeMessage[] }
+    h.conversations.set('c1', conv)
+    h.sendMessage.mockImplementationOnce(async () => { conv.messages.push(message('opener', 'user', 'first\n\nsecond')) })
+    h.addMessage.mockImplementation((_space, _conversation, record) => ({ ...record, id: 'second', timestamp: 'now' }))
+    await source.dispatchBatch!('space-1', 'c1', ['first', 'second'].map(content => ({
+      turnInput: content, record: { content, source: 'team-message', metadata: { teamId: 'team' } },
+    })))
+    expect(h.updateMessageById).toHaveBeenCalledWith('space-1', 'c1', 'opener', expect.objectContaining({ metadata: { teamId: 'team', inputMode: 'turn' } }))
+    expect(h.addMessage).toHaveBeenCalledWith('space-1', 'c1', expect.objectContaining({ metadata: { teamId: 'team', inputMode: 'turn' } }))
   })
 
   describe('dispatch', () => {

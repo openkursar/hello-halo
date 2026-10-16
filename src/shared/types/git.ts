@@ -80,6 +80,8 @@ export type GitCompareScope =
   | { kind: 'since-review'; snapshot: string }
   /** A branch or commit vs the working tree; `mergeBase` compares from where HEAD forked off it. */
   | { kind: 'revision'; revision: string; mergeBase: boolean }
+  /** A commit vs its first parent; the after side is the commit's own tree. */
+  | { kind: 'commit'; revision: string }
 
 export interface GitChangeList {
   scope: GitCompareScope
@@ -121,6 +123,37 @@ export interface GitRevisionOption {
   subject?: string
   /** ISO date of the commit. */
   date?: string
+}
+
+/** One commit of the graph: what a row draws and what a click compares. */
+export interface GitGraphCommit {
+  oid: string
+  shortOid: string
+  parents: string[]
+  author: string
+  /** Commit time, ISO. */
+  date: string
+  subject: string
+  /** Ref names pointing at this commit, for the row's labels. */
+  refs: string[]
+}
+
+export interface GitCommitGraph {
+  commits: GitGraphCommit[]
+  /** More commits follow the last one returned (a later page). */
+  more: boolean
+}
+
+/** What the graph page asks for. */
+export interface GitGraphQuery {
+  /** A branch or commit to walk from; all refs when absent. */
+  branch?: string
+  /** Substring of the author name, matched by git. */
+  author?: string
+  /** Substring of the commit message, matched by git. */
+  message?: string
+  /** Commits before the first one returned. */
+  skip?: number
 }
 
 export interface GitCommitRequest {
@@ -217,4 +250,8 @@ export const GIT_LIMITS = {
   maxListedFiles: 5_000,
   /** Choices returned for the compare picker. */
   maxRevisionOptions: 60,
+  /** Commits returned per page of the commit graph. */
+  maxGraphCommits: 300,
+  /** Ref labels the graph reads to name branch heads and tags. */
+  maxGraphRefs: 200,
 } as const

@@ -24,6 +24,7 @@ const h = vi.hoisted(() => {
   return {
     state,
     sendAppChatMessage: vi.fn(),
+    injectIntoAppChatBatch: vi.fn((..._args: unknown[]) => true),
     loadChatMessagesForConversation: vi.fn(),
     agentDispose: vi.fn(),
   }
@@ -52,6 +53,8 @@ vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
   loadChatMessagesForConversation: (...args: unknown[]) => h.loadChatMessagesForConversation(...args),
 }))
 vi.mock('../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
+  getAppChatTurnIdentity: () => 'owner',
+  injectIntoAppChatBatch: (...args: unknown[]) => h.injectIntoAppChatBatch(...args),
   isAppChatConversationGenerating: (id: string) => h.state.generating.has(id) || h.state.activeRounds.has(id),
 }))
 vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
@@ -59,6 +62,7 @@ vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
   peekAppChatSink: (id: string) => h.state.sinks.get(id),
 }))
 vi.mock('../../../../src/main/services/agent', () => ({
+  hasPendingSessionInput: () => false,
   v2Sessions: { has: (id: string) => h.state.sessions.has(id) },
   onAgentEvent: (listener: (event: { channel: string; conversationId: string }) => void) => {
     h.state.agentListener = listener
@@ -264,6 +268,7 @@ describe('dispatch', () => {
       conversationId: key,
       message: message.turnInput,
       recorded: { content: 'the words', provenance: { source: 'cross-conversation', metadata: message.record.metadata } },
+      recordedMessages: [{ content: 'the words', provenance: { source: 'cross-conversation', metadata: message.record.metadata } }],
       onMessageAccepted: expect.any(Function),
     })
   })

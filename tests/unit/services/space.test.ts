@@ -47,11 +47,12 @@ describe('Space Service', () => {
     _resetSpaceRegistry()
     _resetActivityState()
     renameFault.failures = 0
+    renameFault.code = 'EPERM'
     await initializeApp()
   })
 
   describe('getHaloSpace', () => {
-    it('should return the Halo temp space', () => {
+    it('should return the Halo temp space', async () => {
       const haloSpace = getHaloSpace()
 
       expect(haloSpace.id).toBe('halo-temp')
@@ -60,7 +61,7 @@ describe('Space Service', () => {
       expect(haloSpace.icon).toBe('sparkles')
     })
 
-    it('should have valid path', () => {
+    it('should have valid path', async () => {
       const haloSpace = getHaloSpace()
 
       expect(haloSpace.path).toBeTruthy()
@@ -70,7 +71,7 @@ describe('Space Service', () => {
   })
 
   describe('listSpaces', () => {
-    it('should return empty array when no custom spaces exist', () => {
+    it('should return empty array when no custom spaces exist', async () => {
       const spaces = listSpaces()
 
       expect(Array.isArray(spaces)).toBe(true)
@@ -162,12 +163,12 @@ describe('Space Service', () => {
       expect(space?.name).toBe('Get Test')
     })
 
-    it('should return null/undefined for non-existent id', () => {
+    it('should return null/undefined for non-existent id', async () => {
       const space = getSpace('non-existent-id')
       expect(space).toBeFalsy() // null or undefined
     })
 
-    it('should return Halo space for halo-temp id', () => {
+    it('should return Halo space for halo-temp id', async () => {
       const space = getSpace('halo-temp')
 
       expect(space).toBeDefined()
@@ -205,7 +206,7 @@ describe('Space Service', () => {
     })
 
     it('fails and keeps the space when the index cannot be written, also after a restart', async () => {
-      const space = createSpace({ name: 'Locked', icon: 'folder' })
+      const space = await createSpace({ name: 'Locked', icon: 'folder' })
       renameFault.failures = Infinity
 
       expect(await deleteSpace(space.id)).toBe(false)
@@ -217,40 +218,59 @@ describe('Space Service', () => {
       expect(listSpaces().map(s => s.id)).toContain(space.id)
     })
 
-    // A retry would get past the single failure and delete, so `false` shows there is none.
-    it('does not retry a locked index: fails, and a later try succeeds', async () => {
-      const space = createSpace({ name: 'Briefly locked', icon: 'folder' })
-      renameFault.failures = 1
+    it('waits out a briefly locked index without blocking, then deletes', async () => {
+      const space = await createSpace({ name: 'Briefly locked', icon: 'folder' })
+      renameFault.failures = 2
+      let otherWorkRan = false
+      setTimeout(() => { otherWorkRan = true }, 0)
+
+      expect(await deleteSpace(space.id)).toBe(true)
+      expect(otherWorkRan).toBe(true)
+      expect(renameFault.failures).toBe(0)
+      _resetSpaceRegistry()
+      expect(listSpaces().map(s => s.id)).not.toContain(space.id)
+      expect(fs.existsSync(space.path)).toBe(false)
+    })
+
+    it('gives up on a lock that outlasts the retries, and a later try succeeds', async () => {
+      const space = await createSpace({ name: 'Long locked', icon: 'folder' })
+      renameFault.failures = 5
 
       expect(await deleteSpace(space.id)).toBe(false)
       expect(renameFault.failures).toBe(0)
       expect(listSpaces().map(s => s.id)).toContain(space.id)
 
       expect(await deleteSpace(space.id)).toBe(true)
-      _resetSpaceRegistry()
-      expect(listSpaces().map(s => s.id)).not.toContain(space.id)
-      expect(fs.existsSync(space.path)).toBe(false)
     })
   })
 
   describe('index write failures', () => {
-    it('a space whose creation cannot be recorded is not created', () => {
+    it('a space whose creation cannot be recorded is not created', async () => {
       expect(listSpaces()).toHaveLength(0) // registry loaded, as at app start
       renameFault.failures = Infinity
-      expect(() => createSpace({ name: 'Unrecorded', icon: 'folder' })).toThrow()
+      await expect(createSpace({ name: 'Unrecorded', icon: 'folder' })).rejects.toThrow()
       expect(listSpaces()).toHaveLength(0)
       expect(fs.readdirSync(getSpacesDir())).toHaveLength(0)
     })
 
-    it('a rename that cannot be recorded is undone', () => {
-      const space = createSpace({ name: 'Before', icon: 'folder' })
+    it('a rename that cannot be recorded is undone', async () => {
+      const space = await createSpace({ name: 'Before', icon: 'folder' })
       renameFault.failures = Infinity
-      expect(updateSpace(space.id, { name: 'After' })).toBeNull()
+      expect(await updateSpace(space.id, { name: 'After' })).toBeNull()
       expect(getSpace(space.id)?.name).toBe('Before')
     })
 
-    it('activity that cannot be recorded is written by the next flush', () => {
-      const space = createSpace({ name: 'Busy', icon: 'folder' })
+    it('a write error that is not a lock fails at once', async () => {
+      expect(listSpaces()).toHaveLength(0) // registry loaded, as at app start
+      renameFault.code = 'ENOSPC'
+      renameFault.failures = 1
+      await expect(createSpace({ name: 'Disk full', icon: 'folder' })).rejects.toThrow('ENOSPC')
+      expect(renameFault.failures).toBe(0)
+      expect(listSpaces()).toHaveLength(0)
+    })
+
+    it('activity that cannot be recorded is written by the next flush', async () => {
+      const space = await createSpace({ name: 'Busy', icon: 'folder' })
       renameFault.failures = Infinity
       touchSpaceActivity(space.id)
       renameFault.failures = 0
@@ -261,7 +281,7 @@ describe('Space Service', () => {
   })
 
   describe('getAllSpacePaths', () => {
-    it('should include temp space path', () => {
+    it('should include temp space path', async () => {
       const paths = getAllSpacePaths()
       const tempPath = getTempSpacePath()
 
@@ -281,8 +301,8 @@ describe('Space Service', () => {
   })
 
   describe('touchSpaceActivity', () => {
-    it('should set lastActiveAt on the space', () => {
-      const space = createSpace({ name: 'Activity Test', icon: 'folder' })
+    it('should set lastActiveAt on the space', async () => {
+      const space = await createSpace({ name: 'Activity Test', icon: 'folder' })
       const before = new Date().toISOString()
 
       touchSpaceActivity(space.id)
@@ -293,8 +313,8 @@ describe('Space Service', () => {
       expect(new Date(updated!.lastActiveAt!).getTime()).toBeGreaterThanOrEqual(new Date(before).getTime())
     })
 
-    it('should update lastActiveAt on subsequent calls', () => {
-      const space = createSpace({ name: 'Multi Touch', icon: 'folder' })
+    it('should update lastActiveAt on subsequent calls', async () => {
+      const space = await createSpace({ name: 'Multi Touch', icon: 'folder' })
 
       touchSpaceActivity(space.id)
       const first = getSpace(space.id)!.lastActiveAt!
@@ -306,14 +326,14 @@ describe('Space Service', () => {
       expect(new Date(second).getTime()).toBeGreaterThanOrEqual(new Date(first).getTime())
     })
 
-    it('should be a no-op for non-existent space', () => {
+    it('should be a no-op for non-existent space', async () => {
       // Should not throw
       expect(() => touchSpaceActivity('non-existent-id')).not.toThrow()
     })
 
-    it('does not override explicit sortOrder', () => {
-      const spaceA = createSpace({ name: 'Space A', icon: 'folder' })
-      const spaceB = createSpace({ name: 'Space B', icon: 'folder' })
+    it('does not override explicit sortOrder', async () => {
+      const spaceA = await createSpace({ name: 'Space A', icon: 'folder' })
+      const spaceB = await createSpace({ name: 'Space B', icon: 'folder' })
 
       // Reset activity state to avoid throttle interference
       _resetActivityState()
@@ -329,7 +349,7 @@ describe('Space Service', () => {
   })
 
   describe('missing spaces', () => {
-    it('should preserve unavailable spaces in the index and mark them missing', () => {
+    it('should preserve unavailable spaces in the index and mark them missing', async () => {
       const haloDir = getHaloDir()
       const indexPath = path.join(haloDir, 'spaces-index.json')
       const missingPath = path.join(globalThis.__HALO_TEST_DIR__, 'external-drive', 'missing-project')
@@ -360,7 +380,7 @@ describe('Space Service', () => {
       expect(persisted.spaces[missingId]).toBeDefined()
     })
 
-    it('should exclude unavailable paths from security allowlist', () => {
+    it('should exclude unavailable paths from security allowlist', async () => {
       const haloDir = getHaloDir()
       const indexPath = path.join(haloDir, 'spaces-index.json')
       const missingPath = path.join(globalThis.__HALO_TEST_DIR__, 'external-drive', 'missing-project')
@@ -388,8 +408,8 @@ describe('Space Service', () => {
   })
 
   describe('flushSpaceActivity', () => {
-    it('should persist dirty activity to disk', () => {
-      const space = createSpace({ name: 'Flush Test', icon: 'folder' })
+    it('should persist dirty activity to disk', async () => {
+      const space = await createSpace({ name: 'Flush Test', icon: 'folder' })
 
       // First touch persists immediately + starts throttle timer
       touchSpaceActivity(space.id)
@@ -408,7 +428,7 @@ describe('Space Service', () => {
       expect(reloaded!.lastActiveAt).toBeDefined()
     })
 
-    it('should be safe to call with no pending activity', () => {
+    it('should be safe to call with no pending activity', async () => {
       expect(() => flushSpaceActivity()).not.toThrow()
     })
   })
@@ -419,7 +439,7 @@ describe('Space Service', () => {
     // internal storage path. Regressions here historically broke outbound
     // file sends for every user with a custom workingDir.
 
-    it('returns the artifacts subdir for halo-temp', () => {
+    it('returns the artifacts subdir for halo-temp', async () => {
       const dir = getSpaceDir('halo-temp')
       const expected = path.join(getTempSpacePath(), 'artifacts')
       expect(dir).toBe(expected)
@@ -449,15 +469,15 @@ describe('Space Service', () => {
       expect(getSpaceDir(space.id)).toBe(space.path)
     })
 
-    it('returns empty string for unknown spaceIds', () => {
+    it('returns empty string for unknown spaceIds', async () => {
       expect(getSpaceDir('does-not-exist')).toBe('')
     })
   })
 
   describe('reorderSpaces + sortOrder', () => {
     it('assigns a smaller sortOrder to newer spaces (new sorts first)', async () => {
-      const a = createSpace({ name: 'A', icon: 'folder' })
-      const b = createSpace({ name: 'B', icon: 'folder' })
+      const a = await createSpace({ name: 'A', icon: 'folder' })
+      const b = await createSpace({ name: 'B', icon: 'folder' })
 
       expect(typeof a.sortOrder).toBe('number')
       expect(typeof b.sortOrder).toBe('number')
@@ -465,22 +485,22 @@ describe('Space Service', () => {
     })
 
     it('sorts by sortOrder when all spaces have it', async () => {
-      const a = createSpace({ name: 'A', icon: 'folder' })
-      const b = createSpace({ name: 'B', icon: 'folder' })
-      const c = createSpace({ name: 'C', icon: 'folder' })
+      const a = await createSpace({ name: 'A', icon: 'folder' })
+      const b = await createSpace({ name: 'B', icon: 'folder' })
+      const c = await createSpace({ name: 'C', icon: 'folder' })
 
       // Reverse the order via reorderSpaces
-      reorderSpaces([c.id, b.id, a.id])
+      await reorderSpaces([c.id, b.id, a.id])
 
       const spaces = listSpaces()
       expect(spaces.map(s => s.name)).toEqual(['C', 'B', 'A'])
     })
 
     it('persisted sortOrder survives a registry reload', async () => {
-      const a = createSpace({ name: 'A', icon: 'folder' })
-      const b = createSpace({ name: 'B', icon: 'folder' })
+      const a = await createSpace({ name: 'A', icon: 'folder' })
+      const b = await createSpace({ name: 'B', icon: 'folder' })
 
-      reorderSpaces([b.id, a.id])
+      await reorderSpaces([b.id, a.id])
 
       _resetSpaceRegistry()
       const spaces = listSpaces()
@@ -488,14 +508,14 @@ describe('Space Service', () => {
     })
 
     it('rejects partial lists and preserves existing order', async () => {
-      const a = createSpace({ name: 'A', icon: 'folder' })
-      const b = createSpace({ name: 'B', icon: 'folder' })
+      const a = await createSpace({ name: 'A', icon: 'folder' })
+      const b = await createSpace({ name: 'B', icon: 'folder' })
 
       // Establish a known order first
-      reorderSpaces([a.id, b.id])
+      await reorderSpaces([a.id, b.id])
 
       // Partial list (3 ids for 2 spaces, with an unknown id) — must be rejected
-      reorderSpaces([b.id, 'unknown-id', a.id])
+      await reorderSpaces([b.id, 'unknown-id', a.id])
 
       // Order unchanged from the successful reorder above
       const spaces = listSpaces()
@@ -503,26 +523,26 @@ describe('Space Service', () => {
     })
 
     it('rejects incomplete lists (fewer ids than spaces)', async () => {
-      const a = createSpace({ name: 'A', icon: 'folder' })
-      const b = createSpace({ name: 'B', icon: 'folder' })
-      const c = createSpace({ name: 'C', icon: 'folder' })
+      const a = await createSpace({ name: 'A', icon: 'folder' })
+      const b = await createSpace({ name: 'B', icon: 'folder' })
+      const c = await createSpace({ name: 'C', icon: 'folder' })
 
-      reorderSpaces([c.id, b.id, a.id])
+      await reorderSpaces([c.id, b.id, a.id])
 
       // Only send 2 of 3 ids — must be rejected, order preserved
-      reorderSpaces([a.id, b.id])
+      await reorderSpaces([a.id, b.id])
 
       const spaces = listSpaces()
       expect(spaces.map(s => s.name)).toEqual(['C', 'B', 'A'])
     })
 
     it('new space created after reorder sorts first', async () => {
-      const a = createSpace({ name: 'A', icon: 'folder' })
-      const b = createSpace({ name: 'B', icon: 'folder' })
+      const a = await createSpace({ name: 'A', icon: 'folder' })
+      const b = await createSpace({ name: 'B', icon: 'folder' })
 
-      reorderSpaces([b.id, a.id])
+      await reorderSpaces([b.id, a.id])
 
-      const c = createSpace({ name: 'C', icon: 'folder' })
+      const c = await createSpace({ name: 'C', icon: 'folder' })
       const spaces = listSpaces()
       expect(spaces.map(s => s.name)).toEqual(['C', 'B', 'A'])
     })
@@ -554,7 +574,7 @@ describe('Space Service', () => {
       _resetSpaceRegistry()
 
       // New space after legacy load — must sort first (matches store prepend)
-      const b = createSpace({ name: 'New B', icon: 'folder' })
+      const b = await createSpace({ name: 'New B', icon: 'folder' })
       const spaces = listSpaces()
       expect(spaces.map(s => s.name)).toEqual(['New B', 'Legacy A'])
 

@@ -136,6 +136,11 @@ export default defineConfig({
       use: { actionTimeout: 10000 }
     },
     {
+      name: 'cli-tools-packaged',
+      testMatch: '**/cli-tools-packaged.spec.ts',
+      use: { actionTimeout: 10000 }
+    },
+    {
       name: 'settings',
       testMatch: '**/settings.spec.ts',
       use: {

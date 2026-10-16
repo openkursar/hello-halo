@@ -55,8 +55,8 @@ interface PendingWait {
 }
 
 const pendingWaits = new Map<string, PendingWait>()
-/** conversationId -> the correlation id the conversation's CURRENTLY RUNNING turn owes an answer to, if any. */
-const activeCorrelationFor = new Map<string, string>()
+/** Every explicit reply the current turn owes, keyed independently by its waiting sender. */
+const activeCorrelationFor = new Map<string, Set<string>>()
 /**
  * conversationId -> who it is currently waiting on. A conversation can hold
  * at most one outstanding wait at a time: it is blocked inside the tool call
@@ -117,9 +117,8 @@ export function registerWait(params: {
     const timer = setTimeout(() => {
       if (pendingWaits.delete(correlationId)) {
         if (waitingOn.get(fromConversationId) === toConversationId) waitingOn.delete(fromConversationId)
-        if (activeCorrelationFor.get(toConversationId) === correlationId) {
-          activeCorrelationFor.delete(toConversationId)
-        }
+        removeActiveCorrelation(toConversationId, correlationId)
+        console.warn(`[ConversationInterop] Reply wait timed out: source=${fromConversationId} target=${toConversationId}`)
         resolve({ status: 'timeout' })
       }
     }, timeoutMs)
@@ -137,9 +136,7 @@ function settleWait(correlationId: string, outcome: WaitOutcome): boolean {
   clearTimeout(wait.timer)
   pendingWaits.delete(correlationId)
   if (waitingOn.get(wait.fromConversationId) === wait.toConversationId) waitingOn.delete(wait.fromConversationId)
-  if (activeCorrelationFor.get(wait.toConversationId) === correlationId) {
-    activeCorrelationFor.delete(wait.toConversationId)
-  }
+  removeActiveCorrelation(wait.toConversationId, correlationId)
   wait.resolve(outcome)
   return true
 }
@@ -165,11 +162,24 @@ export function abandonWait(correlationId: string, outcome: WaitOutcome): void {
  * an honest `no_reply` now. So a stale entry is settled as `no_reply` first.
  */
 export function armActiveCorrelation(conversationId: string, correlationId: string): void {
-  const stale = activeCorrelationFor.get(conversationId)
-  if (stale !== undefined && stale !== correlationId) {
-    settleWait(stale, { status: 'no_reply' })
-  }
-  activeCorrelationFor.set(conversationId, correlationId)
+  const active = activeCorrelationFor.get(conversationId)
+  if (active?.size === 1 && active.has(correlationId)) return
+  clearActiveCorrelation(conversationId)
+  addActiveCorrelation(conversationId, correlationId)
+}
+
+/** Several senders may await distinct explicit replies from the same live turn. */
+export function addActiveCorrelation(conversationId: string, correlationId: string): void {
+  if (!pendingWaits.has(correlationId)) return
+  const active = activeCorrelationFor.get(conversationId) ?? new Set<string>()
+  active.add(correlationId)
+  activeCorrelationFor.set(conversationId, active)
+}
+
+function removeActiveCorrelation(conversationId: string, correlationId: string): void {
+  const active = activeCorrelationFor.get(conversationId)
+  active?.delete(correlationId)
+  if (active?.size === 0) activeCorrelationFor.delete(conversationId)
 }
 
 /**
@@ -182,7 +192,7 @@ export function armActiveCorrelation(conversationId: string, correlationId: stri
 export function clearActiveCorrelation(conversationId: string): void {
   const stale = activeCorrelationFor.get(conversationId)
   activeCorrelationFor.delete(conversationId)
-  if (stale !== undefined) settleWait(stale, { status: 'no_reply' })
+  for (const correlationId of stale ?? []) settleWait(correlationId, { status: 'no_reply' })
 }
 
 /**
@@ -195,13 +205,13 @@ export function clearActiveCorrelation(conversationId: string): void {
  * — never both a tool result and a message.
  */
 export function tryResolveAsReply(fromConversationId: string, toConversationId: string, message: string): boolean {
-  const correlationId = activeCorrelationFor.get(fromConversationId)
-  if (!correlationId) return false
-  const wait = pendingWaits.get(correlationId)
-  if (!wait || wait.toConversationId !== fromConversationId || wait.fromConversationId !== toConversationId) {
-    return false
+  for (const correlationId of activeCorrelationFor.get(fromConversationId) ?? []) {
+    const wait = pendingWaits.get(correlationId)
+    if (wait?.toConversationId === fromConversationId && wait.fromConversationId === toConversationId) {
+      return settleWait(correlationId, { status: 'replied', message })
+    }
   }
-  return settleWait(correlationId, { status: 'replied', message })
+  return false
 }
 
 /**
@@ -211,11 +221,7 @@ export function tryResolveAsReply(fromConversationId: string, toConversationId: 
  * content (see the module doc above).
  */
 export function noteTurnEnded(conversationId: string): void {
-  const owed = activeCorrelationFor.get(conversationId)
-  if (owed) {
-    activeCorrelationFor.delete(conversationId)
-    settleWait(owed, { status: 'no_reply' })
-  }
+  clearActiveCorrelation(conversationId)
   // A wait this conversation was itself blocked in has no reader once its turn
   // is over (stopped, failed). Left open, the target's late answer would be
   // consumed as its reply and never reach the conversation; settled, it is an

@@ -1,5 +1,5 @@
 /**
- * Top bar of a Git changes tab: repository, compare scope, totals, the two
+ * Top bar of a Git changes tab: repository, compare scope, totals, the
  * sub-pages, the diff controls and the file list toggle. Wraps onto two rows
  * on a narrow canvas.
  */
@@ -310,14 +310,17 @@ function RevisionPicker({ spaceId, repoRoot, kind, anchorRef, onClose, onPick }:
 
 function PageSwitch({ page, onPage, full = false, showBadge }: { page: ChangesPage; onPage: (page: ChangesPage) => void; full?: boolean; showBadge: boolean }) {
   const { t } = useTranslation()
-  const pages: ChangesPage[] = ['changes', 'overview']
+  const pages: ChangesPage[] = ['changes', 'overview', 'graph']
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
     e.preventDefault()
-    const next = page === 'changes' ? 'overview' : 'changes'
+    const step = e.key === 'ArrowRight' ? 1 : -1
+    const next = pages[(pages.indexOf(page) + step + pages.length) % pages.length]
     onPage(next)
     ;(e.currentTarget.querySelector(`[data-page="${next}"]`) as HTMLElement | null)?.focus()
   }
+  const label = (item: ChangesPage) =>
+    item === 'changes' ? t('Changes') : item === 'graph' ? t('Graph') : t('Overview & review')
   return (
     <div role="tablist" aria-label={t('Changes')} onKeyDown={onKeyDown} className={`inline-flex shrink-0 rounded-md bg-secondary p-0.5 ${full ? 'w-full' : ''}`}>
       {pages.map((item) => {
@@ -338,7 +341,7 @@ function PageSwitch({ page, onPage, full = false, showBadge }: { page: ChangesPa
               selected ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
             }`}
           >
-            {item === 'changes' ? t('Changes') : t('Overview & review')}
+            {label(item)}
             {item === 'overview' && showBadge && (
               <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">{t('AI')}</span>
             )}

@@ -60,7 +60,9 @@ export function AppBotSessionsView({ appId, spaceId, instanceId }: AppBotSession
         </div>
         <div className="flex-1 min-w-0">
           {selected ? (
-            <ImSessionDetailView appId={appId} spaceId={spaceId} session={selected} />
+            // Keyed per contact: a reused view would keep the previous contact's
+            // messages and graft them onto this transcript.
+            <ImSessionDetailView key={sessionKey(selected)} appId={appId} spaceId={spaceId} session={selected} />
           ) : (
             <div className="h-full flex flex-col items-center justify-center gap-2 text-muted-foreground">
               <MessageSquare className="w-6 h-6 opacity-30" />

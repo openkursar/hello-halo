@@ -32,16 +32,16 @@
  *   6. turn-gate dispatch
  */
 
-import { createTurnGate } from '../../platform/turn-gate'
+import { createTurnGate, TurnGateCapacityError } from '../../platform/turn-gate'
 import type { TurnGate } from '../../platform/turn-gate'
 import type { TranscriptProvenanceMetadata, TranscriptSource } from '../../../shared/types/transcript'
 import { AdmissionRefusal, admitSend } from './admission'
 import { sourceOfConversation } from './source'
-import type { ConversationSource, DispatchOutcome, SourceConversation } from './source'
+import type { ConversationSource, DispatchedMessage, DispatchOutcome, SourceConversation } from './source'
 import { circuitBreaker } from './circuit-breaker'
 import type { CircuitRejectReason } from './circuit-breaker'
 import * as pendingWait from './pending-wait'
-import type { DeliverFailureReason, DeliverResult, WaitOutcome, WaitResult } from './types'
+import type { DeliverFailureReason, DeliverResult, ExternalDeliverResult, WaitOutcome, WaitResult } from './types'
 
 const LOG_TAG = '[ConversationInterop]'
 
@@ -49,7 +49,14 @@ const LOG_TAG = '[ConversationInterop]'
 const TARGET_MAILBOX_CAP = 50
 const DEFAULT_WAIT_TIMEOUT_MS = 120_000
 
+class ConversationUnavailableError extends Error {}
+
 interface DeliveryJob {
+  identity: string | undefined
+  coalescingKey?: string
+  batch?: DeliveryJob[]
+  /** Taken back after a person's stop: the target's transcript already holds its record. */
+  inputRecorded?: boolean
   spaceId: string
   fromConversationId: string
   toConversationId: string
@@ -131,49 +138,14 @@ function renderCooldownNotice(reason: CircuitRejectReason, targetTitle: string, 
   )
 }
 
-/**
- * conversationId -> number of jobs currently sitting in its turn-gate mailbox
- * (never inferred from turn-gate itself — see DESIGN.md for why the cap is
- * a rejection here rather than turn-gate's shed).
- *
- * Staying in step with turn-gate's real mailbox rests on one invariant of it:
- * `deliver()` reaches its `'buffered'` return SYNCHRONOUSLY after enqueuing.
- * That is what guarantees no drain can run between the enqueue and the
- * `incBuffered` below (a drain is only ever reached from a timer, i.e. a
- * macrotask, and the caller's `await` resumes on a microtask first). If
- * turn-gate ever awaits before returning `'buffered'`, a drain could dispatch
- * the job — decrementing a count that has not been incremented yet — and this
- * map would keep a phantom entry forever, since nothing later would decrement
- * it. The end state of that drift is a target permanently stuck at
- * `queue_full`, which is why it is spelled out rather than left to be
- * rediscovered.
- */
-const bufferedCounts = new Map<string, number>()
-
 function bufferedCountFor(conversationId: string): number {
-  return bufferedCounts.get(conversationId) ?? 0
-}
-
-function incBuffered(conversationId: string): void {
-  bufferedCounts.set(conversationId, bufferedCountFor(conversationId) + 1)
-}
-
-/**
- * Safe to call unconditionally at the start of every dispatch: an
- * immediately-dispatched job (never buffered) finds nothing to decrement,
- * since turn-gate only ever dispatches immediately when that conversation's
- * mailbox is empty.
- */
-function decBufferedIfAny(conversationId: string): void {
-  const count = bufferedCountFor(conversationId)
-  if (count <= 1) bufferedCounts.delete(conversationId)
-  else bufferedCounts.set(conversationId, count - 1)
+  return turnGate.bufferedCount(conversationId)
 }
 
 /** The source that owns `conversationId`, or a loud failure: a buffered job can outlive its source's registration. */
 function requireSource(conversationId: string): ConversationSource {
   const source = sourceOfConversation(conversationId)
-  if (!source) throw new Error(`no conversation source owns ${conversationId}`)
+  if (!source) throw new ConversationUnavailableError(`no conversation source owns ${conversationId}`)
   return source
 }
 
@@ -184,13 +156,14 @@ function requireSource(conversationId: string): ConversationSource {
  */
 function requireAdmitted(target: ConversationSource, job: DeliveryJob): void {
   const meta = target.getMeta(job.spaceId, job.toConversationId)
-  if (!meta) throw new Error('the conversation no longer exists')
+  if (!meta) throw new ConversationUnavailableError('the conversation no longer exists')
   const admission = admitSend(target, meta, false)
   if (!admission.ok) throw new AdmissionRefusal(admission.reason, admission.detail)
 }
 
 /** Why an immediate dispatch failed: a refusal keeps its reason, anything else could not be started. */
 function refusedOrUnreachable(err: unknown): { ok: false; reason: DeliverFailureReason; detail?: string } {
+  if (err instanceof TurnGateCapacityError) return { ok: false, reason: 'queue_full' }
   return err instanceof AdmissionRefusal ? { ok: false, reason: err.reason, detail: err.detail } : { ok: false, reason: 'unreachable' }
 }
 
@@ -205,73 +178,86 @@ function tellWaitingSender(job: DeliveryJob, err: unknown): void {
   console.warn(`${LOG_TAG} delivery ${job.fromConversationId}->${job.toConversationId} failed; its waiting sender was told: ${reason}`)
 }
 
-async function dispatchToConversation(_sessionKey: string, job: DeliveryJob): Promise<void> {
-  decBufferedIfAny(job.toConversationId)
-  let target: ConversationSource
-  try {
-    target = requireSource(job.toConversationId)
-    requireAdmitted(target, job)
-  } catch (err) {
-    tellWaitingSender(job, err)
-    throw err
-  }
+function jobsOf(job: DeliveryJob): DeliveryJob[] { return job.batch ?? [job] }
 
-  if (job.external) {
-    const external = job.external
-    // Any prior reply-matching window belongs to a turn that is over now.
-    pendingWait.clearActiveCorrelation(job.toConversationId)
-    const outcome = await target.dispatch(job.spaceId, job.toConversationId, {
-      turnInput: external.turnInput,
-      record: external.persist,
-    })
-    if (outcome.messageId) job.result = { messageId: outcome.messageId }
-    return
-  }
+function messageOf(job: DeliveryJob): DispatchedMessage {
+  return job.inputRecorded ? { ...renderedMessageOf(job), inputRecorded: true } : renderedMessageOf(job)
+}
 
-  circuitBreaker.recordInboundForwardDepth(job.toConversationId, job.forwardDepth)
-  // A queued ask can come up after its sender stopped waiting (timed out): it is
-  // then only a notice, and must not invite an answer nobody will receive.
-  const waitCorrelationId =
-    job.waitCorrelationId && pendingWait.isWaitPending(job.waitCorrelationId) ? job.waitCorrelationId : undefined
-  if (waitCorrelationId) {
-    pendingWait.armActiveCorrelation(job.toConversationId, waitCorrelationId)
-  } else {
-    pendingWait.clearActiveCorrelation(job.toConversationId)
-  }
-
-  // Named as it was when it sent: a queued message can dispatch after its sender is gone (a finished run).
+function renderedMessageOf(job: DeliveryJob): DispatchedMessage {
+  if (job.external) return { turnInput: job.external.turnInput, record: job.external.persist }
+  const waiting = !!job.waitCorrelationId && pendingWait.isWaitPending(job.waitCorrelationId)
   const fromTitle = job.fromTitle ?? lookupMeta(job.spaceId, job.fromConversationId)?.title ?? 'a conversation'
-  // A sender whose source takes no messages cannot be answered, except through a
-  // wait it is blocked in; neither can one that has stopped waiting.
-  const oneWay =
-    !waitCorrelationId &&
-    (!!job.waitCorrelationId || sourceOfConversation(job.fromConversationId)?.capabilities.writable === false)
-
-  let outcome: DispatchOutcome
-  try {
-    outcome = await target.dispatch(job.spaceId, job.toConversationId, {
-      turnInput: renderCrossConversationFrame(
-        fromTitle,
-        job.message,
-        oneWay ? { oneWay: true } : { oneWay: false, replyTarget: waitCorrelationId ? job.fromConversationId : undefined }
-      ),
-      record: {
-        content: job.message,
-        source: 'cross-conversation',
-        metadata: {
-          fromConversationId: job.fromConversationId,
-          fromConversationTitle: fromTitle,
-          summary: job.summary,
-          ...(waitCorrelationId ? { correlationId: waitCorrelationId } : {}),
-          forwardDepth: job.forwardDepth,
-        },
+  const oneWay = !waiting && (!!job.waitCorrelationId || sourceOfConversation(job.fromConversationId)?.capabilities.writable === false)
+  return {
+    turnInput: renderCrossConversationFrame(fromTitle, job.message,
+      oneWay ? { oneWay: true } : { oneWay: false, replyTarget: waiting ? job.fromConversationId : undefined }),
+    record: {
+      content: job.message,
+      source: 'cross-conversation',
+      metadata: {
+        fromConversationId: job.fromConversationId,
+        fromConversationTitle: fromTitle,
+        summary: job.summary,
+        ...(waiting ? { correlationId: job.waitCorrelationId } : {}),
+        forwardDepth: job.forwardDepth,
       },
-    })
+    },
+  }
+}
+
+function recordDelivery(jobs: DeliveryJob[], outcomes: DispatchOutcome[], newTurn: boolean): void {
+  const conversationId = jobs[0].toConversationId
+  if (newTurn) pendingWait.clearActiveCorrelation(conversationId)
+  for (const [index, job] of jobs.entries()) {
+    if (!job.external) {
+      circuitBreaker.recordInboundForwardDepth(conversationId,
+        Math.max(circuitBreaker.getInboundForwardDepth(conversationId), job.forwardDepth))
+    }
+    if (job.waitCorrelationId && pendingWait.isWaitPending(job.waitCorrelationId)) {
+      pendingWait.addActiveCorrelation(conversationId, job.waitCorrelationId)
+    }
+    if (outcomes[index]?.messageId) job.result = { messageId: outcomes[index].messageId! }
+  }
+}
+
+async function dispatchToConversation(_sessionKey: string, job: DeliveryJob): Promise<void> {
+  const jobs = jobsOf(job)
+  try {
+    const target = requireSource(job.toConversationId)
+    for (const item of jobs) requireAdmitted(target, item)
+    const messages = jobs.map(messageOf)
+    // Arm before sending: a warm model may answer while the source completes its acceptance bookkeeping.
+    recordDelivery(jobs, [], true)
+    const outcomes = target.dispatchBatch
+      ? await target.dispatchBatch(job.spaceId, job.toConversationId, messages)
+      : [await target.dispatch(job.spaceId, job.toConversationId, messages[0])]
+    recordDelivery(jobs, outcomes, false)
   } catch (err) {
-    tellWaitingSender(job, err)
+    for (const item of jobs) tellWaitingSender(item, err)
     throw err
   }
-  if (outcome.messageId) job.result = { messageId: outcome.messageId }
+}
+
+function deliverMidTurn(conversationId: string, job: DeliveryJob): boolean {
+  const target = requireSource(conversationId)
+  const jobs = jobsOf(job)
+  for (const item of jobs) requireAdmitted(target, item)
+  if (!target.deliverMidTurn) return false
+  const outcomes = target.deliverMidTurn(job.spaceId, conversationId, jobs.map(messageOf), () => {
+    // Unread when a person stopped the turn: it waits for the conversation's next
+    // turn, its record standing where it arrived.
+    const returned = jobs.map((item): DeliveryJob => ({ ...item, batch: undefined, inputRecorded: true }))
+    turnGate.putBack(conversationId, [returned.length === 1 ? returned[0] : { ...returned[0], batch: returned }])
+  })
+  if (outcomes === false) return false
+  recordDelivery(jobs, outcomes, false)
+  return true
+}
+
+/** A person stopped this conversation: what waits for it neither joins the stopping turn nor starts one. */
+export function holdConversationAfterStop(conversationId: string): void {
+  turnGate.park(conversationId)
 }
 
 function lookupMeta(spaceId: string, conversationId: string): SourceConversation | null {
@@ -337,6 +323,10 @@ const inFlightDispatch = new Map<string, Promise<void>>()
  */
 const activeGeneration = new Map<string, symbol>()
 
+/** Failed starts of a queued message before the sender is told it was not delivered. */
+const MAX_FAILED_DISPATCHES = 3
+const failedDispatches = new WeakMap<DeliveryJob, number>()
+
 function trackedDispatch(sessionKey: string, job: DeliveryJob): Promise<void> {
   const generation = Symbol(sessionKey)
   activeGeneration.set(sessionKey, generation)
@@ -360,10 +350,31 @@ function trackedDispatch(sessionKey: string, job: DeliveryJob): Promise<void> {
 const turnGate: TurnGate<DeliveryJob> = createTurnGate<DeliveryJob>(
   {
     dispatch: trackedDispatch,
+    getJobIdentity: (job) => sourceOfConversation(job.toConversationId)?.dispatchBatch ? job.identity : undefined,
+    getActiveIdentity: (conversationId) => sourceOfConversation(conversationId)?.getActiveIdentity?.(conversationId),
+    mergeJobs: (jobs) => ({ ...jobs[0], batch: jobs.flatMap(jobsOf) }),
+    deliverMidTurn,
     isBusy: (conversationId) => sourceOfConversation(conversationId)?.isBusy(conversationId) ?? false,
   },
   {
     bufferCap: TARGET_MAILBOX_CAP,
+    retryDispatch: (err, job) => {
+      if (err instanceof AdmissionRefusal || err instanceof ConversationUnavailableError) return false
+      // A start that keeps failing (folder gone, engine cannot launch) would
+      // otherwise rerun every recheck forever, writing the message and an error
+      // into the target transcript each time. Give up and tell the sender.
+      let exhausted = false
+      for (const item of jobsOf(job)) {
+        const attempts = (failedDispatches.get(item) ?? 0) + 1
+        failedDispatches.set(item, attempts)
+        if (attempts >= MAX_FAILED_DISPATCHES) exhausted = true
+      }
+      return !exhausted
+    },
+    getCoalescingKey: (job) => job.coalescingKey,
+    onDiscard: (job, reason) => { for (const item of jobsOf(job)) tellWaitingSender(item, new Error(reason)) },
+    // A turn opened only by records the transcript already holds would show its opener twice.
+    canOpenTurn: (job) => jobsOf(job).some((item) => !item.inputRecorded),
     describeJob: (job) => `${job.fromConversationId}->${job.toConversationId}`,
   }
 )
@@ -398,6 +409,10 @@ export async function releaseConversationTurn(conversationId: string): Promise<v
 /** Attempt one buffered dispatch for `conversationId` now that its turn ended — unconditional, see `releaseConversationTurn`. */
 export function drainConversationTurn(conversationId: string): void {
   turnGate.drain(conversationId)
+}
+
+export function notifyConversationTurnReady(conversationId: string): void {
+  turnGate.notifyReady(conversationId)
 }
 
 /**
@@ -539,6 +554,7 @@ export async function deliverToConversation(params: DeliverParams): Promise<Deli
   if (circuitFailure) return { ok: false, reason: circuitFailure }
 
   const job: DeliveryJob = {
+    identity: 'owner',
     spaceId: params.spaceId,
     fromConversationId: params.fromConversationId,
     toConversationId: params.toConversationId,
@@ -550,14 +566,13 @@ export async function deliverToConversation(params: DeliverParams): Promise<Deli
 
   reclaimLeakedReservation(job.toConversationId)
 
-  let disposition: 'dispatched' | 'buffered'
+  let disposition: Awaited<ReturnType<typeof turnGate.deliver>>
   try {
-    disposition = (await turnGate.deliver(job.toConversationId, job, 'buffer')) as 'dispatched' | 'buffered'
+    disposition = (await turnGate.deliver(job.toConversationId, job, 'buffer'))
   } catch (err) {
     return refusedOrUnreachable(err)
   }
   if (disposition === 'buffered') {
-    incBuffered(job.toConversationId)
     return { ok: true, status: 'queued' }
   }
 
@@ -597,6 +612,7 @@ export async function deliverToConversationAndWait(params: DeliverAndWaitParams)
   if (!registered.ok) return { ok: false, reason: 'mutual_wait' }
 
   const job: DeliveryJob = {
+    identity: 'owner',
     spaceId: params.spaceId,
     fromConversationId: params.fromConversationId,
     toConversationId: params.toConversationId,
@@ -610,8 +626,7 @@ export async function deliverToConversationAndWait(params: DeliverAndWaitParams)
   reclaimLeakedReservation(job.toConversationId)
 
   try {
-    const disposition = await turnGate.deliver(job.toConversationId, job, 'buffer')
-    if (disposition === 'buffered') incBuffered(job.toConversationId)
+    await turnGate.deliver(job.toConversationId, job, 'buffer')
   } catch (err) {
     // The dispatch already told the wait why; the same reason is the answer here.
     const outcome: WaitOutcome = { status: 'undelivered', reason: err instanceof Error ? err.message : String(err) }
@@ -628,6 +643,9 @@ export function tryResolveAsReply(fromConversationId: string, toConversationId: 
 }
 
 export interface ExternalDeliverParams {
+  /** Sender authority, independent of the human-readable provenance. */
+  identity?: string
+  coalescingKey?: string
   spaceId: string
   toConversationId: string
   /** What the model reads as this turn's input (already framed by the caller). */
@@ -646,7 +664,7 @@ export interface ExternalDeliverParams {
  * pending-wait matching: the sender's own coordination layer (the team bus)
  * already budgets and receipts these messages.
  */
-export async function deliverExternalMessage(params: ExternalDeliverParams): Promise<DeliverResult> {
+export async function deliverExternalMessage(params: ExternalDeliverParams): Promise<ExternalDeliverResult> {
   const target = sourceOfConversation(params.toConversationId)
   const meta = target?.getMeta(params.spaceId, params.toConversationId)
   if (!target || !meta) return { ok: false, reason: 'not_found' }
@@ -657,6 +675,8 @@ export async function deliverExternalMessage(params: ExternalDeliverParams): Pro
   }
 
   const job: DeliveryJob = {
+    identity: params.identity,
+    coalescingKey: params.coalescingKey,
     spaceId: params.spaceId,
     fromConversationId: '',
     toConversationId: params.toConversationId,
@@ -668,15 +688,14 @@ export async function deliverExternalMessage(params: ExternalDeliverParams): Pro
 
   reclaimLeakedReservation(job.toConversationId)
 
-  let disposition: 'dispatched' | 'buffered'
+  let disposition: Awaited<ReturnType<typeof turnGate.deliver>>
   try {
-    disposition = (await turnGate.deliver(job.toConversationId, job, 'buffer')) as 'dispatched' | 'buffered'
+    disposition = (await turnGate.deliver(job.toConversationId, job, 'buffer'))
   } catch (err) {
     return refusedOrUnreachable(err)
   }
   if (disposition === 'buffered') {
-    incBuffered(job.toConversationId)
     return { ok: true, status: 'queued' }
   }
-  return { ok: true, status: 'delivered', messageId: job.result?.messageId ?? '' }
+  return { ok: true, status: 'delivered', messageId: job.result?.messageId ?? '', joinedTurn: disposition === 'mid_turn' }
 }

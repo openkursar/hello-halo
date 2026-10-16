@@ -7,6 +7,8 @@
  * toolset in the system prompt) regardless of how many toolsets exist.
  */
 
+import type { AgentModelSelection } from '../../../../shared/types/ai-sources'
+
 /**
  * Who triggered a toolset open/close. 'system' marks an automatic open by the
  * runtime itself (e.g. the non-vision image fallback opening OCR) — distinct
@@ -19,6 +21,8 @@ export interface ToolsetScope {
   spaceId: string
   conversationId: string
   workDir: string
+  /** Captured with the session, not the next turn's pending model selection. */
+  modelSelection?: AgentModelSelection
 }
 
 /**

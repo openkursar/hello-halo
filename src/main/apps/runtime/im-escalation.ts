@@ -71,6 +71,9 @@ export function deliverEscalationToIm(entry: ActivityEntry, appName: string): vo
               message: question,
               action: { kind: 'answer-question', appId: entry.appId, entryId: entry.id },
             })
+            void import('./pending-relay-delivery')
+              .then(({ offerPendingRelaysToLiveTurn }) => offerPendingRelaysToLiveTurn(targetKey, session))
+              .catch(error => console.warn(`${LOG_TAG} Live question context unavailable; retained: target=${targetKey}`, error))
           } else {
             console.warn(`${LOG_TAG} ${tag} sent to ${targetKey} without relay context: spool is unavailable`)
           }

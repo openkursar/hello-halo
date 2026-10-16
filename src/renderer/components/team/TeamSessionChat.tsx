@@ -10,9 +10,11 @@ import { invalidateTeamSessionHistory, loadTeamSessionHistory, matchesTeamHistor
  * chat engine lives here once.
  */
 
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
 import { Loader2, AlertCircle, LockKeyhole, MessageSquareMore } from 'lucide-react'
 import { api } from '../../api'
+import { injectTeamSessionMessage } from './session-input'
+import { mergeArrivingMessages, withoutLiveInputs, withStoppedInputs } from '../../utils/live-inputs'
 import { usePeopleViewStore } from '../../stores/people-view.store'
 import { useChatStore } from '../../stores/chat.store'
 import { MessageRow } from '../chat/MessageRow'
@@ -109,10 +111,17 @@ export function TeamSessionChat({
   const answerQuestion = useChatStore(s => s.answerQuestion)
   const {
     isGenerating, streamingContent, isStreaming, thoughts, isThinking, compactInfo,
-    pendingQuestion, error, errorType, textBlockVersion, apiRetry,
+    pendingQuestion, error, errorType, textBlockVersion, apiRetry, liveInputs,
   } = session
 
-  const backgroundTurn = isBackgroundTurn?.(messages) ?? false
+  const quietMessages = isGenerating ? withoutLiveInputs(messages, liveInputs ?? []) : messages
+  const backgroundTurn = isBackgroundTurn?.(quietMessages) ?? false
+  // A turn this view does not stream shows only what the owner added to it.
+  const ownAdditions = useMemo(() => (liveInputs ?? [])
+    .filter(({ message }) => message.source === 'injection')
+    .map(({ message }) => ({ message, textBlockVersion: 0, textOffset: 0 })), [liveInputs])
+  const visibleMessages = backgroundTurn && isGenerating ? withoutLiveInputs(messages, ownAdditions) : quietMessages
+  const hasLiveInputs = isGenerating && (backgroundTurn ? ownAdditions : liveInputs ?? []).length > 0
   const follower = useStickToBottom({ live: isGenerating && !backgroundTurn })
   const { scroller, scrollToBottom, detach, isFollowing } = follower
 
@@ -294,6 +303,16 @@ export function TeamSessionChat({
     })
   }, [teamId, appId, loadMessages])
 
+  useEffect(() => api.onAgentInputArrived(event => {
+    if (event.conversationId !== conversationId) return
+    setMessages(prior => mergeArrivingMessages(prior, event.messages))
+    setLoadState('loaded')
+  }), [conversationId])
+
+  useEffect(() => api.onAgentInputStopped(event => {
+    if (event.conversationId === conversationId) setMessages(prior => withStoppedInputs(prior, event.messages))
+  }), [conversationId])
+
   const markSendFailed = useCallback((messageId: string, reason: string) => {
     // The turn never started: release the latch, or the next turn started
     // elsewhere is mistaken for ours and its trigger goes unread.
@@ -334,12 +353,15 @@ export function TeamSessionChat({
     }
     const convId = buildTeamSessionKey(appId, teamId, eid)
 
-    resetSession(convId)
-    ownTurnRef.current = true
+    // An owner message may wait behind an external turn; retain that turn's live stream.
+    if (!useChatStore.getState().getSession(convId).isGenerating) {
+      resetSession(convId)
+      ownTurnRef.current = true
+    }
     // A new send answers the previous one's notice, whatever it said.
     setDeliveredNoReply(null)
     const userMsg: Message = {
-      id: `user-${Date.now()}`,
+      id: `pending-user-${Date.now()}`,
       role: 'user',
       content,
       timestamp: new Date().toISOString(),
@@ -418,6 +440,20 @@ export function TeamSessionChat({
     }
   }, [appId, spaceId, teamId, conversationId, epochId, ensureEpochId, isRemote, ownerName, resetSession, scrollToBottom, markSendFailed, t])
 
+  const handleInject = useCallback(async (content: string, references?: ContentReference[]) => {
+    if (isRemote || readonly || !epochId) return false
+    try {
+      return await injectTeamSessionMessage(
+        { appId, conversationId, message: content, ...(references?.length ? { references } : {}) },
+        () => handleSend(content, undefined, undefined, references?.length ? { references } : undefined)
+      )
+    } catch (error) {
+      useChatStore.getState().setSessionError(conversationId,
+        error instanceof Error ? error.message : t('Failed to add message'))
+      return false
+    }
+  }, [appId, conversationId, epochId, isRemote, readonly, handleSend, t])
+
   const handleStop = useCallback(async () => {
     // Settle the UI first and unconditionally. The abort may be swallowed
     // downstream (a killed subprocess emits no completion) or answered only
@@ -470,6 +506,7 @@ export function TeamSessionChat({
 
   const streamingSection = <StreamingSection
     streamingContent={streamingContent}
+    liveInputs={liveInputs}
     isStreaming={isStreaming}
     thoughts={thoughts}
     isThinking={isThinking}
@@ -524,18 +561,18 @@ export function TeamSessionChat({
               </div>
             )}
 
-            {(loadState !== 'error' || messages.length > 0) && (renderMessages ? renderMessages(messages, hasStreaming ? thoughts : []) : messages.map(message => (
-              <div key={message.id} className={transcriptRowClass(message)}>
+            {(loadState !== 'error' || messages.length > 0) && (renderMessages ? renderMessages(visibleMessages, hasStreaming ? thoughts : []) : visibleMessages.map(message => (
+              <div key={message.clientKey ?? message.id} className={transcriptRowClass(message)}>
                 <MessageRow message={message} hideBrowserLiveView hideTerminalOpen />
               </div>
             )))}
 
-            {(hasStreaming || showRelayedTranscript || pendingQuestion) && <div className="mt-4">{readonlyQuestion ?? (isBackgroundTurn?.(messages)
-              ? pendingQuestion && <StreamingSection streamingContent="" isStreaming={false} thoughts={[]} isThinking={false} textBlockVersion={0} showBrowserViewButton={false} pendingQuestion={pendingQuestion} onAnswerQuestion={handleAnswerQuestion} />
+            {(hasStreaming || hasLiveInputs || showRelayedTranscript || pendingQuestion) && <div className="mt-4">{readonlyQuestion ?? (backgroundTurn
+              ? (pendingQuestion || hasLiveInputs) && <StreamingSection streamingContent="" isStreaming={false} thoughts={[]} isThinking={false} textBlockVersion={0} liveInputs={hasLiveInputs ? ownAdditions : undefined} showBrowserViewButton={false} pendingQuestion={pendingQuestion} onAnswerQuestion={handleAnswerQuestion} />
               : streamingSection)}</div>}
             {hasStreaming && renderAfterStreaming?.(thoughts)}
 
-            {showRelayedTranscript && !isBackgroundTurn?.(messages) && (
+            {showRelayedTranscript && !backgroundTurn && (
               <p className="pb-4 pt-1 text-center text-xs text-muted-foreground/60">
                 {t('This is what they did just now.')}
               </p>
@@ -637,6 +674,7 @@ export function TeamSessionChat({
             hideToolsetControls
             hideKnowledgeControls
             onSend={handleSend}
+            onInject={isRemote ? undefined : handleInject}
             onStop={handleStop}
             isGenerating={isGenerating}
             placeholder={placeholder ?? t('Type a message…')}

@@ -28,6 +28,8 @@ export {
 } from './delivery'
 export { deliverToConversationAndWait } from './delivery'
 export { deliverExternalMessage, type ExternalDeliverParams } from './delivery'
+/** A person stopped this conversation without reaching its engine (a message still on its way): hold its waiting mail. */
+export { holdConversationAfterStop } from './delivery'
 export { circuitBreaker, DEFAULT_CIRCUIT_LIMITS } from './circuit-breaker'
 export type { CircuitLimits, CircuitBreachEvent, CircuitRejectReason } from './circuit-breaker'
 export type {
@@ -40,6 +42,7 @@ export type {
   DeliveryStatus,
   DeliverFailureReason,
   DeliverResult,
+  ExternalDeliverResult,
   WaitOutcome,
   WaitFailureReason,
   WaitResult,

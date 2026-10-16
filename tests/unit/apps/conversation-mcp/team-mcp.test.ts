@@ -28,6 +28,7 @@ function toolsFor(service: any, runtime: any = null) {
     spaceId: 'space-1',
     conversationId: 'conversation-1',
     workDir: '/tmp/space-1',
+    modelSelection: { modelSourceId: 'parent-source', modelId: 'parent-model' },
   }) as unknown as { tools: Array<{ name: string; handler: Function }> }
   return new Map(server.tools.map(tool => [tool.name, tool.handler]))
 }
@@ -89,10 +90,32 @@ describe('Space Team MCP', () => {
     })
 
     expect(createCollab).toHaveBeenCalledWith(
-      expect.objectContaining({ owningSpaceId: 'space-1', conversationId: 'conversation-1' })
+      expect.objectContaining({ owningSpaceId: 'space-1', conversationId: 'conversation-1',
+        modelSelection: { modelSourceId: 'parent-source', modelId: 'parent-model' } })
     )
     expect(result.content[0].text).toContain('Research crew')
     expect(result.isError).toBeUndefined()
+  })
+
+  it('collab_start refuses when the session captured no coordinator model', async () => {
+    const createCollab = vi.fn()
+    serviceRef.current = { createCollab }
+    const server = createSpaceTeamMcpServer({
+      spaceId: 'space-1',
+      conversationId: 'conversation-1',
+      workDir: '/tmp/space-1',
+    }) as unknown as { tools: Array<{ name: string; handler: Function }> }
+    const start = server.tools.find(tool => tool.name === 'collab_start')!.handler
+
+    const result = await start({
+      name: 'Crew',
+      goal: 'Review',
+      members: [{ memberName: 'reviewer', role: 'Reviewer', responsibility: 'Review' }],
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('coordinator model is unavailable')
+    expect(createCollab).not.toHaveBeenCalled()
   })
 
   it('collab_start tells the coordinator where its team folder is', async () => {

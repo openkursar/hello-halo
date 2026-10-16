@@ -8,6 +8,10 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
+vi.mock('react', async original => ({
+  ...await original<typeof import('react')>(),
+  useMemo: (compute: () => unknown) => compute(),
+}))
 vi.mock('../../../src/renderer/i18n', () => ({
   useTranslation: () => ({
     t: (text: string, values?: Record<string, string>) => text.replace(/\{\{(\w+)\}\}/g, (_, key: string) => values?.[key] ?? ''),
@@ -44,7 +48,7 @@ function text(tree: unknown): string[] {
   return nodes(tree).flatMap(node => [node.props?.children].flat(Infinity)).filter((child): child is string => typeof child === 'string')
 }
 
-/** MessageRow is memoized; its render function holds no hooks. */
+/** Calls the memoized row's render function directly; useMemo is mocked above to compute inline. */
 function row(message: Message): unknown {
   return (MessageRow as unknown as { type: (props: { message: Message }) => unknown }).type({ message })
 }

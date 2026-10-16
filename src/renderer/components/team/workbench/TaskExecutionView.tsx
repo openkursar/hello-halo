@@ -62,7 +62,7 @@ export function TaskExecutionView({ teamId, epochId, appId, spaceId, remote }: {
       return <details key={turn.id} onToggle={event => { const open = event.currentTarget.open; setExpanded(current => { const next = new Set(current); if (open) next.add(turn.id); else next.delete(turn.id); return next }) }} className="rounded-xl border border-border bg-background p-3">
         <summary className="cursor-pointer text-xs"><span className="font-medium">{label}</span><TaskTimestamp value={turn.input?.timestamp ?? result?.timestamp} recordId={turn.id} format="datetime" className="ml-2 text-muted-foreground" /><span className="mt-2 block line-clamp-2 break-words leading-5 text-muted-foreground">{result?.error || result?.content || t('View execution')}</span></summary>
         {expanded.has(turn.id) && <div className="mt-3 min-w-0 space-y-3 border-t border-border pt-3 [overflow-wrap:anywhere]">
-          {turn.input && <details className="rounded-lg bg-secondary/30 p-3"><summary className="cursor-pointer text-xs text-muted-foreground">{t('View original input')}</summary><p className="mt-2 whitespace-pre-wrap text-xs leading-5">{turn.input.content}</p></details>}
+          {turn.input && <details className="rounded-lg bg-secondary/30 p-3"><summary className="cursor-pointer text-xs text-muted-foreground">{t('View original input')}</summary>{turn.inputs.map((input, index) => <p key={input.id} className={`mt-2 whitespace-pre-wrap text-xs leading-5 ${index > 0 ? 'border-t border-border-faint pt-2' : ''}`}>{input.content}</p>)}</details>}
           {turn.outputs.map(message => <MessageRow key={message.id} message={message} hideBrowserLiveView hideTerminalOpen defaultThoughtsExpanded />)}
         </div>}
       </details>

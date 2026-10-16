@@ -20,6 +20,9 @@ import { tags } from '@lezer/highlight'
 // Editor Theme (Structure & Colors)
 // ============================================
 
+/** Monospace stack of the CodeMirror editors (files and diffs); Windows reaches Cascadia Mono or Consolas before Courier New. */
+export const EDITOR_FONT_FAMILY = "'SF Mono', 'Fira Code', 'JetBrains Mono', Menlo, Monaco, 'Cascadia Mono', Consolas, 'Courier New', monospace"
+
 /**
  * Base editor theme using Halo CSS variables
  * Uses CSS variables that automatically adapt to light/dark mode
@@ -30,7 +33,7 @@ export const haloEditorTheme = EditorView.theme(
     '&': {
       height: '100%',
       fontSize: '13px',
-      fontFamily: "'SF Mono', 'Fira Code', 'JetBrains Mono', Menlo, Monaco, 'Courier New', monospace",
+      fontFamily: EDITOR_FONT_FAMILY,
       backgroundColor: 'hsl(var(--background))',
       color: 'hsl(var(--foreground))',
     },

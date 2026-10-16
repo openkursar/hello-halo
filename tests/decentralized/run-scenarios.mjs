@@ -17,6 +17,7 @@
 
 import fs from 'fs'
 import path from 'path'
+import { randomUUID } from 'crypto'
 import {
   PROJECT_ROOT,
   clusterStart,
@@ -71,6 +72,24 @@ async function waitPresence(host, officeId, n, timeoutMs = 30_000) {
     },
     { timeoutMs, intervalMs: 1500 },
   )
+}
+
+function consistentReplyAfter(chats, marker) {
+  if (chats.length === 0 || chats.some(chat => chat.status !== 200 || chat.error || !Array.isArray(chat.messages))) return null
+  const replies = chats.map(({ messages }) => {
+    const inputIndex = messages.findIndex(message =>
+      (message.role === 'user' || message.role === 'system')
+      && typeof message.content === 'string' && message.content.includes(marker))
+    if (inputIndex < 0) return null
+    return messages.slice(inputIndex + 1).find(message => message.role === 'assistant'
+      && message.source !== 'push' && !message.error
+      && typeof message.content === 'string' && message.content.trim().length > 0) ?? null
+  })
+  if (replies.some(reply => !reply)) return null
+  const signatures = chats.map(chat => JSON.stringify(chat.messages.map(message => [message.role, message.content])))
+  if (!signatures.every(signature => signature === signatures[0])) return null
+  if (!replies.every(reply => reply.content === replies[0].content)) return null
+  return { lengths: chats.map(chat => chat.messages.length), replyChars: replies[0].content.trim().length }
 }
 
 /** Build a host office and have `joiners` join it. Returns { officeId, inviteToken, inviteJti, broughtAppIds }. */
@@ -561,18 +580,14 @@ async function categoryG(host, joiner, hasModel) {
     } else {
       await apiOk(host, 'POST', `/api/teams/${office.officeId}/run`)
       await sleep(2000)
-      const send = await api(host, 'POST', `/api/teams/${office.officeId}/members/${remote.appId}/send`, { message: 'Hello, please reply briefly.' })
-      const persisted = await pollUntil(async () => {
+      const marker = `[G2 history ${randomUUID()}]`
+      const send = await api(host, 'POST', `/api/teams/${office.officeId}/members/${remote.appId}/send`, { message: `${marker} Hello, please reply briefly.` })
+      const accepted = send.status === 200 && send.json?.success !== false
+      const persisted = accepted && await pollUntil(async () => {
         const chats = await chatOnAll([host, joiner], office.officeId, remote.appId)
-        const bothHave = chats.every((c) => (c.messages ?? []).length > 0)
-        const lens = chats.map((c) => (c.messages ?? []).length)
-        // CONTENT-level agreement, not just length: a replica that froze a
-        // provisional last message has equal length but truncated text — the
-        // "final text missing on other nodes" bug this must catch.
-        const sigs = chats.map((c) => JSON.stringify((c.messages ?? []).map((m) => [m.role, m.content])))
-        return bothHave && sigs.every((s) => s === sigs[0]) ? lens : null
+        return consistentReplyAfter(chats, marker)
       }, { timeoutMs: 90_000, intervalMs: 3000 })
-      reporter[persisted ? 'pass' : 'fail']('G2', persisted ? `message+reply content-consistent, both nodes read ${persisted[0]} msgs` : `transcript not persisted/consistent (send status=${send.status})`)
+      reporter[persisted ? 'pass' : 'fail']('G2', persisted ? `current message+assistant reply content-consistent, both nodes read ${persisted.lengths[0]} msgs, replyChars=${persisted.replyChars}` : `no consistent assistant reply after current message (send status=${send.status})`)
     }
   }
 
@@ -630,18 +645,14 @@ async function categoryH(host, joiners, hasModel) {
   const localHost = hostMs.find((m) => m.origin !== 'remote' && !m.isLead) ?? hostMs.find((m) => m.origin !== 'remote')
 
   async function dispatchAndCheck(senderNode, targetAppId, label) {
-    const send = await api(senderNode, 'POST', `/api/teams/${office.officeId}/members/${targetAppId}/send`, { message: `[${label}] Please acknowledge briefly.` })
+    const marker = `[${label} ${randomUUID()}]`
+    const send = await api(senderNode, 'POST', `/api/teams/${office.officeId}/members/${targetAppId}/send`, { message: `${marker} Please acknowledge briefly.` })
     if (send.status !== 200 || send.json?.success === false) return { ok: false, why: `send status=${send.status} err=${send.json?.error}` }
     const got = await pollUntil(async () => {
       const chats = await chatOnAll([host, ...parts], office.officeId, targetAppId)
-      const lens = chats.map((c) => (c.messages ?? []).length)
-      // Content-level agreement (see G2): equal lengths can hide a frozen
-      // provisional last message on a replica.
-      const sigs = chats.map((c) => JSON.stringify((c.messages ?? []).map((m) => [m.role, m.content])))
-      const consistent = sigs.every((s) => s === sigs[0])
-      return lens[0] > 0 && consistent ? lens : null
+      return consistentReplyAfter(chats, marker)
     }, { timeoutMs: 90_000, intervalMs: 3000 })
-    return { ok: !!got, why: got ? `transcript content-consistent len=${got[0]} across nodes` : 'no consistent reply within 90s' }
+    return { ok: !!got, why: got ? `current message+assistant reply content-consistent len=${got.lengths[0]} across nodes, replyChars=${got.replyChars}` : 'no consistent assistant reply after current message within 90s' }
   }
 
   if (want('H1')) {
@@ -1038,6 +1049,7 @@ function writeResults(manifest, hasModel) {
   fs.writeFileSync(out, lines.join('\n'))
   console.log(`\n=== TALLY: total=${t.total} PASS=${t.PASS} FAIL=${t.FAIL} PARTIAL=${t.PARTIAL} SKIP=${t.SKIP} ===`)
   console.log(`=== Wrote ${out} ===`)
+  if (t.FAIL > 0) process.exitCode = 1
 }
 
 main().catch((err) => {

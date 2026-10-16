@@ -13,7 +13,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 const { v2Sessions } = vi.hoisted(() => ({ v2Sessions: new Map<string, any>() }))
-const { writeTrigger } = vi.hoisted(() => ({ writeTrigger: vi.fn() }))
+const { writeTrigger, livePreparation, announceLiveInputs } = vi.hoisted(() => ({
+  writeTrigger: vi.fn(),
+  announceLiveInputs: vi.fn(),
+  livePreparation: { handler: undefined as undefined | ((text: string, images?: unknown[]) => unknown) },
+}))
 const { rounds, consumers } = vi.hoisted(() => ({
   rounds: new Set<string>(),
   consumers: new Map<string, any>(),
@@ -24,6 +28,8 @@ const { sinkEvents } = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
+  activeSessions: new Map(),
+  hasPendingSessionInput: () => false,
   v2Sessions,
   getConsumerHandle: (conversationId: string) => consumers.get(conversationId),
 }))
@@ -31,7 +37,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
 vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
   hasActiveAppChatRound: (conversationId: string) => rounds.has(conversationId),
   peekAppChatSink: (conversationId: string) =>
-    conversationId === 'convo-with-sink' ? { writeUserMessage: writeTrigger } : undefined,
+    conversationId === 'convo-with-sink' ? { writeUserMessage: writeTrigger, announceLiveInputs, getTurnIdentity: () => 'owner', get prepareLiveInput() { return livePreparation.handler } } : undefined,
   onAppChatRoundChange: (listener: (conversationId: string) => void) => {
     sinkEvents.emit = listener
     return () => {}
@@ -40,9 +46,11 @@ vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
 
 import {
   beginAppChatTurnStart,
+  refreshAppChatTurnStarts,
   cancelAppChatTurnStarts,
   getStartingAppChatConversations,
   injectIntoAppChat,
+  injectIntoAppChatBatch,
   injectIntoAppChatWhenLive,
   isAppChatConversationGenerating,
   isAppChatTurnDispatched,
@@ -53,7 +61,7 @@ const CONVO = 'convo-with-sink'
 
 /** A conversation with a live session AND a turn the consumer is processing. */
 function liveTurn(conversationId: string, send: (text: string) => void): void {
-  v2Sessions.set(conversationId, { session: { send }, spaceId: 'space-1' })
+  v2Sessions.set(conversationId, { session: { send, sendIntoLiveTurn: (text: string) => { send(text); return true } }, spaceId: 'space-1' })
   consumers.set(conversationId, { isRunning: true, getActiveSessionState: () => ({}) })
 }
 
@@ -159,7 +167,7 @@ describe('injectIntoAppChat', () => {
     // nothing is listening — text sent then goes nowhere while the caller is
     // told it arrived. Late is recoverable; "delivered but never arrived" is not.
     const send = vi.fn()
-    v2Sessions.set(CONVO, { session: { send }, spaceId: 'space-1' })
+    v2Sessions.set(CONVO, { session: { send, sendIntoLiveTurn: (text: string) => { send(text); return true } }, spaceId: 'space-1' })
     consumers.set(CONVO, { isRunning: true, getActiveSessionState: () => null })
 
     expect(injectIntoAppChat(CONVO, 'x')).toBe(false)
@@ -235,13 +243,13 @@ describe('a message on its way to the engine', () => {
 
   it('is told to send nothing when stopped, and keeps holding the conversation until it unwinds', () => {
     const start = beginAppChatTurnStart(CONVO)
-    expect(cancelAppChatTurnStarts(CONVO)).toBe(true)
+    expect(cancelAppChatTurnStarts(CONVO, 'user')).toBe(true)
     expect(start.cancelled).toBe(true)
     // Whatever arrives meanwhile waits behind it instead of starting beside it.
     expect(isAppChatConversationGenerating(CONVO)).toBe(true)
     start.end()
     expect(isAppChatConversationGenerating(CONVO)).toBe(false)
-    expect(cancelAppChatTurnStarts(CONVO)).toBe(false)
+    expect(cancelAppChatTurnStarts(CONVO, 'user')).toBe(false)
   })
 })
 
@@ -332,7 +340,7 @@ describe('injectIntoAppChatWhenLive — a person adding to a turn that may not h
     const send = vi.fn()
     const outcome = injectIntoAppChatWhenLive(CONVO, 'also check the totals')
 
-    cancelAppChatTurnStarts(CONVO)
+    cancelAppChatTurnStarts(CONVO, 'user')
 
     expect(await outcome).toBe('stopped')
     start.end()
@@ -362,7 +370,7 @@ describe('onAppChatConversationChange', () => {
 
     const start = beginAppChatTurnStart(CONVO)
     expect(changed).toEqual([])
-    cancelAppChatTurnStarts(CONVO)
+    cancelAppChatTurnStarts(CONVO, 'user')
     start.end()
     start.end()
     sinkEvents.emit(CONVO)
@@ -384,5 +392,70 @@ describe('onAppChatConversationChange', () => {
     second()
 
     expect(changed).toEqual([CONVO])
+  })
+})
+
+
+describe('live app-chat input preparation', () => {
+  beforeEach(() => {
+    rounds.clear()
+    consumers.clear()
+    v2Sessions.clear()
+    writeTrigger.mockReset()
+  })
+  afterEach(() => { livePreparation.handler = undefined })
+
+  it('sends prepared text to the engine while keeping the original content and images in the transcript', () => {
+    const send = vi.fn()
+    liveTurn(CONVO, send)
+    livePreparation.handler = () => ({ text: 'use OCR on saved-image.png' })
+    const images = [{ id: 'img', type: 'image' as const, mediaType: 'image/png' as const, data: 'aGVsbG8=' }]
+    expect(injectIntoAppChatBatch(CONVO, [{ text: 'read this', images }], () => {})).toBe(true)
+    expect(send).toHaveBeenCalledWith('use OCR on saved-image.png')
+    expect(writeTrigger).toHaveBeenCalledWith('read this', images, undefined, undefined, undefined)
+  })
+
+  it('retains a message that needs a new permission envelope without sending or recording it', () => {
+    const send = vi.fn()
+    liveTurn(CONVO, send)
+    livePreparation.handler = () => false
+    expect(injectIntoAppChatBatch(CONVO, [{ text: 'new attachment' }], () => {})).toBe(false)
+    expect(send).not.toHaveBeenCalled()
+    expect(writeTrigger).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('preparation retirement', () => {
+  beforeEach(() => { consumers.clear(); rounds.clear(); v2Sessions.clear() })
+  it('releases an unavailable acquired instance without cancelling its successor', () => {
+    const first = beginAppChatTurnStart(CONVO)
+    let usable = true
+    const retire = vi.fn(() => { first.releaseSession(); first.end() })
+    first.bindSession({ get isUsable() { return usable } }, retire)
+    expect(isAppChatConversationGenerating(CONVO)).toBe(true)
+    usable = false
+    refreshAppChatTurnStarts(CONVO)
+    expect(retire).toHaveBeenCalledOnce()
+    expect(first.cancelled).toBe(false)
+    expect(isAppChatConversationGenerating(CONVO)).toBe(false)
+    const successor = beginAppChatTurnStart(CONVO)
+    first.end()
+    expect(isAppChatConversationGenerating(CONVO)).toBe(true)
+    successor.end()
+  })
+})
+
+
+describe('accepted live record announcements', () => {
+  it('announces an owner addition using its original visible record', () => {
+    const send = vi.fn()
+    liveTurn(CONVO, send)
+    const record = { id: 'pending-live-visible', role: 'user', source: 'injection', content: 'original text', timestamp: '2026-10-09T10:00:00.000Z' }
+    writeTrigger.mockReturnValueOnce(record)
+    announceLiveInputs.mockClear()
+    expect(injectIntoAppChat(CONVO, 'original text', { source: 'injection' })).toBe(true)
+    expect(announceLiveInputs).toHaveBeenCalledWith([record])
+    expect(send).toHaveBeenCalledWith('original text')
   })
 })

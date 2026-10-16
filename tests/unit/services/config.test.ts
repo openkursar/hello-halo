@@ -14,6 +14,11 @@ vi.mock('../../../src/main/foundation/credential-safety', () => ({
   isCredentialAtRestSafe: vi.fn(() => false),
 }))
 
+vi.mock('../../../src/main/foundation/product-config', async original => ({
+  ...await original<typeof import('../../../src/main/foundation/product-config')>(),
+  getProductFederationGatewayUrl: vi.fn(),
+}))
+
 // Import after mocks are set up
 import {
   getConfig,
@@ -24,8 +29,10 @@ import {
   getCredentialsGeneration,
   onApiConfigChange,
   migrateCredentialEncryption,
-  getCredentialDecodeFailures
+  getCredentialDecodeFailures,
+  getFederationGatewayUrl
 } from '../../../src/main/foundation/config.service'
+import { getProductFederationGatewayUrl } from '../../../src/main/foundation/product-config'
 import { isCredentialAtRestSafe } from '../../../src/main/foundation/credential-safety'
 import {
   decodeFromStorage,
@@ -163,6 +170,62 @@ describe('Config Service', () => {
 
       const config = getConfig()
       expect(config.mcpServers).toEqual({ server2: { command: 'cmd2' } })
+    })
+  })
+
+  describe('federation gateway defaults', () => {
+    const productUrl = 'https://relay.example.test/'
+
+    beforeEach(() => {
+      vi.mocked(getProductFederationGatewayUrl).mockReturnValue(productUrl)
+    })
+
+    afterEach(() => {
+      vi.mocked(getProductFederationGatewayUrl).mockReset()
+    })
+
+    it('uses the build gateway on first launch without creating user settings', () => {
+      expect(getFederationGatewayUrl()).toBe(productUrl)
+      expect(getConfig().federation).toBeUndefined()
+      expect(fs.existsSync(getConfigPath())).toBe(false)
+    })
+
+    it.each([undefined, '', '   '])('inherits the build default for an existing override of %s without rewriting it', gatewayUrl => {
+      const saved = JSON.stringify({ federation: { gatewayUrl }, appearance: { theme: 'light' } })
+      fs.writeFileSync(getConfigPath(), saved)
+
+      expect(getFederationGatewayUrl()).toBe(productUrl)
+      expect(fs.readFileSync(getConfigPath(), 'utf8')).toBe(saved)
+      expect(getConfig().federation?.gatewayUrl).toBe(gatewayUrl)
+    })
+
+    it('preserves and prioritizes a custom gateway', () => {
+      const saved = JSON.stringify({ federation: { gatewayUrl: ' https://custom.example.test/ ' } })
+      fs.writeFileSync(getConfigPath(), saved)
+
+      expect(getFederationGatewayUrl()).toBe('https://custom.example.test/')
+      expect(fs.readFileSync(getConfigPath(), 'utf8')).toBe(saved)
+    })
+
+    it.each([undefined, '', '   '])('keeps LAN-only behavior without a non-empty build default of %s', gatewayUrl => {
+      vi.mocked(getProductFederationGatewayUrl).mockReturnValue(gatewayUrl)
+      expect(getFederationGatewayUrl()).toBeNull()
+    })
+
+    it('trims the build default without persisting it on an unrelated save', () => {
+      vi.mocked(getProductFederationGatewayUrl).mockReturnValue(` ${productUrl} `)
+      saveConfig({ appearance: { theme: 'light' } })
+
+      expect(getFederationGatewayUrl()).toBe(productUrl)
+      expect(JSON.parse(fs.readFileSync(getConfigPath(), 'utf8')).federation).toBeUndefined()
+    })
+
+    it('restores the build default when an override is cleared through a JSON patch', () => {
+      saveConfig({ federation: { gatewayUrl: 'https://custom.example.test/' } })
+      saveConfig(JSON.parse(JSON.stringify({ federation: { gatewayUrl: '' } })))
+
+      expect(getFederationGatewayUrl()).toBe(productUrl)
+      expect(getConfig().federation?.gatewayUrl).toBe('')
     })
   })
 

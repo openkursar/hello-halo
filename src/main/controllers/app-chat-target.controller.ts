@@ -16,7 +16,7 @@
 
 import { randomUUID } from 'crypto'
 import { getTeamStore } from '../apps/team'
-import { nativeChatAppId, resolveHttpConversationId } from '../../shared/apps/im-keys'
+import { nativeChatAppId, parseTeamSessionKey, resolveHttpConversationId } from '../../shared/apps/im-keys'
 import { isRemoteMember } from '../../shared/apps/team-types'
 import type { TeamTriggerContext } from '../../shared/apps/team-types'
 
@@ -103,12 +103,13 @@ export function resolveAppChatTarget(appId: string, conversationId: unknown): Ap
 }
 
 /**
- * The chat a user may add a message to mid-turn: only their own conversation
- * with this digital human (its default or a local session). An HTTP, IM or team
- * session belongs to somebody else's traffic, and another digital human's chat
- * is not addressed through this one.
+ * Native and locally owned team chats admit the owner's messages. Permission
+ * equality is checked when delivering, after target authorization here.
  */
 export function resolveUserInjectTarget(appId: string, conversationId: unknown): AppChatTargetResult {
+  if (typeof conversationId === 'string' && parseTeamSessionKey(conversationId)) {
+    return resolveAppChatTarget(appId, conversationId)
+  }
   if (typeof conversationId !== 'string' || nativeChatAppId(conversationId) !== appId) {
     return { ok: false, status: 400, error: 'Not a chat of this digital human' }
   }

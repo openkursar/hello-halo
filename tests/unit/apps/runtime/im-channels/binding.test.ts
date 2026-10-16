@@ -151,11 +151,59 @@ describe('setInstanceApp — write behaviour', () => {
     expect(state.invalidated).toBe(1)
   })
 
+  it('removes a team binding when transferring the bot to a standalone digital human', () => {
+    state.instances = [instance({ teamId: 'team-1' })]
+    expect(setInstanceApp('inst-1', 'app-2', 'app-1').success).toBe(true)
+    const saved = (state.saved as { imChannels: { instances: ImChannelInstanceConfig[] } }).imChannels.instances[0]
+    expect(saved.appId).toBe('app-2')
+    expect(saved).not.toHaveProperty('teamId')
+  })
+
+  it('can switch a team front desk to the same digital human acting independently', () => {
+    state.instances = [instance({ teamId: 'team-1' })]
+    expect(setInstanceApp('inst-1', 'app-1', 'app-1').success).toBe(true)
+    expect(state.applied).toBe(1)
+    const saved = (state.saved as { imChannels: { instances: ImChannelInstanceConfig[] } }).imChannels.instances[0]
+    expect(saved).not.toHaveProperty('teamId')
+  })
+
   it('is a no-op when the instance is already bound to that app', () => {
     state.instances = [instance({ appId: 'app-1' })]
     expect(setInstanceApp('inst-1', 'app-1').success).toBe(true)
     expect(state.saved).toBeNull()
     expect(state.applied).toBe(0)
+  })
+
+  it('rejects a confirmation for an outdated binding without saving or reconnecting', () => {
+    state.instances = [instance({ appId: 'app-2' })]
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const res = setInstanceApp('inst-1', 'app-1', 'app-1')
+      expect(res.success).toBe(false)
+      expect(res.error).toContain('binding changed')
+      expect(state.saved).toBeNull()
+      expect(state.applied).toBe(0)
+      expect(state.invalidated).toBe(0)
+      expect(warning).toHaveBeenCalledOnce()
+    } finally {
+      warning.mockRestore()
+    }
+  })
+
+  it('checks an explicitly unbound confirmation instead of treating it as absent', () => {
+    state.instances = [instance()]
+    expect(setInstanceApp('inst-1', 'app-2', '').success).toBe(false)
+    expect(state.saved).toBeNull()
+    state.instances = [instance({ appId: '' })]
+    expect(setInstanceApp('inst-1', 'app-2', '').success).toBe(true)
+    expect(state.applied).toBe(1)
+  })
+
+  it('accepts the binding that the user actually confirmed', () => {
+    state.instances = [instance()]
+    expect(setInstanceApp('inst-1', 'app-2', 'app-1').success).toBe(true)
+    expect(state.applied).toBe(1)
+    expect(state.invalidated).toBe(1)
   })
 
   it('leaves sibling instances untouched', () => {

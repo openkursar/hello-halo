@@ -9,7 +9,7 @@
 
 import type { HaloAPI } from '../../../src/preload'
 import { test, expect } from '../fixtures/people'
-import { navigateToApps } from '../fixtures/helpers'
+import { navigateToApps, navigateToSettings } from '../fixtures/helpers'
 import type { Page } from '@playwright/test'
 
 test.setTimeout(60000)
@@ -96,7 +96,160 @@ test('the work activity tab opens on the compact run summary band', async ({ win
   await expect(band).toContainText(`succeeded in the last ${runs.length} runs`)
 })
 
+async function seedBots(page: Page) {
+  const result = await page.evaluate(async () => {
+    const halo = (globalThis.window as unknown as { halo: HaloAPI }).halo
+    const instances = [
+      { id: 'bot-sales', type: 'wecom-bot', appId: 'person-001' },
+      { id: 'bot-unbound', type: 'wecom-bot', appId: '' },
+      { id: 'bot-current', type: 'wecom-bot', appId: 'person-000' },
+      { id: 'bot-feishu', type: 'feishu-bot', appId: 'person-001' },
+    ].map(instance => ({ ...instance, enabled: false, config: {} }))
+    const saved = await halo.setConfig({ imChannels: { instances } })
+    if (!saved.success) return saved
+    return halo.imChannelsReload()
+  })
+  expect(result.success).toBe(true)
+}
+
+async function botStatuses(page: Page) {
+  return page.evaluate(async () => {
+    const result = await (globalThis.window as unknown as { halo: HaloAPI }).halo.imChannelsStatus()
+    return (result.data ?? []) as Array<{ id: string; appId: string; appName?: string; ordinal: number }>
+  })
+}
+
 for (const width of [1280, 375]) {
+  test(`the scan menu dismisses outside, on Escape, and before opening a scan dialog at ${width}px`, async ({ window, electronApp }) => {
+    await window.setViewportSize({ width, height: 900 })
+    await electronApp.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('wecom-bot:scan-auth:start')
+      ipcMain.handle('wecom-bot:scan-auth:start', () => ({ success: false, error: 'Scan unavailable in test' }))
+    })
+    await seedBots(window)
+    await openSettings(window)
+    const section = window.getByRole('region', { name: 'Bot Access', exact: true })
+    const trigger = section.getByRole('button', { name: 'Scan to add a bot', exact: true })
+    await trigger.click()
+    const menu = window.getByRole('dialog').filter({ has: window.getByRole('button', { name: 'WeCom bot', exact: true }) })
+    await expect(menu).toBeVisible()
+    await section.getByRole('button', { name: 'Bind an existing bot', exact: true }).click()
+    await expect(menu).toHaveCount(0)
+    await trigger.click()
+    await window.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+    await trigger.focus()
+    await window.keyboard.press('Enter')
+    await expect(menu).toBeVisible()
+    const box = await menu.boundingBox()
+    expect(box!.x).toBeGreaterThanOrEqual(0)
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width)
+    await menu.getByRole('button', { name: 'WeCom bot', exact: true }).click()
+    await expect(menu).toHaveCount(0)
+    const scan = window.getByRole('dialog').filter({ hasText: 'Scan to add WeCom Bot' })
+    await expect(scan).toBeVisible()
+    await scan.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(scan).toHaveCount(0)
+    await expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  test(`bot numbers and current owners stay consistent, and transfer requires confirmation at ${width}px`, async ({ window }) => {
+    await window.setViewportSize({ width, height: 900 })
+    await seedBots(window)
+    await openSettings(window)
+    const section = window.getByRole('region', { name: 'Bot Access', exact: true })
+    await expect(section.getByText('WeCom bot 3', { exact: true })).toBeVisible()
+    await section.getByRole('button', { name: 'Bind an existing bot', exact: true }).click()
+    const row = section.getByRole('button', { name: 'WeCom bot 1 now bound to Analyst 001', exact: true })
+    await expect(row).toBeVisible()
+    await expect(section.getByRole('button', { name: 'WeCom bot 2 Not bound', exact: true })).toBeVisible()
+    await window.screenshot({ path: `tests/e2e/results/bot-picker-${width}.png`, animations: 'disabled' })
+    await row.click()
+    const confirmation = window.getByRole('alertdialog')
+    await expect(confirmation).toContainText('WeCom bot 1')
+    await expect(confirmation).toContainText('Analyst 001')
+    await expect(confirmation).toContainText('Analyst 000')
+    await window.screenshot({ path: `tests/e2e/results/bot-confirm-${width}.png`, animations: 'disabled' })
+    await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+    expect((await botStatuses(window)).find(bot => bot.id === 'bot-sales')?.appId).toBe('person-001')
+    await window.keyboard.press('Escape')
+    await expect(confirmation).toHaveCount(0)
+    await expect(row).toBeEnabled()
+    await row.click()
+    await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(row).toBeEnabled()
+    await row.click()
+    await confirmation.getByRole('button', { name: 'Rebind', exact: true }).click()
+    await expect.poll(async () => (await botStatuses(window)).find(bot => bot.id === 'bot-sales')?.appName).toBe('Analyst 000')
+    await expect(section.getByText('WeCom bot 1', { exact: true })).toBeVisible()
+    await expect(section.getByText('WeCom bot 3', { exact: true })).toBeVisible()
+    await section.getByRole('button', { name: 'Bind an existing bot', exact: true }).click()
+    await section.getByRole('button', { name: 'WeCom bot 2 Not bound', exact: true }).click()
+    await expect(confirmation).toHaveCount(0)
+    await expect.poll(async () => (await botStatuses(window)).find(bot => bot.id === 'bot-unbound')?.appId).toBe('person-000')
+    await window.screenshot({ path: `tests/e2e/results/bot-binding-${width}.png`, animations: 'disabled' })
+    const dimensions = await window.evaluate(() => ({ content: document.documentElement.scrollWidth, viewport: document.documentElement.clientWidth }))
+    expect(dimensions.content).toBeLessThanOrEqual(dimensions.viewport + 1)
+  })
+
+  test(`long digital human names wrap in the picker and confirmation at ${width}px`, async ({ window }) => {
+    await window.setViewportSize({ width, height: 900 })
+    await seedBots(window)
+    const name = 'CustomerSupport'.repeat(14)
+    const renamed = await window.evaluate(async name => (globalThis.window as unknown as { halo: HaloAPI }).halo.appUpdateSpec({ appId: 'person-001', specPatch: { name } }), name)
+    expect(renamed.success).toBe(true)
+    await openSettings(window)
+    const section = window.getByRole('region', { name: 'Bot Access', exact: true })
+    await section.getByRole('button', { name: 'Bind an existing bot', exact: true }).click()
+    const row = section.getByRole('button', { name: `WeCom bot 1 now bound to ${name}`, exact: true })
+    await expect(row).toBeVisible()
+    expect(await row.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+    await row.click()
+    const confirmation = window.getByRole('alertdialog')
+    await expect(confirmation).toContainText(name)
+    expect(await confirmation.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+    await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click()
+  })
+
+  test(`an outdated transfer confirmation cannot take over a bot rebound elsewhere at ${width}px`, async ({ window }) => {
+    await window.setViewportSize({ width, height: 900 })
+    await seedBots(window)
+    await openSettings(window)
+    const section = window.getByRole('region', { name: 'Bot Access', exact: true })
+    await section.getByRole('button', { name: 'Bind an existing bot', exact: true }).click()
+    await section.getByRole('button', { name: 'WeCom bot 1 now bound to Analyst 001', exact: true }).click()
+    const confirmation = window.getByRole('alertdialog')
+    await expect(confirmation).toBeVisible()
+    const changed = await window.evaluate(async () => (globalThis.window as unknown as { halo: HaloAPI }).halo.imChannelsUnbindInstance('bot-sales'))
+    expect(changed.success).toBe(true)
+    await confirmation.getByRole('button', { name: 'Rebind', exact: true }).click()
+    await expect(section.getByText('The bot binding changed. Refresh and confirm again.', { exact: true })).toBeVisible()
+    expect((await botStatuses(window)).find(bot => bot.id === 'bot-sales')?.appId).toBe('')
+    await expect(section.getByRole('button', { name: 'WeCom bot 1 Not bound', exact: true })).toBeEnabled()
+  })
+
+  test(`global connection settings also confirm before transferring a bot at ${width}px`, async ({ window }) => {
+    await window.setViewportSize({ width, height: 900 })
+    await seedBots(window)
+    await window.reload()
+    await navigateToSettings(window)
+    const section = window.locator('#message-channels')
+    await section.getByRole('button', { name: /WeCom Intelligent Bot/ }).click()
+    await section.getByRole('button', { name: /Analyst 001.*WeCom bot 1/ }).click()
+    const picker = section.locator('select').filter({ has: window.locator('option[value="app:person-001"]') }).first()
+    await picker.selectOption('app:person-000')
+    const confirmation = window.getByRole('alertdialog')
+    await expect(confirmation).toContainText('Analyst 001')
+    await expect(confirmation).toContainText('Analyst 000')
+    await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(picker).toHaveValue('app:person-001')
+    expect((await botStatuses(window)).find(bot => bot.id === 'bot-sales')?.appId).toBe('person-001')
+    await picker.selectOption('app:person-000')
+    await confirmation.getByRole('button', { name: 'Rebind', exact: true }).click()
+    await expect(picker).toHaveValue('app:person-000')
+    await expect.poll(async () => (await botStatuses(window)).find(bot => bot.id === 'bot-sales')?.appId).toBe('person-000')
+  })
+
   test(`a working-days switch stays reversible outside China at ${width}px`, async ({ window }) => {
     const cdp = await window.context().newCDPSession(window)
     await cdp.send('Emulation.setTimezoneOverride', { timezoneId: 'Europe/Berlin' })

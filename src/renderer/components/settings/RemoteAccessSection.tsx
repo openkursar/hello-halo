@@ -76,6 +76,22 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
   const [gatewayInput, setGatewayInput] = useState(config?.federation?.gatewayUrl || '')
   const [gatewayError, setGatewayError] = useState<string | null>(null)
   const [gatewaySaved, setGatewaySaved] = useState(false)
+  const [isSavingGateway, setIsSavingGateway] = useState(false)
+  const [defaultGatewayUrl, setDefaultGatewayUrl] = useState<string | null | undefined>()
+
+  useEffect(() => {
+    let cancelled = false
+    api.getConfig().then(response => {
+      if (!response.success) {
+        console.error('[RemoteAccessSection] Failed to load gateway default:', response.error)
+        return
+      }
+      if (!cancelled) setDefaultGatewayUrl(response.productDefaults?.federation.gatewayUrl)
+    }).catch(error => {
+      console.error('[RemoteAccessSection] Failed to load gateway default:', error)
+    })
+    return () => { cancelled = true }
+  }, [])
 
   // Change-address flow (revoke + re-issue a new permanent hostname)
   const [showReset, setShowReset] = useState(false)
@@ -189,16 +205,25 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
       }
     }
     setGatewayError(null)
+    setIsSavingGateway(true)
     try {
-      const updatedFederation = { ...config?.federation, gatewayUrl: value || undefined }
+      const updatedFederation = { ...config?.federation, gatewayUrl: value }
       const updatedConfig = { ...config, federation: updatedFederation } as HaloConfig
-      await api.setConfig({ federation: updatedFederation })
+      const response = await api.setConfig({ federation: updatedFederation })
+      if (!response.success) {
+        console.error('[RemoteAccessSection] Gateway override was not saved:', response.error)
+        setGatewayError(response.error || t('Failed to save'))
+        return
+      }
       setConfig(updatedConfig)
+      setGatewayInput(value)
       setGatewaySaved(true)
       setTimeout(() => setGatewaySaved(false), 2000)
     } catch (error) {
       console.error('[RemoteAccessSection] Failed to save gateway URL:', error)
       setGatewayError(t('Failed to save'))
+    } finally {
+      setIsSavingGateway(false)
     }
   }
 
@@ -555,8 +580,16 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
         <div className="pt-4 border-t border-border space-y-2">
           <p className="font-medium">{t('Federation Gateway')}</p>
           <p className="text-sm text-muted-foreground">
-            {t('Relay team collaboration through a gateway server so members outside your local network can join. Leave empty for LAN-only teams.')}
+            {t('Relay team collaboration through a gateway server so members outside your local network can join.')}
           </p>
+          {defaultGatewayUrl ? (
+            <p className="text-sm text-muted-foreground break-words">
+              {config?.federation?.gatewayUrl?.trim() ? t('Built-in gateway') : t('Using the built-in gateway')}: <code className="block break-all sm:inline">{defaultGatewayUrl}</code>
+              <span className="block">{t('Leave empty to use the built-in gateway.')}</span>
+            </p>
+          ) : defaultGatewayUrl === null ? (
+            <p className="text-sm text-muted-foreground">{t('Leave empty for LAN-only teams.')}</p>
+          ) : null}
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
               type="text"
@@ -564,17 +597,24 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
               onChange={(e) => {
                 setGatewayInput(e.target.value)
                 setGatewayError(null)
+                setGatewaySaved(false)
               }}
-              placeholder={t('https://gateway.example.com')}
-              className="flex-1 px-2 py-1 text-sm bg-input rounded border border-border focus:border-primary focus:outline-none"
+              aria-label={t('Federation Gateway')}
+              disabled={isSavingGateway}
+              placeholder={defaultGatewayUrl || t('https://gateway.example.com')}
+              className="w-full min-w-0 flex-1 px-2 py-1 text-sm bg-input rounded border border-border focus:border-primary focus:outline-none disabled:opacity-50"
             />
             <button
               onClick={handleGatewaySave}
-              className="text-xs px-3 py-1.5 bg-primary text-primary-foreground rounded hover:bg-primary/90"
+              disabled={isSavingGateway}
+              className="text-xs px-3 py-1.5 bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50"
             >
-              {gatewaySaved ? t('Saved') : t('Save')}
+              {isSavingGateway ? t('Saving...') : gatewaySaved ? t('Saved') : t('Save')}
             </button>
           </div>
+          <p className="text-xs text-muted-foreground">
+            {t('Restart Halo to apply gateway changes to existing team connections.')}
+          </p>
           {gatewayError && <p className="text-xs text-red-500">{gatewayError}</p>}
         </div>
       </div>

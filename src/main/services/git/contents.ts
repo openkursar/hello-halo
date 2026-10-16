@@ -3,7 +3,8 @@
  *
  * The before side is a blob of the list's `beforeRevision` (so every file of
  * one list shares a before side, even if HEAD moves meanwhile); the after side
- * is the index for `staged` and the working tree otherwise. A side over
+ * is the index for `staged`, the commit's own tree for `commit`, and the
+ * working tree otherwise. A side over
  * GIT_LIMITS.maxFileBytes or with a NUL byte comes back as a size only.
  */
 
@@ -114,7 +115,9 @@ function checkContentsRequest(request: GitFileContentsRequest): CheckedContentsR
 async function readContents(ctx: RepoContext, { scope, path, oldPath, beforeRevision }: CheckedContentsRequest): Promise<GitFileContents> {
   const [before, after] = await Promise.all([
     beforeRevision ? readTreeSide(ctx, beforeRevision, oldPath ?? path, scope) : Promise.resolve(ABSENT),
-    scope.kind === 'staged' ? readIndexSide(ctx, path) : readWorktreeSide(ctx, path),
+    scope.kind === 'staged' ? readIndexSide(ctx, path)
+      : scope.kind === 'commit' ? readTreeSide(ctx, scope.revision, path, scope)
+        : readWorktreeSide(ctx, path),
   ])
 
   const sides = [before, after].filter((side): side is Extract<Side, { exists: true }> => side.exists)

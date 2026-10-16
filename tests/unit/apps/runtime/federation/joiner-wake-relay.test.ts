@@ -102,7 +102,7 @@ describe('joiner wake relay addressing', () => {
     dbManager.closeAll()
   })
 
-  it('credits a self-labeled upstream ack to the authority (delivery accounting)', () => {
+  it('credits an upstream ack to its authenticated authority (delivery accounting)', () => {
     manager.sendWakeToMember({
       officeId: OFFICE,
       ownerNodeId: NODE_OWNER,
@@ -113,17 +113,12 @@ describe('joiner wake relay addressing', () => {
     const ownCtrlKey = feedIdKey({ officeId: OFFICE, author: NODE_SELF, kind: ctrlTargetKind(NODE_HOST) })
     const seq = feedStore.getMaxSeq(OFFICE, ownCtrlKey)
 
-    // The authority's ack arrives over the joined office's single upstream leg,
-    // which labels inbound frames with THIS node's id. Delivery accounting
-    // (deliveredUpTo / the give-up backstop) queries by the authority's REAL id,
-    // so the router must normalize the label — otherwise every joiner-published
-    // wake is falsely declared undeliverable at the backstop.
     manager.deliverInbound(OFFICE, {
       kind: 'feed-ack',
       officeId: OFFICE,
       feedKey: ownCtrlKey,
       ackedSeq: seq,
-    } as unknown as Parameters<FederationManager['deliverInbound']>[1])
+    } as unknown as Parameters<FederationManager['deliverInbound']>[1], NODE_HOST)
     expect(feedStore.getPeerCursor(OFFICE, ownCtrlKey, NODE_HOST)).toBe(seq)
   })
 

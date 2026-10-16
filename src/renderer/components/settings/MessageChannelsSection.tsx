@@ -40,6 +40,7 @@ import {
   type ImChannelInstanceStatus,
 } from '../../../shared/types/im-channel'
 import { ChannelBackendSelect, ChannelBackendName } from './ChannelBackendSelect'
+import { getImBotLabel } from '../apps/im-channel-labels'
 import { Disclosure } from '../ui/Disclosure'
 import type {
   ChannelBackendApp,
@@ -592,7 +593,8 @@ function InstanceCard({
               <ChannelBackendName value={instance} automationApps={automationApps} teams={teams} />
             </p>
             <p className="text-[11px] text-muted-foreground truncate">
-              Bot ID: {truncateId(botId) || t('Not set')}
+              {status && <>{getImBotLabel(status, t)} · </>}
+              {t('Bot ID')}: {truncateId(botId) || t('Not set')}
               {!isEnabled ? '' : isConnected ? '' : ` · ${statusText}`}
             </p>
           </div>
@@ -1096,6 +1098,8 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   const [testingChannel, setTestingChannel] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [imStatuses, setImStatuses] = useState<ImChannelInstanceStatus[]>([])
+  const [rebindError, setRebindError] = useState<string | null>(null)
+  const rebindBusy = useRef(false)
   const [permissionDefaults, setPermissionDefaults] = useState<ImPermissionDefaults | null>(null)
   const [notifyProductConfig, setNotifyProductConfig] = useState<NotifyChannelsProductConfig | null>(null)
   const [scanDialogOpen, setScanDialogOpen] = useState(false)
@@ -1223,15 +1227,40 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   // Rebinding is owned by main (see im-channels/binding.ts): it validates the
   // target and re-applies the connection, which a plain config write cannot do.
   const handleRebindInstance = useCallback(async (instanceId: string, appId: string) => {
-    if (!config) return
-    const res = await api.imChannelsSetInstanceApp(instanceId, appId)
-    if (!res.success) {
-      console.error('[MessageChannels] rebind failed:', res.error)
+    if (rebindBusy.current) return
+    const current = configRef.current
+    const instance = current?.imChannels?.instances?.find(i => i.id === instanceId)
+    if (!current || !instance) {
+      console.warn('[MessageChannelsSection] Rebinding skipped: bot configuration no longer exists', { instanceId, appId })
+      setRebindError(t('Failed to bind'))
       return
     }
-    const patched = instances.map(i => i.id === instanceId ? { ...i, appId } : i)
-    setConfig({ ...config, imChannels: { ...config.imChannels, instances: patched } } as HaloConfig)
-  }, [config, instances, setConfig])
+    rebindBusy.current = true
+    setRebindError(null)
+    try {
+      const res = await api.imChannelsSetInstanceApp(instanceId, appId, instance.appId)
+      if (!res.success) {
+        if (res.code !== 'BINDING_CHANGED') {
+          console.warn('[MessageChannelsSection] Bot binding was rejected', { instanceId, appId, error: res.error })
+        }
+        setRebindError(res.code === 'BINDING_CHANGED'
+          ? t('The bot binding changed. Refresh and confirm again.')
+          : res.error ?? t('Failed to bind'))
+      }
+      const fresh = await api.getConfig()
+      if (!fresh.success || !fresh.data) {
+        console.warn('[MessageChannelsSection] Bot configuration could not be refreshed after rebinding', { instanceId, error: fresh.error })
+        setRebindError(t('Failed to load bot connections'))
+        return
+      }
+      setConfig(fresh.data as HaloConfig)
+    } catch (error) {
+      console.warn('[MessageChannelsSection] Bot rebinding failed', { instanceId, appId, error })
+      setRebindError(t('Failed to bind'))
+    } finally {
+      rebindBusy.current = false
+    }
+  }, [setConfig, t])
 
   const handleAddInstance = useCallback(() => {
     // Apply product-level permission defaults for new instances
@@ -1497,6 +1526,8 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
           {t('Configure channels for sending and receiving messages with digital humans')}
         </p>
       </div>
+
+      {rebindError && <p role="alert" className="mb-3 text-sm text-destructive">{rebindError}</p>}
 
       <div className="space-y-3">
         {/* ── WeChat Personal Bot via iLink (multi-instance) ─────────── */}

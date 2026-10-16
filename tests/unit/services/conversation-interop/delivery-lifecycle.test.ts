@@ -34,6 +34,8 @@ type EngineListener = (event: { channel: string; conversationId: string }) => vo
 const h = vi.hoisted(() => {
   const store = new Map<string, FakeConversation>()
   const busy = new Set<string>()
+  const pendingInput = new Set<string>()
+  const sendIntoLiveTurn = vi.fn((_id: string, _text: string, _images?: unknown, _options?: { onWithdrawn: () => void }) => false)
   let nextId = 0
   const state: { listener: EngineListener | null } = { listener: null }
   const sendMessage = vi.fn(async (params: { spaceId: string; conversationId: string; message: string }) => {
@@ -43,7 +45,9 @@ const h = vi.hoisted(() => {
     busy.add(params.conversationId)
   })
   const hasLiveNativeSession = vi.fn((_id: string) => true)
-  return { store, busy, state, sendMessage, hasLiveNativeSession }
+  const userStop: { listener: ((conversationId: string) => void) | null } = { listener: null }
+  const userStopSettled: { listener: ((conversationId: string) => void) | null } = { listener: null }
+  return { store, busy, pendingInput, sendIntoLiveTurn, state, sendMessage, hasLiveNativeSession, userStop, userStopSettled }
 })
 
 vi.mock('../../../../src/main/services/agent/send-message', () => ({ sendMessage: h.sendMessage }))
@@ -51,12 +55,27 @@ vi.mock('../../../../src/main/services/agent/send-message', () => ({ sendMessage
 // chat-source reaches the engine through the services/agent barrel; without this
 // every module reset would load the whole engine graph.
 vi.mock('../../../../src/main/services/agent', async () => ({
+  hasPendingSessionInput: (id: string) => h.pendingInput.has(id),
   onAgentEvent: (await import('../../../../src/main/services/agent/events')).onAgentEvent,
+  emitAgentEvent: (await import('../../../../src/main/services/agent/events')).emitAgentEvent,
   sendMessage: (await import('../../../../src/main/services/agent/send-message')).sendMessage,
+  sendIntoLiveTurn: h.sendIntoLiveTurn,
+  onUserStop: (listener: (conversationId: string) => void) => {
+    h.userStop.listener = listener
+    return { dispose: () => { h.userStop.listener = null } }
+  },
+  onUserStopSettled: (listener: (conversationId: string) => void) => {
+    h.userStopSettled.listener = listener
+    return { dispose: () => { h.userStopSettled.listener = null } }
+  },
 }))
 vi.mock('../../../../src/main/services/agent/events', () => ({
+  emitAgentEvent: (channel: string, _spaceId: string, conversationId: string) => {
+    h.state.listener?.({ channel, conversationId })
+  },
   onAgentEvent: (listener: EngineListener) => {
-    h.state.listener = listener
+    const previous = h.state.listener
+    h.state.listener = (event) => { previous?.(event); listener(event) }
     return { dispose: () => { h.state.listener = null } }
   },
 }))
@@ -135,6 +154,8 @@ beforeEach(async () => {
   vi.resetModules()
   h.store.clear()
   h.busy.clear()
+  h.pendingInput.clear()
+  h.sendIntoLiveTurn.mockReset().mockReturnValue(false)
   h.sendMessage.mockClear()
   h.hasLiveNativeSession.mockReturnValue(true)
   ;({ deliverToConversation, deliverToConversationAndWait, deliverExternalMessage } = await import(
@@ -154,7 +175,7 @@ afterEach(() => {
 })
 
 describe('turn slot and mailbox', () => {
-  it('queues mail behind a running turn and dispatches it FIFO, one turn at a time, as each turn ends', async () => {
+  it('combines same-permission fallback mail in arrival order into one following turn', async () => {
     seed('s1'); seed('s2'); seed('s3'); seed('tgt')
 
     expect(await send('s1', 'tgt', 'first')).toMatchObject({ ok: true, status: 'delivered' })
@@ -164,11 +185,11 @@ describe('turn slot and mailbox', () => {
 
     await endTurn('tgt')
     expect(sentTo('tgt')).toHaveLength(2)
-    expect(sentTo('tgt')[1]).toContain('second')
+    expect(sentTo('tgt')[1]).toMatch(/second[\s\S]*third/)
+    expect(h.store.get('tgt')!.messages.map((message) => message.content)).toEqual(['first', 'second', 'third'])
 
     await endTurn('tgt')
-    expect(sentTo('tgt')).toHaveLength(3)
-    expect(sentTo('tgt')[2]).toContain('third')
+    expect(sentTo('tgt')).toHaveLength(2)
   })
 
   it('treats an errored turn like a completed one: the slot frees and queued mail moves', async () => {
@@ -222,9 +243,9 @@ describe('turn slot and mailbox', () => {
     await endTurn('tgt')
     expect(sentTo('tgt')).toHaveLength(1)
 
-    // One slot opened up (the dispatched job left the mailbox) — exactly one.
+    // All 50 compatible entries left together, so the next arrivals have room.
     expect(await send('late-2', 'tgt')).toEqual({ ok: true, status: 'queued' })
-    expect(await send('late-1', 'tgt')).toEqual({ ok: false, reason: 'queue_full' })
+    expect(await send('late-1', 'tgt')).toEqual({ ok: true, status: 'queued' })
   })
 
   it('checks the mailbox cap before charging the breaker: rejected sends spend no rate budget and raise no notice', async () => {
@@ -625,5 +646,105 @@ describe('deliveries from non-conversation senders', () => {
     await endTurn('target')
     await expect(pendingAgain).resolves.toEqual({ ok: true, outcome: { status: 'no_reply' } })
     expect(sentTo('target').at(-1)).toBe('ext')
+  })
+})
+
+
+describe('live replies at a turn boundary', () => {
+  it('keeps a wait open while the engine owns its immediate continuation', async () => {
+    seed('waiting-source')
+    seed('ending-target')
+    h.busy.add('ending-target')
+    h.sendIntoLiveTurn.mockReturnValue(true)
+    h.pendingInput.add('ending-target')
+    let settled = false
+    const waiting = ask('waiting-source', 'ending-target').then((result) => { settled = true; return result })
+    await flush()
+    h.state.listener?.({ channel: 'agent:complete', conversationId: 'ending-target' })
+    await flush()
+    expect(settled).toBe(false)
+    h.pendingInput.delete('ending-target')
+    expect(await send('ending-target', 'waiting-source', 'answer after continuation')).toMatchObject({ status: 'resolved_pending_wait' })
+    expect(await waiting).toMatchObject({ outcome: { status: 'replied', message: 'answer after continuation' } })
+    await endTurn('ending-target')
+  })
+
+  it('does not settle a newly dispatched wait twice when error and complete arrive together', async () => {
+    seed('source-first')
+    seed('source-wait')
+    seed('target-dual-end')
+    await send('source-first', 'target-dual-end')
+    const waiting = ask('source-wait', 'target-dual-end')
+    await flush()
+    h.busy.delete('target-dual-end')
+    h.state.listener?.({ channel: 'agent:error', conversationId: 'target-dual-end' })
+    h.state.listener?.({ channel: 'agent:complete', conversationId: 'target-dual-end' })
+    await flush()
+    expect(await send('target-dual-end', 'source-wait', 'answer')).toMatchObject({ status: 'resolved_pending_wait' })
+    expect(await waiting).toMatchObject({ outcome: { status: 'replied', message: 'answer' } })
+  })
+})
+
+
+describe('a person stopping the conversation', () => {
+  it('keeps waiting mail from starting a turn after the stop, and lets it ride the next one', async () => {
+    seed('src-a')
+    seed('src-b')
+    seed('stopped-target')
+    await send('src-a', 'stopped-target', 'first')
+    expect(await send('src-b', 'stopped-target', 'waiting report')).toMatchObject({ ok: true, status: 'queued' })
+    h.userStop.listener?.('stopped-target')
+    await endTurn('stopped-target')
+    expect(sentTo('stopped-target')).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(sentTo('stopped-target')).toHaveLength(1)
+
+    await send('src-a', 'stopped-target', 'after the stop')
+    expect(sentTo('stopped-target')).toHaveLength(2)
+    expect(sentTo('stopped-target')[1]).toMatch(/waiting report[\s\S]*after the stop/)
+    await endTurn('stopped-target')
+  })
+
+  it('takes back unread live mail without writing its record twice when it is delivered again', async () => {
+    const target = seed('live-target')
+    seed('live-source')
+    seed('later-source')
+    await send('live-source', 'live-target', 'opener')
+    h.sendIntoLiveTurn.mockReturnValue(true)
+    await send('live-source', 'live-target', 'read later')
+    const recordsBefore = target.messages.filter((m) => m.content === 'read later').length
+    expect(recordsBefore).toBe(1)
+    const options = h.sendIntoLiveTurn.mock.calls[0][3] as { onWithdrawn: () => void }
+    h.userStop.listener?.('live-target')
+    options.onWithdrawn()
+    await endTurn('live-target')
+    expect(sentTo('live-target')).toHaveLength(1)
+
+    await send('later-source', 'live-target', 'new arrival')
+    expect(sentTo('live-target')).toHaveLength(2)
+    expect(sentTo('live-target')[1]).toMatch(/read later[\s\S]*new arrival/)
+    expect(target.messages.filter((m) => m.content === 'read later')).toHaveLength(1)
+    expect(target.messages.filter((m) => m.content === 'new arrival')).toHaveLength(1)
+    await endTurn('live-target')
+  })
+})
+
+describe('a person stopping between a reply and its continuation', () => {
+  it('still tells a waiting sender there was no reply when no turn end follows the stop', async () => {
+    seed('asker')
+    seed('gap-target')
+    h.busy.add('gap-target')
+    h.sendIntoLiveTurn.mockReturnValue(true)
+    h.pendingInput.add('gap-target')
+    const waiting = ask('asker', 'gap-target')
+    await flush()
+    // The reply ended while the ask was still unread, so its turn end was held back.
+    h.busy.delete('gap-target')
+    h.state.listener?.({ channel: 'agent:complete', conversationId: 'gap-target' })
+    await flush()
+    h.userStop.listener?.('gap-target')
+    h.pendingInput.delete('gap-target')
+    h.userStopSettled.listener?.('gap-target')
+    expect(await waiting).toMatchObject({ outcome: { status: 'no_reply' } })
   })
 })

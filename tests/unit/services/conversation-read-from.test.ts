@@ -51,6 +51,8 @@ import {
   getConversationFrom,
   withImageFiles,
 } from '../../../src/main/services/conversation.service'
+import { haloFileUrlToPath } from '../../../src/shared/halo-file-url'
+import { sep } from 'path'
 import * as fs from 'fs'
 
 const SPACE = 'space-read-from'
@@ -98,15 +100,19 @@ describe('withImageFiles', () => {
     const view = withImageFiles(SPACE, stored)
     const image = view.messages[0].images![0]
     expect(image.data).toBe('')
-    expect(image.url).toMatch(/^halo-file:\/\/.*\.images\/.*img-1\.png$/)
-    const filePath = decodeURIComponent(image.url!.replace('halo-file://', ''))
-    expect(Buffer.from(disk.get(filePath) as Buffer).toString()).toBe('fake png bytes')
+    // Empty host (`halo-file:///`): a Windows drive letter or any other first
+    // segment pasted as a URL host makes the URL invalid and the image blank.
+    expect(image.url).toMatch(/^halo-file:\/\/\/.*\.images\/.*img-1\.png$/)
+    expect(() => new URL(image.url!)).not.toThrow()
+    expect(new URL(image.url!).host).toBe('')
+    const diskKey = sep === '\\' ? haloFileUrlToPath(image.url!).replace(/\//g, '\\') : haloFileUrlToPath(image.url!)
+    expect(Buffer.from(disk.get(diskKey) as Buffer).toString()).toBe('fake png bytes')
 
     // The stored conversation keeps its data for remote clients.
     expect(getConversation(SPACE, conversation.id)!.messages[0].images![0].data).toBe(png)
-    disk.set(filePath, Buffer.from('changed'))
+    disk.set(diskKey, Buffer.from('changed'))
     withImageFiles(SPACE, stored)
-    expect(Buffer.from(disk.get(filePath) as Buffer).toString()).toBe('changed')
+    expect(Buffer.from(disk.get(diskKey) as Buffer).toString()).toBe('changed')
   })
 
   it('returns a conversation without inline images untouched', () => {

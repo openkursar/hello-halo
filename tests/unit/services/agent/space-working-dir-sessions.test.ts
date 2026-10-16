@@ -63,14 +63,13 @@ function fakeSession() {
   return { query: { transport: { isReady: () => true, onExit: () => () => {} } }, close: vi.fn() }
 }
 
-type Handle = { isRunning: boolean; turn: unknown; tasks: boolean }
+type Handle = { isRunning: boolean; turn: unknown }
 
 function consumer(state: Handle) {
   return {
     get isRunning() { return state.isRunning },
     getActiveSessionState: () => state.turn,
     getTeamLifecycleThoughts: () => [],
-    hasRunningTasks: () => state.tasks,
     stop: vi.fn(),
   }
 }
@@ -101,19 +100,14 @@ afterAll(() => {
 describe('isSpaceBusy', () => {
   it('is free with nothing running, and with sessions idle between turns', async () => {
     expect(isSpaceBusy('space-a')).toBe(false)
-    await withConsumer('space-a', 'conv-idle', { isRunning: true, turn: null, tasks: false })
+    await withConsumer('space-a', 'conv-idle', { isRunning: true, turn: null })
     expect(isSpaceBusy('space-a')).toBe(false)
   })
 
   it('is busy while one of its conversations answers, and only that space', async () => {
-    await withConsumer('space-a', 'conv-turn', { isRunning: true, turn: { thoughts: [] }, tasks: false })
+    await withConsumer('space-a', 'conv-turn', { isRunning: true, turn: { thoughts: [] } })
     expect(isSpaceBusy('space-a')).toBe(true)
     expect(isSpaceBusy('space-b')).toBe(false)
-  })
-
-  it('is busy while background work will come back as a later turn', async () => {
-    await withConsumer('space-a', 'conv-tasks', { isRunning: true, turn: null, tasks: true })
-    expect(isSpaceBusy('space-a')).toBe(true)
   })
 
   it('is busy while a run or digital human turn of the space is in flight', () => {
@@ -125,7 +119,7 @@ describe('isSpaceBusy', () => {
   it('is busy while a session of the space is still being created', async () => {
     let finish!: (session: unknown) => void
     createSession.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
-    startConsumer.mockReturnValueOnce(consumer({ isRunning: true, turn: null, tasks: false }))
+    startConsumer.mockReturnValueOnce(consumer({ isRunning: true, turn: null }))
 
     const creating = getOrCreateV2Session('space-a', 'conv-new', { systemPrompt: 'p', model: 'm' }, undefined, undefined, {} as never)
     await vi.waitFor(() => expect(createSession).toHaveBeenCalled())

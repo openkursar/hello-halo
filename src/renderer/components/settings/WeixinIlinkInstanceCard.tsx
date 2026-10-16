@@ -21,6 +21,7 @@ import type {
   ImChannelInstanceStatus,
 } from '../../../shared/types/im-channel'
 import { ChannelBackendSelect, ChannelBackendName } from './ChannelBackendSelect'
+import { getImBotLabel } from '../apps/im-channel-labels'
 import { ImProcessingNoticeRow } from './ImProcessingNoticeRow'
 import type {
   ChannelBackendApp,
@@ -243,6 +244,7 @@ export function WeixinIlinkInstanceCard({
               <ChannelBackendName value={instance} automationApps={automationApps} teams={teams} />
             </p>
             <p className="text-[11px] text-muted-foreground truncate">
+              {status && <>{getImBotLabel(status, t)} · </>}
               {statusText}
             </p>
           </div>

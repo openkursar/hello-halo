@@ -407,23 +407,15 @@ export class HaloAdapter implements RegistryAdapter {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+/** Total attempts for a store request; only a 5xx answer or a network error is retried. */
+const FETCH_MAX_ATTEMPTS = 3
+const FETCH_RETRY_BASE_DELAY_MS = 150
+
 /**
  * Fetch with a timeout that covers the entire request lifecycle
  * (connection + headers + body reading). The AbortController signal
  * is passed to fetch() so the abort propagates to body consumption too.
  */
-/**
- * Total attempts for a store GET. When traffic is routed through a forward
- * HTTP proxy (system/corporate proxy resolved by proxy-fetch), the first
- * request over a freshly opened or stale keep-alive connection can come back
- * as a spurious `400` with an empty body in a few ms — the identical request
- * then succeeds. The registry only ever answers these GETs with 200/404/5xx,
- * so retrying once or twice on 400/5xx (never on 404 or success) removes the
- * "first open/install fails, retry works" glitch without masking real errors.
- */
-const FETCH_MAX_ATTEMPTS = 3
-const FETCH_RETRY_BASE_DELAY_MS = 150
-
 export async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
   const controller = new AbortController()
   const existingSignal = init?.signal
@@ -462,7 +454,7 @@ export async function fetchWithTimeout(url: string, init?: RequestInit): Promise
     for (let attempt = 1; attempt <= FETCH_MAX_ATTEMPTS; attempt++) {
       try {
         const response = await proxyFetch(url, { ...init, signal: controller.signal })
-        const transient = response.status === 400 || response.status >= 500
+        const transient = response.status >= 500
         if (transient && attempt < FETCH_MAX_ATTEMPTS && !controller.signal.aborted) {
           console.warn(`[HaloAdapter] Transient ${response.status} (attempt ${attempt}/${FETCH_MAX_ATTEMPTS}), retrying: ${url}`)
           // Release the underlying socket before retrying on a fresh connection.

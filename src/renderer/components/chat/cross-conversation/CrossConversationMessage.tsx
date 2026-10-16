@@ -33,14 +33,18 @@ const FRESH_DELIVERY_MS = 5_000
 
 interface CrossConversationMessageProps {
   message: Message
+  /** Received while a reply was being written: drawn as a row of that reply's process. */
+  inProcess?: boolean
+  /** Drawn inside the live process timeline, which supplies the icon and the row spacing. */
+  timeline?: boolean
 }
 
-export function CrossConversationMessage({ message }: CrossConversationMessageProps) {
+export function CrossConversationMessage({ message, inProcess = false, timeline = false }: CrossConversationMessageProps) {
   const { t } = useTranslation()
   const provenance = readProvenance(message)
 
   const [isFresh, setIsFresh] = useState(
-    () => Date.now() - new Date(message.timestamp).getTime() < FRESH_DELIVERY_MS
+    () => !inProcess && Date.now() - new Date(message.timestamp).getTime() < FRESH_DELIVERY_MS
   )
   const [isExpanded, setIsExpanded] = useState(isFresh)
 
@@ -85,6 +89,68 @@ export function CrossConversationMessage({ message }: CrossConversationMessagePr
     navigateToConversation(currentSpaceId, provenance.fromConversationId)
   }
 
+  const body = isExpanded && (
+    <div className={`px-2.5 pb-2 ${inProcess ? '' : 'animate-slide-down'}`}>
+      <div className="text-[13px] leading-[1.7] text-foreground/[0.88] whitespace-pre-wrap break-words">
+        {message.content}
+      </div>
+      {/* /80 rather than the /55-/60 used for incidental meta elsewhere: this row
+          carries "sent by that conversation's AI", the only visual statement that this
+          message is not the user's. Measured at /55 it lands near 3:1 in dark mode,
+          under the 4.5:1 floor — too weak for the one line that has to be read. */}
+      <div className="mt-2 pt-1.5 border-t border-dashed border-border-faint
+        flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[10px] text-muted-foreground/80">
+        <span>{t('From conversation')}</span>
+        {fromRun ? (
+          <span>{displayTitle}</span>
+        ) : isSourceAvailable ? (
+          <button
+            onClick={openSource}
+            className="inline-flex items-center gap-0.5 text-primary hover:underline"
+          >
+            {displayTitle}
+            <ExternalLink size={9} />
+          </button>
+        ) : (
+          <span className="text-muted-foreground/50 italic">{t('deleted conversation')}</span>
+        )}
+        <span>· {time} ·</span>
+        <span>{fromRun ? t('one-way notice from a scheduled run, no reply possible') : t("sent by that conversation's AI")}</span>
+      </div>
+    </div>
+  )
+
+  if (inProcess) {
+    return (
+      <div className={`w-full min-w-0 ${timeline ? '' : 'border-b border-border-faint'}`} data-message-id={message.id}>
+        <button
+          onClick={() => setIsExpanded(v => !v)}
+          aria-expanded={isExpanded}
+          className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left transition-colors hover:bg-muted/25"
+        >
+          <ChevronRight
+            size={12}
+            className={`shrink-0 text-muted-foreground/60 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+          />
+          {!timeline && (
+            <span className="shrink-0 w-4 h-4 rounded-[5px] flex items-center justify-center bg-primary/15 text-primary">
+              <Send size={9} />
+            </span>
+          )}
+          <span className="max-w-[55%] truncate text-xs font-medium text-muted-foreground">
+            {t('From @{{title}}:', { title: displayTitle })}
+          </span>
+          {provenance.summary && (
+            <span className="text-xs text-muted-foreground truncate min-w-0">{provenance.summary}</span>
+          )}
+          <span className="hidden sm:inline shrink-0 text-muted-foreground/40 text-[10px]">·</span>
+          <span className="hidden sm:inline shrink-0 text-[10px] text-muted-foreground/55">{time}</span>
+        </button>
+        {body}
+      </div>
+    )
+  }
+
   return (
     <div className="flex justify-start animate-fade-in" data-message-id={message.id}>
       <div className="max-w-[85%] min-w-0 rounded-xl bg-muted/15 border border-border-soft overflow-hidden">
@@ -114,37 +180,7 @@ export function CrossConversationMessage({ message }: CrossConversationMessagePr
           <span className="shrink-0 text-muted-foreground/40 text-[10px]">·</span>
           <span className="shrink-0 text-[10px] text-muted-foreground/55">{time}</span>
         </button>
-
-        {isExpanded && (
-          <div className="px-2.5 pb-2 animate-slide-down">
-            <div className="text-[13px] leading-[1.7] text-foreground/[0.88] whitespace-pre-wrap break-words">
-              {message.content}
-            </div>
-            {/* /80 rather than the /55-/60 used for incidental meta elsewhere: this row
-                carries "sent by that conversation's AI", the only visual statement that this
-                message is not the user's. Measured at /55 it lands near 3:1 in dark mode,
-                under the 4.5:1 floor — too weak for the one line that has to be read. */}
-            <div className="mt-2 pt-1.5 border-t border-dashed border-border-faint
-              flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[10px] text-muted-foreground/80">
-              <span>{t('From conversation')}</span>
-              {fromRun ? (
-                <span>{displayTitle}</span>
-              ) : isSourceAvailable ? (
-                <button
-                  onClick={openSource}
-                  className="inline-flex items-center gap-0.5 text-primary hover:underline"
-                >
-                  {displayTitle}
-                  <ExternalLink size={9} />
-                </button>
-              ) : (
-                <span className="text-muted-foreground/50 italic">{t('deleted conversation')}</span>
-              )}
-              <span>· {time} ·</span>
-              <span>{fromRun ? t('one-way notice from a scheduled run, no reply possible') : t("sent by that conversation's AI")}</span>
-            </div>
-          </div>
-        )}
+        {body}
       </div>
     </div>
   )

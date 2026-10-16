@@ -67,7 +67,6 @@ async function withSession(spaceId: string, conversationId: string, pid: number,
     isRunning: true,
     getActiveSessionState: () => turn,
     getTeamLifecycleThoughts: () => [],
-    hasRunningTasks: () => false,
     stop: vi.fn(),
   })
   await getOrCreateV2Session(spaceId, conversationId, { systemPrompt: 'p', model: 'm' }, undefined, undefined, {} as never)

@@ -50,8 +50,10 @@ Platform Layer (src/main/platform)
                   turn rendering, write lock + engine-hook write guard, file side
                   of consolidation; standing conventions shared across owners
   - background  : keep-alive + tray + daemon browser
-  - turn-gate   : generic "one turn per session key" lock + FIFO mailbox
-                  (shared by apps/runtime/team and services/agent; see its DESIGN.md)
+  - turn-gate   : generic exclusive turn reservation + permission-aware mailbox
+                  (shared by team, conversation interop, app chat, IM and automation;
+                  batches matching authority, isolates different/unknown authority,
+                  flushes startup arrivals on readiness; see its DESIGN.md)
   - file-cache  : caches of values derived from files, valid while the file's
                   stamp (size + mtime + inode) is unchanged (`createStampedLru`)
 
@@ -376,6 +378,14 @@ All channels follow `module:action` format. Modules are organized by functional 
 | System & diag | `system`, `perf`, `health`, `git-bash` |
 
 New IM/platform IPC modules should be added under the matching area. See §22 for the IM-specific rule (generic lifecycle vs brand-specific setup).
+
+`agent:input-arrived` carries original accepted input records to retained
+conversation views, as a detail-only batch (`shared/types/agent-input.ts`). It is
+forwarded through IPC/preload and the same WebSocket event mapping; federation
+relays it as a retained milestone. It never triggers a whole-transcript reload.
+Renderer live placement uses the existing source styles and a bounded transient
+overlay; normal transcript reads reconcile temporary app record IDs. See the
+chat-store and app-runtime DESIGN documents for arrival and storage contracts.
 
 Two types:
 - **Request/Response** (renderer → main): registered via `ipcMain.handle()`
@@ -936,6 +946,11 @@ before the main window loads; the hidden host uses a minimal sandbox-compatible
 preload with this protocol alone. Guest attachment is authorized in main; guests
 never receive Halo's preload. The `browser:page-gone` event tells the main
 renderer that a page was closed or lost, so Canvas can drop or recreate its tab.
+`browser:clear-data` is a desktop-only typed request from System Settings. The
+public browser service clears storage and HTTP cache only in `persist:browser`,
+shares concurrent cleanup requests and propagates failure. Settings confirms the
+all-site logout (including digital humans) before requesting cleanup; transport
+only forwards the request. No startup cleanup or remote endpoint is registered.
 Existing `browser:*` business methods retain their legacy names and response
 shapes. The fullscreen chat capsule is ordinary DOM.
 
@@ -964,6 +979,22 @@ shapes. The fullscreen chat capsule is ordinary DOM.
 | Agent | @anthropic-ai/claude-code (claude-agent-sdk) |
 | Icons | lucide-react |
 | Build | electron-vite 2 + Vite 5 |
+
+### Accepted input during ongoing work
+
+The agent surface `sendIntoLiveTurn` is synchronous ownership transfer, backed by
+an engine-specific acceptance primitive. A true result owns the input through the
+next model step or an immediate continuation after a final response. Pending native
+input is part of session liveness; UI, mailbox and run-finalization code must not
+interpret the result-to-continuation gap as idle. A configuration or tool change
+made during a turn applies from the next turn; it never stops input joining the
+running one. Input from a sender with different permissions never joins a turn.
+
+Runtime's app-chat sink owns each running turn's permission identity and input
+preparation. Live messages do not create another queued reply slot. The platform
+mailbox compares opaque identities supplied by each caller; it does not import app
+policies, agent state or transport code. The existing conversation-source registration
+supplies live batch delivery and readiness for both space and digital-human chats.
 
 ## 20) Known Contract Gaps
 
@@ -1119,6 +1150,9 @@ Key invariants (violating these is an architecture bug):
   happen — the truth about delivery is the mailbox receipt, the truth about work
   is the member. `team_activity` (append-only, office-shared) is what makes the
   record complete enough to be useful: directed messages exist nowhere else.
+- A space coordinator's running turn admits only owner-authorized local members.
+  External, remotely owned or unknown senders never join it; they run as their own
+  turn afterwards, as before live delivery.
 - Kernel imports no federation transport (links/frames/routes) — renderer event fan-out
   (`broadcastToAll`/`sendToRenderer`) is UI egress, not the federation link; federation
   reads/writes only through stores + injected deps.

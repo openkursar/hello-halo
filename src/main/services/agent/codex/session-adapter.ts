@@ -9,7 +9,7 @@
  *   - spawns the app-server child once (transport/connection.ts)
  *   - performs the JSON-RPC handshake (initialize / initialized)
  *   - starts or resumes a thread (thread/start or thread/resume)
- *   - dispatches user messages as turn/start
+ *   - starts idle turns and steers active ones with ordered input batches
  *   - normalizes notifications into a CC-shaped event stream that Halo's
  *     stream-processor consumes verbatim
  *
@@ -53,13 +53,7 @@ import {
 } from './types/codex-protocol'
 import { emitAgentEvent } from '../events'
 import { resolveQuestion } from '../permission-handler'
-
-interface PendingTurn {
-  input: UserInput[]
-  /** Resolves once turn/start has been sent and a turnId is known. */
-  ack: { resolve: () => void; reject: (err: Error) => void }
-  abortController: AbortController
-}
+import type { SessionLiveInputOptions } from '../types'
 
 interface AdapterOptions {
   /** Optional spaceId/conversationId for AskUserQuestion event routing. */
@@ -69,11 +63,17 @@ interface AdapterOptions {
   resume?: string
 }
 
+interface QueuedInput {
+  input: UserInput[]
+  /** Present when accepted through sendIntoLiveTurn; only such input can be withdrawn. */
+  live?: SessionLiveInputOptions
+}
+
 export class CodexAppServerSession {
   private connection: CodexConnection | null = null
   private rpc: JsonRpcClient | null = null
   private normalizer: CodexEventNormalizer
-  private readonly sessionId: string
+  private readonly initialSessionId: string
   private readonly options: CodexResolvedOptions
   private readonly opts: AdapterOptions
   private threadId: string | null = null
@@ -81,8 +81,17 @@ export class CodexAppServerSession {
   private closed = false
   private starting: Promise<void> | null = null
   private notificationQueue: any[] = []
+  private queuedTurnStarts = 0
   private notificationWaiters: Array<() => void> = []
-  private queue: PendingTurn[] = []
+  private queue: QueuedInput[] = []
+  /** The batch a turn/start or turn/steer request is carrying right now. */
+  private inFlight: QueuedInput[] = []
+  private withdrawals = 0
+  private dispatching = false
+  private dispatchScheduled = false
+  private dispatchWaiters: Array<() => void> = []
+  private turnActive = false
+  private steeringDeferred = false
   private exitListeners = new Set<(error?: Error) => void>()
   private pendingHaloQuestionIds = new Set<string>()
   private serverHandlerDisposer: (() => void) | null = null
@@ -112,7 +121,7 @@ export class CodexAppServerSession {
   }
 
   private constructor(options: CodexResolvedOptions, sessionId: string, opts: AdapterOptions) {
-    this.sessionId = sessionId
+    this.initialSessionId = sessionId
     this.options = options
     this.opts = opts
     this.normalizer = new CodexEventNormalizer({
@@ -138,6 +147,10 @@ export class CodexAppServerSession {
       // Halo's warmup path doesn't trip on a missing method.
       supportedCommands: async () => [],
     }
+  }
+
+  get sessionId(): string {
+    return this.threadId ?? this.initialSessionId
   }
 
   static async create(sdkOptions: Record<string, any>): Promise<CodexAppServerSession> {
@@ -225,15 +238,20 @@ export class CodexAppServerSession {
 
     // Start (or resume) the thread.
     const threadStartParams = { ...this.options.threadParams }
-    let response: ThreadStartResponse
+    let response: ThreadStartResponse | undefined
     if (this.opts.resume) {
-      response = await rpc.request<ThreadStartResponse>(ClientMethods.ThreadResume, {
-        ...threadStartParams,
-        id: this.opts.resume,
-      })
-    } else {
-      response = await rpc.request<ThreadStartResponse>(ClientMethods.ThreadStart, threadStartParams)
+      try {
+        response = await rpc.request<ThreadStartResponse>(ClientMethods.ThreadResume, {
+          ...threadStartParams,
+          threadId: this.opts.resume,
+        })
+      } catch (err) {
+        // A thread that cannot be resumed (cleared Codex home, another machine)
+        // must not fail every later message: continue on a fresh thread.
+        console.warn(`[Codex][session] thread/resume failed, starting a fresh thread: thread=${this.opts.resume}; ${(err as Error).message}`)
+      }
     }
+    response ??= await rpc.request<ThreadStartResponse>(ClientMethods.ThreadStart, threadStartParams)
     this.threadId = response?.thread?.id ?? null
     if (!this.threadId) {
       throw new Error('[Codex] thread/start did not return a thread id')
@@ -277,8 +295,9 @@ export class CodexAppServerSession {
     rpc.onNotification(ServerNotifications.ThreadStarted, reflect(ServerNotifications.ThreadStarted))
     rpc.onNotification(ServerNotifications.TurnStarted, (params) => {
       // Track current turnId for interrupt routing.
-      const tp = params as { turnId?: string } | undefined
-      if (tp?.turnId) this.currentTurnId = tp.turnId
+      const tp = params as { turnId?: string; turn?: { id?: string } } | undefined
+      this.currentTurnId = tp?.turn?.id ?? tp?.turnId ?? this.currentTurnId
+      this.turnActive = true
       reflect(ServerNotifications.TurnStarted)(params)
     })
     rpc.onNotification(ServerNotifications.ItemStarted, reflect(ServerNotifications.ItemStarted))
@@ -292,10 +311,16 @@ export class CodexAppServerSession {
     rpc.onNotification(ServerNotifications.TurnCompleted, (params) => {
       reflect(ServerNotifications.TurnCompleted)(params)
       this.currentTurnId = null
+      this.turnActive = false
+      this.steeringDeferred = false
+      this.scheduleDispatch()
     })
     rpc.onNotification(ServerNotifications.TurnFailed, (params) => {
       reflect(ServerNotifications.TurnFailed)(params)
       this.currentTurnId = null
+      this.turnActive = false
+      this.steeringDeferred = false
+      this.scheduleDispatch()
     })
     rpc.onNotification(ServerNotifications.Error, reflect(ServerNotifications.Error))
     rpc.onNotification(ServerNotifications.Warning, reflect(ServerNotifications.Warning))
@@ -310,18 +335,50 @@ export class CodexAppServerSession {
   }
 
   send(message: any): void {
-    if (this.closed) throw new Error('Codex session is closed')
-    const input = normalizeMessageInput(message)
-    const turn: PendingTurn = {
-      input,
-      ack: { resolve: () => {}, reject: () => {} },
-      abortController: new AbortController(),
+    this.enqueue({ input: normalizeMessageInput(message) })
+  }
+
+  sendIntoLiveTurn(message: any, options?: SessionLiveInputOptions): boolean {
+    if (!this.query.transport.isReady()) return false
+    this.enqueue({ input: normalizeMessageInput(message), live: options ?? {} })
+    return true
+  }
+
+  hasPendingInput(): boolean {
+    return !this.closed && (this.dispatching || this.queue.length > 0 || this.queuedTurnStarts > 0)
+  }
+
+  /**
+   * Live input still queued here (including steering the server refused and
+   * deferred) has not been read; a steer the server accepted has. A request in
+   * flight is waited out: it either lands or comes back to the queue.
+   */
+  async withdrawUnreadInput(): Promise<number> {
+    const accepted = new Set([...this.queue, ...this.inFlight].filter(item => item.live))
+    if (accepted.size === 0) return 0
+    this.withdrawals++
+    try {
+      if (this.dispatching) await new Promise<void>(resolve => this.dispatchWaiters.push(resolve))
+      const withdrawn = this.queue.filter(item => accepted.has(item))
+      this.queue = this.queue.filter(item => !accepted.has(item))
+      for (const item of withdrawn) {
+        try {
+          item.live?.onWithdrawn?.()
+        } catch (err) {
+          console.error(`[Codex][session] Withdrawn-input handler failed: thread=${this.threadId}`, err)
+        }
+      }
+      return withdrawn.length
+    } finally {
+      this.withdrawals--
+      if (this.withdrawals === 0 && this.queue.length > 0 && !this.steeringDeferred) this.scheduleDispatch()
     }
-    this.queue.push(turn)
-    void this.dispatchNextTurn().catch((err) => {
-      console.error(`[Codex][session] dispatch failed:`, err)
-      this.pushNotification(this.normalizer.createResult(true, err instanceof Error ? err.message : String(err)))
-    })
+  }
+
+  private enqueue(item: QueuedInput): void {
+    if (this.closed) throw new Error('Codex session is closed')
+    this.queue.push(item)
+    this.scheduleDispatch()
   }
 
   /**
@@ -354,7 +411,17 @@ export class CodexAppServerSession {
         continue
       }
       const next = this.notificationQueue.shift()
-      yield next
+      // A terminal notification may beat the steering response. Settle input
+      // ownership before consumers decide whether this result is really idle.
+      if (next?.type === 'result' && this.dispatching) {
+        await new Promise<void>(resolve => this.dispatchWaiters.push(resolve))
+      }
+      try {
+        yield next
+      } finally {
+        // Ownership transfers only after the consumer has processed init.
+        if (next?.type === 'system' && next.subtype === 'init') this.queuedTurnStarts = Math.max(0, this.queuedTurnStarts - 1)
+      }
       // Terminal frame closes the per-turn iterator. The consumer's outer
       // loop re-enters stream() to await / drain the next turn.
       if (next && next.type === 'result') return
@@ -372,7 +439,6 @@ export class CodexAppServerSession {
     this.pendingHaloQuestionIds.clear()
 
     // Drain any in-flight turns.
-    for (const turn of this.queue) turn.abortController.abort()
     this.queue = []
 
     try { this.serverHandlerDisposer?.() } catch { /* best-effort */ }
@@ -421,33 +487,61 @@ export class CodexAppServerSession {
   // Internals
   // --------------------------------------------------------------------------
 
-  private async dispatchNextTurn(): Promise<void> {
-    if (!this.rpc || !this.threadId) return
-    if (this.queue.length === 0) return
-    const turn = this.queue.shift()!
+  private scheduleDispatch(): void {
+    if (this.dispatchScheduled || this.closed) return
+    this.dispatchScheduled = true
+    queueMicrotask(() => {
+      this.dispatchScheduled = false
+      void this.dispatchInput()
+    })
+  }
 
-    // Reset per-turn state in the normalizer; the message_start envelope is
-    // emitted on the first item/started or by turn/started.
-    this.normalizer.resetTurn()
-
-    const params: TurnStartParams = {
-      threadId: this.threadId,
-      input: turn.input,
-    }
+  private async dispatchInput(): Promise<void> {
+    if (this.dispatching || this.withdrawals > 0 || this.closed || !this.rpc || !this.threadId || this.queue.length === 0) return
+    if (this.turnActive && (!this.currentTurnId || this.steeringDeferred)) return
+    this.dispatching = true
+    const batch = this.queue.splice(0)
+    this.inFlight = batch
+    const input = batch.flatMap(item => item.input)
+    const expectedTurnId = this.currentTurnId
+    const steering = this.turnActive
     try {
-      await this.rpc.request(ClientMethods.TurnStart, params)
+      if (steering) {
+        await this.rpc.request(ClientMethods.TurnSteer, {
+          threadId: this.threadId, input, expectedTurnId,
+        })
+      } else {
+        this.normalizer.resetTurn()
+        this.turnActive = true
+        const response = await this.rpc.request<{ turn: { id: string } }>(ClientMethods.TurnStart, {
+          threadId: this.threadId, input,
+        } satisfies TurnStartParams)
+        // Completion may overtake the start response on the same transport.
+        if (this.turnActive) this.currentTurnId = response.turn.id
+      }
     } catch (err) {
-      // The server rejected turn/start outright (rare) — surface as a result.
-      const message = err instanceof Error ? err.message : String(err)
-      this.pushNotification(this.normalizer.createResult(true, message))
+      const reason = err instanceof Error ? err.message : String(err)
+      if (steering && !this.closed) {
+        this.queue.unshift(...batch)
+        this.steeringDeferred = this.turnActive && this.currentTurnId === expectedTurnId
+        console.warn(`[Codex][session] Steering deferred until turn completion: thread=${this.threadId} turn=${expectedTurnId} messages=${batch.length}; ${reason}`)
+      } else {
+        this.turnActive = false
+        this.currentTurnId = null
+        console.error(`[Codex][session] Turn dispatch failed: thread=${this.threadId} messages=${batch.length}; ${reason}`)
+        for (const frame of this.normalizer.handle(ServerNotifications.TurnStarted, { threadId: this.threadId, turn: { id: 'failed-dispatch' } })) this.pushNotification(frame)
+        this.pushNotification(this.normalizer.createResult(true, reason))
+      }
+    } finally {
+      this.dispatching = false
+      this.inFlight = []
+      for (const resolve of this.dispatchWaiters.splice(0)) resolve()
+      if (this.queue.length > 0 && !this.steeringDeferred) this.scheduleDispatch()
     }
-
-    // The actual turn lifetime is driven by streaming notifications, not by
-    // the RPC return value. We fire-and-forget here; the next user message
-    // will queue another turn after the current one completes.
   }
 
   private pushNotification(msg: any): void {
+    if (msg?.type === 'system' && msg.subtype === 'init') this.queuedTurnStarts++
     this.notificationQueue.push(msg)
     this.wakeNotificationWaiters()
   }
@@ -517,9 +611,10 @@ export class CodexAppServerSession {
 
 function normalizeMessageInput(message: any): UserInput[] {
   if (typeof message === 'string') {
-    return [{ type: 'text', text: message }]
+    return [{ type: 'text', text: message, text_elements: [] }]
   }
-  const content = message?.message?.content
+  const content = message?.message?.content ?? message?.content
+  if (typeof content === 'string') return [{ type: 'text', text: content, text_elements: [] }]
   if (Array.isArray(content)) {
     const inputs: UserInput[] = []
     const textParts: string[] = []
@@ -528,12 +623,13 @@ function normalizeMessageInput(message: any): UserInput[] {
       if (block?.type === 'image' && block.source?.type === 'base64') {
         const path = block.source.path || block.path
         if (path) inputs.push({ type: 'localImage', path })
+        else inputs.push({ type: 'image', url: `data:${block.source.media_type};base64,${block.source.data}` })
       }
     }
-    if (textParts.length > 0) inputs.unshift({ type: 'text', text: textParts.join('\n\n') })
-    return inputs.length > 0 ? inputs : [{ type: 'text', text: '' }]
+    if (textParts.length > 0) inputs.unshift({ type: 'text', text: textParts.join('\n\n'), text_elements: [] })
+    return inputs.length > 0 ? inputs : [{ type: 'text', text: '', text_elements: [] }]
   }
-  return [{ type: 'text', text: typeof message === 'string' ? message : JSON.stringify(message) }]
+  return [{ type: 'text', text: typeof message === 'string' ? message : JSON.stringify(message), text_elements: [] }]
 }
 
 // ============================================================================

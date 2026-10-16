@@ -244,7 +244,12 @@ export async function sendMessage(
     const buildMcpServers = (): Record<string, unknown> | null => {
       const dbMcpServers = getDbMcpServers(spaceId)
       const record: Record<string, unknown> = dbMcpServers ? { ...dbMcpServers } : {}
-      Object.assign(record, buildCreationTimeServers({ spaceId, conversationId, workDir }))
+      Object.assign(record, buildCreationTimeServers({
+        spaceId, conversationId, workDir,
+        modelSelection: credentials.sourceId
+          ? { modelSourceId: credentials.sourceId, modelId: credentials.model }
+          : undefined,
+      }))
       return Object.keys(record).length > 0 ? record : null
     }
 

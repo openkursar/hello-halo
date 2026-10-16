@@ -7,9 +7,12 @@
 ## 1) What it is, and what it is not
 
 The main-process side of the canvas changes view: which repositories a space has,
-their working-tree status, change lists for four compare scopes, both sides of a
-changed file, snapshots of the working tree for reviews, and the few writes the
-view offers (stage, unstage, discard, commit / amend / push, sync).
+their working-tree status, change lists for five compare scopes (the fifth: a
+commit against its first parent), both sides of a
+changed file, snapshots of the working tree for reviews, the commit graph (one
+page of history in topo order, read-only browsing — no checkout, no reset), and
+the few writes the view offers (stage, unstage, discard, commit / amend / push,
+sync).
 
 It is **only git**. It does not depend on the agent or conversation services, and
 it knows nothing about reviews beyond producing and comparing snapshots. Branch
@@ -38,6 +41,7 @@ is a user action (open, refresh, click).
 | `gate.ts` | Bounded concurrency with a bounded, cancellable line (`GIT_BUSY` beyond it). |
 | `snapshot.ts` | Snapshot trees and "changed since". |
 | `revisions.ts` | Choices for "compare with a branch / commit". |
+| `graph.ts` | The commit graph: one page of history in topo order, with parents and refs. |
 | `operations.ts` | Writes. |
 | `errors.ts` | `GitError` + stable codes, failure classification. |
 

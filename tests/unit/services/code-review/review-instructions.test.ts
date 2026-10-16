@@ -88,6 +88,21 @@ describe('describeReviewReading', () => {
       .toContain('`v1.0`')
   })
 
+  it('reads a commit against its first parent, from the commit rather than from disk', () => {
+    const commit = 'c0ffee0000000000000000000000000000000000'
+    const reading = describeReviewReading(task({ scope: { kind: 'commit', revision: commit } }), WORK)
+    expect(reading.compare).toContain(`the commit \`${commit}\` against ${REV}, its first parent`)
+    expect(reading.commands.map(c => c.command)).toEqual([
+      `git --no-optional-locks -c core.quotepath=off show --no-patch --format=fuller ${commit}`,
+      `git --no-optional-locks -c core.quotepath=off diff --stat ${REV} ${commit}`,
+      `git --no-optional-locks -c core.quotepath=off diff ${REV} ${commit} -- <path>`,
+      `git --no-optional-locks -c core.quotepath=off show ${commit}:<path>`,
+    ])
+    expect(reading.notes.join(' ')).toContain('not from disk')
+    // The change list always resolves the base, the empty tree for a root commit; no guess replaces it.
+    expect(() => describeReviewReading(task({ scope: { kind: 'commit', revision: commit }, beforeRevision: null }), WORK)).toThrow()
+  })
+
   it('points git at a nested repository, quoting paths that need it', () => {
     expect(commands(task({ repoRoot: `${WORK}/halo-local` }))[0]).toBe(
       'git -C halo-local --no-optional-locks -c core.quotepath=off status --short --untracked-files=all'
@@ -167,6 +182,12 @@ describe('buildCodeReviewInstructions', () => {
     expect(text).toContain('**需要你决定**')
     expect(text).toContain('`src/app.ts:42`')
     expect(text).not.toContain('collab_start')
+  })
+
+  it('builds the instructions for a commit picked in the graph', () => {
+    const text = buildCodeReviewInstructions(task({ scope: { kind: 'commit', revision: 'abc1234' }, scopeLabel: 'Commit abc1234' }), { workDir: WORK, changes })
+    expect(text).toContain(`- Compare "Commit abc1234": the commit \`abc1234\` against ${REV}`)
+    expect(text).toContain(`diff ${REV} abc1234 -- <path>`)
   })
 
   it('asks the model to list files itself when the list could not be read', () => {

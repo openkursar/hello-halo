@@ -86,6 +86,10 @@ class ChildProcessRuntimeClient implements DshRuntimeClient {
     return { messageId: result.messageId }
   }
 
+  async steer(sessionId: string, contentBlocks: unknown[]): Promise<{ messageId: string }> {
+    return this.rpc().request<DshSessionPromptResult>(DshRequestMethod.SessionSteer, { sessionId, contentBlocks })
+  }
+
   onNotification(handler: (notification: DshNotification) => void): () => void {
     this.handlers.add(handler)
     return () => this.handlers.delete(handler)

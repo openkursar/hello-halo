@@ -410,7 +410,7 @@ export function buildCodexToolNamespaceMap(tools: unknown[] | undefined): CodexT
       if (String(innerTool.type || '') !== 'function') continue
       const fn = innerTool.function || innerTool
       const innerName = String(fn.name || innerTool.name || 'tool')
-      map.set(`${nsPrefix}${innerName}`, { namespace: nsPrefix, name: innerName })
+      map.set(`${nsPrefix}${innerName}`, { namespace: rawNs, name: innerName })
     }
   }
   return map
@@ -797,7 +797,7 @@ export async function handleResponsesRequest(
       res.setHeader('Connection', 'keep-alive')
 
       if (apiType === 'responses') {
-        await pipeNativeResponsesStream(upstreamResp.body, res)
+        await pipeNativeResponsesStream(upstreamResp.body, res, toolNamespaceMap)
       } else {
         await streamOpenAIChatToAnthropic(
           upstreamResp.body,
@@ -821,17 +821,40 @@ export async function handleResponsesRequest(
   }
 }
 
-async function pipeNativeResponsesStream(stream: ReadableStream<Uint8Array> | null, res: ExpressResponse): Promise<void> {
+async function pipeNativeResponsesStream(
+  stream: ReadableStream<Uint8Array> | null,
+  res: ExpressResponse,
+  toolNamespaceMap: CodexToolNamespaceMap,
+): Promise<void> {
   if (!stream) {
     writeCodexSse(res, 'response.failed', { type: 'response.failed', response: { error: { message: 'Empty stream from provider' } } })
     res.end()
     return
   }
 
+  const decoder = new TextDecoder()
+  let pending = ''
+  const flushEvents = (): void => {
+    let boundary: RegExpMatchArray | null
+    while ((boundary = pending.match(/\r\n\r\n|\n\n|\r\r/))) {
+      const index = boundary.index!
+      res.write(restoreNativeToolNamespaces(pending.slice(0, index), toolNamespaceMap) + boundary[0])
+      pending = pending.slice(index + boundary[0].length)
+    }
+  }
   try {
     await stream.pipeTo(new WritableStream({
-      write(chunk) { res.write(Buffer.from(chunk)) },
-      close() { res.end() },
+      write(chunk) {
+        if (toolNamespaceMap.size === 0) { res.write(Buffer.from(chunk)); return }
+        pending += decoder.decode(chunk, { stream: true })
+        flushEvents()
+      },
+      close() {
+        pending += decoder.decode()
+        flushEvents()
+        if (pending) res.write(restoreNativeToolNamespaces(pending, toolNamespaceMap))
+        res.end()
+      },
       abort(error) {
         writeCodexSse(res, 'response.failed', { type: 'response.failed', response: { error: { message: error?.message || String(error) } } })
         res.end()
@@ -841,6 +864,34 @@ async function pipeNativeResponsesStream(stream: ReadableStream<Uint8Array> | nu
     writeCodexSse(res, 'response.failed', { type: 'response.failed', response: { error: { message: error?.message || String(error) } } })
     res.end()
   }
+}
+
+// Upstream sees flattened tools even when it speaks Responses. Restore only
+// their identity; native reasoning, encrypted content and other events survive.
+function restoreNativeToolNamespaces(frame: string, toolNamespaceMap: CodexToolNamespaceMap): string {
+  if (!frame.includes('function_call')) return frame
+  const lines = frame.split(/\r\n|\n|\r/)
+  const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).replace(/^ /, '')).join('\n')
+  let event: any
+  try { event = JSON.parse(data) } catch { return frame }
+  let changed = false
+  const restore = (item: any): void => {
+    if (item?.type !== 'function_call' || item.namespace) return
+    const split = toolNamespaceMap.get(item.name)
+    if (!split) return
+    Object.assign(item, split)
+    changed = true
+  }
+  restore(event?.item)
+  if (Array.isArray(event?.response?.output)) event.response.output.forEach(restore)
+  if (!changed) return frame
+  let written = false
+  return lines.flatMap(line => {
+    if (!line.startsWith('data:')) return [line]
+    if (written) return []
+    written = true
+    return [`data: ${JSON.stringify(event)}`]
+  }).join(frame.includes('\r\n') ? '\r\n' : frame.includes('\r') ? '\r' : '\n')
 }
 
 export function createCodexStreamBridgeForTest(

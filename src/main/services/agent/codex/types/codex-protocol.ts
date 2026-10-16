@@ -77,7 +77,7 @@ export interface ThreadStartResponse {
 
 export interface ThreadResumeParams extends ThreadStartParams {
   /** Thread id to resume. */
-  id?: string
+  threadId?: string
   /** Or resume from rollout file path. */
   path?: string
   /** Replay history from notification stream after resume. */
@@ -90,7 +90,7 @@ export interface ThreadResumeParams extends ThreadStartParams {
 // ============================================================================
 
 export type UserInput =
-  | { type: 'text'; text: string }
+  | { type: 'text'; text: string; text_elements?: unknown[] }
   | { type: 'image'; url: string }
   | { type: 'localImage'; path: string }
   | { type: 'skill'; name: string; path?: string }
@@ -102,6 +102,13 @@ export interface TurnStartParams {
   model?: string
   effort?: string
   summary?: string
+}
+
+/** Verified against the bundled Codex app-server generated V2 schema. */
+export interface TurnSteerParams {
+  threadId: string
+  input: UserInput[]
+  expectedTurnId: string
 }
 
 export interface TurnInterruptParams {
@@ -165,12 +172,16 @@ export interface FileChangeOutputDeltaNotification extends ItemNotificationBase 
 
 export interface TurnStartedNotification {
   threadId: string
-  turnId: string
+  turn?: { id: string; status?: string }
+  /** Legacy notification shape. */
+  turnId?: string
 }
 
 export interface TurnCompletedNotification {
   threadId: string
-  turnId: string
+  turn?: { id: string; status?: string; error?: { message: string } | null }
+  /** Legacy notification shape. */
+  turnId?: string
   usage?: TokenUsage
   status?: string
 }
@@ -196,6 +207,8 @@ export interface TokenUsage {
 }
 
 export interface ErrorNotification {
+  /** Native retry keeps the current turn alive; only a terminal error ends it. */
+  willRetry?: boolean
   message?: string
   threadId?: string
   turnId?: string
@@ -436,8 +449,8 @@ export const ClientMethods = {
   Initialized: 'initialized',
   ThreadStart: 'thread/start',
   ThreadResume: 'thread/resume',
-  ThreadInjectItems: 'thread/inject_items',
   TurnStart: 'turn/start',
+  TurnSteer: 'turn/steer',
   TurnInterrupt: 'turn/interrupt',
 } as const
 

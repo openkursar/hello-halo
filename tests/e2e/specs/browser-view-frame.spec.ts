@@ -117,15 +117,35 @@ test.describe('production webview carrier', () => {
     await trigger.click()
     const action = window.getByRole('button', { name: /Open browser Built-in AI browser window/ })
     await expect(action).toBeVisible()
+    await action.evaluate(element => Promise.all(element.closest('[role="dialog"]')!.getAnimations({ subtree: true }).map(animation => animation.finished)))
     const box = await action.boundingBox()
     expect(box).not.toBeNull()
     await window.keyboard.press('Escape')
     const viewId = 'carrier-overlay'
     await createBrowser(window, viewId, browserSite.pageUrl(viewId))
-    await showBrowser(window, viewId, { x: Math.floor(box!.x), y: Math.floor(box!.y), width: 500, height: 400 })
+    const viewport = await window.evaluate(() => ({ width: innerWidth, height: innerHeight }))
+    const bounds = {
+      x: Math.max(0, Math.min(Math.floor(box!.x), viewport.width - 500)),
+      y: Math.max(0, Math.min(Math.floor(box!.y), viewport.height - 400)),
+      width: 500,
+      height: 400,
+    }
+    await showBrowser(window, viewId, bounds)
+    const guest = await window.locator(`webview[data-browser-page-id="${viewId}"]`).boundingBox()
+    expect(guest).not.toBeNull()
+    expect(guest!.x).toBeGreaterThanOrEqual(0)
+    expect(guest!.y).toBeGreaterThanOrEqual(0)
+    expect(guest!.x + guest!.width).toBeLessThanOrEqual(viewport.width)
+    expect(guest!.y + guest!.height).toBeLessThanOrEqual(viewport.height)
+    expect(guest!.x).toBeLessThanOrEqual(box!.x)
+    expect(guest!.y).toBeLessThanOrEqual(box!.y)
+    expect(guest!.x + guest!.width).toBeGreaterThanOrEqual(box!.x + box!.width)
+    expect(guest!.y + guest!.height).toBeGreaterThanOrEqual(box!.y + box!.height)
+    await testInfo.attach('popover-guest-geometry', { body: JSON.stringify({ viewport, guest, action: box }), contentType: 'application/json' })
     await assertBrowserFrame(electronApp, window, viewId)
     await trigger.click()
     await expect(action).toBeVisible()
+    await action.evaluate(element => Promise.all(element.closest('[role="dialog"]')!.getAnimations({ subtree: true }).map(animation => animation.finished)))
     const screenshot = await window.screenshot()
     await testInfo.attach('popover-over-webview', { body: screenshot, contentType: 'image/png' })
     const point = { x: Math.floor(box!.x + 8), y: Math.floor(box!.y + 8) }
@@ -137,8 +157,111 @@ test.describe('production webview carrier', () => {
     expect(visiblePixel, 'the popover must replace the cyan webpage at its position').not.toEqual([255, 180, 0])
     await action.click()
     await expect(window.getByPlaceholder(/Enter URL or search Bing/)).toBeVisible()
+    await expect(action).toHaveCount(0)
+    await expect(window.locator('[data-popover-dismiss-overlay]')).toHaveCount(0)
     expect(await executeBrowser(window, viewId, 'pageClicks')).toBe(0)
     await destroyBrowser(window, viewId)
+  })
+
+  test('header dismissal consumes the guest click and closes on Escape and repeated trigger clicks', async ({ electronApp, window, browserSite }) => {
+    await navigateToChat(window)
+    const viewId = 'carrier-menu-dismiss'
+    const url = browserSite.pageUrl(viewId)
+    await createBrowser(window, viewId, url)
+    await showBrowser(window, viewId, { x: 240, y: 200, width: 640, height: 480 })
+    const id = await guestIdentity(electronApp, url)
+    const before = await executeBrowser(window, viewId, '({nonce:carrierNonce,url:location.href,history:history.length})')
+    await executeBrowser(window, viewId, 'window.guestPointerDowns = 0; document.addEventListener("pointerdown", () => guestPointerDowns++); true')
+    const trigger = window.getByTitle('More', { exact: true }).first()
+    const overlay = window.locator('[data-popover-dismiss-overlay]')
+    const action = window.getByRole('button', { name: /Open browser Built-in AI browser window/ })
+    await trigger.click()
+    await expect(action).toBeVisible()
+    expect(await overlay.evaluate(element => element.parentElement === document.body)).toBe(true)
+    await window.mouse.click(500, 580)
+    await expect(action).toHaveCount(0)
+    await expect(overlay).toHaveCount(0)
+    expect(await executeBrowser(window, viewId, '({clicks:pageClicks,downs:guestPointerDowns})')).toEqual({ clicks: 0, downs: 0 })
+    await window.mouse.click(500, 580)
+    await expect.poll(() => executeBrowser(window, viewId, 'pageClicks')).toBe(1)
+    for (const method of ['Escape', 'trigger']) {
+      await trigger.click()
+      await expect(action).toBeVisible()
+      if (method === 'Escape') await window.keyboard.press('Escape')
+      else {
+        // Native coordinates exercise the dismiss overlay covering the trigger, not a forced DOM click.
+        const bounds = (await trigger.boundingBox())!
+        await window.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+      }
+      await expect(action).toHaveCount(0)
+      await expect(overlay).toHaveCount(0)
+      await expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    }
+    expect(await guestIdentity(electronApp, url)).toBe(id)
+    expect(await executeBrowser(window, viewId, '({nonce:carrierNonce,url:location.href,history:history.length})')).toEqual(before)
+    await trigger.click()
+    await action.click()
+    await expect(action).toHaveCount(0)
+    await expect(overlay).toHaveCount(0)
+    await expect(window.getByPlaceholder(/Enter URL or search Bing/)).toBeVisible()
+    expect(await executeBrowser(window, viewId, 'pageClicks')).toBe(1)
+    await destroyBrowser(window, viewId)
+  })
+
+  test('chat and resource rail drags stop after releasing over a real guest and persist the final width', async ({ electronApp, window, browserSite }) => {
+    await navigateToChat(window)
+    await openFromHeaderMenu(window, 'Open browser')
+    const url = browserSite.pageUrl('carrier-resize')
+    const address = window.getByPlaceholder(/Enter URL or search Bing/)
+    await address.fill(url)
+    await address.press('Enter')
+    await expect.poll(() => guestIdentity(electronApp, url)).toBeGreaterThan(0)
+    const id = await guestIdentity(electronApp, url)
+    const guest = window.locator('webview[aria-hidden="false"]')
+    const viewId = await guest.getAttribute('data-browser-page-id')
+    const before = await executeBrowser(window, viewId!, '({nonce:carrierNonce,url:location.href,history:history.length})')
+    const geometry = () => guest.evaluate(element => element.getBoundingClientRect().toJSON())
+    const chatHandle = window.getByTitle('Drag to resize', { exact: true }).first()
+    const original = await chatHandle.boundingBox()
+    expect(original).not.toBeNull()
+    const y = original!.y + original!.height / 2
+    await window.mouse.move(original!.x + 3, y)
+    await window.mouse.down()
+    await expect(window.locator('[data-pointer-drag-shield]')).toHaveCount(1)
+    await window.mouse.move(original!.x + 130, y, { steps: 8 })
+    await window.mouse.up()
+    await expect(window.locator('[data-pointer-drag-shield]')).toHaveCount(0)
+    await expect.poll(async () => (await chatHandle.boundingBox())!.x).toBeGreaterThan(original!.x + 60)
+    const chatEnd = (await chatHandle.boundingBox())!
+    const chatWidth = await chatHandle.evaluate(element => element.parentElement!.getBoundingClientRect().width)
+    const dataDirectory = await electronApp.evaluate(() => process.env.HALO_DATA_DIR!)
+    const metaPath = path.join(dataDirectory, 'temp', '.halo', 'meta.json')
+    await expect.poll(() => JSON.parse(fs.readFileSync(metaPath, 'utf8')).preferences?.layout?.chatWidth).toBe(chatWidth)
+    const afterChat = await geometry()
+    await window.mouse.move(afterChat.x + afterChat.width / 2, y)
+    await window.mouse.move(original!.x + 20, y)
+    await window.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    expect((await chatHandle.boundingBox())!.x).toBe(chatEnd.x)
+    await window.getByRole('button', { name: 'Open workspace resources', exact: true }).click()
+    const railHandle = window.getByTitle('Drag to resize', { exact: true }).last()
+    const railStart = (await railHandle.boundingBox())!
+    await expect.poll(async () => (await geometry()).right).toBeLessThanOrEqual(railStart.x + 1)
+    await railHandle.hover()
+    await window.mouse.down()
+    await expect(window.locator('[data-pointer-drag-shield]')).toHaveCount(1)
+    await window.mouse.move(railStart.x - 75, y, { steps: 8 })
+    await window.mouse.up()
+    await expect(window.locator('[data-pointer-drag-shield]')).toHaveCount(0)
+    await expect.poll(async () => (await railHandle.boundingBox())!.x).toBeLessThan(railStart.x - 30)
+    const railEnd = (await railHandle.boundingBox())!
+    const railWidth = await railHandle.evaluate(element => element.parentElement!.getBoundingClientRect().width)
+    await expect.poll(() => JSON.parse(fs.readFileSync(path.join(dataDirectory, 'config.json'), 'utf8')).layout?.artifactRailWidth).toBe(railWidth)
+    await window.mouse.move(railStart.x - 150, y)
+    await window.mouse.move(railStart.x + 20, y)
+    await window.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    expect((await railHandle.boundingBox())!.x).toBe(railEnd.x)
+    expect(await guestIdentity(electronApp, url)).toBe(id)
+    expect(await executeBrowser(window, viewId!, '({nonce:carrierNonce,url:location.href,history:history.length})')).toEqual(before)
   })
 
   test('shares login storage while keeping guest privileges isolated', async ({ electronApp, window, browserSite }) => {
@@ -662,7 +785,8 @@ test.describe('production webview carrier', () => {
       return
     }
     await openFromHeaderMenu(window, 'Open terminal')
-    await window.keyboard.press('Escape')
+    await expect(window.locator('[data-popover-dismiss-overlay]')).toHaveCount(0)
+    await expect(window.getByRole('button', { name: /Open terminal Current workspace directory/ })).toHaveCount(0)
     await expect(window.locator('.xterm')).toBeVisible()
     const terminalId = await window.evaluate(async () => {
       const result = await (window as unknown as { halo: HaloAPI }).halo.listTerminals()

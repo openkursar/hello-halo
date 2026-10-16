@@ -36,6 +36,14 @@ describe('createSdkMcpServer', () => {
     await expect(server.instance.callTool('absent', {})).resolves.toBeUndefined()
   })
 
+  it('serves a tool with no input fields', async () => {
+    const handler = vi.fn(async () => ({ content: [] }))
+    const server = createSdkMcpServer({ name: 'team', tools: [tool('list', 'List teams', {}, handler)] })
+    expect(server.instance.listTools()[0].inputSchema).toMatchObject({ type: 'object', properties: {} })
+    await server.instance.callTool('list', {})
+    expect(handler).toHaveBeenCalledWith({}, {})
+  })
+
   it('translates the declared field schemas into JSON Schema', async () => {
     // Call sites write zod; anything crossing a process boundary needs JSON
     // Schema, and a client rejects a tool whose schema it cannot read.
@@ -88,5 +96,45 @@ describe('createSdkMcpServer', () => {
       await client.close().catch(() => {})
       await bridge.close()
     }
+  })
+
+  it('preserves nested object and array constraints, descriptions, enums and optional fields', () => {
+    const server = createSdkMcpServer({ name: 'team', tools: [tool('assemble', 'Assemble', {
+      members: z.array(z.object({
+        name: z.string().min(1).describe('Member handle'),
+        role: z.enum(['reviewer', 'writer']),
+        metadata: z.object({ tags: z.array(z.string()).optional() }).optional(),
+        priority: z.number().int().min(1).max(5).default(2),
+        note: z.string().nullable().optional(),
+      })).min(1).max(3),
+    }, async () => ({ content: [] }))] })
+    expect(server.instance.listTools()[0].inputSchema).toMatchObject({
+      type: 'object', required: ['members'], properties: { members: {
+        type: 'array', minItems: 1, maxItems: 3, items: {
+          type: 'object', required: ['name', 'role'], additionalProperties: false,
+          properties: {
+            name: { type: 'string', minLength: 1, description: 'Member handle' },
+            role: { type: 'string', enum: ['reviewer', 'writer'] },
+            metadata: { type: 'object', properties: { tags: { type: 'array', items: { type: 'string' } } } },
+            priority: { type: 'integer', minimum: 1, maximum: 5, default: 2 },
+            note: { type: ['string', 'null'] },
+          },
+        },
+      } },
+    })
+  })
+
+  it('validates nested arguments before handlers and applies defaults and transforms', async () => {
+    const handler = vi.fn(async () => ({ content: [] }))
+    const server = createSdkMcpServer({ name: 'team', tools: [tool('assemble', 'Assemble', {
+      members: z.array(z.object({ responsibility: z.string().min(1).transform(value => value.trim()) })).min(1),
+      wait: z.boolean().default(false),
+    }, handler)] })
+    const invalid = await server.instance.callTool('assemble', { members: [{}] }) as { isError: boolean; content: Array<{ text: string }> }
+    expect(invalid.isError).toBe(true)
+    expect(invalid.content[0].text).toContain('responsibility')
+    expect(handler).not.toHaveBeenCalled()
+    await server.instance.callTool('assemble', { members: [{ responsibility: '  Review concurrency  ' }] })
+    expect(handler).toHaveBeenCalledWith({ members: [{ responsibility: 'Review concurrency' }], wait: false }, {})
   })
 })

@@ -1338,6 +1338,10 @@
   },
   {
     "method": "POST",
+    "path": "/api/git/commit-graph"
+  },
+  {
+    "method": "POST",
     "path": "/api/git/stage"
   },
   {

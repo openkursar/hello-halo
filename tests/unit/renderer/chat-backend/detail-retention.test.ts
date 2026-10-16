@@ -44,7 +44,7 @@ import { createMessagingSlice } from '../../../../src/renderer/stores/chat/messa
 import { createAgentEventsSlice } from '../../../../src/renderer/stores/chat/agent-events'
 import { createSessionSlice } from '../../../../src/renderer/stores/chat/session'
 import { createAppChatSelectionSlice } from '../../../../src/renderer/stores/chat/app-chat-selection'
-import type { ChatState } from '../../../../src/renderer/stores/chat/internal'
+import { createEmptySessionState, type ChatState } from '../../../../src/renderer/stores/chat/internal'
 import type { Conversation, ConversationMeta } from '../../../../src/renderer/types'
 
 const SPACE = 'space-1'
@@ -155,5 +155,30 @@ describe('a turn sent from this window', () => {
     finishRead({ success: true, data: { id: ON_SCREEN, spaceId: SPACE, title: 'Chat', messages: [] } })
     await completing
     expect(holders.has(ON_SCREEN)).toBe(true)
+  })
+})
+
+
+describe('accepted input details', () => {
+  const input = { id: 'pending-live-arrival', role: 'system' as const, source: 'team-message' as const, content: 'Reviewer found an issue', timestamp: '2026-10-09T10:00:00.000Z', metadata: { fromMemberName: 'Reviewer' } }
+
+  it('does not allocate a transcript or session for a background arrival', () => {
+    const store = makeStore()
+    store.getState().handleAgentInputArrived({ spaceId: SPACE, conversationId: BACKGROUND, live: true, messages: [input] })
+    expect(store.getState().sessions.has(BACKGROUND)).toBe(false)
+    expect(store.getState().conversationCache.has(BACKGROUND)).toBe(false)
+  })
+
+  it('anchors accepted records immediately without reading history or repeating the event', () => {
+    const store = makeStore()
+    holders.set(ON_SCREEN, 1)
+    const active = { ...createEmptySessionState(), isGenerating: true, streamingContent: 'Checking', textBlockVersion: 2, thoughts: [{ id: 'running-tool', type: 'tool_use' as const, content: '', timestamp: input.timestamp }] }
+    store.setState({ sessions: new Map([[ON_SCREEN, active]]) })
+    const event = { spaceId: SPACE, conversationId: ON_SCREEN, live: true, messages: [input] }
+    store.getState().handleAgentInputArrived(event)
+    store.getState().handleAgentInputArrived(event)
+    expect(store.getState().sessions.get(ON_SCREEN)?.liveInputs).toEqual([expect.objectContaining({ message: expect.objectContaining(input), afterThoughtId: 'running-tool', textOffset: 8, textBlockVersion: 2 })])
+    expect(store.getState().conversationCache.get(ON_SCREEN)?.messages).toHaveLength(1)
+    expect(apiMock.getConversation).not.toHaveBeenCalled()
   })
 })

@@ -19,11 +19,12 @@
  * (sendWake/registerTurnComplete/resolveOfficeId) are INJECTED by bootstrap.
  */
 
-import { SELF_NODE_ID } from '../../../../shared/apps/team-types'
+import { SELF_NODE_ID, type TeamTriggerContext } from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 import type { OrchestrationSessionDeps } from '../team'
 import type { TurnCompletion } from '../team/message-bus'
 import type { SerializedWakeRequest } from './types'
+import { oneLineExcerpt } from '../text-truncate'
 
 type SendAppChatRequest = Parameters<OrchestrationSessionDeps['sendAppChatMessage']>[0]
 
@@ -71,12 +72,14 @@ const LOG_TAG = '[FedSessionDeps]'
  * confirmed-offline; this only catches the pathological lost-completion path.
  */
 export const WAKE_COMPLETION_BACKSTOP_MS = 2 * 60 * 60 * 1000
+const MAX_REMOTE_MESSAGE_RECEIPTS = 1024
 
 function serialize(request: SendAppChatRequest): SerializedWakeRequest {
   return {
     appId: request.appId,
     spaceId: request.spaceId,
     message: request.message,
+    recordedMessages: request.recordedMessages,
     conversationId: request.conversationId,
     teamContext: request.teamContext,
   }
@@ -120,8 +123,64 @@ export function withOwnerResolvedSpace(
  * omitted this one would have its request run as if the owner had started it.
  * Arriving over the link IS the evidence, and it is evidence only this side has.
  */
-export function withExternalOrigin(request: SerializedWakeRequest): SerializedWakeRequest {
-  return { ...request, teamContext: { ...request.teamContext, external: true } }
+export function withExternalOrigin(
+  request: SerializedWakeRequest,
+  source?: { teamName?: string; fromMemberName?: string | null },
+): SerializedWakeRequest {
+  const incoming = request.teamContext
+  const kind: TeamTriggerContext['kind'] = incoming.kind === 'run_start' || incoming.kind === 'periodic_check' || incoming.kind === 'member_stopped'
+    ? incoming.kind : 'message'
+  const teamContext: TeamTriggerContext = {
+    teamId: incoming.teamId,
+    epochId: incoming.epochId,
+    correlationId: incoming.correlationId,
+    fromAppId: typeof incoming.fromAppId === 'string' ? incoming.fromAppId : null,
+    wait: incoming.wait === true,
+    kind,
+    external: true,
+    // Forging this only withholds a turn report; it grants nothing.
+    ...(incoming.kind === 'human_message' && incoming.fromAppId == null ? { personalChat: true } : {}),
+    ...(typeof incoming.taskId === 'string' ? { taskId: incoming.taskId } : {}),
+    ...(Number.isSafeInteger(incoming.forwardDepth) && incoming.forwardDepth! >= 0 ? { forwardDepth: incoming.forwardDepth } : {}),
+  }
+  if (incoming.kind === undefined || !['run_start', 'message', 'periodic_check', 'human_message', 'member_stopped'].includes(incoming.kind)) {
+    console.warn(`${LOG_TAG} Remote wake kind normalized: team=${teamContext.teamId} app=${request.appId} corr=${teamContext.correlationId}`)
+  }
+  const records = Array.isArray(request.recordedMessages) && request.recordedMessages.length > 0
+    ? request.recordedMessages : [{ content: request.message }]
+  const recordedMessages = records.map(record => {
+    if (!record || typeof record.content !== 'string') throw new TypeError('Remote message records must contain text')
+    // A person's own words read as theirs, as the same chat on one machine does;
+    // only the authority above is narrowed.
+    if (teamContext.personalChat) {
+      return { content: record.content, teamOrigin: { kind: 'human_message' as const, correlationId: teamContext.correlationId } }
+    }
+    // Display only, and bounded: the sender's own words for the card.
+    const summary = record.provenance?.metadata?.summary
+    return {
+      content: record.content,
+      teamOrigin: { kind, correlationId: teamContext.correlationId },
+      provenance: {
+        source: 'team-message' as const,
+        metadata: {
+          teamId: teamContext.teamId, epochId: teamContext.epochId, teamTriggerKind: kind,
+          fromMemberName: source?.fromMemberName ?? null,
+          ...(source?.teamName ? { teamName: source.teamName } : {}),
+          ...(typeof summary === 'string' && summary.trim() ? { summary: oneLineExcerpt(summary, 200) } : {}),
+        },
+      },
+    }
+  })
+  // Runtime holds, callbacks, IM standing and transcript authority never come from a peer's JSON.
+  return {
+    appId: request.appId,
+    spaceId: request.spaceId,
+    message: request.message,
+    conversationId: request.conversationId,
+    teamContext,
+    recordedMessages,
+    ...(typeof request.coalescingKey === 'string' ? { coalescingKey: request.coalescingKey } : {}),
+  }
 }
 
 export function makeLocationAwareSessionDeps(
@@ -136,6 +195,13 @@ export function makeLocationAwareSessionDeps(
     sendStop,
     getRemoteSpaceId,
   } = config
+
+  const remoteMessages = new Map<string, {
+    appId: string
+    teamId: string
+    epochId: string
+    finish: (outcome: TurnCompletion) => void
+  }>()
 
   function isLocal(appId: string, teamId?: string): boolean {
     return resolveOwnerNode(appId, teamId) === SELF_NODE_ID
@@ -227,6 +293,54 @@ export function makeLocationAwareSessionDeps(
       })
     },
 
+    deliverRemoteMessage(request) {
+      const owner = resolveOwnerNode(request.appId, request.teamContext.teamId)
+      if (owner === SELF_NODE_ID) return undefined
+      const correlationId = request.teamContext.correlationId
+      if (remoteMessages.has(correlationId)) return true
+      if (remoteMessages.size >= MAX_REMOTE_MESSAGE_RECEIPTS) {
+        console.warn(`${LOG_TAG} remote message refused app=${request.appId} owner=${owner} reason=receipt capacity count=${remoteMessages.size}`)
+        return false
+      }
+      let finished = false
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let unregister = () => {}
+      const finish = (outcome: TurnCompletion): void => {
+        if (finished) return
+        finished = true
+        remoteMessages.delete(correlationId)
+        if (timer) clearTimeout(timer)
+        unregister()
+        if (outcome.kind === 'error' || outcome.kind === 'undelivered' || outcome.kind === 'timeout') {
+          console.warn(`${LOG_TAG} remote message failed app=${request.appId} owner=${owner} corr=${correlationId} outcome=${outcome.kind}`)
+        }
+        try { request.onCompletion(outcome) } catch (error) {
+          console.error(`${LOG_TAG} remote message completion observer failed app=${request.appId} corr=${correlationId}`, error)
+        }
+      }
+      remoteMessages.set(correlationId, {
+        appId: request.appId, teamId: request.teamContext.teamId, epochId: request.teamContext.epochId, finish,
+      })
+      unregister = registerTurnComplete(correlationId, finish)
+      timer = setTimeout(() => finish({ kind: 'undelivered', reason: 'no-completion-signal' }), WAKE_COMPLETION_BACKSTOP_MS)
+      timer.unref?.()
+      try {
+        const accepted = sendWake({
+          officeId: request.teamContext.teamId,
+          ownerNodeId: owner,
+          correlationId,
+          request: { ...serialize(request), coalescingKey: request.coalescingKey },
+        })
+        if (!accepted) finish({ kind: 'undelivered', reason: 'owner-unreachable' })
+        return accepted
+      } catch (error) {
+        finish({ kind: 'undelivered', reason: error instanceof Error ? error.message : String(error) })
+        return false
+      }
+    },
+
+    getTurnIdentity(sessionKey) { return local.getTurnIdentity?.(sessionKey) },
+
     holdTurn(sessionKey) {
       // Only a session this machine runs can be raced here; a remote member's
       // owner holds its own when the wake lands.
@@ -238,22 +352,25 @@ export function makeLocationAwareSessionDeps(
       // Remote members run their session on the owner, so this answers false and
       // the bus hands the wake straight over. Deliberate: busyness is only
       // knowable on the machine that runs the turn, so the OWNER applies the gate
-      // when the wake lands (`bus.runRelayedTurn`). Do not answer this from a
+      // when the wake lands (app-chat delivery). Do not answer this from a
       // remote status view — it is already stale when the wake arrives.
       return local.isSessionActive(sessionKey)
     },
 
-    injectIntoSession(sessionKey, message) {
-      // No locality branch on purpose: a remote member's turn runs on its owner,
-      // where there is no live session under this key, so the local impl already
-      // answers false and the message queues as before. The remote half of this
-      // — reaching into a turn on ANOTHER machine — would need the wake protocol
-      // to carry a delivery that expects no completion, and is deliberately not
-      // attempted here. Mid-turn delivery is a locally-owned-member gain.
-      return local.injectIntoSession(sessionKey, message)
+    injectIntoSession(sessionKey, message, messages, trigger, onTakenBack) {
+      return local.injectIntoSession(sessionKey, message, messages, trigger, onTakenBack)
+    },
+
+    recordStoppedInputs(sessionKey, records) {
+      local.recordStoppedInputs?.(sessionKey, records)
     },
 
     closeTeamSession(appId, teamId, epochId) {
+      for (const pending of remoteMessages.values()) {
+        if (pending.appId === appId && pending.teamId === teamId && pending.epochId === epochId) {
+          pending.finish({ kind: 'undelivered', reason: 'task-closed-before-completion' })
+        }
+      }
       if (isLocal(appId, teamId)) return local.closeTeamSession(appId, teamId, epochId)
       // The owner tears down its own session; nothing to close here.
       return Promise.resolve()

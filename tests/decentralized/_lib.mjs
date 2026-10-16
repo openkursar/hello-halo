@@ -75,7 +75,7 @@ function retirePreviousRun(clusterDir, dirAbs) {
   }
 }
 
-export function clusterStart({ nodes = 5, basePort = 3460, fresh = true, clusterDir = '.cluster' } = {}) {
+export function clusterStart({ nodes = 5, basePort = 3460, fresh = true, clusterDir = '.cluster', quiet = false } = {}) {
   // Manual fresh: wipe ourselves so we can pre-seed identities into node dirs
   // BEFORE the launcher spawns the processes (the launcher's own --fresh would
   // delete our seeded files). We then call the launcher WITHOUT --fresh.
@@ -84,7 +84,7 @@ export function clusterStart({ nodes = 5, basePort = 3460, fresh = true, cluster
   for (let i = 1; i <= nodes; i++) seedNodeIdentity(clusterDir, i)
 
   const args = [LAUNCHER, 'start', '--nodes', String(nodes), '--base-port', String(basePort), '--cluster', clusterDir]
-  const res = spawnSync('node', args, { cwd: PROJECT_ROOT, stdio: 'inherit', timeout: 5 * 60_000 })
+  const res = spawnSync('node', args, { cwd: PROJECT_ROOT, stdio: quiet ? 'pipe' : 'inherit', timeout: 5 * 60_000 })
   // exit code 2 = some node not ready; we still read the manifest and let the
   // runner decide. Non-2 non-0 is a hard launcher failure.
   if (res.status !== 0 && res.status !== 2) {

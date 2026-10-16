@@ -87,6 +87,10 @@ export async function startReview(request: CodeReviewStartRequest): Promise<Code
     return refusalFromError(error)
   }
 
+  // Built before the conversation exists: a failure here must not leave an empty review behind.
+  const workDir = getWorkingDir(spaceId)
+  const taskInstructions = buildCodeReviewInstructions(task, { workDir, changes: reviewChanges })
+
   let conversationId: string
   try {
     const title = request.title.trim().slice(0, MAX_TITLE_CHARS) || `Review · ${task.repoName}`
@@ -98,7 +102,7 @@ export async function startReview(request: CodeReviewStartRequest): Promise<Code
 
   // A quick review is one agent by definition; a team review needs the team tools.
   // Seeded before the first message, so the session it creates already has them.
-  const toolsetScope = { spaceId, conversationId, workDir: getWorkingDir(spaceId) }
+  const toolsetScope = { spaceId, conversationId, workDir }
   const toolset = variant === 'team'
     ? openToolset(toolsetScope, TEAM_MCP_SERVER_NAME, 'system')
     : closeToolset(toolsetScope, TEAM_MCP_SERVER_NAME, 'system')
@@ -106,8 +110,6 @@ export async function startReview(request: CodeReviewStartRequest): Promise<Code
     // The instructions fall back to a single reviewer and say so in the report.
     console.warn(`${LOG_TAG} Could not ${variant === 'team' ? 'open' : 'close'} team tools for review ${conversationId}: ${toolset.error}`)
   }
-
-  const taskInstructions = buildCodeReviewInstructions(task, { workDir: toolsetScope.workDir, changes: reviewChanges })
 
   // The message is recorded before sendMessage first yields, so the review is
   // visible at once; the turn itself runs in the background and reports its own

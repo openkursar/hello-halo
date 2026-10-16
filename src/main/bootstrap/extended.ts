@@ -82,7 +82,7 @@ import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtim
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
 import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck, TeamOfficeStatusKind, TeamVersionMismatch } from '../../shared/apps/team-types'
 import { parseTeamSessionKey, parseTeamChatKey, nativeChatAppId, isSpaceConversationId } from '../../shared/apps/im-keys'
-import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, createMemberWorkDirResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot, teamFolderDir } from '../apps/runtime/team'
+import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, releaseTeamMailOnTurnStart, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, createMemberWorkDirResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot, teamFolderDir } from '../apps/runtime/team'
 import { readTeamMemberMessages, isAppChatConversationGenerating } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
 import { createSpace, deleteSpace, getSpace, getSpaceDir } from '../services/space.service'
@@ -138,13 +138,13 @@ let disposeRelayCapture: { dispose(): void } | null = null
 let digitalHumanConversations: { dispose(): void } | null = null
 let flushRelayCapture: (() => void) | null = null
 let onSystemResume: (() => void) | null = null
+let stopReleasingTeamMail: (() => void) | null = null
 let taskStateService: Awaited<ReturnType<typeof initTaskState>> | null = null
 
 /**
  * Tell every window and remote client how an office stands (see
- * TeamOfficeStatusKind). `versionMismatch` is only meaningful for
- * 'update-required' and is omitted from the payload (not sent as `undefined`)
- * when direction could not be resolved.
+ * TeamOfficeStatusKind). `versionMismatch` only accompanies 'update-required'
+ * and is left out of the payload, not sent as `undefined`, when absent.
  */
 function emitOfficeStatus(teamId: string, kind: TeamOfficeStatusKind, versionMismatch?: TeamVersionMismatch): void {
   const payload = versionMismatch ? { teamId, kind, versionMismatch } : { teamId, kind }
@@ -657,7 +657,12 @@ async function initPlatformAndApps(): Promise<void> {
               // here, and the fact that this request came from another machine.
               return await localSessionDeps.sendAppChatMessage(
                 withOwnerResolvedSpace(
-                  withExternalOrigin(request),
+                  withExternalOrigin(request, {
+                    teamName: teamStore.getTeamById(request.teamContext.teamId)?.name,
+                    fromMemberName: request.teamContext.fromAppId
+                      ? teamStore.getMember(request.teamContext.teamId, request.teamContext.fromAppId)?.memberName ?? null
+                      : null,
+                  }),
                   (appId) => localSessionDeps.getMemberSpaceId(appId)
                 )
               )
@@ -665,17 +670,8 @@ async function initPlatformAndApps(): Promise<void> {
               notifyLocalBoard()
             }
           }
-          // Only the OWNER can know whether this member is already mid-turn, and
-          // only at the instant the turn starts — the sender's view is stale by
-          // the time the wake crosses the network. So the busy gate is applied
-          // HERE, sharing the kernel's mailbox with local deliveries: without it
-          // a relayed wake starts a second turn on a session key a local one
-          // already owns, and the two race one shared SDK iterator (the loser
-          // waits forever for a completion that never comes).
-          // conversationId IS the session key (buildTeamSessionKey).
-          const bus = getActiveTeamRuntime()?.bus
-          if (!bus) return run()
-          return bus.runRelayedTurn({ sessionKey: request.conversationId, run })
+          // app-chat applies the same permission-aware mailbox to every entry.
+          return run()
         },
         // Deliberately NO kernel unblock on confirmed-offline: over a WAN tunnel
         // a confirmed-offline is routinely a transient outage, and the durable
@@ -1057,6 +1053,8 @@ async function initPlatformAndApps(): Promise<void> {
     const hasPendingEscalationFor = (appId: string, teamId: string, epochId?: string): boolean =>
       getActivityStore()?.hasPendingEscalation(appId, teamId, epochId) ?? false
 
+    stopReleasingTeamMail?.()
+    stopReleasingTeamMail = releaseTeamMailOnTurnStart()
     setActiveTeamRuntime(
       createTeamRuntime({
         store: teamStore,
@@ -1100,12 +1098,10 @@ async function initPlatformAndApps(): Promise<void> {
           broadcastToAll(TEAM_EVENTS.updated, payload as unknown as Record<string, unknown>)
           sendToRenderer(TEAM_EVENTS.updated, payload)
         },
-        // See `TurnReportDeps.isLeadGenerating` for the contract this fills.
-        isLeadGenerating: isAppChatConversationGenerating,
         teamFolderRoot,
         // A space coordinator's "inbox" is its space conversation: member
         // replies and turn-end notices land there through the conversation
-        // delivery layer (wake when idle, queue behind a busy turn). A full
+        // delivery layer (join compatible work, otherwise start a separate turn). A full
         // mailbox or a vanished conversation reads as undelivered — loud, so
         // the sending member is told instead of waiting forever.
         deliverToSpaceCoordinator: async (request) => {
@@ -1113,6 +1109,8 @@ async function initPlatformAndApps(): Promise<void> {
             spaceId: request.spaceId,
             toConversationId: request.conversationId,
             turnInput: request.turnInput,
+            identity: request.permissionIdentity,
+            coalescingKey: request.coalescingKey,
             persist: {
               content: request.persist.content,
               source: 'team-message',
@@ -1122,6 +1120,7 @@ async function initPlatformAndApps(): Promise<void> {
           if (!result.ok) {
             throw new Error(`Could not reach the coordinating conversation (${result.reason})`)
           }
+          return result.status === 'queued' ? 'buffered' : result.joinedTurn ? 'mid_turn' : 'dispatched'
         },
         onBlackboardWrite: (record) => getFederationManager()?.routeAuthorityWrite(record),
         // Auto-seal (quiescence) / breach end a run without going through the
@@ -1686,6 +1685,8 @@ export async function cleanupExtendedServices(): Promise<void> {
     // Team: Tear down the service + runtime accessor and the data layer before
     // the App Manager goes away (the service holds an App Manager reference).
     shutdownTeamService()
+    stopReleasingTeamMail?.()
+    stopReleasingTeamMail = null
     setActiveTeamRuntime(null)
     if (onSystemResume) {
       powerMonitor.removeListener('resume', onSystemResume)

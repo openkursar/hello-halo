@@ -7,12 +7,14 @@
 import { rawRpcMethod, type RpcResponse } from '../define'
 import type {
   GitChangeList,
+  GitCommitGraph,
   GitCommitRequest,
   GitCommitResult,
   GitCompareScope,
   GitErrorCode,
   GitFileContents,
   GitFileContentsRequest,
+  GitGraphQuery,
   GitRepositoryList,
   GitRevisionOption,
   GitSnapshot,
@@ -32,6 +34,7 @@ export const gitRpc = {
   gitGetChanges: rawRpcMethod<[...InRepo, scope: GitCompareScope], GitRpcResponse<GitChangeList>>('git:get-changes'),
   gitGetFileContents: rawRpcMethod<[...InRepo, request: GitFileContentsRequest], GitRpcResponse<GitFileContents>>('git:get-file-contents'),
   gitListRevisionOptions: rawRpcMethod<InRepo, GitRpcResponse<GitRevisionOption[]>>('git:list-revision-options'),
+  gitGetCommitGraph: rawRpcMethod<[...InRepo, query: GitGraphQuery], GitRpcResponse<GitCommitGraph>>('git:get-commit-graph'),
   gitStage: rawRpcMethod<[...InRepo, paths: string[]], GitRpcResponse<void>>('git:stage'),
   gitUnstage: rawRpcMethod<[...InRepo, paths: string[]], GitRpcResponse<void>>('git:unstage'),
   gitDiscard: rawRpcMethod<[...InRepo, paths: string[]], GitRpcResponse<void>>('git:discard'),

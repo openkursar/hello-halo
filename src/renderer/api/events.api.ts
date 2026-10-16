@@ -22,9 +22,26 @@ import { enqueueReport } from './analytics-batch'
 import { isConversationDetailRetained, retainConversationDetail } from './conversation-visibility'
 import type { GoalUpdatedEvent } from '../../shared/types/goal'
 import type { ApiRetryEvent } from '../../shared/types/api-retry'
+import { isAgentInputArrivedEvent, isAgentInputStoppedEvent, type AgentInputArrivedEvent, type AgentInputStoppedEvent } from '../../shared/types/agent-input'
 
 export const eventsApi = {
   // ===== Event Listeners =====
+  onAgentInputArrived: (callback: (data: AgentInputArrivedEvent) => void) =>
+    onEvent<unknown>('agent:input-arrived', value => {
+      if (!isAgentInputArrivedEvent(value)) {
+        console.warn('[AgentEvents] Invalid input-arrival event ignored')
+        return
+      }
+      callback(value)
+    }),
+  onAgentInputStopped: (callback: (data: AgentInputStoppedEvent) => void) =>
+    onEvent<unknown>('agent:input-stopped', value => {
+      if (!isAgentInputStoppedEvent(value)) {
+        console.warn('[AgentEvents] Invalid input-stopped event ignored')
+        return
+      }
+      callback(value)
+    }),
   onAgentMessage: (callback: (data: unknown) => void) =>
     onEvent('agent:message', callback),
   onAgentToolCall: (callback: (data: unknown) => void) =>

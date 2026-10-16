@@ -8,7 +8,7 @@
  * is instant and a finished turn settles where it streamed.
  */
 import { api, createEmptySessionState } from '../internal'
-import type { Conversation, Thought } from '../internal'
+import type { Conversation, Message, Thought } from '../internal'
 import type { TranscriptPage } from '../../../../shared/types/transcript'
 import type { ContentReference } from '../../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../../shared/content-reference'
@@ -70,8 +70,15 @@ function emptyConversation(appId: string, ref: ConversationRef): Conversation {
  *
  * While a turn is in flight the reader already lists its partial reply, which
  * the live streaming section is drawing: replies not shown yet are held back
- * until the turn settles, or the same text would appear twice.
+ * until the turn settles, or the same text would appear twice. Input received
+ * mid-turn splits that partial reply into segments, so every segment from the
+ * start of the running engine turn is held back, not only the last one.
  */
+// The running turn's own text is drawn by the live stream; a push it already sent is not part of that stream.
+function isUnshownReply(message: Message, shown: ReadonlySet<string>): boolean {
+  return message.role === 'assistant' && message.source !== 'push' && !shown.has(message.id)
+}
+
 function withPage(
   existing: Conversation | undefined,
   appId: string,
@@ -83,9 +90,15 @@ function withPage(
   let incoming = page.messages
   if (inFlight) {
     const shown = new Set(base.messages.map(m => m.id))
-    let end = incoming.length
-    while (end > 0 && incoming[end - 1].role === 'assistant' && !shown.has(incoming[end - 1].id)) end--
-    incoming = incoming.slice(0, end)
+    if (page.openTurnFrom !== undefined) {
+      // Not in the page: the running turn began before its oldest message.
+      const from = Math.max(0, incoming.findIndex(m => m.id === page.openTurnFrom))
+      incoming = incoming.filter((m, index) => index < from || !isUnshownReply(m, shown))
+    } else {
+      let start = incoming.length
+      while (start > 0 && incoming[start - 1].role === 'assistant' && !shown.has(incoming[start - 1].id)) start--
+      incoming = incoming.filter((m, index) => index < start || !isUnshownReply(m, shown))
+    }
   }
   const { messages, keptOlder } = reconcileTranscript(base.messages, incoming, { dropUnconfirmed: !inFlight })
   const last = messages[messages.length - 1]

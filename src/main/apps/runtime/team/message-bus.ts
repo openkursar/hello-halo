@@ -19,6 +19,7 @@ import {
   parseSpaceCoordinatorAppId,
 } from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
+import { isBorrowedTeamTurn } from '../capability-policy'
 import type { TeamStore } from '../../team'
 import type { PostActivityInput } from './blackboard'
 import type {
@@ -38,6 +39,9 @@ function appIdFromSessionKey(sessionKey: string): string | null {
 
 // ── Integration seam (implemented by the session layer) ─────────────────────
 
+/** How a coordinating conversation took a message: a turn of its own, inside its running turn, or queued. */
+export type CoordinatorDisposition = Extract<DeliverDisposition, 'dispatched' | 'mid_turn' | 'buffered'>
+
 export interface TeamDeliveryHooks {
   /** Resolves when the turn is accepted/started, NOT when it finishes. */
   wakeTarget(params: {
@@ -47,8 +51,10 @@ export interface TeamDeliveryHooks {
     epochId: string
     envelope: TeamEnvelope
     trigger: TeamTriggerContext
+    deliveries?: readonly TeamDelivery[]
   }): Promise<void>
   isBusy(sessionKey: string): boolean
+  getTurnIdentity?(sessionKey: string): string | undefined
   /**
    * Hand the envelope to the turn the target is ALREADY running, instead of
    * queueing it behind that turn. Synchronous, and false when it could not
@@ -66,7 +72,10 @@ export interface TeamDeliveryHooks {
     epochId: string
     envelope: TeamEnvelope
     trigger: TeamTriggerContext
+    deliveries?: readonly TeamDelivery[]
   }): boolean
+  /** Durable owner-side delivery; undefined means the target is local. */
+  deliverRemote?(params: { sessionKey: string; envelope: TeamEnvelope; trigger: TeamTriggerContext; coalescingKey?: string; onCompletion: (outcome: TurnCompletion) => void }): boolean | undefined
   /**
    * Immediate reachability of a member's OWNER at send time. False only for a
    * remote owner that is offline/unreachable; a locally owned member is always
@@ -80,8 +89,9 @@ export interface TeamDeliveryHooks {
    * space conversation has its own exclusivity (a busy one queues the message
    * itself), and no completion ever comes back through `completeTurn`. Absent →
    * such a send fails loudly instead of waking a phantom app-chat session.
+   * Resolves with how the conversation took it.
    */
-  deliverToCoordinator?(params: { envelope: TeamEnvelope; trigger: TeamTriggerContext }): Promise<void>
+  deliverToCoordinator?(params: { envelope: TeamEnvelope; trigger: TeamTriggerContext; coalescingKey?: string }): Promise<CoordinatorDisposition>
 }
 
 /**
@@ -185,19 +195,10 @@ export interface SendInput {
   taskRef?: string
 }
 
-/**
- * What to do with a runtime wake whose target is already occupied.
- * - `buffer`: mailbox it and deliver when the current turn ends. For a wake that
- *   must not be lost (an escalation answer the member is blocked on).
- * - `skip`: drop it. For a wake that repeats on its own rhythm (a periodic
- *   check) — queueing those only piles up rounds the member already missed.
- *
- * Sourced from the generic `platform/turn-gate` (the session-exclusivity layer
- * this bus delegates to) so the two can never drift.
- */
+/** Whole-run restarts may skip; addressed messages always use buffer/live delivery. */
 export type { BusyDisposition }
 
-export type WakeDisposition = DeliverDisposition
+export type WakeDisposition = DeliverDisposition | 'remote_accepted'
 
 export interface MessageBus {
   send(input: SendInput): Promise<TeamSendAsyncResult | TeamSendSyncResult>
@@ -213,21 +214,29 @@ export interface MessageBus {
     envelope: TeamEnvelope
     trigger: TeamTriggerContext
     onBusy: BusyDisposition
+    coalescingKey?: string
   }): Promise<WakeDisposition>
+  /** A held turn is now ready to accept compatible buffered messages. */
+  notifySessionReady(sessionKey: string): void
   /**
-   * Run a turn this node was ASKED to run by another node — a federation wake
-   * landing on the member's owner. Shares the busy gate and the mailbox with
-   * every other delivery, and nothing else.
-   *
-   * It cannot go through `deliverRuntimeWake`: the turn's input was already
-   * rendered and booked by the sending node, so re-entering `wakeTarget` would
-   * render a second header, file a duplicate act, and sweep quiescence on a node
-   * that does not own the run. Only the gate is needed here.
-   *
-   * `run` is invoked once a slot is free (immediately, or when the current turn
-   * ends); its promise settles this call's and releases the slot. A hard epoch
-   * reset rejects a still-queued run rather than stranding the caller.
+   * A person stopped this session's work. Their own messages still waiting are
+   * void (their receipts settled) and returned for the record; everything else
+   * waits for the next turn of this session.
    */
+  holdSession(sessionKey: string): TeamDelivery[]
+  /**
+   * Deliveries taken back from a stopped turn before the member read them, put
+   * ahead of later mail. A receipt still waiting reads as queued, as for any
+   * message that has to wait for a turn.
+   */
+  returnDeliveries(sessionKey: string, deliveries: readonly TeamDelivery[]): void
+  /**
+   * A person's stop held a woken turn back before the member read any of it: its
+   * slot is handed back, the person's own words are void (receipts settled), and
+   * the rest is returned as by {@link returnDeliveries}. Returns the voided ones.
+   */
+  returnHeldBack(sessionKey: string, deliveries: readonly TeamDelivery[]): TeamDelivery[]
+  /** Reserve an exclusive callback; message delivery uses the identity-aware inbox instead. */
   runRelayedTurn<T>(params: { sessionKey: string; run: () => Promise<T> }): Promise<T>
   /**
    * A woken team turn ended. Releases the session's slot, drains its mailbox, and
@@ -323,10 +332,24 @@ interface PendingWait {
   toAppId: string
 }
 
+/** A person's own words to a member on this machine; anything a teammate, the runtime or another machine sent is not. */
+export function isPersonsOwnDelivery(trigger: TeamTriggerContext): boolean {
+  return trigger.kind === 'human_message' && !trigger.external
+}
+
+const STOPPED_UNREAD: TurnCompletion = { kind: 'error', message: 'Stopped before it was read' }
+
 /** A queued envelope: the job type the session-exclusivity layer buffers for us. */
-interface EnvelopeJob {
+export interface TeamDelivery {
   envelope: TeamEnvelope
   trigger: TeamTriggerContext
+  /** Taken back after a person's stop and delivered again: its record already stands where it first arrived. */
+  inputRecorded?: boolean
+}
+
+interface EnvelopeJob extends TeamDelivery {
+  deliveries?: readonly TeamDelivery[]
+  coalescingKey?: string
 }
 
 /**
@@ -362,34 +385,32 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
           epochId: job.envelope.epochId,
           envelope: job.envelope,
           trigger: job.trigger,
+          deliveries: job.deliveries ?? [job],
         }),
       isBusy: (sessionKey) => hooks.isBusy(sessionKey),
-      // Wired only when the session layer offers it, so a runtime built without
-      // it (and every test harness) keeps the pure queueing behavior.
-      ...(hooks.deliverMidTurn
-        ? {
-            // An external-origin message never joins a running turn: injection
-            // skips the turn-origin resolution a wake goes through (the running
-            // turn keeps whatever strictness it started with, and the session's
-            // sticky origin is never updated), so whether the sender's request
-            // ran strict would depend on whether the target happened to be
-            // busy. Refusing here costs latency only — the gate buffers it and
-            // the wake at turn end resolves origin normally.
-            deliverMidTurn: (sessionKey: string, job: EnvelopeJob): boolean =>
-              !job.trigger.external &&
-              !job.trigger.correlationId.startsWith('decision:') && hooks.deliverMidTurn!({
-                sessionKey,
-                appId: job.envelope.toAppId,
-                teamId: job.envelope.teamId,
-                epochId: job.envelope.epochId,
-                envelope: job.envelope,
-                trigger: job.trigger,
-              }),
-          }
-        : {}),
+      // Same rule as appChatMessageIdentity for a team session not fronted over
+      // IM: a teammate's local job runs delegated, so it never joins the owner's
+      // own turn. Over IM the bus cannot tell, which only errs toward queueing.
+      getJobIdentity: (job) => job.trigger.external ? 'external'
+        : isBorrowedTeamTurn(job.trigger.kind, false, false) ? 'delegated' : 'owner',
+      getActiveIdentity: (sessionKey) => hooks.getTurnIdentity?.(sessionKey),
+      mergeJobs: (jobs) => ({
+        ...jobs[0],
+        deliveries: jobs.flatMap((job) => job.deliveries ?? [job]),
+      }),
+      deliverMidTurn: (sessionKey, job) => hooks.deliverMidTurn?.({
+        sessionKey,
+        appId: job.envelope.toAppId,
+        teamId: job.envelope.teamId,
+        epochId: job.envelope.epochId,
+        envelope: job.envelope,
+        trigger: job.trigger,
+        deliveries: job.deliveries ?? [job],
+      }) ?? false,
     },
     {
       describeJob: (job) => `messageId=${job.envelope.id}`,
+      getCoalescingKey: (job) => job.coalescingKey,
       ...(deps.reservationTtlMs !== undefined ? { reservationTtlMs: deps.reservationTtlMs } : {}),
     }
   )
@@ -551,31 +572,64 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     })
   }
 
+  function recordDeliveryOutcome(env: TeamEnvelope, trigger: TeamTriggerContext, outcome: TurnCompletion): void {
+    recordReply(trigger, env.toAppId, outcome)
+    if (trigger.kind && trigger.kind !== 'message' && trigger.kind !== 'human_message' && isRecordableFate(outcome)) {
+      recordActivity({
+        teamId: env.teamId, epochId: env.epochId, kind: 'reply', actorAppId: env.toAppId,
+        targetAppId: env.fromAppId, subject: toActivitySubject(describeCompletion(outcome)),
+        correlationId: trigger.correlationId, status: replyStatusOf(outcome),
+      })
+    }
+  }
+
   async function deliver(
     env: TeamEnvelope,
     trigger: TeamTriggerContext,
-    onBusy: BusyDisposition = 'buffer'
+    onBusy: BusyDisposition = 'buffer',
+    coalescingKey?: string
   ): Promise<WakeDisposition> {
     // A space coordinator has no member session: no slot to reserve, no
-    // completion to wait for. The space conversation's own delivery layer
-    // queues behind a busy turn, so the gate is bypassed whole.
+    // completion to wait for. Its conversation source owns live delivery and the mailbox.
     if (parseSpaceCoordinatorAppId(env.toAppId)) {
       if (!hooks.deliverToCoordinator) {
         throw new TeamBusError('The coordinating conversation is not reachable in this runtime.')
       }
-      await hooks.deliverToCoordinator({ envelope: env, trigger })
-      return 'dispatched'
+      try {
+        return await hooks.deliverToCoordinator({ envelope: env, trigger, coalescingKey })
+      } catch (error) {
+        // A turn-end notice's failed handoff is the turn report's to log and
+        // retry; a row per attempt would flood the record.
+        if (trigger.kind !== 'member_stopped') {
+          const outcome: TurnCompletion = { kind: 'undelivered', reason: error instanceof Error ? error.message : String(error) }
+          recordDeliveryOutcome(env, trigger, outcome)
+        }
+        throw error
+      }
     }
     const sessionKey = buildTeamSessionKey(env.toAppId, env.teamId, env.epochId)
-    return turnGate.deliver(sessionKey, { envelope: env, trigger }, onBusy)
+    const member = store.getMember(env.teamId, env.toAppId)
+    if (member && isRemoteMember(member)) {
+      const delivered = hooks.deliverRemote?.({
+        sessionKey, envelope: env, trigger, coalescingKey,
+        onCompletion: (outcome) => {
+          recordDeliveryOutcome(env, trigger, outcome)
+          if (trigger.wait) resolvePendingWait(trigger.correlationId, outcome)
+        },
+      })
+      if (delivered === true) return 'remote_accepted'
+      if (delivered === false) throw new TeamBusError("The teammate's machine could not accept this message.")
+    }
+    return turnGate.deliver(sessionKey, { envelope: env, trigger, coalescingKey }, onBusy)
   }
 
   function deliverRuntimeWake(params: {
     envelope: TeamEnvelope
     trigger: TeamTriggerContext
     onBusy: BusyDisposition
+    coalescingKey?: string
   }): Promise<WakeDisposition> {
-    return deliver(params.envelope, params.trigger, params.onBusy)
+    return deliver(params.envelope, params.trigger, params.onBusy, params.coalescingKey)
   }
 
   function runRelayedTurn<T>(params: { sessionKey: string; run: () => Promise<T> }): Promise<T> {
@@ -698,6 +752,9 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       // on another machine — it queues on its OWNER, out of sight from here.
       const remoteTarget = isRemoteMember(store.getMember(input.teamId, toAppId) ?? { origin: 'local' })
       const locality = remoteTarget ? { remoteTarget: true as const } : {}
+      // The coordinating conversation answers in its own transcript; its sender
+      // is told only that the message was handed over.
+      if (coordinatorTarget) return { messageId: envelope.id, ...locality }
       if (disposition === 'buffered') return { messageId: envelope.id, delivery: 'queued', ...locality }
       if (disposition === 'mid_turn') return { messageId: envelope.id, delivery: 'mid_turn', ...locality }
       return { messageId: envelope.id, ...locality }
@@ -735,6 +792,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       // Register the waiter before delivering so a synchronous completion races safely.
       void deliver(envelope, trigger).then(
         (disposition) => {
+          if (disposition === 'remote_accepted') return
           if (disposition !== 'buffered' && disposition !== 'mid_turn') return
           // Either way this message started no turn, so the completion that
           // would answer this receipt belongs to a DIFFERENT one — waiting for
@@ -933,6 +991,45 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     return { ...statsFor(epochId) }
   }
 
+  function voidOwnWords(deliveries: readonly TeamDelivery[]): void {
+    for (const delivery of deliveries) {
+      if (delivery.trigger.wait) resolvePendingWait(delivery.trigger.correlationId, STOPPED_UNREAD)
+    }
+  }
+
+  function holdSession(sessionKey: string): TeamDelivery[] {
+    const voided: TeamDelivery[] = []
+    turnGate.discardJobs((key, job) => {
+      const items = job.deliveries ?? [job]
+      if (key !== sessionKey || !items.every((item) => isPersonsOwnDelivery(item.trigger))) return false
+      voided.push(...items)
+      return true
+    }, 'stopped before it was read')
+    voidOwnWords(voided)
+    turnGate.park(sessionKey)
+    return voided
+  }
+
+  function returnDeliveries(sessionKey: string, deliveries: readonly TeamDelivery[]): void {
+    for (const { trigger } of deliveries) {
+      const pending = pendingWaits.get(trigger.correlationId)
+      if (!pending) continue
+      clearTimeout(pending.timer)
+      pendingWaits.delete(trigger.correlationId)
+      pending.resolve({ from: pending.fromMemberName, message: '', status: 'queued' })
+    }
+    turnGate.putBack(sessionKey, deliveries.map((delivery) => ({ envelope: delivery.envelope, trigger: delivery.trigger, inputRecorded: delivery.inputRecorded })))
+  }
+
+  function returnHeldBack(sessionKey: string, deliveries: readonly TeamDelivery[]): TeamDelivery[] {
+    turnGate.release(sessionKey)
+    const voided = deliveries.filter((delivery) => isPersonsOwnDelivery(delivery.trigger))
+    voidOwnWords(voided)
+    console.log(`${LOG_TAG} woken turn held back by a stop: session=${sessionKey} returned=${deliveries.length - voided.length} voided=${voided.length}`)
+    returnDeliveries(sessionKey, deliveries.filter((delivery) => !isPersonsOwnDelivery(delivery.trigger)))
+    return voided
+  }
+
   function resetEpoch(epochId: string): void {
     epochStats.delete(epochId)
     // Filter by epoch so a concurrent epoch's pending sends aren't falsely timed out.
@@ -968,6 +1065,10 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     send,
     deliverRuntimeWake,
     runRelayedTurn,
+    notifySessionReady: (sessionKey) => turnGate.notifyReady(sessionKey),
+    holdSession,
+    returnDeliveries,
+    returnHeldBack,
     completeTurn,
     assertCanContact,
     resolveMemberAppId,

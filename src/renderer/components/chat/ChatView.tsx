@@ -690,6 +690,7 @@ const LiveTranscript = forwardRef<MessageListHandle, LiveTranscriptProps>(functi
     <MessageList
       ref={ref}
       {...props}
+      allowViewChanges
       streamingContent={mockStreamingContent || live.streamingContent}
       isStreaming={live.isStreaming}
       thoughts={live.thoughts}

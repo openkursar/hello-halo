@@ -2,7 +2,7 @@
  * Conversation goal — read and set the engine session's goal on the user's behalf.
  *
  * The engine owns the goal (it persists it with the session and tells the model
- * about host-side changes on its next turn); this module only routes a request
+ * about host-side changes at its next model step); this module only routes a request
  * to the conversation's live session, creating it the same way a conversation
  * switch does when none is live yet. Before a conversation has an engine
  * session id the goal is also kept as a draft (see draft.ts).
@@ -36,7 +36,7 @@ export async function getConversationGoal(spaceId: string, conversationId: strin
 
 /**
  * Replace the conversation's goal, or clear it with null. Does not start a
- * turn: the model learns of the change when its next turn begins.
+ * turn when idle. A running model learns of the change at its next step.
  *
  * @throws when the engine keeps no goals, the objective is blank, or the goal
  *   cannot be held (a resumable conversation whose session failed to start).

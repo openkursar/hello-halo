@@ -618,6 +618,10 @@ export class CodexEventNormalizer {
   }
 
   private handleError(params: ErrorNotification): any[] {
+    if (params?.willRetry === true) {
+      console.warn(`[Codex][session] Native retry retains the current turn: thread=${params.threadId ?? 'unknown'} turn=${params.turnId ?? 'unknown'}`)
+      return []
+    }
     const message = errorMessageFrom(params)
     return this.emitTerminalError(message || 'Codex stream error')
   }

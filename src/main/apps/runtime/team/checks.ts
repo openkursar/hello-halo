@@ -77,25 +77,17 @@ export interface TeamChecksDeps {
   store: TeamStore
   /** Absent → checks are recorded and shared but no alarm rings (test runtimes). */
   scheduler?: SchedulerService | null
-  /**
-   * Start the target's turn with the rendered standing instruction. `onBusy`
-   * carries what a busy target means for this particular check. Returns what
-   * actually happened to the wake: the bus owns the final busy gate (it also sees
-   * wakes in flight, which {@link TeamChecksDeps.isBusy} cannot), so a round can
-   * still be skipped after this module has decided to go ahead — and a skipped
-   * round is not counted as run.
-   */
+  /** Deliver the standing instruction; the shared mailbox decides timing and coalescing. */
   wake: (params: {
     teamId: string
     epochId: string
     appId: string
     body: string
     onBusy: BusyDisposition
+    coalescingKey?: string
     /** The check was set by a member somebody else owns. */
     external?: boolean
   }) => Promise<WakeDisposition>
-  /** True while the target is mid-turn — a due check is skipped, never queued. */
-  isBusy: (teamId: string, epochId: string, appId: string) => boolean
   /**
    * Share a change office-wide. Injected by bootstrap onto the federation
    * replication plane; absent → single-machine team.
@@ -387,23 +379,8 @@ export function createTeamChecks(deps: TeamChecksDeps): TeamChecks {
     // the team while it is resting — the next due round checks again once it
     // resumes, and the check itself stays armed and on the board meanwhile.
     if (epoch && epoch.endedAt !== null) return 'skipped'
-    // A one-shot has no second chance, so the two rules that keep a recurring
-    // check cheap are wrong for it: skipping a busy round would throw the whole
-    // thing away, and keeping the row afterwards would leave the board showing
-    // something that can never run again.
     const oneShot = check.schedule.kind === 'once'
 
-    // Busy means skip, not queue: the next round comes anyway, and stacking
-    // wake-ups on a member already working is how a check turns into a pile-up.
-    if (!oneShot && deps.isBusy(check.teamId, check.epochId, check.targetAppId)) {
-      console.log(`${LOG_TAG} target busy, skipping this round: id=${check.id}`)
-      return 'skipped'
-    }
-
-    // Counted only once the wake is actually taken. The bus applies the same
-    // busy rule one layer down and can still skip this round; persisting first
-    // would inflate "run #N" and lastRunAt for a round that never ran — and
-    // that pair is what both the panel and the agent read.
     const attempt: TeamCheck = {
       ...check,
       runCount: check.runCount + 1,
@@ -415,7 +392,8 @@ export function createTeamChecks(deps: TeamChecksDeps): TeamChecks {
       epochId: check.epochId,
       appId: check.targetAppId,
       body: renderCheckWake(attempt, memberName(check.teamId, check.createdByAppId)),
-      onBusy: oneShot ? 'buffer' : 'skip',
+      onBusy: 'buffer',
+      coalescingKey: `check:${check.id}`,
       // A check is a standing instruction from whoever set it, and it rings long
       // after they set it. What the target may do while carrying it out is
       // decided by whose instruction it is, not by who happens to own the clock:
@@ -440,8 +418,8 @@ export function createTeamChecks(deps: TeamChecksDeps): TeamChecks {
   }
 
   /**
-   * A one-shot has been handed over — queued counts, the mailbox delivers it at
-   * the end of the turn in the way. Drop the row so no board keeps offering to
+   * A one-shot has been handed over; the mailbox owns its remaining delivery.
+   * Drop the row so no board keeps offering to
    * stop something that will never run again; the turn it starts is the record
    * of it, in the transcript where it lands.
    *

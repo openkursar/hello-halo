@@ -9,6 +9,7 @@ import type { AddressInfo } from 'net'
 
 const injectIntoAppChat = vi.fn()
 const sendAppChatMessage = vi.fn()
+const team = vi.hoisted(() => ({ ready: false, remote: false }))
 
 vi.mock('../../../../src/main/http/routes/_shared', () => ({
   AppAlreadyInstalledError: class extends Error {},
@@ -21,7 +22,10 @@ vi.mock('../../../../src/main/http/routes/_shared', () => ({
   injectIntoAppChatWhenLive: async (...args: unknown[]) => injectIntoAppChat(...args),
   sendAppChatMessage: (...args: unknown[]) => sendAppChatMessage(...args),
 }))
-vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: () => null }))
+vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: () => team.ready ? {
+  getEpochById: (id: string) => id === 'e1' ? { id, teamId: 't1' } : null,
+  getMember: (_teamId: string, appId: string) => appId === 'app-1' ? { origin: team.remote ? 'remote' : 'local', ownerNodeId: team.remote ? 'other-node' : undefined } : null,
+} : null }))
 
 import { registerAppsRoutes } from '../../../../src/main/http/routes/apps.routes'
 
@@ -45,6 +49,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   injectIntoAppChat.mockReturnValue('delivered')
   sendAppChatMessage.mockResolvedValue(undefined)
+  team.ready = false
+  team.remote = false
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
@@ -80,13 +86,41 @@ describe('POST chat/inject', () => {
   it.each([
     ['an IM session', 'app-chat:app-1:wecom-bot:direct:someone'],
     ['an HTTP session', 'app-chat:app-1:http:direct:x'],
-    ['a team session', 'app-chat:app-1:team:t1:e1'],
     ['another digital human\'s chat', 'app-chat:app-2'],
     ['a space conversation', '0d9a1c6e-1111-2222-3333-444444444444'],
   ])('refuses %s', async (_label, conversationId) => {
     await withServer(async (post) => {
       const res = await post('/api/apps/app-1/chat/inject', { conversationId, message: 'hi' })
       expect(res.status).toBe(400)
+      expect(injectIntoAppChat).not.toHaveBeenCalled()
+    })
+  })
+
+  it('authorizes an owner addition to a local team member conversation', async () => {
+    team.ready = true
+    await withServer(async post => {
+      const res = await post('/api/apps/app-1/chat/inject', { conversationId: 'app-chat:app-1:team:t1:e1', message: 'also check this' })
+      expect(res.body).toEqual({ success: true, data: { delivered: true } })
+      expect(injectIntoAppChat).toHaveBeenCalledWith('app-chat:app-1:team:t1:e1', 'also check this', { source: 'injection' }, undefined)
+    })
+  })
+
+  it('does not authorize the owner of this machine to inject into a remotely owned member', async () => {
+    team.ready = true
+    team.remote = true
+    await withServer(async post => {
+      const res = await post('/api/apps/app-1/chat/inject', { conversationId: 'app-chat:app-1:team:t1:e1', message: 'also check this' })
+      expect(res.status).toBe(403)
+      expect(injectIntoAppChat).not.toHaveBeenCalled()
+    })
+  })
+
+  it('requires a valid local team store and epoch before delivery', async () => {
+    await withServer(async post => {
+      const request = { conversationId: 'app-chat:app-1:team:t1:e1', message: 'also check this' }
+      expect((await post('/api/apps/app-1/chat/inject', request)).status).toBe(503)
+      team.ready = true
+      expect((await post('/api/apps/app-1/chat/inject', { ...request, conversationId: 'app-chat:app-1:team:t1:missing' })).status).toBe(404)
       expect(injectIntoAppChat).not.toHaveBeenCalled()
     })
   })

@@ -758,10 +758,11 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       if (res.success) {
         await get().loadTeams()
         // The ephemeral workbench showed the collaboration's single room
-        // implicitly (it ignores the selection). Saving flips the workbench to
-        // selection-driven routing, so every surface showing this team (the
-        // Teams page or a canvas tab) reselects the room — otherwise the user
-        // lands in the blank new-task state and their conversation "disappears".
+        // implicitly (it ignores the selection). Once saved, the Teams page
+        // routes by selection, so every surface showing this team reselects the
+        // room and records it as the team's last task — otherwise the Teams page
+        // lands in the blank new-task state and the conversation "disappears".
+        // A canvas tab keeps showing the room regardless (see TeamView).
         if (get().currentTeamId === teamId || get().views[teamId]) {
           await get().loadDetail(teamId)
           await get().loadConversations(teamId)

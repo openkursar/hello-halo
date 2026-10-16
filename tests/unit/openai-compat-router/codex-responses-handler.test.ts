@@ -30,6 +30,51 @@ import {
 } from '../../../src/main/openai-compat-router/server/codex-responses-handler'
 
 describe('Codex Responses compatibility', () => {
+  it('restores native Responses tool namespaces across split SSE chunks while preserving opaque events', async () => {
+    const item = { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'mcp__halo_team__collab_start', arguments: '{"message":"你好"}' }
+    const shell = { type: 'function_call', id: 'fc_2', call_id: 'call_2', name: 'functions__exec_command', arguments: '{"cmd":"echo hello"}' }
+    const reasoning = { type: 'reasoning', id: 'rs_1', encrypted_content: 'opaque-content', summary: [] }
+    const events = [
+      { type: 'response.output_item.added', output_index: 0, item: { ...item, arguments: '' } },
+      { type: 'response.output_item.done', output_index: 0, item },
+      { type: 'response.output_item.added', output_index: 1, item: shell },
+      { type: 'response.completed', response: { output: [item, shell, reasoning] } },
+    ]
+    const untouched = 'event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","delta":"正在思考"}\n\n'
+    const input = untouched + events.map(event => `event: ${event.type}\r\ndata: ${JSON.stringify(event)}\r\n\r\n`).join('') + 'data: [DONE]\n\n'
+    const bytes = new TextEncoder().encode(input)
+    proxyFetch.mockResolvedValueOnce(new Response(new ReadableStream({
+      start(controller) {
+        for (let index = 0; index < bytes.length; index += 5) controller.enqueue(bytes.slice(index, index + 5))
+        controller.close()
+      },
+    })))
+    let output = ''
+    const res = { setHeader: vi.fn(), write: (value: string | Buffer) => { output += value.toString() }, end: vi.fn() }
+    try {
+      await handleResponsesRequest({
+        model: 'model', stream: true, input: 'Start',
+        tools: [
+          { type: 'namespace', name: 'mcp__halo_team__', tools: [{ type: 'function', name: 'collab_start', parameters: { type: 'object' } }] },
+          { type: 'namespace', name: 'functions', tools: [{ type: 'function', name: 'exec_command', parameters: { type: 'object' } }] },
+        ],
+      }, { key: 'local', model: 'model', url: 'http://127.0.0.1/responses', apiType: 'responses' }, res as any)
+      expect(output.startsWith(untouched)).toBe(true)
+      expect(output.endsWith('data: [DONE]\n\n')).toBe(true)
+      const parsed = output.split(/\r\n\r\n|\n\n/).flatMap(frame => {
+        const data = frame.split(/\r\n|\n/).find(line => line.startsWith('data: '))?.slice(6)
+        return data && data !== '[DONE]' ? [JSON.parse(data)] : []
+      })
+      const restored = { ...item, name: 'collab_start', namespace: 'mcp__halo_team__' }
+      const restoredShell = { ...shell, name: 'exec_command', namespace: 'functions' }
+      expect(parsed[1].item).toEqual({ ...restored, arguments: '' })
+      expect(parsed[2].item).toEqual(restored)
+      expect(parsed[3].item).toEqual(restoredShell)
+      expect(parsed[4].response.output).toEqual([restored, restoredShell, reasoning])
+      expect(res.end).toHaveBeenCalledOnce()
+    } finally { proxyFetch.mockReset() }
+  })
+
   it('applies conflicting account capabilities independently through the Responses ingress', async () => {
     proxyFetch.mockResolvedValue(new Response(JSON.stringify({ error: { message: 'test upstream' } }), { status: 400 }))
     for (const capabilities of [
@@ -903,7 +948,7 @@ describe('Codex Responses compatibility', () => {
       name: 'fetch_url',
     })
     expect(map.get('mcp__halo_apps__list_apps')).toEqual({
-      namespace: 'mcp__halo_apps__',
+      namespace: 'mcp__halo_apps',
       name: 'list_apps',
     })
     expect(map.get('shell')).toBeUndefined()

@@ -306,7 +306,8 @@ function tryReadMeta(spacePath: string): SpaceMeta | null {
  * memory would come back undone on the next start. Callers undo or report it.
  * One attempt only: this runs on the main process, which must never wait out
  * a file another program (an antivirus or indexer on Windows) holds open.
- * Activity writes retry on their own throttle timer; user actions fail and roll back.
+ * Activity writes retry on their own throttle timer; user actions retry
+ * between timers (persistIndexWithRetry), then fail and roll back.
  */
 function persistIndex(map: Map<string, SpaceIndexEntry>): void {
   // Filter out halo-temp before persisting
@@ -340,26 +341,57 @@ function persistIndex(map: Map<string, SpaceIndexEntry>): void {
 }
 
 /**
+ * On Windows, replacing a file another program holds open (an antivirus or
+ * indexer scanning it) fails with one of these until that program lets go.
+ */
+const TRANSIENT_LOCK_CODES = new Set(['EPERM', 'EBUSY', 'EACCES'])
+const INDEX_RETRY_DELAYS_MS = [50, 100, 200, 400]
+
+/** persistIndex for a user action: waits out a brief lock on timers, never by blocking. */
+async function persistIndexWithRetry(map: Map<string, SpaceIndexEntry>): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      persistIndex(map)
+      if (attempt > 0) console.log(`[Space] Index written after ${attempt} retr${attempt === 1 ? 'y' : 'ies'}`)
+      return
+    } catch (error) {
+      // Each failed attempt is already logged by persistIndex.
+      const code = (error as NodeJS.ErrnoException).code
+      if (!code || !TRANSIENT_LOCK_CODES.has(code) || attempt >= INDEX_RETRY_DELAYS_MS.length) throw error
+      await new Promise(resolve => setTimeout(resolve, INDEX_RETRY_DELAYS_MS[attempt]))
+    }
+  }
+}
+
+let registryCommits: Promise<unknown> = Promise.resolve()
+
+/**
  * Apply a change to the given registry entries and persist it. If persisting
  * fails, the entries are put back as they were and the error is rethrown.
+ * Changes run one at a time, so a rollback never undoes what a later write
+ * already put on disk.
  */
-function commitRegistryChange(ids: Iterable<string>, change: () => void): void {
-  const reg = getRegistry()
-  const before = new Map<string, SpaceIndexEntry | undefined>()
-  for (const id of ids) {
-    const entry = reg.get(id)
-    before.set(id, entry ? { ...entry } : undefined)
-  }
-  change()
-  try {
-    persistIndex(reg)
-  } catch (error) {
-    for (const [id, saved] of before) {
-      if (saved) reg.set(id, saved)
-      else reg.delete(id)
+function commitRegistryChange(ids: Iterable<string>, change: () => void): Promise<void> {
+  const commit = registryCommits.then(async () => {
+    const reg = getRegistry()
+    const before = new Map<string, SpaceIndexEntry | undefined>()
+    for (const id of ids) {
+      const entry = reg.get(id)
+      before.set(id, entry ? { ...entry } : undefined)
     }
-    throw error
-  }
+    change()
+    try {
+      await persistIndexWithRetry(reg)
+    } catch (error) {
+      for (const [id, saved] of before) {
+        if (saved) reg.set(id, saved)
+        else reg.delete(id)
+      }
+      throw error
+    }
+  })
+  registryCommits = commit.catch(() => {})
+  return commit
 }
 
 // ============================================================================
@@ -516,7 +548,7 @@ export function getAllSpacePaths(): string[] {
 /**
  * Create a new space. Registers in both memory and disk index.
  */
-export function createSpace(input: { name: string; icon: string; color?: string; customPath?: string }): Space {
+export async function createSpace(input: { name: string; icon: string; color?: string; customPath?: string }): Promise<Space> {
   const id = uuidv4()
   const now = new Date().toISOString()
 
@@ -566,7 +598,7 @@ export function createSpace(input: { name: string; icon: string; color?: string;
     sortOrder
   }
   try {
-    commitRegistryChange([id], () => getRegistry().set(id, entry))
+    await commitRegistryChange([id], () => getRegistry().set(id, entry))
   } catch (error) {
     try { rmSync(spacePath, { recursive: true, force: true }) } catch { /* unregistered, unreachable */ }
     throw error
@@ -588,7 +620,7 @@ export function createSpace(input: { name: string; icon: string; color?: string;
  * Refuses to run on a space whose path actually resolves — this is not a
  * shortcut around deleteSpace()'s confirmation flow for live spaces.
  */
-export function forgetSpace(spaceId: string): boolean {
+export async function forgetSpace(spaceId: string): Promise<boolean> {
   const entry = getRegistry().get(spaceId)
   if (!entry || entry.isTemp) return false
   if (existsSync(entry.path)) {
@@ -597,7 +629,7 @@ export function forgetSpace(spaceId: string): boolean {
   }
 
   try {
-    commitRegistryChange([spaceId], () => getRegistry().delete(spaceId))
+    await commitRegistryChange([spaceId], () => getRegistry().delete(spaceId))
   } catch {
     return false
   }
@@ -623,7 +655,7 @@ export async function deleteSpace(spaceId: string): Promise<boolean> {
   const withoutSpace = new Map(getRegistry())
   withoutSpace.delete(spaceId)
   try {
-    persistIndex(withoutSpace)
+    await persistIndexWithRetry(withoutSpace)
   } catch {
     console.error(`[Space] Delete of ${spaceId} aborted: the index could not be written`)
     return false
@@ -689,12 +721,12 @@ export function openSpaceFolder(spaceId: string): boolean {
 /**
  * Update space metadata. Updates registry (memory + disk) and meta.json.
  */
-export function updateSpace(spaceId: string, updates: { name?: string; icon?: string; color?: string }): Space | null {
+export async function updateSpace(spaceId: string, updates: { name?: string; icon?: string; color?: string }): Promise<Space | null> {
   const entry = getRegistry().get(spaceId)
   if (!entry || entry.isTemp) return null
 
   try {
-    commitRegistryChange([spaceId], () => {
+    await commitRegistryChange([spaceId], () => {
       if (updates.name) entry.name = updates.name
       if (updates.icon) entry.icon = updates.icon
       if (updates.color !== undefined) entry.color = updates.color
@@ -784,7 +816,7 @@ export function workingDirChangeProblem(spaceId: string, workingDir: string): st
  * @throws Error with a readable reason when the folder cannot be used or the
  *   record cannot be written
  */
-export function setSpaceWorkingDir(spaceId: string, workingDir: string): Space | null {
+export async function setSpaceWorkingDir(spaceId: string, workingDir: string): Promise<Space | null> {
   const entry = getRegistry().get(spaceId)
   if (!entry || entry.isTemp) return null
   const problem = workingDirChangeProblem(spaceId, workingDir)
@@ -793,7 +825,7 @@ export function setSpaceWorkingDir(spaceId: string, workingDir: string): Space |
   const changed: SpaceIndexEntry = { ...entry, workingDir: resolve(workingDir), updatedAt: new Date().toISOString() }
   writeMeta(spaceId, changed)
   try {
-    commitRegistryChange([spaceId], () => {
+    await commitRegistryChange([spaceId], () => {
       entry.workingDir = changed.workingDir
       entry.updatedAt = changed.updatedAt
     })
@@ -811,7 +843,7 @@ export function setSpaceWorkingDir(spaceId: string, workingDir: string): Space |
  * desired order; partial lists are rejected to prevent sortOrder collisions
  * that would corrupt the persisted index.
  */
-export function reorderSpaces(spaceIds: string[]): Space[] {
+export async function reorderSpaces(spaceIds: string[]): Promise<Space[]> {
   const registry = getRegistry()
 
   // Reject partial lists: assigning sortOrder only to a subset leaves the
@@ -828,7 +860,7 @@ export function reorderSpaces(spaceIds: string[]): Space[] {
     return listSpaces()
   }
 
-  commitRegistryChange(spaceIds, () => {
+  await commitRegistryChange(spaceIds, () => {
     for (let i = 0; i < spaceIds.length; i++) {
       const entry = registry.get(spaceIds[i])
       if (!entry || entry.isTemp) continue

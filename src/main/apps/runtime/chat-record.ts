@@ -65,6 +65,7 @@ export function writeChatPush(push: ChatPush): void {
     conversationId,
     runId: appChatRunId(conversationId, push.appId),
     spacePath,
+    spaceId: getActivityStore()?.getSessionEnvironment(conversationId)?.spaceId ?? app?.spaceId ?? undefined,
   }).writePush({ text: push.text, via: push.via, by })
 
   const sessionRevision = registry?.getSessionRevision(push.appId, push.channel, push.chatId)

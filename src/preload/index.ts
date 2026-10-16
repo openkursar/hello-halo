@@ -39,6 +39,7 @@ import { systemRpc } from '../shared/rpc/contracts/system.contract'
 import { healthRpc } from '../shared/rpc/contracts/health.contract'
 import { canvasPreviewRpc } from '../shared/rpc/contracts/canvas-preview.contract'
 import { gitRpc } from '../shared/rpc/contracts/git.contract'
+import { browserRpc } from '../shared/rpc/contracts/browser.contract'
 import { codeReviewRpc } from '../shared/rpc/contracts/code-review.contract'
 import { configRpc } from '../shared/rpc/contracts/config.contract'
 import { agentRpc } from '../shared/rpc/contracts/agent.contract'
@@ -112,7 +113,7 @@ export interface HaloAPI extends BrowserHostBridge {
   authDelegatedActivate: () => Promise<IpcResponse>
 
   // Config
-  getConfig: () => Promise<IpcResponse & { configEpoch?: number }>
+  getConfig: RpcClient<typeof configRpc>['getConfig']
   setConfig: (updates: Record<string, unknown>, snapshotEpoch?: number) => Promise<IpcResponse>
   getCredentialFailures: () => Promise<IpcResponse>
   getConfigReadFailure: () => Promise<IpcResponse>
@@ -225,6 +226,8 @@ export interface HaloAPI extends BrowserHostBridge {
 
   // Event listeners
   onAgentMessage: (callback: (data: unknown) => void) => () => void
+  onAgentInputArrived: (callback: (data: unknown) => void) => () => void
+  onAgentInputStopped: (callback: (data: unknown) => void) => () => void
   onAgentToolCall: (callback: (data: unknown) => void) => () => void
   onAgentToolResult: (callback: (data: unknown) => void) => () => void
   onAgentError: (callback: (data: unknown) => void) => () => void
@@ -375,6 +378,7 @@ export interface HaloAPI extends BrowserHostBridge {
   onDisplayScale: (callback: (factor: number) => void) => () => void
 
   // Browser (embedded browser for Content Canvas)
+  clearBrowserData: RpcClient<typeof browserRpc>['clearBrowserData']
   getBrowserHomepage: () => Promise<IpcResponse>
   createBrowserView: (viewId: string, url?: string) => Promise<IpcResponse>
   onBrowserPageGone: (callback: (data: BrowserPageGone) => void) => () => void
@@ -505,7 +509,7 @@ export interface HaloAPI extends BrowserHostBridge {
   imChannelsReload: () => Promise<IpcResponse>
   imChannelsProviders: () => Promise<IpcResponse>
   imChannelsPermissionDefaults: () => Promise<IpcResponse>
-  imChannelsSetInstanceApp: (instanceId: string, appId: string) => Promise<IpcResponse>
+  imChannelsSetInstanceApp: (instanceId: string, appId: string, expectedAppId?: string) => Promise<IpcResponse>
   imChannelsCreateInstance: (instance: unknown) => Promise<IpcResponse>
   imChannelsUnbindInstance: (instanceId: string) => Promise<IpcResponse>
 
@@ -767,6 +771,7 @@ export interface HaloAPI extends BrowserHostBridge {
   gitGetChanges: GitRpcClient['gitGetChanges']
   gitGetFileContents: GitRpcClient['gitGetFileContents']
   gitListRevisionOptions: GitRpcClient['gitListRevisionOptions']
+  gitGetCommitGraph: GitRpcClient['gitGetCommitGraph']
   gitStage: GitRpcClient['gitStage']
   gitUnstage: GitRpcClient['gitUnstage']
   gitDiscard: GitRpcClient['gitDiscard']
@@ -884,6 +889,8 @@ const api: HaloAPI = {
 
   // Event listeners
   onAgentMessage: (callback) => createEventListener('agent:message', callback),
+  onAgentInputArrived: (callback) => createEventListener('agent:input-arrived', callback),
+  onAgentInputStopped: (callback) => createEventListener('agent:input-stopped', callback),
   onAgentToolCall: (callback) => createEventListener('agent:tool-call', callback),
   onAgentToolResult: (callback) => createEventListener('agent:tool-result', callback),
   onAgentError: (callback) => createEventListener('agent:error', callback),
@@ -956,6 +963,7 @@ const api: HaloAPI = {
   getDisplayScale: () => ipcRenderer.invoke('display:get-scale'),
   setDisplayScale: (factor) => ipcRenderer.invoke('display:set-scale', factor),
   onDisplayScale: (callback) => createEventListener('display:scale-changed', callback),
+  ...bindRpc(browserRpc),
   getBrowserHomepage: () => ipcRenderer.invoke('browser:get-homepage'),
   createBrowserView: (viewId, url) => ipcRenderer.invoke('browser:create', { viewId, url }),
   onBrowserPageGone: (callback) => createEventListener('browser:page-gone', callback),

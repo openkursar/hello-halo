@@ -15,8 +15,8 @@ export const MODULE: RouteModuleMeta = {
       expose: 'ai',
       group: 'settings',
       summary: 'Read the global configuration',
-      returns: '{"success":true,"data":{...},"configEpoch":0}  // secret fields come back as "***"',
-      notes: 'Read-only here. The write side is not opened to the assistant. configEpoch -1 means the config file could not be read and data holds the built-in defaults, not what the user configured.',
+      returns: '{"success":true,"data":{...},"configEpoch":0,"productDefaults":{"federation":{"gatewayUrl":null}}}  // secret fields come back as "***"',
+      notes: 'Read-only here. The write side is not opened to the assistant. configEpoch -1 means the config file could not be read and data holds the built-in defaults, not what the user configured. productDefaults is read-only build metadata, not user settings: a non-empty user federation.gatewayUrl overrides its gatewayUrl; an empty user value inherits it. A null build gateway with no user override means LAN-only teams.',
     },
 
     'GET /api/config/credential-failures': {

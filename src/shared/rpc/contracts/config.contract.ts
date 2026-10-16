@@ -3,7 +3,17 @@
  * model discovery, and AI-sources CRUD. Handler bodies build their own
  * `{ success, data | error }` envelopes, so these are raw passthrough.
  */
-import { rawRpcMethod } from '../define'
+import { rawRpcMethod, type RpcResponse } from '../define'
+
+/** Read-only build defaults stay outside the persisted user configuration. */
+export interface ConfigReadMetadata {
+  configEpoch?: number
+  productDefaults?: {
+    federation: {
+      gatewayUrl: string | null
+    }
+  }
+}
 
 /** `code` of a write declined because config.json cannot be read: nothing was saved. */
 export const CONFIG_UNREADABLE_CODE = 'CONFIG_UNREADABLE'
@@ -20,7 +30,7 @@ export const CONFIG_UNREADABLE_CODE = 'CONFIG_UNREADABLE'
 export const CONFIG_RELOAD_REQUIRED_CODE = 'CONFIG_RELOAD_REQUIRED'
 
 export const configRpc = {
-  getConfig: rawRpcMethod('config:get'),
+  getConfig: rawRpcMethod<[], RpcResponse & ConfigReadMetadata>('config:get'),
   setConfig: rawRpcMethod('config:set'),
   getCredentialFailures: rawRpcMethod('config:get-credential-failures'),
   getConfigReadFailure: rawRpcMethod('config:get-read-failure'),

@@ -8,6 +8,7 @@
  * the store decides when to call them.
  */
 import type { Message } from '../../../types'
+import { sameTranscriptInput } from '../../../../shared/transcript'
 
 /** Ids of messages shown before the transcript reader has confirmed them. */
 const PENDING_ID_PREFIX = 'pending-'
@@ -52,11 +53,6 @@ function withLoadedThoughts(prior: Message, fresh: Message): Message {
   return fresh
 }
 
-function samePendingContent(pending: Message, persisted: Message): boolean {
-  return pending.content.trim() === persisted.content.trim()
-    && (pending.images?.length ?? 0) === (persisted.images?.length ?? 0)
-    && (pending.metadata?.references?.length ?? 0) === (persisted.metadata?.references?.length ?? 0)
-}
 
 export interface ReconcileResult {
   messages: Message[]
@@ -87,8 +83,8 @@ export function reconcileTranscript(
       const next = withLoadedThoughts(prior, incoming)
       return prior.clientKey ? { ...next, clientKey: prior.clientKey } : next
     }
-    if (incoming.role === 'user' && !incoming.source) {
-      const twin = pending.find(p => !claimed.has(p.id) && samePendingContent(p, incoming))
+    if (incoming.role !== 'assistant' || incoming.source) {
+      const twin = pending.find(p => !claimed.has(p.id) && sameTranscriptInput(p, incoming))
       if (twin) {
         claimed.add(twin.id)
         return { ...incoming, clientKey: twin.clientKey ?? twin.id }

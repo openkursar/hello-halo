@@ -63,7 +63,7 @@ beforeEach(() => {
       success: true,
       data: [record({}), record({ chatId: 'alice', chatType: 'direct', displayName: 'Alice', lastActiveAt: 1 }), record({ appId: 'weekly', chatId: 'own' })],
     })),
-    imChannelsStatus: vi.fn(async () => ({ success: true, data: [{ id: 'bot-1', type: 'wecom-bot', enabled: true, connected: true, appId: 'morning', appName: 'Morning report' }] })),
+    imChannelsStatus: vi.fn(async () => ({ success: true, data: [{ id: 'bot-1', type: 'wecom-bot', ordinal: 2, enabled: true, connected: true, appId: 'morning', appName: 'Morning report' }] })),
     imSessionsSetPushLink: vi.fn(async () => ({ success: true })),
   }
 })
@@ -80,7 +80,7 @@ async function mount() {
 it('lists the other bots\' chats with the digital human that gets the replies, never the digital human\'s own', async () => {
   const render = await mount()
   const tree = render()
-  expect(texts(tree)).toEqual(expect.arrayContaining(['Product weekly', 'Alice', 'Replies go to Morning report']))
+  expect(texts(tree)).toEqual(expect.arrayContaining(['Product weekly', 'Alice', 'WeCom bot 2', 'Replies go to Morning report']))
   expect(texts(tree)).not.toContain('own')
   expect(button(tree, 'Add (').props.disabled).toBe(true)
 })

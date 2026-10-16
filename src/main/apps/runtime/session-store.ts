@@ -16,7 +16,9 @@
 
 import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync, fstatSync, statSync, copyFileSync, readSync, rmSync } from 'fs'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
+import type { LiveInputOutcome } from '../../../shared/types/agent-input'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import type {
@@ -29,7 +31,7 @@ import type {
 } from '../../../shared/types/transcript'
 import { pageTranscript, withThoughtsUnloaded } from '../../../shared/transcript'
 import { createStampedLru } from '../../platform/file-cache'
-import { convertEventsToMessages, type StoredEvent } from './session-transcript'
+import { convertEventsToTranscript, type ConvertedTranscript, type StoredEvent } from './session-transcript'
 import { LineIndex, scanJsonlLines, withFileDescriptor } from './session-file-reader'
 
 // ============================================
@@ -48,7 +50,8 @@ export interface SessionWriter {
    * this conversation (an injection, another conversation, ...). Write the text
    * to show, not any framed text the model was given. `references` are the
    * places the user pointed at, kept as records; the expanded block the model
-   * read is not stored.
+   * read is not stored. Returns the original timestamp and the record's input id
+   * after a successful append.
    */
   writeTrigger(
     content: string,
@@ -56,13 +59,19 @@ export interface SessionWriter {
     teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'>,
     provenance?: TranscriptProvenance,
     references?: ContentReference[]
-  ): void
+  ): WrittenTrigger | void
+  /** Mark an earlier trigger record by its input id; the file is append-only, so this is a line of its own. */
+  writeInputOutcome(inputId: string, outcome: LiveInputOutcome): void
   /**
-   * Record a message the digital human sent to this chat outside its turns.
-   * Never among a turn's lines: reading the file back takes it as the end of any
-   * turn before it.
+   * Record a proactively sent message at arrival, including during active work.
+   * Its timestamp and source are independent of the surrounding native turn.
    */
   writePush(push: RecordedPush): void
+}
+
+export interface WrittenTrigger {
+  timestamp: string
+  inputId: string
 }
 
 /** A message sent to a chat outside its turns, as the chat's record keeps it. */
@@ -100,11 +109,13 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
   }
   const filePath = getSessionFilePath(spacePath, appId, runId)
 
-  function appendLine(event: StoredEvent): void {
+  function appendLine(event: StoredEvent): boolean {
     try {
       appendFileSync(filePath, JSON.stringify(event) + '\n', 'utf8')
+      return true
     } catch (err) {
       console.error(`[SessionStore] Failed to write event to ${filePath}:`, err)
+      return false
     }
   }
 
@@ -113,7 +124,7 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
       appendLine({ _ts: new Date().toISOString(), ...event } as StoredEvent)
     },
 
-    writeTrigger(content, images, teamOrigin, provenance, references): void {
+    writeTrigger(content, images, teamOrigin, provenance, references) {
       const blocks: Array<Record<string, unknown>> = [{ type: 'text', text: content }]
       for (const img of images ?? []) {
         blocks.push({
@@ -122,16 +133,24 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
           ...(img.name ? { _name: img.name } : {}),
         })
       }
-      appendLine({
-        _ts: new Date().toISOString(),
+      const timestamp = new Date().toISOString()
+      const inputId = randomUUID()
+      const written = appendLine({
+        _ts: timestamp,
         type: 'user',
         _isTrigger: true,
+        _inputId: inputId,
         ...(teamOrigin ? { _teamOrigin: teamOrigin } : {}),
         ...(provenance ? { _source: provenance.source } : {}),
         ...(provenance?.metadata ? { _metadata: provenance.metadata } : {}),
         ...(references && references.length > 0 ? { _references: references } : {}),
         message: { role: 'user', content: blocks },
       })
+      return written ? { timestamp, inputId } : undefined
+    },
+
+    writeInputOutcome(inputId, outcome): void {
+      appendLine({ _ts: new Date().toISOString(), type: 'input_outcome', _inputId: inputId, outcome })
     },
 
     writePush({ text, via, at, by }): void {
@@ -158,6 +177,7 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
  */
 interface ParsedSession {
   messages: TranscriptMessage[]
+  openTurnFrom?: string
   ino: number
   /** Bytes consumed, through the last complete line. */
   endByte: number
@@ -234,10 +254,10 @@ function parseRange(fd: number, filePath: string, start: number, end: number, st
   return { events, lines, trailingEvent, endByte: scan.endByte, nextLine: scan.nextLine }
 }
 
-function toMessages(events: StoredEvent[], lines: number[], trailing: { event: StoredEvent; line: number } | null) {
+function toTranscript(events: StoredEvent[], lines: number[], trailing: { event: StoredEvent; line: number } | null): ConvertedTranscript {
   return trailing
-    ? convertEventsToMessages([...events, trailing.event], [...lines, trailing.line])
-    : convertEventsToMessages(events, lines)
+    ? convertEventsToTranscript([...events, trailing.event], [...lines, trailing.line])
+    : convertEventsToTranscript(events, lines)
 }
 
 /** Parse a whole file, continuing from `previous` when the file only grew since. */
@@ -253,7 +273,7 @@ function parseSessionFile(filePath: string, previous?: ParsedSession): ParsedSes
       const events = resume ? resume.events.concat(parsed.events) : parsed.events
       const lines = resume ? resume.lines.concat(parsed.lines) : parsed.lines
       return {
-        messages: toMessages(events, lines, parsed.trailingEvent),
+        ...toTranscript(events, lines, parsed.trailingEvent),
         ino,
         endByte: parsed.endByte,
         nextLine: parsed.nextLine,
@@ -311,15 +331,20 @@ function readWindow(
       const { byte: start, line } = index.lineStartingAtOrAfter(fd, rawStart)
       const parsed = parseRange(fd, filePath, start, end, line)
       const trailing = end >= index.indexedBytes ? parsed.trailingEvent : null
-      const messages = toMessages(parsed.events, parsed.lines, trailing)
+      const { messages, openTurnFrom } = toTranscript(parsed.events, parsed.lines, trailing)
       if (chosen.startsAtMessage) {
         if (messages.length >= 2 || end >= fileSize) return { messages, truncated: start > 0, end }
         span *= 2
         end = Math.min(fileSize, start + span)
         continue
       }
-      if (start === 0) return { messages, truncated: false, end }
-      if (messages.length >= 2) return { messages: messages.slice(1), truncated: true, end }
+      // A window that opened mid-turn cannot tell where that turn began.
+      const open = end >= fileSize ? openTurnFrom : undefined
+      if (start === 0) return { messages, truncated: false, end, openTurnFrom: open }
+      if (messages.length >= 2) {
+        const kept = messages.slice(1)
+        return { messages: kept, truncated: true, end, openTurnFrom: open && kept.some(m => m.id === open) ? open : undefined }
+      }
       span *= 2
       rawStart = Math.max(0, end - span)
     }
@@ -394,7 +419,7 @@ export function readSessionTranscript(
         const end = beforeLine !== null ? index.offsetOfLine(fd, beforeLine) ?? size : size
         return { start: Math.max(0, end - SESSION_WINDOW_BYTES), end }
       })
-      const page = pageTranscript(window.messages, { limit: request.limit, through: request.through })
+      const page = pageTranscript(window.messages, { limit: request.limit, through: request.through }, window.openTurnFrom)
       return {
         ...page,
         hasMoreBefore: page.hasMoreBefore || window.truncated,
@@ -405,7 +430,8 @@ export function readSessionTranscript(
       return pageTranscript([], request)
     }
   }
-  const page = pageTranscript(size === null ? [] : loadParsedSession(filePath)?.messages ?? [], request)
+  const parsed = size === null ? null : loadParsedSession(filePath)
+  const page = pageTranscript(parsed?.messages ?? [], request, parsed?.openTurnFrom)
   return { ...page, messages: page.messages.map(withThoughtsUnloaded) }
 }
 

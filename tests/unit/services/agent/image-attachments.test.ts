@@ -25,8 +25,11 @@ import {
   modelAcceptsImages,
   attachmentFileName,
   formatImageAttachmentBlock,
-  prepareNonVisionImageFallback
+  prepareNonVisionImageFallback,
+  withInputImageFiles
 } from '../../../../src/main/services/agent/image-attachments'
+import { haloFileUrlToPath } from '../../../../src/shared/halo-file-url'
+import type { TranscriptMessage } from '../../../../src/shared/types/transcript'
 import type { ApiCredentials, ImageAttachment } from '../../../../src/main/services/agent/types'
 
 const creds = (overrides: Partial<ApiCredentials>): ApiCredentials => ({
@@ -140,5 +143,20 @@ describe('prepareNonVisionImageFallback', () => {
   it('degrades to null when the space is unknown', () => {
     spaceRef.value = null
     expect(prepareNonVisionImageFallback({ scope, credentials: creds({}), images: [image()] })).toBeNull()
+  })
+})
+
+describe('withInputImageFiles', () => {
+  it('hands the renderer an empty-host halo-file URL that decodes back to the saved file', () => {
+    spaceRef.value!.path = join(spaceRef.value!.path, 'my #1 space?')
+    const message = { role: 'user', content: 'see', images: [image()] } as unknown as TranscriptMessage
+    const [out] = withInputImageFiles('space-1', [message])
+    const saved = out.images![0]
+
+    expect(saved.data).toBe('')
+    expect(saved.url!.startsWith('halo-file:///')).toBe(true)
+    const filePath = haloFileUrlToPath(saved.url!)
+    expect(filePath).toBe(join(spaceRef.value!.path, '.halo', 'attachments', attachmentFileName(image())))
+    expect(readFileSync(filePath).toString()).toBe('fake-png-bytes')
   })
 })

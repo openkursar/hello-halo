@@ -286,6 +286,38 @@ describe.skipIf(!enabled)('dsh adapter against a real runtime', () => {
     }
   }, 120_000)
 
+  it('steers messages received during a tool into the next model step', async () => {
+    const origin = useScript(index => index === 0 ? {
+      blocks: [{ type: 'tool_use', id: 'live-tool', name: 'bash', input: {
+        command: 'sleep 0.25; echo live-tool-finished', description: 'Wait for a message',
+      } }], stopReason: 'tool_use',
+    } : textReply('I received both updates.'))
+    const session = await createSession(materializeCordisConfig(dataDir, { workDir }))
+    const frames: any[] = []
+    let sent = false
+    try {
+      session.send('Start the tool')
+      for await (const frame of session.stream()) {
+        frames.push(frame)
+        if (!sent && frame.type === 'assistant' && frame.message?.content?.some((block: any) => block.type === 'tool_use')) {
+          sent = true
+          expect(session.sendIntoLiveTurn('first live update')).toBe(true)
+          expect(session.sendIntoLiveTurn('second live update')).toBe(true)
+        }
+      }
+      expect(sent).toBe(true)
+      expect(stub.requests.slice(origin)).toHaveLength(2)
+      const messages = JSON.stringify(stub.requests[origin + 1].messages)
+      expect(messages).toContain('first live update')
+      expect(messages).toContain('second live update')
+      expect(messages.indexOf('first live update')).toBeLessThan(messages.indexOf('second live update'))
+      expect(frames.filter(frame => frame.type === 'result')).toHaveLength(1)
+      expect(session.hasPendingInput()).toBe(false)
+    } finally {
+      await session.close()
+    }
+  }, 120_000)
+
   it('runs on the model limits Halo pinned, not the SDK DeepSeek defaults', async () => {
     // Both limits are decided deep inside the runtime — the output cap in the
     // adapter that builds the request, the capacity in the plugin the token

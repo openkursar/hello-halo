@@ -237,6 +237,7 @@ import { getSpace } from '../../../../src/main/services/space.service'
 import { broadcastToAll } from '../../../../src/main/http/websocket'
 import { sendToRenderer } from '../../../../src/main/foundation/window.service'
 import { executeRun } from '../../../../src/main/apps/runtime/execute'
+import { registerActiveRun, unregisterActiveRun, notifyActiveRunReady } from '../../../../src/main/apps/runtime/active-runs'
 import { notifyAppEvent } from '../../../../src/main/services/notification.service'
 import { refreshWorkdayCalendar, workdayStatusOn } from '../../../../src/main/services/workday-calendar'
 import { createReportToolServer } from '../../../../src/main/apps/runtime/report-tool'
@@ -1741,6 +1742,209 @@ describe('AppRuntimeService', () => {
       registerKeepAliveReason: vi.fn().mockReturnValue(() => {}),
       shouldKeepAlive: vi.fn().mockReturnValue(false),
     }
+  })
+
+  describe('inputs received during an automation run', () => {
+    let app: any
+    let finish!: () => void
+    let runId: string
+    let service: ReturnType<typeof createService>
+    const send = vi.fn((_text: string) => true)
+    const writeTrigger = vi.fn()
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      send.mockReset().mockReturnValue(true)
+      writeTrigger.mockClear()
+      runId = randomUUID()
+      app = { id: randomUUID(), status: 'active', spec: createTestSpec({ subscriptions: [
+        { id: 'files', source: { type: 'file', config: { pattern: '*.md' } } },
+      ] }), userConfig: {}, userOverrides: {}, spaceId: 'space-001' }
+      mockAppManager.getApp.mockReturnValue(app)
+      dbManager.getAppDatabase().prepare(`INSERT INTO installed_apps(id, spec_id, space_id, spec_json, installed_at) VALUES (?, ?, 'space-001', ?, ?)`).run(app.id, app.id, JSON.stringify(app.spec), Date.now())
+      vi.mocked(executeRun).mockImplementationOnce(async (options: any) => {
+        store.insertRun({ runId, appId: app.id, sessionKey: runId, status: 'running', triggerType: 'manual', startedAt: 1 })
+        store.updateRunSessionId(runId, 'original-engine-session')
+        options.onRunStarted?.({ runId, sessionKey: runId, startedAt: 1 })
+        await new Promise<void>((resolve) => { finish = resolve })
+        unregisterActiveRun(runId)
+        store.completeRun(runId, { status: 'ok', finishedAt: 2, durationMs: 1 })
+        return { appId: app.id, runId, sessionKey: runId, outcome: 'useful', startedAt: 1, finishedAt: 2, durationMs: 1 }
+      })
+      service = createService()
+    })
+
+    function readyRun(): void {
+      registerActiveRun({ runId, appId: app.id, spaceId: app.spaceId, triggerType: 'manual', startedAt: 1,
+        session: { send, sendIntoLiveTurn: send }, writer: { writeTrigger, writeEvent: vi.fn(), writePush: vi.fn(), writeInputOutcome: vi.fn() } })
+      notifyActiveRunReady(runId)
+    }
+
+    afterEach(async () => {
+      unregisterActiveRun(runId)
+      await service.deactivateAll()
+    })
+
+    it('delivers file events to the running model while keeping schedule and manual restarts blocked', async () => {
+      await service.activate(app.id)
+      const running = service.triggerManually(app.id)
+      readyRun()
+      const handler = mockEventRouter.on.mock.calls[0][1]
+      await handler({ type: 'file.changed', payload: { path: 'notes.md' } })
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(send.mock.calls[0][0]).toContain('notes.md')
+      expect(writeTrigger).toHaveBeenCalledTimes(1)
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      await expect(service.triggerManually(app.id)).rejects.toThrow(ConcurrencyLimitError)
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+      expect(await onJobDue({ id: 'scheduled', schedule: { kind: 'every', every: '1m' }, metadata: { appId: app.id } })).toBe('skipped')
+      finish()
+      await running
+    })
+
+    it('merges startup events at the first live-input readiness signal', async () => {
+      await service.activate(app.id)
+      const running = service.triggerManually(app.id)
+      const handler = mockEventRouter.on.mock.calls[0][1]
+      await handler({ type: 'file.changed', payload: { path: 'first.md' } })
+      await handler({ type: 'file.changed', payload: { path: 'second.md' } })
+      expect(send).not.toHaveBeenCalled()
+      readyRun()
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(send.mock.calls[0][0]).toMatch(/first.md[\s\S]*second.md/)
+      expect(writeTrigger).toHaveBeenCalledTimes(2)
+      finish()
+      await running
+    })
+
+    it('starts one batched event run when finalization can no longer accept live input', async () => {
+      await service.activate(app.id)
+      const running = service.triggerManually(app.id)
+      const handler = mockEventRouter.on.mock.calls[0][1]
+      await handler({ type: 'file.changed', payload: { path: 'first.md' } })
+      await handler({ type: 'file.changed', payload: { path: 'second.md' } })
+      finish()
+      await running
+      await vi.waitFor(() => expect(executeRun).toHaveBeenCalledTimes(2))
+      const options = vi.mocked(executeRun).mock.calls[1][0]
+      expect(options.trigger.type).toBe('event')
+      expect(options.trigger.description).toMatch(/first.md[\s\S]*second.md/)
+      expect(options.recordedInputs).toHaveLength(2)
+    })
+
+    it('keeps webhook request headers and caller address out of a live event addition', async () => {
+      const webhook = (path: string) => ({
+        type: 'webhook.received',
+        payload: { path, body: { order: path }, headers: { authorization: 'Bearer secret-token' }, ip: '10.1.2.3' },
+      })
+      await service.activate(app.id)
+      const running = service.triggerManually(app.id)
+      readyRun()
+      const handler = mockEventRouter.on.mock.calls[0][1]
+      await handler(webhook('/live'))
+      expect(send.mock.calls[0][0]).toContain('/live')
+      expect(send.mock.calls[0][0]).not.toContain('secret-token')
+      expect(send.mock.calls[0][0]).not.toContain('10.1.2.3')
+      finish()
+      await running
+    })
+
+    it('keeps webhook request headers and caller address out of a batched event run', async () => {
+      const webhook = (path: string) => ({
+        type: 'webhook.received',
+        payload: { path, body: { order: path }, headers: { authorization: 'Bearer secret-token' }, ip: '10.1.2.3' },
+      })
+      await service.activate(app.id)
+      const running = service.triggerManually(app.id)
+      const handler = mockEventRouter.on.mock.calls[0][1]
+      await handler(webhook('/first'))
+      await handler(webhook('/second'))
+      finish()
+      await running
+      await vi.waitFor(() => expect(executeRun).toHaveBeenCalledTimes(2))
+      const { trigger } = vi.mocked(executeRun).mock.calls[1][0]
+      const shown = `${trigger.description}\n${JSON.stringify(trigger.eventPayload)}`
+      expect(shown).toMatch(/\/first[\s\S]*\/second/)
+      expect(shown).not.toContain('secret-token')
+      expect(shown).not.toContain('10.1.2.3')
+    })
+
+    it('injects an answered decision into its original live run and settles it when that run finishes', async () => {
+      const running = service.triggerManually(app.id)
+      readyRun()
+      store.insertEntry({ id: 'live-decision', appId: app.id, runId, type: 'escalation', ts: Date.now(), content: { summary: 'Proceed?' } })
+      await service.respondToEscalation(app.id, 'live-decision', { ts: 1, text: 'Approved' })
+      expect(send.mock.calls[0][0]).toContain('Approved')
+      expect(store.getEntry('live-decision')?.continuation?.status).toBe('running')
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      finish()
+      await running
+      expect(store.getEntry('live-decision')?.continuation?.status).toBe('completed')
+    })
+
+    it('retains one answer until every question from the same live run has been answered', async () => {
+      const running = service.triggerManually(app.id)
+      readyRun()
+      for (const id of ['first-question', 'second-question']) {
+        store.insertEntry({ id, appId: app.id, runId, type: 'escalation', ts: Date.now(), content: { summary: `Approve ${id}?` } })
+      }
+      await service.respondToEscalation(app.id, 'second-question', { ts: 1, text: 'Second approved' })
+      expect(send).not.toHaveBeenCalled()
+      expect(store.getEntry('second-question')?.continuation?.status).toBe('queued')
+      await service.respondToEscalation(app.id, 'first-question', { ts: 2, text: 'First approved' })
+      expect(send).toHaveBeenCalledTimes(2)
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      finish()
+      await running
+      expect(store.getEntry('first-question')?.continuation?.status).toBe('completed')
+      expect(store.getEntry('second-question')?.continuation?.status).toBe('completed')
+    })
+
+    it('does not mark a live decision followup completed when its execution was stopped', async () => {
+      const running = service.triggerManually(app.id)
+      readyRun()
+      store.insertEntry({ id: 'stopped-decision', appId: app.id, runId, type: 'escalation', ts: Date.now(), content: { summary: 'Proceed?' } })
+      await service.respondToEscalation(app.id, 'stopped-decision', { ts: 1, text: 'Approved' })
+      expect(store.getEntry('stopped-decision')?.continuation?.status).toBe('running')
+      await service.stopRun(app.id, runId)
+      finish()
+      await running
+      expect(store.getEntry('stopped-decision')?.continuation?.status).toBe('failed')
+    })
+
+    it('retains an unconsumed accepted answer when a new escalation cuts the original execution', async () => {
+      const running = service.triggerManually(app.id)
+      readyRun()
+      store.insertEntry({ id: 'pending-consumption', appId: app.id, runId, type: 'escalation', ts: Date.now(), content: { summary: 'Proceed?' } })
+      await service.respondToEscalation(app.id, 'pending-consumption', { ts: 1, text: 'Approved' })
+      expect(store.getEntry('pending-consumption')?.continuation?.status).toBe('running')
+      store.insertEntry({ id: 'new-blocking-question', appId: app.id, runId, type: 'escalation', ts: Date.now(), content: { summary: 'Another approval?' } })
+      vi.mocked(executeRun).mock.calls[0][0].onPendingInputAbandoned?.()
+      finish()
+      await running
+      expect(store.getEntry('pending-consumption')?.continuation?.status).toBe('queued')
+      expect(executeRun).toHaveBeenCalledTimes(1)
+    })
+
+    it('tells the person the app is busy when a run-detail follow-up cannot join a live run', async () => {
+      const running = service.triggerManually(app.id)
+      await expect(service.injectIntoRun(app.id, runId, 'one final correction')).rejects.toThrow(/busy with another run/)
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      finish()
+      await running
+      expect(executeRun).toHaveBeenCalledTimes(1)
+    })
+
+    it('adds a run-detail follow-up to the run while it is live', async () => {
+      const running = service.triggerManually(app.id)
+      readyRun()
+      await service.injectIntoRun(app.id, runId, 'one more thing')
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(send.mock.calls[0][0]).toContain('one more thing')
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      finish()
+      await running
+    })
   })
 
   describe('activate', () => {

@@ -555,6 +555,13 @@ export interface TeamTriggerContext {
    * overwritten on arrival, never trusted.
    */
   external?: boolean
+  /**
+   * A person's own 1:1 chat that crossed from another machine. Its `kind` is
+   * normalized to 'message' on arrival (the peer wrote it, so it buys no
+   * verbatim framing or owner reading); this only keeps the turn out of the
+   * lead's turn reports, as the same chat on one machine is. Reporting only.
+   */
+  personalChat?: boolean
 }
 
 export interface TeamContext {
@@ -1189,16 +1196,12 @@ export type TeamOfficeStatusKind = 'paused' | 'resumed' | 'authority-changed' | 
 
 /**
  * Resolved once a join/re-join is refused as VERSION_INCOMPATIBLE: which side
- * is actually behind, so the renderer is never left guessing.
- *   'self' — this machine's Halo is the one behind; a check-for-updates action
- *            is genuinely useful.
- *   'peer' — the team's current host is behind; `peerName` is that person's
- *            display name from this node's last-synced roster when known
- *            (null if the roster has no owner name for that node) — checking
- *            for updates on THIS machine cannot help, so no action is offered.
- * Absent on the office-status event entirely when the other side's version
- * could not be read (an older build that predates this field) — the renderer
- * then falls back to the direction-less message.
+ * is actually behind, so the toast tells the right person what to do.
+ *   'self' — this machine's Halo is the one behind; checking for updates helps.
+ *   'peer' — the team's current host is behind, including a host too old to
+ *            report its version; `peerName` is that person's display name from
+ *            this node's last-synced roster, null when unknown. Checking for
+ *            updates on THIS machine cannot help, so no action is offered.
  */
 export interface TeamVersionMismatch {
   direction: 'self' | 'peer'
@@ -1208,7 +1211,7 @@ export interface TeamVersionMismatch {
 export interface TeamOfficeStatusEvent {
   teamId: string
   kind: TeamOfficeStatusKind
-  /** Present only when kind is 'update-required' and direction was determinable. */
+  /** Present only when kind is 'update-required'. */
   versionMismatch?: TeamVersionMismatch
 }
 

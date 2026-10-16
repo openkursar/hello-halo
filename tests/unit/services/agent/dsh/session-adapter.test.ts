@@ -17,6 +17,9 @@ const SESSION = 'sess-a'
 
 class FakeRuntimeClient implements DshRuntimeClient {
   readonly prompts: Array<{ sessionId: string; contentBlocks: unknown[] }> = []
+  readonly steering: Array<{ sessionId: string; contentBlocks: unknown[] }> = []
+  steerHook: (() => void) | null = null
+  steerError: Error | null = null
   closed = false
   private handlers = new Set<(notification: DshNotification) => void>()
   private exitHandlers = new Set<(error?: Error) => void>()
@@ -35,6 +38,13 @@ class FakeRuntimeClient implements DshRuntimeClient {
   async prompt(sessionId: string, contentBlocks: unknown[]): Promise<{ messageId: string }> {
     this.prompts.push({ sessionId, contentBlocks })
     this.promptHook?.()
+    return { messageId: `msg-${++this.nextMessageId}` }
+  }
+
+  async steer(sessionId: string, contentBlocks: unknown[]): Promise<{ messageId: string }> {
+    this.steering.push({ sessionId, contentBlocks })
+    if (this.steerError) throw this.steerError
+    this.steerHook?.()
     return { messageId: `msg-${++this.nextMessageId}` }
   }
 
@@ -146,11 +156,14 @@ describe('DshSession — turn interval', () => {
     expect(deltas).toEqual(['Hello', ' world'])
   })
 
-  it('serializes a second prompt until the first interval has closed', async () => {
+  it('retains a prompt for a runtime that cannot steer until the first interval closes', async () => {
     const { session, runtime } = await createSession()
     const firstTurn = collectTurn(session)
 
+    runtime.steerError = new Error('unknown method')
     session.send('one')
+    await settle()
+    runtime.emit(inboxReceipt(SESSION, 'msg-1'))
     session.send('two')
     await settle()
     expect(runtime.prompts).toHaveLength(1)
@@ -331,4 +344,124 @@ describe('DshSession — child liveness', () => {
 
     expect(runtime.closed).toBe(true)
   })
+})
+
+describe('DshSession — live input', () => {
+  it('steers one ordered batch into the active interval without another prompt', async () => {
+    const { session, runtime } = await createSession()
+    const turn = collectTurn(session)
+    session.send('start')
+    await settle()
+    runtime.emit(inboxReceipt(SESSION, 'msg-1'))
+    session.sendIntoLiveTurn('first')
+    session.sendIntoLiveTurn('second')
+    await settle()
+    expect(runtime.prompts).toHaveLength(1)
+    expect(runtime.steering).toEqual([{ sessionId: SESSION, contentBlocks: [{ type: 'text', text: 'first' }, { type: 'text', text: 'second' }] }])
+    runtime.emit(inboxReceipt(SESSION, 'msg-2'), ...textTurn(SESSION), sessionStatus(SESSION, 'idle'))
+    const frames = await turn
+    expect(frames.filter(frame => frame.type === 'system' && frame.subtype === 'init')).toHaveLength(1)
+    expect(frames.filter(frame => frame.type === 'result')).toHaveLength(1)
+    expect(session.hasPendingInput()).toBe(false)
+  })
+
+  it('opens a continuation when idle precedes the steering receipt', async () => {
+    const { session, runtime } = await createSession()
+    const first = collectTurn(session)
+    session.send('start')
+    await settle()
+    runtime.emit(inboxReceipt(SESSION, 'msg-1'), ...textTurn(SESSION))
+    runtime.steerHook = () => runtime.emit(
+      sessionStatus(SESSION, 'idle'), inboxReceipt(SESSION, 'msg-2'),
+      ...textTurn(SESSION), sessionStatus(SESSION, 'idle'),
+    )
+    session.sendIntoLiveTurn('late input')
+    await first
+    const continuation = await collectTurn(session)
+    expect(continuation[0]).toMatchObject({ type: 'system', subtype: 'init' })
+    expect(continuation.at(-1)).toMatchObject({ type: 'result' })
+    expect(runtime.prompts).toHaveLength(1)
+    expect(session.hasPendingInput()).toBe(false)
+  })
+
+  it('delivers input that arrived while the original prompt was awaiting its receipt', async () => {
+    const { session, runtime } = await createSession()
+    session.send('start')
+    await settle()
+    session.send('during startup')
+    await settle()
+    expect(runtime.steering).toHaveLength(0)
+    runtime.emit(inboxReceipt(SESSION, 'msg-1'))
+    await settle()
+    expect(runtime.steering[0].contentBlocks).toEqual([{ type: 'text', text: 'during startup' }])
+    await session.close()
+  })
+})
+
+describe('DshSession — live-input withdrawal', () => {
+  it('drops live input still queued here without ending the runtime', async () => {
+    const { session, runtime } = await createSession()
+    session.send('start')
+    await settle()
+    let withdrawn = 0
+    // Queued behind the prompt that is still waiting for its receipt.
+    session.sendIntoLiveTurn('queued addition', { onWithdrawn: () => withdrawn++ })
+    session.send('ordinary follow-up')
+    expect(await session.withdrawUnreadInput()).toBe(1)
+    expect(withdrawn).toBe(1)
+    expect(runtime.closed).toBe(false)
+    runtime.emit(inboxReceipt(SESSION, 'msg-1'))
+    await settle()
+    expect(runtime.steering[0].contentBlocks).toEqual([{ type: 'text', text: 'ordinary follow-up' }])
+    await session.close()
+  })
+
+  it('ends the runtime to withdraw steering it accepted but has not spliced', async () => {
+    const { session, runtime } = await createSession()
+    const turn = collectTurn(session)
+    session.send('start')
+    await settle()
+    runtime.emit(inboxReceipt(SESSION, 'msg-1'))
+    let withdrawn = 0
+    session.sendIntoLiveTurn('steered addition', { onWithdrawn: () => withdrawn++ })
+    await settle()
+    expect(runtime.steering).toHaveLength(1)
+    expect(await session.withdrawUnreadInput()).toBe(1)
+    expect(withdrawn).toBe(1)
+    expect(runtime.closed).toBe(true)
+    expect((await turn).at(-1)).toMatchObject({ type: 'result' })
+  })
+
+  it('treats spliced steering as read', async () => {
+    const { session, runtime } = await createSession()
+    const turn = collectTurn(session)
+    session.send('start')
+    await settle()
+    runtime.emit(inboxReceipt(SESSION, 'msg-1'))
+    let withdrawn = 0
+    session.sendIntoLiveTurn('spliced addition', { onWithdrawn: () => withdrawn++ })
+    await settle()
+    runtime.emit(inboxReceipt(SESSION, 'msg-2'))
+    expect(await session.withdrawUnreadInput()).toBe(0)
+    expect(withdrawn).toBe(0)
+    expect(runtime.closed).toBe(false)
+    runtime.emit(...textTurn(SESSION), sessionStatus(SESSION, 'idle'))
+    await turn
+    await session.close()
+  })
+})
+
+
+it('keeps native init owned across the async iterator handoff and releases it on return', async () => {
+  const { session, runtime } = await createSession()
+  session.send('start')
+  await settle()
+  runtime.emit(inboxReceipt(SESSION, 'msg-1'), ...textTurn(SESSION), sessionStatus(SESSION, 'idle'))
+  const iterator = session.stream()[Symbol.asyncIterator]()
+  expect((await iterator.next()).value).toMatchObject({ type: 'system', subtype: 'init' })
+  await Promise.resolve()
+  expect(session.hasPendingInput()).toBe(true)
+  await iterator.return?.()
+  expect(session.hasPendingInput()).toBe(false)
+  await session.close()
 })

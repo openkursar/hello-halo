@@ -7,14 +7,16 @@
  * links resolve next to the file on disk, as they would when opened directly.
  */
 
+import { toHaloFileUrl } from '../../../../shared/halo-file-url'
+
 /** `halo-file://` URL of the directory holding `filePath`, with a trailing slash. */
 export function haloFileDirectoryUrl(filePath: string): string | null {
   const normalized = filePath.replace(/\\/g, '/')
   const cut = normalized.lastIndexOf('/')
   if (cut < 0) return null
-  const segments = normalized.slice(0, cut).split('/').map(encodeURIComponent)
-  const path = segments.join('/')
-  return `halo-file://${path.startsWith('/') ? '' : '/'}${path}/`
+  // A file directly under the filesystem root resolves against "/" itself.
+  const dir = cut === 0 ? '/' : normalized.slice(0, cut)
+  return toHaloFileUrl(dir.endsWith('/') ? dir : `${dir}/`)
 }
 
 const BASE_WITH_HREF = /<base\b[^>]*\bhref\s*=/i

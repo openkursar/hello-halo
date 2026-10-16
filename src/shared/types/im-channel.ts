@@ -564,6 +564,8 @@ export interface ImChannelInstanceStatus {
   id: string
   /** Provider type */
   type: ImChannelType
+  /** One-based position among this provider's configured bots, before any UI filtering. */
+  ordinal?: number
   /** Whether enabled in config */
   enabled: boolean
   /** Whether the connection is currently active */

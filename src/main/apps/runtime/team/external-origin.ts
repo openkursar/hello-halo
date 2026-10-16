@@ -9,22 +9,20 @@
  * answer their digital human's question, and the resumed turn runs with the
  * owner's own reach.
  *
- * So origin sticks to the thread of work and is cleared only by a person typing
- * into that thread on this machine. Keyed by team session, which is exactly the
- * granularity a thread of work has.
+ * Origin sticks to the team session until its owner types here or the task is
+ * permanently closed. Resting a task must not reset its authority.
  */
 
 import type { TeamTriggerContext } from '../../../../shared/apps/team-types'
+import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 
 /**
- * Bounded so a long-lived process cannot accumulate one entry per conversation
- * ever opened. Eviction is oldest-first and only ever LOSES stickiness, which
- * is why the cap can be generous rather than exact: an evicted thread falls
- * back to what its next message says about itself.
+ * Bounded so a long-lived process cannot accumulate one entry per external
+ * thread ever opened. Eviction is oldest-first and only ever LOSES stickiness:
+ * an evicted thread falls back to what its next message says about itself.
  */
 const MAX_TRACKED_SESSIONS = 2000
-
-const origins = new Map<string, boolean>()
+const externalSessions = new Set<string>()
 
 /**
  * Resolve this turn's origin and remember it for the wakes that follow.
@@ -32,9 +30,20 @@ const origins = new Map<string, boolean>()
  * @param sessionKey the member's team session (see `buildTeamSessionKey`)
  */
 export function resolveTurnOrigin(sessionKey: string, trigger: TeamTriggerContext): boolean {
-  const external = peekTurnOrigin(sessionKey, trigger)
-  if (trigger.external || isOwnPersonTurn(trigger)) remember(sessionKey, external)
-  return external
+  if (isOwnPersonTurn(trigger)) {
+    externalSessions.delete(sessionKey)
+    return false
+  }
+  if (trigger.external) {
+    // Re-inserted so the entry counts as the newest for eviction.
+    externalSessions.delete(sessionKey)
+    externalSessions.add(sessionKey)
+    if (externalSessions.size > MAX_TRACKED_SESSIONS) {
+      const oldest = externalSessions.values().next()
+      if (!oldest.done) externalSessions.delete(oldest.value)
+    }
+  }
+  return peekTurnOrigin(sessionKey, trigger)
 }
 
 /**
@@ -46,7 +55,7 @@ export function peekTurnOrigin(sessionKey: string, trigger: TeamTriggerContext):
   if (trigger.external) return true
   if (isOwnPersonTurn(trigger)) return false
   // Runtime-authored, or a teammate's message that started here: inherit.
-  return origins.get(sessionKey) ?? false
+  return externalSessions.has(sessionKey)
 }
 
 /**
@@ -62,15 +71,13 @@ function isOwnPersonTurn(trigger: TeamTriggerContext): boolean {
 
 /** Forget a thread of work that no longer exists. */
 export function forgetTurnOrigin(sessionKey: string): void {
-  origins.delete(sessionKey)
+  externalSessions.delete(sessionKey)
 }
 
-function remember(sessionKey: string, external: boolean): void {
-  // Re-insert so the entry counts as the newest for eviction.
-  origins.delete(sessionKey)
-  origins.set(sessionKey, external)
-  if (origins.size > MAX_TRACKED_SESSIONS) {
-    const oldest = origins.keys().next()
-    if (!oldest.done) origins.delete(oldest.value)
+/** Permanently closed epochs release every member, including members removed from the roster. */
+export function forgetEpochTurnOrigins(teamId: string, epochId: string): void {
+  for (const sessionKey of externalSessions) {
+    const session = parseTeamSessionKey(sessionKey)
+    if (session?.teamId === teamId && session.epochId === epochId) externalSessions.delete(sessionKey)
   }
 }

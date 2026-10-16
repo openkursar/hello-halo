@@ -21,6 +21,7 @@ import type { TurnCompletion } from '../team/message-bus'
 import type { M2Frame } from './protocol-m2'
 import type { FeedSyncFrame } from './log/types'
 import type { FederationPlane } from '../../../../shared/federation/planes'
+import type { TranscriptProvenance } from '../../../../shared/types/transcript'
 
 /** Stable per-node identifier (office_nodes.node_id). */
 export type NodeId = string
@@ -90,10 +91,10 @@ export interface JoinReject {
     | 'MALFORMED'
     | 'VERSION_INCOMPATIBLE'
   /**
-   * The rejecting side's own FEDERATION_PROTOCOL_VERSION. Lets a joiner refused
-   * as VERSION_INCOMPATIBLE tell which side is actually behind instead of just
-   * "not equal". Absent on a reject from an older build that predates this
-   * field — callers must treat that as "direction unknown", never as a guess.
+   * The rejecting side's own FEDERATION_PROTOCOL_VERSION, so a joiner refused
+   * as VERSION_INCOMPATIBLE can tell which side is behind. Absent only from a
+   * build older than this field — which by itself means the rejecting side is
+   * the older one (see manager `resolveVersionMismatchDetail`).
    */
   pv?: number
 }
@@ -142,6 +143,8 @@ export interface RejoinRequest {
  * non-serializable; the owner reconstructs the turn locally from these fields.
  */
 export interface SerializedWakeRequest {
+  coalescingKey?: string
+  recordedMessages?: Array<{ content: string; teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'>; provenance?: TranscriptProvenance }>
   appId: string
   spaceId: string
   message: string

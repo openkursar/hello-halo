@@ -120,6 +120,14 @@ export function isShortConversationId(target: string): boolean {
   return new RegExp(`^[0-9a-f]{${SHORT_ID_LENGTH}}$`, 'i').test(target)
 }
 
+/** The short id a reference's link target carries (lowercase), or null when `href` is not a reference. */
+export function conversationReferenceShortId(href: string): string | null {
+  const prefix = `${CONVERSATION_REFERENCE_SCHEME}:`
+  if (href.slice(0, prefix.length).toLowerCase() !== prefix) return null
+  const id = href.slice(prefix.length)
+  return isShortConversationId(id) ? id.toLowerCase() : null
+}
+
 /** Longest a first-message preview stands in for a chat's missing name. */
 export const CHAT_TITLE_PREVIEW_CHARS = 50
 

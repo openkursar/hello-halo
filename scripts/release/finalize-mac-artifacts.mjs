@@ -12,6 +12,8 @@
 // latest-mac.yml carrying BOTH arches, keeping the two in sync — electron-updater
 // picks a file by testing the url for "arm64" (MacUpdater.isArm64), so the
 // arm64 entry must keep that token and the Intel entry must not contain it.
+// The yml also states the packaged app's minimum macOS (see macos-floor.mjs),
+// so a Mac the update cannot run on keeps the version it has.
 //
 // Usage:
 //   node scripts/release/finalize-mac-artifacts.mjs --dist <dir> --version <v>
@@ -22,6 +24,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { load, dump } from 'js-yaml'
 import { c, log } from './lib.mjs'
+import { darwinVersionForMacOS, packagedMinimumMacOS } from './macos-floor.mjs'
 
 function parseArgs(argv) {
   const args = {}
@@ -115,6 +118,16 @@ function main() {
     releaseDate: new Date().toISOString(),
   }
 
+  // electron-builder never writes this field; without it every Mac is offered
+  // the update, including one that will refuse to open it.
+  let minimumMacOS
+  try {
+    minimumMacOS = packagedMinimumMacOS(dist, version)
+    merged.minimumSystemVersion = darwinVersionForMacOS(minimumMacOS)
+  } catch (err) {
+    fail(`cannot state which Macs may update: ${err.message}`)
+  }
+
   // electron-builder does not write releaseNotes into latest-mac.yml even when
   // --releaseNotesFile is passed (only win/linux get it), so mac update
   // notifications would otherwise fall back to the full GitHub release body.
@@ -138,6 +151,7 @@ function main() {
   fs.rmSync(arm64Yml, { force: true })
 
   log.ok(`latest-mac.yml carries both arches (${merged.files.map((f) => f.url).join(', ')})`)
+  log.ok(`latest-mac.yml offers this update to macOS ${minimumMacOS}+ only (minimumSystemVersion ${merged.minimumSystemVersion}, a Darwin version)`)
   if (merged.releaseNotes) log.ok('latest-mac.yml carries releaseNotes for the update notification')
   log.info(`${c.green}finalize-mac-artifacts passed${c.reset}`)
 }

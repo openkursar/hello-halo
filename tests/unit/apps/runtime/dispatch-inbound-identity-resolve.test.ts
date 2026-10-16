@@ -83,6 +83,9 @@ vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
 }))
 
 vi.mock('../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
+  getAppChatTurnIdentity: () => undefined,
+  appChatMessageIdentity: (permission: any) => permission?.isOwner === false ? 'guest' : 'owner',
+  injectIntoAppChatBatch: () => false,
   beginAppChatTurnStart: vi.fn(() => ({ cancelled: false, end: vi.fn() })),
 }))
 

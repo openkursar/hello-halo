@@ -31,7 +31,10 @@ import type { StreamResult } from '../../services/agent/stream-processor'
 import type { TurnSink } from '../../services/agent/turn-sink'
 import type { ImageAttachment } from '../../services/agent/types'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
-import type { TranscriptProvenance } from '../../../shared/types/transcript'
+import type { TranscriptMessage, TranscriptProvenance } from '../../../shared/types/transcript'
+import { roleForTranscriptSource } from '../../../shared/transcript'
+import { randomUUID } from 'crypto'
+import { emitAgentEvent } from '../../services/agent/events'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { parseAppChatKey } from '../../../shared/apps/im-keys'
 import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
@@ -43,11 +46,18 @@ import { TurnCutPoint } from './escalation-cut'
 import { openSessionWriter, saveChatSessionId, type RecordedPush, type SessionWriter } from './session-store'
 import { AppChatTurnInterrupted, turnEndingOf, withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
 import { stopGeneration } from '../../services/agent/control'
-import { listResidentSessions } from '../../services/agent'
+import { listResidentSessions, hasPendingSessionInput } from '../../services/agent'
 
 // ============================================
 // Types
 // ============================================
+
+export interface PreparedAppChatInput {
+  text: string
+  images?: ImageAttachment[]
+}
+
+export type PrepareAppChatInput = (text: string, images?: ImageAttachment[]) => PreparedAppChatInput | false
 
 /** Per-round callbacks supplied by whoever sent the message. */
 export interface AppChatRoundHooks {
@@ -57,16 +67,26 @@ export interface AppChatRoundHooks {
    * off) — then `finalContent` is what was written, possibly nothing.
    */
   onReply?(finalContent: string, ending?: AppChatTurnEnding): void
+  /**
+   * The same answer, for a caller that only needs to know it. Fires for every
+   * message the reply answers, including those whose `onReply` is withheld
+   * because another message's caller already delivers that one reply.
+   */
+  onResult?(finalContent: string, ending?: AppChatTurnEnding): void
   onMessageAccepted?(): void
 }
 
-/** Handle for one awaited round, returned by {@link AppChatSink.beginRound}. */
+/**
+ * Handle for one awaited answer, returned by {@link AppChatSink.beginRound} and
+ * {@link AppChatSink.observeLiveTurn}.
+ */
 export interface AppChatRoundHandle {
   /** Settles when the claimed turn finishes; rejects when it fails. */
   readonly done: Promise<void>
   /**
-   * Drop the round without waiting — used when the send itself fails, so the
-   * next turn is not mis-attributed to a message CC never received.
+   * Drop the wait and settle it with no answer — when the send itself fails, or
+   * a person's stop took the message back unread — so no turn's reply is
+   * attributed to a message the engine never read.
    */
   cancel(): void
 }
@@ -133,7 +153,14 @@ function newTurnState(): TurnState {
 // ============================================
 
 class AppChatSink implements TurnSink {
+  /** Input ids of the records this sink wrote, so a later stop can mark them. */
+  private readonly inputIds = new WeakMap<TranscriptMessage, string>()
+  private permissionIdentity: string | undefined
+  private hasCurrentConfiguration: (() => boolean) | undefined
+  private prepareInput: PrepareAppChatInput | undefined
   private readonly queue: Round[] = []
+  private readonly liveRounds: Round[] = []
+  private liveProgressObservers = 0
   private current: Round | null = null
   private turn: TurnState = newTurnState()
   private writer: SessionWriter | undefined
@@ -145,20 +172,88 @@ class AppChatSink implements TurnSink {
    * and an unclaimed turn is proof of liveness just the same.
    */
   private turnRunning = false
-  /**
-   * Pushes that came while a turn was running, written when it ends: the
-   * record keeps a turn's lines together, and reading it back relies on that.
-   */
-  private heldPushes: RecordedPush[] = []
 
   constructor(
     private readonly appId: string,
     private readonly conversationId: string,
     private readonly runId: string,
-    private readonly spacePath: string
+    private readonly spacePath: string,
+    private spaceId?: string,
   ) {}
 
+  setSpaceId(spaceId: string): void { this.spaceId = spaceId }
+
+  /** One detail event for the accepted batch; original records keep their source and arrival order. */
+  announceLiveInputs(messages: TranscriptMessage[], live = true): void {
+    if (!messages.length) return
+    if (!this.spaceId) {
+      console.warn(`[AppChat][${this.appId}] Live inputs could not be announced: conversation=${this.conversationId} has no space identity`)
+      return
+    }
+    emitAgentEvent('agent:input-arrived', this.spaceId, this.conversationId, { messages, live })
+  }
+
   // ── Round lifecycle (caller side) ──────────────────────
+
+  setTurnIdentity(identity: string, hasCurrentConfiguration?: () => boolean, prepareInput?: PrepareAppChatInput): void {
+    this.permissionIdentity = identity
+    this.hasCurrentConfiguration = hasCurrentConfiguration
+    this.prepareInput = prepareInput
+  }
+
+  /** Preparation uses the active turn's captured model and restrictions, never current global selection. */
+  prepareLiveInput(text: string, images?: ImageAttachment[]): PreparedAppChatInput | false {
+    if (!this.getTurnIdentity() || !this.prepareInput) return false
+    return this.prepareInput(text, images)
+  }
+
+  getTurnIdentity(): string | undefined {
+    return this.hasCurrentConfiguration && !this.hasCurrentConfiguration() ? undefined : this.permissionIdentity
+  }
+
+  /** A person's stop ended the work these additions waited on and nothing more will answer them. */
+  releaseLiveObservers(): void {
+    const observers = this.takeLiveRounds()
+    if (observers.length === 0) return
+    for (const observer of observers) {
+      observer.settled = true
+      observer.resolve()
+    }
+    this.armTurnStartDeadline()
+    emitRoundChange(this.conversationId)
+  }
+
+  canObserveLiveTurn(count: number): boolean {
+    return this.liveRounds.length + count <= 128
+  }
+
+  /** A live addition awaits the result that consumes it without claiming a new native turn. */
+  observeLiveTurn(hooks: AppChatRoundHooks): AppChatRoundHandle {
+    let observer!: Round
+    const done = new Promise<void>((resolve, reject) => {
+      observer = { hooks, resolve, reject, settled: false }
+      this.liveRounds.push(observer)
+      if (hooks.onProgress) this.liveProgressObservers += 1
+    })
+    void done.catch(() => {})
+    this.armTurnStartDeadline()
+    emitRoundChange(this.conversationId)
+    return {
+      done,
+      cancel: () => {
+        if (observer.settled) return
+        observer.settled = true
+        const index = this.liveRounds.indexOf(observer)
+        if (index !== -1) {
+          this.liveRounds.splice(index, 1)
+          if (hooks.onProgress) this.liveProgressObservers -= 1
+        }
+        observer.resolve()
+        this.armTurnStartDeadline()
+        emitRoundChange(this.conversationId)
+      },
+    }
+  }
 
   beginRound(hooks: AppChatRoundHooks): AppChatRoundHandle {
     let resolve!: () => void
@@ -201,27 +296,69 @@ class AppChatSink implements TurnSink {
    * buffer every later message as a supplement instead of answering it.
    */
   hasActiveRound(): boolean {
-    return this.current !== null || this.queue.some(round => !round.settled)
+    return this.current !== null || this.queue.some(round => !round.settled) || this.liveRounds.some(round => !round.settled)
   }
 
-  /** Persist a user message to the transcript ahead of the turn it triggers. */
+  /** Append original input and return its transient display record with the stored timestamp. */
   writeUserMessage(
     text: string,
     images?: ImageAttachment[],
     teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'>,
     provenance?: TranscriptProvenance,
     references?: ContentReference[]
+  ): TranscriptMessage {
+    const written = this.getWriter()?.writeTrigger(text, images, teamOrigin, provenance, references)
+    const metadata = {
+      ...(teamOrigin ? { teamTriggerKind: teamOrigin.kind ?? 'human_message', correlationId: teamOrigin.correlationId } : {}),
+      ...provenance?.metadata,
+      ...(references?.length ? { references } : {}),
+    }
+    const record: TranscriptMessage = {
+      id: `pending-live-${randomUUID()}`, role: roleForTranscriptSource(provenance?.source), content: text,
+      timestamp: written ? written.timestamp : new Date().toISOString(),
+      ...(provenance ? { source: provenance.source } : {}),
+      ...(Object.keys(metadata).length ? { metadata } : {}),
+      ...(images?.length ? { images } : {}),
+    }
+    if (written) this.inputIds.set(record, written.inputId)
+    return record
+  }
+
+  /** A person's additions a stop left unread: marked in the record, and told to whoever shows this chat. */
+  markInputsStopped(records: readonly TranscriptMessage[]): void {
+    const stopped = records.map((record) => {
+      const inputId = this.inputIds.get(record)
+      if (inputId) this.getWriter()?.writeInputOutcome(inputId, 'stopped')
+      else console.warn(`[AppChat][${this.appId}] Stopped input has no stored record to mark: conversation=${this.conversationId}`)
+      return { ...record, metadata: { ...record.metadata, inputOutcome: 'stopped' as const } }
+    })
+    if (!stopped.length) return
+    if (!this.spaceId) {
+      console.warn(`[AppChat][${this.appId}] Stopped inputs could not be announced: conversation=${this.conversationId} has no space identity`)
+      return
+    }
+    emitAgentEvent('agent:input-stopped', this.spaceId, this.conversationId, { messages: stopped })
+  }
+
+  /** A person's message a stop voided before it reached the engine stays in the record, marked. */
+  writeStoppedInput(
+    text: string,
+    images?: ImageAttachment[],
+    provenance?: TranscriptProvenance,
+    references?: ContentReference[],
+    teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'>
   ): void {
-    this.getWriter()?.writeTrigger(text, images, teamOrigin, provenance, references)
+    this.markInputsStopped([this.writeUserMessage(text, images, teamOrigin, provenance, references)])
   }
 
   /** Record a message the digital human pushed to this chat outside its turns (chat-record). */
   writePush(push: RecordedPush): void {
-    if (this.turnRunning) {
-      this.heldPushes.push({ ...push, at: push.at ?? new Date().toISOString() })
-      return
-    }
-    this.getWriter()?.writePush(push)
+    const at = push.at ?? new Date().toISOString()
+    this.getWriter()?.writePush({ ...push, at })
+    this.announceLiveInputs([{
+      id: `pending-live-${randomUUID()}`, role: 'assistant', source: 'push', content: push.text, timestamp: at,
+      metadata: { pushVia: push.via, ...(push.by ? { pushedByAppId: push.by.appId, pushedByName: push.by.name } : {}) },
+    }], this.turnRunning || hasPendingSessionInput(this.conversationId))
   }
 
   /** A message failed before the engine created a turn to checkpoint. */
@@ -286,13 +423,19 @@ class AppChatSink implements TurnSink {
     this.turn.accumulator.feed(sdkMessage)
 
     const onProgress = this.current?.hooks.onProgress
-    if (onProgress) {
+    if (onProgress || this.liveProgressObservers > 0) {
       const progressEvent = this.turn.progressParser.feed(sdkMessage)
       if (progressEvent) {
-        try {
-          onProgress(progressEvent)
-        } catch (err) {
-          console.error(`[AppChat][${this.appId}] onProgress callback error:`, err)
+        const notify = (handler: (event: ProgressEvent) => void) => {
+          try {
+            handler(progressEvent)
+          } catch (err) {
+            console.error(`[AppChat][${this.appId}] onProgress callback error:`, err)
+          }
+        }
+        if (onProgress) notify(onProgress)
+        if (this.liveProgressObservers > 0) {
+          for (const observer of this.liveRounds) if (observer.hooks.onProgress) notify(observer.hooks.onProgress)
         }
       }
     }
@@ -305,8 +448,7 @@ class AppChatSink implements TurnSink {
       this.completeTurn(result)
     } finally {
       this.turnRunning = false
-      this.writeHeldPushes()
-      // Anything still queued is owed a turn of its own from here.
+        // Anything still queued is owed a turn of its own from here.
       this.armTurnStartDeadline()
       emitRoundChange(this.conversationId)
     }
@@ -318,9 +460,9 @@ class AppChatSink implements TurnSink {
     } finally {
       const round = this.takeCurrentRound()
       round?.reject(error)
+      for (const observer of this.takeLiveRounds()) observer.reject(error)
       this.turnRunning = false
-      this.writeHeldPushes()
-      this.armTurnStartDeadline()
+        this.armTurnStartDeadline()
       emitRoundChange(this.conversationId)
     }
   }
@@ -334,6 +476,7 @@ class AppChatSink implements TurnSink {
     const ending = turnEndingOf(result)
 
     const round = this.takeCurrentRound()
+    const observers = hasPendingSessionInput(this.conversationId) ? [] : this.takeLiveRounds()
     console.log(
       `[AppChat][${this.appId}] Turn complete (${round ? 'solicited' : 'autonomous'}): ` +
       `content=${replyContent.length} chars` +
@@ -342,10 +485,28 @@ class AppChatSink implements TurnSink {
       `${ending ? `, ended=${ending.kind}` : ''}`
     )
 
-    if (!round) {
+    if (!round && !observers.some(observer => observer.hooks.onReply)) {
       this.deliverAutonomous(replyContent, ending)
-      return
     }
+
+    // One turn, one chat, one reply: whoever asked first (the round) delivers
+    // it; a message that joined the turn is answered by that same reply, so its
+    // own onReply fires only when nothing else delivers it.
+    let delivered = !!round?.hooks.onReply
+    for (const observer of observers) {
+      if (delivered && observer.hooks.onReply) {
+        this.settleReply({ ...observer, hooks: { ...observer.hooks, onReply: undefined } }, replyContent, ending, result)
+        observer.settled = true
+        continue
+      }
+      if (observer.hooks.onReply) delivered = true
+      this.settleReply(observer, replyContent, ending, result)
+    }
+    if (round) this.settleReply(round, replyContent, ending, result)
+  }
+
+  private settleReply(round: Round, replyContent: string, ending: AppChatTurnEnding | undefined, result: StreamResult): void {
+    round.settled = true
 
     // Fire onReply whenever content exists — including the whitespace-only
     // empty-response placeholder — because the bridge's onReply is what
@@ -377,6 +538,12 @@ class AppChatSink implements TurnSink {
 
   private reply(round: Round, content: string, ending: AppChatTurnEnding | undefined): void {
     try {
+      if (ending) round.hooks.onResult?.(content, ending)
+      else round.hooks.onResult?.(content)
+    } catch (err) {
+      console.error(`[AppChat][${this.appId}] onResult callback error:`, err)
+    }
+    try {
       if (ending) round.hooks.onReply?.(content, ending)
       else round.hooks.onReply?.(content)
     } catch (err) {
@@ -389,11 +556,14 @@ class AppChatSink implements TurnSink {
     try {
       if (partial) this.persistPartial(partial, 'Chat session ended before the reply completed.')
     } finally {
+      this.permissionIdentity = undefined
+      this.hasCurrentConfiguration = undefined
+      this.prepareInput = undefined
       this.turnRunning = false
-      this.writeHeldPushes()
-      this.clearTurnStartDeadline()
+        this.clearTurnStartDeadline()
       const pending = this.takeCurrentRound()
       pending?.reject(new Error('Chat session ended before the reply completed.'))
+      for (const observer of this.takeLiveRounds()) observer.reject(new Error('Chat session ended before the added message was processed.'))
       while (this.queue.length > 0) {
         const round = this.queue.shift()!
         if (round.settled) continue
@@ -406,8 +576,11 @@ class AppChatSink implements TurnSink {
 
   /** Drop the sink's timer and held pushes so a discarded sink cannot outlive its conversation. */
   dispose(): void {
+    this.permissionIdentity = undefined
+    this.hasCurrentConfiguration = undefined
+    this.prepareInput = undefined
     this.clearTurnStartDeadline()
-    this.heldPushes = []
+    for (const observer of this.takeLiveRounds()) observer.reject(new Error('Conversation was cleared before the added message was processed.'))
   }
 
   // ── Internals ──────────────────────────────────────────
@@ -418,11 +591,11 @@ class AppChatSink implements TurnSink {
    */
   private armTurnStartDeadline(): void {
     this.clearTurnStartDeadline()
-    if (this.turnRunning || this.queue.length === 0) return
+    if (this.turnRunning || (this.queue.length === 0 && this.liveRounds.length === 0)) return
 
     this.turnStartTimer = setTimeout(() => {
       this.turnStartTimer = null
-      const round = this.queue.find(r => !r.settled)
+      const round = this.queue.find(r => !r.settled) ?? this.liveRounds.find(r => !r.settled)
       if (!round) return
       // Settled but deliberately LEFT IN THE QUEUE. Ownership here is decided by
       // order, and the turn this message was dispatched for may still arrive —
@@ -436,6 +609,11 @@ class AppChatSink implements TurnSink {
         `giving up the wait; acceptance by the engine is unknown`
       )
       round.reject(new Error(NO_RESPONSE_MESSAGE))
+      const observerIndex = this.liveRounds.indexOf(round)
+      if (observerIndex !== -1) {
+        this.liveRounds.splice(observerIndex, 1)
+        if (round.hooks.onProgress) this.liveProgressObservers -= 1
+      }
       // Whatever is behind it is owed a turn on the same terms.
       this.armTurnStartDeadline()
       emitRoundChange(this.conversationId)
@@ -467,7 +645,8 @@ class AppChatSink implements TurnSink {
       `[AppChat][${this.appId}] Escalation raised — ending this turn ` +
       `(conversation=${this.conversationId}); the answer arrives as its own wake`
     )
-    void stopGeneration(this.conversationId).catch((err) => {
+    // The system ends this turn, not a person: unread input runs after it.
+    void stopGeneration(this.conversationId, { reason: 'internal' }).catch((err) => {
       console.error(`[AppChat][${this.appId}] Could not end the turn after an escalation:`, err)
     })
   }
@@ -480,8 +659,9 @@ class AppChatSink implements TurnSink {
     return round
   }
 
-  private writeHeldPushes(): void {
-    for (const push of this.heldPushes.splice(0)) this.getWriter()?.writePush(push)
+  private takeLiveRounds(): Round[] {
+    this.liveProgressObservers = 0
+    return this.liveRounds.splice(0)
   }
 
   private getWriter(): SessionWriter | undefined {
@@ -603,14 +783,18 @@ export function getAppChatSink(params: {
   conversationId: string
   runId: string
   spacePath: string
+  spaceId?: string
 }): AppChatSink {
   const now = Date.now()
   maybeSweep(now)
   lastUsedAt.set(params.conversationId, now)
   const existing = sinks.get(params.conversationId)
-  if (existing) return existing
+  if (existing) {
+    if (params.spaceId) existing.setSpaceId(params.spaceId)
+    return existing
+  }
 
-  const sink = new AppChatSink(params.appId, params.conversationId, params.runId, params.spacePath)
+  const sink = new AppChatSink(params.appId, params.conversationId, params.runId, params.spacePath, params.spaceId)
   sinks.set(params.conversationId, sink)
   return sink
 }

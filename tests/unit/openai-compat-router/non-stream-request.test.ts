@@ -47,6 +47,8 @@ interface CapturedRes {
   ended: boolean
   status: (n: number) => CapturedRes
   setHeader: (k: string, v: string) => void
+  hasHeader: (k: string) => boolean
+  removeHeader: (k: string) => void
   json: (b: unknown) => void
   write: (chunk: unknown) => boolean
   end: () => void
@@ -64,6 +66,8 @@ function makeRes(): CapturedRes {
     ended: false,
     status(n) { this.statusCode = n; return this },
     setHeader(k, v) { this.headers[k.toLowerCase()] = v },
+    hasHeader(k) { return k.toLowerCase() in this.headers },
+    removeHeader(k) { delete this.headers[k.toLowerCase()] },
     json(b) { this.jsonBody = b; this.ended = true },
     write(chunk) { this.written.push(String(chunk)); return true },
     end() { this.ended = true },

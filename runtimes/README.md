@@ -13,6 +13,6 @@ Each directory is self-contained and has the same shape:
 | Runtime | Output | Consumed by |
 |---|---|---|
 | `dsh/` | `resources/dsh-runtime/` | `src/main/services/agent/dsh/` — experimental: not built by `npm run dev` (run `npm run runtime:dsh`); the app build runs it with `--optional`, so a failure ships the app without dsh |
-| `office/` | `resources/office-runtime/` | `src/main/services/office-runtime/` |
+| `office/` | `resources/office-runtime/` | `src/main/services/office-runtime/` — ships through two `extraResources` entries in `package.json`, one for its `node_modules`: electron-builder 26 silently drops a `node_modules` folder at the root of a copied directory. `scripts/afterPack.cjs` fails packaging when a library or font its manifest lists did not arrive |
 
 Independently deployed projects (`gateway/`, `halo-local/`) stay at the repository root.

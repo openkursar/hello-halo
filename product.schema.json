@@ -262,6 +262,17 @@
         }
       }
     },
+    "federation": {
+      "type": "object",
+      "description": "Build defaults for cross-network team collaboration. A non-empty user gateway takes precedence; leaving the user setting empty inherits this default. Omit both for LAN-only teams.",
+      "properties": {
+        "gatewayUrl": {
+          "type": "string",
+          "description": "Federation relay base URL (http, https, ws or wss). Not copied into user settings."
+        }
+      },
+      "additionalProperties": false
+    },
     "security": {
       "type": "object",
       "description": "Security policy for enterprise/custom builds. Each flag follows the '<surface>Safe' convention: true enables restrictions, omitted/false keeps the permissive default. Open-source builds omit this entirely. Flag definitions live in src/main/services/security-policy.ts.",

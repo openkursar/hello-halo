@@ -147,6 +147,25 @@ export function describeReviewReading(task: CodeReviewTask, workDir: string): Re
         notes: [],
       }
     }
+    case 'commit': {
+      // The change list always resolves the base: the first parent, or the empty tree for a root commit.
+      if (!rev) throw new Error('A commit review needs the revision its change list compared it with')
+      const commit = shellArg(task.scope.revision)
+      return {
+        compare: `the commit ${inlineCode(inlineText(task.scope.revision, 200))} against ${rev}, its first parent (the empty tree for a first commit): only the changes that commit made.`,
+        commands: [
+          { command: `${git} show --no-patch --format=fuller ${commit}`, shows: 'the commit message, for intent' },
+          { command: `${git} diff --stat ${rev} ${commit}`, shows: 'the size of each change' },
+          { command: `${git} diff ${rev} ${commit} -- <path>`, shows: "one file's diff" },
+          { command: `${git} show ${commit}:<path>`, shows: 'a file as the commit left it' },
+        ],
+        notes: ['The files on disk may have changed since this commit and are not under review; read a file as the commit left it with `git show`, not from disk.'],
+      }
+    }
+    default: {
+      const _exhaustive: never = task.scope
+      throw new Error(`Unknown compare scope: ${(_exhaustive as GitCompareScope).kind}`)
+    }
   }
 }
 
@@ -348,7 +367,7 @@ ${roster}
 3. When all three have reported, have them challenge each other: send each member the other two members' findings and ask which they dispute and why, with evidence. Repeat until the findings are agreed or a disagreement is stated plainly.
 4. Check every finding in the code yourself before it enters the report; drop what does not hold up, state remaining disagreements, and write evidence paths relative to your own working directory.
 5. Call \`team_complete\`, then reply with the report.
-Member replies arrive as new turns of yours: after dispatching, end your turn instead of waiting, and keep your todo list current across turns.
+Member reports and other messages arrive after your current tool call while you continue working. You do not need to poll the board or end your turn to receive them. Finish your own work before ending your turn, and keep your todo list current.
 If the team tools are missing or \`collab_start\` fails, review alone, and begin the report by saying the team review could not run and a single reviewer did it instead.`
 }
 

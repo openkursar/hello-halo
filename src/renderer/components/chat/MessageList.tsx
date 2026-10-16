@@ -21,11 +21,13 @@ import { useRef, useMemo, useCallback, forwardRef, useImperativeHandle } from 'r
 import type { ReactNode } from 'react'
 import { MessageRow } from './MessageRow'
 import { StreamingSection } from './StreamingSection'
+import { withoutLiveInputs } from '../../utils/live-inputs'
+import type { LiveInput } from '../../types'
 import { useBrowserToolCalls, type BrowserToolCall } from './useBrowserToolCalls'
 import { useTerminalToolCalls, type TerminalToolCall } from './useTerminalToolCalls'
 import { CompactNotice } from './CompactNotice'
 import { InterruptedBubble } from './InterruptedBubble'
-import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, nextTranscriptRows, type ScrollMotion, type TranscriptRows } from './transcript'
+import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, nextTranscriptRows, liveArrivals, type ScrollMotion, type TranscriptRows } from './transcript'
 import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion, WorkDirIssue } from '../../types'
 import { WorkingDirUnavailableNotice } from './WorkingDirUnavailableNotice'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
@@ -81,6 +83,7 @@ export interface MessageListProps {
    * canvas to open a terminal in (automation runs, IM and team transcripts).
    */
   hideTerminalOpen?: boolean
+  allowViewChanges?: boolean
   /**
    * Older messages exist beyond the loaded ones: called when the reader reaches
    * the top of everything loaded. Pass only while more exists; the surface
@@ -133,6 +136,7 @@ function StreamingFooter({
   onAnswerQuestion,
   onStop,
   senderName,
+  arrivals,
 }: {
   conversationId: string
   streamingContent: string
@@ -148,8 +152,10 @@ function StreamingFooter({
   onAnswerQuestion?: (answers: Record<string, string>) => void
   onStop?: () => void
   senderName?: string
+  arrivals: Message[]
 }) {
   const queuedMessages = useChatStore(s => s.sessions.get(conversationId)?.queuedMessages)
+  const liveInputs = useChatStore(s => s.sessions.get(conversationId)?.liveInputs)
   const apiRetry = useChatStore(s => s.sessions.get(conversationId)?.apiRetry ?? null)
 
   return (
@@ -166,6 +172,8 @@ function StreamingFooter({
       pendingQuestion={pendingQuestion}
       onAnswerQuestion={onAnswerQuestion}
       queuedMessages={queuedMessages ?? EMPTY_QUEUE}
+      liveInputs={liveInputs ?? EMPTY_LIVE_INPUTS}
+      arrivals={arrivals}
       senderName={senderName}
       apiRetry={apiRetry}
       onStop={onStop}
@@ -174,6 +182,8 @@ function StreamingFooter({
 }
 
 const EMPTY_QUEUE: never[] = []
+const EMPTY_LIVE_INPUTS: LiveInput[] = []
+const EMPTY_ARRIVALS: Message[] = []
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList({
   conversationId = '',
@@ -198,6 +208,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   thoughtsLoader,
   hideBrowserLiveView = false,
   hideTerminalOpen = false,
+  allowViewChanges = false,
   onLoadEarlier,
   defaultThoughtsExpanded = false,
   defaultThoughtsMaximized = false,
@@ -226,13 +237,20 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   // Rows, keys, previous costs and injected messages, derived again only from
   // the first message that changed (see transcript/transcript-rows).
+  const liveInputs = useChatStore(s => s.sessions.get(conversationId)?.liveInputs ?? EMPTY_LIVE_INPUTS)
+  const activeArrivals = useMemo(() => isGenerating ? liveArrivals(messages, liveInputs) : EMPTY_ARRIVALS, [messages, liveInputs, isGenerating])
+  const shownMessages = useMemo(() => {
+    if (!isGenerating) return messages
+    const activeIds = new Set(activeArrivals.map(message => message.id))
+    return withoutLiveInputs(messages, liveInputs).filter(message => !activeIds.has(message.id))
+  }, [messages, liveInputs, activeArrivals, isGenerating])
   const transcriptRef = useRef<TranscriptRows | null>(null)
   const transcript = useMemo(() => {
-    const next = nextTranscriptRows(transcriptRef.current, messages, isGenerating)
+    const next = nextTranscriptRows(transcriptRef.current, shownMessages, isGenerating)
     transcriptRef.current = next
     return next
-  }, [messages, isGenerating])
-  const { messages: displayMessages, keys: rowKeys, previousCosts, injections } = transcript
+  }, [shownMessages, isGenerating])
+  const { messages: displayMessages, keys: rowKeys, previousCosts, injections, arrivals } = transcript
 
   const follower = useStickToBottom({ onAtBottomChange: onAtBottomStateChange, live: isGenerating })
   const history = useHistoryWindow(rowKeys, follower.scroller, { onReachStart: onLoadEarlier })
@@ -307,7 +325,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             onLoadThoughts={hasThoughtsLoader ? handleLoadThoughts : undefined}
             hideBrowserLiveView={hideBrowserLiveView}
             hideTerminalOpen={hideTerminalOpen}
+            allowViewChanges={allowViewChanges}
             injectionMessages={injections.get(message.id)}
+            arrivals={arrivals.get(message.id)}
             className={contentWidthClass}
             senderName={message.role === 'assistant' ? senderName : undefined}
           />
@@ -316,7 +336,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     }
     if (liveStart >= displayMessages.length) out.push(<div key="history-start" ref={sentinelRef} aria-hidden="true" />)
     return out
-  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCosts, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, rowKeys, injections, contentWidthClass, senderName])
+  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCosts, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, allowViewChanges, rowKeys, injections, arrivals, contentWidthClass, senderName])
 
   // Keep the footer mounted for an active question independently of isGenerating:
   // a recovered question can be paused on the answer with isGenerating false, and
@@ -350,6 +370,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               onAnswerQuestion={onAnswerQuestion}
               onStop={onStop}
               senderName={senderName}
+              arrivals={activeArrivals}
             />
           )}
 

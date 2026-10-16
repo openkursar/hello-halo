@@ -22,18 +22,26 @@
 import { DisposableStore, toDisposable, type IDisposable } from '../../platform/event'
 import { circuitBreaker } from './circuit-breaker'
 import { noteTurnEnded } from './pending-wait'
-import { releaseConversationTurn, drainConversationTurn } from './delivery'
+import { releaseConversationTurn, drainConversationTurn, notifyConversationTurnReady, holdConversationAfterStop } from './delivery'
+import { onUserStop, onUserStopSettled } from '../agent'
 import { createChatConversationSource } from './chat-source'
-import { getConversationSources, onDidChangeConversationSources, registerConversationSource } from './source'
+import { getConversationSources, onDidChangeConversationSources, registerConversationSource, sourceOfConversation } from './source'
 import type { ConversationSource } from './source'
 
 let running: DisposableStore | null = null
+const finishing = new Set<string>()
 
 async function handleTurnEnded(conversationId: string): Promise<void> {
-  await releaseConversationTurn(conversationId)
-  noteTurnEnded(conversationId)
-  // Depth travels with the messages of a chain; it must not outlive the turn it was recorded for.
-  circuitBreaker.clearInboundForwardDepth(conversationId)
+  if (finishing.has(conversationId)) return
+  finishing.add(conversationId)
+  try {
+    await releaseConversationTurn(conversationId)
+    noteTurnEnded(conversationId)
+    circuitBreaker.clearInboundForwardDepth(conversationId)
+  } finally {
+    // Release before draining: the next dispatch may fail synchronously and report its own ending.
+    finishing.delete(conversationId)
+  }
   drainConversationTurn(conversationId)
 }
 
@@ -46,14 +54,14 @@ export function initConversationInterop(): void {
   const watching = new Map<ConversationSource, IDisposable>()
   const watch = (source: ConversationSource): void => {
     if (watching.has(source)) return
-    watching.set(
-      source,
-      source.onTurnEnd((conversationId) => {
-        handleTurnEnded(conversationId).catch((err) => {
-          console.error(`[ConversationInterop] turn-end handling failed for ${conversationId}:`, err)
-        })
+    const subscriptions = new DisposableStore()
+    subscriptions.add(source.onTurnEnd((conversationId) => {
+      handleTurnEnded(conversationId).catch((err) => {
+        console.error(`[ConversationInterop] turn-end handling failed for ${conversationId}:`, err)
       })
-    )
+    }))
+    if (source.onTurnReady) subscriptions.add(source.onTurnReady(notifyConversationTurnReady))
+    watching.set(source, subscriptions)
   }
   const unwatch = (source: ConversationSource): void => {
     watching.get(source)?.dispose()
@@ -71,6 +79,15 @@ export function initConversationInterop(): void {
   )
   getConversationSources().forEach(watch)
   store.add(registerConversationSource(createChatConversationSource()))
+  store.add(onUserStop(holdConversationAfterStop))
+  // A stop that withdrew a continuation nothing had started leaves no turn end
+  // behind; a turn still running reports its own end.
+  store.add(onUserStopSettled((conversationId) => {
+    if (sourceOfConversation(conversationId)?.isBusy(conversationId) !== false) return
+    handleTurnEnded(conversationId).catch((err) => {
+      console.error(`[ConversationInterop] turn-end handling after a stop failed for ${conversationId}:`, err)
+    })
+  }))
 }
 
 export function disposeConversationInterop(): void {

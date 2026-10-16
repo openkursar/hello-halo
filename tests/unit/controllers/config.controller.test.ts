@@ -13,6 +13,10 @@ vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfigPath: vi.fn(() => '/home/user/.halo/config.json')
 }))
 
+vi.mock('../../../src/main/foundation/product-config', () => ({
+  getProductFederationGatewayUrl: vi.fn(),
+}))
+
 vi.mock('../../../src/main/foundation/config-encryption', () => ({
   maskConfigFields: vi.fn(),
   unmaskSentinels: vi.fn()
@@ -25,6 +29,7 @@ vi.mock('../../../src/main/services/api-validator.service', () => ({
 
 import {
   configSnapshotEpoch,
+  getConfig as readConfig,
   fetchModels,
   preserveManagedSources,
   reloadRequiredBeforeSave,
@@ -36,6 +41,32 @@ import {
   isConfigUnreadable,
   saveConfig
 } from '../../../src/main/foundation/config.service'
+
+import { getProductFederationGatewayUrl } from '../../../src/main/foundation/product-config'
+import { maskConfigFields } from '../../../src/main/foundation/config-encryption'
+
+describe('read-only build defaults', () => {
+  it.each([
+    [undefined, null],
+    ['', null],
+    ['  ', null],
+    [' https://relay.example.test/ ', 'https://relay.example.test/'],
+  ])('returns normalized build metadata for %s without merging it into user settings', (productUrl, expected) => {
+    const user = { federation: { gatewayUrl: 'https://custom.example.test/' } }
+    vi.mocked(getConfig).mockReturnValue(user as any)
+    vi.mocked(maskConfigFields).mockReturnValueOnce(user)
+    vi.mocked(getProductFederationGatewayUrl).mockReturnValueOnce(productUrl ?? undefined)
+    vi.mocked(saveConfig).mockClear()
+
+    expect(readConfig()).toMatchObject({
+      success: true,
+      data: user,
+      productDefaults: { federation: { gatewayUrl: expected } },
+    })
+    expect(user).toEqual({ federation: { gatewayUrl: 'https://custom.example.test/' } })
+    expect(saveConfig).not.toHaveBeenCalled()
+  })
+})
 
 describe('managed account configuration writes', () => {
   const live = {

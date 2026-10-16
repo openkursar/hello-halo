@@ -45,6 +45,8 @@ export interface StoredEvent {
   _pushVia?: ChatPushVia
   /** The digital human that sent a `push` record, when it is not the chat's own */
   _pushedBy?: { appId: string; name: string }
+  /** A trigger record's own id, which a later `input_outcome` line refers to */
+  _inputId?: string
   /** The SDK message payload */
   message?: {
     role?: string
@@ -89,11 +91,15 @@ function createThoughtIdGenerator(): () => string {
  *    - Substantive tool in between → the next text starts a new candidate; the
  *      last candidate of the turn is the bubble and leaves the thoughts.
  * 4. Tool-result user events merge into the corresponding tool_use thought.
- * 5. Non-tool user events (trigger, escalation) flush and start a new turn.
- * 6. A `push` (a message the digital human sent to this chat outside its turns)
- *    is a message of its own. Its writer never puts one among a turn's lines
- *    (app-chat-sink holds it until the turn ends), so like a user event it
- *    closes any turn before it.
+ * 5. Non-tool user events (trigger, escalation) flush and start a new turn,
+ *    except a teammate's or another conversation's message read while the turn
+ *    ran (`inputMode: 'live'`): it joins that reply's process and is emitted
+ *    right after the reply segment it arrived in, naming it in `inputReplyId`.
+ * 6. A `push` is a message of its own at its arrival position. Like a user
+ *    event it closes the visible reply segment, while tool ids remain linked
+ *    across that boundary until the native result or next initialization.
+ * 7. An `input_outcome` line marks an earlier trigger record (by `_inputId`),
+ *    e.g. a person's addition a stop left unread.
  *
  * Result: one agent turn = one collapsed thought-process block + one message bubble,
  * identical to the main-space rendering.
@@ -106,6 +112,16 @@ function createThoughtIdGenerator(): () => string {
  * position in `events` stands in (1-based).
  */
 export function convertEventsToMessages(events: StoredEvent[], lines?: readonly number[]): TranscriptMessage[] {
+  return convertEventsToTranscript(events, lines).messages
+}
+
+/** The open native turn's first message, when the file ends inside a turn that emitted one. */
+export interface ConvertedTranscript {
+  messages: TranscriptMessage[]
+  openTurnFrom?: string
+}
+
+export function convertEventsToTranscript(events: StoredEvent[], lines?: readonly number[]): ConvertedTranscript {
   const generateThoughtId = createThoughtIdGenerator()
 
   const messages: TranscriptMessage[] = []
@@ -139,6 +155,18 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
   // File line of the event that first put something into the pending assistant
   // turn; becomes the message id on flush.
   let turnFirstLine: number | null = null
+  let nativeTurnStart = 0
+  let lastFlushedAnswer = ''
+  /** Index in `messages` where the native turn still running at the end began. */
+  let openTurnStart: number | null = null
+  /** Live records waiting for the reply segment they arrived in. */
+  let heldLive: TranscriptMessage[] = []
+  /** Live records placed this native turn → as held, so a checkpoint replacing its segments can place them again. */
+  const placedLive = new Map<TranscriptMessage, TranscriptMessage>()
+  const inputIdOf = new WeakMap<TranscriptMessage, string>()
+  const recordsByInputId = new Map<string, TranscriptMessage>()
+  /** Outcomes by input id; a mark may be read before or after its record. */
+  const outcomes = new Map<string, 'stopped'>()
 
   const streamBlocks = new Map<number, {
     type: 'text' | 'thinking' | 'tool_use'
@@ -184,6 +212,8 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
     }
 
     messages.push(record)
+    if (content) lastFlushedAnswer = content
+    releaseLive(record.id)
 
     // Reset all turn state
     pendingThoughts = []
@@ -195,6 +225,35 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
     pendingError = undefined
     snapshotUsage = undefined
     turnFirstLine = null
+  }
+
+  /** Keep a record findable by its input id, applying a mark already read. */
+  function register(record: TranscriptMessage, inputId: string | undefined): TranscriptMessage {
+    if (!inputId) return record
+    inputIdOf.set(record, inputId)
+    const outcome = outcomes.get(inputId)
+    const marked = outcome ? { ...record, metadata: { ...record.metadata, inputOutcome: outcome } } : record
+    if (marked !== record) inputIdOf.set(marked, inputId)
+    recordsByInputId.set(inputId, marked)
+    return marked
+  }
+
+  /** Emit held live records after the reply they arrived in, or on their own when the native turn produced none. */
+  function releaseLive(replyId?: string): void {
+    for (const live of heldLive) {
+      const placed = register(replyId ? { ...live, metadata: { ...live.metadata, inputReplyId: replyId } } : live, inputIdOf.get(live))
+      messages.push(placed)
+      placedLive.set(placed, live)
+    }
+    heldLive = []
+  }
+
+  /** The native turn ended: nothing later can be the reply its held records arrived in. */
+  function closeNativeTurn(): void {
+    releaseLive()
+    placedLive.clear()
+    nativeTurnStart = messages.length
+    lastFlushedAnswer = ''
   }
 
   /** Called before each event: the previous one may have started the turn. */
@@ -211,13 +270,40 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
 
     if (event.type === 'system' && event.subtype === 'init') {
       flush()
+      closeNativeTurn()
       streamBlocks.clear()
       toolUseMap.clear()
+      openTurnStart = messages.length
+      continue
+    }
+
+    if (event.type === 'input_outcome') {
+      const inputId = typeof event._inputId === 'string' ? event._inputId : undefined
+      if (inputId && event.outcome === 'stopped') {
+        outcomes.set(inputId, 'stopped')
+        const record = recordsByInputId.get(inputId)
+        const at = record ? messages.lastIndexOf(record) : -1
+        if (at >= 0) messages[at] = register(record!, inputId)
+      }
       continue
     }
 
     // A terminal partial checkpoint replaces this turn's aggregates, not a new reply.
     if (event.type === 'turn_snapshot') {
+      const replaced: TranscriptMessage[] = []
+      // The owner's additions follow the reply they joined; with the replies merged, that is the checkpoint.
+      const additions: TranscriptMessage[] = []
+      for (let at = messages.length - 1; at >= nativeTurnStart; at--) {
+        const held = placedLive.get(messages[at])
+        if (held) {
+          replaced.unshift(held)
+          messages.splice(at, 1)
+        } else if (messages[at].source === 'injection') {
+          additions.unshift(messages[at])
+          messages.splice(at, 1)
+        } else if (messages[at].role === 'assistant' && messages[at].source !== 'push') messages.splice(at, 1)
+      }
+      heldLive = [...replaced, ...heldLive]
       turnFirstLine ??= lineOf(index)
       pendingThoughts = Array.isArray(event.thoughts) ? event.thoughts as Thought[] : []
       // The checkpoint's text is the bubble, not one of its thoughts.
@@ -226,8 +312,11 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
       pendingError = typeof event.error === 'string' ? event.error : undefined
       snapshotUsage = event.tokenUsage as TokenUsage | undefined
       flush()
+      messages.push(...additions)
+      closeNativeTurn()
       streamBlocks.clear()
       toolUseMap.clear()
+      openTurnStart = null
       continue
     }
 
@@ -272,9 +361,17 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
         }
       } else {
         // Normal user message (trigger or escalation response).
-        // Flush the current turn before showing the user message.
-        flush()
-        teamMetadata = event._teamOrigin ? { teamTriggerKind: event._teamOrigin.kind ?? 'human_message', correlationId: event._teamOrigin.correlationId } : undefined
+        const source = parseSource(event._source)
+        const provenance = source ? pickProvenanceMetadata(event._metadata) : {}
+        const live = event._isTrigger === true && provenance.inputMode === 'live'
+          && (source === 'team-message' || source === 'cross-conversation')
+        const origin = event._teamOrigin ? { teamTriggerKind: event._teamOrigin.kind ?? 'human_message', correlationId: event._teamOrigin.correlationId } : undefined
+        // Anything else ends the reply segment before it; the reply keeps
+        // answering the input that opened its turn.
+        if (!live) {
+          flush()
+          teamMetadata = origin
+        }
         const textContent = extractTextContent(content)
         const line = lineOf(index)
         // Image blocks become bubble attachments only for trigger records (our
@@ -286,13 +383,12 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
           ? event._references
           : undefined
         if (textContent || images.length > 0 || references) {
-          const source = parseSource(event._source)
           const metadata = {
-            ...teamMetadata,
-            ...(source ? pickProvenanceMetadata(event._metadata) : {}),
+            ...origin,
+            ...provenance,
             ...(references ? { references } : {}),
           }
-          messages.push({
+          const record: TranscriptMessage = {
             id: messageId(line),
             role: roleForTranscriptSource(source),
             ...(source ? { source } : {}),
@@ -300,7 +396,14 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
             content: textContent,
             timestamp: ts,
             ...(images.length > 0 ? { images } : {}),
-          })
+          }
+          const inputId = typeof event._inputId === 'string' ? event._inputId : undefined
+          if (live) {
+            if (inputId) inputIdOf.set(record, inputId)
+            heldLive.push(record)
+          } else {
+            messages.push(register(record, inputId))
+          }
         }
       }
       continue
@@ -469,15 +572,17 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
     if (event.type === 'result') {
       if (event.is_error !== true) {
         const resultText = typeof event.result === 'string' ? event.result : ''
-        if (resultText) {
+        if (resultText && (pendingThoughts.length > 0 || resultText !== lastFlushedAnswer)) {
           pendingResultText = resultText
           pendingResultTs = ts
         }
       }
       noteTurnStart(index)
       flush()
+      closeNativeTurn()
       streamBlocks.clear()
       toolUseMap.clear()
+      openTurnStart = null
       continue
     }
 
@@ -487,8 +592,10 @@ export function convertEventsToMessages(events: StoredEvent[], lines?: readonly 
   // Flush any remaining turn (the common case — most runs are a single turn).
   noteTurnStart(events.length - 1)
   flush()
+  releaseLive()
 
-  return messages
+  const openTurnFrom = openTurnStart !== null && openTurnStart < messages.length ? messages[openTurnStart].id : undefined
+  return { messages, ...(openTurnFrom ? { openTurnFrom } : {}) }
 }
 
 // ============================================
@@ -570,6 +677,7 @@ function pickProvenanceMetadata(raw: unknown): TranscriptProvenanceMetadata {
   if (source.fromMemberName === null || typeof source.fromMemberName === 'string') {
     picked.fromMemberName = source.fromMemberName as string | null
   }
+  if (source.inputMode === 'live' || source.inputMode === 'turn') picked.inputMode = source.inputMode
   return picked
 }
 

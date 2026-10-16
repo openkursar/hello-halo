@@ -26,7 +26,7 @@ import { ChevronRight, Radio } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { api } from '../../api'
-import { CHANNEL_LABELS } from './im-channel-labels'
+import { getImBotLabel } from './im-channel-labels'
 import type { ImSessionRecord, ImChannelInstanceStatus } from '../../../shared/types/im-channel'
 
 interface AppExternalChannelsCardProps {
@@ -111,7 +111,7 @@ export function AppExternalChannelsCard({ appId, spaceId }: AppExternalChannelsC
                 <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${instance.connected ? 'bg-halo-success' : 'bg-muted-foreground/30'}`} />
                 <div className="flex-1 min-w-0">
                   <div className="text-[13px] font-medium text-foreground">
-                    {CHANNEL_LABELS[instance.type] ?? instance.type}
+                    {getImBotLabel(instance, t)}
                   </div>
                   <div className="text-[11px] text-muted-foreground mt-0.5">
                     {t('{{count}} IM sessions', { count: instanceSessions.length })}

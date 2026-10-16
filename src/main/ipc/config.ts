@@ -8,7 +8,7 @@ import { decryptString } from '../foundation/secure-storage.service'
 import { unmaskSentinels, maskOAuthFields } from '../foundation/config-encryption'
 import { validateApiConnection } from '../services/api-validator.service'
 import {
-  configSnapshotEpoch,
+  getConfigReadMetadata,
   fetchModels as controllerFetchModels,
   getConfigReadFailure as controllerGetConfigReadFailure,
   notSavedWhileConfigUnreadable,
@@ -46,7 +46,7 @@ export function registerConfigHandlers(): void {
         return {
           success: true,
           data: maskOAuthFields(config as unknown as Record<string, unknown>),
-          configEpoch: configSnapshotEpoch(),
+          ...getConfigReadMetadata(),
         }
       } catch (error: unknown) {
         const err = error as Error

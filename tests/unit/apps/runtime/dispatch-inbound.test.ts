@@ -151,7 +151,10 @@ vi.mock('../../../../src/main/services/space.service', () => ({
 }))
 // The IM error reply asks whether a failure is a refused local connection; what
 // a chat is then told is im-error-reply.test's, with the real check.
-vi.mock('../../../../src/main/services/agent', () => ({ isRefusedLocalConnection: (error: string) => error.includes('Unable to connect to API (EACCES)') }))
+vi.mock('../../../../src/main/services/agent', () => ({
+  isRefusedLocalConnection: (error: string) => error.includes('Unable to connect to API (EACCES)'),
+  onAgentEvent: () => ({ dispose: () => {} }),
+}))
 vi.mock('../../../../src/main/foundation/product-config', () => ({
   getImChannelsPermissionDefaults: vi.fn(() => undefined),
 }))
@@ -169,7 +172,7 @@ vi.mock('../../../../src/main/apps/runtime/team', () => ({
 const { hasOpenQuestion, prepareActions, turnHold } = vi.hoisted(() => ({
   hasOpenQuestion: vi.fn(() => false),
   prepareActions: vi.fn(async (_events: unknown[], _isAuthorized: () => boolean) => new Map<string, string>()),
-  turnHold: { cancelled: false, end: vi.fn() },
+  turnHold: { cancelled: false, stoppedBy: undefined as 'user' | 'internal' | undefined, end: vi.fn() },
 }))
 vi.mock('../../../../src/main/apps/runtime/relay-actions', async importOriginal => ({
   ...(await importOriginal<typeof import('../../../../src/main/apps/runtime/relay-actions')>()),
@@ -177,6 +180,10 @@ vi.mock('../../../../src/main/apps/runtime/relay-actions', async importOriginal 
   prepareRelayActions: prepareActions,
 }))
 vi.mock('../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
+  getAppChatTurnIdentity: () => undefined,
+  appChatMessageIdentity: (permission: any) => permission?.isOwner === false ? 'guest' : 'owner',
+  injectIntoAppChatBatch: () => false,
+  keepStoppedInputs: vi.fn(),
   beginAppChatTurnStart: () => turnHold,
 }))
 
@@ -192,6 +199,7 @@ import {
 import { analytics } from '../../../../src/main/services/analytics/analytics.service'
 import { setImPermissionContext, clearImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
 import { maybeClaimOwner } from '../../../../src/main/apps/runtime/im-channels/owner-claim'
+import { keepStoppedInputs } from '../../../../src/main/apps/runtime/app-chat-live-turn'
 import { AppChatTurnInterrupted, type AppChatTurnEnding } from '../../../../src/main/apps/runtime/turn-ending'
 import { WorkingDirectoryUnavailableError } from '../../../../src/main/services/agent/working-dir'
 import { RelayActionUnauthorizedError } from '../../../../src/main/apps/runtime/relay-actions'
@@ -266,6 +274,7 @@ beforeEach(() => {
   hasOpenQuestion.mockReturnValue(false)
   prepareActions.mockImplementation(async () => new Map())
   turnHold.cancelled = false
+  turnHold.stoppedBy = undefined
 })
 
 // ============================================
@@ -1398,6 +1407,24 @@ describe('dispatchInboundMessage — relay context handoff', () => {
     expect(turnHold.end).toHaveBeenCalled()
   })
 
+  it("keeps the owner's message a person's stop caught during that preparation in the record, marked", async () => {
+    instanceCfg = { ...BASE_CONFIG, permissionEnabled: true, owners: ['u1'] }
+    pushQuestion()
+    let finish!: (value: Map<string, string>) => void
+    prepareActions.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const dispatch = dispatchInboundMessage(makeMsg({ body: 'route it east' }), makeReply(false), 'app-1', 'inst-1')
+    turnHold.cancelled = true
+    turnHold.stoppedBy = 'user'
+    finish(new Map())
+    await dispatch
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+    expect(vi.mocked(keepStoppedInputs)).toHaveBeenCalledWith(expect.any(String), [], [expect.objectContaining({
+      content: expect.stringContaining('route it east'),
+    })])
+    // The question context waits for the next message.
+    expect(spool.count(TARGET)).toBe(1)
+  })
+
   it('appends the relay block after the user text, never before it', async () => {
     pushEvent('e1')
     await dispatchInboundMessage(makeMsg({ body: 'approved' }), makeReply(false), 'app-1', 'inst-1')
@@ -1824,7 +1851,7 @@ describe('dispatchInboundMessage — ordinary private answers', () => {
     expect(sendAppChatMessageMock).toHaveBeenCalledOnce()
     expect(hasOpenQuestion).not.toHaveBeenCalled()
     if (command === '/stop') {
-      expect(abortAppChatTurnMock).toHaveBeenCalledWith('app-chat:app-1:wecom-bot:direct:chat-1')
+      expect(abortAppChatTurnMock).toHaveBeenCalledWith('app-chat:app-1:wecom-bot:direct:chat-1', 'user')
       expect(clearImSessionMock).not.toHaveBeenCalled()
     } else {
       expect(clearImSessionMock).toHaveBeenCalledWith('app-1', 'space-1', 'wecom-bot', 'direct', 'chat-1')
@@ -1877,4 +1904,3 @@ describe('dispatchInboundMessage — ordinary private answers', () => {
     expect(prepareActions).not.toHaveBeenCalled()
   })
 })
-

@@ -7,6 +7,8 @@ import { EscalationCard } from '../../apps/EscalationCard'
 import { useTranslation } from '../../../i18n'
 import { AutomationAvatar } from '../../apps/AutomationAvatar'
 import { MessageRow } from '../../chat/MessageRow'
+import { InjectionAnnotation } from '../../chat/InjectionAnnotation'
+import { inputsByReply } from '../../chat/transcript'
 import { TaskTimestamp } from './TaskTimestamp'
 import { taskTime } from './time'
 import { activityLevel, conversationMessages, decisionMessageId, COLLABORATION_PREVIEW_LIMIT, taskConversationRows, type SharedTaskDecision } from './model'
@@ -21,6 +23,7 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
   const hasHumanConversation = conversationMessages(messages).some(message => message.role === 'user')
   useEffect(() => { if (hasHumanConversation && appId) onHumanConversation?.(appId) }, [hasHumanConversation, appId, onHumanConversation])
   const attached = useMemo(() => new Map(decisions.map(decision => [decision.id, decisionMessageId(decision, messages)])), [decisions, messages])
+  const inputs = useMemo(() => inputsByReply(messages), [messages])
   const rows = useMemo(() => taskConversationRows(messages, activities, epochId, appId, decisions.filter(decision => !attached.get(decision.id))), [messages, activities, epochId, appId, decisions, attached])
   const [olderPage, setOlderPage] = useState(0)
   const end = Math.max(0, rows.length - olderPage * 50)
@@ -82,10 +85,12 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
     {visibleRows.map(row => {
       if (row.decision) return decisionCard(row.decision)
       if (row.sharedDecision) return sharedDecisionCard(row.sharedDecision)
+      if (row.additions) return <div key={row.id} className="w-[85%]"><InjectionAnnotation messages={row.additions} /></div>
       if (row.message) {
         const messageId = row.message.id
         const requests = decisions.filter(decision => attached.get(decision.id) === messageId)
-        return <MessageRow key={row.id} message={row.message} hideBrowserLiveView hideTerminalOpen afterThoughts={requests.length ? requests.map(decisionCard) : undefined} />
+        const carried = inputs.get(messageId)
+        return <MessageRow key={row.id} message={row.message} hideBrowserLiveView hideTerminalOpen injectionMessages={carried?.injections} arrivals={carried?.arrivals} afterThoughts={requests.length ? requests.map(decisionCard) : undefined} />
       }
       const updates = row.activities
       const latest = updates[updates.length - 1]

@@ -40,6 +40,11 @@ vi.mock('electron', () => ({
   },
 }))
 
+vi.mock('../../../../../src/main/foundation/product-config', async original => ({
+  ...await original<typeof import('../../../../../src/main/foundation/product-config')>(),
+  getProductFederationGatewayUrl: vi.fn(),
+}))
+
 // ── Mockable singletons used by the controller + join handler ──
 const remoteStatus = {
   value: {
@@ -92,6 +97,8 @@ import {
   revokeTeamInvite,
   joinTeamOffice,
 } from '../../../../../src/main/controllers/team-invite.controller'
+
+import { getProductFederationGatewayUrl } from '../../../../../src/main/foundation/product-config'
 
 const TEAM_ID = 'team-abc'
 
@@ -182,6 +189,20 @@ describe('team invite generation + join (P2)', () => {
     expect(second.data.token).toBe(first.data.token)
     expect(second.data.serverUrl).toBe('http://192.168.1.50:4099')
     expect(second.data.url.startsWith('http://192.168.1.50:4099/?')).toBe(true)
+  })
+
+  it('uses the build gateway with a trailing slash when the local remote server is off', async () => {
+    remoteStatus.value = { server: { running: false, lanUrl: null } }
+    vi.mocked(getProductFederationGatewayUrl).mockReturnValueOnce('http://relay.example.test:18086/')
+
+    const result = await generateTeamInvite(TEAM_ID)
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.serverUrl).toBe('http://relay.example.test:18086')
+    expect(result.data.url.startsWith('http://relay.example.test:18086/?')).toBe(true)
+    expect(fedManager.hostOffice).toHaveBeenCalledWith(TEAM_ID)
+    expect(verifyOfficeCredential(result.data.token)?.officeId).toBe(TEAM_ID)
   })
 
   it('returns REMOTE_ACCESS_OFF when remote access is not running', async () => {

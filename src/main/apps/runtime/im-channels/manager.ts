@@ -46,6 +46,8 @@ export class ImChannelManager {
   /** Callback fired after each instance is torn down (for resource cleanup). */
   private onInstanceStop: ((instanceId: string) => void) | null = null
 
+  constructor(private readonly resolveAppName: (appId: string) => string | undefined = () => undefined) {}
+
   // ── Provider Registration ──────────────────────────────────────
 
   /**
@@ -288,7 +290,14 @@ export class ImChannelManager {
    * Get status of all configured instances.
    */
   getAllStatuses(): ImChannelInstanceStatus[] {
-    return this.currentConfigs.map(cfg => this.toStatus(cfg))
+    const ordinals = new Map<ImChannelType, number>()
+    const names = new Map<string, string | undefined>()
+    return this.currentConfigs.map(cfg => {
+      const ordinal = (ordinals.get(cfg.type) ?? 0) + 1
+      ordinals.set(cfg.type, ordinal)
+      if (cfg.appId && !names.has(cfg.appId)) names.set(cfg.appId, this.resolveAppName(cfg.appId))
+      return this.toStatus(cfg, ordinal, names.get(cfg.appId))
+    })
   }
 
   /**
@@ -297,7 +306,12 @@ export class ImChannelManager {
   getInstanceStatus(instanceId: string): ImChannelInstanceStatus | null {
     const cfg = this.currentConfigs.find(c => c.id === instanceId)
     if (!cfg) return null
-    return this.toStatus(cfg)
+    let ordinal = 0
+    for (const current of this.currentConfigs) {
+      if (current.type === cfg.type) ordinal++
+      if (current.id === instanceId) break
+    }
+    return this.toStatus(cfg, ordinal, cfg.appId ? this.resolveAppName(cfg.appId) : undefined)
   }
 
   /**
@@ -307,7 +321,7 @@ export class ImChannelManager {
    * 'standby'); falls back to deriving state from isConnected() for providers
    * that don't implement it. Stays provider-agnostic — no branches on type.
    */
-  private toStatus(cfg: ImChannelInstanceConfig): ImChannelInstanceStatus {
+  private toStatus(cfg: ImChannelInstanceConfig, ordinal: number, appName: string | undefined): ImChannelInstanceStatus {
     const instance = this.instances.get(cfg.id)
     const connected = instance?.isConnected() ?? false
     const state = instance?.getConnectionState?.()
@@ -321,10 +335,12 @@ export class ImChannelManager {
     return {
       id: cfg.id,
       type: cfg.type,
+      ordinal,
       enabled: cfg.enabled,
       connected,
       state,
       appId: cfg.appId,
+      appName,
       // Only meaningful while disconnected; a live instance has no failure.
       reason: connected ? undefined : this.statusReasons.get(cfg.id),
       identityResolution,

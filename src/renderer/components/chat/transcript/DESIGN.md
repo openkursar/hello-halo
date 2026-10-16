@@ -77,3 +77,46 @@ touching the scroller. Jumps center the row on the scroller directly
 `overflow: hidden` ancestors. A far jump is instant and re-aimed for a few
 frames, because the rows it crosses change from estimated to real heights as
 it lands.
+
+
+### Inputs received while the turn runs
+
+The shared `StreamingSection` places a person's messages (IM additions) and the
+digital human's own pushes at their receipt boundary, using the thought id and
+text offset captured by the chat store and the existing `MessageRow`; the stored
+record splits the reply at the same place, so a reload looks the same. The
+owner's additions appear together in `InjectionAnnotation` below the reply:
+they never partition thoughts or text, change the reply's React key, or mark
+earlier work complete. Older partitions keep their references; a plain text
+delta updates only the final streaming bubble.
+History omits only an exact live record (id, or original timestamp plus source
+and content), keeping older identical messages. On turn completion the normal
+transcript read replaces these temporary rows without a per-input history read.
+
+A teammate's message or another conversation's message read while a reply is
+written (an *arrival*, `arrivals.ts`) joins that reply's thought/tool process at
+its receipt time — never a text partition or a fabricated tool result — live and
+after reload. Renderer-only thoughts carry the original record; SDK thoughts and
+stored records stay unchanged, and only native thoughts drive the streaming
+bubble's tool-transition detection. A reply that did no work has no process to
+join: its arrivals are drawn after it as their own cards, never as a process of
+their own. Live, the same holds for the part of a reply after its last split:
+arrivals with no work of its own beside them are cards after it until work
+joins them. Thought durations count only native steps. A delivery that opened a
+turn (`inputMode: 'turn'`), and any record no drawn reply claims (older history,
+remote records), is its kind's own card with its usual fresh-arrival behaviour.
+
+`transcript-rows` attaches an arrival only when the writer's `inputReplyId` names
+the reply right before it across system/injection records, and never a push.
+These are receipt positions, not claims about model consumption; adjacency or
+timestamps alone establish nothing. Views that draw their own selection of a
+transcript (the team task room) take the same attachment from `inputsByReply`.
+While a turn runs, `liveArrivals` takes the
+turn's arrivals from the stored records after the turn's start (its placeholder,
+or the input that opened it) together with the bounded overlay, because the
+partial reply they name is drawn from the stream, not the transcript. Grouping
+uses the existing incremental tail rebuild; historical thoughts stay lazy-loaded
+and arrivals join them once loaded.
+
+A person's input that a Stop voided before it was read keeps its place, with a
+"Stopped, not handled" note (`inputOutcome: 'stopped'`), live and after reload.

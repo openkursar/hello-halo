@@ -29,11 +29,15 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 const { send } = vi.hoisted(() => ({ send: vi.fn() }))
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
+  activeSessions: new Map(),
+  hasPendingSessionInput: () => false,
   v2Sessions: new Map(),
   closeV2Session: vi.fn(),
   acquireV2Session: vi.fn(async () => ({
     session: { send, setMaxThinkingTokens: vi.fn() },
     isCurrent: true,
+    isUsable: true,
+    onRetired: () => () => {},
     send,
     close: vi.fn(),
     release: vi.fn(),
@@ -54,6 +58,7 @@ vi.mock('../../../../src/main/services/agent/control', () => ({
 const { sink } = vi.hoisted(() => ({
   sink: {
     writeUserMessage: vi.fn(),
+    setTurnIdentity: vi.fn(),
     beginRound: vi.fn(() => ({
       done: Promise.resolve(),
       cancel: vi.fn(),
@@ -65,6 +70,7 @@ const { sink } = vi.hoisted(() => ({
   },
 }))
 vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
+  onAppChatRoundChange: () => () => {},
   getAppChatSink: () => sink,
   peekAppChatSink: () => undefined,
   hasActiveAppChatRound: () => false,
@@ -150,7 +156,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getDbMcpServers: vi.fn(() => null),
 }))
-vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ onAgentEvent: () => ({ dispose: () => {} }), emitAgentEvent: vi.fn() }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))

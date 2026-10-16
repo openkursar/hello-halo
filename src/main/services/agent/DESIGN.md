@@ -39,17 +39,36 @@
 | Top-level orchestration | `agents.ts`, `index.ts` | Public surface; wires everything together. |
 | Constants & shared types | `constants.ts`, `types.ts`, `events.ts`, `helpers.ts` | — |
 
+`mcp/sdk-server.ts` preserves each tool's complete Zod contract through the MCP
+SDK's JSON Schema converter, including nested array items and object fields.
+Calls are validated against that same schema before reaching a handler; parsed
+defaults and transforms are retained. Invalid input returns an MCP tool error
+with its field paths, so the model can correct the request before domain writes.
+
+Codex tool identities also have to survive the model protocol boundary.
+`openai-compat-router/server/codex-responses-handler.ts` flattens a tool's
+namespace and name for upstream providers, then restores the exact registered
+pair on returning function calls. This applies to both Chat Completions and
+native Responses streams: forwarding a Responses stream unchanged loses the
+namespace and makes Codex reject the call before MCP dispatch. The return map
+preserves the original namespace, including whether it ends in `__`; plain
+built-in tool names stay plain. Native Responses rewriting changes only known
+tool identities in streamed items and the completed response's output, preserving
+reasoning, encrypted content and other event fields.
+
 ## 2) Single Source of Truth Contract
 
 - **Session state (thoughts, tool calls, token usage) is authoritative in the main process.** The renderer consumes events and must not persist agent state independently.
 - **API config changes rebuild only affected sources.** `config.service.ts` exposes `onApiConfigChange(callback)` with an optional `{ sourceIds, selectionChanged }` payload. V2 source configuration, account-routing and capability changes advance only those sources' versions; the global epoch advances only for legacy `api` changes (an undefined callback payload invalidates all sessions). Sessions carry the non-secret `sourceId`, resolved from `HALO_AI_SOURCE_ID` or their encoded backend descriptor. Changing one account never invalidates another account's sessions. An OAuth token rotation (refresh, same-account reauthentication) changes no version at all: the router swaps each request's credential for the account's current one (`openai-compat-router` `setRequestCredentialResolver`, implemented by `AISourceManager.resolveRequestCredentials`), so neither the source signature nor `computeCredentialsFingerprint` includes a sourced account's token or credential headers. Rebuilds destroy and recreate sessions at safe boundaries; session options are never mutated in place.
 - **Model selection is per-conversation.** A conversation pins its own `{ modelSourceId, modelId }`, stamped at creation from the active global selection and resolved at send/warm time by `helpers.ts getApiCredentialsForConversation`. Only conversations with no source pin use the global selection. A missing, unconfigured or unauthenticated explicit source fails rather than substituting another account. Credential resolution captures a source id before refreshing OAuth, then re-reads that same source through the manager's public `getSourceConfig`; a concurrent change to `currentId` cannot redirect the request. A pin change is detected by the per-conversation `credentialsFingerprint` and rebuilds that conversation's session. The desktop `ModelSelector` also updates the global selection — the last-used seed for new conversations and non-chat surfaces (apps use their own `userOverrides`). A selection-only change invalidates only legacy sessions without a source marker; managed unpinned sends re-resolve the selection and reconcile through their fingerprint. Concurrent creation never shares a different source's session, and a source switch while busy refuses (`SessionOptionsStaleError`, reason `source-switch`) rather than running on the previous account.
-- **Session identity & rebuild triggers.** A conversation's live session is keyed by `conversationId` and rebuilt when its captured `credentialsGeneration` (global legacy epoch plus source id and source epoch), `credentialsFingerprint` (model/env, account identity headers — plus the key and credential headers only for descriptors without a source — profile ARN and selected-model Codex capabilities), `knowledgeFingerprint` (the RESOLVED knowledge-base set + workDir), or eager `inputsFingerprint` (prompt, MCP server names, permission rules, and a digest of the settings an in-process server keeps for the session's life — `markMcpServerSettings`, e.g. the email tools) differs. Generations travel with the credential snapshot through asynchronous SDK preparation and are captured before asynchronous creation work for legacy callers, never after it, so a racing config change cannot bless stale credentials. Source epoch storage is bounded by configured sources; deletion removes an epoch and re-adding the id receives a fresh epoch. Volatile request ids and catalog fetch timestamps do not churn fingerprints. Knowledge ids are computed cheaply per send via `knowledge-context.ts resolveConversationKnowledgeBaseIds`; resolved-not-declared so a KB whose indexing finishes after creation triggers a rebuild, and workDir so KB-chat vs normal turns never share a mis-rooted session. Rebuild requests converge on `pendingConsumerRebuilds` and are applied at safe points only: turn end (consumer), idle reuse (`hasConsumablePendingRebuild`), or immediately when safely idle. Busy windows that defer a rebuild: a caller-held session lease, an active turn, running background tasks or team agents, in-flight creation, and a dispatched-but-unacknowledged turn (`turnsAwaitingInit`, cleared at `system:init`). Sending entries use `acquireV2Session`: the manager establishes its lease before resolving the acquisition, including callers sharing a warm-up's creation. The lease protects asynchronous thinking/memory preparation and SDK send acceptance. Both chat entries await `lease.send()`: dispatch marks awaiting-init before sending, retains the lease until the SDK's synchronous or asynchronous send settles, and closes only the owned instance on rejection before releasing in `finally`. Successful dispatch transfers protection to awaiting-init/the consumer; abandoned preparation releases in `finally`. Lease cleanup is instance-owned and never closes a successor under the same conversation id. Dispatch failure reporting runs through the lease's synchronous `onFailure` callback while that instance is still current, before cleanup; obsolete rejections still reach their original caller but cannot publish events or mutate conversation state. Preparation errors check `lease.isCurrent` before reporting. Neither check depends on a reservation surviving successful dispatch. Headless follow-ups retain the lease for their whole active execution and close it in `finally`; warm-up uses the unleased `getOrCreateV2Session`.
+- **Session identity & rebuild triggers.** A conversation's live session is keyed by `conversationId` and rebuilt when its captured `credentialsGeneration` (global legacy epoch plus source id and source epoch), `credentialsFingerprint` (model/env, account identity headers — plus the key and credential headers only for descriptors without a source — profile ARN and selected-model Codex capabilities), `knowledgeFingerprint` (the RESOLVED knowledge-base set + workDir), or eager `inputsFingerprint` (prompt, MCP server names, permission rules, and a digest of the settings an in-process server keeps for the session's life — `markMcpServerSettings`, e.g. the email tools) differs. Generations travel with the credential snapshot through asynchronous SDK preparation and are captured before asynchronous creation work for legacy callers, never after it, so a racing config change cannot bless stale credentials. Source epoch storage is bounded by configured sources; deletion removes an epoch and re-adding the id receives a fresh epoch. Volatile request ids and catalog fetch timestamps do not churn fingerprints. Knowledge ids are computed cheaply per send via `knowledge-context.ts resolveConversationKnowledgeBaseIds`; resolved-not-declared so a KB whose indexing finishes after creation triggers a rebuild, and workDir so KB-chat vs normal turns never share a mis-rooted session. Rebuild requests converge on `pendingConsumerRebuilds` and are applied at safe points only: turn end (consumer), idle reuse (`hasConsumablePendingRebuild`), or immediately when safely idle. Busy windows that defer a rebuild: a caller-held session lease, an active turn, running team agents, in-flight creation, and a dispatched-but-unacknowledged turn (`turnsAwaitingInit`, cleared at `system:init`). Sending entries use `acquireV2Session`: the manager establishes its lease before resolving the acquisition, including callers sharing a warm-up's creation. The lease protects asynchronous thinking/memory preparation and SDK send acceptance. Both chat entries await `lease.send()`: dispatch marks awaiting-init before sending, retains the lease until the SDK's synchronous or asynchronous send settles, and closes only the owned instance on rejection before releasing in `finally`. Successful dispatch transfers protection to awaiting-init/the consumer; abandoned preparation releases in `finally`. Lease cleanup is instance-owned and never closes a successor under the same conversation id. Dispatch failure reporting runs through the lease's synchronous `onFailure` callback while that instance is still current, before cleanup; obsolete rejections still reach their original caller but cannot publish events or mutate conversation state. Preparation errors check `lease.isCurrent` before reporting. Neither check depends on a reservation surviving successful dispatch. Headless follow-ups retain the lease for their whole active execution and close it in `finally`; warm-up uses the unleased `getOrCreateV2Session`.
 - **An MCP server that failed to connect is retried by rebuilding the session.** Engines connect MCP servers when a session starts and go on without one that failed (CC and the halo engine alike). A chat consumer hands each turn's `mcp_servers` report to `noteSessionMcpStatus`, which records the failed servers on the session and calls `requestSessionRebuild` — the deferral a toolset toggle gets, so a running turn finishes first and the next message starts on a fresh session. A tool result saying a server is not connected counts as the same failure: CC (2.1.89) can drop a server mid-session for good while its reports still say connected. A server seen connecting again afterwards (`onMcpServerRecovered` in `mcp-manager.ts`: a probe, a connection test or another session) rebuilds the sessions that reported it failed once more. Both rebuilds are spent per conversation and server; the budget outlives only the rebuild it asked for and is dropped when a session connects the server (a failure found by a tool call only after five minutes, so a server that connects but cannot serve calls rebuilds at most once in that time), when any other teardown ends the conversation's session (closed, evicted, idle cleanup, a credential rebuild), or when MCP configuration changes, so a server that passes Halo's probe but never connects in the engine cannot rebuild a session at every report. Codex reports every configured server as connected and dsh never reports a failure, so neither takes this path.
 
 - **Creation-time assembly is deferred and owned by the creation path.** `getOrCreateV2Session` deduplicates concurrent calls per conversation (in-flight promise map — a warm-up racing a send must never spawn two CC processes). Expensive/stateful inputs are passed as thunks and materialized only when a session is actually created, after any cleanup of the previous one: `buildMcpServers` (in-process MCP instances bind to exactly one session transport; a pre-built record could carry instances still bound to a torn-down session, whose connect failure the SDK swallows — tools silently vanish) and `resolveKnowledgeBases` (index.md reads + `# Knowledge` prompt section; deferred for cost — a reused session throws the resolution away).
 
 - **Engine credentials are a captured snapshot.** `resolveCredentialsForSdk` retains the selected `ApiCredentials` with its source generation; both SDK option builders pass that snapshot as `apiCredentials`. Codex and dsh read it through `getSdkApiCredentials`, never resolve the global source again. API validation and MCP connection tests construct options directly and attach their own captured credentials too; both take the engine environment from `buildSdkEnv` (the MCP test resolves its credentials through `resolveCredentialsForSdk` first), so a test runs with the config directory, delegated login and proxy policy a conversation gets. Standalone options can supply an encoded backend or direct Anthropic env without a stored source. Missing or delegated credentials are refused by these adapters, not replaced with another account.
+
+- **A packaged build runs the Claude Code CLI from its real file, never through app.asar.** Every launch — sessions, the API key check, the MCP connection test, the sign-in command — takes the path from `resolveClaudeCodeCliPath` (`sdk-config.ts`), which in a packaged build is the copy the `asarUnpack` rule puts in `app.asar.unpacked`. The CLI starts programs found next to its own file (ripgrep behind Grep, Glob, the shell's `rg` and its discovery of project agents, commands and output styles), and no OS can execute a file inside an archive; Electron's redirect for that stopped reaching the CLI's ES module imports with Electron 43 (Node 24), so every such call failed with `spawn ENOTDIR` while dev and E2E builds kept working. `scripts/afterPack.cjs` fails packaging when that copy or the target's ripgrep is missing; `tests/e2e/specs/cli-tools-packaged.spec.ts` exercises the tools against a packaged app.
 
 - **Windows background consoles stay hidden at every process boundary.** Halo-owned launches set `windowsHide: true`. The bundled Claude Code CLI imports `windows-hide.cjs` before initialization through a version-pinned patch: Windows child launches inside that CLI (including synchronous Git Bash probes, tools and MCP servers) hide their consoles too. The patch changes Node built-ins only inside the CLI process, never the Electron host; parent spawn flags are not inherited by nested launches. Revalidate the patch and console guards when upgrading Claude Code.
 
@@ -169,7 +188,14 @@ not the per-turn abort: normal interruption still drains the result and persists
 the partial turn. A retired consumer never clears a successor's awaiting-init/rebuild
 state, persists its result, or emits a late completion into that conversation.
 
-**Messages before acknowledgement have instance-owned failure settlement.** Chat acquisitions register `onFailureBeforeInit` before handoff. Its pending record survives successful send acceptance until `system:init`, and is removed when unused preparation is released. Unexpected process exit, a dead transport discovered on acquisition/sweep, or a pre-init consumer failure settles those callers synchronously before replacement. Each entry persists the failed message and emits error/completion once; subsequent stale preparation or send rejection remains suppressed. Deliberate close and idle retirement do not invent failed requests. Background task IDs also block every safe-rebuild gate through the final completion turn; the existing bounded idle-timeout policy is unchanged.
+**A lease exposes native liveness and retirement.** `isUsable` checks both the
+acquired instance and its transport; `onRetired` runs only after that exact
+instance has been fully removed. A runtime can then retire a stale preparation
+and release its own mailbox reservation without waiting for an outstanding
+configuration or memory await. It unsubscribes when its request finishes; late
+cleanup cannot release a successor.
+
+**Messages before acknowledgement have instance-owned failure settlement.** Chat acquisitions register `onFailureBeforeInit` before handoff. Its pending record survives successful send acceptance until `system:init`, and is removed when unused preparation is released. Unexpected process exit, a dead transport discovered on acquisition/sweep, or a pre-init consumer failure settles those callers synchronously before replacement. Each entry persists the failed message and emits error/completion once; subsequent stale preparation or send rejection remains suppressed. Deliberate close and idle retirement do not invent failed requests. A task CC runs in the background (a shell, agent or workflow) does not hold any gate: Halo cannot reliably tell when one has ended (CC 2.1.89 reports nothing for a background shell the model stops with TaskStop), so a rebuild, eviction or space close may stop it, as before v3.
 
 **Adding a chat entry point = writing a sink.** The consumer must never learn
 about a surface; a branch on conversation kind inside this loop is the smell
@@ -186,24 +212,132 @@ Do not bypass `subagent-handler` for nested invocations — it owns the lifecycl
 
 ## 5) External Injection (Mid-Turn Delivery)
 
-Two entries push text into a session's RUNNING turn from outside the normal
-user-input path. Both ride the same engine primitive — the subprocess absorbs
-the text at the turn's next tool-round boundary and still ends with a single
-result; no second turn starts. They differ in who owns the record of the
-message:
+`live-turn.ts` is the persistence-free entry for all surfaces. Callers decide
+which permission identity may join a turn before calling it. A rebuild requested
+while a turn runs (configuration, toolset or MCP change, MCP recovery) is deferred
+to the turn end and never refuses live input: the running turn keeps what it
+started with, and the next turn starts on the rebuilt session. A send that needs
+a rebuilt session takes the existing one or the existing explicit busy error; it
+never parks waiting for background work. `inject-message.ts` wraps
+it for a space user's concurrent message, preserving references and the existing
+injection source. A refusal leaves no persisted duplicate: the UI's normal-send
+fallback starts the next turn.
 
-- `inject-message.ts` (`injectMessage`) — persists to the conversation store
-  (source: 'injection'), then sends. Throws when no live session exists. Backs
-  the user's "type while generating"; called from `ipc/agent.ts`.
-- `live-turn.ts` (`hasLiveTurn`, `sendIntoLiveTurn`) — the turn-in-flight probe
-  plus the same send with NO persistence, for a caller that owns its own record
-  (an app chat's JSONL transcript). Returns false instead of throwing whenever
-  nothing reached the engine, so a caller holding a fallback queue can take the
-  message back. Consumed by `apps/runtime/app-chat-live-turn.ts` for the team
-  runtime's mid-turn delivery.
+Every stop states its reason (`stopGeneration(id, { reason })`). A person's stop
+(`'user'`: the Stop button, a review stop, and whatever the surfaces classify so)
+means stop everything: `onUserStop` fires first so delivery gates can hold what
+they still buffer, then every live input the engine accepted but has not read is
+withdrawn and never runs, and only then is the turn interrupted (or the process
+closed); `onUserStopSettled` follows, because a withdrawn continuation that had
+not started produces no turn end. The sender's `onWithdrawn` decides what becomes of its input; a person's
+own space-chat addition is marked `inputOutcome: 'stopped'` and announced through
+detail-only `agent:input-stopped`. A system stop (`'internal'`) keeps the older
+behavior: whatever the turn had not read is handled right after, as a turn of its
+own. dsh has no cancel, so any stop closes its session.
 
-Callers wanting the ordinary "wait for the current turn, then start a new one"
-behavior do not inject — they go through the normal send path and queue.
+`sendIntoLiveTurn(conversationId, text, images, { onWithdrawn })` transfers ownership synchronously.
+True means the engine accepted the input for the next model step after the current
+tool returns, or for an immediate continuation when the current turn is already
+ending. False means nothing was enqueued, and the caller retains its fallback.
+Every engine implements the synchronous SDK `sendIntoLiveTurn(message, options)`
+primitive and `withdrawUnreadInput()`, which takes back the live input accepted
+before the call that the engine has not read; a promise from ordinary `send` is
+never treated as proof of live acceptance.
+Accepted records are announced through detail-only `agent:input-arrived` batches.
+This carries the original transcript record, never the model's framed input;
+source ownership stays with the space store or app sink. The UI positions each
+arrival within the active work without a per-message transcript reload.
+
+The SDK's `hasPendingInput()` reports accepted input awaiting consumption or an
+immediate continuation. It remains true across a final-result / next-init gap,
+and becomes false before the result that finishes that input, or at once when a
+person's stop withdraws it (no further result follows). Session reuse,
+cleanup, rebuilds, and surface completion observers honor this signal.
+`hasPendingSessionInput(id)` exposes it for manager-owned sessions. Headless runs
+own their SDK session directly and keep reading `stream()` until its pending
+input is consumed. `agent:turn-start` follows the consumer's active-state update,
+so delivery mailboxes can flush messages that arrived during session startup.
+
+- **Claude Code:** the SDK patch provides synchronous enqueue and adds UUIDs to
+  live inputs. `--replay-user-messages` acknowledges consumption; matching native
+  replay frames clear pending input, including messages consumed in a continuation.
+  The CLI runs some input as a turn of its own without acknowledging it (a local
+  slash command, text carrying a tag CC reserves): input still pending at the
+  previous result stops counting at the next one. Withdrawal drops input still in
+  the SDK's own queue (never written), and cancels written input in the CLI's
+  command queue (`cancel_async_message`; `cancelled:false` = the CLI dequeued it,
+  i.e. read). User messages reach stdin through the SDK's input stream while
+  control requests are written directly, so the cancel waits one macrotask, by
+  which time everything the stream dequeued is written and the cancel cannot
+  overtake its message. A cancel the CLI leaves unanswered for 2 s is reported
+  like a failed one ("may still run") so the stop goes on to interrupt or close;
+  if the CLI confirms it later, or its process is gone by then, the input is
+  still withdrawn and its `onWithdrawn` runs late. The CLI echoes every control
+  response the SDK writes; echoes answering none of the SDK's own requests are
+  skipped before parsing. It also echoes every user input: an echo the stream
+  drops anyway (no `<local-command-stdout>`, no `tool_result`) is recognized from
+  its line shape (the CLI's key order and `JSON.stringify` output) and replaced
+  by a minimal stand-in carrying its uuid, in the same stream position, so an
+  input's size is not parsed twice. Any other shape is parsed as before.
+  `tests/unit/services/agent/cc-live-input-e2e.test.ts` (`CC_E2E=1`) checks all
+  of this against the bundled CLI; rerun it when bumping either package.
+- **Halo SDK:** accepted messages remain ordered in the session inbox. The query
+  loop drains one combined user message before each model step and checks again
+  before its final result. `UserPromptSubmit` hooks execute in input order when
+  that batch is consumed. Pending messages and image blocks survive a late result.
+  Withdrawal removes live entries the loop has not drained.
+- **Codex:** one serialized dispatcher sends `turn/steer` with `expectedTurnId`
+  while a turn is active, never resets that turn's normalizer, and retains rejected
+  steering for one combined `turn/start` after completion. Its protocol subset is
+  checked against the bundled binary's generated schema; turn ids come from
+  `turn.id`, including the start response. Steering the server accepted is read;
+  withdrawal waits out a request in flight and removes live input still queued.
+- **dsh:** Halo's runtime JSON-RPC plugin adds `session/steer` using the public
+  agent registry and `agent.steer`. The runtime rechecks steering before committing
+  a turn end and wakes an idle agent itself. The adapter handles receipts racing
+  idle and combines rejected steering into its next prompt. The extension remains
+  entirely inside the experimental engine boundary. Input is read once its inbox
+  splice receipt arrives; the runtime cannot give accepted input back, so
+  withdrawing it ends the runtime, as its stop does anyway.
+
+### 5.1) Delivery parity does not expand native permissions
+
+This change preserves the existing capability boundary. Claude Code and Halo SDK
+advertise `features.permissionRules: true`; Codex and dsh advertise false. Those
+flags and the app-chat refusal when `applyCapabilityPolicy(...).enforced` is true
+already existed before the live-delivery change. A native sandbox or a reduced
+MCP list is not a substitute for the tool/file/skill rules the caller relies on.
+
+| Admitted work | Claude Code | Halo SDK | Codex | dsh |
+|---|---|---|---|---|
+| Owner/local unrestricted work, including compatible live additions | Supported | Supported | Supported | Supported |
+| IM guest work (`strict` policy) | Supported with policy enforcement | Supported with policy enforcement | Refused before native acquisition/send | Refused before native acquisition/send |
+| Borrowed external/remote team work (`strict` policy) | Supported with policy enforcement | Supported with policy enforcement | Refused before native acquisition/send | Refused before native acquisition/send |
+| Local teammate work with an explicitly restrictive delegated policy | Supported with policy enforcement | Supported with policy enforcement | Refused before native acquisition/send | Refused before native acquisition/send |
+
+`strict` always requires enforcement, even if individual grants look broad.
+Local owner conversation and locally initiated teammate work with no restrictions
+retain their existing unrestricted path. A guest or external input is never
+reclassified as owner merely because its selected engine cannot enforce policy.
+Space coordinators accept only the owner-authorized local collaboration path.
+
+Live delivery may join only an already admitted compatible execution. On Codex
+and dsh there can therefore be no legitimately admitted restricted guest/external
+turn to join. Input isolated behind an owner turn is tried as its own batch after
+that turn, then receives the same capability refusal; it is not silently run with
+owner permissions. The low-level native live-input primitive remains permission
+agnostic: the registered source/mailbox must establish sender authority first.
+
+A capability refusal is final for that admitted batch. The app-chat delivery
+wrapper rejects its waiting callers and releases its generation-owned reservation;
+it does not throw the asynchronous run failure back into the generic inbox retry
+path. Team orchestration converts that rejection to an error completion and
+releases the member slot. These failure settlements are distinct from retaining a
+message after a native live handoff refuses ownership.
+
+Explicit cancellation and process failure still settle through the existing
+session error/stop lifecycle. Pending input is never mistaken for an idle session
+that may be safely rebuilt.
 
 ## 6) Integration Points
 

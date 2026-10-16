@@ -118,8 +118,7 @@ net.setDefaultAutoSelectFamily(false)
 // Executed after page load to avoid blocking startup
 // Note: fix-path is ESM-only, loaded dynamically to support both CJS and ESM builds
 
-import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, Menu, crashReporter, nativeImage } from 'electron'
-import open from 'open'
+import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, Menu, crashReporter, nativeImage, shell } from 'electron'
 
 // GPU compatibility: Disable hardware acceleration on Windows to prevent blank window issues
 // Some Windows GPU configurations cause the GPU process to crash, resulting in a white/blank screen
@@ -255,6 +254,7 @@ import { TITLE_BAR_OVERLAY_HEIGHT } from '../shared/constants/app-header'
 import { flushAllPendingIndexWrites } from './services/conversation.service'
 import { shutdownRemoteAccess } from './services/remote'
 import { registerDeepLinkHandling, handleDeepLinkArgv } from './services/deep-link.service'
+import { openExternalLink } from './services/external-link.service'
 import { stopOpenAICompatRouter } from './openai-compat-router'
 import { manualCheckForUpdates } from './services/updater'
 import { initAnalytics } from './services/analytics'
@@ -456,7 +456,7 @@ function createAppMenu(): void {
         {
           label: 'Learn More',
           click: async () => {
-            await open('https://github.com/openkursar/hello-halo')
+            await shell.openExternal('https://github.com/openkursar/hello-halo')
           }
         }
       ]
@@ -644,7 +644,7 @@ function createWindow(): void {
   setMainWindow(mainWindow)
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    open(details.url)
+    void openExternalLink(details.url, mainWindow)
     return { action: 'deny' }
   })
 

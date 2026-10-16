@@ -34,6 +34,7 @@ import { deriveConversationLabel, deriveConversationTitle } from '../../team/epo
 import { isNativeConversationChatKey } from '../../../../shared/apps/im-keys'
 import type {
   MessageBus,
+  TeamDelivery,
   TurnCompletion,
   CircuitBreachEvent,
   BusyDisposition,
@@ -41,13 +42,27 @@ import type {
 } from './message-bus'
 import type { TeamPromptContext } from './team-prompt'
 import type { TeamFolders } from './team-folder'
-import type { NoteTurnEndedInput } from './turn-report'
-import { peekTurnOrigin } from './external-origin'
+import type { NoteTurnEndedInput, MemberTurnFate } from './turn-report'
+import { peekTurnOrigin, forgetEpochTurnOrigins } from './external-origin'
 import type { AppChatTurnStart } from '../app-chat-live-turn'
+import type { TranscriptProvenance } from '../../../../shared/types/transcript'
 
 const LOG_TAG = '[TeamOrch]'
+const RECORD_SUMMARY_LIMIT = 200
 
 // ── Injected session-layer dependencies ─────────────────────────────────────
+
+interface TeamInputRecord {
+  content: string
+  teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'>
+  provenance?: TranscriptProvenance
+}
+
+/** A woken turn a person's stop held back before the member read it. */
+interface HeldBackWake {
+  kind: 'held_back'
+  recorded: boolean
+}
 
 /** Injected so the module is testable without Electron / app-chat. */
 export interface OrchestrationSessionDeps {
@@ -56,6 +71,8 @@ export interface OrchestrationSessionDeps {
     appId: string
     spaceId: string
     message: string
+    coalescingKey?: string
+    recordedMessages?: TeamInputRecord[]
     conversationId: string
     teamContext: TeamTriggerContext
     /** The hold `holdTurn` gave this turn; the turn takes it over as its own. */
@@ -69,7 +86,15 @@ export interface OrchestrationSessionDeps {
      * type so "not delivered" is never confused with an empty reply.
      */
     undelivered?: { reason: string }
+    /**
+     * A person's stop held the turn back before the member read it, so no turn
+     * ran; `recorded` says its input records were written meanwhile. The local
+     * impl has already marked the person's own records as stopped.
+     */
+    heldBack?: { recorded: boolean }
   }>
+  deliverRemoteMessage?(request: { appId: string; spaceId: string; message: string; conversationId: string; teamContext: TeamTriggerContext; coalescingKey?: string; recordedMessages?: TeamInputRecord[]; onCompletion: (outcome: TurnCompletion) => void }): boolean | undefined
+  getTurnIdentity?(sessionKey: string): string | undefined
   isSessionActive(sessionKey: string): boolean
   /**
    * Hold this session for a turn decided now but started later: a wake first
@@ -87,7 +112,16 @@ export interface OrchestrationSessionDeps {
    * of "a turn is streaming right now", and an await between reading that and
    * acting on it lets the turn end underneath.
    */
-  injectIntoSession(sessionKey: string, message: string): boolean
+  injectIntoSession(
+    sessionKey: string,
+    message: string,
+    messages?: readonly { text: string; recorded: TeamInputRecord; inputRecorded?: boolean }[],
+    trigger?: TeamTriggerContext,
+    /** A person stopped the turn before it read these (indexes); the person's own words are marked, not returned. */
+    onTakenBack?: (indexes: readonly number[]) => void
+  ): boolean
+  /** A person's own words their stop voided before anything was written stay in the member's record, marked. */
+  recordStoppedInputs?(sessionKey: string, records: readonly TeamInputRecord[]): void
   /**
    * Tear down the live V2 process but preserve the JSONL transcript + saved
    * sessionId so the run stays a retrievable, resumable history record.
@@ -116,6 +150,7 @@ export interface Orchestration {
     epochId: string
     envelope: TeamEnvelope
     trigger: TeamTriggerContext
+    deliveries?: readonly TeamDelivery[]
   }): Promise<void>
   /**
    * Put the envelope into the turn the member is already running — the other
@@ -130,6 +165,7 @@ export interface Orchestration {
     epochId: string
     envelope: TeamEnvelope
     trigger: TeamTriggerContext
+    deliveries?: readonly TeamDelivery[]
   }): boolean
   /**
    * The bus's own busy probe: is a turn streaming on this session right now.
@@ -137,6 +173,7 @@ export interface Orchestration {
    * gate. Anything reporting availability wants `isSessionOccupied`.
    */
   isBusy(sessionKey: string): boolean
+  deliverRemote(params: { sessionKey: string; envelope: TeamEnvelope; trigger: TeamTriggerContext; coalescingKey?: string; onCompletion: (outcome: TurnCompletion) => void }): boolean | undefined
   /** Can this session take a turn — a streaming turn OR a held reservation. */
   isSessionOccupied(sessionKey: string): boolean
 
@@ -194,7 +231,7 @@ export interface Orchestration {
   sealConversationEpoch(teamId: string, epochId: string, endReason?: EpochEndReason, summary?: string | null): Promise<void>
   /** Deferred: seal runs after the lead's current turn ends. */
   requestSeal(teamId: string, epochId: string, summary: string): void
-  noteMemberTurnEnded(params: { appId: string; teamId: string; epochId: string }): void
+  noteMemberTurnEnded(params: { appId: string; teamId: string; epochId: string; fate?: MemberTurnFate }): void
 
   wakeForCheck(params: {
     teamId: string
@@ -202,6 +239,7 @@ export interface Orchestration {
     appId: string
     body: string
     onBusy: BusyDisposition
+    coalescingKey?: string
     /** The check was set by someone on another machine. */
     external?: boolean
   }): Promise<WakeDisposition>
@@ -449,15 +487,20 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
   // Only escalations are captured out-of-band; normal results come from onReply.
   const decisionStarts = new Map<string, () => void>()
+  const liveDecisions = new Map<string, Set<string>>()
+  const decisionSessions = new Map<string, string>()
   const decisionCompletions = new Map<string, (error?: string) => void>()
   function settleDecision(correlationId: string, outcome: TurnCompletion): void {
     const callback = decisionCompletions.get(correlationId)
-    if (!callback) return
     decisionCompletions.delete(correlationId)
     decisionStarts.delete(correlationId)
+    decisionSessions.delete(correlationId)
+    if (!callback) return
     const error = outcome.kind === 'error' ? outcome.message : outcome.kind === 'undelivered' ? outcome.reason
       : outcome.kind === 'timeout' ? 'The continuation timed out' : undefined
-    callback(error)
+    try { callback(error) } catch (failure) {
+      console.error(`${LOG_TAG} decision completion observer failed: corr=${correlationId}`, failure)
+    }
   }
 
   const capturedEscalations = new Map<string, TurnCompletion>()
@@ -552,9 +595,16 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
           return { finalMessage: null, undelivered: { reason: 'Task ended before its notice could run' } }
         }
         // Stopped while it waited: no session to set up, and the chat is free now.
-        if (turnStart?.cancelled) return { finalMessage: null, undelivered: { reason: 'Stopped before it could run' } }
-        decisionStarts.get(request.teamContext.correlationId)?.()
-        decisionStarts.delete(request.teamContext.correlationId)
+        // A person's stop holds the wake for the member's next turn instead.
+        if (turnStart?.cancelled) {
+          return turnStart.stoppedBy === 'user'
+            ? { finalMessage: null, heldBack: { recorded: false } }
+            : { finalMessage: null, undelivered: { reason: 'Stopped before it could run' } }
+        }
+        for (const record of request.recordedMessages ?? [{ teamOrigin: request.teamContext }]) {
+          const correlationId = record.teamOrigin?.correlationId
+          if (correlationId) { decisionStarts.get(correlationId)?.(); decisionStarts.delete(correlationId) }
+        }
         return await session.sendAppChatMessage(turnStart ? { ...request, turnStart } : request)
       } finally {
         turnSemaphore.release()
@@ -577,11 +627,13 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     epochId: string
     envelope: TeamEnvelope
     trigger: TeamTriggerContext
+    deliveries?: readonly TeamDelivery[]
   }): Promise<void> {
     const { sessionKey, appId, teamId, epochId, envelope, trigger } = params
+    const deliveries = params.deliveries ?? [{ envelope, trigger }]
     if (!canDeliverTurn(teamId, epochId, trigger.kind)) {
       bus.resetEpoch(epochId)
-      settleDecision(trigger.correlationId, { kind: 'undelivered', reason: 'Task closed before this wake could run' })
+      deliveries.forEach((delivery) => settleDecision(delivery.trigger.correlationId, { kind: 'undelivered', reason: 'Task closed before this wake could run' }))
       bus.completeTurn({ sessionKey, trigger, outcome: { kind: 'undelivered', reason: 'Task closed before this wake could run' } })
       return
     }
@@ -599,7 +651,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         requestFromAppId: envelope.fromAppId,
         external: peekTurnOrigin(sessionKey, trigger),
       })
-      settleDecision(trigger.correlationId, { kind: 'error', message: 'Member has no space' })
+      deliveries.forEach((delivery) => settleDecision(delivery.trigger.correlationId, { kind: 'error', message: 'Member has no space' }))
       bus.completeTurn({ sessionKey, trigger, outcome: { kind: 'error', message: 'Member has no space' } })
       return
     }
@@ -612,13 +664,15 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     capturedEscalations.delete(trigger.correlationId)
     busTurns.add(sessionKey)
 
+    const inputs = deliveries.map((delivery) => renderEnvelope(delivery.envelope, delivery.trigger))
     let timedOut = false
     const turnPromise = withTimeout(
       runGatedTurn(
         {
           appId,
           spaceId,
-          message: renderEnvelope(envelope, trigger),
+          message: inputs.join('\n\n'),
+          recordedMessages: deliveries.flatMap((delivery, index) => delivery.inputRecorded ? [] : [recordDelivery(delivery, inputs[index])]),
           conversationId: sessionKey,
           teamContext: trigger,
         },
@@ -632,7 +686,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     // Detached: not awaited so the bus stays non-blocking.
     void turnPromise
       .then(
-        (res): TurnCompletion =>
+        (res): TurnCompletion | HeldBackWake =>
+          res.heldBack ? { kind: 'held_back', recorded: res.heldBack.recorded } :
           capturedEscalations.get(trigger.correlationId) ??
           // A wake that never reached the owner (or whose completion never returned)
           // is NOT a result — surface it as 'undelivered' so the sender learns the
@@ -681,6 +736,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         }
       )
       .then((outcome) => {
+        if (outcome.kind === 'held_back') {
+          finishHeldBack(outcome.recorded)
+          return
+        }
         // `bus.completeTurn` is what hands the session's slot back, and this
         // handler is detached — so anything throwing before it would strand that
         // slot AND swallow the reason, leaving a session that only queues mail
@@ -726,7 +785,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         }
 
         busTurns.delete(sessionKey)
-        settleDecision(trigger.correlationId, outcome)
+        deliveries.forEach((delivery) => settleDecision(delivery.trigger.correlationId, outcome))
         bus.completeTurn({ sessionKey, trigger, outcome, ...(sealing ? { sealPending: true } : {}) })
 
         try {
@@ -745,27 +804,55 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         // A `void`-ed chain that rejected would otherwise vanish, and the slot it
         // left behind would only be explained by the gate's watchdog, hours later.
         busTurns.delete(sessionKey)
-        settleDecision(trigger.correlationId, { kind: 'error', message: String(err) })
+        deliveries.forEach((delivery) => settleDecision(delivery.trigger.correlationId, { kind: 'error', message: String(err) }))
         console.error(`${LOG_TAG} turn-completion chain rejected: session=${sessionKey}`, err)
       })
+
+    /**
+     * No turn ran and nothing was lost: the slot goes back, the person's own
+     * words are void, and the rest waits for the member's next turn. Nothing is
+     * reported or settled for it until it has actually run.
+     */
+    function finishHeldBack(recorded: boolean): void {
+      busTurns.delete(sessionKey)
+      capturedEscalations.delete(trigger.correlationId)
+      const voided = bus.returnHeldBack(sessionKey, deliveries.map((delivery) => (
+        recorded ? { ...delivery, inputRecorded: true } : delivery
+      )))
+      const unwritten = voided.filter((delivery) => !recorded && !delivery.inputRecorded)
+      if (unwritten.length) {
+        session.recordStoppedInputs?.(sessionKey, unwritten.map((delivery) => recordDelivery(delivery, renderEnvelope(delivery.envelope, delivery.trigger))))
+      }
+      notifyMemberStatusChanged(teamId)
+    }
   }
 
-  /**
-   * Hand an envelope to a member that is already mid-turn, instead of holding it
-   * until that turn ends.
-   *
-   * Why this exists: the moment a member can accept new instructions — just
-   * finished, not yet started on the next thing — is the moment the queued mail
-   * fills, and whoever wanted to redirect it is woken by that same ending, a
-   * step too late. So a lead that changes its mind at minute 10 of a 20-minute
-   * task could not reach the member until the wasted work was already done.
-   * Between tool calls there is an opening every few seconds; this uses it.
-   *
-   * It is NOT a wake, and none of `wakeTarget`'s bookkeeping applies: no turn
-   * starts, no status pulse (the member was already working), no completion
-   * belongs to this message. The turn it joined completes against its own
-   * trigger, as it always did.
-   */
+  /** `content` is the text the member read for this delivery; the record keeps it as the original input. */
+  function recordDelivery({ envelope, trigger }: TeamDelivery, content: string): TeamInputRecord {
+    const record: TeamInputRecord = {
+      content,
+      teamOrigin: { kind: trigger.kind, correlationId: trigger.correlationId },
+    }
+    if (!trigger.kind || trigger.kind === 'human_message') return record
+    const summary = envelope.body.split('\n').find((line) => line.trim())
+    return {
+      ...record,
+      provenance: {
+        source: 'team-message',
+        metadata: {
+          teamId: envelope.teamId,
+          epochId: envelope.epochId,
+          teamName: store.getTeamById(envelope.teamId)?.name ?? envelope.teamId,
+          fromMemberName: trigger.fromAppId ? store.getMember(envelope.teamId, trigger.fromAppId)?.memberName ?? null : null,
+          teamTriggerKind: trigger.kind,
+          // The content carries the framing the member read; the card shows the sender's own words.
+          ...(summary ? { summary: oneLineExcerpt(summary, RECORD_SUMMARY_LIMIT) } : {}),
+        },
+      },
+    }
+  }
+
+  /** Delivery preserves every original record; decision callbacks follow the receiving turn. */
   function deliverMidTurn(params: {
     sessionKey: string
     appId: string
@@ -773,14 +860,37 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     epochId: string
     envelope: TeamEnvelope
     trigger: TeamTriggerContext
+    deliveries?: readonly TeamDelivery[]
   }): boolean {
-    const { sessionKey, appId, teamId, envelope, trigger } = params
+    const { sessionKey, teamId, envelope, trigger } = params
     if (!canDeliverTurn(teamId, envelope.epochId, trigger.kind)) return false
-    const delivered = session.injectIntoSession(sessionKey, renderMidTurnEnvelope(envelope, trigger))
-    console.log(
-      `${LOG_TAG} deliverMidTurn: team=${teamId} app=${appId} corr=${trigger.correlationId} ` +
-        `kind=${trigger.kind ?? 'n/a'} delivered=${delivered}`
+    const deliveries = params.deliveries ?? [{ envelope, trigger }]
+    const messages = deliveries.map((delivery) => renderMidTurnEnvelope(delivery.envelope, delivery.trigger))
+    const delivered = session.injectIntoSession(
+      sessionKey,
+      messages.join('\n\n'),
+      messages.map((text, index) => ({ text, recorded: recordDelivery(deliveries[index], text), inputRecorded: deliveries[index].inputRecorded })),
+      trigger,
+      (indexes) => {
+        // Unread: a decision answer among them settles with the turn that reads it, not this one.
+        const joined = liveDecisions.get(sessionKey)
+        for (const index of indexes) joined?.delete(deliveries[index].trigger.correlationId)
+        if (joined?.size === 0) liveDecisions.delete(sessionKey)
+        bus.returnDeliveries(sessionKey, indexes.map((index) => ({ ...deliveries[index], inputRecorded: true })))
+      },
     )
+    if (delivered) {
+      for (const delivery of deliveries) {
+        const correlationId = delivery.trigger.correlationId
+        decisionStarts.get(correlationId)?.()
+        decisionStarts.delete(correlationId)
+        if (decisionSessions.has(correlationId)) {
+          const joined = liveDecisions.get(sessionKey) ?? new Set<string>()
+          joined.add(correlationId)
+          liveDecisions.set(sessionKey, joined)
+        }
+      }
+    }
     return delivered
   }
 
@@ -844,18 +954,14 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     }
   }
 
-  /**
-   * Start a member's turn for a due periodic check. What a busy target means is
-   * the caller's to decide, because only it knows whether another round is
-   * coming: a recurring check skips (stacking missed rounds on a member that is
-   * already working is how a check turns into a pile-up), a one-shot queues.
-   */
+  /** Repeated checks use a coalescing key; the gate decides when they can be read. */
   async function wakeForCheck(params: {
     teamId: string
     epochId: string
     appId: string
     body: string
     onBusy: BusyDisposition
+    coalescingKey?: string
     external?: boolean
   }): Promise<WakeDisposition> {
     return wakeSelf({ ...params, kind: 'periodic_check' })
@@ -874,6 +980,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     body: string
     kind: TeamTriggerContext['kind']
     onBusy: BusyDisposition
+    coalescingKey?: string
     /**
      * The standing instruction behind this wake was left by someone on another
      * machine. A runtime wake has no sender to read it from, so whoever set the
@@ -904,6 +1011,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         ...(params.external ? { external: true } : {}),
       },
       onBusy,
+      coalescingKey: params.coalescingKey,
     })
   }
 
@@ -1134,7 +1242,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     // not from nowhere.
     const fromAppId = isLeadSelf ? null : team.leadAppId ?? null
     const correlationId = params.continuationId ? `decision:${params.continuationId}` : randomUUID()
-    if (decisionCompletions.has(correlationId)) return true
+    if (decisionSessions.has(correlationId)) return true
+    decisionSessions.set(correlationId, buildTeamSessionKey(appId, teamId, epochId))
     if (params.onSettled) decisionCompletions.set(correlationId, params.onSettled)
     if (params.onStarted) decisionStarts.set(correlationId, params.onStarted)
     // Written for two readers: the member, which needs the question to bind the
@@ -1176,20 +1285,20 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     ;(trigger as TeamTriggerContext & { forwardDepth?: number }).forwardDepth = 1
 
     console.log(`${LOG_TAG} resumeFromEscalation: team=${teamId} epoch=${epochId} app=${appId} lead=${isLeadSelf}`)
-    // Buffered rather than dispatched when the member is mid-turn: losing this
-    // wake would leave the digital human waiting on an answer it already got,
-    // with nothing left to wake it again.
+    // The persisted answer stays recoverable while the mailbox owns delivery.
     let disposition
     try {
-      disposition = await bus.deliverRuntimeWake({ envelope, trigger, onBusy: params.continuationId ? 'skip' : 'buffer' })
+      disposition = await bus.deliverRuntimeWake({ envelope, trigger, onBusy: 'buffer' })
     } catch (error) {
       decisionCompletions.delete(correlationId)
       decisionStarts.delete(correlationId)
+      decisionSessions.delete(correlationId)
       throw error
     }
     if (disposition === 'skipped') {
       decisionCompletions.delete(correlationId)
       decisionStarts.delete(correlationId)
+      decisionSessions.delete(correlationId)
       if (params.continuationId) { params.onDeferred?.(); return true }
       console.warn(`${LOG_TAG} Decision wake was not admitted: team=${teamId} epoch=${epochId} app=${appId}`)
       return false
@@ -1455,6 +1564,14 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     const pending = closingEpochs.get(epochId)
     if (pending) return pending
     // Disarm mailbox timers before any asynchronous teardown can yield.
+    for (const [sessionKey, decisions] of liveDecisions) {
+      if (!sessionKey.endsWith(`:${epochId}`)) continue
+      liveDecisions.delete(sessionKey)
+      for (const correlationId of decisions) settleDecision(correlationId, { kind: 'undelivered', reason: 'Task closed' })
+    }
+    for (const [correlationId, sessionKey] of decisionSessions) {
+      if (sessionKey.endsWith(`:${epochId}`)) settleDecision(correlationId, { kind: 'undelivered', reason: 'Task closed' })
+    }
     bus.resetEpoch(epochId)
     const closing = Promise.resolve().then(async () => {
       for (const member of store.listMembersByTeam(teamId)) {
@@ -1466,6 +1583,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       }
       const epoch = store.getEpochById(epochId)
       if (epoch?.teamId === teamId && (epoch.endReason === 'cleared' || epoch.workItem?.status === 'completed')) {
+        forgetEpochTurnOrigins(teamId, epochId)
         escalationWaiters.delete(epochId)
         deps.onTaskClosed?.(teamId, epochId)
       }
@@ -1667,7 +1785,16 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     )
   }
 
-  function noteMemberTurnEnded({ appId, teamId, epochId }: { appId: string; teamId: string; epochId: string }): void {
+  function noteMemberTurnEnded({ appId, teamId, epochId, fate }: { appId: string; teamId: string; epochId: string; fate?: MemberTurnFate }): void {
+    const sessionKey = buildTeamSessionKey(appId, teamId, epochId)
+    const decisions = liveDecisions.get(sessionKey)
+    liveDecisions.delete(sessionKey)
+    const outcome: TurnCompletion = fate?.kind === 'error' ? { kind: 'error', message: fate.message }
+      : fate?.kind === 'stopped' ? { kind: 'error', message: 'Stopped by the owner' }
+      : fate?.kind === 'timeout' ? { kind: 'timeout' }
+      : fate?.kind === 'never_ran' ? { kind: 'undelivered', reason: fate.reason }
+      : { kind: 'result', content: '' }
+    for (const correlationId of decisions ?? []) settleDecision(correlationId, outcome)
     const pending = pendingSeals.get(epochId)
     if (!pending || pending.teamId !== teamId || store.getTeamById(teamId)?.leadAppId !== appId) return
     // Bus completions consume the seal in their promise chain, with mailbox
@@ -1868,6 +1995,19 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   return {
     wakeTarget,
     deliverMidTurn,
+    deliverRemote: ({ sessionKey, envelope, trigger, coalescingKey, onCompletion }) => {
+      const message = renderEnvelope(envelope, trigger)
+      return session.deliverRemoteMessage?.({
+        appId: envelope.toAppId,
+        spaceId: session.getMemberSpaceId(envelope.toAppId) ?? envelope.toAppId,
+        message,
+        recordedMessages: [recordDelivery({ envelope, trigger }, message)],
+        conversationId: sessionKey,
+        teamContext: trigger,
+        coalescingKey,
+        onCompletion,
+      })
+    },
     wakeForCheck,
     isBusy,
     isSessionOccupied,

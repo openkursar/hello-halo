@@ -14,6 +14,8 @@
  * tool that always fails.
  */
 
+import { getParseErrorMessage, objectFromShape, safeParseAsync } from '@modelcontextprotocol/sdk/server/zod-compat.js'
+import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js'
 import type {
   SdkMcpServerConfig,
   SdkMcpServerInstance,
@@ -51,66 +53,37 @@ export function createSdkMcpServer(options: {
   tools?: SdkMcpToolDefinition[]
 }): SdkMcpServerConfig {
   const { name, version = '1.0.0', tools = [] } = options
+  const registered = tools.map((definition) => {
+    const schema = objectFromShape(definition.inputSchema)
+    return { definition, schema, jsonSchema: undefined as Record<string, unknown> | undefined }
+  })
 
   const instance: SdkMcpServerInstance = {
     name,
     version,
     async callTool(toolName: string, args: Record<string, unknown>) {
-      const def = tools.find((candidate) => candidate.name === toolName)
-      if (!def) return undefined
-      return def.handler(args, {})
+      const registeredTool = registered.find((candidate) => candidate.definition.name === toolName)
+      if (!registeredTool) return undefined
+      const parsed = await safeParseAsync(registeredTool.schema, args)
+      if (!parsed.success) {
+        console.warn(`[Agent][mcp] tool arguments rejected server=${name} tool=${toolName}`)
+        return { isError: true, content: [{ type: 'text', text: `Invalid arguments for ${toolName}: ${getParseErrorMessage(parsed.error)}` }] }
+      }
+      return registeredTool.definition.handler(parsed.data, {})
     },
     listTools() {
-      return tools.map((def) => ({
-        name: def.name,
-        description: def.description,
-        inputSchema: schemaToJson(def.inputSchema),
-        annotations: def.annotations,
-      }))
+      return registered.map((registeredTool) => {
+        registeredTool.jsonSchema ??= toJsonSchemaCompat(registeredTool.schema, { strictUnions: true, pipeStrategy: 'input' })
+        const { definition } = registeredTool
+        return {
+          name: definition.name,
+          description: definition.description,
+          inputSchema: registeredTool.jsonSchema,
+          annotations: definition.annotations,
+        }
+      })
     },
   }
 
   return { type: 'sdk', name, instance }
-}
-
-/**
- * Call sites declare a field map of zod schemas, which is what the Claude SDK
- * takes. Anything crossing a process boundary needs JSON Schema instead, and
- * only the shapes Halo's own tools use are translated — an unrecognized field
- * becomes a string rather than an error, because a tool with one exotic
- * parameter should lose that parameter's typing, not the whole server.
- */
-function schemaToJson(schema: Record<string, any>): Record<string, unknown> {
-  const properties: Record<string, unknown> = {}
-  const required: string[] = []
-
-  for (const [key, value] of Object.entries(schema || {})) {
-    properties[key] = zodLikeToJsonSchema(value)
-    if (!isOptionalZodLike(value)) required.push(key)
-  }
-
-  return { type: 'object', properties, required, additionalProperties: false }
-}
-
-function zodLikeToJsonSchema(value: any): Record<string, unknown> {
-  const def = value?._def
-  const typeName = def?.typeName || def?.type
-
-  if (typeName === 'ZodNumber' || typeName === 'number') return { type: 'number' }
-  if (typeName === 'ZodBoolean' || typeName === 'boolean') return { type: 'boolean' }
-  if (typeName === 'ZodArray' || typeName === 'array') return { type: 'array' }
-  if (typeName === 'ZodObject' || typeName === 'object') return { type: 'object' }
-  if (typeName === 'ZodEnum' && Array.isArray(def?.values)) return { type: 'string', enum: def.values }
-  if (typeName === 'ZodOptional' || typeName === 'optional') {
-    return zodLikeToJsonSchema(def?.innerType)
-  }
-
-  return { type: 'string' }
-}
-
-function isOptionalZodLike(value: any): boolean {
-  const def = value?._def
-  return def?.typeName === 'ZodOptional'
-    || def?.type === 'optional'
-    || (typeof value?.isOptional === 'function' && value.isOptional())
 }

@@ -25,6 +25,7 @@ import { DEFAULT_TOOLSETS } from '../../shared/constants/toolsets'
 import { isSpaceConversationId } from '../../shared/apps/im-keys'
 import type { Thought, TranscriptMessage } from '../../shared/types/transcript'
 import { summarizeThoughts } from '../../shared/transcript'
+import { toHaloFileUrl } from '../../shared/halo-file-url'
 
 // Re-export for existing consumers
 export type { FileChangesSummary } from '../../shared/file-changes'
@@ -821,11 +822,6 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
 
 function imageFilesDir(conversationsDir: string, conversationId: string): string {
   return join(conversationsDir, `${conversationId}.images`)
-}
-
-/** A `halo-file://` URL for a local path (the protocol decodes it back). */
-function toHaloFileUrl(filePath: string): string {
-  return `halo-file://${filePath.replace(/%/g, '%25').replace(/#/g, '%23').replace(/\?/g, '%3F')}`
 }
 
 /**

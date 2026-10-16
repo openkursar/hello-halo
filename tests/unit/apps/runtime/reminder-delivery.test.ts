@@ -1,6 +1,6 @@
 /**
- * A due reminder becomes a turn of the conversation it was set in: never
- * written into a turn still running there, and in an IM chat spoken as the
+ * A due reminder reaches the shared mailbox of the conversation it was set in,
+ * and in an IM chat is spoken as the
  * person who asked, under the standing they have now, with the reply pushed to
  * the chat that is waiting for it.
  */
@@ -71,6 +71,7 @@ async function settle(): Promise<void> {
   }
 }
 
+type AppChatRequestLike = { message: string; onMessageAccepted?: () => void }
 const sent = () => env.send.mock.calls.map(call => call[0])
 
 beforeEach(() => {
@@ -102,53 +103,56 @@ describe('deliverReminder', () => {
     expect(sent()[0]).not.toHaveProperty('imSession')
   })
 
-  it('waits for a turn still running there instead of writing into it, and starts once', async () => {
+  it('hands a due reminder to the shared delivery gate even while the conversation is busy', async () => {
     env.busy.add(`app-chat:${APP}`)
-    deliverReminder(reminder(`app-chat:${APP}`), NOW)
+    const due = reminder(`app-chat:${APP}`)
+    deliverReminder(due, NOW)
     await settle()
-    expect(env.send).not.toHaveBeenCalled()
-
-    env.busy.clear()
-    for (const listener of [...env.listeners]) listener(`app-chat:${APP}`)
-    for (const listener of [...env.listeners]) listener(`app-chat:${APP}`)
-    await settle()
-
-    expect(env.send).toHaveBeenCalledTimes(1)
+    expect(env.send).toHaveBeenCalledOnce()
+    expect(sent()[0]).toMatchObject({ coalescingKey: `reminder:${due.id}` })
     expect(env.listeners.size).toBe(0)
   })
 
-  it('folds a reminder that comes due again while it waits into one turn, which says how many times', async () => {
+  it('gives repeated due times the same coalescing key and the latest due time', async () => {
     const water = reminder(`app-chat:${APP}`, { schedule: { kind: 'every', every: '5m' }, message: 'Drink water.' })
     env.busy.add(`app-chat:${APP}`)
-
-    expect(deliverReminder(water, NOW)).toBe('started')
-    expect(deliverReminder(water, NOW + 300_000)).toBe('merged')
-    expect(deliverReminder(water, NOW + 600_000)).toBe('merged')
+    deliverReminder(water, NOW)
     await settle()
-    expect(env.listeners.size).toBe(1)
-
-    env.busy.clear()
-    for (const listener of [...env.listeners]) listener(`app-chat:${APP}`)
+    deliverReminder(water, NOW + 300_000)
     await settle()
-
-    expect(env.send).toHaveBeenCalledTimes(1)
-    expect((sent()[0] as Record<string, string>).message).toContain('it came due 2 more times while this conversation was busy]')
-    // Waiting is over: the next coming-due starts a turn of its own.
-    expect(deliverReminder(water, NOW + 900_000)).toBe('started')
+    deliverReminder(water, NOW + 600_000)
+    await settle()
+    expect(env.send).toHaveBeenCalledTimes(3)
+    expect(sent().map(item => item.coalescingKey)).toEqual(Array(3).fill(`reminder:${water.id}`))
+    expect(sent()[2].message).toContain('due 2026-10-06 11:40')
   })
 
-  it('does not deliver one cancelled while it waited', async () => {
+  it('says how many more times it came due while the conversation was busy, then starts counting again', async () => {
+    const water = reminder(`app-chat:${APP}`, { schedule: { kind: 'every', every: '5m' }, message: 'Drink water.' })
+    env.busy.add(`app-chat:${APP}`)
+    for (const offset of [0, 300_000, 600_000]) {
+      deliverReminder(water, NOW + offset)
+      await settle()
+    }
+    const latest = sent()[2]
+    const delivered = (latest.refreshBeforeDelivery as () => AppChatRequestLike)()
+    expect(delivered.message).toContain('it came due 2 more times while this conversation was busy')
+    delivered.onMessageAccepted?.()
+
+    deliverReminder(water, NOW + 900_000)
+    await settle()
+    expect(sent()[3].message).not.toContain('came due')
+  })
+
+  it('revalidates cancellation when the shared gate is ready to dispatch', async () => {
     const cancelled = reminder(`app-chat:${APP}`)
     env.busy.add(`app-chat:${APP}`)
     deliverReminder(cancelled, NOW)
     await settle()
-
+    const refresh = sent()[0].refreshBeforeDelivery as () => unknown
+    expect(refresh()).toBeDefined()
     stillSet.delete(cancelled.id)
-    env.busy.clear()
-    for (const listener of [...env.listeners]) listener(`app-chat:${APP}`)
-    await settle()
-
-    expect(env.send).not.toHaveBeenCalled()
+    expect(refresh()).toBeUndefined()
   })
 
   it('speaks in a group as the person who asked, under their standing now, and pushes the reply there', async () => {
@@ -168,6 +172,8 @@ describe('deliverReminder', () => {
     expect(request.imSession).toMatchObject({ channel: 'wecom-bot', chatType: 'group', displayName: 'Ops group', sessionId: 'inst-1:g-1' })
     expect(request.thinkingEnabled).toBe(true)
     expect(request.relayOrigin).toEqual({ subject: { id: 'u-1', name: 'Li' } })
+    expect(env.setPermission).not.toHaveBeenCalled()
+    request.onMessageAccepted()
     expect(env.setPermission).toHaveBeenCalledWith(conversationId, request.imPermission)
 
     request.onReply('Time is up!')
@@ -270,5 +276,39 @@ describe('deliverReminder', () => {
     await settle()
     expect(sent()).toHaveLength(1)
     expect((sent()[0] as Record<string, any>).imPermission.isOwner).toBe(false)
+  })
+})
+
+
+describe('reminder authorization after queueing', () => {
+  it('re-resolves the setter and recipient callbacks when delayed delivery finally occurs', async () => {
+    const key = `app-chat:${APP}:wecom-bot:group:g-1`
+    const oldPush = vi.fn()
+    const currentPush = vi.fn()
+    env.sessions.set('wecom-bot:g-1', { instanceId: 'inst-1', chatId: 'g-1', displayName: 'Group' })
+    env.instances.set('inst-1', { providerType: 'wecom-bot', pushToChat: oldPush })
+    env.configs.set('inst-1', { appId: APP, permissionEnabled: true, owners: ['setter'], guestPolicy: { allowedTools: [] } })
+    deliverReminder(reminder(key, { setBy: { id: 'setter', name: 'Setter' } }), NOW)
+    await settle()
+    const original = sent()[0] as Record<string, any>
+    expect(original.imPermission.isOwner).toBe(true)
+    env.configs.set('inst-1', { appId: APP, permissionEnabled: true, owners: ['another-owner'], guestPolicy: { allowedTools: ['Read'] } })
+    env.instances.set('inst-1', { providerType: 'wecom-bot', pushToChat: currentPush })
+    const current = original.refreshBeforeDelivery()
+    expect(current.imPermission).toMatchObject({ isOwner: false, guestPolicy: { allowedTools: ['Read'] } })
+    current.onReply('Ready now')
+    expect(currentPush).toHaveBeenCalledWith('g-1', 'Ready now', 'group')
+    expect(oldPush).not.toHaveBeenCalled()
+  })
+
+  it('cancels a delayed reminder when the channel is rebound to another app', async () => {
+    const key = `app-chat:${APP}:wecom-bot:direct:u-1`
+    env.sessions.set('wecom-bot:u-1', { instanceId: 'inst-1', chatId: 'u-1', displayName: 'Owner' })
+    env.instances.set('inst-1', { providerType: 'wecom-bot', pushToChat: vi.fn() })
+    env.configs.set('inst-1', { appId: APP })
+    deliverReminder(reminder(key), NOW)
+    await settle()
+    env.configs.set('inst-1', { appId: 'different-app' })
+    expect((sent()[0] as Record<string, any>).refreshBeforeDelivery()).toBeUndefined()
   })
 })

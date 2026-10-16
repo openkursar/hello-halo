@@ -26,13 +26,17 @@ const { channel, appChatCalls, turn } = vi.hoisted(() => ({
     instance: undefined as Record<string, unknown> | undefined,
   },
   appChatCalls: [] as Record<string, unknown>[],
-  /** How the woken turn answers: its text, how it ended if it stopped short, or how it failed. */
-  turn: { reply: 'answer for the person', ending: undefined as AppChatTurnEnding | undefined, failure: undefined as Error | undefined },
+  /**
+   * How the woken turn answers: its text, how it ended if it stopped short, or
+   * how it failed. `joined`: it joined a turn whose reply another caller sends.
+   */
+  turn: { reply: 'answer for the person', ending: undefined as AppChatTurnEnding | undefined, failure: undefined as Error | undefined, joined: false },
 }))
 
 vi.mock('../../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
   isAppChatConversationGenerating: () => false,
-  injectIntoAppChat: () => true,
+  getAppChatTurnIdentity: () => 'owner',
+  injectIntoAppChatBatch: () => true,
 }))
 
 vi.mock('../../../../../src/main/apps/manager', () => ({
@@ -61,9 +65,11 @@ vi.mock('../../../../../src/main/apps/runtime/app-chat', () => ({
   sendAppChatMessage: async (request: Record<string, unknown>) => {
     appChatCalls.push(request)
     if (turn.failure) throw turn.failure
-    const onReply = request.onReply as ((s: string, ending?: AppChatTurnEnding) => void) | undefined
-    if (turn.ending) onReply?.(turn.reply, turn.ending)
-    else onReply?.(turn.reply)
+    type Answer = ((s: string, ending?: AppChatTurnEnding) => void) | undefined
+    for (const answer of [request.onResult as Answer, turn.joined ? undefined : request.onReply as Answer]) {
+      if (turn.ending) answer?.(turn.reply, turn.ending)
+      else answer?.(turn.reply)
+    }
   },
 }))
 
@@ -108,6 +114,7 @@ beforeEach(() => {
   turn.reply = 'answer for the person'
   turn.ending = undefined
   turn.failure = undefined
+  turn.joined = false
   channel.config = { id: INSTANCE_ID, teamId: TEAM_ID, appId: MEMBER_APP_ID }
   channel.instance = {
     providerType: 'wecom-bot',
@@ -132,6 +139,15 @@ describe('woken front-desk turn — the IM route is resolved in full', () => {
 
     expect(result.finalMessage).toBe('answer for the person')
     expect(pushToChat).toHaveBeenCalledWith(CHAT_ID, 'answer for the person', 'direct')
+  })
+
+  it('gives the team the answer of a turn it joined, without pushing that reply to the chat a second time', async () => {
+    turn.joined = true
+
+    const result = await wake(storeWithEpoch())
+
+    expect(result.finalMessage).toBe('answer for the person')
+    expect(pushToChat).not.toHaveBeenCalled()
   })
 
   it('tells the chat a woken turn stopped at the step limit, and gives the team the text as written', async () => {

@@ -7,7 +7,7 @@
  * moves around and reads it back on mount.
  */
 
-export type ChangesPage = 'changes' | 'overview'
+export type ChangesPage = 'changes' | 'graph' | 'overview'
 
 /**
  * A compare scope as a tab stores it. "Since last review" keeps no snapshot:
@@ -19,6 +19,7 @@ export type StoredCompareScope =
   | { kind: 'staged' }
   | { kind: 'since-review' }
   | { kind: 'revision'; revision: string; mergeBase: boolean }
+  | { kind: 'commit'; revision: string; subject?: string }
 
 /** The directory or file detail opened from the overview, walked with `[` and `]`. */
 export interface DetailState {
@@ -34,6 +35,8 @@ export interface DetailState {
 
 export interface ChangesViewMemory {
   page: ChangesPage
+  /** The graph was opened once: it stays mounted (hidden) from then on. */
+  graphOpened?: boolean
   /** Repository shown by a git tab; absent until one is chosen. */
   repoRoot?: string
   scope: StoredCompareScope

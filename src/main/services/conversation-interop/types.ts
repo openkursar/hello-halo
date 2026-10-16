@@ -89,6 +89,12 @@ export type DeliverResult =
   /** `detail` is the model-facing reason for `read_only` and `unavailable`. */
   | { ok: false; reason: DeliverFailureReason; detail?: string }
 
+/** A non-conversation sender's result; a delivered message also says whether it joined a running turn. */
+export type ExternalDeliverResult =
+  | { ok: true; status: 'delivered'; messageId: string; joinedTurn: boolean }
+  | { ok: true; status: 'queued' }
+  | { ok: false; reason: DeliverFailureReason; detail?: string }
+
 export type WaitOutcome =
   | { status: 'replied'; message: string }
   | { status: 'no_reply' }

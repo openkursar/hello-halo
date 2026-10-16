@@ -74,9 +74,10 @@ import {
   appMemorySettings,
 } from './turn/memory-lifecycle'
 import { appConsolidationInputs } from './memory-control'
-import { registerActiveRun, unregisterActiveRun } from './active-runs'
+import { registerActiveRun, unregisterActiveRun, notifyActiveRunReady, type RunSupplement } from './active-runs'
 import { describeSelfInstance, formatInstanceTag } from './live-instances'
 import { stopEngineOnAbort } from './engine-stop'
+import { renderTriggerContext } from './event-input'
 
 // ============================================
 // Types
@@ -107,6 +108,10 @@ export interface ExecuteRunOptions {
   existingRunId?: string
   /** Existing session key matching the run record (required when existingRunId is set). */
   existingSessionKey?: string
+  /** Original inputs retained as separate transcript rows when one turn receives a batch. */
+  recordedInputs?: RunSupplement[]
+  /** Accepted additions still pending when a safety cut closes the engine remain unprocessed. */
+  onPendingInputAbandoned?: () => void
   /**
    * Fired exactly once, after the run record is inserted/reopened and before
    * the AI session is built. Used by the runtime service to dispatch the
@@ -267,6 +272,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
   // Track escalation from report_to_user callback
   let escalationEntryId: string | undefined
+  const escalationEntryIds = new Set<string>()
 
   // Session reference for cleanup
   let session: any = null
@@ -432,7 +438,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       : (trigger.type === 'escalation_followup' && existingRunId && trigger.escalation)
         ? buildEscalationResumeMessage(trigger.escalation)
         : buildInitialMessage({
-            triggerContext: trigger.description,
+            triggerContext: renderTriggerContext(trigger),
             userConfig: mergedConfig,
             appName: app.spec.name,
             memorySnapshot,
@@ -475,6 +481,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       reportContext,
       (entryId: string) => {
         escalationEntryId = entryId
+        escalationEntryIds.add(entryId)
         console.log(`[Runtime] Escalation created: entry=${entryId}, app=${app.id}`)
       },
       emitEntry
@@ -498,6 +505,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       relay: {
         sessionKey,
         isOwner: true,
+        permissionIdentity: () => 'owner',
         quote: trigger.description,
       },
     })
@@ -639,7 +647,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const followupReferences = trigger.type === 'continue_followup' ? trigger.continue?.references : undefined
     if (spacePath) {
       sessionWriter = openSessionWriter(spacePath, app.id, runId)
-      sessionWriter.writeTrigger(initialMessage, undefined, undefined, undefined, followupReferences)
+      if (options.recordedInputs?.length) {
+        for (const input of options.recordedInputs) sessionWriter.writeTrigger(input.text, undefined, undefined, undefined, input.references)
+      } else {
+        sessionWriter.writeTrigger(initialMessage, undefined, undefined, undefined, followupReferences)
+      }
     }
 
     // ── 5c. Make the run injectable ────────────────────────
@@ -647,7 +659,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //    inject a mid-run supplement (active-runs.ts): it writes the supplement to
     //    the run JSONL and pushes it into the live SDK session. The run itself is
     //    headless — it emits no renderer events; the run-detail view reads the JSONL.
-    registerActiveRun({
+    const activeRunHandle = {
       runId,
       appId: app.id,
       spaceId: app.spaceId!,
@@ -655,7 +667,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       startedAt,
       session,
       writer: sessionWriter,
-    })
+    }
+    registerActiveRun(activeRunHandle)
+    const hasUnansweredEscalation = (): boolean => {
+      for (const entryId of escalationEntryIds) {
+        if (store.getEntry(entryId)?.userResponse) escalationEntryIds.delete(entryId)
+      }
+      escalationEntryId = escalationEntryIds.values().next().value
+      return escalationEntryIds.size > 0
+    }
 
     // ── 6. Process stream (headless: persist JSONL + detect report_to_user) ──
     streamResult = await processStream(
@@ -664,7 +684,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       abortController,
       runTag,
       sessionWriter,
-      () => escalationEntryId !== undefined
+      hasUnansweredEscalation,
+      runId,
+      options.onPendingInputAbandoned
     )
 
     // A free-text follow-up to an already-completed run (continue.interactive) is
@@ -695,13 +717,16 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         sessionWriter.writeTrigger(`[Auto-continue #${autoContinueCount}] ${AUTO_CONTINUE_FULL}`)
       }
 
+      registerActiveRun(activeRunHandle)
       const nextResult = await processStream(
         session,
         AUTO_CONTINUE_FULL,
         abortController,
         runTag,
         sessionWriter,
-        () => escalationEntryId !== undefined
+        hasUnansweredEscalation,
+        runId,
+        options.onPendingInputAbandoned
       )
 
       // Merge results: accumulate text and tokens, take latest flags
@@ -738,7 +763,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     // Escalation is detected via the onEscalation callback closure,
     // which sets escalationEntryId when report_to_user(type="escalation") is called.
-    if (escalationEntryId) {
+    if (hasUnansweredEscalation()) {
       finalStatus = 'waiting_user'
       outcome = 'useful'
     } else if (streamResult.aiReportedError) {
@@ -1019,7 +1044,9 @@ async function processStream(
   abortController: AbortController,
   runTag: string,
   writer?: SessionWriter,
-  turnAskedUser?: () => boolean
+  turnAskedUser?: () => boolean,
+  runId?: string,
+  onPendingInputAbandoned?: () => void
 ): Promise<StreamResult> {
   const result: StreamResult = {
     finalText: '',
@@ -1031,10 +1058,12 @@ async function processStream(
   // Stopped before this turn was sent (e.g. while the engine was starting): do not start it.
   if (abortController.signal.aborted) {
     console.log(`[Runtime][${runTag}] Run stopped before its turn was sent`)
+    if (runId) unregisterActiveRun(runId)
     return result
   }
 
   session.send(message)
+  if (runId) notifyActiveRunReady(runId)
 
   let messageCount = 0
   let toolUseCount = 0
@@ -1042,74 +1071,76 @@ async function processStream(
 
   let stopNoticed = false
   try {
-    for await (const sdkMessage of session.stream()) {
-      if (!sdkMessage || typeof sdkMessage !== 'object') continue
-      const msgType = (sdkMessage as { type?: string }).type
+    do {
+      for await (const sdkMessage of session.stream()) {
+        if (!sdkMessage || typeof sdkMessage !== 'object') continue
+        const msgType = (sdkMessage as { type?: string }).type
 
-      // Stopped: nothing more is handled, but the interrupted turn still reports
-      // its tokens in the result that ends the stream (a stop that is not
-      // answered closes the engine, which ends it too — see engine-stop.ts).
-      if (abortController.signal.aborted) {
-        if (!stopNoticed) {
-          stopNoticed = true
-          console.log(`[Runtime][${runTag}] Run aborted during stream processing`)
+        // Stopped: nothing more is handled, but the interrupted turn still reports
+        // its tokens in the result that ends the stream (a stop that is not
+        // answered closes the engine, which ends it too — see engine-stop.ts).
+        if (abortController.signal.aborted) {
+          if (!stopNoticed) {
+            stopNoticed = true
+            console.log(`[Runtime][${runTag}] Run aborted during stream processing`)
+          }
+          if (msgType === 'result') noteResultUsage(result, sdkMessage)
+          continue
         }
-        if (msgType === 'result') noteResultUsage(result, sdkMessage)
-        continue
-      }
 
-      messageCount++
+        messageCount++
 
-      // Persist assistant/user messages to the run JSONL for "View process" reload.
-      // (No stream_event frames arrive — partials are off.)
-      if (writer && (msgType === 'assistant' || msgType === 'user')) {
-        writer.writeEvent(sdkMessage as Record<string, unknown>)
-      }
+        // Persist assistant/user messages to the run JSONL for "View process" reload.
+        // (No stream_event frames arrive — partials are off.)
+        if (writer && (msgType === 'assistant' || msgType === 'user')) {
+          writer.writeEvent(sdkMessage as Record<string, unknown>)
+        }
 
-      if (msgType === 'assistant') {
-        const content = (sdkMessage as any).message?.content
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block.type === 'text' && typeof block.text === 'string') {
-              result.finalText += block.text
-            }
-            if (block.type === 'tool_use') {
-              toolUseCount++
-              // report_to_user (MCP name: mcp__halo-report__report_to_user) is the
-              // definitive completion signal for automation runs.
-              if (typeof block.name === 'string' && block.name.includes('report_to_user')) {
-                result.reportToolCalled = true
+        if (msgType === 'assistant') {
+          const content = (sdkMessage as any).message?.content
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block.type === 'text' && typeof block.text === 'string') {
+                result.finalText += block.text
+              }
+              if (block.type === 'tool_use') {
+                toolUseCount++
+                // report_to_user (MCP name: mcp__halo-report__report_to_user) is the
+                // definitive completion signal for automation runs.
+                if (typeof block.name === 'string' && block.name.includes('report_to_user')) {
+                  result.reportToolCalled = true
+                }
               }
             }
           }
         }
-      }
 
-      if (msgType === 'result') {
-        const m = sdkMessage as any
-        noteResultUsage(result, m)
-        if (m.is_error || m.error_during_execution) {
-          result.aiReportedError = true
-          if (typeof m.result === 'string' && m.result.length > 0) {
-            result.aiReportedErrorDetail = explainEngineError(m.result)
+        if (msgType === 'result') {
+          const m = sdkMessage as any
+          noteResultUsage(result, m)
+          if (m.is_error || m.error_during_execution) {
+            result.aiReportedError = true
+            if (typeof m.result === 'string' && m.result.length > 0) {
+              result.aiReportedErrorDetail = explainEngineError(m.result)
+            }
+            console.warn(`[Runtime][${runTag}] AI reported error in result message`)
           }
-          console.warn(`[Runtime][${runTag}] AI reported error in result message`)
+        }
+
+        // Capture the CC session id so a user can later resume / continue this run.
+        if (msgType === 'system' && (sdkMessage as any).subtype === 'init' && (sdkMessage as any).session_id) {
+          result.sessionId = (sdkMessage as any).session_id
+        }
+
+        // The run asked the user something: it is over, and the transcript the
+        // answer will resume against is now complete.
+        if (cutPoint.observe(sdkMessage) && turnAskedUser?.()) {
+          console.log(`[Runtime][${runTag}] Escalation raised — ending the run here; the answer resumes it`)
+          abortController.abort()
+          break
         }
       }
-
-      // Capture the CC session id so a user can later resume / continue this run.
-      if (msgType === 'system' && (sdkMessage as any).subtype === 'init' && (sdkMessage as any).session_id) {
-        result.sessionId = (sdkMessage as any).session_id
-      }
-
-      // The run asked the user something: it is over, and the transcript the
-      // answer will resume against is now complete.
-      if (cutPoint.observe(sdkMessage) && turnAskedUser?.()) {
-        console.log(`[Runtime][${runTag}] Escalation raised — ending the run here; the answer resumes it`)
-        abortController.abort()
-        break
-      }
-    }
+    } while (!abortController.signal.aborted && session.hasPendingInput?.())
   } catch (streamErr) {
     if (abortController.signal.aborted) {
       console.log(`[Runtime][${runTag}] Stream aborted (expected)`)
@@ -1121,6 +1152,10 @@ async function processStream(
         streamErr instanceof Error ? streamErr.message : String(streamErr)
       )
     }
+  } finally {
+    // Close acceptance before any asynchronous run finalization can receive a late message.
+    if (runId) unregisterActiveRun(runId)
+    if (abortController.signal.aborted && session.hasPendingInput?.()) onPendingInputAbandoned?.()
   }
 
   console.log(

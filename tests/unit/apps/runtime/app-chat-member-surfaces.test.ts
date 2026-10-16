@@ -44,11 +44,15 @@ const { consumers, v2Sessions, send } = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
+  activeSessions: new Map(),
+  hasPendingSessionInput: () => false,
   v2Sessions,
   closeV2Session: vi.fn(),
   acquireV2Session: vi.fn(async () => ({
     session: { send, setMaxThinkingTokens: vi.fn() },
     isCurrent: true,
+    isUsable: true,
+    onRetired: () => () => {},
     send,
     close: vi.fn(),
     release: vi.fn(),
@@ -77,10 +81,11 @@ const { sink, beginRound } = vi.hoisted(() => {
   }))
   return {
     beginRound,
-    sink: { writeUserMessage: vi.fn(), beginRound },
+    sink: { writeUserMessage: vi.fn(), beginRound, setTurnIdentity: vi.fn() },
   }
 })
 vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
+  onAppChatRoundChange: () => () => {},
   getAppChatSink: () => sink,
   peekAppChatSink: () => undefined,
   hasActiveAppChatRound: () => false,
@@ -119,7 +124,7 @@ vi.mock('../../../../src/main/services/app-bridge', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createHaloAppsMcpServer,
 }))
-const { buildUserSessionSdkOptions } = vi.hoisted(() => ({ buildUserSessionSdkOptions: vi.fn(() => ({})) }))
+const { buildUserSessionSdkOptions } = vi.hoisted(() => ({ buildUserSessionSdkOptions: vi.fn((_options: Record<string, unknown>) => ({})) }))
 const { getEngineCapabilities } = vi.hoisted(() => ({ getEngineCapabilities: vi.fn((): unknown => null) }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../src/main/services/agent/resolved-sdk')>()),
@@ -154,9 +159,8 @@ vi.mock('../../../../src/main/services/agent/message-utils', () => ({
   buildMessageContent: (text: string) => text,
   formatCanvasContext: () => '',
 }))
-vi.mock('../../../../src/main/services/agent/image-attachments', () => ({
-  prepareNonVisionImageFallback: () => undefined,
-}))
+const { prepareNonVisionImageFallback } = vi.hoisted(() => ({ prepareNonVisionImageFallback: vi.fn((_params: unknown): any => undefined) }))
+vi.mock('../../../../src/main/services/agent/image-attachments', () => ({ prepareNonVisionImageFallback }))
 vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getApiCredentials: vi.fn(async () => ({ provider: 'anthropic' })),
   getApiCredentialsForSource: vi.fn(),
@@ -164,7 +168,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getDbMcpServers: vi.fn(() => null),
 }))
-vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ onAgentEvent: () => ({ dispose: () => {} }), emitAgentEvent: vi.fn() }))
 // A borrowed turn lists the skills it could load; none here.
 vi.mock('../../../../src/main/apps/skill-discovery', () => ({ listLoadableSkillCopies: () => [] }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
@@ -207,8 +211,11 @@ vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({
 vi.mock('../../../../src/main/apps/runtime/reminders/tool', () => ({
   createRemindersMcpServer: () => ({ _isMcpServer: true, name: 'halo-reminders' }),
 }))
+const { createPersonContextMcpServer } = vi.hoisted(() => ({
+  createPersonContextMcpServer: vi.fn((_caller: unknown) => ({ _isMcpServer: true, name: 'halo-person-context' })),
+}))
 vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
-  createPersonContextMcpServer: () => ({ _isMcpServer: true, name: 'halo-person-context' }),
+  createPersonContextMcpServer,
   personContextPrompt: () => 'person-context',
 }))
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
@@ -218,6 +225,7 @@ const sessionRegistry = vi.hoisted(() => ({
   current: null as null | {
     register: ReturnType<typeof vi.fn>
     getPendingResume?: () => string | undefined
+    getSessionRevision?: (appId: string, channel: string, chatId: string) => object | undefined
     getPushableSessions: () => []
   },
 }))
@@ -322,11 +330,13 @@ import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'
 import { hasChatBrowserContext } from '../../../../src/main/apps/runtime/app-chat-browser'
 import { createScopedBrowserContext } from '../../../../src/main/services/ai-browser'
 import { acquireV2Session, updateConsumerDisplayModel } from '../../../../src/main/services/agent/session-manager'
+import { getApiCredentials } from '../../../../src/main/services/agent/helpers'
 import { resolveCredentialsForSdk } from '../../../../src/main/services/agent/sdk-config'
 import { requestAppMemoryConsolidation, prepareMemoryForTurn, appMemorySettings, loadSpaceTopicsForTurn } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
 import { generatePromptInstructions } from '../../../../src/main/platform/memory'
 import { describeSelfInstance, formatInstanceTag } from '../../../../src/main/apps/runtime/live-instances'
 import { setImPermissionContext, clearImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
+import { setActiveImChannelManager } from '../../../../src/main/apps/runtime/im-channels'
 import { buildTeamSessionKey } from '../../../../src/shared/apps/team-types'
 
 beforeEach(() => {
@@ -675,6 +685,134 @@ describe('the conversation list names a message of cards alone', () => {
       expect(register.mock.calls[0]?.[5]).toMatchObject({ lastMessage: 'a.ts:3-5' })
     } finally {
       sessionRegistry.current = null
+    }
+  })
+})
+
+
+describe('live messages keep the current turn envelope', () => {
+  beforeEach(() => {
+    keptMemberContext()
+    sink.setTurnIdentity.mockClear()
+    prepareNonVisionImageFallback.mockReset().mockReturnValue(undefined)
+  })
+
+  afterEach(() => { prepareNonVisionImageFallback.mockReset().mockReturnValue(undefined) })
+
+  it('invalidates live identity when app tool permissions change', async () => {
+    await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId: 'app-chat:app-member:local:direct:permission-snapshot', message: 'start' })
+    const isCurrent = sink.setTurnIdentity.mock.calls.at(-1)![1] as () => boolean
+    expect(isCurrent()).toBe(true)
+    const prior = app.permissions
+    try {
+      app.permissions = { granted: ['ai-browser'], denied: [] } as any
+      expect(isCurrent()).toBe(false)
+    } finally {
+      app.permissions = prior
+    }
+  })
+
+  it('invalidates a borrowed live turn when its governing team policy changes', async () => {
+    const turn = memberTurn({ external: true })
+    getDelegatedPolicy.mockReturnValue({ allowedTools: ['Read'] } as never)
+    await sendAppChatMessage({ ...turn, conversationId: buildTeamSessionKey(app.id, TEAM_ID, 'policy-snapshot'), teamContext: { ...turn.teamContext!, epochId: 'policy-snapshot' } })
+    const isCurrent = sink.setTurnIdentity.mock.calls.at(-1)![1] as () => boolean
+    expect(isCurrent()).toBe(true)
+    getDelegatedPolicy.mockReturnValue({ allowedTools: [] } as never)
+    expect(isCurrent()).toBe(false)
+    getDelegatedPolicy.mockReturnValue(undefined)
+  })
+
+  it.each(['authorization', 'session'] as const)('keeps a changed IM %s revision invalid even after the same values return', async revisionKind => {
+    let authorizationRevision = {}
+    let sessionRevision = {}
+    const channel = { enabled: true, appId: app.id, owners: ['owner'], permissionEnabled: true }
+    setActiveImChannelManager({ getInstanceConfig: () => channel, getAuthorizationRevision: () => authorizationRevision } as never)
+    const getRevision = vi.fn((_app: string, _channel: string, _chatId: string) => sessionRevision)
+    sessionRegistry.current = { register: vi.fn(), getPushableSessions: () => [], getSessionRevision: getRevision }
+    try {
+      await sendAppChatMessage({
+        appId: app.id, spaceId: 'space-1', conversationId: `app-chat:${app.id}:wecom-bot:group:revision-${revisionKind}`, message: 'start',
+        imSession: { channel: 'wecom-bot', chatType: 'group', displayName: 'Group', sessionId: 'inst:room:7' },
+        imPermission: { senderId: 'owner', senderName: 'Owner', isOwner: true, ownerIds: ['owner'] },
+      })
+      const isCurrent = sink.setTurnIdentity.mock.calls.at(-1)![1] as () => boolean
+      expect(isCurrent()).toBe(true)
+      expect(getRevision).toHaveBeenCalledWith(app.id, 'wecom-bot', 'room:7')
+      if (revisionKind === 'authorization') {
+        channel.owners = []
+        authorizationRevision = {}
+        channel.owners = ['owner']
+        authorizationRevision = {}
+      } else {
+        sessionRevision = {}
+      }
+      expect(isCurrent()).toBe(false)
+    } finally {
+      setActiveImChannelManager(null)
+      sessionRegistry.current = null
+    }
+  })
+
+  it('prepares live images with the captured model and preserves the original image for recording', async () => {
+    const credentials = { provider: 'openai' as const, model: 'captured-nonvision', baseUrl: 'https://example.invalid', apiKey: '' }
+    vi.mocked(getApiCredentials).mockResolvedValueOnce(credentials)
+    await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId: 'app-chat:app-member:local:direct:image-snapshot', message: 'start' })
+    prepareNonVisionImageFallback.mockReturnValue({ contextBlock: '<halo_attachments>saved image</halo_attachments>\n', filePaths: ['/tmp/image.png'] })
+    const prepare = sink.setTurnIdentity.mock.calls.at(-1)![2] as (text: string, images: unknown[]) => unknown
+    const images = [{ id: 'image', mediaType: 'image/png', data: 'aGVsbG8=' }]
+    expect(prepare('read the image', images)).toEqual({ text: '<halo_attachments>saved image</halo_attachments>\nread the image', images: undefined })
+    expect(prepareNonVisionImageFallback.mock.calls.at(-1)![0]).toMatchObject({ credentials, images, scope: { workDir: environment.workDir } })
+    expect(images).toHaveLength(1)
+  })
+
+  it('keeps slash commands inert and defers new attachment grants in a restricted turn', async () => {
+    const turn = memberTurn({ external: true })
+    await sendAppChatMessage({ ...turn, conversationId: buildTeamSessionKey(app.id, TEAM_ID, 'restricted-live-input'), teamContext: { ...turn.teamContext!, epochId: 'restricted-live-input' } })
+    const prepare = sink.setTurnIdentity.mock.calls.at(-1)![2] as (text: string, images?: unknown[]) => any
+    const result = prepare('/dangerous-command')
+    expect(result.text).toContain('/dangerous-command')
+    expect(result.text.startsWith('/')).toBe(false)
+    prepareNonVisionImageFallback.mockReturnValue({ contextBlock: 'image files', filePaths: ['/tmp/new-image.png'] })
+    expect(prepare('read image', [{ id: 'img', mediaType: 'image/png', data: 'aGVsbG8=' }])).toBe(false)
+  })
+})
+
+
+describe('external team authority', () => {
+  beforeEach(() => {
+    keptMemberContext()
+    buildUserSessionSdkOptions.mockClear()
+    createPersonContextMcpServer.mockClear()
+  })
+
+  it.each([undefined, 'message'] as const)('withholds self-API credentials and owner surfaces for external kind %s', async kind => {
+    const prior = app.permissions
+    app.permissions = { granted: ['halo-api-ref'], denied: [] } as any
+    try {
+      const turn = memberTurn({ external: true })
+      const epochId = `external-authority-${kind ?? 'missing'}`
+      await sendAppChatMessage({ ...turn, conversationId: buildTeamSessionKey(app.id, TEAM_ID, epochId), teamContext: { ...turn.teamContext!, epochId, kind } })
+      const options = buildUserSessionSdkOptions.mock.calls.at(-1)![0] as any
+      expect(options.selfApiAccess).toBe(false)
+      expect(options.mcpServers).not.toHaveProperty('halo-api-ref')
+      expect(createPersonContextMcpServer).toHaveBeenLastCalledWith(expect.objectContaining({ authority: 'team' }))
+    } finally {
+      app.permissions = prior
+    }
+  })
+
+  it('keeps the explicitly enabled self-API for a local owner turn', async () => {
+    const prior = app.permissions
+    app.permissions = { granted: ['halo-api-ref'], denied: [] } as any
+    try {
+      await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId: 'app-chat:app-member:local:direct:owner-api', message: 'start' })
+      const options = buildUserSessionSdkOptions.mock.calls.at(-1)![0] as any
+      expect(options.selfApiAccess).toBe(true)
+      expect(options.mcpServers).toHaveProperty('halo-api-ref')
+      expect(createPersonContextMcpServer).toHaveBeenLastCalledWith(expect.objectContaining({ authority: 'owner' }))
+    } finally {
+      app.permissions = prior
     }
   })
 })

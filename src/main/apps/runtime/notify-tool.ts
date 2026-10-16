@@ -58,6 +58,8 @@ export interface RelaySourceContext {
   subject?: RelaySubject
   /** Whether the source run is owner-context (gates transcript exposure) */
   isOwner: boolean
+  /** Read from the running turn; the reusable tool server must not retain a previous caller's authority. */
+  permissionIdentity?: () => string | undefined
   /** Source-context snapshot captured by the runtime (e.g. the triggering message) */
   quote?: string
 }
@@ -242,6 +244,7 @@ function buildNotifyBotTool(context: NotifyToolContext) {
     },
     async (input) => {
       const runTag = context.runId.slice(0, 8)
+      const sourceIdentity = context.relay.permissionIdentity?.()
       console.log(
         `[Runtime][${runTag}] notify_bot called: to="${input.to}", ` +
         `hasMessage=${!!input.message}, hasFile=${!!input.file}`
@@ -372,9 +375,10 @@ function buildNotifyBotTool(context: NotifyToolContext) {
             console.warn(`[Runtime][${runTag}] notify_bot delivered without relay context: target=${destination.conversationId}, reason=relay spool unavailable`)
             return
           }
+          const relayId = randomUUID()
           spool.append(destination.conversationId, {
             kind: 'push',
-            id: randomUUID(),
+            id: relayId,
             at: Date.now(),
             source: {
               key: context.relay.sessionKey,
@@ -389,6 +393,9 @@ function buildNotifyBotTool(context: NotifyToolContext) {
             file: sentFile,
             quote: context.relay.quote,
           })
+          void import('./pending-relay-delivery')
+            .then(({ offerPendingRelaysToLiveTurn }) => offerPendingRelaysToLiveTurn(destination.conversationId, session, { id: relayId, identity: sourceIdentity }))
+            .catch(error => console.warn(`[Runtime][${runTag}] Live relay unavailable; context retained: target=${destination.conversationId}`, error))
         } catch {
           console.error(`[Runtime][${runTag}] notify_bot delivered without relay context: target=${destination.conversationId}, reason=relay recording failed`)
         }

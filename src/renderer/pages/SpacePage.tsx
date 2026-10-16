@@ -36,6 +36,7 @@ import { ReferenceLayer } from '../components/references'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
 import { api } from '../api'
 import { useLayoutPreferences } from '../hooks/useLayoutPreferences'
+import { usePointerDrag } from '../hooks/usePointerDrag'
 import { useConversationTouchedFiles } from '../hooks/useConversationTouchedFiles'
 import { useRailYield } from '../hooks/useRailYield'
 import { useWindowMaximize } from '../components/canvas/viewers/useWindowMaximize'
@@ -176,42 +177,23 @@ export function SpacePage() {
     }
   }, [effectiveChatWidth, isDraggingChat])
 
-  // Handle chat width drag
-  const handleChatDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    setIsDraggingChat(true)
-  }, [])
-
-  // Chat drag move/end handlers
-  useEffect(() => {
-    if (!isDraggingChat) return
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!chatContainerRef.current) return
-
-      // Calculate width from left edge of chat container to mouse position
-      const containerRect = chatContainerRef.current.getBoundingClientRect()
-      const newWidth = e.clientX - containerRect.left
-
-      // Clamp to constraints
-      const clampedWidth = Math.max(chatWidthMin, Math.min(chatWidthMax, newWidth))
-      setDragChatWidth(clampedWidth)
-    }
-
-    const handleMouseUp = () => {
+  const chatWidthAt = (clientX: number) => {
+    const container = chatContainerRef.current
+    return container
+      ? Math.max(chatWidthMin, Math.min(chatWidthMax, clientX - container.getBoundingClientRect().left))
+      : dragChatWidth
+  }
+  const handleChatDragStart = usePointerDrag({
+    enabled: !isMobile && isCanvasOpen && !isCanvasMaximized && !!currentSpace,
+    onStart: () => setIsDraggingChat(true),
+    onMove: ({ clientX }) => setDragChatWidth(chatWidthAt(clientX)),
+    onEnd: ({ clientX }) => {
+      const width = chatWidthAt(clientX)
+      setDragChatWidth(width)
       setIsDraggingChat(false)
-      // Persist the final width
-      setChatWidth(dragChatWidth)
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [isDraggingChat, dragChatWidth, chatWidthMin, chatWidthMax, setChatWidth])
+      setChatWidth(width)
+    },
+  })
 
   // Close canvas when switching to mobile with canvas open
   useEffect(() => {
@@ -503,11 +485,11 @@ export function SpacePage() {
                   {isCanvasOpen && (
                     <div
                       className={`
-                        absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize z-20
+                        absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize touch-none z-20
                         hover:bg-primary/50 transition-colors
                         ${isDraggingChat ? 'bg-primary/50' : ''}
                       `}
-                      onMouseDown={handleChatDragStart}
+                      onPointerDown={handleChatDragStart}
                       title={t('Drag to resize')}
                     />
                   )}

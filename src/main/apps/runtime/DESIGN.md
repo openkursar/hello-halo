@@ -68,7 +68,12 @@ digital-human chat in `app-chat.ts`) rather than routing through the space chat'
   `turn_snapshot` checkpoint, preserving open streaming blocks without per-token
   JSONL writes; replay replaces the current turn's aggregates with that checkpoint
   rather than duplicating them. Partial retirement still rejects the waiting round,
-  never delivers it as a successful reply. Abandoned preparation releases in `finally`.
+  never delivers it as a successful reply. Each preparation hold binds to its
+  acquired lease's native liveness. Retirement releases that exact hold and its
+  mailbox reservation before any blocked preparation finishes; a per-dispatch
+  release token prevents the old `finally` from releasing a successor. The next
+  admission probes a hold whose transport died without an exit notification.
+  Abandoned live preparation still releases in `finally`.
   A manager-owned follow-up holds its lease and active session for the entire
   execution, including auto-continue, then closes its own instance and releases
   before unregistering. Its cleanup cannot close a successor; transient runs close directly.
@@ -503,6 +508,8 @@ inputs and dispatches.
 
 ```
 sendAppChatMessage
+  ├── app-chat-delivery → permission-aware platform/turn-gate admission
+  │                       (live additions do not create another round)
   ├── beginAppChatTurnStart(conversationId)   → holds the conversation, before any await
   │                                             (or adopts request.turnStart, a hold its caller took)
   ├── who the turn answers to (request.imPermission, or the chat's last sender), fixed now
@@ -538,13 +545,12 @@ concurrency slot (team/DESIGN.md, "Team as an IM backend").
 between starting, queued, running and idle — a start ended, a stop was asked
 for, and through the sink (`onAppChatRoundChange`) a turn began or a round
 settled or was dropped — to its own waiters and to `onAppChatConversationChange`
-listeners. Buffered IM supplements are released that way
-(`dispatch-inbound.releaseSupplementsWhenIdle`, wired at runtime start): a
-failed start, a stopped one, a team wake that gave its hold back and an
-autonomous turn's end all owe them their turn, and no exit path has to remember
-to say so. Their merged turn starts in the same tick as the check that found the
-chat free — it does not retry the owner claim each of its messages already
-tried, which would await in between.
+listeners. IM supplements use the shared permission-aware mailbox. The engine's
+`agent:turn-start` signal releases compatible startup arrivals immediately;
+conversation changes release a separate merged turn when the prior authority
+finishes. A failed start, stopped start or autonomous completion cannot strand
+accepted input. A separate IM batch starts in the same synchronous admission
+step and does not repeat the owner-claim attempt its messages already made.
 
 Stopping reaches a message on its way (`abortAppChatTurn`): it is marked, keeps
 holding the conversation until it unwinds — so nothing starts beside a turn that
@@ -577,9 +583,9 @@ Consequences that matter:
   place (see `renderer/stores/chat/DESIGN.md`).
 - A round enqueued while a turn is already running cannot be claimed by it, so
   the residual race is only the instant between enqueue and `system:init`. The
-  IM busy check closes even that: `isAppChatConversationGenerating` counts an
-  autonomous turn as busy, so an inbound message arriving then is buffered as a
-  supplement instead of starting a round.
+  shared mailbox closes even that: `isAppChatConversationGenerating` counts an
+  autonomous turn and accepted native continuations as busy. Compatible input
+  joins the engine without queuing a second round; different authority waits.
 - A round that can never be answered is settled, not left hanging:
   `onConsumerStopped` rejects outstanding rounds synchronously at consumer
   retirement (or once on natural exit). The sink outlives its SDK sessions, so a
@@ -826,7 +832,8 @@ inbound message; rides into whatever history the engine keeps).
 - **Durability**: `~/.halo/im-pending-relays.json`, versioned (unknown
   versions rejected, never guessed), write-behind (im-session-registry
   pattern) plus a synchronous flush at shutdown. Survives restarts —
-  notification-style pushes may wait weeks for consumption.
+  notification-style pushes to idle or incompatible conversations may wait weeks
+  for consumption.
 - **Lifecycle**: cleared on `/halo-clear` (the conversation it belonged to is
   gone) and cascaded on session removal. Removal clears both the ordinary chat key
   and the exact team-member session recorded on that chat, never another chat's
@@ -835,10 +842,14 @@ inbound message; rides into whatever history the engine keeps).
 - **Self-target skip**: pushes to the invoking session itself are not spooled
   (already in that session's tool history).
 
-**Trade-off**: The relay context arrives only with the next inbound message —
-acceptable because AI context is only ever consumed by a run, and runs are
-inbound-triggered. Deep history beyond the quote requires the AI to Read/Grep
-the source transcript, reusing existing tools instead of a new query API.
+**Live delivery**: a successful notification or private question also offers its
+context to the target's ongoing work. Source authority is captured at send time,
+not reconstructed from a later turn of the source. Compatible input is accepted
+through the shared gate and committed from the spool only afterward. Private
+question actions recheck the current owner and destination before and after
+asynchronous grant preparation. Idle targets are not awakened, and declined
+input stays in the durable spool for the next eligible inbound message. Deep
+history beyond the quote still uses the existing Read/Grep tools.
 
 ### 2.14a A Push Is in the Record of the Chat It Went To
 
@@ -877,15 +888,21 @@ moves to the top of the session list (`ImSessionRegistry.notePush`, then
   at the time, read as `metadata.pushedByAppId` / `pushedByName`), the label says
   "Sent proactively by …", and the session list shows it as the last sender. A
   push by the chat's own digital human carries no `_pushedBy`.
-- **Seen while open**: no turn starts, so an open view reads the record again on
-  the announcement instead — the chat's view (`ImChatView`) on
-  `app:im-session-updated` for that chat while no turn of it runs, the team's
-  conversation (`TeamSessionChat`) on `team:member-history`.
-- **A turn stays whole**: a push that comes while a turn of that chat is running is
-  held by the sink and written when the turn ends, with the time it was sent. A
-  large file is paged by the line a message starts on (§2.18), which a line in the
-  middle of a turn would cut. Halo exiting mid-turn loses the held line, not the
-  push; clearing the chat drops it.
+- **Seen at arrival**: the sink writes a push immediately, even during another
+  turn, and emits the original display record through `agent:input-arrived`.
+  The record retains its `push` source, sender label and timestamp; action
+  wrappers injected into the AI are never included in this display event.
+- **Tools across an arrival**: the transcript codec splits visible reply
+  segments at a push or user record, but keeps the native tool-id map until the
+  result/init boundary, so a tool started before the arrival keeps its result.
+  A teammate's or another conversation's message read mid-turn
+  (`_metadata.inputMode: 'live'`) does not split the reply: it is emitted right
+  after the reply segment it arrived in, naming it in `inputReplyId`. The page
+  also names the first message of a native turn still running (`openTurnFrom`).
+  Native result fallbacks do not duplicate a reply flushed just before a push;
+  terminal partial snapshots replace that native turn's assistant segments while
+  retaining its original input/push records. Paging continues to use existing
+  file-line IDs, with no storage format or whole-history read added.
 - **The AI is not told here**: these record writes never enter engine history.
   Only `notify_bot` messages and private owner questions separately enter the relay
   spool (§2.14). Automatic run-result pushes are for the person reading Halo only.
@@ -1344,12 +1361,11 @@ create a digital human for a reminder.
   run log follows it. Bounds: 20 per conversation, 100 per digital human,
   repeats at least 5 minutes apart, at most a year ahead.
 - **Delivery** (`reminders/delivery.ts`) starts a turn of the same
-  conversation once it is free — an IM turn takes the chat's live reply
-  stream as it begins, so a reminder never writes into a person's reply. A
-  reminder waits at most once: coming due again meanwhile is folded into that
-  one turn and counted in its text, so a repeating reminder never piles up
-  behind a long turn; right before starting, it is checked to still be set,
-  and its conversation resolved again. The text says it is the digital
+  conversation through the shared mailbox. Matching authority joins ongoing work;
+  a different authority waits for a separate turn. Repeated due times use the
+  reminder id as their coalescing key, so only the latest waiting notice remains.
+  Before delivery, the reminder is checked to still be set and its destination
+  and sender standing are resolved again. The text says it is the digital
   human's own reminder, who asked, when it was set and due, and whether it is
   late. An IM chat gets the framing and file sending dispatch-inbound gives it,
   the asker's `<msg-sender>` in a group (and as the subject of any push), the
@@ -1416,6 +1432,77 @@ through if nothing could have written there:
   in the instant of the change.
 
 ---
+
+### 2.29 Messages Addressed to Ongoing Work
+
+`platform/turn-gate` owns the decision to join a live turn or start a separate one.
+Each delivery carries an opaque authority identity. The running chat reads its
+identity from the sink's assembled turn context, never from the IM registry's
+latest sender. Owner input, a teammate's delegated work, external team work, and
+guest policies are distinct; unknown authority cannot join anything. Only a change
+to who may do what (app permissions, space-memory access, IM owners or guest
+policy, a teammate's delegated policy) makes the live context unavailable for
+additions; a model, reasoning-effort or notification edit does not. One turn
+delivers one reply to its chat, however many queued or live messages it answered;
+every message it answered learns that reply (`onResult`), while only one caller
+delivers it (`onReply`).
+
+**Stops.** Every stop caller states who stopped (`abortAppChatTurn(id, reason)`).
+A person (`'user'`: the Stop button, `/stop`, an IM session stop, stopping a team
+member here or from another machine, a run's Stop or Close) stops everything:
+- the person's own words not yet read are void — never executed, kept in the
+  record with `inputOutcome: 'stopped'` (an `input_outcome` line naming the
+  trigger's `_inputId`) and announced on `agent:input-stopped`. That covers
+  additions the engine withdrew, messages still waiting in a mailbox, and a
+  message stopped on its way to the engine;
+- what others sent and the AI had not read (teammates, reminders, other
+  conversations, events, guests, other machines) is taken back into its mailbox
+  (`turn-gate.park` / `putBack`), with records written once (`inputRecorded`),
+  and waits: it neither joins the stopping turn nor starts one, and is released
+  when the conversation's next turn starts or something arrives after the stop.
+  A caller awaiting its answer is settled at once with an empty one (the sink
+  handle's `cancel`), because the stopped turn's reply answered a different
+  message; a team decision it carried is settled by the turn that reads it.
+  A message stopped on its way to the engine is handed to its sender through
+  `AppChatRequest.onHeldBack` (with the records written so far); chat delivery,
+  IM dispatch and the team session layer each void their person's words and
+  put the rest back, and no turn-end report is made for a turn that never ran.
+The system (`'internal'`: an escalation cut, clear, restart, closing a task,
+shutdown) keeps the earlier behavior: unread input runs after the stop, and a
+clear still keeps waiting reminders and teammates' messages.
+
+`app-chat-delivery` handles direct API and UI messages. IM supplements, team mail
+and cross-conversation sources use the same gate contract with their own original
+records and transport callbacks. A live addition creates no native round slot:
+callers awaiting its answer observe the consuming turn, including an immediate
+native continuation when the previous final response was already underway. The
+original round and its appended observers never shift a later user's reply into
+the wrong request. An engine-owned continuation remains busy until its accepted
+input is consumed; retirement and shutdown release pending callers explicitly.
+
+Message preparation remains tied to the running envelope. The sink retains a
+synchronous preparer using the turn's actual model capabilities and work directory.
+Non-vision images use the same image-to-file fallback as an ordinary message.
+Restricted live input is inert command text. Input needing new restricted file
+grants waits for fresh session assembly instead of extending the old permission
+set. Original messages keep their own transcript rows and provenance even when
+the model receives one ordered batch.
+
+File and event automation arrivals use owner-authority mailboxes and join the
+active run. Startup arrivals flush after its initial SDK send. Scheduled ticks
+and manual restarts retain their existing admission rules. A decision answer
+joins only its original live run and settles with that execution; a different
+active run leaves its durable continuation pending. A run-detail follow-up joins
+its run while that run is live; once the run has ended, a follow-up sent while the
+app is busy is refused with the busy error, and otherwise resumes that same run.
+Headless consumption drains accepted engine continuations before closing live
+input and finalizing storage.
+
+Only pending notices can be replaced by a coalescing key. Input already accepted
+by a native engine cannot be retracted; a later notice remains an ordered update.
+No periodic polling or per-token logging is added to make delivery work. Existing
+readiness/completion events drive the mailboxes, with bounded recovery timers for
+missed lifecycle notifications.
 
 ## 3. SQLite Schema
 
@@ -1486,7 +1573,7 @@ src/main/apps/runtime/
 
   -- Interactive chat with an App (separate from automation runs):
   app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
-  app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a); the record's one writer, holding a push that comes mid-turn until the turn ends (§2.14a)
+  app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a); the record's one writer, announcing accepted inputs and pushes at arrival (§2.14a)
   turn-ending.ts             -- A turn that stopped short (step limit, cut off): how it is recognized and the note an IM chat gets (§2.12a)
   im-error-reply.ts          -- What an IM chat is told when its turn failed: no path or program of this computer goes out (§2.12a)
   turn-skills.ts             -- Which skills a borrowed turn may load, what a granted skill may not bring with it, and why its message never runs as a command ("Skills on a borrowed turn")
@@ -1495,6 +1582,8 @@ src/main/apps/runtime/
   run-conversation-source.ts -- A scheduled run's one-way sender identity for cross-conversation messages (§2.20)
   local-time.ts              -- Local time as `YYYY-MM-DD HH:mm` for times written into text the model and the person read (run titles, reminders)
   conversation-collab.ts     -- Who gets `halo-conversations` (owner's `conversation-collab` switch, owner-only, no team channel, global master switch) and the lazy server factory shared by app-chat.ts and execute.ts (§2.20)
+  app-chat-delivery.ts       -- Permission-aware admission and grouped direct-message delivery (§2.29)
+  pending-relay-delivery.ts  -- Offers durable relay context to compatible ongoing work (§2.14)
   app-chat-live-turn.ts      -- The turn a chat is running RIGHT NOW: whether there is one (`isAppChatConversationGenerating` — the only truthful busy probe, counting a message still on its way to the engine (`beginAppChatTurnStart`, §2.12a) as well as a queued round and a live turn; app chat never writes the engine's legacy `activeSessions` map) and how to add a message to it (`injectIntoAppChat` for the team bus; `injectIntoAppChatWhenLive`, which waits for a starting turn to begin and answers delivered / no_turn / stopped, for the user adding to their own turn through `app:chat-inject` / `POST /chat/inject` — that path passes `{ source: 'injection' }`, which the transcript reader shows as an annotation on the reply), plus the change announcements everything waiting on a conversation is woken by (`onAppChatConversationChange`, §2.12a). Its own leaf module because the team layer asks both synchronously, and app-chat.ts imports the team runtime accessor — a static edge back would close that cycle
   config-defaults.ts         -- Merge App config_schema defaults into userConfig
   dispatch-inbound.ts        -- Route IM inbound messages into app-chat
@@ -1542,6 +1631,15 @@ src/main/apps/runtime/
     *.provider.ts            -- Brand-specific provider implementations
                                 (wecom-bot.provider.ts, weixin-ilink.provider.ts, ...)
 ```
+
+IM status reads return a per-provider `ordinal` derived from the full config order,
+not a filtered UI list, and the currently bound `appName`. Runtime passes a name
+resolver to the manager at construction; the manager deduplicates name lookups
+within each list read and retains no name cache or numbering state. IPC and HTTP
+both consume these status reads. `setInstanceApp` accepts an optional
+`expectedAppId`; a mismatched current binding returns `BINDING_CHANGED` without
+writing or reconnecting, so a stale UI confirmation cannot transfer another
+person's newly rebound bot.
 
 ### 4.1 identityCapability pattern
 

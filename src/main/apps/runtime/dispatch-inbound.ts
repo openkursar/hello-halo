@@ -18,6 +18,7 @@
  */
 
 import type { InboundMessage, ReplyHandle, ProgressEvent } from '../../../shared/types/inbound-message'
+import type { TranscriptMessage } from '../../../shared/types/transcript'
 import { buildTeamSessionKey } from '../../../shared/apps/team-types'
 import { buildTeamChatKey } from '../../../shared/apps/im-keys'
 import { getAppManager } from '../manager'
@@ -57,7 +58,9 @@ import { maybeClaimOwner } from './im-channels/owner-claim'
 import { resolveInboundIdentity } from './im-channels/identity-resolve'
 import { getImChannelsPermissionDefaults } from '../../foundation/product-config'
 import { hasOpenImQuestion, prepareRelayActions, RelayActionUnauthorizedError } from './relay-actions'
-import { beginAppChatTurnStart } from './app-chat-live-turn'
+import { beginAppChatTurnStart, appChatMessageIdentity, getAppChatTurnIdentity, injectIntoAppChatBatch, keepStoppedInputs } from './app-chat-live-turn'
+import { createTurnGate } from '../../platform/turn-gate'
+import { onAgentEvent } from '../../services/agent'
 
 // ============================================
 // Constants
@@ -236,18 +239,134 @@ function relayOwnerValidator(
 // Supplement Buffer
 // ============================================
 //
-// When a message arrives while AI is generating, we buffer it (with ack) instead
-// of starting a concurrent generation. On completion, buffered messages are merged
-// into a single new round using the latest entry's ReplyHandle.
+// Reply handles stay with their messages until the shared mailbox accepts them.
 
 interface SupplementEntry {
   msg: InboundMessage
   reply: ReplyHandle
   appId: string
   instanceId: string
+  identity: string
+  /** Taken back after a stop: its record already stands where it first arrived. */
+  inputRecorded?: boolean
+}
+
+const STOPPED_UNREAD = 'stopped before it was read'
+
+/** The reply path of a supplement taken back after a stop: its stream was already closed. */
+function withoutStream(reply: ReplyHandle): ReplyHandle {
+  return {
+    send: text => reply.send(text),
+    ...(reply.sendTyping ? { sendTyping: () => reply.sendTyping!() } : {}),
+    channel: reply.channel,
+    chatId: reply.chatId,
+    replyTtlMs: reply.replyTtlMs,
+  }
 }
 
 const supplementBuffers = new Map<string, SupplementEntry[]>()
+const supplementDispatches = new Map<string, symbol>()
+
+function forgetSupplements(conversationId: string, entries: readonly SupplementEntry[]): void {
+  const removed = new Set(entries)
+  const remaining = supplementBuffers.get(conversationId)?.filter(entry => !removed.has(entry)) ?? []
+  if (remaining.length > 0) supplementBuffers.set(conversationId, remaining)
+  else supplementBuffers.delete(conversationId)
+}
+
+function supplementText(entry: SupplementEntry): string {
+  let text = buildMergedMessageText([entry], entry.msg.chatType)
+  if (entry.msg.attachments?.length) {
+    text += '\n\n[Attached files — use the Read tool to access their content]\n'
+      + entry.msg.attachments.map(file => `- [${file.type}] ${file.filename}: ${file.localPath}`).join('\n')
+  }
+  return text
+}
+
+const supplementGate = createTurnGate<SupplementEntry[]>({
+  isBusy: isAppChatConversationGenerating,
+  getJobIdentity: entries => entries[0]?.identity,
+  getActiveIdentity: getAppChatTurnIdentity,
+  mergeJobs: jobs => jobs.flat(),
+  deliverMidTurn: (conversationId, entries) => {
+    if (entries[0].identity !== 'owner' && entries.some(entry => entry.msg.attachments?.length)) return false
+    if (!injectIntoAppChatBatch(conversationId, entries.map(entry => ({
+      text: supplementText(entry), images: entry.msg.images, inputRecorded: entry.inputRecorded,
+      personal: entry.identity === 'owner',
+    })), indexes => returnSupplements(conversationId, indexes.map(index => entries[index]), true))) return false
+    forgetSupplements(conversationId, entries)
+    for (const entry of entries) {
+      try { entry.reply.streaming?.dispose?.() } catch (error) {
+        console.warn(`${LOG_TAG} Accepted supplement stream cleanup failed: conversation=${conversationId}`, error)
+      }
+    }
+    return true
+  },
+  dispatch: async (conversationId, entries) => {
+    forgetSupplements(conversationId, entries)
+    const generation = Symbol(conversationId)
+    supplementDispatches.set(conversationId, generation)
+    const release = () => {
+      if (supplementDispatches.get(conversationId) !== generation) return
+      supplementDispatches.delete(conversationId)
+      supplementGate.release(conversationId)
+      supplementGate.drain(conversationId)
+    }
+    void dispatchSupplementBatch(conversationId, entries, release)
+      .catch(error => console.error(`${LOG_TAG} Supplement dispatch failed before completion: conversation=${conversationId}`, error))
+      .finally(release)
+  },
+}, {
+  describeJob: entries => `IM messages=${entries.length}`,
+  onDiscard: (entries, reason) => {
+    for (const entry of entries) {
+      try { entry.reply.streaming?.dispose?.() } catch (error) {
+        console.warn(`${LOG_TAG} Cancelled supplement stream cleanup failed: reason=${reason}`, error)
+      }
+    }
+  },
+})
+
+/**
+ * A person stopped this chat: the owner's supplements still waiting are void and
+ * stay in the record, marked; a guest's wait, without waking anything, for the
+ * next turn of this chat.
+ */
+export function holdSupplementsAfterStop(conversationId: string): void {
+  const voided: SupplementEntry[] = []
+  supplementGate.discardJobs((key, entries) => {
+    if (key !== conversationId || !entries.every(entry => entry.identity === 'owner')) return false
+    voided.push(...entries)
+    return true
+  }, STOPPED_UNREAD)
+  if (voided.length) {
+    forgetSupplements(conversationId, voided)
+    keepStoppedInputs(conversationId, [], voided.map(entry => ({ content: supplementText(entry), images: entry.msg.images })))
+  }
+  supplementGate.park(conversationId)
+}
+
+/** A guest's messages taken back from a stopped turn wait for the next turn of this chat, answered by a one-shot reply. */
+function returnSupplements(conversationId: string, entries: readonly SupplementEntry[], recorded: boolean): void {
+  const returned = entries.map(entry => ({ ...entry, inputRecorded: entry.inputRecorded || recorded, reply: withoutStream(entry.reply) }))
+  supplementBuffers.set(conversationId, [...returned, ...(supplementBuffers.get(conversationId) ?? [])])
+  supplementGate.putBack(conversationId, [returned])
+}
+
+/**
+ * A person's stop held these back before the engine got them (`records`: what
+ * was written for them meanwhile): the owner's own words are void, kept in the
+ * record and marked; a guest's wait for the next turn of this chat.
+ */
+function handBackSupplements(conversationId: string, entries: readonly SupplementEntry[], records: readonly TranscriptMessage[]): void {
+  if (entries[0]?.identity !== 'owner') {
+    returnSupplements(conversationId, entries, records.length > 0)
+    return
+  }
+  keepStoppedInputs(conversationId, records, records.length ? [] : entries
+    .filter(entry => !entry.inputRecorded)
+    .map(entry => ({ content: supplementText(entry), images: entry.msg.images })))
+}
 
 function truncatePreview(body: string): string {
   const trimmed = body.trim().replace(/\s+/g, ' ')
@@ -261,7 +380,7 @@ function buildSupplementAck(buffer: SupplementEntry[]): string {
   if (count === 1) {
     return [
       '✏️ 已收到补充消息',
-      'AI 正在这一轮的回应中，你的补充会在下一轮回应时一并理解处理。',
+      '你的补充已收到，会合并理解处理。',
       '当前已收到补充：1 条',
       `• ${truncatePreview(buffer[0].msg.body)}`,
     ].join('\n')
@@ -271,7 +390,7 @@ function buildSupplementAck(buffer: SupplementEntry[]): string {
     const lines = buffer.map((e) => `• ${truncatePreview(e.msg.body)}`)
     return [
       '✏️ 又收到补充',
-      '下一轮回应时，会把这些补充合并理解、一起回复：',
+      '会把这些补充合并理解、一起回复：',
       ...lines,
     ].join('\n')
   }
@@ -279,7 +398,7 @@ function buildSupplementAck(buffer: SupplementEntry[]): string {
   const recent = buffer.slice(-3).map((e) => `• ${truncatePreview(e.msg.body)}`)
   return [
     `✏️ 又收到补充（共 ${count} 条）`,
-    '下一轮回应时合并处理。最近 3 条：',
+    '补充消息会合并处理。最近 3 条：',
     ...recent,
     '... 更多',
   ].join('\n')
@@ -304,13 +423,7 @@ export function clearSupplementBuffer(conversationId: string): SupplementEntry[]
     return []
   }
   supplementBuffers.delete(conversationId)
-  for (const e of entries) {
-    try {
-      e.reply.streaming?.dispose?.()
-    } catch (err) {
-      console.error(`${LOG_TAG} clearSupplementBuffer dispose error:`, err)
-    }
-  }
+  supplementGate.discard(key => key === conversationId, 'conversation stopped or cleared')
   return entries
 }
 
@@ -321,14 +434,6 @@ export function clearSupplementBuffersForInstance(instanceId: string): number {
     const kept: SupplementEntry[] = []
     for (const e of entries) {
       if (e.instanceId === instanceId) {
-        try {
-          e.reply.streaming?.dispose?.()
-        } catch (err) {
-          console.error(
-            `${LOG_TAG} clearSupplementBuffersForInstance dispose error:`,
-            err
-          )
-        }
         dropped++
       } else {
         kept.push(e)
@@ -340,6 +445,7 @@ export function clearSupplementBuffersForInstance(instanceId: string): number {
       supplementBuffers.set(conversationId, kept)
     }
   }
+  supplementGate.discardJobs((_key, entries) => entries.every(entry => entry.instanceId === instanceId), 'IM instance stopped')
   if (dropped > 0) {
     console.log(
       `${LOG_TAG} Dropped ${dropped} buffered supplement(s) for stopped ` +
@@ -358,16 +464,20 @@ export function clearSupplementBuffersForInstance(instanceId: string): number {
  * @returns unsubscribe
  */
 export function releaseSupplementsWhenIdle(): () => void {
-  return onAppChatConversationChange((conversationId) => {
+  const stopReady = onAgentEvent(event => {
+    if (event.channel === 'agent:turn-start' && !event.relayed) supplementGate.notifyReady(event.conversationId)
+  })
+  const stopChange = onAppChatConversationChange((conversationId) => {
     if (!supplementBuffers.has(conversationId)) return
     setImmediate(() => {
       try {
-        flushSupplementBuffer(conversationId)
+        supplementGate.drain(conversationId)
       } catch (err) {
         console.error(`${LOG_TAG} flushSupplementBuffer failed: conv=${conversationId}`, err)
       }
     })
   })
+  return () => { stopReady.dispose(); stopChange() }
 }
 
 /** Merge supplement bodies. Groups get per-entry <msg-sender> tags for attribution. */
@@ -398,23 +508,7 @@ function buildMergedMessageText(
  * round queued, a turn begun): while it is busy the supplements stay queued,
  * and the change that frees it calls again.
  */
-function flushSupplementBuffer(conversationId: string): void {
-  const entries = supplementBuffers.get(conversationId)
-  if (!entries || entries.length === 0) {
-    supplementBuffers.delete(conversationId)
-    return
-  }
-
-  if (isAppChatConversationGenerating(conversationId)) {
-    console.log(
-      `${LOG_TAG} Supplements wait: conv=${conversationId} is still busy, ` +
-      `${entries.length} stay queued until it is free`
-    )
-    return
-  }
-
-  supplementBuffers.delete(conversationId)
-
+async function dispatchSupplementBatch(conversationId: string, entries: SupplementEntry[], onSessionRetired: () => void): Promise<void> {
   const last = entries[entries.length - 1]
 
   // Dispose all stream sessions except the last (used for the merged round)
@@ -490,10 +584,13 @@ function flushSupplementBuffer(conversationId: string): void {
   // Dispatched in the same tick as the busy check above, which the merged round
   // skips: the turn holds the conversation from its first synchronous step, so a
   // message arriving in between waits behind it instead of starting beside it.
-  dispatchInboundMessage(merged, last.reply, last.appId, last.instanceId, {
+  await dispatchInboundMessage(merged, last.reply, last.appId, last.instanceId, {
     skipBusyCheck: true,
     preBuiltMessageText: messageText,
     preBuiltSenderIdentity: senderIdentity,
+    recordedMessages: entries.filter(entry => !entry.inputRecorded).map(entry => ({ content: supplementText(entry), images: entry.msg.images })),
+    onSessionRetired,
+    onHeldBack: records => handBackSupplements(conversationId, entries, records),
   }).catch((err) => {
     console.error(`${LOG_TAG} Supplement flush dispatch failed:`, err)
   })
@@ -508,6 +605,10 @@ interface DispatchOptions {
   skipBusyCheck?: boolean
   preBuiltMessageText?: string
   preBuiltSenderIdentity?: { id: string; name: string }
+  recordedMessages?: import('./app-chat').AppChatRequest['recordedMessages']
+  onSessionRetired?: () => void
+  /** The pre-merged messages' own handling when a person's stop holds them back on their way. */
+  onHeldBack?: (records: readonly TranscriptMessage[]) => void
 }
 
 /**
@@ -697,20 +798,21 @@ export async function dispatchInboundMessage(
     broadcastToAll('app:im-session-updated', sessionEvent)
   }
 
-  // ── Stop command: abort generation, silently drop buffered supplements ──
+  // ── Stop command: abort generation; the owner's waiting supplements are void, a guest's wait ──
   if (isStopCommand(msg.body, msg.chatType)) {
     withdrawProcessingNotice(conversationId)
-    const dropped = clearSupplementBuffer(conversationId)
+    const waiting = supplementBuffers.get(conversationId)?.length ?? 0
     const isActive = isAppChatConversationGenerating(conversationId)
+    if (!isActive) holdSupplementsAfterStop(conversationId)
     if (isActive) {
       console.log(
         `${LOG_TAG} Stop command received: channel=${msg.channel}, chatId=${msg.chatId}, ` +
-        `session=${conversationId}, droppedSupplements=${dropped.length}`
+        `session=${conversationId}, waitingSupplements=${waiting}`
       )
       try {
         // Reaches a message still on its way to the engine as well as a turn
         // already running: both read as busy above, so both must be stoppable.
-        await abortAppChatTurn(conversationId)
+        await abortAppChatTurn(conversationId, 'user')
         await reply.send('Generation stopped.')
       } catch (err) {
         console.error(`${LOG_TAG} Failed to stop generation: session=${conversationId}`, err)
@@ -767,16 +869,29 @@ export async function dispatchInboundMessage(
   // "Busy" covers an autonomous turn too: starting a round while one is running
   // would let that turn claim this message's round and answer the wrong thing.
   if (!options.skipBusyCheck && isAppChatConversationGenerating(conversationId)) {
-    const entry: SupplementEntry = { msg, reply, appId, instanceId }
+    const permission = resolveImPermission(instanceCfg, msg.from, msg.fromName ?? msg.from)
+    const entry: SupplementEntry = { msg, reply, appId, instanceId, identity: appChatMessageIdentity(permission) }
     const buffer = supplementBuffers.get(conversationId) ?? []
     buffer.push(entry)
     supplementBuffers.set(conversationId, buffer)
+
+    let disposition: Awaited<ReturnType<typeof supplementGate.deliver>>
+    try {
+      disposition = await supplementGate.deliver(conversationId, [entry])
+    } catch (error) {
+      forgetSupplements(conversationId, [entry])
+      console.error(`${LOG_TAG} Supplement was not accepted: conversation=${conversationId}`, error)
+      await reply.send('This conversation has too many pending messages. Please try again shortly.')
+      return
+    }
 
     // Ack via proactive push (non-fatal)
     const ackInstance = channelManager?.getInstance(instanceId)
     if (ackInstance) {
       try {
-        ackInstance.pushToChat(msg.chatId, buildSupplementAck(buffer), msg.chatType)
+        ackInstance.pushToChat(msg.chatId, disposition === 'mid_turn'
+          ? '✏️ 已加入正在进行的处理'
+          : buildSupplementAck(supplementBuffers.get(conversationId) ?? [entry]), msg.chatType)
       } catch (err) {
         console.error(`${LOG_TAG} Supplement ack push failed:`, err)
       }
@@ -945,6 +1060,12 @@ export async function dispatchInboundMessage(
   }
   if (processingNotice) pendingProcessingNotices.set(conversationId, settleProcessingNotice)
 
+  // A person's stop held this message back before the engine got it.
+  const handBack = (records: readonly TranscriptMessage[]): void => {
+    if (options.onHeldBack) options.onHeldBack(records)
+    else handBackSupplements(conversationId, [{ msg, reply, appId, instanceId, identity: appChatMessageIdentity(imPermission) }], records)
+  }
+
   // Listener startup may await; the existing hold keeps supplements and stop/clear safe.
   const turnStart = beginAppChatTurnStart(conversationId)
   try {
@@ -982,14 +1103,18 @@ export async function dispatchInboundMessage(
       } finally {
         if (reply.streaming && getImStreamHandle(conversationId) === reply.streaming) clearImStreamHandle(conversationId)
       }
+      if (turnStart.stoppedBy === 'user') handBack([])
       return
     }
     await sendAppChatMessage({
       turnStart,
+      onSessionRetired: options.onSessionRetired,
+      onHeldBack: handBack,
       appId: app.id,
       spaceId: app.spaceId,
       message: messageText,
       recorded: { content: recordedMessage },
+      recordedMessages: options.recordedMessages,
       conversationId,
       images: msg.images,
       attachedFiles: msg.attachments?.map(a => a.localPath),

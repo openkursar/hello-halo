@@ -1,4 +1,5 @@
 import { compareTaskTimes, taskTime } from './time'
+import { inputsByReply } from '../../chat/transcript'
 import type { Message, Thought } from '../../../types'
 import type { ActivityEntry } from '../../../../shared/apps/app-types'
 import type { TeamActivity, TeamConversation } from '../../../../shared/apps/team-types'
@@ -31,14 +32,26 @@ export interface TaskMemberReport {
   message: Message
 }
 
-export function executionTurns(messages: Message[]): { id: string; input?: Message; outputs: Message[] }[] {
-  const turns: { id: string; input?: Message; outputs: Message[] }[] = []
+export interface ExecutionTurn {
+  id: string
+  /** The input the execution started from. */
+  input?: Message
+  /** Every input it read: delivered together at its start, or received while it ran. */
+  inputs: Message[]
+  outputs: Message[]
+}
+
+export function executionTurns(messages: Message[]): ExecutionTurn[] {
+  const turns: ExecutionTurn[] = []
   for (const message of messages) {
-    if (message.role === 'user') turns.push({ id: message.id, input: message, outputs: [] })
-    else if (message.role === 'assistant') {
-      const current = turns[turns.length - 1]
+    const current = turns[turns.length - 1]
+    if (message.role === 'user' || (message.role === 'system' && message.source === 'team-message')) {
+      const joins = !!current?.input && (current.outputs.length === 0 || message.metadata?.inputMode === 'live')
+      if (joins) current.inputs.push(message)
+      else turns.push({ id: message.id, input: message, inputs: [message], outputs: [] })
+    } else if (message.role === 'assistant') {
       if (current) current.outputs.push(message)
-      else turns.push({ id: message.id, outputs: [message] })
+      else turns.push({ id: message.id, inputs: [], outputs: [message] })
     }
   }
   return turns.reverse()
@@ -83,12 +96,15 @@ export function isTeamBackgroundTurn(messages: Message[]): boolean {
   return !messages.some(isHumanInput)
 }
 
+// The owner adding to work already running belongs to that work; it does not start a conversation.
 function isHumanInput(message: Message): boolean {
-  return message.role === 'user' && (!message.metadata?.teamTriggerKind || message.metadata.teamTriggerKind === 'human_message')
+  return message.role === 'user' && message.source !== 'injection'
+    && (!message.metadata?.teamTriggerKind || message.metadata.teamTriggerKind === 'human_message')
 }
 
 function isSystemNotification(message: Message): boolean {
-  return message.role === 'user' && ['member_stopped', 'periodic_check', 'run_start'].includes(message.metadata?.teamTriggerKind ?? '')
+  return (message.role === 'user' || (message.role === 'system' && message.source === 'team-message'))
+    && ['member_stopped', 'periodic_check', 'run_start'].includes(message.metadata?.teamTriggerKind ?? '')
 }
 
 export function conversationMessages(messages: Message[]): Message[] {
@@ -110,10 +126,11 @@ export function taskReportMessages(messages: Message[]): Message[] {
 }
 
 export type ConversationRow =
-  | { id: string; message: Message; activities?: never; decision?: never; sharedDecision?: never }
-  | { id: string; activities: TeamActivity[]; message?: never; decision?: never; sharedDecision?: never }
-  | { id: string; decision: ActivityEntry; message?: never; activities?: never; sharedDecision?: never }
-  | { id: string; sharedDecision: SharedTaskDecision; message?: never; activities?: never; decision?: never }
+  | { id: string; message: Message; activities?: never; decision?: never; sharedDecision?: never; additions?: never }
+  | { id: string; activities: TeamActivity[]; message?: never; decision?: never; sharedDecision?: never; additions?: never }
+  | { id: string; decision: ActivityEntry; message?: never; activities?: never; sharedDecision?: never; additions?: never }
+  | { id: string; sharedDecision: SharedTaskDecision; message?: never; activities?: never; decision?: never; additions?: never }
+  | { id: string; additions: Message[]; message?: never; activities?: never; decision?: never; sharedDecision?: never }
 
 export interface SharedTaskDecision {
   refId: string
@@ -159,17 +176,32 @@ export function sharedTaskDecisions(activities: TeamActivity[], epochId: string 
   })
 }
 
+/**
+ * The owner's additions no shown reply carries — their reply is work this view
+ * does not show, or there is none — drawn on their own where they were sent, as
+ * they were while that work ran.
+ */
+function looseAdditions(messages: Message[], conversation: readonly Message[]): Message[] {
+  const carriers = inputsByReply(messages)
+  const carried = new Set<Message>()
+  for (const message of conversation) for (const addition of carriers.get(message.id)?.injections ?? []) carried.add(addition)
+  return messages.filter(message => message.source === 'injection' && !carried.has(message))
+}
+
 export function taskConversationRows(messages: Message[], activities: TeamActivity[], epochId: string | null, appId?: string, decisions: ActivityEntry[] = []): ConversationRow[] {
   const sharedDecisions = sharedTaskDecisions(activities, epochId, appId, new Set(decisions.map(decision => decision.id)))
+  const conversation = conversationMessages(messages)
   const entries: Array<{
     id: string
     at: number | null
     message?: Message
+    addition?: Message
     decision?: ActivityEntry
     sharedDecision?: SharedTaskDecision
     activity?: TeamActivity
   }> = [
-    ...conversationMessages(messages).map(message => ({ id: `message:${message.id}`, at: taskTime(message.timestamp), message, activity: undefined, decision: undefined })),
+    ...conversation.map(message => ({ id: `message:${message.id}`, at: taskTime(message.timestamp), message, activity: undefined, decision: undefined })),
+    ...looseAdditions(messages, conversation).map(addition => ({ id: `addition:${addition.id}`, at: taskTime(addition.timestamp), addition })),
     ...decisions.map(decision => ({ id: `decision:${decision.id}`, at: taskTime(decision.ts), decision, message: undefined, activity: undefined })),
     ...sharedDecisions.map(sharedDecision => ({ id: `shared-decision:${sharedDecision.refId}`, at: taskTime(sharedDecision.requestedAt), sharedDecision })),
     ...[...new Map(activities.map(activity => [activity.id, activity])).values()]
@@ -185,7 +217,11 @@ export function taskConversationRows(messages: Message[], activities: TeamActivi
     if (entry.decision) rows.push({ id: entry.id, decision: entry.decision })
     else if ('sharedDecision' in entry && entry.sharedDecision) rows.push({ id: entry.id, sharedDecision: entry.sharedDecision })
     else if (entry.message) rows.push({ id: entry.id, message: entry.message })
-    else if (entry.activity) {
+    else if (entry.addition) {
+      const previous = rows[rows.length - 1]
+      if (previous?.additions) previous.additions.push(entry.addition)
+      else rows.push({ id: entry.id, additions: [entry.addition] })
+    } else if (entry.activity) {
       const previous = rows[rows.length - 1]
       if (previous?.activities && activityLevel(entry.activity) !== 'attention' && activityLevel(previous.activities[previous.activities.length - 1]) !== 'attention') previous.activities.push(entry.activity)
       else rows.push({ id: entry.id, activities: [entry.activity] })

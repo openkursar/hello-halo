@@ -16,6 +16,7 @@ import {
 } from '../../../../src/main/apps/runtime/session-store'
 import {
   convertEventsToMessages,
+  convertEventsToTranscript,
   type StoredEvent,
 } from '../../../../src/main/apps/runtime/session-transcript'
 
@@ -559,5 +560,170 @@ describe('parse cache', () => {
     // Different size => new stamp, regardless of mtime granularity.
     writeFileSync(path, JSON.stringify(user('BBBBBB', 1)) + '\n', 'utf8')
     expect(readSessionMessages(dir, 'app-1', 'run-1')[0].content).toBe('BBBBBB')
+  })
+})
+
+describe('native turn boundaries with live arrivals', () => {
+  const pushed = (n: number): StoredEvent => ({ _ts: ts(n), type: 'push', _pushVia: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'A teammate update' }] } })
+
+  it('does not repeat a final answer when a push arrived just before the native result', () => {
+    const messages = convertEventsToMessages([
+      user('question', 1), { _ts: ts(2), type: 'system', subtype: 'init' },
+      assistant([text('answer')], 3), pushed(4), result('answer', 5),
+    ])
+    expect(messages.map(message => [message.content, message.source])).toEqual([
+      ['question', undefined], ['answer', undefined], ['A teammate update', 'push'],
+    ])
+  })
+
+  it('keeps live input records while replacing split assistant fragments with a terminal snapshot', () => {
+    const messages = convertEventsToMessages([
+      user('question', 1), { _ts: ts(2), type: 'system', subtype: 'init' },
+      assistant([thinking('before'), toolUse('t1')], 3), pushed(4), toolResult('t1', 5),
+      assistant([text('partial')], 6),
+      { _ts: ts(7), type: 'turn_snapshot', content: 'partial answer', thoughts: [{ id: 'snapshot-tool', type: 'tool_use', content: '', timestamp: ts(3), toolResult: { output: 'completed', isError: false, timestamp: ts(5) } }], error: 'stopped' },
+    ])
+    expect(messages.map(message => [message.content, message.source])).toEqual([
+      ['question', undefined], ['A teammate update', 'push'], ['partial answer', undefined],
+    ])
+    expect(messages[2].thoughts).toHaveLength(1)
+    expect(messages[2].thoughts?.[0].toolResult?.output).toBe('completed')
+  })
+
+  it('keeps the owner\'s addition right after the reply when a terminal snapshot replaces the turn', () => {
+    const messages = convertEventsToMessages([
+      user('question', 1), { _ts: ts(2), type: 'system', subtype: 'init' },
+      assistant([text('first part')], 3),
+      user('also do X', 4, { _source: 'injection', _inputId: 'in-1' }),
+      { _ts: ts(5), type: 'input_outcome', _inputId: 'in-1', outcome: 'stopped' },
+      { _ts: ts(6), type: 'turn_snapshot', content: 'partial answer', thoughts: [], error: 'engine exited' },
+    ])
+    expect(messages.map(message => [message.content, message.source])).toEqual([
+      ['question', undefined], ['partial answer', undefined], ['also do X', 'injection'],
+    ])
+    expect(messages[2].metadata?.inputOutcome).toBe('stopped')
+  })
+})
+
+describe('messages read while the turn ran', () => {
+  const init = (n: number): StoredEvent => ({ _ts: ts(n), type: 'system', subtype: 'init' })
+  const teamLive = (body: string, n: number, extra: Record<string, unknown> = {}): StoredEvent => user(body, n, {
+    _teamOrigin: { kind: 'message', correlationId: `corr-${n}` },
+    _source: 'team-message',
+    _metadata: { teamId: 'team-1', epochId: 'epoch-1', teamName: 'Crew', fromMemberName: 'writer', teamTriggerKind: 'message', inputMode: 'live' },
+    ...extra,
+  })
+  const pushed = (n: number): StoredEvent => ({ _ts: ts(n), type: 'push', _pushVia: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Sent to the chat' }] } })
+
+  it('keeps the reply whole and places a teammate report right after it, naming that reply', () => {
+    const messages = convertEventsToMessages([
+      user('question', 1), init(2),
+      assistant([thinking('plan'), toolUse('t1')], 3), toolResult('t1', 4),
+      teamLive('[Arrived while you were working — from writer (teammate)]\n\nreport', 5),
+      assistant([toolUse('t2')], 6), toolResult('t2', 7),
+      assistant([text('answer')], 8), result('answer', 9),
+    ])
+    expect(messages.map(message => [message.role, message.content])).toEqual([
+      ['user', 'question'],
+      ['assistant', 'answer'],
+      ['system', '[Arrived while you were working — from writer (teammate)]\n\nreport'],
+    ])
+    expect(messages[1].thoughts?.filter(thought => thought.type === 'tool_use')).toHaveLength(2)
+    expect(messages[2].metadata).toMatchObject({ inputMode: 'live', inputReplyId: messages[1].id, teamTriggerKind: 'message' })
+    // The reply still answers what opened the turn.
+    expect(messages[1].metadata).toBeUndefined()
+  })
+
+  it('anchors each report to the reply segment it arrived in when a push splits the reply', () => {
+    const messages = convertEventsToMessages([
+      user('question', 1), init(2),
+      assistant([text('first part'), toolUse('t1')], 3),
+      teamLive('early report', 4), toolResult('t1', 5),
+      pushed(6),
+      teamLive('late report', 7),
+      assistant([text('second part')], 8), result('second part', 9),
+    ])
+    expect(messages.map(message => message.content)).toEqual([
+      'question', 'first part', 'early report', 'Sent to the chat', 'second part', 'late report',
+    ])
+    expect(messages[2].metadata?.inputReplyId).toBe(messages[1].id)
+    expect(messages[5].metadata?.inputReplyId).toBe(messages[4].id)
+  })
+
+  it('places a report again after the checkpoint that replaces its segment', () => {
+    const messages = convertEventsToMessages([
+      user('question', 1), init(2),
+      assistant([text('partial'), toolUse('t1')], 3), pushed(4), teamLive('report', 5),
+      { _ts: ts(6), type: 'turn_snapshot', content: 'checkpointed answer', thoughts: [], error: 'stopped' },
+    ])
+    expect(messages.map(message => message.content)).toEqual(['question', 'Sent to the chat', 'checkpointed answer', 'report'])
+    expect(messages[3].metadata?.inputReplyId).toBe(messages[2].id)
+  })
+
+  it('shows a report on its own when its native turn produced no reply', () => {
+    const messages = convertEventsToMessages([
+      user('question', 1), init(2), teamLive('report', 3), { _ts: ts(4), type: 'result', is_error: true },
+    ])
+    expect(messages.map(message => message.content)).toEqual(['question', 'report'])
+    expect(messages[1].metadata).not.toHaveProperty('inputReplyId')
+  })
+
+  it('keeps an owner addition splitting the reply, as before', () => {
+    const messages = convertEventsToMessages([
+      user('question', 1), init(2), assistant([text('first'), toolUse('t1')], 3), toolResult('t1', 4),
+      user('also this', 5, { _source: 'injection' }), assistant([text('second')], 6), result('second', 7),
+    ])
+    expect(messages.map(message => message.content)).toEqual(['question', 'first', 'also this', 'second'])
+  })
+
+  it('names where the unfinished native turn begins, and nothing once it ended', () => {
+    const open = convertEventsToTranscript([
+      user('question', 1), init(2), assistant([thinking('plan'), toolUse('t1')], 3), teamLive('report', 4),
+    ])
+    expect(open.messages.map(message => message.content)).toEqual(['question', '', 'report'])
+    expect(open.openTurnFrom).toBe(open.messages[1].id)
+    expect(convertEventsToTranscript([user('question', 1), init(2), assistant([text('done')], 3), result('done', 4)]).openTurnFrom).toBeUndefined()
+    expect(convertEventsToTranscript([user('question', 1), init(2)]).openTurnFrom).toBeUndefined()
+  })
+
+  it('marks a person’s addition a stop left unread, wherever the mark lands', () => {
+    const messages = convertEventsToMessages([
+      user('question', 1), init(2), assistant([toolUse('t1')], 3),
+      user('also this', 4, { _source: 'injection', _inputId: 'input-1' }),
+      { _ts: ts(5), type: 'input_outcome', _inputId: 'input-1', outcome: 'stopped' },
+      { _ts: ts(6), type: 'input_outcome', _inputId: 'unknown', outcome: 'stopped' },
+      result('', 7),
+    ])
+    expect(messages.find(message => message.content === 'also this')?.metadata).toMatchObject({ inputOutcome: 'stopped' })
+    expect(messages.filter(message => message.metadata?.inputOutcome)).toHaveLength(1)
+  })
+})
+
+describe('reading an unfinished turn', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'halo-transcript-open-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('tells the newest page where the running native turn begins, never an older page', () => {
+    const writer = openSessionWriter(dir, 'app-1', 'run-1')
+    writer.writeTrigger('earlier')
+    writer.writeEvent({ type: 'system', subtype: 'init' })
+    writer.writeEvent({ type: 'assistant', message: { role: 'assistant', content: [text('earlier answer')] } })
+    writer.writeEvent({ type: 'result', result: 'earlier answer' })
+    writer.writeTrigger('question')
+    writer.writeEvent({ type: 'system', subtype: 'init' })
+    writer.writeEvent({ type: 'assistant', message: { role: 'assistant', content: [thinking('working')] } })
+
+    const newest = readSessionTranscript(dir, 'app-1', 'run-1', {})
+    expect(newest.openTurnFrom).toBe(newest.messages[newest.messages.length - 1].id)
+    const older = readSessionTranscript(dir, 'app-1', 'run-1', { before: newest.messages[2].id })
+    expect(older.openTurnFrom).toBeUndefined()
+
+    writer.writeEvent({ type: 'result', result: '' })
+    expect(readSessionTranscript(dir, 'app-1', 'run-1', {}).openTurnFrom).toBeUndefined()
   })
 })

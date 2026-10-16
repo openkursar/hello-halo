@@ -1,7 +1,8 @@
 {
-  "syncedAt": "2026-10-09",
+  "syncedAt": "2026-10-14",
   "source": "../halo-website/docs-src/public/ai-guides (partial refresh)",
   "refreshedFiles": [
+    "ai-browser/index.md",
     "create-digital-human/im-triggers.md",
     "message-channels/index.md",
     "message-channels/wecom-bot.md",

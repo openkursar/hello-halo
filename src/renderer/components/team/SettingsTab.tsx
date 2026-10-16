@@ -11,6 +11,7 @@ import { useTeamStore } from '../../stores/team.store'
 import { useOfficeSkin, useTeamViewPrefsStore } from '../../stores/team-view-prefs.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTranslation } from '../../i18n'
+import { useAutosaveDraft } from '../../hooks/useAutosaveDraft'
 import { api } from '../../api'
 import { SchedulePicker } from '../apps/SchedulePicker'
 import { SystemPromptEditor } from '../apps/SystemPromptEditor'
@@ -54,6 +55,7 @@ export function SettingsTab({ detail, openMemberId, onOpenMemberChange }: Settin
   if (openMember) {
     return (
       <TeamMemberSettings
+        key={openMember.appId}
         detail={detail}
         member={openMember}
         onBack={() => onOpenMemberChange(null)}
@@ -100,21 +102,8 @@ export function SettingsTab({ detail, openMemberId, onOpenMemberChange }: Settin
 function GoalSection({ team, first, readOnly }: { team: TeamDetail['team']; first?: boolean; readOnly?: boolean }) {
   const updateTeam = useTeamStore(s => s.updateTeam)
   const { t } = useTranslation()
-  const [draft, setDraft] = useState(team.goal)
-  const [nameDraft, setNameDraft] = useState(team.name)
-
-  useEffect(() => { setDraft(team.goal) }, [team.goal])
-  useEffect(() => { setNameDraft(team.name) }, [team.name])
-
-  const saveGoal = useCallback(() => {
-    const next = draft.trim()
-    if (next && next !== team.goal) void updateTeam(team.id, { goal: next })
-  }, [draft, team.goal, team.id, updateTeam])
-
-  const saveName = useCallback(() => {
-    const next = nameDraft.trim()
-    if (next && next !== team.name) void updateTeam(team.id, { name: next })
-  }, [nameDraft, team.name, team.id, updateTeam])
+  const [draft, setDraft, saveGoal] = useAutosaveDraft(team.goal, goal => updateTeam(team.id, { goal }))
+  const [nameDraft, setNameDraft, saveName] = useAutosaveDraft(team.name, name => updateTeam(team.id, { name }))
 
   return (
     <Section title={t('Team')} first={first}>

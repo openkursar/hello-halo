@@ -10,8 +10,62 @@ import { conversationKind, backendFor } from './backend'
 import { startedTurnState } from './backend/turn'
 import { noteTurnEnded } from '../../services/home-telemetry'
 import { acceptsDetailEvent, releaseTurnDetail } from './detail-retention'
+import { appendLiveInputs, mergeArrivingMessages, withStoppedInputs, withStoppedLiveInputs } from '../../utils/live-inputs'
+import { cacheConversation } from './backend/cache'
+import { messageSummaryText } from '../../../shared/content-reference'
 
-export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAgentToolCall' | 'handleAgentToolResult' | 'handleAgentError' | 'handleAgentComplete' | 'handleAgentThought' | 'handleAgentThoughtDelta' | 'handleAgentCompact' | 'handleAgentApiRetry' | 'handleAgentSessionInfo' | 'handleAgentTurnStart' | 'handleAskQuestion'> = (set, get) => ({
+export const createAgentEventsSlice: ChatSlice<'handleAgentInputArrived' | 'handleAgentInputStopped' | 'handleAgentMessage' | 'handleAgentToolCall' | 'handleAgentToolResult' | 'handleAgentError' | 'handleAgentComplete' | 'handleAgentThought' | 'handleAgentThoughtDelta' | 'handleAgentCompact' | 'handleAgentApiRetry' | 'handleAgentSessionInfo' | 'handleAgentTurnStart' | 'handleAskQuestion'> = (set, get) => ({
+  handleAgentInputArrived: ({ conversationId, messages, live }) => {
+    if (!messages.length) return
+    set(state => {
+      if (!acceptsDetailEvent(state, conversationId)) return state
+      const session = state.sessions.get(conversationId) ?? createEmptySessionState()
+      const arrivals = messages.map(message => ({ ...message, clientKey: message.id }))
+      const queued = [...session.queuedMessages]
+      for (const message of arrivals) {
+        const at = queued.indexOf(messageSummaryText(message.content, message.metadata?.references))
+        if (at >= 0) queued.splice(at, 1)
+      }
+      const sessions = new Map(state.sessions)
+      sessions.set(conversationId, {
+        ...session, queuedMessages: queued,
+        liveInputs: live ? appendLiveInputs(session.liveInputs ?? [], arrivals, {
+          afterThoughtId: session.thoughts.at(-1)?.id,
+          textBlockVersion: session.textBlockVersion,
+          textOffset: session.streamingContent.length,
+          textSnapshot: session.streamingContent,
+        }) : session.liveInputs,
+      })
+      const cached = state.conversationCache.get(conversationId)
+      if (!cached) return { sessions }
+      const merged = mergeArrivingMessages(cached.messages, arrivals)
+      return { sessions, conversationCache: cacheConversation(state, {
+        ...cached, messages: merged, messageCount: cached.messageCount + merged.length - cached.messages.length,
+        updatedAt: arrivals.at(-1)!.timestamp,
+      }) }
+    })
+  },
+
+  // Only state this window already holds changes; a later read carries the stored outcome.
+  handleAgentInputStopped: ({ conversationId, messages }) => {
+    if (!messages.length) return
+    set(state => {
+      const session = state.sessions.get(conversationId)
+      const liveInputs = session?.liveInputs?.length ? withStoppedLiveInputs(session.liveInputs, messages) : session?.liveInputs
+      let sessions = state.sessions
+      if (session && liveInputs !== session.liveInputs) {
+        sessions = new Map(state.sessions)
+        sessions.set(conversationId, { ...session, liveInputs })
+      }
+      const cached = state.conversationCache.get(conversationId)
+      if (!cached) return sessions === state.sessions ? state : { sessions }
+      const updated = withStoppedInputs(cached.messages, messages)
+      return { sessions, conversationCache: cacheConversation(state, {
+        ...cached, messages: updated, messageCount: cached.messageCount + updated.length - cached.messages.length,
+      }) }
+    })
+  },
+
   handleAgentMessage: (data) => {
     const { conversationId, content, delta, isStreaming, isNewTextBlock } = data as AgentEventBase & {
       content?: string

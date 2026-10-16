@@ -11,6 +11,7 @@
  */
 
 import type { FileChangesSummary } from '../file-changes'
+import type { LiveInputOutcome } from './agent-input'
 import type { ContentReference } from './content-reference'
 import type { GoalInput } from './goal'
 import type { ImageAttachment } from './image-attachment'
@@ -145,6 +146,11 @@ export interface TranscriptProvenanceMetadata {
   teamName?: string
   fromMemberName?: string | null
   teamTriggerKind?: string
+  /** Whether a delivered input joined existing work or opened the following turn. */
+  inputMode?: 'live' | 'turn'
+  /** Reply open at receipt, not a claim about which model step consumed the input. */
+  inputReplyId?: string
+  inputOutcome?: LiveInputOutcome
 }
 
 /** Where a stored message came from, as a writer states it. */
@@ -212,6 +218,11 @@ export interface TranscriptPage {
   cursor: string | null
   /** Message count of the whole transcript at read time */
   total: number
+  /**
+   * First message of an engine turn that has started and not ended, on newest
+   * pages only. Its rows are partial: a live view draws them from the stream.
+   */
+  openTurnFrom?: string
 }
 
 export interface TranscriptPageRequest {

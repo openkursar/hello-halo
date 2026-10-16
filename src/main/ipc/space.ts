@@ -60,7 +60,7 @@ export function registerSpaceHandlers(): void {
     // Create a new space
     createSpace: async (input: { name: string; icon: string; color?: string; customPath?: string }) => {
       try {
-        const space = createSpace(input)
+        const space = await createSpace(input)
         return { success: true, data: space }
       } catch (error: unknown) {
         const err = error as Error
@@ -96,7 +96,7 @@ export function registerSpaceHandlers(): void {
     // Update space
     updateSpace: async (spaceId: string, updates: { name?: string; icon?: string; color?: string }) => {
       try {
-        const space = updateSpace(spaceId, updates)
+        const space = await updateSpace(spaceId, updates)
         return { success: true, data: space }
       } catch (error: unknown) {
         const err = error as Error
@@ -153,7 +153,7 @@ export function registerSpaceHandlers(): void {
     // Reorder spaces (persist user-defined display order)
     reorderSpaces: async (spaceIds: string[]) => {
       try {
-        const spaces = reorderSpaces(spaceIds)
+        const spaces = await reorderSpaces(spaceIds)
         console.log('[SpaceIPC] space:reorder response: count=%d', spaces.length)
         return { success: true, data: spaces }
       } catch (error: unknown) {

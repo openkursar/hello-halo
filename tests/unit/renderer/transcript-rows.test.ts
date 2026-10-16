@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { nextTranscriptRows, type TranscriptRows } from '../../../src/renderer/components/chat/transcript/transcript-rows'
+import { inputsByReply, nextTranscriptRows, type TranscriptRows } from '../../../src/renderer/components/chat/transcript/transcript-rows'
 import type { Message } from '../../../src/renderer/types'
 
 let seq = 0
@@ -81,6 +81,118 @@ describe('transcript rows', () => {
     const ended = nextTranscriptRows(running, source, false)
     expectMatchesReference(ended, source, false)
     expect(ended.injections.get(placeholder.id)).toHaveLength(2)
+  })
+
+  it('draws a delivery read mid-turn in the reply it joined, and one that opened a turn as its own card', () => {
+    const first = reply()
+    const live = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'live', inputReplyId: first.id } })
+    const idle = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'turn' } })
+    const second = reply()
+    const source = [user(), first, live, injection(), idle, second]
+    const rows = nextTranscriptRows(null, source, false)
+    expect(rows.messages).toEqual([source[0], first, idle, second])
+    expect(rows.arrivals.get(first.id)).toEqual([live])
+    expect(rows.arrivals.has(second.id)).toBe(false)
+    expect(rows.injections.get(first.id)).toEqual([source[3]])
+    const pending = nextTranscriptRows(null, source.slice(0, -1), false)
+    expect(pending.messages).toContain(idle)
+    const appended = nextTranscriptRows(pending, source, false)
+    expect(appended.messages).toEqual(rows.messages)
+    expect([...appended.arrivals]).toEqual([...rows.arrivals])
+  })
+
+  it('gives a view drawing its own selection the same attachment, by reply', () => {
+    const first = reply()
+    const live = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'live', inputReplyId: first.id } })
+    const added = injection()
+    const source = [user(), first, live, added, message({ role: 'system', source: 'cross-conversation' }), injection(), reply()]
+    const rows = nextTranscriptRows(null, source, false)
+    const byReply = inputsByReply(source)
+    expect([...byReply.keys()]).toEqual([first.id])
+    expect(byReply.get(first.id)).toEqual({ injections: rows.injections.get(first.id), arrivals: rows.arrivals.get(first.id) })
+    expect(byReply.get(first.id)).toEqual({ injections: [added], arrivals: [live] })
+  })
+
+  it('draws another conversation’s message read mid-turn in the reply it joined, never in a push', () => {
+    const first = reply()
+    const crossLive = message({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: 'other', inputMode: 'live', inputReplyId: first.id } })
+    const crossOpener = message({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: 'other' } })
+    const second = reply()
+    const source = [user(), first, crossLive, crossOpener, second]
+    const rows = nextTranscriptRows(null, source, false)
+    expect(rows.messages).toEqual([source[0], first, crossOpener, second])
+    expect(rows.arrivals.get(first.id)).toEqual([crossLive])
+    const push = reply(undefined, { source: 'push' })
+    const pushed = [user(), push, message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'live', inputReplyId: push.id } })]
+    expect(nextTranscriptRows(null, pushed, false).arrivals.size).toBe(0)
+  })
+
+  it('keeps a running turn’s placeholder hidden while it receives deliveries', () => {
+    const placeholder = reply(undefined, { content: '' })
+    const live = message({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: 'other', inputMode: 'live', inputReplyId: placeholder.id } })
+    const source = [user(), placeholder, live]
+    const running = nextTranscriptRows(null, source, true)
+    expect(running.messages).toEqual([source[0]])
+    expect(running.arrivals.get(placeholder.id)).toEqual([live])
+  })
+
+  it('does not guess ownership for old or incomplete team records', () => {
+    const first = reply()
+    const legacy = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team' } })
+    const missingProvenance = message({ role: 'system', source: 'team-message', metadata: { inputMode: 'live' } })
+    const source = [user(), first, legacy, missingProvenance, reply()]
+    const rows = nextTranscriptRows(null, source, false)
+    expect(rows.messages).toEqual(source)
+    expect(rows.arrivals.size).toBe(0)
+  })
+
+  it('keeps team deliveries attached across a visible cross-conversation input', () => {
+    const first = reply()
+    const other = message({ role: 'system', source: 'cross-conversation' })
+    const team = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'live', inputReplyId: first.id } })
+    const source = [user(), first, other, team]
+    const rows = nextTranscriptRows(null, source, false)
+    expect(rows.messages).toEqual([source[0], first, other])
+    expect(rows.arrivals.get(first.id)).toEqual([team])
+  })
+
+  it('leaves unanchored continuation inputs visible instead of assigning them to the last answer', () => {
+    const first = reply(0.1)
+    const late = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'live' } })
+    const missingReply = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'live', inputReplyId: 'removed-placeholder' } })
+    const source = [user(), first, late, missingReply, reply(0.2)]
+    const rows = nextTranscriptRows(null, source, false)
+    expect(rows.messages).toEqual(source)
+    expect(rows.arrivals.size).toBe(0)
+  })
+
+  it('does not move owner additions across unrelated system messages', () => {
+    const source = [user(), reply(), message({ role: 'system', source: 'cross-conversation' }), injection()]
+    expectMatchesReference(nextTranscriptRows(null, source, false), source, false)
+    const running = [user(), reply(undefined, { content: '' }), message({ role: 'system', source: 'cross-conversation' })]
+    expectMatchesReference(nextTranscriptRows(null, running, true), running, true)
+  })
+
+  it('keeps incremental team grouping equal to a fresh build while records change', () => {
+    let source: Message[] = [user(), reply(0.1)]
+    let rows = nextTranscriptRows(null, source, false)
+    for (let i = 0; i < 60; i++) {
+      const previousReply = [...source].reverse().find(m => m.role === 'assistant')!
+      source = [...source, message({ role: 'system', source: 'team-message', metadata: {
+        teamId: 'team', inputMode: i % 3 === 0 ? 'turn' : 'live', inputReplyId: previousReply.id,
+      } })]
+      if (i % 4 === 0) source.push(reply(0.2))
+      if (i % 5 === 0) source.push(message({ role: 'system', source: 'cross-conversation' }))
+      if (i % 6 === 0) source.push(message({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: 'other', inputMode: 'live', inputReplyId: previousReply.id } }))
+      if (i % 7 === 0) source = source.slice(0, -2)
+      rows = nextTranscriptRows(rows, source, i % 2 === 0)
+      const full = nextTranscriptRows(null, source, i % 2 === 0)
+      expect(rows.messages).toEqual(full.messages)
+      expect(rows.keys).toEqual(full.keys)
+      expect(rows.previousCosts).toEqual(full.previousCosts)
+      expect([...rows.injections]).toEqual([...full.injections])
+      expect([...rows.arrivals]).toEqual([...full.arrivals])
+    }
   })
 
   it('falls back to a full build for a repeated key, an older page or another conversation', () => {

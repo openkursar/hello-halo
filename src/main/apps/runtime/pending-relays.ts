@@ -223,6 +223,22 @@ export class PendingRelayStore {
     )
   }
 
+  /**
+   * Put back events whose accepted message a person's stop withdrew before the
+   * engine read it, ahead of newer ones. Ids still pending are kept once.
+   */
+  restore(targetKey: string, events: readonly RelayEvent[]): void {
+    const current = this.pending.get(targetKey) ?? []
+    const present = new Set(current.map(e => e.id))
+    const restored = events.filter(e => !present.has(e.id))
+    if (restored.length === 0) return
+    const merged = [...restored, ...current]
+    this.collapseOverflow(targetKey, merged)
+    this.pending.set(targetKey, merged)
+    this.requestPersist()
+    console.log(`[PendingRelays] Restored ${restored.length} event(s) a stop left unread: ${targetKey}`)
+  }
+
   /** Drop all pending events for a target (context reset, session removal). */
   clear(targetKey: string): void {
     if (!this.pending.delete(targetKey)) return

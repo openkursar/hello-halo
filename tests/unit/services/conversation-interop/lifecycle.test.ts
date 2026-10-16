@@ -24,7 +24,8 @@ const engine: { listener: EngineListener | null } = vi.hoisted(() => ({ listener
 const engineDispose = vi.hoisted(() => vi.fn())
 vi.mock('../../../../src/main/services/agent/events', () => ({
   onAgentEvent: (listener: EngineListener) => {
-    engine.listener = listener
+    const previous = engine.listener
+    engine.listener = (event) => { previous?.(event); listener(event) }
     return { dispose: engineDispose }
   },
 }))
@@ -35,6 +36,9 @@ vi.mock('../../../../src/main/services/agent/send-message', () => ({ sendMessage
 // chat-source reaches the engine through the services/agent barrel; without this
 // every module reset would load the whole engine graph.
 vi.mock('../../../../src/main/services/agent', async () => ({
+  hasPendingSessionInput: () => false,
+  onUserStop: () => ({ dispose: () => {} }),
+  onUserStopSettled: () => ({ dispose: () => {} }),
   onAgentEvent: (await import('../../../../src/main/services/agent/events')).onAgentEvent,
   sendMessage: (await import('../../../../src/main/services/agent/send-message')).sendMessage,
 }))
@@ -68,6 +72,8 @@ const drainConversationTurn = vi.fn((conversationId: string) => {
 vi.mock('../../../../src/main/services/conversation-interop/delivery', () => ({
   releaseConversationTurn: (conversationId: string) => releaseConversationTurn(conversationId),
   drainConversationTurn: (conversationId: string) => drainConversationTurn(conversationId),
+  notifyConversationTurnReady: vi.fn(),
+  holdConversationAfterStop: vi.fn(),
 }))
 
 import { initConversationInterop, disposeConversationInterop } from '../../../../src/main/services/conversation-interop/lifecycle'
@@ -115,7 +121,7 @@ describe('lifecycle', () => {
 
     disposeConversationInterop()
     expect(getConversationSources()).toEqual([])
-    expect(engineDispose).toHaveBeenCalledTimes(1)
+    expect(engineDispose).toHaveBeenCalledTimes(2)
 
     initConversationInterop()
     expect(getConversationSources().map((s) => s.kind)).toEqual(['chat'])

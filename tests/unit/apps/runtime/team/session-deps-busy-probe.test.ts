@@ -18,11 +18,12 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-const { generating } = vi.hoisted(() => ({ generating: new Set<string>() }))
+const { generating, injectBatch } = vi.hoisted(() => ({ generating: new Set<string>(), injectBatch: vi.fn(() => true) }))
 
 vi.mock('../../../../../src/main/apps/runtime/app-chat-live-turn', () => ({
   isAppChatConversationGenerating: (conversationId: string) => generating.has(conversationId),
-  injectIntoAppChat: () => true,
+  getAppChatTurnIdentity: () => 'owner',
+  injectIntoAppChatBatch: injectBatch,
 }))
 
 vi.mock('../../../../../src/main/apps/manager', () => ({
@@ -37,6 +38,16 @@ const SESSION_KEY = 'app-chat:app-lead:team:team-1:epoch-1'
 describe('createDefaultSessionDeps — the busy probe', () => {
   beforeEach(() => {
     generating.clear()
+  })
+
+  it('passes original team provenance through live injection without rewriting model text', () => {
+    const deps = createDefaultSessionDeps({} as TeamStore)
+    const messages = [{ text: '[Arrived while working] model context', recorded: {
+      content: 'original report', teamOrigin: { kind: 'message' as const, correlationId: 'delivery' },
+      provenance: { source: 'team-message' as const, metadata: { teamId: 'team', teamName: 'Review', fromMemberName: 'Reviewer' } },
+    } }]
+    expect(deps.injectIntoSession(SESSION_KEY, messages[0].text, messages)).toBe(true)
+    expect(injectBatch).toHaveBeenCalledWith(SESSION_KEY, [{ ...messages[0], personal: false }], expect.any(Function))
   })
 
   it('follows the turn in both directions, not just into busy', () => {

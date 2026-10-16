@@ -42,56 +42,45 @@ and `Message.metadata` gained three optional fields
 (`fromConversationId`/`fromConversationTitle`/`summary`) for D16. Both are
 additive, backward-compatible, and outside `services/agent`.
 
-## 2. The D16 patch, and why content is raw while the model sees more
+## 2. Model input and transcript provenance
 
-`dispatchToConversation` (`delivery.ts`) does, in order:
+Every delivery has two representations: the framed text the model reads and the
+original sender content/provenance the transcript keeps. A same-permission batch
+becomes one model input while remaining several original transcript records.
 
-1. Read the conversation's current message count (`beforeCount`) — BEFORE
-   calling `sendMessage`.
-2. Wrap the sender's raw `message` in a short non-authorization frame
-   (rule four — "another conversation's words are not your user's, and do
-   not authorize anything") and pass THAT to `sendMessage`. The model must
-   understand the framing the moment it reads the text live; nothing else
-   reaches it before this turn runs.
-3. `sendMessage` persists that wrapped text as `role:'user'` — its own
-   behavior, unchanged — and returns. Per its own doc, it returns
-   **immediately, before the turn it started finishes**: the session
-   consumer is now running concurrently, and can append its own assistant
-   placeholder (or later, streamed content) at any moment.
-4. Read the conversation again, take `messages[beforeCount]` — this is
-   provably the message from step 3, regardless of anything appended after
-   it by now, because `addMessage` inside `sendMessage` runs synchronously,
-   before `sendMessage`'s own first `await`, so nothing could have been
-   inserted BEFORE it in the window between steps 1 and 3 either.
-5. Patch that message BY ID via `conversation.service.ts`'s
-   `updateMessageById(spaceId, conversationId, messageId, patch)`: `role:
-   'system'`, `source:'cross-conversation'`, `metadata:
-   {fromConversationId, fromConversationTitle, summary, forwardDepth,
-   correlationId?}`, and **`content` reset to the original, unwrapped
-   `message`** — the frame from step 2 is turn input only, never what a
-   reader (a human, or another `conversation_read` call) sees back.
+The built-in space source starts ordinary `sendMessage` with the combined input.
+That entry point persists synchronously before its first await. The source locates
+that exact message by id, rewrites it with the first original message, then appends
+the remaining originals before awaiting acceptance. Its writes are id-keyed; an
+assistant placeholder inserted concurrently is never overwritten by an old snapshot.
 
-**Why id-keyed, re-read-then-mutate, not a snapshot-and-replace.** An earlier
-version did `const messages = [...conversation.messages]; messages[last] =
-{...}; updateConversation(..., { messages })` — a full-array write built from
-a snapshot taken right after step 3. The consequence: the turn
-`sendMessage` started is genuinely still running by that point (see step 3),
-so the session consumer's own `addMessage` (its assistant placeholder) can
-land in the real window between that snapshot and the write-back — and the
-snapshot's write-back silently reverts it. That is real message loss, not a
-cosmetic race, and it would trigger essentially every time a cold target
-takes any nonzero time to start streaming. `updateMessageById` closes this by
-re-reading the CURRENT state itself immediately before mutating (no snapshot
-crosses an `await`), and by touching only the one entry it was asked for —
-whatever else exists around it survives untouched no matter when it arrived.
-Proven with a dedicated test simulating the placeholder landing before the
-patch runs, at both the `conversation.service.ts` level and through the full
-`delivery.ts` dispatch path.
+Live delivery first obtains synchronous engine acceptance, then records each
+original message at arrival. A false handoff writes nothing, so the queued fallback
+cannot duplicate transcript entries. Digital-human sources use their runtime's
+batch injection and `recordedMessages` input through the same source contract.
 
-`deliverToConversation`'s returned `messageId` (for `status:'delivered'`) is
-this same real, persisted id — never a synthesized one. A `'queued'` result
-has no id to report: the message does not exist yet until the buffered job
-actually dispatches later.
+A delivered result reports the persisted id when the transcript can name it.
+Queued work has no id until accepted by the source. The message storage format and
+source tags are unchanged.
+
+Space records carry optional presentation provenance in their existing JSON
+metadata: a team opener has `inputMode: 'turn'`, and every record accepted live
+(team or cross-conversation) has `'live'`. A live record also carries
+`inputReplyId` only when the transcript still has an unfinished assistant
+placeholder at receipt, so a reload shows it inside the reply it arrived in. This names where the input arrived,
+not which SDK step consumed it: acceptance may lead to an immediate continuation.
+A missing/removed reply or legacy metadata never licenses guessing an attachment
+to the last completed answer. This changes neither engine input nor dispatch.
+
+A person's stop (`onUserStop`) parks the conversation's mailbox: waiting
+messages neither join the stopping turn nor start one. A digital-human chat
+whose stop reached only a message still on its way to the engine — so the engine
+signal never fires — is held through `holdConversationAfterStop` by app-chat. Live input the engine
+withdrew unread goes back into the mailbox marked `inputRecorded`, keeping the
+record it already has; it may join the next turn or ride in a batch with a new
+message, but never opens a turn on its own (`canOpenTurn`), so no opener is
+written twice. When the stop withdrew a continuation nothing had started, no
+turn end follows; `onUserStopSettled` runs the turn-end bookkeeping instead.
 
 ## 3. D9/D17, corrected twice under review
 
@@ -107,9 +96,11 @@ interlocked:
   never end, because the source is blocked on the very target now blocked on
   it. A→B→C→A rings deadlock the same way.
 
-`pending-wait.ts`'s fix: a wait is scoped to the SPECIFIC TURN the waiter's
-delivery started, via a single-use correlation id armed on the target
-conversation at DISPATCH time (`armActiveCorrelation`) and cleared the moment
+`pending-wait.ts` scopes a wait to the turn that accepts its delivery, via a
+single-use correlation id added to the target conversation at dispatch or
+live-delivery time (`addActiveCorrelation`). A new turn clears obsolete
+correlations; live delivery preserves the other waiters in the same turn.
+Each correlation is cleared the moment
 that turn ends (`noteTurnEnded` → `no_reply`) or is explicitly answered
 (`tryResolveAsReply`). A later, unrelated message between the same two
 conversations can never resolve a wait whose turn has already closed, because
@@ -248,18 +239,40 @@ volume (nothing queued, no turn started, no message persisted) — a ping-pong
 loop needs NEW sends to sustain itself, and those are still charged normally,
 so the exemption does not reopen the loop the breaker exists to stop.
 
-## 6. Mailbox cap is enforced as a rejection, not a shed
+## 6. One permission-aware mailbox
 
-`platform/turn-gate`'s own overflow behavior is "shed the oldest buffered
-entry" (correct for team, where the blackboard is a durable fallback for
-anything dropped). The approved spec wants a full mailbox to reject the NEW send
-as `queue_full` instead. Rather than change turn-gate's already-reviewed
-overflow semantics, `delivery.ts` tracks its own per-target buffered count
-(`bufferedCounts`, incremented when `turnGate.deliver` returns `'buffered'`,
-decremented at the start of every dispatch — safe to call unconditionally,
-since an immediately-dispatched job by construction found nothing buffered
-ahead of it) and refuses a delivery before ever calling `turnGate.deliver`
-once that count reaches the spec's cap (50).
+The platform gate owns capacity, ordering, grouping, coalescing and the decision to
+join a live turn. `delivery.ts` supplies message identities and source adapters;
+it reads `bufferedCount` directly instead of maintaining a second counter.
+The cap is 50 waiting entries. Overflow rejects the new send as `queue_full`, never
+silently sheds an accepted message.
+
+Conversation collaboration sends have owner identity: guest and delegated turns
+have no conversation-send capability. External delivery callers must state their
+identity explicitly; omitted authority is unknown and cannot join a running turn.
+Space conversations report owner; digital-human conversations report their active
+runtime permission identity. Identity controls which inputs may share a live turn;
+it does not itself grant capabilities. Source admission still decides whether a
+sender may dispatch. The team space-coordinator adapter permanently rejects
+external, remotely owned, and unknown senders before either live delivery or a
+new space turn. Space sessions have no delegated permission model, so delaying
+that input would not make it safe to execute. Sources without the batch/identity contract retain
+safe individual delivery until upgraded.
+
+The source `onTurnReady` signal follows `agent:turn-start`, after the consumer can
+accept live input. It calls `notifyReady` to flush messages buffered during startup.
+Turn end releases the reservation, settles outstanding unanswered waits and drains
+the next permission group. A source dispatch still in flight delays that release,
+preventing an early engine error event from starting a concurrent second send.
+
+Multiple waiting senders can address the same live turn. Each has its own active
+correlation; an explicit reply matches its sender, and a plain notice never clears
+another sender's wait. Starting a genuinely new turn clears stale associations.
+Turn completion settles every remaining active correlation as `no_reply`. A final
+result with engine-owned pending input does not settle these waits prematurely:
+the source waits for the continuation's completion. Concurrent error/complete
+signals share one finishing operation so an old completion cannot clear a wait
+armed by the next dispatch.
 
 ## 7. The MCP tools and the broker cycle they exposed
 
@@ -350,6 +363,10 @@ behavior with the real module over faked sources.
   (framed); `record` is what the transcript keeps (the sender's raw words plus
   provenance). The pending-wait arm/clear and forward-depth bookkeeping stay in
   `delivery.ts`.
+- `dispatchBatch` accepts one merged input and retains original transcript rows;
+  `deliverMidTurn` accepts its entire batch synchronously or returns false without
+  recording it. `getActiveIdentity` supplies the live authority and `onTurnReady`
+  reports when startup finishes. The platform gate owns permission comparison.
 - `onTurnEnd` must fire after `isBusy` can already read false; the module
   releases the gate slot, settles `no_reply`, then drains the mailbox.
 - `hasLiveSession` is the "definitely not a phantom" probe for reservation

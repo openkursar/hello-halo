@@ -7,7 +7,14 @@
  * Shared across: MessageList (space and digital-human chat), ImChatView.
  */
 
+import { memo, useMemo, useRef } from 'react'
 import { ThoughtProcess } from './ThoughtProcess'
+import { MessageRow } from './MessageRow'
+import { InjectionAnnotation } from './InjectionAnnotation'
+import { ArrivalCard } from './ArrivalCard'
+import { isArrivalRecord, isArrivalThought, mergeArrivalThoughts, projectArrivalThoughts, type ArrivalThought } from './transcript'
+import { splitLiveInputSections, type LiveInputSection } from '../../utils/live-inputs'
+import type { LiveInput, Message } from '../../types'
 import { StreamingBubble } from './StreamingBubble'
 import { BrowserTaskCard } from '../tool/BrowserTaskCard'
 import { TerminalTaskCard } from '../tool/TerminalTaskCard'
@@ -57,8 +64,18 @@ export interface StreamingSectionProps {
   /** Additional className for the outer wrapper */
   className?: string
 
+  /** Inside a host card that frames and titles the turn: full width, steps inline. */
+  embedded?: boolean
+
   /** Messages queued for mid-turn injection (shown below StreamingBubble) */
   queuedMessages?: string[]
+  /** Inputs accepted while this turn runs, at the point each became visible. */
+  liveInputs?: LiveInput[]
+  /**
+   * The turn's arrivals as stored (see transcript/arrivals); without it they
+   * are taken from `liveInputs`.
+   */
+  arrivals?: Message[]
 
   /**
    * Reply-sender name — the digital-human's display name for an
@@ -76,6 +93,21 @@ export interface StreamingSectionProps {
   onStop?: () => void
 }
 
+const EMPTY_INPUTS: LiveInput[] = []
+const EMPTY_MESSAGES: Message[] = []
+const EMPTY_THOUGHTS: Thought[] = []
+const EMPTY_ARRIVAL_THOUGHTS: ArrivalThought[] = []
+
+const ArrivedInputSection = memo(function ArrivedInputSection({ input, thoughts, text, embedded }: LiveInputSection & { embedded: boolean }) {
+  return <>
+    <div className={embedded ? 'w-full' : 'w-[85%]'}>
+      {thoughts.length > 0 && <ThoughtProcess thoughts={thoughts} isThinking={thoughts.some(thought => thought.isStreaming || (thought.type === 'tool_use' && !thought.toolResult))} embedded={embedded} />}
+      {text && <StreamingBubble content={text} isStreaming={false} thoughts={[]} textBlockVersion={input.textBlockVersion} />}
+    </div>
+    <MessageRow message={input.message} hideBrowserLiveView hideTerminalOpen />
+  </>
+})
+
 export function StreamingSection({
   streamingContent,
   isStreaming,
@@ -89,21 +121,50 @@ export function StreamingSection({
   pendingQuestion,
   onAnswerQuestion,
   className = '',
+  embedded = false,
   queuedMessages = [],
+  liveInputs = EMPTY_INPUTS,
+  arrivals,
   senderName,
   apiRetry = null,
   onStop,
 }: StreamingSectionProps) {
+  const conversationInputs = useMemo(() => liveInputs.filter(input => input.message.source !== 'injection' && !isArrivalRecord(input.message)), [liveInputs])
+  const injectionMessages = useMemo(() => liveInputs.filter(input => input.message.source === 'injection').map(input => input.message), [liveInputs])
+  const arrivalMessages = useMemo(() => arrivals ?? liveInputs.filter(input => isArrivalRecord(input.message)).map(input => input.message), [liveInputs, arrivals])
+  const hasOwnThoughts = thoughts.length > 0
+  const previousArrivalThoughts = useRef<ArrivalThought[]>([])
+  const arrivalThoughts = useMemo(() => {
+    const next = hasOwnThoughts ? projectArrivalThoughts(arrivalMessages, previousArrivalThoughts.current) : EMPTY_ARRIVAL_THOUGHTS
+    previousArrivalThoughts.current = next
+    return next
+  }, [arrivalMessages, hasOwnThoughts])
+  const processThoughts = useMemo(() => mergeArrivalThoughts(thoughts, arrivalThoughts), [thoughts, arrivalThoughts])
+  const priorSections = useRef<LiveInputSection[]>([])
+  const layout = useMemo(() => {
+    const next = splitLiveInputSections(processThoughts, textBlockVersion, conversationInputs, priorSections.current)
+    priorSections.current = next.sections
+    return next
+  }, [processThoughts, textBlockVersion, conversationInputs])
+  const bubbleThoughts = useMemo(() => arrivalThoughts.length === 0 ? layout.thoughts : layout.thoughts.filter(thought => !isArrivalThought(thought)), [layout.thoughts, arrivalThoughts.length])
+  // Received where the reply has no work beside them — before its first step, or
+  // after its last split — they are cards after it until work joins them, as the record draws them.
+  const arrivalsOnly = bubbleThoughts.length === 0 && layout.thoughts.length > 0
+  const replyThoughts = arrivalsOnly ? EMPTY_THOUGHTS : layout.thoughts
+  const trailingArrivals = useMemo(() => !hasOwnThoughts ? arrivalMessages
+    : arrivalsOnly ? layout.thoughts.flatMap(thought => isArrivalThought(thought) ? [thought.arrival] : [])
+    : EMPTY_MESSAGES, [hasOwnThoughts, arrivalMessages, arrivalsOnly, layout.thoughts])
   return (
-    <div className={`flex justify-start animate-fade-in pb-4 ${className}`}>
-      <div className="w-[85%] relative">
+    <div className={`animate-fade-in pb-4 ${className}`}>
+      {layout.sections.map(section => <ArrivedInputSection key={section.input.message.clientKey ?? section.input.message.id} {...section} embedded={embedded} />)}
+      <div className={`${embedded ? 'w-full' : 'w-[85%]'} relative`}>
         {senderName && (
           <div className="mb-1 text-xs font-medium text-muted-foreground">{senderName}</div>
         )}
 
         {/* Real-time thought process */}
-        {(thoughts.length > 0 || isThinking) && (
-          <ThoughtProcess thoughts={thoughts} isThinking={isThinking} />
+        {(replyThoughts.length > 0 || isThinking) && (
+          <ThoughtProcess thoughts={replyThoughts} isThinking={isThinking} embedded={embedded} />
         )}
 
         {/* The model request failed and is waiting to be sent again */}
@@ -133,9 +194,10 @@ export function StreamingSection({
 
         {/* Streaming text content with scroll animation */}
         <StreamingBubble
-          content={streamingContent}
+          key={conversationInputs.at(-1)?.message.id ?? 'reply'}
+          content={streamingContent.slice(layout.textOffset)}
           isStreaming={isStreaming}
-          thoughts={thoughts}
+          thoughts={bubbleThoughts}
           textBlockVersion={textBlockVersion}
         />
 
@@ -145,6 +207,14 @@ export function StreamingSection({
             pendingQuestion={pendingQuestion}
             onAnswer={onAnswerQuestion}
           />
+        )}
+
+        {injectionMessages.length > 0 && <InjectionAnnotation messages={injectionMessages} />}
+
+        {trailingArrivals.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {trailingArrivals.map(message => <ArrivalCard key={message.clientKey ?? message.id} message={message} />)}
+          </div>
         )}
 
         {/* Mid-turn queued messages — shown while user types during active generation */}

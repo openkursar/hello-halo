@@ -41,6 +41,11 @@ export function registerGitRoutes(app: Express): void {
     res.json(await gitController.listGitRevisionOptions(spaceId, repoRoot))
   })
 
+  app.post('/api/git/commit-graph', async (req: Request, res: Response) => {
+    const { spaceId, repoRoot, query } = body(req)
+    res.json(await gitController.getGitCommitGraph(spaceId, repoRoot, query))
+  })
+
   app.post('/api/git/stage', async (req: Request, res: Response) => {
     const { spaceId, repoRoot, paths } = body(req)
     res.json(await gitController.stageGitPaths(spaceId, repoRoot, paths))

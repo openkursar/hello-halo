@@ -530,6 +530,67 @@ describe('ImChannelManager.toStatus derivation', () => {
   })
 })
 
+describe('ImChannelManager — bot identity in status reads', () => {
+  it('numbers the full config in provider order, including disabled and unbound bots', () => {
+    const manager = new ImChannelManager()
+    const configs = [
+      makeConfig('wecom-1', { enabled: false }),
+      makeConfig('feishu-1', { type: 'feishu-bot', enabled: false }),
+      makeConfig('wecom-2', { appId: '' }),
+      makeConfig('wecom-3', { enabled: false, appId: 'app-2' }),
+    ]
+    manager.applyConfig(configs, noopInbound)
+
+    expect(manager.getAllStatuses().map(({ id, ordinal }) => ({ id, ordinal }))).toEqual([
+      { id: 'wecom-1', ordinal: 1 },
+      { id: 'feishu-1', ordinal: 1 },
+      { id: 'wecom-2', ordinal: 2 },
+      { id: 'wecom-3', ordinal: 3 },
+    ])
+    for (const status of manager.getAllStatuses()) {
+      expect(manager.getInstanceStatus(status.id)).toEqual(status)
+    }
+    manager.applyConfig(configs.map(cfg => cfg.id === 'wecom-3' ? { ...cfg, appId: 'app-1' } : cfg), noopInbound)
+    expect(manager.getAllStatuses().filter(status => status.appId === 'app-1').map(status => status.ordinal)).toEqual([1, 1, 3])
+    expect(manager.getInstanceStatus('missing')).toBeNull()
+  })
+
+  it('resolves each bound digital human once per list read and does not cache renamed or removed names', () => {
+    const names = new Map([['app-1', 'Sales'], ['app-2', 'Support']])
+    const resolveName = vi.fn((appId: string) => names.get(appId))
+    const manager = new ImChannelManager(resolveName)
+    manager.applyConfig([
+      makeConfig('i1', { enabled: false }),
+      makeConfig('i2', { enabled: false }),
+      makeConfig('i3', { enabled: false, appId: 'app-2' }),
+      makeConfig('i4', { enabled: false, appId: '' }),
+      makeConfig('i5', { enabled: false, appId: 'removed' }),
+    ], noopInbound)
+
+    expect(manager.getAllStatuses().map(status => status.appName)).toEqual(['Sales', 'Sales', 'Support', undefined, undefined])
+    expect(resolveName.mock.calls).toEqual([['app-1'], ['app-2'], ['removed']])
+    names.set('app-1', 'Sales renamed')
+    names.delete('app-2')
+    expect(manager.getInstanceStatus('i1')?.appName).toBe('Sales renamed')
+    expect(manager.getAllStatuses().map(status => status.appName)).toEqual(['Sales renamed', 'Sales renamed', undefined, undefined, undefined])
+  })
+
+  it('does not expose credentials or change connection lifecycle when reading identity', () => {
+    const manager = new ImChannelManager(() => 'Sales')
+    const provider = makeProvider()
+    manager.registerProvider(provider)
+    const config = makeConfig('i1', { config: { botId: 'bot-a', secret: 'fixture-secret' } })
+    manager.applyConfig([config], noopInbound)
+    const original = provider.created[0]
+
+    expect(manager.getAllStatuses()[0]).not.toHaveProperty('config')
+    expect(JSON.stringify(manager.getInstanceStatus('i1'))).not.toContain('fixture-secret')
+    expect(provider.created).toHaveLength(1)
+    expect(original.stopped).toBe(false)
+    expect(config).not.toHaveProperty('ordinal')
+  })
+})
+
 describe('ImChannelManager.applyConfig — duplicate credential gate', () => {
   let manager: ImChannelManager
   let provider: FakeProvider

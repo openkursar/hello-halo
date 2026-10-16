@@ -8,11 +8,49 @@
  */
 
 import { useState } from 'react'
-import { X, Image as ImageIcon } from 'lucide-react'
+import { X, ImageOff, Image as ImageIcon } from 'lucide-react'
 import { ImageViewer } from './ImageViewer'
 import type { ImageAttachment } from '../../types'
 import { useTranslation } from '../../i18n'
 import { imageAttachmentSrc } from '../../../shared/types/image-attachment'
+
+/**
+ * An <img> that says so when it cannot load — a chat image that silently
+ * blanks out is indistinguishable from one that was never sent.
+ */
+function LoadedImage({ image, alt, className, failedClassName, onClick }: {
+  image: ImageAttachment
+  alt: string
+  className: string
+  failedClassName: string
+  onClick?: () => void
+}) {
+  const { t } = useTranslation()
+  const [failed, setFailed] = useState(false)
+
+  if (failed) {
+    return (
+      <div
+        className={`${failedClassName} rounded-lg bg-secondary/50 border border-border-faint
+          flex flex-col items-center justify-center gap-1 text-muted-foreground`}
+        title={t('Image failed to load')}
+      >
+        <ImageOff size={18} />
+        <span className="text-xs">{t('Image failed to load')}</span>
+      </div>
+    )
+  }
+
+  return (
+    <img
+      src={imageAttachmentSrc(image)}
+      alt={alt}
+      className={className}
+      onClick={onClick}
+      onError={() => setFailed(true)}
+    />
+  )
+}
 
 interface ImageAttachmentPreviewProps {
   images: ImageAttachment[]
@@ -144,11 +182,12 @@ export function MessageImages({ images }: MessageImageProps) {
     return (
       <>
         <div className="mb-2">
-          <img
-            src={imageAttachmentSrc(images[0])}
+          <LoadedImage
+            image={images[0]}
             alt={images[0].name || 'Image'}
             className="max-w-full max-h-64 rounded-lg object-contain cursor-pointer
               hover:opacity-95 transition-opacity"
+            failedClassName="w-full h-32"
             onClick={() => openViewer(0)}
           />
         </div>
@@ -178,10 +217,11 @@ export function MessageImages({ images }: MessageImageProps) {
               hover:opacity-95 transition-opacity"
             onClick={() => openViewer(index)}
           >
-            <img
-              src={imageAttachmentSrc(image)}
+            <LoadedImage
+              image={image}
               alt={image.name || `Image ${index + 1}`}
               className="w-full h-full object-cover"
+              failedClassName="w-full h-full"
             />
             {/* Show remaining count on last image */}
             {index === 3 && images.length > 4 && (

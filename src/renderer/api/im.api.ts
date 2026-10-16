@@ -145,11 +145,11 @@ export const imApi = {
     return httpRequest('GET', '/api/im-channels/permission-defaults')
   },
 
-  imChannelsSetInstanceApp: async (instanceId: string, appId: string): Promise<ApiResponse> => {
+  imChannelsSetInstanceApp: async (instanceId: string, appId: string, expectedAppId?: string): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.imChannelsSetInstanceApp(instanceId, appId)
+      return window.halo.imChannelsSetInstanceApp(instanceId, appId, expectedAppId)
     }
-    return httpRequest('POST', '/api/im-channels/set-instance-app', { instanceId, appId })
+    return httpRequest('POST', '/api/im-channels/set-instance-app', { instanceId, appId, expectedAppId })
   },
 
   imChannelsCreateInstance: async (instance: ImChannelInstanceConfig): Promise<ApiResponse> => {

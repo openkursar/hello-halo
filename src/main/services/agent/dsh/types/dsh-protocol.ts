@@ -5,7 +5,7 @@
  * carries `"jsonrpc": "2.0"`. Framing is line-delimited JSON over the child's
  * stdin/stdout, one compact object per `\n`-terminated line.
  *
- * Three client→server requests (`initialize`, `session/prompt`, `shutdown`) and
+ * Upstream lifecycle requests plus Halo's `session/steer` extension, and
  * four server→client notifications, plus one notification Halo's own runtime
  * plugin adds (`halo.assistant-stream`). The server never issues a request: the
  * transport carries them, but the runtime does not send one, so there is no
@@ -87,6 +87,7 @@ export const JsonRpcErrorCode = {
 export const DshRequestMethod = {
   Initialize: 'initialize',
   SessionPrompt: 'session/prompt',
+  SessionSteer: 'session/steer',
   Shutdown: 'shutdown',
 } as const
 

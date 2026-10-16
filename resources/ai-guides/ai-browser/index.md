@@ -94,8 +94,13 @@ viewport resize, direct `fetch()` calls, DOM queries). `browser_run` (see
   anything logged into there is immediately usable by the app's own automated runs.
 - **Halo never verifies the user actually logged in.** `LoginNoticeBar` is "pure presentational"
   (its own doc comment, line 10) — dismissing it is a manual acknowledgment, not a check against
-  real cookie/session state. There is no clear-cookies/reset-session action anywhere in the
-  browser IPC or view-service code either — nothing routinely invalidates this partition.
+  real cookie/session state. Nothing routinely invalidates this partition; the one way to reset it
+  is **Settings → System → "Clear browser data"** (`clearBrowserData` in
+  `src/main/services/browser-view.service.ts`). It clears cookies, site storage and cache of the
+  shared `persist:browser` partition for every site, so every login used by the main chat and by
+  every digital human is signed out at once, then reloads the open browser pages so none of them
+  writes the cleared state back. Halo's own data is untouched. Suggest it when a site keeps
+  serving a broken or wrong account session; warn the user that every shared login must be redone.
 - **Never ask the AI to enter a password.** The pattern is always: the human logs in through the
   standalone window (or the live Canvas, for main chat — see §1's visibility table for why a
   digital human's own run has no equivalent live window to log in through directly), then either

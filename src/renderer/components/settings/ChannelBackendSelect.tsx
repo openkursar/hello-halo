@@ -6,8 +6,10 @@
  * Shared by every provider's instance card so the two kinds stay one control.
  */
 
+import { useRef, useState } from 'react'
 import { Bot } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import type { TeamListItem } from '../../../shared/apps/team-types'
 
 /** A team as this picker needs it: its name and the members it can offer. */
@@ -64,19 +66,21 @@ function offerableTeams(teams: ChannelBackendTeam[]): ChannelBackendTeam[] {
  * binding whose target no longer exists (member removed, app uninstalled) says
  * so rather than rendering blank.
  */
-export function ChannelBackendName({ value, automationApps, teams }: CommonProps) {
-  const { t } = useTranslation()
-
+function backendName({ value, automationApps, teams }: CommonProps, t: (text: string, options?: Record<string, unknown>) => string): string {
   if (value.teamId) {
     const team = teams.find((tm) => tm.id === value.teamId)
     const member = team?.localMembers.find((m) => m.appId === value.appId)
-    if (!team || !member) return <>{t('Binding unavailable')}</>
-    return <>{t('{{member}} · Team {{team}}', { member: member.memberName, team: team.name })}</>
+    return team && member
+      ? t('{{member}} · Team {{team}}', { member: member.memberName, team: team.name })
+      : t('Binding unavailable')
   }
+  if (!value.appId) return t('Not bound')
+  return automationApps.find((a) => a.id === value.appId)?.spec.name ?? t('Binding unavailable')
+}
 
-  if (!value.appId) return <>{t('Not bound')}</>
-  const app = automationApps.find((a) => a.id === value.appId)
-  return <>{app ? app.spec.name : t('Binding unavailable')}</>
+export function ChannelBackendName(props: CommonProps) {
+  const { t } = useTranslation()
+  return <>{backendName(props, t)}</>
 }
 
 interface ChannelBackendSelectProps extends CommonProps {
@@ -90,6 +94,41 @@ export function ChannelBackendSelect({
   onChange,
 }: ChannelBackendSelectProps) {
   const { t } = useTranslation()
+  const { showConfirm, DialogComponent } = useConfirmDialog()
+  const changing = useRef(false)
+  const [confirming, setConfirming] = useState(false)
+  const currentBinding = useRef(encodeTarget(value))
+  currentBinding.current = encodeTarget(value)
+
+  const handleChange = async (raw: string) => {
+    const previous = encodeTarget(value)
+    if (raw === previous || changing.current) return
+    const target = decodeTarget(raw)
+    if (!value.appId) { onChange(target); return }
+    changing.current = true
+    setConfirming(true)
+    try {
+      const confirmed = await showConfirm({
+        title: t('Rebind this bot?'),
+        message: t('Move this bot from "{{from}}" to "{{to}}"? "{{from}}" will stop receiving new messages from this bot.', {
+          from: backendName({ value, automationApps, teams }, t),
+          to: backendName({ value: target, automationApps, teams }, t),
+        }),
+        confirmLabel: t('Rebind'),
+        cancelLabel: t('Cancel'),
+        variant: 'default',
+      })
+      if (!confirmed) return
+      if (currentBinding.current !== previous) {
+        console.warn('[ChannelBackendSelect] Rebinding cancelled because the displayed binding changed')
+        return
+      }
+      onChange(target)
+    } finally {
+      changing.current = false
+      setConfirming(false)
+    }
+  }
 
   const selectable = offerableTeams(teams)
   const selected = encodeTarget(value)
@@ -111,7 +150,8 @@ export function ChannelBackendSelect({
         <Bot className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
         <select
           value={selected}
-          onChange={(e) => onChange(decodeTarget(e.target.value))}
+          onChange={(e) => { void handleChange(e.target.value) }}
+          disabled={confirming}
           className="w-full bg-secondary border border-transparent rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-primary appearance-none cursor-pointer"
         >
           <option value="">{t('Select a digital human or team member')}</option>
@@ -148,6 +188,7 @@ export function ChannelBackendSelect({
             })
           : t('All messages from this Bot will be handled by this digital human')}
       </p>
+      {DialogComponent}
     </div>
   )
 }

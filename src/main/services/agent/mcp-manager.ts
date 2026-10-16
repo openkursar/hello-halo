@@ -14,7 +14,7 @@ import {
   getDbMcpServers,
 } from './helpers'
 import { emitAgentBroadcast } from './events'
-import { buildSdkEnv, resolveCredentialsForSdk } from './sdk-config'
+import { buildSdkEnv, resolveClaudeCodeCliPath, resolveCredentialsForSdk } from './sdk-config'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 
@@ -317,6 +317,7 @@ async function runMcpConnectionTest(): Promise<McpConnectionTestResult> {
         credentialsGeneration: credentials.credentialsGeneration,
         anthropicBaseUrl: resolved.anthropicBaseUrl,
         cwd,
+        pathToClaudeCodeExecutable: resolveClaudeCodeCliPath(),
         executable: electronPath,
         executableArgs: ['--no-warnings'],
         env,

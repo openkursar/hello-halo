@@ -20,7 +20,7 @@ export function TeamViewer({ tab }: { tab: TabState }) {
   if (detail) {
     return (
       <TeamViewContext.Provider value={teamId}>
-        <TeamView key={detail.team.id} detail={detail} onBack={() => closeTab(tab.id)} />
+        <TeamView key={detail.team.id} detail={detail} onBack={() => closeTab(tab.id)} spaceEntry />
       </TeamViewContext.Provider>
     )
   }

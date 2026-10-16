@@ -6,11 +6,12 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { setConfig } = vi.hoisted(() => ({
+const { getConfig, setConfig } = vi.hoisted(() => ({
+  getConfig: vi.fn(),
   setConfig: vi.fn((_updates: unknown, _snapshotEpoch?: number) => ({ success: true })),
 }))
 vi.mock('../../../src/main/http/routes/_shared', () => ({
-  configController: { setConfig },
+  configController: { getConfig, setConfig },
   configTouchesMcp: () => false,
   getAISourceManager: vi.fn(),
   getPublicSecurityPolicy: vi.fn(),
@@ -28,6 +29,27 @@ async function postConfig(query: Record<string, unknown>) {
   await routes.get('post /api/config')!({ body: { imChannels: { instances: [] } }, query }, res)
   return res.json.mock.calls[0][0]
 }
+
+describe('GET /api/config', () => {
+  it('forwards product defaults alongside, not inside, the user configuration', async () => {
+    const response = {
+      success: true,
+      data: { federation: { gatewayUrl: '' } },
+      configEpoch: 0,
+      productDefaults: { federation: { gatewayUrl: 'https://relay.example.test/' } },
+    }
+    getConfig.mockReturnValue(response)
+    const routes = new Map<string, (req: unknown, res: unknown) => Promise<void>>()
+    const app = Object.fromEntries(['get', 'post'].map(verb => [verb, (url: string, handler: never) => routes.set(`${verb} ${url}`, handler)]))
+    registerConfigRoutes(app as never)
+    const res = { json: vi.fn() }
+
+    await routes.get('get /api/config')!({}, res)
+
+    expect(res.json).toHaveBeenCalledWith(response)
+    expect(setConfig).not.toHaveBeenCalled()
+  })
+})
 
 describe('POST /api/config', () => {
   beforeEach(() => {

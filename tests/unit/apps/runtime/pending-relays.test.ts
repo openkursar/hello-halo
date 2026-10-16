@@ -99,6 +99,18 @@ describe('PendingRelayStore — peek/commit lifecycle', () => {
     expect(store.count(TARGET)).toBe(0)
   })
 
+  it('puts back events a stop left unread, ahead of newer ones and only once', () => {
+    store.append(TARGET, makeEvent({ id: 'a' }))
+    store.append(TARGET, makeEvent({ id: 'b' }))
+    const accepted = store.peek(TARGET)
+    store.commit(TARGET, accepted.map(e => e.id))
+    store.append(TARGET, makeEvent({ id: 'late' }))
+
+    store.restore(TARGET, accepted)
+    store.restore(TARGET, accepted)
+    expect(store.peek(TARGET).map(e => e.id)).toEqual(['a', 'b', 'late'])
+  })
+
   it('keeps events that arrived after the peek when committing', () => {
     store.append(TARGET, makeEvent({ id: 'a' }))
     const peeked = store.peek(TARGET).map(e => e.id)

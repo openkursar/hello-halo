@@ -13,12 +13,13 @@
  */
 
 import { addMessage, getConversation, listConversations, updateMessageById } from '../conversation.service'
-import { formatMessageAttachmentsBrief, getWorkingDir, onAgentEvent, sendMessage } from '../agent'
+import { formatMessageAttachmentsBrief, getWorkingDir, onAgentEvent, sendMessage, sendIntoLiveTurn, hasPendingSessionInput, emitAgentEvent } from '../agent'
 import { isSpaceConversationId } from '../../../shared/apps/im-keys'
 import { shortConversationId } from '../../../shared/conversation-reference'
 import { isNativeConversationBusy, hasLiveNativeSession } from './busy'
 import type { ConversationSource, DispatchedMessage, DispatchOutcome, SourceConversation } from './source'
 import type { TranscriptLine } from './types'
+import type { TranscriptMessage } from '../../../shared/types/transcript'
 
 const LOG_TAG = '[ConversationInterop]'
 
@@ -38,6 +39,45 @@ function locateDelivered(spaceId: string, conversationId: string, beforeCount: n
   const atIndex = messages[beforeCount]
   if (atIndex && atIndex.role === 'user' && atIndex.content === turnInput) return atIndex
   return messages.slice(beforeCount).find((m) => m.role === 'user' && m.content === turnInput)
+}
+
+async function dispatchBatch(
+  spaceId: string,
+  conversationId: string,
+  messages: readonly DispatchedMessage[]
+): Promise<DispatchOutcome[]> {
+  const beforeCount = getConversation(spaceId, conversationId)?.messages.length ?? 0
+  const turnInput = messages.map((message) => message.turnInput).join('\n\n')
+  const sending = sendMessage({ spaceId, conversationId, message: turnInput })
+  // sendMessage writes synchronously before its first await. Record the batch before the model can append.
+  const outcomes: DispatchOutcome[] = messages.map(() => ({}))
+  // A message taken back after a stop keeps the record it already has; the first new one becomes the opener.
+  const opener = messages.findIndex((message) => !message.inputRecorded)
+  try {
+    const delivered = locateDelivered(spaceId, conversationId, beforeCount, turnInput)
+    if (delivered && opener >= 0) {
+      const message = messages[opener]
+      updateMessageById(spaceId, conversationId, delivered.id, {
+        content: message.record.content, role: 'system', source: message.record.source,
+        metadata: { ...delivered.metadata, ...message.record.metadata, ...(message.record.source === 'team-message' ? { inputMode: 'turn' as const } : {}) },
+      })
+      outcomes[opener] = { messageId: delivered.id }
+    } else {
+      console.warn(`${LOG_TAG} delivery patch missed: conversation=${conversationId} expected index=${beforeCount} recordedOpener=${opener >= 0}`)
+    }
+    messages.forEach((message, index) => {
+      if (index === opener || message.inputRecorded) return
+      outcomes[index] = { messageId: addMessage(spaceId, conversationId, {
+        role: 'system', content: message.record.content, source: message.record.source,
+        metadata: message.record.source === 'team-message' ? { ...message.record.metadata, inputMode: 'turn' } : message.record.metadata,
+      }).id }
+    })
+  } catch (error) {
+    // The send owns the model input; a transcript failure must never cause a duplicate dispatch.
+    console.error(`${LOG_TAG} Started input could not be recorded: conversation=${conversationId}`, error)
+  }
+  await sending
+  return outcomes
 }
 
 export function createChatConversationSource(): ConversationSource {
@@ -87,29 +127,42 @@ export function createChatConversationSource(): ConversationSource {
     isBusy: isNativeConversationBusy,
     hasLiveSession: hasLiveNativeSession,
 
-    async dispatch(spaceId, conversationId, message: DispatchedMessage): Promise<DispatchOutcome> {
-      const beforeCount = getConversation(spaceId, conversationId)?.messages.length ?? 0
+    getActiveIdentity: () => 'owner',
 
-      await sendMessage({ spaceId, conversationId, message: message.turnInput })
+    dispatch: async (spaceId, conversationId, message) => (await dispatchBatch(spaceId, conversationId, [message]))[0],
+    dispatchBatch,
 
-      // Identified by id, then patched via `updateMessageById` (re-reads current
-      // state itself before writing): the turn `sendMessage` started is running
-      // concurrently and may append at any moment.
-      const delivered = locateDelivered(spaceId, conversationId, beforeCount, message.turnInput)
-      if (!delivered) {
-        console.warn(
-          `${LOG_TAG} delivery patch missed: conversation=${conversationId} expected index=${beforeCount} ` +
-            '— the delivered turn stays persisted as a plain user message'
-        )
-        return {}
-      }
-      updateMessageById(spaceId, conversationId, delivered.id, {
-        content: message.record.content,
-        role: 'system',
-        source: message.record.source,
-        metadata: { ...delivered.metadata, ...message.record.metadata },
+    deliverMidTurn(spaceId, conversationId, messages, onWithdrawn) {
+      if (!sendIntoLiveTurn(conversationId, messages.map((message) => message.turnInput).join('\n\n'), undefined, { onWithdrawn })) return false
+      const transcript = getConversation(spaceId, conversationId)?.messages ?? []
+      let at = transcript.length - 1
+      while (at >= 0 && (transcript[at].role === 'system' || transcript[at].source === 'injection')) at--
+      const reply = transcript[at]
+      const inputReplyId = reply?.role === 'assistant' && !reply.content && !reply.error && !reply.tokenUsage && !reply.thoughtsSummary && !reply.thoughts?.length
+        ? reply.id : undefined
+      const records: TranscriptMessage[] = []
+      const outcomes = messages.map((message) => {
+        if (message.inputRecorded) return {}
+        try {
+          const recorded = addMessage(spaceId, conversationId, {
+            role: 'system', content: message.record.content, source: message.record.source,
+            metadata: { ...message.record.metadata, inputMode: 'live', ...(inputReplyId ? { inputReplyId } : {}) },
+          })
+          records.push(recorded)
+          return { messageId: recorded.id }
+        } catch (error) {
+          console.error(`${LOG_TAG} Accepted live input could not be recorded: conversation=${conversationId}`, error)
+          return {}
+        }
       })
-      return { messageId: delivered.id }
+      if (records.length) emitAgentEvent('agent:input-arrived', spaceId, conversationId, { messages: records, live: true })
+      return outcomes
+    },
+
+    onTurnReady(listener) {
+      return onAgentEvent((event) => {
+        if (event.channel === 'agent:turn-start' && isSpaceConversationId(event.conversationId)) listener(event.conversationId)
+      })
     },
 
     onTurnEnd(listener) {
@@ -118,6 +171,7 @@ export function createChatConversationSource(): ConversationSource {
       return onAgentEvent((event) => {
         if (event.channel !== 'agent:complete' && event.channel !== 'agent:error') return
         if (!isSpaceConversationId(event.conversationId)) return
+        if (hasPendingSessionInput(event.conversationId)) return
         listener(event.conversationId)
       })
     },

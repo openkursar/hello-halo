@@ -29,7 +29,7 @@ interface FakeConversation {
   messages: FakeMessage[]
 }
 
-const { store, sendMessage, isNativeConversationBusy, hasLiveNativeSession } = vi.hoisted(() => {
+const { store, sendMessage, sendIntoLiveTurn, isNativeConversationBusy, hasLiveNativeSession } = vi.hoisted(() => {
   const store = new Map<string, FakeConversation>()
   let nextMessageId = 0
   const sendMessage = vi.fn(async (params: { spaceId: string; conversationId: string; message: string }) => {
@@ -41,7 +41,7 @@ const { store, sendMessage, isNativeConversationBusy, hasLiveNativeSession } = v
   // Defaults to true so existing tests (none of which exercise the
   // crashed-before-init recovery path) never trip reclaimLeakedReservation.
   const hasLiveNativeSession = vi.fn((_conversationId: string) => true)
-  return { store, sendMessage, isNativeConversationBusy, hasLiveNativeSession }
+  return { store, sendMessage, sendIntoLiveTurn: vi.fn((_conversationId: string, _text: string) => false), isNativeConversationBusy, hasLiveNativeSession }
 })
 
 function seed(id: string, title: string): FakeConversation {
@@ -55,7 +55,10 @@ vi.mock('../../../../src/main/services/agent/send-message', () => ({ sendMessage
 // chat-source reaches the engine through the services/agent barrel; without this
 // every module reset would load the whole engine graph.
 vi.mock('../../../../src/main/services/agent', async () => ({
+  hasPendingSessionInput: () => false,
   onAgentEvent: (await import('../../../../src/main/services/agent/events')).onAgentEvent,
+  emitAgentEvent: (await import('../../../../src/main/services/agent/events')).emitAgentEvent,
+  sendIntoLiveTurn,
   sendMessage: (await import('../../../../src/main/services/agent/send-message')).sendMessage,
 }))
 
@@ -87,6 +90,7 @@ import {
   tryResolveAsReply,
   releaseConversationTurn,
   drainConversationTurn,
+  notifyConversationTurnReady,
 } from '../../../../src/main/services/conversation-interop/delivery'
 
 import { registerConversationSource } from '../../../../src/main/services/conversation-interop/source'
@@ -98,6 +102,7 @@ describe('deliverToConversation', () => {
   beforeEach(() => {
     store.clear()
     sendMessage.mockClear()
+    sendIntoLiveTurn.mockReset().mockReturnValue(false)
     isNativeConversationBusy.mockReturnValue(false)
     hasLiveNativeSession.mockReturnValue(true)
   })
@@ -571,6 +576,31 @@ describe('deliverToConversation', () => {
     expect(target.messages).toHaveLength(0) // nothing dispatched yet — still parked behind the busy target
   })
 
+  it('stops retrying a queued message whose start keeps failing', async () => {
+    seed('src-retry', 'Source')
+    seed('tgt-retry', 'Target')
+    isNativeConversationBusy.mockImplementation((id: string) => id === 'tgt-retry')
+    const queued = await deliverToConversation({
+      spaceId: 'space-1',
+      fromConversationId: 'src-retry',
+      toConversationId: 'tgt-retry',
+      message: 'never starts',
+      summary: 's',
+    })
+    expect(queued).toMatchObject({ ok: true, status: 'queued' })
+
+    isNativeConversationBusy.mockReturnValue(false)
+    // Three failures exhaust the bound; a fourth attempt would succeed and show up in the count.
+    for (let i = 0; i < 3; i++) sendMessage.mockRejectedValueOnce(new Error('working folder missing'))
+    const flush = () => new Promise<void>(resolve => setImmediate(resolve))
+    for (let i = 0; i < 6; i++) {
+      await releaseConversationTurn('tgt-retry')
+      drainConversationTurn('tgt-retry')
+      for (let j = 0; j < 5; j++) await flush()
+    }
+    expect(sendMessage).toHaveBeenCalledTimes(3)
+  })
+
   it('maps a dispatch failure to unreachable', async () => {
     seed('src-6', 'Source')
     seed('tgt-6', 'Target')
@@ -697,6 +727,7 @@ describe('deliverToConversationAndWait', () => {
   beforeEach(() => {
     store.clear()
     sendMessage.mockClear()
+    sendIntoLiveTurn.mockReset().mockReturnValue(false)
     isNativeConversationBusy.mockReturnValue(false)
     hasLiveNativeSession.mockReturnValue(true)
   })
@@ -856,6 +887,7 @@ describe('deliverExternalMessage (team → coordinating conversation)', () => {
   beforeEach(() => {
     store.clear()
     sendMessage.mockClear()
+    sendIntoLiveTurn.mockReset().mockReturnValue(false)
     isNativeConversationBusy.mockReturnValue(false)
     hasLiveNativeSession.mockReturnValue(true)
   })
@@ -966,5 +998,83 @@ describe('deliverExternalMessage (team → coordinating conversation)', () => {
       persist: { content: 'x', source: 'team-message', metadata: {} },
     })
     expect(result).toEqual({ ok: false, reason: 'not_found' })
+  })
+})
+
+
+describe('messages during a live conversation turn', () => {
+  beforeEach(() => {
+    sendMessage.mockClear()
+    sendIntoLiveTurn.mockReset().mockReturnValue(true)
+    isNativeConversationBusy.mockReturnValue(true)
+    hasLiveNativeSession.mockReturnValue(true)
+  })
+
+  it('delivers a teammate report into a user-started space turn and retains its provenance', async () => {
+    const target = seed('live-coordinator', 'Coordinator')
+    const result = await deliverExternalMessage({
+      identity: 'owner', spaceId: 'space-1', toConversationId: target.id,
+      turnInput: '[Teammate report] Found a regression',
+      persist: { content: 'Found a regression', source: 'team-message', metadata: { fromMemberName: 'Member A' } },
+    })
+    expect(result).toMatchObject({ ok: true, status: 'delivered' })
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(sendIntoLiveTurn).toHaveBeenCalledWith(target.id, '[Teammate report] Found a regression', undefined, { onWithdrawn: expect.any(Function) })
+    expect(target.messages).toEqual([expect.objectContaining({ role: 'system', content: 'Found a regression', source: 'team-message' })])
+  })
+
+  it('retains an unknown sender until the active owner turn finishes', async () => {
+    const target = seed('live-unknown', 'Coordinator')
+    const result = await deliverExternalMessage({
+      spaceId: 'space-1', toConversationId: target.id, turnInput: 'unknown sender',
+      persist: { content: 'unknown sender', source: 'team-message', metadata: {} },
+    })
+    expect(result).toMatchObject({ ok: true, status: 'queued' })
+    expect(sendIntoLiveTurn).not.toHaveBeenCalled()
+    expect(target.messages).toHaveLength(0)
+  })
+
+  it('flushes startup messages together at readiness with individual original records', async () => {
+    seed('early-source', 'Source')
+    const target = seed('early-target', 'Starting')
+    isNativeConversationBusy.mockReturnValue(false)
+    await deliverToConversation({ spaceId: 'space-1', fromConversationId: 'early-source', toConversationId: target.id, message: 'start', summary: '' })
+    for (const message of ['first followup', 'second followup']) {
+      await deliverToConversation({ spaceId: 'space-1', fromConversationId: 'early-source', toConversationId: target.id, message, summary: '' })
+    }
+    expect(sendIntoLiveTurn).not.toHaveBeenCalled()
+    isNativeConversationBusy.mockReturnValue(true)
+    notifyConversationTurnReady(target.id)
+    expect(sendIntoLiveTurn).toHaveBeenCalledTimes(1)
+    expect(sendIntoLiveTurn.mock.calls[0][1]).toMatch(/first followup[\s\S]*second followup/)
+    expect(target.messages.map((message) => message.content)).toEqual(['start', 'first followup', 'second followup'])
+  })
+
+  it('merges queued same-permission messages into one new turn while preserving each transcript entry', async () => {
+    seed('batch-source', 'Source')
+    const target = seed('batch-target', 'Busy')
+    sendIntoLiveTurn.mockReturnValue(false)
+    for (const message of ['report one', 'report two', 'report three']) {
+      await deliverToConversation({ spaceId: 'space-1', fromConversationId: 'batch-source', toConversationId: target.id, message, summary: '' })
+    }
+    isNativeConversationBusy.mockReturnValue(false)
+    drainConversationTurn(target.id)
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1))
+    expect(sendMessage.mock.calls[0][0].message).toMatch(/report one[\s\S]*report two[\s\S]*report three/)
+    expect(target.messages.map((message) => message.content)).toEqual(['report one', 'report two', 'report three'])
+    expect(target.messages.every((message) => message.source === 'cross-conversation')).toBe(true)
+  })
+
+  it('keeps independent waiting senders live when both ask the same working target', async () => {
+    seed('live-wait-a', 'A')
+    seed('live-wait-c', 'C')
+    const target = seed('live-wait-b', 'B')
+    const a = deliverToConversationAndWait({ spaceId: 'space-1', fromConversationId: 'live-wait-a', toConversationId: target.id, message: 'question A', summary: '' })
+    const c = deliverToConversationAndWait({ spaceId: 'space-1', fromConversationId: 'live-wait-c', toConversationId: target.id, message: 'question C', summary: '' })
+    await Promise.resolve()
+    expect(tryResolveAsReply(target.id, 'live-wait-c', 'answer C')).toBe(true)
+    expect(tryResolveAsReply(target.id, 'live-wait-a', 'answer A')).toBe(true)
+    expect(await a).toMatchObject({ ok: true, outcome: { status: 'replied', message: 'answer A' } })
+    expect(await c).toMatchObject({ ok: true, outcome: { status: 'replied', message: 'answer C' } })
   })
 })

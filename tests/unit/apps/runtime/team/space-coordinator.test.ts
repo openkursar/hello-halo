@@ -94,11 +94,46 @@ describe('bus routing to a space coordinator', () => {
       isBusy: vi.fn(() => false),
       deliverToCoordinator: vi.fn(async (params) => {
         coordinatorDeliveries.push(params)
+        return 'dispatched' as const
       }),
     }
     const bus = createMessageBus({ store, hooks })
     return { bus, hooks, coordinatorDeliveries }
   }
+
+  it('tells a runtime notice how the conversation took it, but tells a sender only that it was handed over', async () => {
+    const { bus, hooks } = makeBus()
+    vi.mocked(hooks.deliverToCoordinator!).mockResolvedValue('mid_turn')
+    const notice = await bus.deliverRuntimeWake({
+      envelope: { id: 'n1', teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: COORD_APP, toAppId: COORD_APP,
+        body: 'report', correlationId: 'n1', createdAt: Date.now() },
+      trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'n1', fromAppId: null, wait: false, kind: 'member_stopped' },
+      onBusy: 'buffer',
+    })
+    expect(notice).toBe('mid_turn')
+
+    const sent = await bus.send({
+      teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP, to: SPACE_COORDINATOR_MEMBER_NAME, message: 'done',
+    })
+    expect(sent).toEqual({ messageId: expect.any(String) })
+  })
+
+  it('files no activity row for a turn-end notice the conversation could not take', async () => {
+    const recordActivity = vi.fn()
+    const hooks: TeamDeliveryHooks = {
+      wakeTarget: vi.fn(async () => {}),
+      isBusy: vi.fn(() => false),
+      deliverToCoordinator: vi.fn(async () => { throw new Error('Could not reach the coordinating conversation (not_found)') }),
+    }
+    const bus = createMessageBus({ store, hooks, recordActivity })
+    await expect(bus.deliverRuntimeWake({
+      envelope: { id: 'n2', teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: COORD_APP, toAppId: COORD_APP,
+        body: 'report', correlationId: 'n2', createdAt: Date.now() },
+      trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'n2', fromAppId: null, wait: false, kind: 'member_stopped' },
+      onBusy: 'buffer',
+    })).rejects.toThrow(/not_found/)
+    expect(recordActivity).not.toHaveBeenCalled()
+  })
 
   it("a member's send to the coordinator bypasses the turn gate", async () => {
     const { bus, hooks, coordinatorDeliveries } = makeBus()
@@ -155,6 +190,7 @@ describe('createCoordinatorDelivery', () => {
     const delivered: CoordinatorDeliveryRequest[] = []
     const deliver = vi.fn(async (request: CoordinatorDeliveryRequest) => {
       delivered.push(request)
+      return 'dispatched' as const
     })
     return { delivered, hook: createCoordinatorDelivery({ store, deliver }) }
   }
@@ -180,6 +216,7 @@ describe('createCoordinatorDelivery', () => {
 
     expect(delivered).toHaveLength(1)
     const request = delivered[0]
+    expect(request.permissionIdentity).toBe('owner')
     expect(request.spaceId).toBe('space-a')
     expect(request.conversationId).toBe(CONVERSATION)
     expect(request.turnInput).toContain('Team message from researcher')
@@ -187,6 +224,35 @@ describe('createCoordinatorDelivery', () => {
     expect(request.persist.content).toBe('Brief is ready at report.md')
     expect(request.persist.metadata.fromMemberName).toBe('researcher')
     expect(request.persist.metadata.teamName).toBe('Research crew')
+  })
+
+  it.each(['external', 'remote'])('delivers %s member content as its own turn, never into the owner\'s running turn', async source => {
+    if (source === 'remote') {
+      store.removeMember(TEAM_ID, RESEARCHER_APP)
+      store.addMember({ teamId: TEAM_ID, appId: RESEARCHER_APP, memberName: 'researcher', role: 'Research',
+        isLead: false, aiProvisioned: false, addedAt: Date.now(), origin: 'remote', ownerNodeId: 'another-node' })
+    }
+    const { delivered, hook } = makeDelivery()
+    const bus = createMessageBus({ store, hooks: {
+      wakeTarget: vi.fn(async () => {}), isBusy: () => false, deliverToCoordinator: hook,
+    } })
+    await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP,
+      to: SPACE_COORDINATOR_MEMBER_NAME, message: 'Update from another machine',
+      external: source === 'external' })
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0].permissionIdentity).toBe('external')
+  })
+
+  it('delivers an external ending notice and a message from a removed member as their own turns', async () => {
+    const { delivered, hook } = makeDelivery()
+    await hook({ envelope: { ...envelope('external summary'), fromAppId: COORD_APP },
+      trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'external-ending',
+        fromAppId: null, wait: false, kind: 'member_stopped', external: true },
+    })
+    await hook({ envelope: { ...envelope('left already'), fromAppId: 'app-gone' },
+      trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'gone', fromAppId: 'app-gone', wait: false, kind: 'message' },
+    })
+    expect(delivered.map(request => request.permissionIdentity)).toEqual(['external', 'external'])
   })
 
   it('passes a system turn-end report verbatim', async () => {

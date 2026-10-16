@@ -49,6 +49,9 @@ function makeHooks(options: MakeHooksOptions = {}) {
       if (options.busyOnDispatch) busy.add(sessionKey)
     }),
     isBusy: (sessionKey: string) => busy.has(sessionKey),
+    getJobIdentity: () => 'owner',
+    getActiveIdentity: () => 'owner',
+    ...(options.midTurn ? { mergeJobs: (jobs: readonly Job[]) => ({ body: jobs.map((job) => job.body).join('\n') }) } : {}),
     ...(options.midTurn
       ? {
           deliverMidTurn: vi.fn((sessionKey: string, job: Job) => {
@@ -136,7 +139,7 @@ describe('createTurnGate', () => {
       expect(midTurnDelivered).toEqual([{ sessionKey: 's1', job: { body: 'second' } }])
     })
 
-    it('buffers instead when the running turn is not one the gate dispatched', async () => {
+    it('joins an owner turn even when it started outside this gate', async () => {
       // Busy without a reservation = a turn started outside this gate (its
       // owner typing into the same conversation). Someone else's message must
       // not be folded into that.
@@ -144,8 +147,8 @@ describe('createTurnGate', () => {
       busy.add('s1')
       const gate = createTurnGate<Job>(hooks)
 
-      expect(await gate.deliver('s1', { body: 'x' })).toBe('buffered')
-      expect(midTurnDelivered).toHaveLength(0)
+      expect(await gate.deliver('s1', { body: 'x' })).toBe('mid_turn')
+      expect(midTurnDelivered).toHaveLength(1)
     })
 
     it('buffers instead while the dispatch is still in flight (nothing to join yet)', async () => {
@@ -159,7 +162,7 @@ describe('createTurnGate', () => {
       expect(midTurnDelivered).toHaveLength(0)
     })
 
-    it('buffers instead when the mailbox is not empty, so nothing overtakes it', async () => {
+    it('joins compatible queued mail and the new message in arrival order', async () => {
       // Order is the whole value of a later message: it may supersede an
       // earlier one, which only works if it is read after it.
       const { hooks, midTurnDelivered, setMidTurn } = makeHooks({ busyOnDispatch: true, midTurn: 'decline' })
@@ -169,9 +172,8 @@ describe('createTurnGate', () => {
       expect(await gate.deliver('s1', { body: 'queued' })).toBe('buffered')
 
       setMidTurn('accept')
-      expect(await gate.deliver('s1', { body: 'later' })).toBe('buffered')
-      // The hook was not even consulted for it — the queue in front is enough.
-      expect(midTurnDelivered.map((d) => d.job.body)).not.toContain('later')
+      expect(await gate.deliver('s1', { body: 'later' })).toBe('mid_turn')
+      expect(midTurnDelivered.at(-1)?.job.body).toBe('queued\nlater')
     })
 
     it('falls back to the mailbox when the hook declines', async () => {
@@ -312,36 +314,29 @@ describe('createTurnGate', () => {
   // ===========================================================================
 
   describe('mailbox overflow', () => {
-    it('caps the per-session mailbox, shedding the OLDEST entry', async () => {
+    it('rejects new work while retaining every already accepted message', async () => {
       const { hooks, dispatched, busy } = makeHooks()
-      busy.add('s1') // stays busy the whole time, nothing drains
+      busy.add('s1')
+      hooks.mergeJobs = (jobs) => ({ body: jobs.map((job) => job.body).join('\n') })
       const gate = createTurnGate<Job>(hooks, { bufferCap: 3 })
-
-      for (let i = 0; i < 5; i++) {
-        await gate.deliver('s1', { body: `msg-${i}` })
-      }
-      expect(dispatched).toHaveLength(0)
-
-      // Drain one: the oldest SURVIVOR is msg-2 (msg-0 and msg-1 were shed).
+      for (let i = 0; i < 3; i++) await gate.deliver('s1', { body: `msg-${i}` })
+      await expect(gate.deliver('s1', { body: 'overflow' })).rejects.toThrow('mailbox is full')
+      expect(gate.bufferedCount('s1')).toBe(3)
       busy.delete('s1')
       gate.drain('s1')
       await Promise.resolve()
-      expect(dispatched[0].job.body).toBe('msg-2')
+      expect(dispatched[0].job.body).toBe('msg-0\nmsg-1\nmsg-2')
     })
 
-    it('cancels a shed RELAYED run instead of stranding its caller', async () => {
+    it('retains an accepted exclusive run when another message exceeds capacity', async () => {
       const { hooks, busy } = makeHooks()
       busy.add('s1')
       const gate = createTurnGate<Job>(hooks, { bufferCap: 1 })
-
-      // First relayed run occupies the mailbox's one slot.
-      const shed = gate.runExclusive('s1', async () => 'should never run')
-      const shedRejection = expect(shed).rejects.toThrow(/mailbox overflow/)
-
-      // A second entry overflows the cap-1 mailbox and sheds the first.
-      await gate.deliver('s1', { body: 'evicts the relayed run' })
-
-      await shedRejection
+      const relayed = gate.runExclusive('s1', async () => 'ran')
+      await expect(gate.deliver('s1', { body: 'overflow' })).rejects.toThrow('mailbox is full')
+      busy.delete('s1')
+      gate.drain('s1')
+      expect(await relayed).toBe('ran')
     })
   })
 

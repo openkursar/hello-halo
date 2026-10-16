@@ -3,11 +3,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   createTurnReport,
   REPORT_WAKE_CAP,
-  FLUSH_WINDOW_MS,
-  LEAD_BUSY_RECHECK_MS,
-  FACTS_PER_NOTICE,
   FINAL_REPLY_LIMIT,
   REQUEST_SUMMARY_LIMIT,
+  REMOTE_FLUSH_WINDOW_MS,
+  MAX_TIMED_RETRIES,
 } from '../../../../../src/main/apps/runtime/team/turn-report'
 import type { TurnReport } from '../../../../../src/main/apps/runtime/team/turn-report'
 import type { MessageBus } from '../../../../../src/main/apps/runtime/team/message-bus'
@@ -55,23 +54,14 @@ function makeBus() {
   return { bus, wakes, tripExternal }
 }
 
-/**
- * Build a report wired the same way `createTeamRuntime` wires it in
- * production (`isLeadGenerating` sourced from the live "is this session
- * actively generating a turn" signal — see `TurnReportDeps`'s own doc for why
- * it is not `orchestration.isBusy`). Defaults to "always idle" here so every
- * existing test keeps exercising the idle-lead path it was written for; the
- * busy-gating tests pass their own `isLeadGenerating` to flip that.
- */
 function makeReport(
   members: FakeMember[],
   bus: MessageBus,
-  opts?: { sealed?: boolean; isLeadGenerating?: (sessionKey: string) => boolean }
+  opts?: { sealed?: boolean }
 ): TurnReport {
   return createTurnReport({
     store: makeStore(members, opts),
     bus,
-    isLeadGenerating: opts?.isLeadGenerating ?? (() => false),
   })
 }
 
@@ -146,7 +136,7 @@ describe('turn-end report', () => {
     store.isEdgeAllowed = vi.fn((_team, from, to) => from === LEAD && (
       to === 'app-writer' ? scenario.memberAllowed : to === 'app-editor' && scenario.requesterAllowed
     ))
-    const report = createTurnReport({ store, bus, isLeadGenerating: () => false })
+    const report = createTurnReport({ store, bus })
     runTurn(report, 'app-writer', [{ kind: 'task_update', refId: 'private-task' }], {
       appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'error', message: 'private failure' },
       requestSummary: 'private request', finalReply: 'private answer', requestFromAppId: scenario.requester,
@@ -158,20 +148,16 @@ describe('turn-end report', () => {
     }
   })
 
-  it('rechecks topology when a busy lead receives queued facts', async () => {
+  it('checks topology immediately before handing a fact to the delivery core', async () => {
     const store = makeStore(LOCAL_TEAM)
     vi.mocked(store.getTeamById).mockReturnValue({ id: TEAM, leadAppId: LEAD, collabMode: 'structured' } as any)
-    store.isEdgeAllowed = vi.fn(() => true)
-    const report = createTurnReport({ store, bus, isLeadGenerating: () => true })
+    store.isEdgeAllowed = vi.fn(() => false)
+    const report = createTurnReport({ store, bus })
     runTurn(report, 'app-writer', [], {
       appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' },
       requestFromAppId: LEAD, requestSummary: 'private request', finalReply: 'private answer',
     })
-    expect(wakes).toHaveLength(0)
-    vi.mocked(store.isEdgeAllowed).mockReturnValue(false)
-    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
-    await vi.waitFor(() => expect(wakes).toHaveLength(1))
-    expect(wakes[0].body).toContain('writer — stopped')
+    expect(wakes).toHaveLength(1)
     expect(wakes[0].body).not.toContain('private')
   })
 
@@ -201,22 +187,12 @@ describe('turn-end report', () => {
     expect(wakes[0].body).not.toContain('No explicit result delivery')
   })
 
-  it.each(['sealed', 'completed'])('pending notices are discarded if the task becomes %s before delivery', async state => {
+  it.each(['sealed', 'completed'])('closed tasks never hand another notice to the mailbox: %s', async state => {
     const store = makeStore(LOCAL_TEAM)
-    let closed = false
-    vi.mocked(store.getEpochById).mockImplementation(() => ({ id: EPOCH, endedAt: closed && state === 'sealed' ? Date.now() : null, workItem: { status: closed && state === 'completed' ? 'completed' : 'open' } }) as any)
-    const report = createTurnReport({ store, bus, isLeadGenerating: () => true })
+    vi.mocked(store.getEpochById).mockReturnValue({ id: EPOCH, endedAt: state === 'sealed' ? Date.now() : null, workItem: { status: state === 'completed' ? 'completed' : 'open' } } as any)
+    const report = createTurnReport({ store, bus })
     runTurn(report, 'app-writer', [])
     expect(wakes).toHaveLength(0)
-    closed = true
-    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
-    await Promise.resolve()
-    expect(wakes).toHaveLength(0)
-    closed = false
-    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
-    await Promise.resolve()
-    expect(wakes).toHaveLength(0)
-    report.clearEpoch(EPOCH)
   })
 
   it('wakes the lead when a member stops, and says what it filed', async () => {
@@ -251,21 +227,17 @@ describe('turn-end report', () => {
     expect(wakes[0].external).toBeUndefined()
   })
 
-  it('one outside ending makes the whole notice it rides in outside work', async () => {
-    let leadBusy = true
-    const report = makeReport(LOCAL_TEAM, bus, { isLeadGenerating: () => leadBusy })
+  it('keeps owner and external endings separate for permission-aware delivery', async () => {
+    const report = makeReport(LOCAL_TEAM, bus)
     runTurn(report, 'app-writer', [])
     runTurn(report, 'app-editor', [], {
       appId: 'app-editor', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' }, external: true,
     })
-    expect(wakes).toHaveLength(0)
-    leadBusy = false
-    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
-    await vi.waitFor(() => expect(wakes).toHaveLength(1))
-    expect(wakes[0].body).toContain('writer —')
-    expect(wakes[0].body).toContain('editor —')
-    expect(wakes[0].external).toBe(true)
-    report.clearEpoch(EPOCH)
+    await vi.waitFor(() => expect(wakes).toHaveLength(2))
+    expect(wakes[0].external).toBeUndefined()
+    expect(wakes[1].external).toBe(true)
+    expect(wakes[0].body).not.toContain('editor —')
+    expect(wakes[1].body).not.toContain('writer —')
   })
 
   it('never says the work is done — "no error" is stated as exactly that', async () => {
@@ -349,10 +321,6 @@ describe('turn-end report', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(wakes).toHaveLength(0)
 
-    // Not merely delayed: forcing a flush via the lead's own ending — the
-    // exact trigger that surfaces anything sitting in the pending queue —
-    // still produces nothing. If this ending had been queued (just held
-    // back), this would have released it.
     endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
     await new Promise((r) => setTimeout(r, 0))
     expect(wakes).toHaveLength(0)
@@ -366,48 +334,40 @@ describe('turn-end report', () => {
     expect(wakes).toHaveLength(0)
   })
 
-  it('endings that arrive while the lead is still reading merge into one later notice', async () => {
+  it('hands each ending to the shared delivery core at once, never superseding an earlier one', async () => {
     const report = makeReport(LOCAL_TEAM, bus)
-
     runTurn(report, 'app-writer', [])
-    await vi.waitFor(() => expect(wakes).toHaveLength(1))
-
-    // The lead is now busy with that notice; two more stops must not each wake it.
+    await Promise.resolve()
     runTurn(report, 'app-editor', [])
+    await Promise.resolve()
     runTurn(report, 'app-writer', [])
-    await new Promise((r) => setTimeout(r, 0))
-    expect(wakes).toHaveLength(1)
-
-    // Its turn ends → the ones that piled up go out together.
+    const reported = (name: string) => wakes.flatMap((wake) => wake.body.split('\n')).filter((line) => line.startsWith(`- ${name} —`))
+    await vi.waitFor(() => expect(reported('writer')).toHaveLength(2))
+    expect(reported('editor')).toHaveLength(1)
+    // The first ending went out alone; the two that landed meanwhile share the next notice.
+    expect(wakes).toHaveLength(2)
+    const calls = vi.mocked(bus.deliverRuntimeWake).mock.calls
+    expect(calls.every(([request]) => request.coalescingKey === undefined)).toBe(true)
     endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
-    await vi.waitFor(() => expect(wakes).toHaveLength(2))
-    expect(wakes[1].body).toContain('editor')
-    expect(wakes[1].body).toContain('writer')
+    expect(wakes).toHaveLength(2)
   })
 
-  it('a lead on another machine gets the same time-window coalescing as a local one', async () => {
-    const remoteLead: FakeMember[] = [
-      { appId: LEAD, memberName: 'Lead', origin: 'remote', ownerNodeId: 'node-b' },
-      { appId: 'app-writer', memberName: 'writer' },
-      { appId: 'app-editor', memberName: 'editor' },
-    ]
-    const report = makeReport(remoteLead, bus)
-
-    runTurn(report, 'app-writer', [])
-    await vi.waitFor(() => expect(wakes).toHaveLength(1))
-
-    // Arriving moments later, this merges into the next notice instead of
-    // waking the lead again immediately — remoteness no longer matters: the
-    // old "does the lead ever tell us it read one" signal (which a remote
-    // lead could never send) is gone, replaced by the same time window a
-    // local lead gets.
+  it('keeps every ending of the same member that piled up while a notice was going out', async () => {
+    let release!: () => void
+    vi.mocked(bus.deliverRuntimeWake).mockImplementationOnce(async (params: any) => {
+      wakes.push({ toAppId: params.envelope.toAppId, body: params.envelope.body, kind: params.trigger.kind })
+      await new Promise<void>(resolve => { release = resolve })
+      return 'dispatched'
+    })
+    const report = makeReport(LOCAL_TEAM, bus)
     runTurn(report, 'app-editor', [])
-    await new Promise((r) => setTimeout(r, 0))
-    expect(wakes).toHaveLength(1)
-
-    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    await vi.waitFor(() => expect(wakes).toHaveLength(1))
+    runTurn(report, 'app-writer', [], { appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'error', message: 'first failure' } })
+    runTurn(report, 'app-writer', [], { appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'timeout' } })
+    release()
     await vi.waitFor(() => expect(wakes).toHaveLength(2))
-    expect(wakes[1].body).toContain('editor')
+    expect(wakes[1].body).toContain('first failure')
+    expect(wakes[1].body).toContain('cut off for running past the turn time limit')
   })
 
   it('the machine that did not run the turn stays quiet about how it ended', async () => {
@@ -469,10 +429,6 @@ describe('turn-end report', () => {
     // attribution (`a.at >= since`) to tell them apart at all.
     await new Promise((r) => setTimeout(r, 2))
     runTurn(report, 'app-writer', [])
-    // Force this ending's notice out now instead of waiting on the real
-    // coalescing window — the lead's own turn ending already does exactly
-    // this in production (see "endings that arrive while the lead is still
-    // reading merge into one later notice").
     endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
     await vi.waitFor(() => expect(wakes).toHaveLength(2))
     expect(lineFor(wakes[1].body, 'writer')).toContain('filed nothing during that turn')
@@ -484,14 +440,10 @@ describe('turn-end report', () => {
     async () => {
       const report = makeReport(LOCAL_TEAM, bus)
 
-      // REPORT_WAKE_CAP wakes, each forced out via the lead's-own-ending
-      // shortcut so every one of them actually goes out as its own wake
-      // instead of coalescing into fewer attempts. Looped synchronously
-      // (no per-iteration await) since each call's synchronous prefix
-      // (clear timer, delete pending, set lastFlushAt) fully runs before the
-      // next iteration starts — only the final state needs waiting for.
+      // Separate accepted handoffs so this tests the cap, not member coalescing.
       for (let i = 0; i < REPORT_WAKE_CAP; i++) {
         runTurn(report, 'app-writer', [])
+        await new Promise<void>(resolve => setImmediate(resolve))
         endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
       }
       await vi.waitFor(() => expect(wakes).toHaveLength(REPORT_WAKE_CAP))
@@ -508,315 +460,113 @@ describe('turn-end report', () => {
       expect(tripExternal).toHaveBeenCalledWith(TEAM, EPOCH, 'turnReportFlood')
     }
   )
-})
 
-/**
- * The time-window mechanism itself, under fake timers. The tests above prove
- * coalescing using the lead's-own-ending shortcut (a real, production early-
- * flush trigger), but none of them let `FLUSH_WINDOW_MS` actually elapse —
- * so none of them prove the trailing timer really fires on its own. That is
- * the core of this fix (replacing `outstanding`/`leadIsLocal`, which never
- * merged anything for a remote lead) and needs its own proof, including the
- * remote-lead case explicitly.
- */
-describe('turn-end report — time-window coalescing', () => {
-  beforeEach(() => {
-    vi.useFakeTimers()
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('an isolated ending flushes immediately; one arriving inside the window waits, then auto-flushes once the window elapses', async () => {
-    const { bus, wakes } = makeBus()
+  it('does not count notices read inside the lead\'s running turn toward the report-wake cap', async () => {
+    // A lead holding one long turn reads every member ending at a tool boundary;
+    // none of those woke it, so a long run must not trip the flood breaker.
+    vi.mocked(bus.deliverRuntimeWake).mockImplementation(async (params: any) => {
+      wakes.push({ toAppId: params.envelope.toAppId, body: params.envelope.body, kind: params.trigger.kind })
+      return 'mid_turn'
+    })
     const report = makeReport(LOCAL_TEAM, bus)
+    for (let i = 0; i < REPORT_WAKE_CAP + 1; i++) {
+      runTurn(report, 'app-writer', [])
+      await new Promise<void>(resolve => setImmediate(resolve))
+      endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    }
+    await vi.waitFor(() => expect(wakes).toHaveLength(REPORT_WAKE_CAP + 1))
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(tripExternal).not.toHaveBeenCalled()
+  })
+})
 
+
+describe('turn-end notices to a lead on another machine', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  const REMOTE_LEAD_TEAM: FakeMember[] = [
+    { appId: LEAD, memberName: 'Lead', origin: 'remote', ownerNodeId: 'node-b' },
+    { appId: 'app-writer', memberName: 'writer' },
+    { appId: 'app-editor', memberName: 'editor' },
+  ]
+
+  it('sends an isolated ending at once and carries a burst in one notice, so an older lead is woken once', async () => {
+    const { bus, wakes } = makeBus()
+    vi.mocked(bus.deliverRuntimeWake).mockImplementation(async (params: any) => {
+      wakes.push({ toAppId: params.envelope.toAppId, body: params.envelope.body, kind: params.trigger.kind })
+      return 'remote_accepted'
+    })
+    const report = makeReport(REMOTE_LEAD_TEAM, bus)
     runTurn(report, 'app-writer', [])
     await vi.advanceTimersByTimeAsync(0)
     expect(wakes).toHaveLength(1)
 
-    // Arrives well inside the window — must not wake again yet.
     runTurn(report, 'app-editor', [])
-    await vi.advanceTimersByTimeAsync(FLUSH_WINDOW_MS - 1)
+    runTurn(report, 'app-writer', [], { appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'timeout' } })
+    await vi.advanceTimersByTimeAsync(0)
     expect(wakes).toHaveLength(1)
 
-    // The window elapses — the trailing timer fires ON ITS OWN, no lead
-    // action needed.
-    await vi.advanceTimersByTimeAsync(1)
+    await vi.advanceTimersByTimeAsync(REMOTE_FLUSH_WINDOW_MS)
     expect(wakes).toHaveLength(2)
-    expect(wakes[1].body).toContain('editor')
+    expect(lineFor(wakes[1].body, 'editor')).toContain('stopped with no error reported')
+    expect(lineFor(wakes[1].body, 'writer')).toContain('cut off for running past the turn time limit')
+    report.clearEpoch(EPOCH)
   })
+})
 
-  it("the lead's own ending flushes immediately even mid-window, and cancels the trailing timer so it does not ALSO fire later", async () => {
+describe('turn-end delivery recovery', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('stops timed retries after a bounded number, logging the outage once, and tries again with the next ending', async () => {
     const { bus, wakes } = makeBus()
+    vi.mocked(bus.deliverRuntimeWake).mockRejectedValue(new Error('Could not reach the coordinating conversation (not_found)'))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     const report = makeReport(LOCAL_TEAM, bus)
-
     runTurn(report, 'app-writer', [])
-    await vi.advanceTimersByTimeAsync(0)
-    expect(wakes).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(vi.mocked(bus.deliverRuntimeWake)).toHaveBeenCalledTimes(1 + MAX_TIMED_RETRIES)
+    expect(errors.mock.calls.filter(([line]) => String(line).includes('could not reach the lead'))).toHaveLength(1)
 
+    vi.mocked(bus.deliverRuntimeWake).mockImplementation(async (params: any) => {
+      wakes.push({ toAppId: params.envelope.toAppId, body: params.envelope.body, kind: params.trigger.kind })
+      return 'dispatched'
+    })
     runTurn(report, 'app-editor', [])
-    await vi.advanceTimersByTimeAsync(1) // still well inside the window
-    expect(wakes).toHaveLength(1)
-
-    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
-    await vi.advanceTimersByTimeAsync(0)
-    expect(wakes).toHaveLength(2)
-    expect(wakes[1].body).toContain('editor')
-
-    // The trailing timer that would have fired later must have been
-    // cancelled — advancing past where it would have fired must not
-    // produce a third, empty wake.
-    await vi.advanceTimersByTimeAsync(FLUSH_WINDOW_MS)
-    expect(wakes).toHaveLength(2)
-  })
-
-  it('a lead on another machine gets exactly the same window-based coalescing and auto-flush as a local one', async () => {
-    const { bus, wakes } = makeBus()
-    const remoteLead: FakeMember[] = [
-      { appId: LEAD, memberName: 'Lead', origin: 'remote', ownerNodeId: 'node-b' },
-      { appId: 'app-writer', memberName: 'writer' },
-      { appId: 'app-editor', memberName: 'editor' },
-    ]
-    const report = makeReport(remoteLead, bus)
-
-    runTurn(report, 'app-writer', [])
     await vi.advanceTimersByTimeAsync(0)
     expect(wakes).toHaveLength(1)
-
-    // Arriving moments later, this merges into the next notice instead of
-    // waking the lead again immediately — remoteness no longer matters: the
-    // old "does the lead ever tell us it read one" signal (which a remote
-    // lead could never send, so it never merged anything cross-machine) is
-    // gone, replaced by the exact same time window a local lead gets.
-    runTurn(report, 'app-editor', [])
-    await vi.advanceTimersByTimeAsync(FLUSH_WINDOW_MS - 1)
-    expect(wakes).toHaveLength(1)
-
-    await vi.advanceTimersByTimeAsync(1)
-    expect(wakes).toHaveLength(2)
-    expect(wakes[1].body).toContain('editor')
+    expect(lineFor(wakes[0].body, 'writer')).toContain('stopped with no error reported')
+    expect(lineFor(wakes[0].body, 'editor')).toContain('stopped with no error reported')
+    errors.mockRestore()
+    report.clearEpoch(EPOCH)
   })
 
-  it(
-    'a healthy team sustained at the maximum rate the window allows, for a long-running epoch, ' +
-      'never trips the report-wake cap — a fixed backstop, not a second rate limiter',
-    async () => {
-      const { bus, tripExternal } = makeBus()
-      const report = makeReport(LOCAL_TEAM, bus)
-
-      // REPORT_WAKE_CAP is a fixed backstop, well above what any healthy
-      // long run generates at one wake every FLUSH_WINDOW_MS.
-      const healthyWakesForFullEpoch = REPORT_WAKE_CAP / 2
-      for (let i = 0; i < healthyWakesForFullEpoch; i++) {
-        runTurn(report, 'app-writer', [])
-        await vi.advanceTimersByTimeAsync(FLUSH_WINDOW_MS)
-      }
-
-      expect(tripExternal).not.toHaveBeenCalled()
-    }
-  )
-})
-
-/**
- * The busy-gating fix itself: a lead that stays busy for a long stretch must
- * not be woken by the flush window ticking on its own — only its own turn
- * ending may flush a busy stretch, and it must do so exactly once, carrying
- * everything that piled up. Before this fix, `requestFlush` fired on elapsed
- * time alone: several endings spread across one long busy stretch each
- * queued their own buffered turn, and the lead surfaced from one only to find
- * the next already queued behind it — the screenful of independent
- * "nothing to do" replies this fix removes.
- *
- * `isLeadGenerating` here is a fake the test controls directly (see
- * `TurnReportDeps.isLeadGenerating` for what it is in production and why).
- * The production wiring itself cannot be exercised by a unit test; it was
- * verified by reading the call chain from `bootstrap/extended.ts` through to
- * `app-chat.ts`, not by a test in this file.
- */
-describe('turn-end report — busy-lead gating', () => {
-  beforeEach(() => {
-    vi.useFakeTimers()
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('a lead busy for longer than several flush windows is not woken by the window itself', async () => {
+  it('retries a failed handoff without needing another ending, then clears its timer', async () => {
     const { bus, wakes } = makeBus()
-    let busy = true
-    const report = makeReport(LOCAL_TEAM, bus, { isLeadGenerating: () => busy })
-
-    // Four endings, one per window, while the lead stays busy throughout —
-    // the buggy version fired a separate buffered flush for each of these.
-    for (let i = 0; i < 4; i++) {
-      runTurn(report, i % 2 === 0 ? 'app-writer' : 'app-editor', [])
-      await vi.advanceTimersByTimeAsync(FLUSH_WINDOW_MS)
-    }
-    expect(wakes).toHaveLength(0)
-
-    // The lead frees up and its own turn ends — everything that piled up
-    // during the whole busy stretch goes out as exactly ONE notice.
-    busy = false
-    report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, triggerKind: 'human_message', fate: { kind: 'ended' } })
-    await vi.advanceTimersByTimeAsync(0)
-    expect(wakes).toHaveLength(1)
-    expect(wakes[0].body).toContain('writer')
-    expect(wakes[0].body).toContain('editor')
-  })
-
-  it('a trailing timer scheduled while idle defers to the lead-ending flush if the lead turns busy before it fires', async () => {
-    const { bus, wakes } = makeBus()
-    let busy = false
-    const report = makeReport(LOCAL_TEAM, bus, { isLeadGenerating: () => busy })
-
-    // Isolated ending while idle: flushes immediately, same as ever.
-    runTurn(report, 'app-writer', [])
-    await vi.advanceTimersByTimeAsync(0)
-    expect(wakes).toHaveLength(1)
-
-    // A second ending lands inside the window (still idle) and schedules the
-    // trailing timer as usual.
-    runTurn(report, 'app-editor', [])
-    await vi.advanceTimersByTimeAsync(1)
-    expect(wakes).toHaveLength(1)
-
-    // The lead becomes busy with something unrelated (e.g. its own person
-    // starts a chat) before the trailing timer fires.
-    busy = true
-    await vi.advanceTimersByTimeAsync(FLUSH_WINDOW_MS)
-    // The timer fired, saw the lead busy, and deferred to the busy-backstop
-    // path instead of flushing — no second wake yet.
-    expect(wakes).toHaveLength(1)
-
-    // The lead's own turn ends — that flushes the pending "editor" ending.
-    busy = false
-    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
-    await vi.advanceTimersByTimeAsync(0)
-    expect(wakes).toHaveLength(2)
-    expect(wakes[1].body).toContain('editor')
-  })
-
-  it('a member ending while the lead is busy does not itself flush — it only arms the busy-backstop recheck, which keeps re-arming while busy stays true', async () => {
-    const { bus, wakes } = makeBus()
-    const report = makeReport(LOCAL_TEAM, bus, { isLeadGenerating: () => true })
-
-    runTurn(report, 'app-writer', [])
-    // Advance past several backstop periods — each recheck must see "still
-    // busy" and re-arm rather than flush into a bus mock that always resolves
-    // as 'dispatched' regardless of real busyness.
-    await vi.advanceTimersByTimeAsync(LEAD_BUSY_RECHECK_MS * 3)
-    expect(wakes).toHaveLength(0)
-  })
-
-  it('the busy-backstop recheck eventually flushes on its own once the busy reading clears, even without a lead-own-ending signal ever arriving', async () => {
-    const { bus, wakes } = makeBus()
-    let busy = true
-    const report = makeReport(LOCAL_TEAM, bus, { isLeadGenerating: () => busy })
-
+    vi.mocked(bus.deliverRuntimeWake).mockRejectedValueOnce(new Error('mailbox temporarily full'))
+    const report = makeReport(LOCAL_TEAM, bus)
     runTurn(report, 'app-writer', [])
     await vi.advanceTimersByTimeAsync(0)
     expect(wakes).toHaveLength(0)
-
-    // The busy reading clears on its own — this is the safety net for a
-    // signal that resolved late (or was ever plain wrong), not the primary
-    // path: nothing here calls `noteTurnEnded` for the lead itself.
-    busy = false
-    await vi.advanceTimersByTimeAsync(LEAD_BUSY_RECHECK_MS)
+    await vi.advanceTimersByTimeAsync(3000)
     expect(wakes).toHaveLength(1)
-    expect(wakes[0].body).toContain('writer')
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(wakes).toHaveLength(1)
+    report.clearEpoch(EPOCH)
   })
 
-  it("a member's ending and the lead's own ending landing in the same busy stretch do not lose the member's ending", async () => {
+  it('drops a failed handoff retry when the task closes', async () => {
     const { bus, wakes } = makeBus()
-    let busy = true
-    const report = makeReport(LOCAL_TEAM, bus, { isLeadGenerating: () => busy })
-
-    // The member's turn ends while the lead is still busy — piles into
-    // pending, no flush yet.
+    vi.mocked(bus.deliverRuntimeWake).mockRejectedValueOnce(new Error('unavailable'))
+    const store = makeStore(LOCAL_TEAM)
+    const report = createTurnReport({ store, bus })
     runTurn(report, 'app-writer', [])
     await vi.advanceTimersByTimeAsync(0)
+    vi.mocked(store.getEpochById).mockReturnValue({ id: EPOCH, endedAt: Date.now() } as any)
+    await vi.advanceTimersByTimeAsync(3000)
     expect(wakes).toHaveLength(0)
-
-    // The lead's own turn ends moments later, in the same busy stretch.
-    busy = false
-    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
-    await vi.advanceTimersByTimeAsync(0)
-
-    expect(wakes).toHaveLength(1)
-    expect(wakes[0].body).toContain('writer')
-  })
-
-  it('endings beyond FACTS_PER_NOTICE piling up during a busy stretch are dropped from the front, but counted in the eventual notice', async () => {
-    const { bus, wakes } = makeBus()
-    let busy = true
-    const report = makeReport(LOCAL_TEAM, bus, { isLeadGenerating: () => busy })
-
-    // Two more than the cap — the two oldest are dropped, not silently lost.
-    for (let i = 0; i < FACTS_PER_NOTICE + 2; i++) {
-      runTurn(report, i % 2 === 0 ? 'app-writer' : 'app-editor', [])
-    }
-    expect(wakes).toHaveLength(0)
-
-    busy = false
-    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
-    await vi.advanceTimersByTimeAsync(0)
-
-    expect(wakes).toHaveLength(1)
-    expect(wakes[0].body).toContain('2 earlier endings piled up')
-  })
-})
-
-/**
- * A delivery failure puts the batch back in `pending` for the next attempt —
- * but endings that land WHILE that failed attempt is in flight merge into the
- * put-back batch too, and that merge can itself cross `FACTS_PER_NOTICE`. The
- * overflow from that merge must be counted the same way the normal
- * accumulation path counts it, or a delivery failure becomes the one silent
- * way to lose an ending — the exact failure this whole module exists to
- * prevent, on the one path most likely to be hit under real network trouble.
- */
-describe('turn-end report — delivery-failure accounting', () => {
-  it('endings that pile up during a failed delivery attempt are counted in the retry, not lost', async () => {
-    let report: TurnReport
-    let deliverCalls = 0
-    let busy = false
-    const wakes: { body: string }[] = []
-    const bus = {
-      deliverRuntimeWake: vi.fn(async (params: any) => {
-        deliverCalls += 1
-        if (deliverCalls === 1) {
-          // Mark the lead busy for the duration of this injection so the
-          // extra endings below only accumulate (no timer, no second flush)
-          // — mirroring "something else landed while this attempt was on
-          // the wire", without needing to race real timers to prove it.
-          busy = true
-          for (let i = 0; i < FACTS_PER_NOTICE; i++) {
-            endCollaboration(report, { appId: 'app-editor', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
-          }
-          busy = false
-          throw new Error('network blip')
-        }
-        wakes.push({ body: params.envelope.body })
-        return 'dispatched'
-      }),
-      tripExternal: vi.fn(),
-    } as unknown as MessageBus
-
-    report = createTurnReport({ store: makeStore(LOCAL_TEAM), bus, isLeadGenerating: () => busy })
-
-    // The one writer ending in `facts`, plus the FACTS_PER_NOTICE editor
-    // endings injected during the failed attempt, merge to one over the cap.
-    runTurn(report, 'app-writer', [])
-    await vi.waitFor(() => expect(deliverCalls).toBe(1))
-    await new Promise((r) => setTimeout(r, 0)) // let flush()'s catch block finish running
-
-    // Force the retry via the lead's own ending, same as every other test here.
-    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
-    await vi.waitFor(() => expect(wakes).toHaveLength(1))
-
-    expect(wakes[0].body).toContain('1 earlier ending piled up')
+    expect(vi.mocked(bus.deliverRuntimeWake)).toHaveBeenCalledTimes(1)
+    report.clearEpoch(EPOCH)
   })
 })

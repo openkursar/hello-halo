@@ -24,16 +24,13 @@ import {
   getActiveRun,
   isRunActive,
   injectIntoActiveRun,
+  tryInjectIntoActiveRun,
   type ActiveRunHandle,
 } from '../../../../src/main/apps/runtime/active-runs'
 import { openSessionWriter, readSessionMessages } from '../../../../src/main/apps/runtime/session-store'
 
-function makeHandle(overrides: Partial<ActiveRunHandle> = {}): {
-  handle: ActiveRunHandle
-  send: ReturnType<typeof vi.fn>
-  writeTrigger: ReturnType<typeof vi.fn>
-} {
-  const send = vi.fn()
+function makeHandle(overrides: Partial<ActiveRunHandle> = {}) {
+  const send = vi.fn(() => true)
   const writeTrigger = vi.fn()
   const writeEvent = vi.fn()
   const handle: ActiveRunHandle = {
@@ -42,8 +39,8 @@ function makeHandle(overrides: Partial<ActiveRunHandle> = {}): {
     spaceId: 'space-1',
     triggerType: 'manual',
     startedAt: 0,
-    session: { send },
-    writer: { writeTrigger, writeEvent },
+    session: { send, sendIntoLiveTurn: send },
+    writer: { writeTrigger, writeEvent, writePush: vi.fn(), writeInputOutcome: vi.fn() },
     ...overrides,
   }
   return { handle, send, writeTrigger }
@@ -80,19 +77,56 @@ describe('active-runs: injectIntoActiveRun', () => {
     unregisterActiveRun('run-2')
   })
 
-  it('persists to JSONL then sends to the session', () => {
+  it('accepts live input before recording it so refused input cannot appear twice', () => {
     const { handle, send, writeTrigger } = makeHandle()
     registerActiveRun(handle)
 
     injectIntoActiveRun('app-1', 'run-1', 'check the staging URL')
 
     expect(writeTrigger).toHaveBeenCalledWith('check the staging URL', undefined, undefined, undefined, undefined)
-    expect(send).toHaveBeenCalledWith('check the staging URL')
+    expect(send).toHaveBeenCalledWith('check the staging URL', expect.anything())
 
-    // Ordering: persist before send (so a message survives even if the turn ends instantly)
+    // Recording follows ownership transfer; a declined send leaves no false transcript entry.
     const writeOrder = writeTrigger.mock.invocationCallOrder[0]
     const sendOrder = send.mock.invocationCallOrder[0]
-    expect(writeOrder).toBeLessThan(sendOrder)
+    expect(sendOrder).toBeLessThan(writeOrder)
+  })
+
+  it('keeps declined input with the caller and writes no transcript row', () => {
+    const { handle, send, writeTrigger } = makeHandle()
+    send.mockReturnValue(false)
+    registerActiveRun(handle)
+    expect(tryInjectIntoActiveRun('app-1', 'run-1', [{ text: 'late message' }], () => {})).toBe(false)
+    expect(writeTrigger).not.toHaveBeenCalled()
+  })
+
+  it('delivers one batch while preserving each original transcript record', () => {
+    const { handle, send, writeTrigger } = makeHandle()
+    registerActiveRun(handle)
+    expect(tryInjectIntoActiveRun('app-1', 'run-1', [{ text: 'first event' }, { text: 'second event' }], () => {})).toBe(true)
+    expect(send).toHaveBeenCalledWith('first event\n\nsecond event', expect.objectContaining({ onWithdrawn: expect.any(Function) }))
+    expect(writeTrigger.mock.calls.map((call) => call[0])).toEqual(['first event', 'second event'])
+  })
+
+  it('hands back the records of input a person stopped before the run read it', () => {
+    const { handle, send, writeTrigger } = makeHandle()
+    writeTrigger.mockReturnValueOnce({ timestamp: 't1', inputId: 'in-1' }).mockReturnValueOnce({ timestamp: 't2', inputId: 'in-2' })
+    registerActiveRun(handle)
+    const withdrawn = vi.fn()
+    tryInjectIntoActiveRun('app-1', 'run-1', [{ text: 'first' }, { text: 'second' }], withdrawn)
+    const options = (send.mock.calls[0] as unknown[])[1] as { onWithdrawn: () => void }
+    options.onWithdrawn()
+    expect(withdrawn).toHaveBeenCalledWith(['in-1', 'in-2'])
+  })
+
+  it('marks a person’s run-detail words a stop left unread', () => {
+    const { handle, send, writeTrigger } = makeHandle()
+    writeTrigger.mockReturnValueOnce({ timestamp: 't1', inputId: 'in-1' })
+    registerActiveRun(handle)
+    injectIntoActiveRun('app-1', 'run-1', 'one more thing')
+    const options = (send.mock.calls[0] as unknown[])[1] as { onWithdrawn: () => void }
+    options.onWithdrawn()
+    expect(handle.writer!.writeInputOutcome).toHaveBeenCalledWith('in-1', 'stopped')
   })
 
   it('trims surrounding whitespace before persist + send', () => {
@@ -102,7 +136,7 @@ describe('active-runs: injectIntoActiveRun', () => {
     injectIntoActiveRun('app-1', 'run-1', '  go back to step 2  \n')
 
     expect(writeTrigger).toHaveBeenCalledWith('go back to step 2', undefined, undefined, undefined, undefined)
-    expect(send).toHaveBeenCalledWith('go back to step 2')
+    expect(send).toHaveBeenCalledWith('go back to step 2', expect.anything())
   })
 
   it('throws on empty / whitespace-only text and does not touch the session', () => {
@@ -129,12 +163,12 @@ describe('active-runs: injectIntoActiveRun', () => {
   })
 
   it('works without a writer (no space path resolved) — still sends to session', () => {
-    const send = vi.fn()
-    const { handle } = makeHandle({ writer: undefined, session: { send } })
+    const send = vi.fn(() => true)
+    const { handle } = makeHandle({ writer: undefined, session: { send, sendIntoLiveTurn: send } })
     registerActiveRun(handle)
 
     expect(() => injectIntoActiveRun('app-1', 'run-1', 'continue please')).not.toThrow()
-    expect(send).toHaveBeenCalledWith('continue please')
+    expect(send).toHaveBeenCalledWith('continue please', expect.anything())
   })
 
   it('isolates concurrent runs of different apps', () => {
@@ -145,7 +179,7 @@ describe('active-runs: injectIntoActiveRun', () => {
 
     injectIntoActiveRun('app-2', 'run-2', 'B message')
 
-    expect(b.send).toHaveBeenCalledWith('B message')
+    expect(b.send).toHaveBeenCalledWith('B message', expect.anything())
     expect(a.send).not.toHaveBeenCalled()
 
     unregisterActiveRun('run-2')
@@ -170,21 +204,21 @@ describe('active-runs: injection persistence (real JSONL round-trip)', () => {
     // Real writer + reader from session-store — exercises the persistence half
     // of injection (what makes a supplement survive reload + reach remote clients).
     const writer = openSessionWriter(dir, appId, runId)
-    const send = vi.fn()
+    const send = vi.fn(() => true)
     registerActiveRun({
       runId,
       appId,
       spaceId: 'space-real',
       triggerType: 'manual',
       startedAt: 0,
-      session: { send },
+      session: { send, sendIntoLiveTurn: send },
       writer,
     })
 
     injectIntoActiveRun(appId, runId, 'Use UTC for all timestamps.')
 
     // Live half: pushed into the session.
-    expect(send).toHaveBeenCalledWith('Use UTC for all timestamps.')
+    expect(send).toHaveBeenCalledWith('Use UTC for all timestamps.', expect.anything())
 
     // Persistence half: the run JSONL now reconstructs a user message bubble.
     const messages = readSessionMessages(dir, appId, runId)

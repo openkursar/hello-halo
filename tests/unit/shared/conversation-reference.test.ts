@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest'
 import { createHash, randomUUID } from 'crypto'
 import {
   CHAT_TITLE_PREVIEW_CHARS,
+  conversationReferenceShortId,
   digitalHumanChatTitle,
   formatConversationReference,
   isShortConversationId,
@@ -76,5 +77,20 @@ describe('digitalHumanChatTitle', () => {
   it('cuts a long first message to the preview length', () => {
     const title = digitalHumanChatTitle({ ...chat, lastMessage: 'x'.repeat(CHAT_TITLE_PREVIEW_CHARS + 30) }, 'New chat')
     expect(title).toBe(`Analyst: ${'x'.repeat(CHAT_TITLE_PREVIEW_CHARS)}`)
+  })
+})
+
+describe('conversationReferenceShortId', () => {
+  it('reads the short id back from the link target the composer writes', () => {
+    const id = randomUUID()
+    const href = /\]\((.+)\)$/.exec(formatConversationReference('Plan', id))![1]
+    expect(conversationReferenceShortId(href)).toBe(shortConversationId(id))
+    expect(conversationReferenceShortId('CONV:3A5D77EA')).toBe('3a5d77ea')
+  })
+
+  it('is null for anything that is not a reference', () => {
+    for (const href of ['https://example.com', 'conv:', 'conv:3a5d77', 'conv:3a5d77ea0', 'conv:zzzzzzzz', 'xconv:3a5d77ea', '']) {
+      expect(conversationReferenceShortId(href), href).toBeNull()
+    }
   })
 })

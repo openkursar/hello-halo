@@ -104,6 +104,8 @@ interface CapturedRes {
   status: (n: number) => CapturedRes
   setHeader: (k: string, v: string) => void
   getHeader: (k: string) => string | undefined
+  hasHeader: (k: string) => boolean
+  removeHeader: (k: string) => void
   json: (b: unknown) => void
   end: (b?: string) => void
   on: (event: string, cb: () => void) => void
@@ -126,6 +128,12 @@ function makeRes(): CapturedRes {
     },
     getHeader(k) {
       return this.headers[k.toLowerCase()]
+    },
+    hasHeader(k) {
+      return k.toLowerCase() in this.headers
+    },
+    removeHeader(k) {
+      delete this.headers[k.toLowerCase()]
     },
     json(b) {
       this.jsonBody = b
@@ -617,7 +625,7 @@ describe('upstream error mapping', () => {
   })
 })
 
-describe('upstream error retry hints', () => {
+describe('retry headers on error replies', () => {
   async function relay(upstream: { status: number; body: unknown; headers?: Record<string, string> }, apiType = 'chat_completions') {
     const req = anthReq()
     runInterceptors.mockResolvedValue({ intercepted: false, request: req })
@@ -666,82 +674,70 @@ describe('upstream error retry hints', () => {
     expect(res.headers['retry-after']).toBeUndefined()
   })
 
-  it('forwards the upstream retry-after rather than replacing it', async () => {
-    const res = await relay({
-      status: 429,
-      body: { error: { type: 'rate_limit_error', message: 'slow down' } },
-      headers: { 'retry-after': '20' },
-    })
-
-    expect(res.headers['retry-after']).toBe('20')
-  })
-
   it.each(['chat_completions', 'anthropic_passthrough'])(
-    '%s: preserves short retry-after despite quota wording',
+    '%s: passes on none of the upstream\'s retry hints, even a wait of hours',
     async (apiType) => {
       const res = await relay({
         status: 429,
-        body: { error: { type: 'rate_limit_error', message: 'Quota exceeded: requests per minute. Please retry in 2 seconds.' } },
-        headers: { 'retry-after': '2' },
+        body: { type: 'error', error: { type: 'rate_limit_error', message: "This request would exceed your account's rate limit. Please try again later." } },
+        headers: { 'retry-after': '15007', 'retry-after-ms': '15007000', 'x-should-retry': 'true' },
       }, apiType)
 
       expect(res.statusCode).toBe(429)
-      expect(res.headers['retry-after']).toBe('2')
+      expect(res.headers['retry-after']).toBeUndefined()
+      expect(res.headers['retry-after-ms']).toBeUndefined()
       expect(res.headers['x-should-retry']).toBeUndefined()
     },
   )
 
-  it('honors an explicit upstream refusal to retry even with a retry-after', async () => {
-    const res = await relay({
-      status: 429,
-      body: { error: { type: 'rate_limit_error', message: 'Quota exceeded' } },
-      headers: { 'retry-after': '2', 'x-should-retry': 'false' },
-    })
-
-    expect(res.headers['x-should-retry']).toBe('false')
-    expect(res.headers['retry-after']).toBe('2')
-  })
-
-  it('suggests a short wait for a server-side failure that came without one', async () => {
-    const res = await relay({ status: 503, body: 'Service Unavailable' })
-
-    expect(res.statusCode).toBe(500)
-    expect(res.headers['retry-after']).toBe('3')
-  })
-
-  it('passthrough: keeps the upstream retry-after instead of forcing a short one', async () => {
-    const res = await relay(
-      {
+  it.each(['chat_completions', 'anthropic_passthrough'])(
+    '%s: ignores an upstream refusal to retry an ordinary rate limit',
+    async (apiType) => {
+      const res = await relay({
         status: 429,
         body: { type: 'error', error: { type: 'rate_limit_error', message: 'slow down' } },
-        headers: { 'retry-after': '30' },
-      },
+        headers: { 'retry-after': '2', 'x-should-retry': 'false' },
+      }, apiType)
+
+      expect(res.headers['x-should-retry']).toBeUndefined()
+      expect(res.headers['retry-after']).toBeUndefined()
+    },
+  )
+
+  it.each(['chat_completions', 'anthropic_passthrough'])(
+    '%s: refuses to retry quota wording even when the upstream asks for a short wait',
+    async (apiType) => {
+      const res = await relay({
+        status: 429,
+        body: { type: 'error', error: { type: 'rate_limit_error', message: 'Quota exceeded: requests per minute. Please retry in 2 seconds.' } },
+        headers: { 'retry-after': '2', 'x-should-retry': 'true' },
+      }, apiType)
+
+      expect(res.statusCode).toBe(429)
+      expect(res.headers['x-should-retry']).toBe('false')
+      expect(res.headers['retry-after']).toBeUndefined()
+    },
+  )
+
+  it.each(['chat_completions', 'anthropic_passthrough'])(
+    '%s: adds no wait of its own to a server-side failure',
+    async (apiType) => {
+      const res = await relay({ status: 503, body: 'Service Unavailable' }, apiType)
+
+      expect(res.headers['retry-after']).toBeUndefined()
+      expect(res.headers['x-should-retry']).toBeUndefined()
+    },
+  )
+
+  it('passthrough: forwards the rest of the error as the upstream sent it', async () => {
+    const body = { type: 'error', error: { type: 'rate_limit_error', message: 'slow down' } }
+    const res = await relay(
+      { status: 429, body, headers: { 'retry-after': '30', 'request-id': 'req_upstream' } },
       'anthropic_passthrough',
     )
 
     expect(res.statusCode).toBe(429)
-    expect(res.headers['retry-after']).toBe('30')
-  })
-
-  it('passthrough: marks a spent quota as not retryable', async () => {
-    const res = await relay(
-      { status: 429, body: { type: 'error', error: { type: 'rate_limit_error', message: 'You exceeded your current quota' } } },
-      'anthropic_passthrough',
-    )
-
-    expect(res.headers['x-should-retry']).toBe('false')
-  })
-
-  it('passthrough: an upstream x-should-retry is authoritative', async () => {
-    const res = await relay(
-      {
-        status: 429,
-        body: { type: 'error', error: { type: 'rate_limit_error', message: 'usage limit' } },
-        headers: { 'x-should-retry': 'true' },
-      },
-      'anthropic_passthrough',
-    )
-
-    expect(res.headers['x-should-retry']).toBe('true')
+    expect(res.headers['request-id']).toBe('req_upstream')
+    expect(res.ended).toBe(JSON.stringify(body))
   })
 })

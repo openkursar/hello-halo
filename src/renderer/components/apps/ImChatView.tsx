@@ -23,6 +23,8 @@ import { useConversationDetail } from '../../hooks/useConversationDetail'
 import { useWsRecovery } from '../../hooks/useWsRecovery'
 import { useTranslation } from '../../i18n'
 import type { Message } from '../../types'
+import { mergeArrivingMessages, withStoppedInputs } from '../../utils/live-inputs'
+import { reconcileTranscript } from '../../stores/chat.store'
 import type { ImSessionRecord, SessionSource } from '../../../shared/types/im-channel'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 import { buildImSessionKey } from '../../../shared/apps/im-keys'
@@ -48,6 +50,13 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
 
   // Live reply detail for this conversation, desktop and remote alike.
   useConversationDetail(conversationId)
+
+  // A turn already running when the chat opens shows its steps so far and any
+  // retry it is waiting on, as the chat page does.
+  const handledByTeam = !!session.teamContext
+  useEffect(() => {
+    if (!handledByTeam) void useChatStore.getState().recoverRunningTurn(conversationId)
+  }, [conversationId, handledByTeam])
 
   // Persisted messages
   const [messages, setMessages] = useState<Message[]>([])
@@ -75,6 +84,16 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
     setShowScrollButton(!atBottom)
   }, [])
 
+  useEffect(() => api.onAgentInputArrived(event => {
+    if (event.conversationId !== conversationId) return
+    setMessages(previous => mergeArrivingMessages(previous, event.messages))
+    setLoadState('loaded')
+  }), [conversationId])
+
+  useEffect(() => api.onAgentInputStopped(event => {
+    if (event.conversationId === conversationId) setMessages(previous => withStoppedInputs(previous, event.messages))
+  }), [conversationId])
+
   // Load persisted messages
   useEffect(() => {
     let cancelled = false
@@ -86,7 +105,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
         if (cancelled) return
         if (res.success && res.data) {
           const msgs = (res.data as Message[]) ?? []
-          setMessages(msgs)
+          setMessages(previous => reconcileTranscript(previous, msgs, { dropUnconfirmed: !useChatStore.getState().getSession(conversationId).isGenerating }).messages)
           setLoadState(msgs.length > 0 ? 'loaded' : 'empty')
         } else {
           console.warn('[ImChatView] History rejected', { appId, spaceId, error: res.error })
@@ -116,7 +135,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
           if (cancelled) return
           if (res.success && res.data) {
             const msgs = (res.data as Message[]) ?? []
-            setMessages(msgs)
+            setMessages(previous => reconcileTranscript(previous, msgs, { dropUnconfirmed: !useChatStore.getState().getSession(conversationId).isGenerating }).messages)
             setLoadState(msgs.length > 0 ? 'loaded' : 'empty')
           }
         })
@@ -138,7 +157,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
           if (cancelled) return
           if (res.success && res.data) {
             const msgs = (res.data as Message[]) ?? []
-            setMessages(msgs)
+            setMessages(previous => reconcileTranscript(previous, msgs, { dropUnconfirmed: !useChatStore.getState().getSession(conversationId).isGenerating }).messages)
             setLoadState(msgs.length > 0 ? 'loaded' : 'empty')
           }
         })
@@ -159,7 +178,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
       .then(res => {
         if (res.success && res.data) {
           const msgs = (res.data as Message[]) ?? []
-          setMessages(msgs)
+          setMessages(previous => reconcileTranscript(previous, msgs, { dropUnconfirmed: !useChatStore.getState().getSession(conversationId).isGenerating }).messages)
           setLoadState(msgs.length > 0 ? 'loaded' : 'empty')
         }
       })

@@ -4,7 +4,7 @@
  */
 
 import { execFileSync } from 'child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 
@@ -13,6 +13,28 @@ const ISOLATION_KEYS = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_AUTHOR_
 /** A scratch directory (real path, so it compares equal to what git prints). */
 export function makeTempDir(prefix = 'halo-git-test-'): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)))
+}
+
+/**
+ * Removes a repository directory. On Windows git marks its object files
+ * read-only, which rmSync refuses to delete; clear the bits, then remove.
+ */
+export function removeRepoDir(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true })
+    return
+  } catch {
+    // Read-only entries below; clear them and retry.
+  }
+  const clearReadOnly = (at: string): void => {
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      const child = join(at, entry.name)
+      if (entry.isDirectory()) clearReadOnly(child)
+      chmodSync(child, 0o666)
+    }
+  }
+  clearReadOnly(dir)
+  rmSync(dir, { recursive: true, force: true })
 }
 
 /**

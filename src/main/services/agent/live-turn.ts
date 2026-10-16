@@ -17,34 +17,33 @@
  * nor the probe writes anything down here.
  */
 
-import { v2Sessions, getConsumerHandle } from './session-manager'
+import { v2Sessions, getConsumerHandle, activeSessions, hasPendingSessionInput } from './session-manager'
+import { buildMessageContent } from './message-utils'
+import type { ImageAttachment } from './types'
 
 const LOG_TAG = '[Agent][LiveTurn]'
 
 /** Whether `conversationId` has a turn the consumer is actively processing. */
 export function hasLiveTurn(conversationId: string): boolean {
   const consumer = getConsumerHandle(conversationId)
-  return !!(consumer?.isRunning && consumer.getActiveSessionState())
+  return activeSessions.has(conversationId) || hasPendingSessionInput(conversationId) || !!(consumer?.isRunning && consumer.getActiveSessionState())
+}
+
+export interface LiveInputOptions {
+  /**
+   * The person stopped the turn before the engine read this input, so it will
+   * never run. Called at most once, inside that stop; never for input the
+   * engine read, and never on internal stops, rebuilds or crashes.
+   */
+  onWithdrawn: () => void
 }
 
 /**
- * Hand `text` into the turn `conversationId` is already running. The engine
- * absorbs it at that turn's next tool-round boundary, which still ends with a
- * single result — no second turn is started and nothing is interrupted; the
- * same primitive backs a person typing while their agent is generating.
- *
- * Returns false — never throws — whenever the text did NOT reach the engine:
- * no live session, no turn in flight, or the send itself failed. A live
- * session is not a live TURN: between the engine emitting a turn's result and
- * the consumer tearing the subprocess down, the session object is still here
- * and nothing is listening — text sent into it goes nowhere. So this checks
- * the narrowest signal available (`hasLiveTurn`) and declines otherwise. The
- * check narrows that window rather than closing it — the turn can still end
- * in the microseconds after it reads true — which is why a caller must treat
- * false as "use your slower path" and never as "lost", and treat true as "the
- * engine has it".
+ * Synchronously transfers ownership to the engine. Accepted input reaches its
+ * next tool boundary or an immediate continuation if the turn is already ending.
+ * False leaves ownership with the caller; no input was enqueued.
  */
-export function sendIntoLiveTurn(conversationId: string, text: string): boolean {
+export function sendIntoLiveTurn(conversationId: string, text: string, images: ImageAttachment[] | undefined, options: LiveInputOptions): boolean {
   const info = v2Sessions.get(conversationId)
   if (!info) {
     console.warn(`${LOG_TAG} No live session for ${conversationId}; not delivered`)
@@ -54,11 +53,40 @@ export function sendIntoLiveTurn(conversationId: string, text: string): boolean 
     console.warn(`${LOG_TAG} No turn in flight for ${conversationId}; not delivered`)
     return false
   }
+  if (!info.session.sendIntoLiveTurn) {
+    console.warn(`${LOG_TAG} Engine has no synchronous live-input acceptance for ${conversationId}; not delivered`)
+    return false
+  }
+  const onWithdrawn = () => {
+    try {
+      options.onWithdrawn()
+    } catch (err) {
+      console.error(`${LOG_TAG} Withdrawn-input handler failed for ${conversationId}:`, err)
+    }
+  }
   try {
-    info.session.send(text)
+    const content = buildMessageContent(text, images)
+    return info.session.sendIntoLiveTurn(typeof content === 'string' ? content : {
+      type: 'user', session_id: '', parent_tool_use_id: null, message: { role: 'user', content },
+    }, { onWithdrawn })
   } catch (err) {
     console.error(`${LOG_TAG} Delivery into the running turn of ${conversationId} failed:`, err)
     return false
   }
-  return true
+}
+
+/**
+ * A person's stop: takes back what the engine accepted for `conversationId`
+ * but has not read, calling each input's `onWithdrawn`, before the turn is
+ * interrupted. Input accepted after this call is not touched.
+ */
+export async function withdrawUnreadLiveInput(conversationId: string): Promise<void> {
+  const session = v2Sessions.get(conversationId)?.session
+  if (!session?.withdrawUnreadInput) return
+  try {
+    const withdrawn = await session.withdrawUnreadInput()
+    if (withdrawn > 0) console.log(`${LOG_TAG} Stop withdrew ${withdrawn} unread input(s) of ${conversationId}; they will not run`)
+  } catch (err) {
+    console.error(`${LOG_TAG} Withdrawing unread input of ${conversationId} failed; it may still run after the stop:`, err)
+  }
 }

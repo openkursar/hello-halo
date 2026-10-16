@@ -35,6 +35,15 @@ it('keeps internal execution inputs with their outputs and retains unfinished tu
   expect(turns[1].outputs.map(message => message.id)).toEqual(['result'])
   expect(turns[1].input?.metadata?.teamTriggerKind).toBe('message')
 })
+it('records one execution for messages delivered together and for messages read while it ran', () => {
+  const team = (id: string, inputMode?: 'live') => ({ ...received, id, role: 'system' as const, source: 'team-message' as const, metadata: { teamId: 'team', teamTriggerKind: 'message', ...(inputMode ? { inputMode } : {}) } })
+  const output = (id: string) => ({ ...received, id, role: 'assistant' as const })
+  const turns = executionTurns([team('t1'), team('t2'), team('t3'), output('r1'), team('t4', 'live'), output('r2'), team('t5'), output('r3')])
+  expect(turns.map(turn => [turn.id, turn.inputs.map(input => input.id), turn.outputs.map(message => message.id)])).toEqual([
+    ['t5', ['t5'], ['r3']],
+    ['t1', ['t1', 't2', 't3', 't4'], ['r1', 'r2']],
+  ])
+})
 it('anchors a confirmation to its tool receipt rather than quoted reply text', () => {
   const decision: ActivityEntry = { id: 'request-id', appId: 'kb', runId: 'run', type: 'escalation', ts: 2000, content: { summary: 'Confirm' } }
   const human = { ...received, metadata: { teamTriggerKind: 'human_message' } }
@@ -237,5 +246,49 @@ describe('conversation labels', () => {
 
   it('keeps the proper name a room arrives with', () => {
     expect(conversationLabel(task({ kind: 'collab', label: 'Research crew' }), key => key)).toBe('Research crew')
+  })
+})
+
+it('keeps source-marked team inputs and system notifications in their existing execution/report projections', () => {
+  const source = { ...received, role: 'system' as const, source: 'team-message' as const, content: 'Original report',
+    metadata: { teamId: 'team', teamName: 'Review', fromMemberName: 'Reviewer', teamTriggerKind: 'message' } }
+  const notice = { ...source, id: 'notice', content: 'Periodic check', metadata: { ...source.metadata, teamTriggerKind: 'periodic_check' } }
+  const result = { ...source, id: 'output', role: 'assistant' as const, source: undefined, content: 'Result' }
+  expect(executionTurns([source, result])[0]).toMatchObject({ input: source, outputs: [result] })
+  expect(taskReportMessages([source, result, notice]).map(message => message.id)).toEqual(['output', 'notice'])
+  expect(conversationMessages([source, result, notice])).toEqual([])
+  expect(isTeamBackgroundTurn([source, notice])).toBe(true)
+  const human = { ...received, id: 'owner', content: 'My question', metadata: { teamTriggerKind: 'human_message' } }
+  expect(conversationMessages([source, notice, human, result]).map(message => message.id)).toEqual(['owner', 'output'])
+})
+
+describe('the owner’s additions to a member’s running work, read back', () => {
+  const at = (second: number) => new Date(Date.UTC(2026, 9, 13, 10, 0, second)).toISOString()
+  const teammate = { id: 'teammate', role: 'system' as const, source: 'team-message' as const, content: 'Please review', timestamp: at(1),
+    metadata: { teamId: 'team', teamName: 'Review', fromMemberName: 'Lead', teamTriggerKind: 'message' } }
+  const human = { id: 'human', role: 'user' as const, content: 'Review the PR', timestamp: at(1), metadata: { teamTriggerKind: 'human_message' } }
+  const first = { id: 'first', role: 'assistant' as const, content: 'Reading', timestamp: at(2) }
+  const addition = { id: 'addition', role: 'user' as const, source: 'injection' as const, content: 'Also check the tests', timestamp: at(3) }
+  const second = { id: 'second', role: 'assistant' as const, content: 'Done', timestamp: at(4) }
+
+  it('sit on the reply they joined, as in the chat, and never become a message row', () => {
+    const rows = taskConversationRows([human, first, addition, second], [], 'task', 'kb')
+    expect(rows.map(row => row.message?.id ?? row.additions?.map(message => message.id))).toEqual(['human', 'first', 'second'])
+  })
+
+  it('keep a background turn background, shown on their own where they were sent, as during the turn', () => {
+    const messages = [teammate, first, addition, second]
+    expect(isTeamBackgroundTurn(messages)).toBe(true)
+    expect(conversationMessages(messages)).toEqual([])
+    expect(taskReportMessages(messages).map(message => message.id)).toEqual(['first', 'second'])
+    const rows = taskConversationRows(messages, [], 'task', 'kb')
+    expect(rows).toEqual([{ id: 'addition:addition', additions: [addition] }])
+  })
+
+  it('stand on their own, together, when no shown reply carries them', () => {
+    const another = { ...addition, id: 'another' }
+    const reply = { ...first, timestamp: at(5) }
+    const rows = taskConversationRows([human, addition, another, reply], [], 'task', 'kb')
+    expect(rows.map(row => row.message?.id ?? row.additions?.map(message => message.id))).toEqual(['human', ['addition', 'another'], 'first'])
   })
 })

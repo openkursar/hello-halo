@@ -132,6 +132,26 @@ describe('startReview', () => {
     expect(m.createConversation).not.toHaveBeenCalled()
   })
 
+  it('reviews a commit picked in the graph against its first parent', async () => {
+    const commit = 'c'.repeat(40)
+    const scope = { kind: 'commit' as const, revision: commit }
+    m.getChangeList.mockResolvedValueOnce({
+      scope, beforeRevision: 'b'.repeat(40), truncated: false,
+      files: [{ path: 'src/a.ts', state: 'modified', additions: 2, deletions: 1, binary: false }],
+    })
+    const result = await startReview(request({ scope, scopeLabel: 'Commit ccccccc' }))
+    expect(result).toMatchObject({ ok: true, record: { scope } })
+    expect(m.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      taskInstructions: expect.stringContaining(`diff ${'b'.repeat(40)} ${commit} -- <path>`),
+    }))
+  })
+
+  it('leaves no conversation behind when the instructions cannot be built', async () => {
+    await expect(startReview(request({ scope: { kind: 'unknown' } as never }))).rejects.toThrow('Unknown compare scope')
+    expect(m.createConversation).not.toHaveBeenCalled()
+    expect(m.sendMessage).not.toHaveBeenCalled()
+  })
+
   it('still runs the review when recording it fails, and keeps the larger count of a cut list', async () => {
     m.saveLatestReview.mockImplementationOnce(() => { throw new Error('disk full') })
     m.getChangeList.mockResolvedValueOnce({

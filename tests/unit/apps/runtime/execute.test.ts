@@ -233,6 +233,7 @@ vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
 vi.mock('../../../../src/main/apps/runtime/active-runs', () => ({
   registerActiveRun: vi.fn(),
   unregisterActiveRun: vi.fn(),
+  notifyActiveRunReady: vi.fn(),
   listActiveRuns: vi.fn(() => []),
 }))
 
@@ -314,7 +315,7 @@ const releaseManagedSession = vi.fn()
 
 function managedLease(session: FakeSession) {
   closeManagedSession.mockImplementation(() => session.close())
-  return { session, isCurrent: true, send: session.send, close: closeManagedSession, release: releaseManagedSession }
+  return { session, isCurrent: true, isUsable: true, onRetired: () => () => {}, send: session.send, close: closeManagedSession, release: releaseManagedSession }
 }
 
 function makeApp(overrides: Record<string, unknown> = {}) {
@@ -338,6 +339,7 @@ function makeApp(overrides: Record<string, unknown> = {}) {
 function makeStore() {
   return {
     getRun: vi.fn(),
+    getEntry: vi.fn(),
     pinRunEnvironment: vi.fn(),
     insertRun: vi.fn(),
     completeRun: vi.fn(),
@@ -561,6 +563,36 @@ describe('executeRun — a run that asks the user', () => {
    * the question's tool call has its result: cutting earlier would leave a call
    * unanswered in the transcript the user's reply has to resume against.
    */
+  it('does not bypass an earlier unanswered question when the latest parallel question was answered', async () => {
+    const calls: SdkMessage = { type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'ask-1', name: 'mcp__halo-report__report_to_user' },
+      { type: 'tool_use', id: 'ask-2', name: 'mcp__halo-report__report_to_user' },
+    ] } }
+    const toolResults: SdkMessage = { type: 'user', message: { content: [
+      { type: 'tool_result', tool_use_id: 'ask-1' }, { type: 'tool_result', tool_use_id: 'ask-2' },
+    ] } }
+    const unsafe: SdkMessage = { type: 'assistant', message: { content: [{ type: 'text', text: 'proceeding without the first answer' }] } }
+    nextSession = new FakeSession({ script: [calls, toolResults, unsafe], onYield: message => {
+      if (message === calls) { raiseEscalation?.('first-question'); raiseEscalation?.('latest-question') }
+    } })
+    const store = makeStore()
+    store.getEntry.mockImplementation((id: string) => id === 'latest-question' ? { userResponse: { text: 'Approved' } } : {})
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory() })
+    expect(store.completeRun).toHaveBeenCalledWith(result.runId, expect.objectContaining({ status: 'waiting_user' }))
+    expect(nextSession.yielded).not.toContain(unsafe)
+  })
+
+  it('reports accepted but unconsumed additions when an escalation safety cut ends the engine', async () => {
+    const calls: SdkMessage = { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'ask', name: 'mcp__halo-report__report_to_user' }] } }
+    const result: SdkMessage = { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'ask' }] } }
+    nextSession = new FakeSession({ script: [calls, result], onYield: message => { if (message === calls) raiseEscalation?.('new-question') } })
+    Object.assign(nextSession, { hasPendingInput: () => true })
+    const abandoned = vi.fn()
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory(), onPendingInputAbandoned: abandoned })
+    expect(abandoned).toHaveBeenCalledOnce()
+    expect(nextSession.streamCalls).toBe(1)
+  })
+
   it('ends the run at the escalation instead of letting the model carry on', async () => {
     const askUser: SdkMessage = {
       type: 'assistant',
@@ -1180,5 +1212,39 @@ describe('executeRun — original continuation context', () => {
     expect(store.insertRun).not.toHaveBeenCalled()
     expect(openSessionWriter).toHaveBeenCalledWith(environment.spacePath, 'app-1', 'old-run')
     rmSync(directory, { recursive: true, force: true })
+  })
+})
+
+
+describe('executeRun — live input continuations', () => {
+  it('consumes accepted final-reply input before closing the session or completing the run', async () => {
+    let streams = 0
+    const session = {
+      send: vi.fn(), close: vi.fn(), hasPendingInput: () => streams < 2,
+      stream: async function* () {
+        streams += 1
+        yield streams === 1 ? assistantReport() : { type: 'assistant', message: { content: [{ type: 'text', text: 'Handled the late input.' }] } }
+        yield { type: 'result', usage: { input_tokens: 3, output_tokens: 2 } }
+      },
+    }
+    nextSession = session as unknown as FakeSession
+    const store = makeStore()
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory() })
+    expect(streams).toBe(2)
+    expect(session.send).toHaveBeenCalledTimes(1)
+    expect(result.finalText).toContain('Handled the late input.')
+    expect(result.outcome).toBe('useful')
+    expect(session.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('records original batched followups individually while sending one model input', async () => {
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    vi.mocked(openSessionWriter).mockClear()
+    await executeRun({
+      app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory(),
+      recordedInputs: [{ text: 'first event' }, { text: 'second event' }],
+    })
+    const writer = vi.mocked(openSessionWriter).mock.results[0].value
+    expect(vi.mocked(writer.writeTrigger).mock.calls.map((call: unknown[]) => call[0])).toEqual(['first event', 'second event'])
   })
 })

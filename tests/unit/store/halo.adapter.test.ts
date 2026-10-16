@@ -43,6 +43,19 @@ describe('fetch response compatibility', () => {
       globalThis.fetch = savedFetch
     }
   })
+
+  it('returns a 400 as the answer without retrying it', async () => {
+    const savedFetch = globalThis.fetch
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 400 }))
+    globalThis.fetch = fetchMock
+    try {
+      const response = await fetchWithTimeout('http://example.test/unknown-category')
+      expect(response.status).toBe(400)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      globalThis.fetch = savedFetch
+    }
+  })
 })
 
 function envelope(apps: Array<Record<string, unknown>>): Record<string, unknown> {

@@ -19,6 +19,8 @@ import { TodoCard } from '../tool/TodoCard'
 import { parseTodoInput } from '../../utils/thought-activity'
 import { ToolResultViewer } from './tool-result'
 import { SubAgentTimeline } from './SubAgentTimeline'
+import { ArrivalCard } from './ArrivalCard'
+import { isArrivalThought, mergeArrivalThoughts, toArrivalThought, workSeconds } from './transcript'
 import { ErrorContent } from './ErrorContent'
 import {
   getThoughtIcon,
@@ -27,7 +29,7 @@ import {
   getToolFriendlyFormat,
 } from './thought-utils'
 import { useLazyVisible } from '../../hooks/useLazyVisible'
-import type { Thought, ThoughtsSummary } from '../../types'
+import type { Message, Thought, ThoughtsSummary } from '../../types'
 import { getCurrentLanguage, useTranslation } from '../../i18n'
 import { holdOpenThoughts } from '../../stores/chat.store'
 
@@ -51,6 +53,8 @@ function ThoughtItem({ thought, allThoughts }: { thought: Thought; allThoughts?:
   const [isContentExpanded, setIsContentExpanded] = useState(false)  // For thinking content expand
   const color = getThoughtColor(thought.type, thought.isError)
   const Icon = getThoughtIcon(thought.type, thought.toolName)
+
+  if (isArrivalThought(thought)) return <ArrivalCard message={thought.arrival} inProcess />
 
   // Check if tool has result (merged tool_result)
   const hasToolResult = thought.type === 'tool_use' && thought.toolResult
@@ -235,12 +239,7 @@ export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false, def
   // Calculate duration from first to last thought.
   // Must stay above the early return below: a hook after it would change the
   // hook count the first time this panel gains content, which React rejects.
-  const duration = useMemo(() => {
-    if (thoughts.length < 1) return 0
-    const first = new Date(thoughts[0].timestamp).getTime()
-    const last = new Date(thoughts[thoughts.length - 1].timestamp).getTime()
-    return (last - first) / 1000
-  }, [thoughts])
+  const duration = useMemo(() => workSeconds(thoughts), [thoughts])
 
   // Check if there's anything to show
   const hasContent = displayThoughts.length > 0 || (latestTodos && latestTodos.length > 0)
@@ -333,16 +332,21 @@ export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false, def
 interface LazyCollapsedThoughtProcessProps {
   thoughtsSummary: ThoughtsSummary
   onLoadThoughts: () => Promise<Thought[]>
+  /** Records received while the reply was written; joined to its thoughts once they load. */
+  arrivals?: Message[]
 }
 
-export function LazyCollapsedThoughtProcess({ thoughtsSummary, onLoadThoughts }: LazyCollapsedThoughtProcessProps) {
+export function LazyCollapsedThoughtProcess({ thoughtsSummary, onLoadThoughts, arrivals }: LazyCollapsedThoughtProcessProps) {
   const { t } = useTranslation()
   const [loadedThoughts, setLoadedThoughts] = useState<Thought[] | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const mergedThoughts = useMemo(() => loadedThoughts?.length && arrivals?.length
+    ? mergeArrivalThoughts(loadedThoughts, arrivals.map(toArrivalThought))
+    : loadedThoughts, [loadedThoughts, arrivals])
 
   // Once loaded, render expanded — user explicitly clicked to load thoughts
-  if (loadedThoughts && loadedThoughts.length > 0) {
-    return <CollapsedThoughtProcess thoughts={loadedThoughts} defaultExpanded />
+  if (mergedThoughts && mergedThoughts.length > 0) {
+    return <CollapsedThoughtProcess thoughts={mergedThoughts} defaultExpanded />
   }
 
   // Empty array is truthy: without the length check above, a message with
@@ -385,6 +389,11 @@ export function LazyCollapsedThoughtProcess({ thoughtsSummary, onLoadThoughts }:
           {!unavailable && duration != null && <span>{duration.toFixed(1)}s</span>}
         </div>
       </button>
+      {unavailable && arrivals?.map(message => (
+        <div key={message.clientKey ?? message.id} className="mt-2">
+          <ArrivalCard message={message} />
+        </div>
+      ))}
     </div>
   )
 }

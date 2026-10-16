@@ -62,10 +62,6 @@ export interface ConsumerHandle {
    * control to detect active team agents while the consumer idles between
    * turns — the spawn may be several turns in the past. */
   getTeamLifecycleThoughts(): Thought[]
-  /** Whether a task CC started (a background shell, agent or workflow) has not
-   * reported completion yet. Its result arrives as a later autonomous turn, so
-   * closing the session now would lose it. */
-  hasRunningTasks(): boolean
   /** Update the display model name used for thought parsing (and the
    * source-resolved context window shown in token usage).
    * Called by sendMessage to keep both in sync after model switches
@@ -112,8 +108,6 @@ interface ConsumerState {
    * detect active team agents while the consumer idles; reset when the team
    * is disbanded. */
   teamLifecycleThoughts: Thought[]
-  /** Task ids from task_started not yet closed by a task_notification. */
-  runningTasks: Set<string>
 }
 
 // ============================================
@@ -148,7 +142,6 @@ export function startConsumer(
     readTurnSnapshot: null,
     running: true,
     teamLifecycleThoughts: [],
-    runningTasks: new Set(),
   }
 
   let sinkStopped = false
@@ -205,9 +198,6 @@ export function startConsumer(
     },
     getTeamLifecycleThoughts() {
       return state.teamLifecycleThoughts
-    },
-    hasRunningTasks() {
-      return state.runningTasks.size > 0
     },
     updateDisplayModel(newDisplayModel: string, newContextWindow?: number) {
       if (state.displayModel !== newDisplayModel) {
@@ -278,7 +268,6 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
         callbacks: {
           onSnapshotReady: readSnapshot => { state.readTurnSnapshot = readSnapshot },
           onRawMessage: (m) => {
-            trackTaskLifecycle(state.runningTasks, m)
             noteSessionMcpStatus(conversationId, v2Session, m)
             sink.onRawMessage?.(m)
           },
@@ -351,8 +340,8 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
           break
         }
 
-        // Keep consuming until every background and team task has reported back.
-        if (state.runningTasks.size === 0 && !hasActiveTeamTasks(state.teamLifecycleThoughts) && consumePendingRebuild(conversationId)) {
+        // Keep consuming until every team agent has reported back.
+        if (!hasActiveTeamTasks(state.teamLifecycleThoughts) && consumePendingRebuild(conversationId)) {
           console.log(`[Consumer][${conversationId}] Rebuild pending, breaking for rebuild`)
           break
         }
@@ -440,14 +429,6 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
 // ============================================
 // Turn Handling Helpers
 // ============================================
-
-/** Keeps `running` in step with CC's task_started / task_notification events. */
-export function trackTaskLifecycle(running: Set<string>, sdkMessage: unknown): void {
-  const msg = sdkMessage as { type?: unknown; subtype?: unknown; task_id?: unknown } | null
-  if (msg?.type !== 'system' || typeof msg.task_id !== 'string') return
-  if (msg.subtype === 'task_started') running.add(msg.task_id)
-  else if (msg.subtype === 'task_notification') running.delete(msg.task_id)
-}
 
 /**
  * Check if an error indicates the CC process is dead (not recoverable).

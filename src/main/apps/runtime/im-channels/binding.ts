@@ -17,6 +17,7 @@ import type { ImChannelInstanceConfig } from '../../../../shared/types/im-channe
 export interface BindResult {
   success: boolean
   error?: string
+  code?: 'BINDING_CHANGED'
 }
 
 /**
@@ -83,14 +84,18 @@ function readInstances(): ImChannelInstanceConfig[] {
 }
 
 /** Point an existing instance at another digital human. */
-export function setInstanceApp(instanceId: string, appId: string): BindResult {
+export function setInstanceApp(instanceId: string, appId: string, expectedAppId?: string): BindResult {
   const invalid = validateTarget(appId)
   if (invalid) return { success: false, error: invalid }
 
   const instances = readInstances()
   const target = instances.find(i => i.id === instanceId)
   if (!target) return { success: false, error: `Instance "${instanceId}" not found` }
-  if (target.appId === appId) return { success: true }
+  if (expectedAppId !== undefined && target.appId !== expectedAppId) {
+    console.warn('[ImChannelBinding] Rebinding refused because the current binding changed', { instanceId, appId })
+    return { success: false, code: 'BINDING_CHANGED', error: 'The bot binding changed. Refresh and confirm again.' }
+  }
+  if (target.appId === appId && !target.teamId) return { success: true }
 
   // Binding is what lets the manager start an instance (enabled + appId), so
   // an unbound instance whose credential is already live elsewhere must be
@@ -99,7 +104,12 @@ export function setInstanceApp(instanceId: string, appId: string): BindResult {
     return { success: false, error: 'This bot is already bound to another digital human' }
   }
 
-  persist(instances.map(i => i.id === instanceId ? { ...i, appId } : i))
+  persist(instances.map(i => {
+    if (i.id !== instanceId) return i
+    const rebound = { ...i, appId }
+    delete rebound.teamId
+    return rebound
+  }))
   console.log(`[ImChannelBinding] instance ${instanceId} rebound to app ${appId}`)
   return { success: true }
 }

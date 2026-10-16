@@ -29,6 +29,8 @@ import {
 import {
   createRelayCapture,
   createStreamReplay,
+  milestoneOnly,
+  statusOnly,
 } from '../../../../../src/main/apps/runtime/federation/relay'
 import type {
   StreamFramesFrame,
@@ -74,6 +76,29 @@ function tapEvents(): { events: AgentEvent[]; dispose: () => void } {
 }
 
 describe('RelayCapture (owner-only + team-only)', () => {
+  it('relays input arrivals as source-preserving detail milestones and never as global status', () => {
+    const batches: StreamFramesFrame[] = []
+    const capture = createRelayCapture({
+      isOwnTeamSession: key => key === SELF_SESSION,
+      resolveOffice: () => OFFICE,
+      sink: (_office, batch) => batches.push(batch),
+    })
+    const sub = capture.start()
+    const messages = [{ id: 'incoming-report', role: 'system', content: 'review evidence',
+      timestamp: new Date().toISOString(), source: 'team-message', metadata: { teamTriggerKind: 'message' } }]
+    emitAgentEvent('agent:input-arrived', 'space-1', SELF_SESSION, { messages })
+    capture.flushAll()
+    sub.dispose()
+    expect(batches).toHaveLength(1)
+    expect(batches[0].frames[0]).toMatchObject({ kind: 'milestone', channel: 'agent:input-arrived', payload: { messages } })
+    expect(milestoneOnly(batches[0])).toEqual(batches[0])
+    expect(statusOnly(batches[0])).toBeNull()
+    const tap = tapEvents()
+    createStreamReplay().apply(batches[0])
+    tap.dispose()
+    expect(tap.events).toEqual([expect.objectContaining({ channel: 'agent:input-arrived', relayed: true, data: { messages } })])
+  })
+
   it('captures a SELF-owned team session with monotonic seq + correct kind', () => {
     const sinkCalls: Array<{ officeId: string; batch: StreamFramesFrame }> = []
     const capture = createRelayCapture({

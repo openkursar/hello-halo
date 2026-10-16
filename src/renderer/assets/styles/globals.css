@@ -44,6 +44,9 @@
   --popover: 220 12% 15%;
   --popover-foreground: 223 17% 92%;
   --primary: 217 91% 60%;
+  /* `text-primary` and links read this (tailwind.config textColor): lighter
+     than the fill so it clears 4.5 on background, card/popover and secondary. */
+  --primary-text: 217 91% 66%;
   --primary-foreground: 0 0% 100%;
   --primary-hover: 221 83% 53%;
   --secondary: 220 12% 19%;
@@ -127,6 +130,7 @@
   --popover: 0 0% 100%;
   --popover-foreground: 222 16% 11%;
   --primary: 217 91% 55%;
+  --primary-text: var(--primary);
   --primary-foreground: 0 0% 100%;
   --primary-hover: 221 83% 48%;
   --secondary: 220 14% 94%;
@@ -1320,7 +1324,7 @@ html.platform-desktop body::after {
    reply's web links (colour, underline on hover only) and in the inline code's
    own box, so nothing moves when it turns into a link after the existence check. */
 .markdown-content :is(code, span)[data-file-link] {
-  color: hsl(var(--primary));
+  color: hsl(var(--primary-text));
   text-underline-offset: 2px;
   cursor: pointer;
 }
@@ -1338,7 +1342,7 @@ html.platform-desktop body::after {
 @keyframes chip-bump {
   0% {
     transform: scale(1);
-    color: hsl(var(--primary));
+    color: hsl(var(--primary-text));
   }
   35% {
     transform: scale(1.14);
@@ -1356,7 +1360,7 @@ html.platform-desktop body::after {
 @media (prefers-reduced-motion: reduce) {
   @keyframes chip-bump {
     0%, 60% {
-      color: hsl(var(--primary));
+      color: hsl(var(--primary-text));
     }
   }
 }

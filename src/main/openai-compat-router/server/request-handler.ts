@@ -34,7 +34,7 @@ import { applyProviderAdapter, type AdapterContext } from './provider-adapters'
 import { handleKiroRequest } from '../adapters/kiro.adapter'
 import { countTokens } from '../utils/token-counter'
 import { deferInputTokensEstimate, fillResponseUsageFallback } from '../utils/usage-estimator'
-import { applyRetryHints, getUpstreamError, sendError } from './error-response'
+import { applyRetryPolicy, getUpstreamError, sendError } from './error-response'
 
 export interface RequestHandlerOptions {
   debug?: boolean
@@ -288,7 +288,8 @@ function repairPassthroughUsage(body: string, request: AnthropicRequest): string
  *    re-serialized through BaseStreamHandler to apply repairs (empty text block,
  *    malformed tool JSON, etc.).
  *
- * Response headers and status codes are forwarded transparently from upstream.
+ * Response headers and status codes are forwarded transparently from upstream,
+ * except an error's retry headers, which are the router's (see error-response).
  */
 async function handleAnthropicPassthrough(
   anthropicRequest: AnthropicRequest,
@@ -367,7 +368,8 @@ async function handleAnthropicPassthrough(
     )
     console.log(`[RequestHandler] upstream_ok wire=anthropic status=${upstreamResp.status} duration_ms=${Date.now() - anthUpstreamStartTs} stream=${anthropicRequest.stream ?? false} tools=${toolCount} url=${targetUrl}`)
 
-    // Handle errors — forward upstream response transparently (status + headers + body)
+    // Errors are forwarded as the upstream sent them (status, headers, body),
+    // apart from the retry headers.
     if (!upstreamResp.ok) {
       const errorText = await upstreamResp.text().catch(() => '')
       console.error(`[RequestHandler] Anthropic error ${upstreamResp.status}: ${errorText.slice(0, 200)}`)
@@ -376,7 +378,7 @@ async function handleAnthropicPassthrough(
       res.status(upstreamResp.status)
       forwardResponseHeaders(upstreamResp, res)
       const { type: errorType, message: errorMessage } = getUpstreamError(upstreamResp.status, errorText)
-      applyRetryHints(res, upstreamResp.status, errorType, errorMessage, upstreamResp.headers)
+      applyRetryPolicy(res, upstreamResp.status, errorType, errorMessage)
       res.end(errorText)
       return
     }

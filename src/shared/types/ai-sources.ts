@@ -55,6 +55,12 @@ export function resolveLocalizedText(value: LocalizedText, locale: string): stri
  */
 export type AuthType = 'api-key' | 'oauth' | 'delegated'
 
+/** Non-secret source and model captured by a running agent for its children. */
+export interface AgentModelSelection {
+  readonly modelSourceId: string
+  readonly modelId: string
+}
+
 /**
  * Built-in provider IDs
  * - anthropic: Anthropic Claude API (supports custom URL for proxies)

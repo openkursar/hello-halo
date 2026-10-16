@@ -11,6 +11,7 @@
 
 import type { Message } from '../../../types'
 import { messageRowKey, messageRowKeys } from '../../../utils/message-row-key'
+import { arrivedDuring } from './arrivals'
 
 /** Rows appended since the last full build whose keys are checked one by one. */
 const MAX_UNINDEXED_KEYS = 256
@@ -30,19 +31,25 @@ export interface TranscriptRows {
   readonly previousCosts: readonly number[]
   /** Injected messages by the id of the reply they follow. */
   readonly injections: ReadonlyMap<string, Message[]>
+  /** Records received while a reply was written, by its id; drawn in its process (see `arrivals`). */
+  readonly arrivals: ReadonlyMap<string, Message[]>
   /** Index in `source` of each row. */
   readonly sourceIndexes: readonly number[]
-  /** Source index of each reply in `injections`. */
-  readonly injectionOwners: ReadonlyMap<string, number>
+  /** Source index of each reply owning injected messages or arrivals. */
+  readonly attachmentOwners: ReadonlyMap<string, number>
   /** Row index of each key at the last full build, covering the first `indexedRows` rows. */
   readonly keyRows: ReadonlyMap<string, number>
   readonly indexedRows: number
 }
 
-/** The last message that is not an injection: the one a running turn's placeholder can be. */
+function isProcessInput(message: Message): boolean {
+  return message.source === 'injection' || message.role === 'system'
+}
+
+/** The last message not received into running work: the one a running turn's placeholder can be. */
 function lastPlainIndex(source: readonly Message[]): number {
   let index = source.length - 1
-  while (index >= 0 && source[index].source === 'injection') index--
+  while (index >= 0 && (source[index].source === 'injection' || source[index].metadata?.inputMode === 'live')) index--
   return index
 }
 
@@ -54,11 +61,53 @@ function costAfter(message: Message, before: number): number {
   return message.role === 'assistant' && message.tokenUsage?.totalCostUsd ? message.tokenUsage.totalCostUsd : before
 }
 
-/** The run of injected messages following `index`, or null. */
-function injectedAfter(source: readonly Message[], index: number): Message[] | null {
-  let end = index + 1
-  while (end < source.length && source[end].source === 'injection') end++
-  return end > index + 1 ? source.slice(index + 1, end) : null
+/** What a reply carries besides itself: drawn on it, never as rows of their own. */
+export interface ReplyInputs {
+  injections: Message[]
+  arrivals: Message[]
+}
+
+/**
+ * The owner's additions right after the reply at `index`, and the records that
+ * name it as the reply open at their receipt. Ownership is the writer's
+ * statement; adjacency alone attaches nothing else.
+ */
+function inputsFor(source: readonly Message[], index: number): ReplyInputs {
+  const injections: Message[] = []
+  const arrivals: Message[] = []
+  const reply = source[index]
+  let contiguous = true
+  for (let at = index + 1; at < source.length && isProcessInput(source[at]); at++) {
+    const message = source[at]
+    if (arrivedDuring(message, reply)) arrivals.push(message)
+    else if (contiguous && message.source === 'injection') injections.push(message)
+    else contiguous = false
+  }
+  return { injections, arrivals }
+}
+
+/** The same attachment by reply id, for views that draw their own selection of a transcript. */
+export function inputsByReply(messages: readonly Message[]): Map<string, ReplyInputs> {
+  const byReply = new Map<string, ReplyInputs>()
+  messages.forEach((message, index) => {
+    if (message.role !== 'assistant') return
+    const inputs = inputsFor(messages, index)
+    if (inputs.injections.length || inputs.arrivals.length) byReply.set(message.id, inputs)
+  })
+  return byReply
+}
+
+function attachedArrivals(source: readonly Message[], from = 0): Set<Message> {
+  const attached = new Set<Message>()
+  let at = from
+  while (at < source.length) {
+    if (!isProcessInput(source[at])) { at++; continue }
+    const previousReply = source[at - 1]
+    for (; at < source.length && isProcessInput(source[at]); at++) {
+      if (arrivedDuring(source[at], previousReply)) attached.add(source[at])
+    }
+  }
+  return attached
 }
 
 function buildRows(source: readonly Message[], isGenerating: boolean): TranscriptRows {
@@ -66,18 +115,19 @@ function buildRows(source: readonly Message[], isGenerating: boolean): Transcrip
   const sourceIndexes: number[] = []
   const previousCosts: number[] = []
   const injections = new Map<string, Message[]>()
-  const injectionOwners = new Map<string, number>()
+  const arrivals = new Map<string, Message[]>()
+  const attachmentOwners = new Map<string, number>()
   const lastPlain = lastPlainIndex(source)
   let lastCost = 0
+  const attached = attachedArrivals(source)
   for (let i = 0; i < source.length; i++) {
     const message = source[i]
-    if (message.source === 'injection') continue
+    if (message.source === 'injection' || attached.has(message)) continue
     if (message.role === 'assistant') {
-      const injected = injectedAfter(source, i)
-      if (injected) {
-        injections.set(message.id, injected)
-        injectionOwners.set(message.id, i)
-      }
+      const inputs = inputsFor(source, i)
+      if (inputs.injections.length) injections.set(message.id, inputs.injections)
+      if (inputs.arrivals.length) arrivals.set(message.id, inputs.arrivals)
+      if (inputs.injections.length || inputs.arrivals.length) attachmentOwners.set(message.id, i)
     }
     if (isHiddenPlaceholder(message, i, lastPlain, isGenerating)) continue
     messages.push(message)
@@ -87,7 +137,7 @@ function buildRows(source: readonly Message[], isGenerating: boolean): Transcrip
   }
   const keys = messageRowKeys(messages)
   return {
-    source, isGenerating, messages, keys, previousCosts, injections, sourceIndexes, injectionOwners,
+    source, isGenerating, messages, keys, previousCosts, injections, arrivals, sourceIndexes, attachmentOwners,
     keyRows: new Map(keys.map((key, row) => [key, row])),
     indexedRows: keys.length,
   }
@@ -116,8 +166,8 @@ export function nextTranscriptRows(prev: TranscriptRows | null, source: readonly
   // Whether the last plain message is drawn depended on it being last.
   const lastPlain = lastPlainIndex(source)
   from = Math.min(from, Math.max(0, lastPlainIndex(prev.source)), Math.max(0, lastPlain))
-  // A reply owns the injected messages after it: derive it again with them.
-  while (from > 0 && source[from - 1].source === 'injection') from--
+  // A reply owns the inputs after it: derive it again with them.
+  while (from > 0 && isProcessInput(source[from - 1])) from--
   if (from > 0 && source[from - 1].role === 'assistant') from--
   if (from === 0) return buildRows(source, isGenerating)
 
@@ -128,30 +178,36 @@ export function nextTranscriptRows(prev: TranscriptRows | null, source: readonly
   const previousCosts = prev.previousCosts.slice(0, keepRows)
   const keys = prev.keys.slice(0, keepRows)
   let injections = prev.injections as Map<string, Message[]>
-  let injectionOwners = prev.injectionOwners as Map<string, number>
-  for (const [id, owner] of prev.injectionOwners) {
+  let arrivals = prev.arrivals as Map<string, Message[]>
+  let attachmentOwners = prev.attachmentOwners as Map<string, number>
+  for (const [id, owner] of prev.attachmentOwners) {
     if (owner < from) continue
-    if (injections === prev.injections) {
+    if (attachmentOwners === prev.attachmentOwners) {
       injections = new Map(prev.injections)
-      injectionOwners = new Map(prev.injectionOwners)
+      arrivals = new Map(prev.arrivals)
+      attachmentOwners = new Map(prev.attachmentOwners)
     }
     injections.delete(id)
-    injectionOwners.delete(id)
+    arrivals.delete(id)
+    attachmentOwners.delete(id)
   }
   let lastCost = keepRows > 0 ? costAfter(messages[keepRows - 1], previousCosts[keepRows - 1]) : 0
 
+  const attached = attachedArrivals(source, from)
   for (let i = from; i < source.length; i++) {
     const message = source[i]
-    if (message.source === 'injection') continue
+    if (message.source === 'injection' || attached.has(message)) continue
     if (message.role === 'assistant') {
-      const injected = injectedAfter(source, i)
-      if (injected) {
-        if (injections === prev.injections) {
+      const inputs = inputsFor(source, i)
+      if (inputs.injections.length || inputs.arrivals.length) {
+        if (attachmentOwners === prev.attachmentOwners) {
           injections = new Map(prev.injections)
-          injectionOwners = new Map(prev.injectionOwners)
+          arrivals = new Map(prev.arrivals)
+          attachmentOwners = new Map(prev.attachmentOwners)
         }
-        injections.set(message.id, injected)
-        injectionOwners.set(message.id, i)
+        if (inputs.injections.length) injections.set(message.id, inputs.injections)
+        if (inputs.arrivals.length) arrivals.set(message.id, inputs.arrivals)
+        attachmentOwners.set(message.id, i)
       }
     }
     if (isHiddenPlaceholder(message, i, lastPlain, isGenerating)) continue
@@ -170,7 +226,7 @@ export function nextTranscriptRows(prev: TranscriptRows | null, source: readonly
   if (keys.length - indexedRows > MAX_UNINDEXED_KEYS) return buildRows(source, isGenerating)
 
   return {
-    source, isGenerating, messages, keys, previousCosts, injections, sourceIndexes, injectionOwners,
+    source, isGenerating, messages, keys, previousCosts, injections, arrivals, sourceIndexes, attachmentOwners,
     keyRows: prev.keyRows,
     indexedRows,
   }

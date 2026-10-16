@@ -898,9 +898,12 @@ const CLI_RELATIVE = 'node_modules/@anthropic-ai/claude-code/cli.js'
  *
  * Three runtime environments need to be handled:
  *
- * 1. **Packaged** (`app.isPackaged === true`): electron-builder bundles node_modules
- *    alongside app.asar. `app.getAppPath()` returns the asar root, so the CLI is
- *    always at `<appPath>/node_modules/...`. This path is guaranteed to exist.
+ * 1. **Packaged** (`app.isPackaged === true`): the real file `asarUnpack` puts in
+ *    `app.asar.unpacked`, not its path inside the archive. The CLI runs programs
+ *    found next to its own file (ripgrep behind Grep, Glob and its agent/command
+ *    discovery), and no OS can execute a file inside an archive; Electron's
+ *    redirect for that does not reach the CLI's ES module imports since
+ *    Electron 43 (Node 24), so those calls failed with `spawn ENOTDIR`.
  *
  * 2. **Dev** (`npm run dev`): Vite runs the main process from the project root.
  *    `app.getAppPath()` returns the project root, so the CLI is at
@@ -916,8 +919,9 @@ const CLI_RELATIVE = 'node_modules/@anthropic-ai/claude-code/cli.js'
  */
 export function resolveClaudeCodeCliPath(): string {
   if (app.isPackaged) {
-    // Packaged: node_modules is bundled inside the asar alongside the app
-    return path.join(app.getAppPath(), CLI_RELATIVE)
+    const appPath = app.getAppPath()
+    const diskRoot = appPath.endsWith('.asar') ? `${appPath}.unpacked` : appPath
+    return path.join(diskRoot, CLI_RELATIVE)
   }
 
   // Unpackaged (dev or E2E build): search candidate locations
@@ -967,8 +971,7 @@ function shellQuote(value: string): string {
 
 // On spawn ENOENT the SDK always blames cliPath ("executable not found"), even
 // when the real culprit is a missing cwd — the classic Node cause (#170). Log the
-// triplet and surface a bad cwd with its true cause. Don't existsSync cliPath: it
-// lives in app.asar (served from app.asar.unpacked), so existsSync false-negatives.
+// triplet and surface a bad cwd with its true cause.
 function validateSpawnInputs(electronPath: string, cliPath: string, workDir: string, spaceId: string): void {
   console.log(`[SDK Config] spawn inputs: command="${electronPath}", cli="${cliPath}", cwd="${workDir}"`)
   if (!existsSync(workDir)) {

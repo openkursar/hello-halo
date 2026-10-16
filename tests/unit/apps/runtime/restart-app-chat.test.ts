@@ -69,6 +69,8 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   acquireV2Session: vi.fn(),
   markTurnDispatched: vi.fn(),
   updateConsumerDisplayModel: vi.fn(),
+  activeSessions: new Map(),
+  hasPendingSessionInput: () => false,
 }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({

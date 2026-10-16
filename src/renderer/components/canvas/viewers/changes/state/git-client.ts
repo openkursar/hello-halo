@@ -8,11 +8,13 @@ import { api } from '../../../../../api'
 import type { CodeReviewAvailability, CodeReviewStartRequest, CodeReviewStartResult } from '../../../../../../shared/types/code-review'
 import type {
   GitChangeList,
+  GitCommitGraph,
   GitCommitRequest,
   GitCommitResult,
   GitCompareScope,
   GitFileContents,
   GitFileContentsRequest,
+  GitGraphQuery,
   GitRepositoryList,
   GitReviewRecord,
   GitRevisionOption,
@@ -57,6 +59,8 @@ export const gitClient = {
     unwrap(api.gitGetFileContents(spaceId, repoRoot, request)),
   listRevisionOptions: (spaceId: string, repoRoot: string): Promise<GitRevisionOption[]> =>
     unwrap(api.gitListRevisionOptions(spaceId, repoRoot)),
+  getCommitGraph: (spaceId: string, repoRoot: string, query: GitGraphQuery): Promise<GitCommitGraph> =>
+    unwrap(api.gitGetCommitGraph(spaceId, repoRoot, query)),
   stage: (spaceId: string, repoRoot: string, paths: string[]): Promise<void> =>
     unwrap(api.gitStage(spaceId, repoRoot, paths)),
   unstage: (spaceId: string, repoRoot: string, paths: string[]): Promise<void> =>

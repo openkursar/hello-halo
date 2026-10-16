@@ -92,10 +92,13 @@ describe('buildTeamImBridge', () => {
   })
 
   it.each([true, false])('warns that a teammate answer cannot land inside this turn (isLead=%s)', (isLead) => {
+    // The person's turn runs under their own standing; a teammate's answer runs
+    // under the teammate's, so it never joins this turn.
     const out = buildTeamImBridge(im, isLead)
     expect(out).toContain('team_send')
     expect(out).toContain('cannot')
     expect(out).toContain('later as a new turn')
+    expect(out).toContain('Two short messages')
     // No wait=* advice: there is no primitive that lands a result in this turn.
     expect(out).not.toContain('wait=true')
     expect(out).not.toContain('wait=false')

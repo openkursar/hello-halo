@@ -25,14 +25,16 @@
 import { getAppManager } from '../manager'
 import { getSpace } from '../../services/space.service'
 import { getConfig } from '../../foundation/config.service'
-import { formatMessageAttachmentsBrief, onAgentEvent, v2Sessions } from '../../services/agent'
+import { formatMessageAttachmentsBrief, onAgentEvent, v2Sessions, hasPendingSessionInput } from '../../services/agent'
 import type {
   ConversationSource,
   SourceConversation,
   TranscriptLine,
+  DispatchedMessage,
+  DispatchOutcome,
 } from '../../services/conversation-interop'
 import { hasActiveAppChatRound, peekAppChatSink } from './app-chat-sink'
-import { isAppChatConversationGenerating } from './app-chat-live-turn'
+import { isAppChatConversationGenerating, getAppChatTurnIdentity, injectIntoAppChatBatch } from './app-chat-live-turn'
 import { loadChatMessagesForConversation, sendAppChatMessage } from './app-chat'
 import { getImSessionRegistry } from './im-session-registry'
 import {
@@ -129,6 +131,43 @@ function listSessions(spaceId: string): { app: InstalledApp; ref: NativeChatKey;
   return sessions
 }
 
+function dispatchBatch(
+  spaceId: string,
+  conversationId: string,
+  messages: readonly DispatchedMessage[]
+): Promise<DispatchOutcome[]> {
+  const ref = parseNativeChatKey(conversationId)
+  if (!ref) return Promise.reject(new Error(`not a digital-human session: ${conversationId}`))
+  // A message taken back after a stop keeps the record it already has.
+  const fresh = messages.filter((message) => !message.inputRecorded)
+  const first = fresh[0] ?? messages[0]
+  return new Promise((resolve, reject) => {
+    let accepted = false
+    const outcomes = messages.map(() => ({}))
+    sendAppChatMessage({
+      appId: ref.appId,
+      spaceId,
+      conversationId,
+      message: messages.map((message) => message.turnInput).join('\n\n'),
+      recorded: {
+        content: first.record.content,
+        provenance: { source: first.record.source, metadata: first.record.metadata },
+      },
+      recordedMessages: fresh.map((message) => ({
+        content: message.record.content,
+        provenance: { source: message.record.source, metadata: message.record.metadata },
+      })),
+      onMessageAccepted: () => {
+        accepted = true
+        resolve(outcomes)
+      },
+    }).then(() => resolve(outcomes), (err: unknown) => {
+      if (!accepted) reject(err)
+      else console.error(`${LOG_TAG} turn on ${conversationId} failed after delivery:`, err)
+    })
+  })
+}
+
 export function createDigitalHumanConversationSource(): ConversationSource {
   return {
     kind: DIGITAL_HUMAN_SOURCE_KIND,
@@ -175,31 +214,23 @@ export function createDigitalHumanConversationSource(): ConversationSource {
 
     hasLiveSession: (conversationId) => v2Sessions.has(conversationId) || hasActiveAppChatRound(conversationId),
 
-    dispatch(spaceId, conversationId, message) {
-      const ref = parseNativeChatKey(conversationId)
-      if (!ref) return Promise.reject(new Error(`not a digital-human session: ${conversationId}`))
-      // `sendAppChatMessage` settles when the whole turn does. What the caller
-      // waits for is the engine taking the message in, so that is the moment
-      // this resolves; a failure after it can only be logged.
-      return new Promise((resolve, reject) => {
-        let accepted = false
-        sendAppChatMessage({
-          appId: ref.appId,
-          spaceId,
-          conversationId,
-          message: message.turnInput,
-          recorded: { content: message.record.content, provenance: { source: message.record.source, metadata: message.record.metadata } },
-          onMessageAccepted: () => {
-            accepted = true
-            resolve({})
-          },
-        }).then(
-          () => resolve({}),
-          (err: unknown) => {
-            if (!accepted) reject(err)
-            else console.error(`${LOG_TAG} turn on ${conversationId} failed after delivery:`, err)
-          }
-        )
+    getActiveIdentity: getAppChatTurnIdentity,
+
+    dispatch: async (spaceId, conversationId, message) => (await dispatchBatch(spaceId, conversationId, [message]))[0],
+    dispatchBatch,
+
+    deliverMidTurn(_spaceId, conversationId, messages, onWithdrawn) {
+      const accepted = injectIntoAppChatBatch(conversationId, messages.map((message) => ({
+        text: message.turnInput,
+        recorded: { content: message.record.content, provenance: { source: message.record.source, metadata: message.record.metadata } },
+        inputRecorded: message.inputRecorded,
+      })), () => onWithdrawn())
+      return accepted ? messages.map(() => ({})) : false
+    },
+
+    onTurnReady(listener) {
+      return onAgentEvent((event) => {
+        if (event.channel === 'agent:turn-start' && isAppChatKey(event.conversationId)) listener(event.conversationId)
       })
     },
 
@@ -207,6 +238,7 @@ export function createDigitalHumanConversationSource(): ConversationSource {
       return onAgentEvent((event) => {
         if (event.channel !== 'agent:complete' && event.channel !== 'agent:error') return
         if (!isAppChatKey(event.conversationId)) return
+        if (hasPendingSessionInput(event.conversationId)) return
         listener(event.conversationId)
       })
     },

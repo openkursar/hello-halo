@@ -3,10 +3,10 @@
 import { HighlightStyle } from '@codemirror/language'
 import { EditorView } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
+import { EDITOR_FONT_FAMILY } from '../../../../../lib/codemirror-theme'
 
 const ADD = 'var(--diff-add)'
 const DEL = 'var(--diff-del)'
-const MONO = "'SF Mono', 'Fira Code', 'JetBrains Mono', Menlo, Monaco, 'Courier New', monospace"
 
 export const diffHighlightStyle = HighlightStyle.define([
   { tag: [tags.name, tags.operator, tags.punctuation, tags.meta], color: 'hsl(var(--foreground))' },
@@ -26,14 +26,14 @@ export const diffEditorTheme = EditorView.theme({
     '--halo-reveal-alpha': '0.14',
   },
   '&.cm-focused': { outline: 'none' },
-  '.cm-scroller': { fontFamily: MONO, lineHeight: '1.6' },
+  '.cm-scroller': { fontFamily: EDITOR_FONT_FAMILY, lineHeight: '1.6' },
   '.cm-content': { padding: '4px 0', caretColor: 'hsl(var(--primary))' },
   '.cm-line': { padding: '0 10px 0 6px' },
   '.cm-gutters': {
     backgroundColor: 'hsl(var(--background))',
     borderRight: '1px solid hsl(var(--border) / 0.6)',
     color: 'hsl(var(--subtle-foreground))',
-    fontFamily: MONO,
+    fontFamily: EDITOR_FONT_FAMILY,
   },
   '.cm-lineNumbers .cm-gutterElement': { padding: '0 8px 0 10px', minWidth: '36px' },
   '&.cm-focused .cm-cursor': { borderLeftColor: 'hsl(var(--primary))' },

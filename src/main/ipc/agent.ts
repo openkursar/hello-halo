@@ -6,6 +6,7 @@
  * this module subscribes and forwards them to the BrowserWindow.
  */
 
+import type { AgentInputArrivedEvent } from '../../shared/types/agent-input'
 import {
   stopGeneration,
   getSessionState,
@@ -19,7 +20,8 @@ import {
   getConversationGoal,
   setConversationGoal,
   onAgentEvent,
-  onAgentBroadcast
+  onAgentBroadcast,
+  withInputImageFiles
 } from '../services/agent'
 import type { GoalInput } from '../../shared/types/goal'
 import type { AgentInjectRequest, AgentSendRequest } from '../../shared/types/agent-send'
@@ -112,7 +114,10 @@ export function registerAgentHandlers(): void {
     if (mainWindow && !mainWindow.isDestroyed()) {
       const detail = detailByRenderer.get(mainWindow.webContents.id) ?? NO_DETAIL
       if (shouldDeliverAgentEvent(e.channel, e.conversationId, detail, e.data)) {
-        mainWindow.webContents.send(e.channel, eventData)
+        const desktopData = e.channel === 'agent:input-arrived' || e.channel === 'agent:input-stopped'
+          ? { ...eventData, messages: withInputImageFiles(e.spaceId, (eventData as unknown as AgentInputArrivedEvent).messages) }
+          : eventData
+        mainWindow.webContents.send(e.channel, desktopData)
       }
     }
 
@@ -155,7 +160,7 @@ export function registerAgentHandlers(): void {
         // outright (see control.ts), which surfaces the same way a crash does —
         // this is the only thing that tells turn-report.ts the difference.
         if (conversationId) markIntentionalStop(conversationId)
-        stopGeneration(conversationId)
+        stopGeneration(conversationId, { reason: 'user' })
         return { success: true }
       } catch (error: unknown) {
         const err = error as Error

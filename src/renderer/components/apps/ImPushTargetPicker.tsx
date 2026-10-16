@@ -14,7 +14,7 @@ import { api } from '../../api'
 import type { ImChannelInstanceStatus, ImSessionRecord } from '../../../shared/types/im-channel'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 import { pushTargetCandidates } from './im-push-targets'
-import { getImChannelDisplay } from './im-channel-labels'
+import { getImChannelDisplay, getImBotLabel } from './im-channel-labels'
 
 interface ImPushTargetPickerProps {
   appId: string
@@ -63,7 +63,7 @@ export function ImPushTargetPicker({ appId, onClose, onAdded }: ImPushTargetPick
     return () => window.removeEventListener('keydown', onKey)
   }, [requestClose])
 
-  const botNames = useMemo(() => new Map(bots.map(bot => [bot.id, bot.appName])), [bots])
+  const botsById = useMemo(() => new Map(bots.map(bot => [bot.id, bot])), [bots])
 
   const q = query.trim().toLowerCase()
   const shown = (candidates ?? []).filter(session =>
@@ -163,7 +163,8 @@ export function ImPushTargetPicker({ appId, onClose, onAdded }: ImPushTargetPick
             shown.map((session) => {
               const key = keyOf(session)
               const channel = getImChannelDisplay(session.channel)
-              const answeredBy = botNames.get(session.instanceId)
+              const bot = botsById.get(session.instanceId)
+              const answeredBy = bot?.appName
               return (
                 <label
                   key={key}
@@ -183,7 +184,8 @@ export function ImPushTargetPicker({ appId, onClose, onAdded }: ImPushTargetPick
                       <span className="text-sm font-medium truncate">{getImSessionDisplayName(session)}</span>
                       <span className={`text-xs shrink-0 ${channel.color}`}>{channel.label}</span>
                     </span>
-                    <span className="block text-xs text-muted-foreground/70 mt-0.5">
+                    <span className="block text-xs text-muted-foreground/70 mt-0.5 break-words">
+                      {bot && <>{getImBotLabel(bot, t)} · </>}
                       {answeredBy
                         ? t('Replies go to {{name}}', { name: answeredBy })
                         : (session.chatType === 'group' ? t('Group') : t('Direct'))}

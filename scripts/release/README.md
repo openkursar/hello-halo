@@ -140,6 +140,20 @@ prompt they cannot close.
 Self-hosted (`generic`) feeds generate their yml server-side; there the field
 belongs in that generator, not in this repo.
 
+## Which Macs a Mac release is offered to
+
+`latest-mac.yml` carries `minimumSystemVersion`, so a Mac the release cannot run
+on keeps the version it has. Without it electron-updater downloads the update,
+swaps it in when the app quits, and macOS then refuses to open the app.
+`finalize-mac-artifacts.mjs` writes it from the `LSMinimumSystemVersion` of the
+packaged apps of the release version, and fails when it cannot.
+
+The value is a **Darwin** version (macOS 12 → `21.0.0`): electron-updater
+compares it with `os.release()`. Writing the macOS number gates nothing. The
+mapping lives in `macos-floor.mjs`; a self-hosted feed applies the same rule in
+its own generator. Never put the field in a Windows yml — there it would be
+compared with the NT version and block every update.
+
 ## Staged Windows updates
 
 A variant enables the Windows background-unpack update path in product.json

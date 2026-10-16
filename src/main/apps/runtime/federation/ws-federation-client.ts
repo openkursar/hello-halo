@@ -66,7 +66,7 @@ export interface WsFederationClientDeps {
    */
   officeId?: string
   /** Delivered every inbound 'federation' frame after auth succeeds. */
-  onFrame: (frame: FederationMessage) => void
+  onFrame: (frame: FederationMessage, from?: NodeId) => void
   /** Connection lifecycle, surfaced for the manager's logging/diagnostics. */
   onStateChange?: (state: WsFederationClientState) => void
   /**
@@ -130,6 +130,12 @@ export class WsFederationClient {
   // which is what distinguishes a reconnect-reauth (fire onReauth) from the
   // initial auth (do not).
   private hasAuthedEver = false
+  private gatewaySession = false
+
+  /** The link rides a relay gateway (wire version announced at auth), not a LAN host socket. */
+  get isGatewaySession(): boolean {
+    return this.gatewaySession
+  }
   private stopped = false
   private reconnectAttempt = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -295,7 +301,7 @@ export class WsFederationClient {
   }
 
   private handleMessage(data: WebSocket.RawData): void {
-    let message: { type?: string; payload?: unknown; error?: string }
+    let message: { type?: string; payload?: unknown; error?: string; from?: string }
     const text = data.toString()
     try {
       message = JSON.parse(text)
@@ -333,6 +339,7 @@ export class WsFederationClient {
       }
       case 'auth:success': {
         const isReauth = this.hasAuthedEver
+        if (!isReauth) this.gatewaySession = typeof (message.payload as { wirePv?: unknown } | undefined)?.wirePv === 'number'
         this.authed = true
         this.hasAuthedEver = true
         this.reconnectAttempt = 0
@@ -368,7 +375,7 @@ export class WsFederationClient {
         if (!byKind) this.receivedByKind.set(kindKey, (byKind = { frames: 0, bytes: 0 }))
         byKind.frames += 1
         byKind.bytes += text.length
-        this.deps.onFrame(frame)
+        this.deps.onFrame(frame, this.gatewaySession ? message.from : undefined)
         break
       }
       case 'gw:host-lost':

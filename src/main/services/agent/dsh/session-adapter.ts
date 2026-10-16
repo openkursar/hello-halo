@@ -27,6 +27,7 @@
 import { randomUUID } from 'crypto'
 import { DshEventNormalizer } from './event-normalizer'
 import type { SdkMcpBridge } from '../mcp/sdk-bridge'
+import type { SessionLiveInputOptions } from '../types'
 import type {
   DshInitializeParams,
   DshNotification,
@@ -54,6 +55,8 @@ export function setDshRuntimeClientFactory(factory: DshRuntimeClientFactory): vo
 
 interface PendingPrompt {
   contentBlocks: unknown[]
+  /** Present when accepted through sendIntoLiveTurn; only such input can be withdrawn. */
+  live?: SessionLiveInputOptions
 }
 
 export class DshSession {
@@ -67,7 +70,7 @@ export class DshSession {
    * it must not be shared and must not outlive the child.
    */
   private readonly mcpBridge: SdkMcpBridge | null
-  private sessionId: string
+  readonly sessionId: string
 
   private client: DshRuntimeClient | null = null
   private unsubscribe: (() => void) | null = null
@@ -76,6 +79,7 @@ export class DshSession {
   private starting: Promise<void> | null = null
 
   private frameQueue: any[] = []
+  private queuedTurnStarts = 0
   private frameWaiters: Array<() => void> = []
   private queue: PendingPrompt[] = []
   private exitListeners = new Set<(error?: Error) => void>()
@@ -91,6 +95,13 @@ export class DshSession {
   private turnOpen = false
   /** True while a `session/prompt` call is in flight. */
   private dispatching = false
+  private steeringReceiptFor: string | null = null
+  private steeringDeferred = false
+  private dispatchScheduled = false
+  /** The batch a `session/prompt` or `session/steer` call is carrying right now. */
+  private inFlight: PendingPrompt[] = []
+  /** Input the runtime accepted and has not spliced into the agent yet. */
+  private unspliced: PendingPrompt[] = []
   /** Notifications that raced the in-flight `session/prompt` response. */
   private pendingWhileDispatching: DshNotification[] = []
 
@@ -268,9 +279,53 @@ export class DshSession {
   }
 
   send(message: any): void {
+    this.enqueue({ contentBlocks: toContentBlocks(message) })
+  }
+
+  sendIntoLiveTurn(message: any, options?: SessionLiveInputOptions): boolean {
+    if (!this.query.transport.isReady()) return false
+    this.enqueue({ contentBlocks: toContentBlocks(message), live: options ?? {} })
+    return true
+  }
+
+  /**
+   * The runtime cannot give back input it accepted, so live input it has not
+   * spliced into the agent yet is withdrawn by ending the runtime — what a stop
+   * of this engine does anyway. Input still queued here is simply dropped.
+   */
+  async withdrawUnreadInput(): Promise<number> {
+    const handedOver = [...this.unspliced, ...this.inFlight].filter(prompt => prompt.live)
+    const queued = this.queue.filter(prompt => prompt.live)
+    if (handedOver.length + queued.length === 0) return 0
+    this.queue = this.queue.filter(prompt => !prompt.live)
+    if (handedOver.length > 0) await this.interrupt()
+    for (const prompt of [...handedOver, ...queued]) {
+      try {
+        prompt.live?.onWithdrawn?.()
+      } catch (err) {
+        console.error(`[dsh][session] Withdrawn-input handler failed: session=${this.sessionId}`, err)
+      }
+    }
+    return queued.length + handedOver.length
+  }
+
+  private enqueue(prompt: PendingPrompt): void {
     if (this.closed) throw new Error('dsh session is closed')
-    this.queue.push({ contentBlocks: toContentBlocks(message) })
-    this.dispatchQueued()
+    this.queue.push(prompt)
+    this.scheduleDispatch()
+  }
+
+  hasPendingInput(): boolean {
+    return !this.closed && (this.dispatching || this.awaitingReceiptFor !== null || this.queue.length > 0 || this.queuedTurnStarts > 0)
+  }
+
+  private scheduleDispatch(): void {
+    if (this.dispatchScheduled || this.closed) return
+    this.dispatchScheduled = true
+    queueMicrotask(() => {
+      this.dispatchScheduled = false
+      this.dispatchQueued()
+    })
   }
 
   /**
@@ -287,7 +342,12 @@ export class DshSession {
         continue
       }
       const frame = this.frameQueue.shift()
-      yield frame
+      try {
+        yield frame
+      } finally {
+        // Ownership transfers only after the consumer has processed init.
+        if (frame?.type === 'system' && frame.subtype === 'init') this.queuedTurnStarts = Math.max(0, this.queuedTurnStarts - 1)
+      }
       if (frame && frame.type === 'result') return
     }
   }
@@ -340,23 +400,36 @@ export class DshSession {
   // --------------------------------------------------------------------------
 
   private async dispatchNext(): Promise<void> {
-    // Prompts are serialized: a second one sent while an interval is open
-    // would put its receipt inside the first turn, and the two turns could no
-    // longer be told apart. The harness queues it anyway once we do send it.
-    // `dispatching` closes the window between `prompt()` being called and its
-    // receipt id landing, during which the guards below still read as free.
-    if (this.dispatching || this.turnOpen || this.awaitingReceiptFor !== null) return
-    if (this.closed || !this.client) return
-    const next = this.queue.shift()
-    if (!next) return
-
+    if (this.dispatching || this.awaitingReceiptFor !== null) return
+    if (this.closed || !this.client || this.queue.length === 0) return
+    if (this.turnOpen && this.steeringDeferred) return
+    if (this.turnOpen && !this.client.steer) {
+      this.steeringDeferred = true
+      console.warn(`[dsh][session] Runtime cannot steer; retaining ${this.queue.length} messages for continuation: session=${this.sessionId}`)
+      return
+    }
+    const batch = this.queue.splice(0)
+    const contentBlocks = batch.flatMap(prompt => prompt.contentBlocks)
+    const steering = this.turnOpen
     this.dispatching = true
+    this.inFlight = batch
     try {
-      const receipt = await this.client.prompt(this.sessionId, next.contentBlocks)
-      this.awaitingReceiptFor = receipt.messageId
+      const receipt = steering
+        ? await this.client.steer!(this.sessionId, contentBlocks)
+        : await this.client.prompt(this.sessionId, contentBlocks)
+      if (steering) this.steeringReceiptFor = receipt.messageId
+      else this.awaitingReceiptFor = receipt.messageId
+      this.unspliced.push(...batch)
+    } catch (error) {
+      if (!steering) throw error
+      this.queue.unshift(...batch)
+      this.steeringDeferred = true
+      console.warn(`[dsh][session] Steering rejected; retaining ${batch.length} messages for continuation: session=${this.sessionId}; ${String(error)}`)
     } finally {
       this.dispatching = false
+      this.inFlight = []
       this.drainDispatchBuffer()
+      if (this.queue.length > 0 && !this.steeringDeferred) this.scheduleDispatch()
     }
   }
 
@@ -385,9 +458,15 @@ export class DshSession {
     if (this.awaitingReceiptFor !== null) {
       if (!isInboxReceipt(notification, this.sessionId, this.awaitingReceiptFor)) return
       this.awaitingReceiptFor = null
+      this.unspliced = []
       this.turnOpen = true
       this.pushFrames(this.normalizer.beginTurn())
+      this.scheduleDispatch()
       return
+    }
+    if (this.steeringReceiptFor && isInboxReceipt(notification, this.sessionId, this.steeringReceiptFor)) {
+      this.steeringReceiptFor = null
+      this.unspliced = []
     }
     if (!this.turnOpen) return
 
@@ -395,6 +474,11 @@ export class DshSession {
 
     if (this.normalizer.isOwnIdle(notification)) {
       this.turnOpen = false
+      this.steeringDeferred = false
+      if (this.steeringReceiptFor) {
+        this.awaitingReceiptFor = this.steeringReceiptFor
+        this.steeringReceiptFor = null
+      }
       this.pushFrames(this.normalizer.endTurn())
       this.dispatchQueued()
     }
@@ -419,7 +503,10 @@ export class DshSession {
 
   private pushFrames(frames: any[]): void {
     if (frames.length === 0) return
-    for (const frame of frames) this.frameQueue.push(frame)
+    for (const frame of frames) {
+      if (frame?.type === 'system' && frame.subtype === 'init') this.queuedTurnStarts++
+      this.frameQueue.push(frame)
+    }
     this.wakeFrameWaiters()
   }
 

@@ -33,14 +33,14 @@ export function registerSpaceRoutes(app: Express): void {
 
   app.post('/api/spaces', async (req: Request, res: Response) => {
     const { name, icon, color, customPath } = req.body
-    const result = spaceController.createSpace({ name, icon, color, customPath })
+    const result = await spaceController.createSpace({ name, icon, color, customPath })
     res.json(result)
   })
 
   // Reorder spaces — must be before :spaceId route to avoid matching "reorder" as an id
   app.put('/api/spaces/reorder', async (req: Request, res: Response) => {
     const { spaceIds } = req.body
-    const result = spaceController.reorderSpaces(Array.isArray(spaceIds) ? spaceIds : [])
+    const result = await spaceController.reorderSpaces(Array.isArray(spaceIds) ? spaceIds : [])
     res.json(result)
   })
 
@@ -50,7 +50,7 @@ export function registerSpaceRoutes(app: Express): void {
   })
 
   app.put('/api/spaces/:spaceId', async (req: Request, res: Response) => {
-    const result = spaceController.updateSpace(req.params.spaceId, req.body)
+    const result = await spaceController.updateSpace(req.params.spaceId, req.body)
     res.json(result)
   })
 
@@ -84,7 +84,7 @@ export function registerSpaceRoutes(app: Express): void {
 
   // Remove an unreachable space's registry entry (does not touch disk)
   app.post('/api/spaces/:spaceId/forget', async (req: Request, res: Response) => {
-    const result = spaceController.forgetSpace(req.params.spaceId)
+    const result = await spaceController.forgetSpace(req.params.spaceId)
     res.json(result)
   })
 

@@ -114,3 +114,31 @@ not counted as a passed collaboration check.
 For an endpoint that must bypass the host's system proxy, set
 `HALO_TEST_NO_PROXY=1`; only the disposable cluster Electron processes receive
 `--no-proxy-server`. This does not alter the user's application or OS settings.
+
+### Live-turn review regression
+
+`npm run test:team -- live-turn` creates a disposable space conversation and asks
+its real model to coordinate three specialist reviewers. Each reviewer generates
+a fresh receipt unknown to the coordinator, reviews a small code fixture, and
+sends its finding through the production team-message route. The coordinator
+runs separate slow validation commands meanwhile. The suite checks that the
+original turn incorporates all three receipts, that reports are reflected in the
+next command after a tool boundary, and that completion notices do not cause a
+sequence of follow-up turns. It keeps only sanitized timing/count evidence and
+removes the credential-bearing node directory on every exit.
+
+Select a configured backend explicitly; the test refuses an engine fallback:
+
+```bash
+npm run test:team -- live-turn --engine codex --model <configured-gpt-model> --api-type responses --env-file /path/to/.env.local --output /tmp/live-turn-gpt.json
+npm run test:team -- live-turn --engine anthropic --model <configured-claude-model> --env-file /path/to/.env.local --output /tmp/live-turn-claude.json
+```
+
+The endpoint and credential come from the normal test environment, not model
+names. Use `--api-type anthropic_passthrough` only when the configured provider
+expects native Anthropic requests. The launcher also accepts
+`HALO_TEST_SDK_ENGINE` and `HALO_TEST_API_TYPE`; omitting them preserves the
+existing default engine and Chat Completions source. Run model cases sequentially.
+The result records observed cost; it does not assert a dollar threshold, since
+provider pricing and independent review work vary. See
+[LIVE-TURN-COVERAGE.md](./LIVE-TURN-COVERAGE.md) for the deterministic coverage.

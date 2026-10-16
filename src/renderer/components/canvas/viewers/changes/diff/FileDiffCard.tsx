@@ -8,7 +8,7 @@ import { useViewerResources } from '../../../viewer-resources'
 import { createDiffEditor, type DiffEditorHandle, type DiffLayout, type DiffSide } from './diff-editor'
 import type { DiffPart, LoadedDiff } from './diff-content'
 import { useStackContext } from './stack-context'
-import { MAX_STACK_PARTS } from './stack-policy'
+import { MAX_STACK_PARTS, wrapsLines } from './stack-policy'
 import { DiffStat, FileGlyph, IconButton, PathTail, StateLetter } from '../shared/parts'
 import { baseName, dirName } from '../model/paths'
 import { formatBytes, formatCount } from '../shared/format'
@@ -315,6 +315,7 @@ function DiffEditorHost({ file, part, layout, collapseUnchanged, sideExtensions,
       collapseUnchanged,
       path: shown.path,
       lineNumbers: part.lineNumbers,
+      lineWrapping: wrapsLines(shown.path, part),
       phrases,
       labels: {
         before: t('{{location}} · Before', { location: shown.oldPath ?? shown.path }),

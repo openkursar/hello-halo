@@ -3,13 +3,14 @@
  *
  * Sends a mid-turn user message into an active V2 session's input stream.
  * Persisted with source:'injection' (folded into the assistant bubble in the UI,
- * never rendered as its own user bubble). CC absorbs it into the current turn at
- * the next tool-round boundary and continues to a single result — no separate
- * turn. Backs the user's concurrent "type while generating".
+ * never rendered as its own user bubble). The engine absorbs it at the next tool boundary, or runs
+ * an immediate continuation when the current turn is already ending. Backs the user's concurrent "type while generating".
  */
 
 import { v2Sessions } from './session-manager'
-import { addMessage } from '../conversation.service'
+import { sendIntoLiveTurn } from './live-turn'
+import { emitAgentEvent } from './events'
+import { addMessage, updateMessageById, type Message } from '../conversation.service'
 import { getWorkingDir } from './helpers'
 import { formatReferencesBlock } from './references'
 import type { ContentReference } from '../../../shared/types/content-reference'
@@ -17,11 +18,12 @@ import type { ContentReference } from '../../../shared/types/content-reference'
 /**
  * Inject a message into an active V2 session mid-turn.
  *
- * 1. Persists the message (source: 'injection'), with its references
- * 2. Sends to CC subprocess via v2Session.send(), references expanded ahead of the text
+ * Accepts through the engine's synchronous live-input primitive, then persists
+ * the original text and references before the engine's next asynchronous step.
  *
- * CC absorbs this at the next tool boundary within the current turn; the turn
- * completes normally with a single result. Images are not supported here.
+ * Accepted text is consumed at the next model step or an immediate continuation.
+ * If the user stops the turn before that, it never runs and its record is marked
+ * stopped. Images are not supported by this legacy UI entry.
  *
  * @param conversationId - Target conversation
  * @param message - Message text; may be empty when references carry it
@@ -33,16 +35,38 @@ export function injectMessage(conversationId: string, message: string, reference
   if (!v2SessionInfo) {
     throw new Error(`No active V2 session for conversation: ${conversationId}`)
   }
+  const { spaceId } = v2SessionInfo
 
-  // Persist with source:'injection' so it appears in history and folds in the UI
-  addMessage(v2SessionInfo.spaceId, conversationId, {
-    role: 'user',
-    content: message,
-    source: 'injection',
-    ...(references && references.length > 0 ? { metadata: { references } } : {}),
-  })
-
-  const text = formatReferencesBlock(references, getWorkingDir(v2SessionInfo.spaceId)) + message
-  v2SessionInfo.session.send(text)
-  console.log(`[Agent][${conversationId}] Injection message sent and persisted (${text.length} chars${references?.length ? `, references=${references.length}` : ''})`)
+  const text = formatReferencesBlock(references, getWorkingDir(spaceId)) + message
+  let recorded: Message | undefined
+  const onWithdrawn = () => {
+    if (!recorded) {
+      console.warn(`[Agent][${conversationId}] Stopped live input has no record to mark`)
+      return
+    }
+    const stopped = updateMessageById(spaceId, conversationId, recorded.id, {
+      metadata: { ...recorded.metadata, inputOutcome: 'stopped' },
+    })
+    if (!stopped) {
+      console.warn(`[Agent][${conversationId}] Stopped live input ${recorded.id} is no longer stored; mark skipped`)
+      return
+    }
+    emitAgentEvent('agent:input-stopped', spaceId, conversationId, { messages: [stopped] })
+  }
+  if (!sendIntoLiveTurn(conversationId, text, undefined, { onWithdrawn })) {
+    throw new Error('The live turn cannot accept input; send this message through the normal send entry')
+  }
+  try {
+    // Acceptance is synchronous; persistence precedes the engine's next async step.
+    recorded = addMessage(spaceId, conversationId, {
+      role: 'user',
+      content: message,
+      source: 'injection',
+      ...(references && references.length > 0 ? { metadata: { references } } : {}),
+    })
+    emitAgentEvent('agent:input-arrived', spaceId, conversationId, { messages: [recorded], live: true })
+    console.log(`[Agent][${conversationId}] Live input accepted and recorded: chars=${text.length}`)
+  } catch (error) {
+    console.error(`[Agent][${conversationId}] Accepted live input could not be recorded or announced:`, error)
+  }
 }

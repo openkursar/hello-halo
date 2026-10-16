@@ -74,3 +74,9 @@ export function subscribeAppChatSessions(listener: () => void): () => void {
 export function getAppChatSessions(): ImSessionRecord[] {
   return records
 }
+
+/** Fetch the records now, for a one-off lookup that cannot wait for the next poll. */
+export async function loadAppChatSessions(): Promise<ImSessionRecord[]> {
+  await refresh()
+  return records
+}

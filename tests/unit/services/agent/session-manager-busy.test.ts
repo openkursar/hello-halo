@@ -50,6 +50,8 @@ import {
   stopSessionCleanup,
   activeSessions,
   isSessionBusy,
+  markTurnDispatched,
+  markTurnInitReceived,
 } from '../../../../src/main/services/agent/session-manager'
 
 function fakeSession() {
@@ -92,6 +94,14 @@ describe('isSessionBusy', () => {
 
   it('is not busy without a session', () => {
     expect(isSessionBusy('conv-none')).toBe(false)
+  })
+
+  it('is busy after accepted dispatch and before native init', async () => {
+    await withConsumer('conv-awaiting', { isRunning: true, turn: null, teamThoughts: [] })
+    markTurnDispatched('conv-awaiting')
+    expect(isSessionBusy('conv-awaiting')).toBe(true)
+    markTurnInitReceived('conv-awaiting')
+    expect(isSessionBusy('conv-awaiting')).toBe(false)
   })
 
   it('is busy while the consumer is processing a turn', async () => {

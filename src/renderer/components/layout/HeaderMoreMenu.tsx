@@ -40,10 +40,12 @@ export function HeaderMoreMenu() {
   }
 
   const handleOpenBrowser = () => {
+    setIsOpen(false)
     trackToolOpen('browser', 'more_menu', openBrowser())
   }
 
   const handleOpenTerminal = () => {
+    setIsOpen(false)
     trackToolOpen('terminal', 'more_menu', openTerminal())
   }
 
@@ -61,7 +63,7 @@ export function HeaderMoreMenu() {
         >
           <MoreHorizontal className="w-5 h-5" />
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-56 py-1">
+        <PopoverContent align="end" dismissOverlay className="w-56 py-1">
           {canOpenBrowser && (
             <button
               onClick={handleOpenBrowser}
