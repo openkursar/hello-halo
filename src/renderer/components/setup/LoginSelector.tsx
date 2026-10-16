@@ -22,6 +22,7 @@ import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } fro
 import { getApiKeyProviders, type BuiltinProvider } from '../../types'
 import { getProviderIcon } from '../icons/BrandIcons'
 import { ProviderIconTile } from '../icons/ProviderIconTile'
+import brandMarkAnimated from '../../assets/brand/halo-mark-animated.svg'
 
 // Re-export so existing renderer imports (`from './LoginSelector'`) continue
 // to work without churn. The canonical definition lives in shared/types.
@@ -278,12 +279,9 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom
         </div>
       </div>
 
-      {/* Header with Logo */}
+      {/* Header with the animated brand mark, as on the empty chat */}
       <div className="flex flex-col items-center mb-10">
-        {/* Logo with halo glow effect */}
-        <div className="w-20 h-20 rounded-full border-2 border-primary/60 flex items-center justify-center halo-glow">
-          <div className="w-14 h-14 rounded-full bg-gradient-to-br from-primary/30 to-transparent" />
-        </div>
+        <img src={brandMarkAnimated} alt="" aria-hidden="true" className="w-20 h-20" />
         <h1 className="mt-4 text-3xl font-light tracking-wide">{t('Welcome to Halo')}</h1>
       </div>
 
