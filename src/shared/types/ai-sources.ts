@@ -81,6 +81,7 @@ export type BuiltinProviderId =
   | 'stepfun'
   | 'openrouter'
   | 'orcarouter'
+  | 'cheaperinference'
   | 'atlascloud'
   | 'requesty'
   | 'groq'
