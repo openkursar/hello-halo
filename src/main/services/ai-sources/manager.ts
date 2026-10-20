@@ -1078,6 +1078,7 @@ class AISourceManager {
       : accounts
     let sources = [...aiSources.sources]
     const ids: string[] = []
+    const addedIds: string[] = []
     const now = new Date().toISOString()
     const sameProvider = (source: AISource) => source.provider === providerType && source.authType === 'oauth'
     for (const account of selectedAccounts) {
@@ -1126,11 +1127,13 @@ class AISourceManager {
       this.catalogRefreshes.delete(id)
       this.dropRequestCredentials([id])
       ids.push(id)
+      if (!existing) addedIds.push(id)
     }
-    saveConfig({ aiSources: {
-      ...aiSources, currentId: aiSources.currentId || ids[0] || null, sources
-    }, isFirstLaunch: false } as any)
-    console.log(`[AISourceManager] OAuth account credentials saved: provider=${providerType} sources=${ids.join(',')}`)
+    // Adding an account means the user wants to use it now; signing in again to
+    // a listed account (expired token, reauthentication) keeps their selection.
+    const currentId = addedIds[0] || aiSources.currentId || ids[0] || null
+    saveConfig({ aiSources: { ...aiSources, currentId, sources }, isFirstLaunch: false } as any)
+    console.log(`[AISourceManager] OAuth account credentials saved: provider=${providerType} sources=${ids.join(',')} current=${currentId}`)
     return ids
   }
 

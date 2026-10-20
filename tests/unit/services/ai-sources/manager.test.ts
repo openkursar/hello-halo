@@ -328,6 +328,18 @@ describe('OAuth multi-account _accounts upsert', () => {
     // keepModel: current model still in the new list → preserved.
     expect(saved.sources[0].model).toBe('m1')
   })
+
+  it('selects the newly added account, and signing in again to a listed one keeps the selection', async () => {
+    const listed = oauthSource({ id: 'listed', provider: 'acct-prov' as never, user: { name: '', uid: 'acc-a' } })
+    seed({ currentId: 'deepseek', sources: [apiKeySource({ id: 'deepseek' }), listed] })
+    const mgr = new AISourceManager()
+    await loginWithAccounts(mgr, [{ key: 'k-a2', label: 'Org A', id: 'acc-a' }])
+    expect((store.value.aiSources as AISourcesConfig).currentId).toBe('deepseek')
+
+    await loginWithAccounts(mgr, [{ key: 'k-a3', label: 'Org A', id: 'acc-a' }, { key: 'k-b', label: 'Org B', id: 'acc-b' }])
+    const saved = store.value.aiSources as AISourcesConfig
+    expect(saved.currentId).toBe(saved.sources.find(source => source.user?.uid === 'acc-b')!.id)
+  })
 })
 
 describe('single-source create / update / delete', () => {
@@ -388,7 +400,7 @@ describe('single-source create / update / delete', () => {
     expect(saved.accessToken).toBe('new-token')
   })
 
-  it('adds another account without replacing an unidentified existing account or selection', async () => {
+  it('adds another account without replacing an unidentified existing account, and selects it', async () => {
     seed({ currentId: 'ex', sources: [oauthSource({ id: 'ex', provider: 'single-prov' as never })] })
     const mgr = new AISourceManager()
     await login(mgr, 'u2')
@@ -397,7 +409,7 @@ describe('single-source create / update / delete', () => {
     expect(saved.sources[0].id).toBe('ex')
     expect(saved.sources[0].accessToken).toBe('tok')
     expect(saved.sources[1].accessToken).toBe('at')
-    expect(saved.currentId).toBe('ex')
+    expect(saved.currentId).toBe(saved.sources[1].id)
   })
 
   it('reassigns currentId to the first remaining source when the current one is deleted', () => {
