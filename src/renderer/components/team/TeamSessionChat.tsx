@@ -1,4 +1,4 @@
-import { invalidateTeamSessionHistory, loadTeamSessionHistory, matchesTeamHistory, peekTeamSessionHistory, retainTeamSessionHistory } from './session-history'
+import { invalidateTeamSessionHistory, loadTeamSessionHistory, matchesTeamHistory, mergeTeamSessionHistory, peekTeamSessionHistory, retainTeamSessionHistory } from './session-history'
 /**
  * TeamSessionChat — the ONE team session surface, shared by the member panel and
  * the Conversation tab (spec §6.2: "must share one set of session components,
@@ -228,28 +228,7 @@ export function TeamSessionChat({
         const seqOf = (m: Message): number | undefined => (m as { seq?: number }).seq
         const maxSeq = batch.reduce((hi, m) => Math.max(hi, seqOf(m) ?? 0), cursor)
         if (incremental) {
-          if (batch.length > 0) {
-            setMessages((prev) => {
-              const bySeq = new Map<number, Message>()
-              for (const m of batch) {
-                const s = seqOf(m)
-                if (s !== undefined) bySeq.set(s, m)
-              }
-              const appendSeqs = new Set(bySeq.keys())
-              const replaced = prev.map((m) => {
-                const s = seqOf(m)
-                if (s === undefined || !bySeq.has(s)) return m
-                appendSeqs.delete(s)
-                return bySeq.get(s)!
-              })
-              const fresh = batch.filter((m) => { const s = seqOf(m); return s !== undefined && appendSeqs.has(s) })
-              const supersededKeys = new Set(fresh.map((m) => `${m.role}\u0000${m.content}`))
-              const base = replaced.filter(
-                (m) => seqOf(m) !== undefined || !supersededKeys.has(`${m.role}\u0000${m.content}`)
-              )
-              return [...base, ...fresh]
-            })
-          }
+          if (batch.length > 0) setMessages(prev => mergeTeamSessionHistory(prev, batch))
           seqCursorRef.current = maxSeq
           setLoadState('loaded')
         } else if (draftCommit && batch.length === 0) {
