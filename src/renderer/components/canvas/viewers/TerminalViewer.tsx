@@ -9,8 +9,8 @@
  *  - keeps the pty size in sync via the fit addon + ResizeObserver.
  *
  * A soft border highlight indicates when the AI is actively writing, so the two
- * parties never surprise each other (Ctrl+C reaches the pty unless a
- * selection turns it into a copy — see attachCustomKeyEventHandler).
+ * parties never surprise each other (Ctrl+C reaches the pty unless, off macOS,
+ * a selection turns it into a copy — see lib/terminal-keys.ts).
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -24,6 +24,7 @@ import { useTranslation } from '../../../i18n'
 import type { TabState } from '../../../services/canvas-lifecycle'
 import { noteTerminalInput } from '../../../services/tool-session-telemetry'
 import { getTerminalThemeOptions, isLightTheme } from '../../../lib/terminal-theme'
+import { copiesSelection } from '../../../lib/terminal-keys'
 import { copyToClipboard } from '../../../utils/clipboard'
 import { latchTerminalEnd, type TerminalEndState } from '../../../lib/terminal-liveness'
 import { useCanvasActions } from '../../../hooks/useCanvasLifecycle'
@@ -46,6 +47,9 @@ interface TerminalViewerProps {
  * main-side low watermark or a paused pty could never resume.
  */
 const CHAR_COUNT_ACK_SIZE = 5000
+
+/** The keyboard in front of the user: a remote browser can run on another OS than the host. */
+const IS_MAC = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().includes('MAC')
 
 export function TerminalViewer({ tab }: TerminalViewerProps) {
   const { t } = useTranslation()
@@ -100,19 +104,20 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
     termRef.current = term
     fitRef.current = fit
 
-    // Ctrl/Cmd+C copies when text is selected (xterm's selection is internal —
-    // the browser never sees it); without a selection it passes through as
-    // SIGINT (#358). Check the selection text: a whitespace-only selection
-    // copies nothing, and gating on hasSelection() alone would swallow the
-    // keypress without copying or interrupting.
     term.attachCustomKeyEventHandler((e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'c' && term.getSelection().length > 0) {
-        // copyToClipboard falls back to execCommand on HTTP remote (non-secure
-        // context), where navigator.clipboard is undefined.
-        if (e.type === 'keydown') void copyToClipboard(term.getSelection()).catch(() => {})
-        return false
+      if (!copiesSelection(e, IS_MAC, term.getSelection())) return true
+      if (e.type === 'keydown') {
+        const text = term.getSelection()
+        term.clearSelection()
+        // Consumed here, so the Copy menu item does not run a second copy.
+        e.preventDefault()
+        // Over HTTP remote access the copy goes through a temporary text field,
+        // which takes the keyboard focus with it when it is removed.
+        void copyToClipboard(text)
+          .then(() => { if (document.activeElement === document.body) term.focus() })
+          .catch(error => console.warn('[TerminalViewer] Copying the selection failed', { sessionId, error }))
       }
-      return true
+      return false
     })
 
     let disposed = false
