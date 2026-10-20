@@ -15,4 +15,7 @@ export const imChannelsRpc = {
   imChannelsSetInstanceApp: rawRpcMethod('im-channels:set-instance-app'),
   imChannelsCreateInstance: rawRpcMethod('im-channels:create-instance'),
   imChannelsUnbindInstance: rawRpcMethod('im-channels:unbind-instance'),
+  imChannelsUpdateInstance: rawRpcMethod('im-channels:update-instance'),
+  imChannelsAddInstance: rawRpcMethod('im-channels:add-instance'),
+  imChannelsRemoveInstance: rawRpcMethod('im-channels:remove-instance'),
 }

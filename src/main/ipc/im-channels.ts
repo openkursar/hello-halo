@@ -12,8 +12,9 @@ import { getImChannelManager } from '../apps/runtime'
 import { getConfig } from '../foundation/config.service'
 import { dispatchInboundMessage, invalidateImSessions } from '../apps/runtime'
 import { setInstanceApp, createInstance, unbindInstance } from '../apps/runtime/im-channels/binding'
+import { updateInstanceSettings, addInstance, removeInstance } from '../apps/runtime/im-channels/instance-settings'
 import { getImChannelsPermissionDefaults } from '../foundation/product-config'
-import type { ImChannelInstanceStatus, ImChannelInstanceConfig } from '../../shared/types/im-channel'
+import type { ImChannelInstanceStatus, ImChannelInstanceConfig, ImChannelInstancePatch } from '../../shared/types/im-channel'
 import { imChannelsRpc } from '../../shared/rpc/contracts/im-channels.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -129,6 +130,34 @@ export function registerImChannelHandlers(): void {
       try {
         return createInstance(instance)
       } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
+      }
+    },
+
+    // Settings-page writes: what the person changed, applied onto the stored list
+    imChannelsUpdateInstance: async (instanceId: string, patch: ImChannelInstancePatch) => {
+      try {
+        return updateInstanceSettings(instanceId, patch)
+      } catch (error: unknown) {
+        console.warn('[ImChannels] Instance update failed', { instanceId, error })
+        return { success: false, error: (error as Error).message }
+      }
+    },
+
+    imChannelsAddInstance: async (instance: ImChannelInstanceConfig) => {
+      try {
+        return addInstance(instance)
+      } catch (error: unknown) {
+        console.warn('[ImChannels] Instance add failed', { instanceId: instance?.id, error })
+        return { success: false, error: (error as Error).message }
+      }
+    },
+
+    imChannelsRemoveInstance: async (instanceId: string) => {
+      try {
+        return removeInstance(instanceId)
+      } catch (error: unknown) {
+        console.warn('[ImChannels] Instance removal failed', { instanceId, error })
         return { success: false, error: (error as Error).message }
       }
     },

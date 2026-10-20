@@ -1676,6 +1676,10 @@ src/main/apps/runtime/
   im-channels/
     index.ts                 -- ImChannelManager + provider registration
     manager.ts               -- Generic channel lifecycle (provider-agnostic)
+    instance-settings.ts     -- Settings-page writes (field patch / add / remove)
+                                applied onto the stored instance list
+    binding.ts               -- Bind/unbind/create with target + duplicate-bot checks
+    owner-claim.ts           -- First direct-message sender becomes the owner
     im-prompt.ts             -- IM entry/constraint builders + ImSessionContext
     file-send-mcp.ts         -- send_file_to_chat MCP tool (pre-bound to session)
     file-send-resolve.ts     -- binds that capability to one chat, behind the export
@@ -1700,6 +1704,15 @@ both consume these status reads. `setInstanceApp` accepts an optional
 `expectedAppId`; a mismatched current binding returns `BINDING_CHANGED` without
 writing or reconnecting, so a stale UI confirmation cannot transfer another
 person's newly rebound bot.
+
+Clients never write the instance list back whole. Main writes instance fields of
+its own (owner-claim, the WeChat token), so a settings page's copy goes stale and
+writing it back undoes them — the owner of a claimed bot vanished on the next
+settings save. The settings page sends `ImChannelInstancePatch` (only the changed
+fields, `null` removes; `config` per key, a masked `***` value ignored) or an
+add/remove, `instance-settings.ts` applies it onto the stored list, and the
+answer is that list, which the page shows in place of its copy (HTTP masks its
+secrets). The page also re-reads the list when it opens.
 
 ### 4.1 identityCapability pattern
 

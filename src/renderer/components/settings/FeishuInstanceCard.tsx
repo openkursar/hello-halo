@@ -13,9 +13,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, Info, MoreVertical, RefreshCw, Trash2 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
-import type {
-  ImChannelInstanceConfig,
-  ImChannelInstanceStatus,
+import {
+  mergeImChannelInstancePatches,
+  type ImChannelInstanceConfig,
+  type ImChannelInstancePatch,
+  type ImChannelInstanceStatus,
 } from '../../../shared/types/im-channel'
 import { ChannelBackendSelect, ChannelBackendName } from './ChannelBackendSelect'
 import { getImBotLabel } from '../apps/im-channel-labels'
@@ -39,7 +41,7 @@ export interface FeishuInstanceCardProps {
   teams: ChannelBackendTeam[]
   isExpanded: boolean
   onToggle: () => void
-  onChange: (instance: ImChannelInstanceConfig) => void
+  onChange: (patch: ImChannelInstancePatch) => void
   /** Rebinding goes through main so its validation applies to both binding surfaces. */
   onRebind: (appId: string) => void
   onDelete: () => void
@@ -90,23 +92,33 @@ export function FeishuInstanceCard({
   const [showMenu, setShowMenu] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
-  // Debounced save for text fields. pendingSaveRef always holds the most-recent
-  // unsaved value so it can be flushed synchronously on unmount (e.g. the card
-  // is collapsed within the debounce window).
+  // Debounced save for text fields. pendingSaveRef holds every change not yet
+  // sent so it can be flushed synchronously on unmount (e.g. the card is
+  // collapsed within the debounce window).
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pendingSaveRef = useRef<ImChannelInstanceConfig | null>(null)
+  const pendingSaveRef = useRef<ImChannelInstancePatch | null>(null)
   const onChangeRef = useRef(onChange)
   useEffect(() => { onChangeRef.current = onChange })
 
-  const scheduleChange = useCallback((updated: ImChannelInstanceConfig) => {
-    pendingSaveRef.current = updated
+  const scheduleChange = useCallback((patch: ImChannelInstancePatch) => {
+    const pending = mergeImChannelInstancePatches(pendingSaveRef.current, patch)
+    pendingSaveRef.current = pending
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => {
-      onChangeRef.current(updated)
+      onChangeRef.current(pending)
       pendingSaveRef.current = null
       saveTimerRef.current = null
     }, 500)
   }, [])
+
+  /** The changes still waiting for the debounce, taken off the timer. */
+  const takePendingChange = (): ImChannelInstancePatch | null => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = null
+    const pending = pendingSaveRef.current
+    pendingSaveRef.current = null
+    return pending
+  }
 
   useEffect(() => {
     return () => {
@@ -161,27 +173,28 @@ export function FeishuInstanceCard({
   const currentCfg = draft ?? cfg
 
   const handleConfigChange = (key: string, value: unknown) => {
-    const newCfg = { ...currentCfg, [key]: value }
-    setDraft(newCfg)
-    scheduleChange({ ...instance, config: newCfg })
+    setDraft({ ...currentCfg, [key]: value })
+    scheduleChange({ config: { [key]: value } })
   }
 
-  /** Immediate save for toggles/selects — no debounce, and drop any draft. */
-  const commit = (updated: ImChannelInstanceConfig) => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+  /** Immediate save for toggles/selects; typing still waiting for the debounce goes with it. */
+  const commit = (patch: ImChannelInstancePatch) => {
+    const pending = takePendingChange()
     setDraft(null)
-    onChange(updated)
+    onChange(mergeImChannelInstancePatches(pending, patch))
   }
 
   const handleTargetChange = (target: ChannelBackendValue) => {
     // Same split as the other cards: a digital-human target goes through main's
     // rebind validation; a team target has no validator yet.
-    if (target.teamId) commit({ ...instance, ...target })
-    else {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-      setDraft(null)
-      onRebind(target.appId)
+    if (target.teamId) {
+      commit({ appId: target.appId, teamId: target.teamId })
+      return
     }
+    const pending = takePendingChange()
+    setDraft(null)
+    if (pending) onChange(pending)
+    onRebind(target.appId)
   }
 
   const isStreamingEnabled = instance.streaming === true
@@ -282,7 +295,7 @@ export function FeishuInstanceCard({
             <p className="text-sm text-muted-foreground">{t('Enabled')}</p>
             <Switch
               checked={isEnabled}
-              onCheckedChange={() => commit({ ...instance, enabled: !isEnabled })}
+              onCheckedChange={() => commit({ enabled: !isEnabled })}
             />
           </div>
 
@@ -320,10 +333,7 @@ export function FeishuInstanceCard({
               <label className="text-sm text-muted-foreground">{t('Deployment')}</label>
               <select
                 value={domain}
-                onChange={(e) => commit({
-                  ...instance,
-                  config: { ...currentCfg, domain: e.target.value },
-                })}
+                onChange={(e) => commit({ config: { domain: e.target.value } })}
                 className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary appearance-none cursor-pointer"
               >
                 <option value="feishu">{t('Feishu (China)')}</option>
@@ -347,10 +357,7 @@ export function FeishuInstanceCard({
             </div>
             <select
               value={replyScope}
-              onChange={(e) => commit({
-                ...instance,
-                replyScope: e.target.value as ImChannelInstanceConfig['replyScope'],
-              })}
+              onChange={(e) => commit({ replyScope: e.target.value as ImChannelInstanceConfig['replyScope'] })}
               className="w-full bg-secondary border border-transparent rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary appearance-none cursor-pointer"
             >
               <option value="all">{t('All messages')}</option>
@@ -389,10 +396,7 @@ export function FeishuInstanceCard({
             </div>
             <Switch
               checked={requireMention}
-              onCheckedChange={() => commit({
-                ...instance,
-                config: { ...currentCfg, requireMention: !requireMention },
-              })}
+              onCheckedChange={() => commit({ config: { requireMention: !requireMention } })}
             />
           </div>
 
@@ -411,10 +415,7 @@ export function FeishuInstanceCard({
             </div>
             <Switch
               checked={quoteReply}
-              onCheckedChange={() => commit({
-                ...instance,
-                config: { ...currentCfg, quoteReply: !quoteReply },
-              })}
+              onCheckedChange={() => commit({ config: { quoteReply: !quoteReply } })}
             />
           </div>
 
@@ -433,20 +434,14 @@ export function FeishuInstanceCard({
             </div>
             <Switch
               checked={isStreamingEnabled}
-              onCheckedChange={() => commit({
-                ...instance,
-                streaming: isStreamingEnabled ? undefined : true,
-              })}
+              onCheckedChange={() => commit({ streaming: isStreamingEnabled ? null : true })}
             />
           </div>
 
           <ImProcessingNoticeRow
             on={instance.processingNotice !== false}
             streaming={isStreamingEnabled}
-            onToggle={() => commit({
-              ...instance,
-              processingNotice: instance.processingNotice === false ? undefined : false,
-            })}
+            onToggle={() => commit({ processingNotice: instance.processingNotice === false ? null : false })}
           />
 
           {/* ── Permission Control ── */}

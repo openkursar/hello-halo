@@ -498,6 +498,18 @@
     "path": "/api/im-channels/unbind-instance"
   },
   {
+    "method": "POST",
+    "path": "/api/im-channels/update-instance"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-channels/add-instance"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-channels/remove-instance"
+  },
+  {
     "method": "GET",
     "path": "/api/im-channels/permission-defaults",
     "group": "channels"

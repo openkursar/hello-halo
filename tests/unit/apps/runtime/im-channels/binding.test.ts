@@ -19,14 +19,16 @@ import type { ImChannelInstanceConfig } from '../../../../../src/shared/types/im
 const state = {
   instances: [] as ImChannelInstanceConfig[],
   apps: new Map<string, { spec: { type: string }; spaceId: string | null }>(),
+  unreadable: false,
   saved: null as unknown,
   applied: 0,
   invalidated: 0,
 }
 
 vi.mock('../../../../../src/main/foundation/config.service', () => ({
-  getConfig: () => ({ imChannels: { instances: state.instances } }),
+  getConfig: () => ({ imChannels: { instances: state.unreadable ? [] : state.instances } }),
   saveConfig: (patch: unknown) => { state.saved = patch },
+  isConfigUnreadable: () => state.unreadable,
 }))
 
 vi.mock('../../../../../src/main/apps/manager', () => ({
@@ -74,9 +76,31 @@ beforeEach(() => {
     ['global-app', { spec: { type: 'automation' }, spaceId: null }],
     ['a-skill', { spec: { type: 'skill' }, spaceId: 'space-1' }],
   ])
+  state.unreadable = false
   state.saved = null
   state.applied = 0
   state.invalidated = 0
+})
+
+describe('while config.json cannot be read', () => {
+  beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}) })
+
+  it('says nothing was saved, instead of creating a bot alone and stopping the others', () => {
+    state.instances = [instance()]
+    state.unreadable = true
+    const res = createInstance(instance({ id: 'inst-2', config: { botId: 'bot-b' } }))
+    expect(res).toMatchObject({ success: false, error: expect.stringContaining('Not saved') })
+    expect(state.saved).toBeNull()
+    expect(state.applied).toBe(0)
+  })
+
+  it('says nothing was saved when rebinding or unbinding, rather than "not found"', () => {
+    state.instances = [instance()]
+    state.unreadable = true
+    expect(setInstanceApp('inst-1', 'app-2').error).toContain('Not saved')
+    expect(unbindInstance('inst-1').error).toContain('Not saved')
+    expect(state.applied).toBe(0)
+  })
 })
 
 describe('setInstanceApp — target validation', () => {

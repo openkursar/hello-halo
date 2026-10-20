@@ -185,5 +185,8 @@ export const MODULE: RouteModuleMeta = {
     'POST /api/im-channels/set-instance-app': { expose: 'internal' },
     'POST /api/im-channels/create-instance': { expose: 'internal' },
     'POST /api/im-channels/unbind-instance': { expose: 'internal' },
+    'POST /api/im-channels/update-instance': { expose: 'internal' },
+    'POST /api/im-channels/add-instance': { expose: 'internal' },
+    'POST /api/im-channels/remove-instance': { expose: 'internal' },
   },
 }

@@ -18,6 +18,7 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
     state.instances = patch.imChannels.instances
     state.writes++
   },
+  isConfigUnreadable: () => false,
 }))
 vi.mock('../../../../src/main/apps/manager', () => ({
   getAppManager: () => ({ getApp: (id: string) => state.apps.get(id) ?? null }),

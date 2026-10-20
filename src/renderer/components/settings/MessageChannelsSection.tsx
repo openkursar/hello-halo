@@ -23,6 +23,7 @@ import {
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { Switch, switchRowHover } from '../ui/Switch'
 import { api } from '../../api'
+import type { ApiResponse } from '../../api/_shared'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTeamStore } from '../../stores/team.store'
 import type { HaloConfig } from '../../types'
@@ -36,7 +37,9 @@ import type {
 } from '../../../shared/types/notification-channels'
 import {
   imCredentialId,
+  mergeImChannelInstancePatches,
   type ImChannelInstanceConfig,
+  type ImChannelInstancePatch,
   type ImChannelInstanceStatus,
 } from '../../../shared/types/im-channel'
 import { ChannelBackendSelect, ChannelBackendName } from './ChannelBackendSelect'
@@ -428,7 +431,7 @@ interface InstanceCardProps {
   teams: ChannelBackendTeam[]
   isExpanded: boolean
   onToggle: () => void
-  onChange: (instance: ImChannelInstanceConfig) => void
+  onChange: (patch: ImChannelInstancePatch) => void
   /** Rebinding goes through main so its validation applies to both binding surfaces. */
   onRebind: (appId: string) => void
   onDelete: () => void
@@ -485,24 +488,34 @@ function InstanceCard({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   // Debounced save for config fields.
-  // pendingSaveRef always holds the most-recent unsaved value so we can
-  // flush it synchronously on unmount (e.g. card collapsed within 500 ms).
+  // pendingSaveRef holds every change not yet sent, so we can flush it
+  // synchronously on unmount (e.g. card collapsed within 500 ms).
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pendingSaveRef = useRef<ImChannelInstanceConfig | null>(null)
+  const pendingSaveRef = useRef<ImChannelInstancePatch | null>(null)
   // Keep a stable ref to onChange so the unmount cleanup can call it without
   // adding onChange to the flush effect's dependency array.
   const onChangeRef = useRef(onChange)
   useEffect(() => { onChangeRef.current = onChange })
 
-  const scheduleChange = useCallback((updated: ImChannelInstanceConfig) => {
-    pendingSaveRef.current = updated
+  const scheduleChange = useCallback((patch: ImChannelInstancePatch) => {
+    const pending = mergeImChannelInstancePatches(pendingSaveRef.current, patch)
+    pendingSaveRef.current = pending
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => {
-      onChangeRef.current(updated)
+      onChangeRef.current(pending)
       pendingSaveRef.current = null
       saveTimerRef.current = null
     }, 500)
   }, [])
+
+  /** The changes still waiting for the debounce, taken off the timer. */
+  const takePendingChange = (): ImChannelInstancePatch | null => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = null
+    const pending = pendingSaveRef.current
+    pendingSaveRef.current = null
+    return pending
+  }
 
   // Flush any pending debounced save when the card unmounts (e.g. card
   // collapsed or parent component unmounts before the 500 ms timer fires).
@@ -522,60 +535,58 @@ function InstanceCard({
   const currentCfg = draft ?? cfg
 
   const handleConfigChange = (key: string, value: unknown) => {
-    const newCfg = { ...currentCfg, [key]: value }
-    setDraft(newCfg)
-    scheduleChange({ ...instance, config: newCfg })
+    setDraft({ ...currentCfg, [key]: value })
+    scheduleChange({ config: { [key]: value } })
+  }
+
+  /** Immediate save for toggles/selects; typing still waiting for the debounce goes with it. */
+  const commit = (patch: ImChannelInstancePatch) => {
+    const pending = takePendingChange()
+    setDraft(null)
+    onChange(mergeImChannelInstancePatches(pending, patch))
   }
 
   const handleEnabledChange = () => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    setDraft(null)
-    onChange({ ...instance, enabled: !isEnabled })
+    commit({ enabled: !isEnabled })
   }
 
   const handleTargetChange = (target: ChannelBackendValue) => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    setDraft(null)
     // A digital-human target goes through main's rebind, which rejects a target
     // that would silently swallow inbound messages. A team target has no such
     // validator yet, so it takes the plain config write.
-    if (target.teamId) onChange({ ...instance, ...target })
-    else onRebind(target.appId)
+    if (target.teamId) {
+      commit({ appId: target.appId, teamId: target.teamId })
+      return
+    }
+    const pending = takePendingChange()
+    setDraft(null)
+    if (pending) onChange(pending)
+    onRebind(target.appId)
   }
 
   const handleStreamingChange = () => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    setDraft(null)
-    // Streaming defaults to off (undefined). Toggle on → explicit true; toggle off → undefined.
-    onChange({ ...instance, streaming: instance.streaming === true ? undefined : true })
+    // Streaming defaults to off (absent). Toggle on → explicit true; toggle off → absent.
+    commit({ streaming: instance.streaming === true ? null : true })
   }
 
   const handleQuoteReplyChange = () => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    setDraft(null)
-    // quoteReply defaults to on (true). Toggle off → explicit false; toggle on → undefined (legacy default).
-    const nextQuote = (cfg.quoteReply as boolean) === false ? undefined : false
-    const nextConfig = { ...cfg, quoteReply: nextQuote }
+    // quoteReply defaults to on (true). Toggle off → explicit false; toggle on → absent (legacy default).
+    const nextQuote = (cfg.quoteReply as boolean) === false ? null : false
     // Disabling Quote Reply also disables Streaming, since streaming in group
     // chats relies on the passive reply path that produces the quote bubble.
-    let nextInstance = { ...instance, config: nextConfig }
-    if (nextQuote === false && instance.streaming === true) {
-      nextInstance = { ...nextInstance, streaming: undefined }
-    }
-    onChange(nextInstance)
+    commit({
+      config: { quoteReply: nextQuote },
+      ...(nextQuote === false && instance.streaming === true ? { streaming: null } : {}),
+    })
   }
 
   const handleReplyScopeChange = (scope: string) => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    setDraft(null)
-    onChange({ ...instance, replyScope: scope as ImChannelInstanceConfig['replyScope'] })
+    commit({ replyScope: scope as ImChannelInstanceConfig['replyScope'] })
   }
 
   const handleProcessingNoticeChange = () => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    setDraft(null)
-    // On by default (undefined). Toggle off → explicit false; toggle on → undefined.
-    onChange({ ...instance, processingNotice: instance.processingNotice === false ? undefined : false })
+    // On by default (absent). Toggle off → explicit false; toggle on → absent.
+    commit({ processingNotice: instance.processingNotice === false ? null : false })
   }
 
   const isStreamingEnabled = instance.streaming === true
@@ -1098,7 +1109,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   const [testingChannel, setTestingChannel] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [imStatuses, setImStatuses] = useState<ImChannelInstanceStatus[]>([])
-  const [rebindError, setRebindError] = useState<string | null>(null)
+  const [instanceError, setInstanceError] = useState<string | null>(null)
   const rebindBusy = useRef(false)
   const [permissionDefaults, setPermissionDefaults] = useState<ImPermissionDefaults | null>(null)
   const [notifyProductConfig, setNotifyProductConfig] = useState<NotifyChannelsProductConfig | null>(null)
@@ -1154,48 +1165,83 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
     return () => { cancelled = true; clearInterval(interval) }
   }, [])
 
-  // Subscribe to main-initiated instance config updates (currently only used
-  // by the IM owner auto-claim flow). When the first direct message binds its
-  // sender as owner while this settings panel is open, the backend writes
-  // owners=[userid] and broadcasts this event — we patch the local config so
-  // the owner ID refreshes without requiring a manual reload. configRef
-  // avoids re-subscribing on every config change.
+  // ── IM Channel instances ────────────────────────────────────────
+  // Main writes instance fields itself — the owner a first direct message
+  // claims — so the list shown is always the one main last reported, and a
+  // change goes to main as just what the person changed (see
+  // im-channels/instance-settings.ts). configRef avoids re-subscribing on
+  // every config change.
   const configRef = useRef(config)
   useEffect(() => { configRef.current = config }, [config])
+
+  const showInstances = useCallback((next: ImChannelInstanceConfig[]) => {
+    const current = configRef.current
+    if (!current) return
+    const updated = { ...current, imChannels: { ...current.imChannels, instances: next } } as HaloConfig
+    configRef.current = updated
+    setConfig(updated)
+  }, [setConfig])
+
+  // The copy loaded at startup misses what main wrote since.
+  useEffect(() => {
+    let cancelled = false
+    api.getConfig()
+      .then((res) => {
+        if (cancelled) return
+        if (!res.success) {
+          console.warn('[MessageChannelsSection] Bot list could not be refreshed', { error: res.error })
+          return
+        }
+        showInstances((res.data as HaloConfig | undefined)?.imChannels?.instances ?? [])
+      })
+      .catch((error) => console.warn('[MessageChannelsSection] Bot list could not be refreshed', { error }))
+    return () => { cancelled = true }
+  }, [showInstances])
+
+  // An owner claimed while this panel is open (the owner auto-claim flow).
   useEffect(() => {
     const unsub = api.onImChannelInstanceUpdated?.((data: unknown) => {
       const update = data as { instanceId?: string; instance?: ImChannelInstanceConfig } | null
-      if (!update?.instanceId || !update?.instance) return
-      const current = configRef.current
-      if (!current) return
-      const list: ImChannelInstanceConfig[] = current.imChannels?.instances ?? []
-      const idx = list.findIndex((i: ImChannelInstanceConfig) => i.id === update.instanceId)
-      if (idx === -1) return
-      const patched = list.slice()
-      patched[idx] = update.instance
-      setConfig({
-        ...current,
-        imChannels: { ...current.imChannels, instances: patched },
-      } as HaloConfig)
+      const claimed = update?.instance
+      if (!update?.instanceId || !claimed) return
+      const list: ImChannelInstanceConfig[] = configRef.current?.imChannels?.instances ?? []
+      if (!list.some(i => i.id === update.instanceId)) return
+      showInstances(list.map(i => (i.id === update.instanceId ? claimed : i)))
     })
     return () => { unsub?.() }
-  }, [setConfig])
+  }, [showInstances])
 
-  // ── IM Channel instances from config ────────────────────────────
   const instances: ImChannelInstanceConfig[] = config?.imChannels?.instances ?? []
 
-  const saveInstances = useCallback(async (newInstances: ImChannelInstanceConfig[]) => {
-    if (!config) return
-    const imChannels = { ...config.imChannels, instances: newInstances }
+  /** Run one instance write in main and show the list it answers with; returns the refusal, if any. */
+  const writeInstances = useCallback(async (
+    action: string,
+    instanceId: string,
+    write: () => Promise<ApiResponse<ImChannelInstanceConfig[]>>,
+  ): Promise<string | null> => {
+    setInstanceError(null)
     try {
-      await api.setConfig({ imChannels })
-      setConfig({ ...config, imChannels } as HaloConfig)
-      // Reload instances in the backend so new config takes effect
-      api.imChannelsReload().catch(() => {})
+      const res = await write()
+      if (res.success && res.data) {
+        showInstances(res.data)
+        return null
+      }
+      console.warn(`[MessageChannelsSection] Bot ${action} was not saved`, { instanceId, error: res.error })
+      const error = res.error ?? t('Failed to save')
+      setInstanceError(error)
+      return error
     } catch (error) {
-      console.error('[MessageChannelsSection] Failed to save IM instances:', error)
+      console.warn(`[MessageChannelsSection] Bot ${action} failed`, { instanceId, error })
+      setInstanceError(t('Failed to save'))
+      return t('Failed to save')
     }
-  }, [config, setConfig])
+  }, [showInstances, t])
+
+  /** Add a new instance; the scan dialogs await this and show a refusal themselves. */
+  const addInstance = useCallback(async (instance: ImChannelInstanceConfig) => {
+    const error = await writeInstances('add', instance.id, () => api.imChannelsAddInstance(instance))
+    if (error) throw new Error(error)
+  }, [writeInstances])
 
   /**
    * Check if a given instance has a duplicate Bot ID among other enabled instances.
@@ -1219,10 +1265,9 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
     return undefined
   }, [t])
 
-  const handleInstanceChange = useCallback((updated: ImChannelInstanceConfig) => {
-    const newInstances = instances.map(i => i.id === updated.id ? updated : i)
-    saveInstances(newInstances)
-  }, [instances, saveInstances])
+  const handleInstanceChange = useCallback((instanceId: string, patch: ImChannelInstancePatch) => {
+    void writeInstances('update', instanceId, () => api.imChannelsUpdateInstance(instanceId, patch))
+  }, [writeInstances])
 
   // Rebinding is owned by main (see im-channels/binding.ts): it validates the
   // target and re-applies the connection, which a plain config write cannot do.
@@ -1232,31 +1277,31 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
     const instance = current?.imChannels?.instances?.find(i => i.id === instanceId)
     if (!current || !instance) {
       console.warn('[MessageChannelsSection] Rebinding skipped: bot configuration no longer exists', { instanceId, appId })
-      setRebindError(t('Failed to bind'))
+      setInstanceError(t('Failed to bind'))
       return
     }
     rebindBusy.current = true
-    setRebindError(null)
+    setInstanceError(null)
     try {
       const res = await api.imChannelsSetInstanceApp(instanceId, appId, instance.appId)
       if (!res.success) {
         if (res.code !== 'BINDING_CHANGED') {
           console.warn('[MessageChannelsSection] Bot binding was rejected', { instanceId, appId, error: res.error })
         }
-        setRebindError(res.code === 'BINDING_CHANGED'
+        setInstanceError(res.code === 'BINDING_CHANGED'
           ? t('The bot binding changed. Refresh and confirm again.')
           : res.error ?? t('Failed to bind'))
       }
       const fresh = await api.getConfig()
       if (!fresh.success || !fresh.data) {
         console.warn('[MessageChannelsSection] Bot configuration could not be refreshed after rebinding', { instanceId, error: fresh.error })
-        setRebindError(t('Failed to load bot connections'))
+        setInstanceError(t('Failed to load bot connections'))
         return
       }
       setConfig(fresh.data as HaloConfig)
     } catch (error) {
       console.warn('[MessageChannelsSection] Bot rebinding failed', { instanceId, appId, error })
-      setRebindError(t('Failed to bind'))
+      setInstanceError(t('Failed to bind'))
     } finally {
       rebindBusy.current = false
     }
@@ -1277,23 +1322,20 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
         guestPolicy: pd.defaultGuestAccess ? defaultGuestPolicy(pd.defaultGuestPolicy) : undefined,
       } : {}),
     }
-    const newInstances = [...instances, newInstance]
-    saveInstances(newInstances)
+    void writeInstances('add', newInstance.id, () => api.imChannelsAddInstance(newInstance))
     setExpandedInstances(prev => new Set(prev).add(newInstance.id))
-  }, [instances, saveInstances, permissionDefaults])
+  }, [writeInstances, permissionDefaults])
 
   const handleDeleteInstance = useCallback((instanceId: string) => {
-    const newInstances = instances.filter(i => i.id !== instanceId)
-    saveInstances(newInstances)
-  }, [instances, saveInstances])
+    void writeInstances('removal', instanceId, () => api.imChannelsRemoveInstance(instanceId))
+  }, [writeInstances])
 
   /**
    * Wire the freshly-scanned credentials into a new IM channel instance.
    *
    * The scan dialog has already installed a dedicated default automation app
-   * via the create-assistant IPC; here we just append the corresponding
-   * ImChannelInstanceConfig and persist. saveInstances() then triggers
-   * imChannelsReload() which starts the WS connection.
+   * via the create-assistant IPC; here we just add the corresponding
+   * ImChannelInstanceConfig, which main persists and starts connecting.
    */
   const handleScanComplete = useCallback(async (result: {
     botId: string; secret: string; appId: string; appName: string
@@ -1313,7 +1355,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       replyScope: 'all',
       permissionEnabled: true,
     }
-    await saveInstances([...instances, newInstance])
+    await addInstance(newInstance)
     // Refresh the apps list so the newly-installed assistant appears in the
     // digital-human selector inside the new instance card.
     loadApps().catch(() => {})
@@ -1324,7 +1366,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       next.add('im-wecom-bot')
       return next
     })
-  }, [instances, saveInstances, loadApps])
+  }, [addInstance, loadApps])
 
   const handleAddFeishuInstance = useCallback(() => {
     const pd = permissionDefaults
@@ -1340,9 +1382,9 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
         guestPolicy: pd.defaultGuestAccess ? defaultGuestPolicy(pd.defaultGuestPolicy) : undefined,
       } : {}),
     }
-    saveInstances([...instances, newInstance])
+    void writeInstances('add', newInstance.id, () => api.imChannelsAddInstance(newInstance))
     setExpandedInstances(prev => new Set(prev).add(newInstance.id))
-  }, [instances, saveInstances, permissionDefaults])
+  }, [writeInstances, permissionDefaults])
 
   /**
    * Persist the app the user just created by scanning.
@@ -1375,7 +1417,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       replyScope: 'all',
       permissionEnabled: true,
     }
-    await saveInstances([...instances, newInstance])
+    await addInstance(newInstance)
     // Refresh the apps list so the newly-installed assistant shows up in the
     // digital-human selector inside the new instance card.
     loadApps().catch(() => {})
@@ -1384,7 +1426,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       next.add('im-feishu-bot')
       return next
     })
-  }, [instances, saveInstances, loadApps])
+  }, [addInstance, loadApps])
 
   const handleReconnectInstance = useCallback(async (instanceId: string) => {
     try {
@@ -1513,10 +1555,9 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       appId: '',
       config: { botToken: '', baseUrl: '', accountId: '' },
     }
-    const newInstances = [...instances, newInstance]
-    saveInstances(newInstances)
+    void writeInstances('add', newInstance.id, () => api.imChannelsAddInstance(newInstance))
     setExpandedInstances(prev => new Set(prev).add(newInstance.id))
-  }, [instances, saveInstances])
+  }, [writeInstances])
 
   return (
     <section id="message-channels" className="bg-card rounded-xl border border-border-faint p-4 sm:p-6">
@@ -1527,7 +1568,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
         </p>
       </div>
 
-      {rebindError && <p role="alert" className="mb-3 text-sm text-destructive">{rebindError}</p>}
+      {instanceError && <p role="alert" className="mb-3 text-sm text-destructive">{instanceError}</p>}
 
       <div className="space-y-3">
         {/* ── WeChat Personal Bot via iLink (multi-instance) ─────────── */}
@@ -1577,7 +1618,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                   teams={teams}
                   isExpanded={expandedInstances.has(inst.id)}
                   onToggle={() => toggleInstanceExpanded(inst.id)}
-                  onChange={handleInstanceChange}
+                  onChange={(patch) => handleInstanceChange(inst.id, patch)}
                   onRebind={(appId) => handleRebindInstance(inst.id, appId)}
                   onDelete={() => handleDeleteInstance(inst.id)}
                 />
@@ -1643,7 +1684,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                   teams={teams}
                   isExpanded={expandedInstances.has(inst.id)}
                   onToggle={() => toggleInstanceExpanded(inst.id)}
-                  onChange={handleInstanceChange}
+                  onChange={(patch) => handleInstanceChange(inst.id, patch)}
                   onRebind={(appId) => handleRebindInstance(inst.id, appId)}
                   onDelete={() => handleDeleteInstance(inst.id)}
                   onReconnect={() => handleReconnectInstance(inst.id)}
@@ -1709,7 +1750,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                   teams={teams}
                   isExpanded={expandedInstances.has(inst.id)}
                   onToggle={() => toggleInstanceExpanded(inst.id)}
-                  onChange={handleInstanceChange}
+                  onChange={(patch) => handleInstanceChange(inst.id, patch)}
                   onRebind={(appId) => handleRebindInstance(inst.id, appId)}
                   onDelete={() => handleDeleteInstance(inst.id)}
                   onReconnect={() => handleReconnectInstance(inst.id)}

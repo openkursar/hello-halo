@@ -242,6 +242,35 @@ export interface ImChannelInstanceConfig {
   savedGuestPolicy?: GuestPolicy
 }
 
+type ImChannelInstanceFields = Omit<ImChannelInstanceConfig, 'id' | 'type' | 'config'>
+
+/**
+ * What a person changed on one instance in settings, applied by main onto the
+ * stored instance. Main writes fields of its own (the owner a first direct
+ * message claims, a WeChat token), so a client never writes back its whole copy.
+ *
+ * Only the fields present change; `null` removes an optional field. `config`
+ * changes key by key, `null` removing a key. `id` and `type` never change.
+ */
+export type ImChannelInstancePatch = {
+  [K in keyof ImChannelInstanceFields]?: undefined extends ImChannelInstanceFields[K]
+    ? Exclude<ImChannelInstanceFields[K], undefined> | null
+    : ImChannelInstanceFields[K]
+} & {
+  config?: Record<string, unknown>
+}
+
+/** One patch holding both changes; where they touch the same field or config key, `later` wins. */
+export function mergeImChannelInstancePatches(
+  earlier: ImChannelInstancePatch | null,
+  later: ImChannelInstancePatch,
+): ImChannelInstancePatch {
+  if (!earlier) return later
+  const merged: ImChannelInstancePatch = { ...earlier, ...later }
+  if (earlier.config || later.config) merged.config = { ...earlier.config, ...later.config }
+  return merged
+}
+
 // ============================================
 // ImChannelProvider (Plugin interface)
 // ============================================

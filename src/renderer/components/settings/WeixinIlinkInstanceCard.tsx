@@ -18,6 +18,7 @@ import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type {
   ImChannelInstanceConfig,
+  ImChannelInstancePatch,
   ImChannelInstanceStatus,
 } from '../../../shared/types/im-channel'
 import { ChannelBackendSelect, ChannelBackendName } from './ChannelBackendSelect'
@@ -50,7 +51,7 @@ export interface WeixinIlinkInstanceCardProps {
   teams: ChannelBackendTeam[]
   isExpanded: boolean
   onToggle: () => void
-  onChange: (instance: ImChannelInstanceConfig) => void
+  onChange: (patch: ImChannelInstancePatch) => void
   /** Rebinding goes through main so its validation applies to both binding surfaces. */
   onRebind: (appId: string) => void
   onDelete: () => void
@@ -163,7 +164,6 @@ export function WeixinIlinkInstanceCard({
           await api.imChannelsReload()
           // Update instance config in persisted state
           onChangeRef.current({
-            ...instance,
             enabled: true,
             config: { botToken, baseUrl: confirmedBaseUrl, accountId: accountId ?? '' },
           })
@@ -204,7 +204,6 @@ export function WeixinIlinkInstanceCard({
     await api.weixinIlinkDisconnect(instance.id)
     await api.imChannelsReload()
     onChangeRef.current({
-      ...instance,
       enabled: false,
       config: { botToken: '', baseUrl: '', accountId: '' },
     })
@@ -213,9 +212,9 @@ export function WeixinIlinkInstanceCard({
   // Same split as MessageChannelsSection: a digital-human target is validated by
   // main's rebind; a team target has no validator yet and takes a config write.
   const handleTargetChange = useCallback((target: ChannelBackendValue) => {
-    if (target.teamId) onChange({ ...instance, ...target })
+    if (target.teamId) onChange({ appId: target.appId, teamId: target.teamId })
     else onRebind(target.appId)
-  }, [instance, onChange, onRebind])
+  }, [onChange, onRebind])
 
   const statusDot = !isEnabled
     ? 'bg-muted-foreground/30'
@@ -384,7 +383,7 @@ export function WeixinIlinkInstanceCard({
           <ImProcessingNoticeRow
             on={instance.processingNotice !== false}
             streaming={false}
-            onToggle={() => onChange({ ...instance, processingNotice: instance.processingNotice === false ? undefined : false })}
+            onToggle={() => onChange({ processingNotice: instance.processingNotice === false ? null : false })}
           />
         </div>
       )}

@@ -21,6 +21,7 @@ import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLiveP
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
 import type { ModelCatalogChangedEvent } from '../shared/types/ai-sources'
 import type { PickedLocalEntry } from '../shared/attached-paths'
+import type { ImChannelInstanceConfig, ImChannelInstancePatch } from '../shared/types/im-channel'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
 import { onboardingRpc } from '../shared/rpc/contracts/onboarding.contract'
 import { securityRpc } from '../shared/rpc/contracts/security.contract'
@@ -515,6 +516,9 @@ export interface HaloAPI extends BrowserHostBridge {
   imChannelsSetInstanceApp: (instanceId: string, appId: string, expectedAppId?: string) => Promise<IpcResponse>
   imChannelsCreateInstance: (instance: unknown) => Promise<IpcResponse>
   imChannelsUnbindInstance: (instanceId: string) => Promise<IpcResponse>
+  imChannelsUpdateInstance: (instanceId: string, patch: ImChannelInstancePatch) => Promise<IpcResponse<ImChannelInstanceConfig[]>>
+  imChannelsAddInstance: (instance: ImChannelInstanceConfig) => Promise<IpcResponse<ImChannelInstanceConfig[]>>
+  imChannelsRemoveInstance: (instanceId: string) => Promise<IpcResponse<ImChannelInstanceConfig[]>>
 
   // IM Sessions
   imSessionsList: (appId?: string) => Promise<IpcResponse>
