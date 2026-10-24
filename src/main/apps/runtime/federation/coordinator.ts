@@ -1081,6 +1081,9 @@ export function createFederationCoordinator(
         }
         if (revived) notifyPresence()
         onJoinGrant?.(msg.assignedNodeId)
+        // Rejoining can restore the ledger before another heartbeat arrives.
+        // The admitted sender alone proves a live path; other revived rows do not.
+        onNodePresence?.(from, 'online')
         break
       }
       case 'join-reject':

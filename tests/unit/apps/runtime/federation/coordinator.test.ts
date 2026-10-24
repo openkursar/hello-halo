@@ -256,6 +256,39 @@ describe('FederationCoordinator', () => {
       expect(federationStore.getNode(OFFICE, BOB)).toBeTruthy()
     })
 
+    it.each(['offline', 'online', 'missing'] as const)('an admitted grant signals only its sender after transport admission, with a %s ledger row', status => {
+      let inbound: (from: string, msg: FederationMessage) => void = () => {}
+      const order: string[] = []
+      const onNodePresence = vi.fn((nodeId: string, state: string) => order.push(`${nodeId}:${state}`))
+      const joiner = createFederationCoordinator({
+        context: { officeId: OFFICE, selfNodeId: BOB },
+        link: { send: () => {}, broadcast: () => {}, onMessage: h => { inbound = h }, close: () => {} },
+        federationStore,
+        teamStore,
+        verifyCredential: () => null,
+        now,
+        onJoinGrant: () => order.push('admitted'),
+        onNodePresence,
+      })
+      joiner.start()
+      coordinators.push(joiner)
+      if (status !== 'missing') federationStore.upsertNode({
+        nodeId: HOST, officeId: OFFICE, identity: HOST, displayName: 'Host',
+        joinedAt: clock, lastSeen: clock, status, advertisedUrl: null,
+      })
+      federationStore.upsertNode({
+        nodeId: CAROL, officeId: OFFICE, identity: CAROL, displayName: 'Carol',
+        joinedAt: clock, lastSeen: clock, status: 'offline', advertisedUrl: null,
+      })
+      const grant = { kind: 'join-grant' as const, officeId: OFFICE, assignedNodeId: BOB, pv: FEDERATION_PROTOCOL_VERSION }
+      inbound(HOST, grant)
+      expect(order).toEqual(['admitted', `${HOST}:online`])
+      expect(onNodePresence.mock.calls).toEqual([[HOST, 'online']])
+      inbound(HOST, grant)
+      expect(order).toEqual(['admitted', `${HOST}:online`, 'admitted', `${HOST}:online`])
+      expect(onNodePresence.mock.calls).toEqual([[HOST, 'online'], [HOST, 'online']])
+    })
+
     it.each([
       ['older', FEDERATION_PROTOCOL_VERSION - 1],
       ['newer', FEDERATION_PROTOCOL_VERSION + 1],
@@ -566,6 +599,7 @@ describe('FederationCoordinator', () => {
       const sent: FederationMessage[] = []
       let inbound: (from: string, msg: FederationMessage) => void = () => {}
       const rejects: Array<[string, number | undefined]> = []
+      const onNodePresence = vi.fn()
       let granted = 0
       const joiner = createFederationCoordinator({
         context: { officeId: OFFICE, selfNodeId: BOB },
@@ -581,6 +615,7 @@ describe('FederationCoordinator', () => {
         now,
         onJoinGrant: () => { granted += 1 },
         onJoinReject: (reason, peerPv) => rejects.push([reason, peerPv]),
+        onNodePresence,
       })
       joiner.start()
       coordinators.push(joiner)
@@ -592,6 +627,7 @@ describe('FederationCoordinator', () => {
       // the mismatched `pv` this test made it announce.
       expect(rejects).toEqual([['VERSION_INCOMPATIBLE', pv]])
       expect(granted).toBe(0)
+      expect(onNodePresence).not.toHaveBeenCalled()
       // Terminal: a heartbeat from the host does not re-drive the join.
       const joins = sent.filter((m) => m.kind === 'join-request').length
       inbound(HOST, { kind: 'rejoin-request', officeId: OFFICE })

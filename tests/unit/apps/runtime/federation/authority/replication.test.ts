@@ -1076,14 +1076,16 @@ describe('replication — catch-up across a term boundary', () => {
   function standbyInTerm(term: number, authorityNode: string) {
     const sb = makeStores()
     const sent: M2Frame[] = []
+    const onCatchupComplete = vi.fn()
     const standby = createReplication({
       officeId: OFFICE, selfNodeId: HEIR, authorityStore: sb.authorityStore, replicaStore: sb.teamStore,
       send: (_to, frame) => sent.push(frame), broadcast: () => {},
       getTerm: () => term, getCommittedSeq: () => 0, setCommittedSeq: () => {},
       getOnlineStandbys: () => [], getHeir: () => null, getKnownStandbyCount: () => 0,
       getAuthorityNodeId: () => authorityNode,
+      onCatchupComplete,
     })
-    return { sb, sent, standby }
+    return { sb, sent, standby, onCatchupComplete }
   }
   const entries = [
     { seq: 1, term: 0, op: 'post_task' as const, payload: makeTaskPayload('t1'), taskId: 't1', fid: 'f1' },
@@ -1129,6 +1131,69 @@ describe('replication — catch-up across a term boundary', () => {
       entries, committedSeq: 3, fid: 'resp',
     })
     expect(standby.getAppliedSeq()).toBe(0)
+    sb.dbManager.closeAll()
+  })
+
+  it('confirms catch-up only after its entries and committed position are available', () => {
+    const { sb, sent, standby, onCatchupComplete } = standbyInTerm(1, AUTHORITY)
+    onCatchupComplete.mockImplementation(() => {
+      expect(standby.getAppliedSeq()).toBe(3)
+      expect(sb.teamStore.getTaskById('t3')).not.toBeNull()
+    })
+    standby.handleM2Frame(AUTHORITY, {
+      kind: 'catchup-response', officeId: OFFICE, fromNode: AUTHORITY, term: 1,
+      reFid: askCatchup(standby, sent), mode: 'incremental', entries, committedSeq: 3, fid: 'complete',
+    })
+    expect(onCatchupComplete.mock.calls).toEqual([[AUTHORITY, 1]])
+    sb.dbManager.closeAll()
+  })
+
+  it.each(['wrong-peer', 'expired', 'stale', 'unsolicited'] as const)('does not confirm a %s catch-up response', reason => {
+    vi.useFakeTimers()
+    const { sb, sent, standby, onCatchupComplete } = standbyInTerm(1, AUTHORITY)
+    try {
+      const reFid = askCatchup(standby, sent)
+      if (reason === 'expired') vi.advanceTimersByTime(4_001)
+      standby.handleM2Frame(reason === 'wrong-peer' ? STANDBY_2 : AUTHORITY, {
+        kind: 'catchup-response', officeId: OFFICE, fromNode: AUTHORITY,
+        term: reason === 'stale' ? 0 : 1,
+        reFid: reason === 'unsolicited' ? 'other-request' : reFid,
+        mode: 'incremental', entries, committedSeq: 3, fid: 'invalid',
+      })
+      expect(onCatchupComplete).not.toHaveBeenCalled()
+      expect(standby.getAppliedSeq()).toBe(0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+      sb.dbManager.closeAll()
+    }
+  })
+
+  it('replaces an outstanding request when recovery moves to another authority', () => {
+    const { sb, sent, standby, onCatchupComplete } = standbyInTerm(1, AUTHORITY)
+    const oldRequest = askCatchup(standby, sent)
+    const newRequest = askCatchup(standby, sent, STANDBY_2)
+    expect(newRequest).not.toBe(oldRequest)
+    standby.handleM2Frame(AUTHORITY, {
+      kind: 'catchup-response', officeId: OFFICE, fromNode: AUTHORITY, term: 1,
+      reFid: oldRequest, mode: 'incremental', entries: [], committedSeq: 0, fid: 'old-response',
+    })
+    expect(onCatchupComplete).not.toHaveBeenCalled()
+    standby.handleM2Frame(STANDBY_2, {
+      kind: 'catchup-response', officeId: OFFICE, fromNode: STANDBY_2, term: 1,
+      reFid: newRequest, mode: 'incremental', entries: [], committedSeq: 0, fid: 'new-response',
+    })
+    expect(onCatchupComplete.mock.calls).toEqual([[STANDBY_2, 1]])
+    sb.dbManager.closeAll()
+  })
+
+  it('does not confirm recovery when the response has not filled the committed gap', () => {
+    const { sb, sent, standby, onCatchupComplete } = standbyInTerm(1, AUTHORITY)
+    standby.handleM2Frame(AUTHORITY, {
+      kind: 'catchup-response', officeId: OFFICE, fromNode: AUTHORITY, term: 1,
+      reFid: askCatchup(standby, sent), mode: 'incremental', entries: [], committedSeq: 3, fid: 'missing',
+    })
+    expect(onCatchupComplete).not.toHaveBeenCalled()
     sb.dbManager.closeAll()
   })
 })

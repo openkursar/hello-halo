@@ -262,10 +262,19 @@ reconnect or election.
   were committed in. From the believed authority a page is applied whole; from
   any other responder (a voter a vetoed candidate pulls from), entries past its
   committed seq are taken only from the current term onward, so a deposed
-  authority's uncommitted older-term tail is not. Only the believed
-  authority's response can realign this node's tenure; a voter that already
-  knows a newer term is not its winner; a standby pages itself to the
-  head, one transaction + one ack + one applied notification per page; a
+  authority's uncommitted older-term tail is not. A catch-up response never
+  establishes a newer authority: its sender may only be a voter that knows the
+  winner. A paused node resumes only after its currently believed authority
+  answers an unexpired request at the same term and the reported tail and
+  committed position have been applied. A newer authority must first be learned
+  through the established authority-announcement or replication path. Lost
+  catch-up replies retry only while the node is paused and that authority is
+  online; stopping the office cancels the outstanding request. Recovery also
+  follows a successful rejoin: the grant notifies the admitted sender's
+  online lifecycle after transport admission, even if the handshake already
+  restored its ledger row to online. No other roster peer is treated as reachable
+  by that handshake. A standby pages itself to the head, one transaction + one
+  ack + one applied notification per page; a
   snapshot carries tasks, findings, epochs, checks and the open epochs'
   activities). The log is retained whole today. Since the version gate
   guarantees every node reads the full snapshot, pruning is now safe to add

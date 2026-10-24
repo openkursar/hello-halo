@@ -84,6 +84,8 @@ export interface Handover {
   onNodePresence: (nodeId: NodeId, status: 'online' | 'suspect' | 'offline') => void
   /** Observe any inbound frame's tenure; step down if a higher term is seen. */
   observeFrameTerm: (fromNode: NodeId, term: number) => void
+  /** A correlated catch-up from the believed authority finished applying. */
+  confirmAuthority: (fromNode: NodeId, term: number) => void
   /** Election frames routed by the manager (onM2Frame). */
   handleClaim: (from: NodeId, frame: AuthorityClaimFrame) => void
   handleConfirm: (from: NodeId, frame: AuthorityConfirmFrame) => void
@@ -159,7 +161,13 @@ export function createHandover(deps: HandoverDeps): Handover {
     send: deps.send,
     broadcast: deps.broadcast,
     onElected: becomeAuthority,
-    onQuorumUnreachable: () => setPaused(true),
+    onQuorumUnreachable: () => {
+      setPaused(true)
+      const authority = termState.getAuthorityNodeId()
+      if (authority && authority !== selfNodeId && deps.getOnlineCandidatesOrdered().includes(authority)) {
+        deps.requestCatchup?.(authority)
+      }
+    },
     // Freshness veto (STALE_LOG / STALE_ROSTER): the voter holds committed
     // state this candidate lacks. Pull its tail, then re-claim once the pull
     // had a chance to apply — the loop is bounded by the election attempt cap,
@@ -181,6 +189,12 @@ export function createHandover(deps: HandoverDeps): Handover {
   function onNodePresence(nodeId: NodeId, status: 'online' | 'suspect' | 'offline'): void {
     const authority = termState.getAuthorityNodeId()
     if (status === 'online') {
+      if (nodeId === authority && !isAuthoritySelf() && (paused || election.isElecting())) {
+        // Presence alone has no tenure. A reply to our catch-up proves the
+        // returning authority is reachable at a tenure we can still follow.
+        deps.requestCatchup?.(nodeId)
+        return
+      }
       // A node returned: if we were paused as a partition minority, re-attempt —
       // the majority may now be reachable.
       if (paused) election.retrigger()
@@ -198,9 +212,7 @@ export function createHandover(deps: HandoverDeps): Handover {
     election.startElection()
   }
 
-  function observeFrameTerm(fromNode: NodeId, term: number): void {
-    const cur = termState.getTerm()
-    if (term <= cur) return
+  function followAuthority(fromNode: NodeId, term: number): void {
     // A higher tenure exists → I missed (or lost) a handover. Re-align my believed
     // authority and, if I was acting as authority (resurrected old authority),
     // step down within the grace window. My own stale writes are EPOCH_STALE'd by
@@ -221,9 +233,29 @@ export function createHandover(deps: HandoverDeps): Handover {
     }
   }
 
+  function observeFrameTerm(fromNode: NodeId, term: number): void {
+    if (term <= termState.getTerm()) return
+    followAuthority(fromNode, term)
+    if (paused) deps.requestCatchup?.(fromNode)
+  }
+
+  function confirmAuthority(fromNode: NodeId, term: number): void {
+    if (fromNode !== termState.getAuthorityNodeId() || fromNode === selfNodeId) return
+    if (term !== termState.getTerm()) {
+      if (paused) console.warn(`${LOG_TAG} recovery not confirmed office=${officeId} node=${fromNode} term=${term} expectedTerm=${termState.getTerm()}`)
+      return
+    }
+    election.cancel()
+    if (paused) {
+      console.log(`${LOG_TAG} authority recovered office=${officeId} node=${fromNode} term=${term}`)
+      setPaused(false)
+    }
+  }
+
   return {
     onNodePresence,
     observeFrameTerm,
+    confirmAuthority,
     handleClaim: (from, frame) => election.handleClaim(from, frame),
     handleConfirm: (from, frame) => election.handleConfirm(from, frame),
     handleReject: (from, frame) => election.handleReject(from, frame),
