@@ -98,6 +98,17 @@ type AuthRpcClient = RpcClient<typeof authRpc>
   }
 }
 
+// The theme saved in config, passed by the main process at window creation.
+// index.html's anti-flash script boots the first frame in it; its own copy in
+// localStorage can lag behind config, e.g. after a reinstall.
+{
+  const arg = process.argv.find((a) => a.startsWith('--halo-boot-theme='))
+  const theme = arg?.slice(arg.indexOf('=') + 1)
+  if (theme === 'light' || theme === 'dark' || theme === 'system') {
+    contextBridge.exposeInMainWorld('haloBootTheme', theme)
+  }
+}
+
 // Type definitions for exposed API
 export interface HaloAPI extends BrowserHostBridge {
   // Generic Auth (provider-agnostic)

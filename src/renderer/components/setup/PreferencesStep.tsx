@@ -8,7 +8,7 @@
  * this step entirely and land on the existing LoginSelector.
  *
  * Persistence:
- *   - Language: i18n.changeLanguage + localStorage (via setLanguage())
+ *   - Language: i18n.changeLanguage + localStorage (via switchLanguage())
  *   - Theme:    localStorage('halo-theme') + config.appearance.theme
  *
  * Theme is applied reactively by App.tsx via the same useEffect that
@@ -18,7 +18,8 @@
 
 import { useState } from 'react'
 import { Globe, ChevronDown, Sun, Moon, Monitor, Loader2 } from 'lucide-react'
-import { useTranslation, setLanguage, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
+import { useTranslation, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
+import { useLanguagePicker } from '../../hooks/useLanguagePicker'
 import { api } from '../../api'
 import { useAppStore } from '../../stores/app.store'
 import type { HaloConfig, ThemeMode } from '../../types'
@@ -39,15 +40,14 @@ export function PreferencesStep({ onContinue }: PreferencesStepProps) {
   const { t } = useTranslation()
   const { config, setConfig } = useAppStore()
 
-  const [currentLang, setCurrentLang] = useState<LocaleCode>(getCurrentLanguage())
+  const [currentLang, pickLanguage] = useLanguagePicker()
   const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false)
   const [theme, setTheme] = useState<ThemeMode>(config?.appearance?.theme ?? 'system')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const handleLanguageChange = (lang: LocaleCode) => {
-    setLanguage(lang)
-    setCurrentLang(lang)
+  const handleLanguageChange = async (lang: LocaleCode) => {
     setIsLangDropdownOpen(false)
+    await pickLanguage(lang)
   }
 
   // Optimistic local update so the preview reflects immediately; persistence
@@ -68,7 +68,7 @@ export function PreferencesStep({ onContinue }: PreferencesStepProps) {
     setIsSubmitting(true)
     try {
       // Persist theme to backend config. Language is already persisted to
-      // localStorage by setLanguage(); no backend write needed.
+      // localStorage by switchLanguage(); no backend write needed.
       await api.setConfig({ appearance: { theme } })
     } catch (err) {
       // Non-fatal: theme already applied locally via setConfig above; user
@@ -125,7 +125,7 @@ export function PreferencesStep({ onContinue }: PreferencesStepProps) {
                     <button
                       key={code}
                       type="button"
-                      onClick={() => handleLanguageChange(code as LocaleCode)}
+                      onClick={() => void handleLanguageChange(code as LocaleCode)}
                       className={`w-full px-4 py-2 text-left text-sm hover:bg-secondary/80 transition-colors ${
                         currentLang === code ? 'text-primary font-medium' : 'text-foreground'
                       }`}

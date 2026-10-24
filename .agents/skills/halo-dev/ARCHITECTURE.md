@@ -226,7 +226,6 @@ src/
     │   ├── AppsPage.tsx              #   Digital humans management
     │   ├── StorePage.tsx              #   Marketplace browse/detail
     │   ├── TlonPage.tsx               #   Knowledge base management
-    │   ├── SplashPage.tsx             #   Startup splash screen
     │   ├── SetupPage.tsx              #   First-time login flow
     │   ├── GitBashSetupPage.tsx       #   Windows Git Bash installer
     │   ├── ServerConnectPage.tsx      #   Capacitor: add/connect to server
@@ -279,8 +278,9 @@ src/
     │                                  # useAutoResize, useDataContent, useLazyVisible,
     │                                  # useSearchShortcuts
     ├── types/index.ts                 # All shared renderer types
-    ├── lib/                           # utils (cn()), codemirror, highlight, perf
-    ├── i18n/                          # Internationalization
+    ├── lib/                           # utils (cn()), codemirror, highlight, perf, boot-splash
+    ├── boot/                          # Inline boot scripts (run before the app bundle; see §16)
+    ├── i18n/                          # Internationalization (locale.ts: language choice, i18next-free)
     └── assets/styles/                 # globals.css, syntax-theme.css, canvas-tabs.css, browser-task-card.css
 ```
 
@@ -690,7 +690,11 @@ hsl(var(--primary)), hsl(var(--muted-foreground))
 ```
 
 Theme switch: `<html>` class toggle in `App.tsx`
-Anti-flash: `index.html` inline script reads `localStorage('halo-theme')`
+Anti-flash: `index.html` inline script reads the theme saved in config, which the
+desktop main process passes through the preload (`window.haloBootTheme`), else
+`localStorage('halo-theme')` (remote/mobile). Literal copies of the tokens used
+before globals.css loads (native window colors, anti-flash, boot splash fallbacks)
+are held to globals.css by `tests/unit/architecture/startup-colors.guard.test.ts`.
 
 ## 12) CSS Architecture: Tailwind First
 
@@ -857,11 +861,12 @@ Notes:
    - Failures are logged as warnings and never interrupt the queue or the process.
    - Implemented in `src/main/bootstrap/idle-queue.ts` (`registerIdleTask`, `startIdleDrain`).
 
-### The first-screen cue (do not gate deferred work on first paint alone)
+### The first-screen cue (do not gate deferred work on `ready-to-show` alone)
 
-`ready-to-show` fires on first paint, and the window is created hidden, so it
-doubles as "reveal the window" and "start the deferred tier". Both uses assume
-Windows will give the process a paint — which is false for a launch that has no
+`ready-to-show` fires once the page has laid out content to show (see "The first
+frame" below), and the window is created hidden, so it doubles as "reveal the
+window" and "start the deferred tier". Both uses assume Windows will let the
+hidden page draw — which is false for a launch that has no
 foreground context: the installer's "run when finished" checkbox, or the
 updater relaunching after a swap. That process then runs with no window, no
 tray, no database and no automation while its processes sit in Task Manager,
@@ -873,6 +878,70 @@ first paint, page loaded (after a short grace period so a normal start is not
 revealed unpainted), and an absolute deadline — and `registerFirstScreenListener`
 is what the deferred tier subscribes to. Keep the two on the same cue: a launch
 that reaches one and not the other is worse than one that reaches neither.
+
+### Code loads with its tier
+
+Deferring when a service starts does not defer its code: everything statically
+imported from `src/main/index.ts` is loaded and run before the window is created.
+So the tiers are also split in the bundle:
+
+- `bootstrap/index.ts` reaches `extended.ts` only through a dynamic import, which
+  makes Extended and every module only it imports a chunk loaded after the first
+  screen. `cleanupExtendedServices()` loads it too, because it also cleans up
+  first-tier services.
+- A first-tier module (the essential IPC handlers, their controllers and services,
+  `index.ts`) never statically imports a Tier 2 module such as `apps/runtime` or
+  `http/routes`. One such import puts that module and all it imports back in front
+  of the window. Import it where it is used, as `ipc/agent.ts` (stop),
+  `controllers/space.controller.ts` and `http/server.ts` (routes) do. Still loaded
+  before the window, through `http/server.ts` and `http/websocket.ts`: `apps/team`
+  and `apps/federation`.
+- A package that only a rare path needs loads on first use
+  (`openai-compat-router/utils/token-counter.ts`, the Feishu provider's SDK).
+- The renderer loads one language at startup: `i18n/index.ts` bundles English (the
+  fallback) and loads each other language as its own chunk, and `main.tsx` renders
+  once `i18nReady` has resolved. That wait is bounded: when the chunk fails, or has
+  not arrived 3 s after the app's modules have run, the app starts in English and
+  switches over if the chunk still arrives, unless the user has picked a language
+  meanwhile. A language picked later that cannot be loaded leaves the language in
+  use and the saved choice as they were; `services/language-switch.ts` tells the
+  user. A language picker shows what `hooks/useLanguagePicker.ts` returns, never a
+  copy of its own, so it follows a switch the app makes by itself too.
+- Nothing calls `t()` while a module loads (a module-scope constant, a store
+  initializer): that runs before the language has loaded and stays English.
+  Translate where the text is used.
+- `tests/unit/architecture/startup-phases.guard.test.ts` and
+  `module-scope-translation.guard.test.ts` hold these rules.
+
+### The first frame (boot splash)
+
+The window is revealed at the page's first layout that counts as having content,
+just before that frame is presented and before the app bundle runs, so whatever
+the page draws then stays on screen until the bundle finishes. Three rules keep it
+a finished picture:
+
+- **The page draws the splash itself.** `index.html` holds the boot splash, a
+  centered logo, as plain markup and CSS; its only script is
+  `src/renderer/boot/splash.ts`, inlined at build time by `vite.boot-script.ts`
+  (desktop and mobile configs) with just the strings it passes to `t`, taken from
+  the locale files. React has no splash view: `App.tsx` renders nothing for
+  `'splash'` and takes the splash down once the first real page has rendered inside
+  its Suspense boundary; the root ErrorBoundary and the pre-React fatal handler take
+  it down too.
+- **The splash counts as content.** Electron's `ready-to-show` fires when Blink
+  first counts the page as visually non-empty: more than 200 characters of text
+  laid out, an image larger than 32×32, any laid-out `<canvas>`, or the document
+  fully parsed, which waits for the deferred app bundle to run. The image rule
+  holds only at layout zoom 1 (screen scale × display size): at any other zoom Blink
+  counts the image as 0×0 before it has loaded, and only once. So `#boot-splash`
+  ends with a 0×0 `<canvas>`, which counts at every zoom; under `display:none` it
+  is not laid out and does not count. `boot-splash-reveal.guard.test.ts` keeps it in
+  place. Without it the window waits for the bundle at 125%, 150% or Retina.
+- **The first frame is drawn at the revealed size.** The window is revealed
+  maximized with that first frame while the page is still busy, and a page busy
+  running code cannot redraw at a new size. `foundation/window-startup.ts` sizes
+  the hidden window to the work area before anything is drawn (Windows and macOS)
+  and puts the default size back on the first restore.
 
 ### Shutdown behavior
 

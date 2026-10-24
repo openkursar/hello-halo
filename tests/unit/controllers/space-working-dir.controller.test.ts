@@ -161,6 +161,7 @@ describe('changeSpaceWorkingDir', () => {
 
     const first = changeSpaceWorkingDir('space-1', '/work/new')
     expect(await changeSpaceWorkingDir('space-1', '/work/other')).toEqual({ success: false, error: 'This workspace’s folder is already being changed.' })
+    await vi.waitFor(() => expect(finishCopy).toBeDefined())
     finishCopy()
     expect((await first).success).toBe(true)
 

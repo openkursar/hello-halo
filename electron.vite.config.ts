@@ -4,6 +4,7 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import type { Plugin } from 'vite'
 import { build as buildEsbuild } from 'esbuild'
 import react from '@vitejs/plugin-react'
+import { bootSplashScript } from './vite.boot-script'
 
 /**
  * pdf.js keeps its CJK CMaps, base-14 standard fonts, image-codec wasm and ICC
@@ -171,7 +172,7 @@ export default defineConfig({
       entries: ['src/renderer/index.html', 'src/renderer/pages/*.tsx']
     },
     define: buildMetaDefine,
-    plugins: [react(), pdfjsAssets()],
+    plugins: [react(), pdfjsAssets(), bootSplashScript(resolve(__dirname, 'src/renderer'))],
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src/renderer')

@@ -118,7 +118,7 @@ net.setDefaultAutoSelectFamily(false)
 // Executed after page load to avoid blocking startup
 // Note: fix-path is ESM-only, loaded dynamically to support both CJS and ESM builds
 
-import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, Menu, crashReporter, nativeImage, shell } from 'electron'
+import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, Menu, crashReporter, nativeImage, nativeTheme, shell } from 'electron'
 
 // GPU compatibility: Disable hardware acceleration on Windows to prevent blank window issues
 // Some Windows GPU configurations cause the GPU process to crash, resulting in a white/blank screen
@@ -247,7 +247,8 @@ import {
   bootServerMode
 } from './bootstrap'
 import { isServerMode } from './foundation/runtime-mode'
-import { initializeApp } from './foundation/config.service'
+import { getConfig, initializeApp } from './foundation/config.service'
+import { drawFirstFrameMaximized, startupWindowColors } from './foundation/window-startup'
 import { applyDisplayScale, currentDisplayScale, nudgeDisplayScale, setDisplayScale, DISPLAY_STEP, registerDisplayHandlers } from './services/display.service'
 import { MAC_TRAFFIC_LIGHT_POSITION } from '../shared/constants/mac-traffic-lights'
 import { TITLE_BAR_OVERLAY_HEIGHT } from '../shared/constants/app-header'
@@ -475,6 +476,10 @@ function createAppMenu(): void {
 function createWindow(): void {
   // Platform-specific window options
   const isMac = process.platform === 'darwin'
+  // The saved theme, so neither the native window nor the page's first frame
+  // starts out in the other theme before the app applies it.
+  const theme = getConfig().appearance?.theme ?? 'system'
+  const colors = startupWindowColors(theme, nativeTheme.shouldUseDarkColors)
 
   // Create the browser window
   mainWindow = new BrowserWindow({
@@ -493,17 +498,14 @@ function createWindow(): void {
     // Sits in NavRail's column above the brand mark; the renderer derives its
     // clearance from the same shared geometry.
     trafficLightPosition: isMac ? MAC_TRAFFIC_LIGHT_POSITION : undefined,
-    // Windows/Linux: native window controls overlay in content area.
-    // Matches globals.css's dark-theme `--background`/`--foreground` (the
-    // default theme) and index.html's anti-flash color exactly, for the brief
-    // window before the renderer loads and calls setTitleBarOverlay with the
-    // live (possibly light) theme's actual tokens — see App.tsx's applyTheme.
+    // Windows/Linux: native window controls overlay in content area. App.tsx's
+    // applyTheme keeps it on the live theme's tokens once the page runs.
     titleBarOverlay: !isMac ? {
-      color: '#181b20',
-      symbolColor: '#e7e9ee',
+      color: colors.background,
+      symbolColor: colors.symbol,
       height: TITLE_BAR_OVERLAY_HEIGHT
     } : undefined,
-    backgroundColor: '#181b20',
+    backgroundColor: colors.background,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       sandbox: true,
@@ -514,9 +516,11 @@ function createWindow(): void {
       // the zoom natively, and the CLI arg lets the preload set --display-scale
       // synchronously, so chrome-inset compensation is correct on frame one.
       zoomFactor: currentDisplayScale(),
-      additionalArguments: [`--halo-display-scale=${currentDisplayScale()}`]
+      additionalArguments: [`--halo-display-scale=${currentDisplayScale()}`, `--halo-boot-theme=${theme}`]
     }
   })
+
+  drawFirstFrameMaximized(mainWindow)
 
   // The page's own <title> is the same for every product, so it must not replace the product name.
   mainWindow.on('page-title-updated', (event) => event.preventDefault())
@@ -533,9 +537,10 @@ function createWindow(): void {
   //
   // So first paint is the preferred cue, not the only one: a loaded page will
   // do, and failing that a deadline. Whichever fires first wins.
-  // First paint normally arrives about a second in. The page-loaded cue fires
-  // earlier than that, so it waits a moment rather than revealing an unpainted
-  // window; the outer deadline covers a launch where neither ever arrives.
+  // First paint normally arrives before the page has loaded (the boot splash
+  // needs none of the app's code). A loaded page that has not painted yet still
+  // gets a moment rather than an unpainted reveal; the outer deadline covers a
+  // launch where neither ever arrives.
   const REVEAL_AFTER_LOAD_MS = 1500
   const REVEAL_DEADLINE_MS = 8000
   let revealed = false
@@ -752,13 +757,21 @@ app.whenReady().then(async () => {
   registerFirstScreenListener(() => {
     // Yield first so the paint (when there was one) is not competing with it.
     setImmediate(() => {
-      initializeExtendedServices()
-
-      // Initialize analytics (after IPC handlers registered and window created),
-      // then performance telemetry, whose next-launch report needs analytics up.
-      initAnalytics()
-        .catch(err => console.warn('[Analytics] Init failed:', err))
-        .finally(() => startPerfTelemetry())
+      // Quitting before the first screen: the shutdown cleanup has run or is
+      // running, and must not be followed by the tray, database and scheduler.
+      if (isAppQuitting) return
+      void initializeExtendedServices()
+        .then(() => {
+          // Initialize analytics (after IPC handlers registered and window created),
+          // then performance telemetry, whose next-launch report needs analytics up.
+          initAnalytics()
+            .catch(err => console.warn('[Analytics] Init failed:', err))
+            .finally(() => startPerfTelemetry())
+        })
+        .catch(err => {
+          console.error('[Main] Extended services failed to start:', err)
+          showUncaughtErrorNotice(err instanceof Error ? err : new Error(String(err)))
+        })
     })
   })
 

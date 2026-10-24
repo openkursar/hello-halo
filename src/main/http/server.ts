@@ -22,7 +22,6 @@ import {
 } from './auth'
 import { ACCESS_CODE_MIN_SUBMIT_LENGTH, PASSWORD_MAX_LENGTH } from '../../shared/auth/password-policy'
 import { initWebSocket, shutdownWebSocket, getClientCount } from './websocket'
-import { registerApiRoutes } from './routes'
 import { getInvitePage } from './invite-page'
 import { serveRendererAssets } from './renderer-assets'
 import { getTeamStore } from '../apps/team'
@@ -174,6 +173,9 @@ export async function startHttpServer(
   existingToken?: string
 ): Promise<{ port: number; token: string }> {
   const listenPort = await findAvailablePort(port)
+  // The routes reach almost every service; loaded here, they stay out of
+  // what the main process loads before its window opens.
+  const { registerApiRoutes } = await import('./routes')
 
   // Create Express app
   expressApp = express()

@@ -16,7 +16,6 @@ import { useAppsStore } from './stores/apps.store'
 import { useAppsPageStore } from './stores/apps-page.store'
 import { useToolsetsStore, type ToolsetsChangedEvent, type ToolsetsRequestedEvent } from './stores/toolsets.store'
 import { useTlonStore } from './stores/tlon.store'
-import { SplashPage } from './pages/SplashPage'
 import { SetupPage } from './pages/SetupPage'
 import { GitBashSetupPage } from './pages/GitBashSetupPage'
 import { ServerConnectPage } from './pages/ServerConnectPage'
@@ -55,6 +54,7 @@ import { openSearchResultConversation } from './utils/conversation-navigation'
 import { useTeamStore } from './stores/team.store'
 import { canvasLifecycle } from './services/canvas-lifecycle'
 import { mountBrowserHost } from './browser-host'
+import { dismissBootSplash } from './lib/boot-splash'
 import { trackNavigate } from './services/home-telemetry'
 import type { TeamUpdatedEvent, TeamBlackboardEvent, TeamMessageEvent, TeamPresenceEvent, TeamOfficeStatusEvent } from '../shared/apps/team-types'
 
@@ -68,8 +68,15 @@ const StorePage = lazy(() => import('./pages/StorePage').then(m => ({ default: m
 const SpacesPage = lazy(() => import('./pages/SpacesPage').then(m => ({ default: m.SpacesPage })))
 
 // Views that render inside the persistent shell (rail visible). Pre-app
-// screens (splash/setup/server connect/...) render full-bleed without it.
+// screens (setup/server connect/...) render full-bleed without it.
 const RAIL_VIEWS: AppView[] = ['space', 'settings', 'apps', 'tlon', 'store', 'spaces']
+
+// Sits next to the current page inside its Suspense boundary, so it mounts
+// once that page has rendered, never while only its loading fallback shows.
+function BootSplashRelease() {
+  useEffect(() => dismissBootSplash(), [])
+  return null
+}
 
 // Page loading fallback - minimal spinner that matches app style
 function PageLoader() {
@@ -103,13 +110,27 @@ function cssHslVarToHex(varName: string): string {
   return `#${channel(0)}${channel(8)}${channel(4)}`
 }
 
+type ThemeSetting = 'light' | 'dark' | 'system'
+
+// Read by index.html's anti-flash script before any of this code runs.
+const THEME_STORAGE_KEY = 'halo-theme'
+
+/** The theme index.html booted the page with. */
+function storedTheme(): ThemeSetting {
+  try {
+    const value = localStorage.getItem(THEME_STORAGE_KEY)
+    if (value === 'light' || value === 'dark' || value === 'system') return value
+  } catch { /* storage unavailable */ }
+  return 'system'
+}
+
 // Apply theme to document and sync to localStorage (for anti-flash on reload)
-function applyTheme(theme: 'light' | 'dark' | 'system') {
+function applyTheme(theme: ThemeSetting) {
   const root = document.documentElement
 
   // Save to localStorage for anti-flash script
   try {
-    localStorage.setItem('halo-theme', theme)
+    localStorage.setItem(THEME_STORAGE_KEY, theme)
   } catch (e) { /* ignore */ }
 
   let isDark: boolean
@@ -286,9 +307,12 @@ export default function App() {
     }
   }, [initialize, initializeOnboarding, completeDeferredGitBashCheck, navigate])
 
-  // Theme switching
+  // Theme switching. Until config has loaded, keep the theme the page booted
+  // with: assuming 'system' meanwhile flipped anyone whose chosen theme differs
+  // from the OS's to the other theme for the first moments of every launch.
+  const configTheme = config ? (config.appearance?.theme || 'system') : null
   useEffect(() => {
-    const theme = config?.appearance?.theme || 'system'
+    const theme = configTheme ?? storedTheme()
     applyTheme(theme)
 
     // Resolve effective dark/light for the status bar.
@@ -308,7 +332,7 @@ export default function App() {
       mediaQuery.addEventListener('change', handleChange)
       return () => mediaQuery.removeEventListener('change', handleChange)
     }
-  }, [config?.appearance?.theme])
+  }, [configTheme])
 
   // WebSocket connection state for reconnection banner
   const [wsState, setWsState] = useState<WsConnectionState>('connected')
@@ -999,12 +1023,8 @@ export default function App() {
     && view !== 'serverList'
     && view !== 'splash'
 
-  // Render based on current view
-  // Heavy pages (SpacePage, SettingsPage, AppsPage, TlonPage) are lazy-loaded for better initial performance
-  const renderView = () => {
+  const renderPage = () => {
     switch (view) {
-      case 'splash':
-        return <SplashPage />
       case 'gitBashSetup':
         return <GitBashSetupPage onComplete={completeGitBashSetup} />
       case 'setup':
@@ -1024,44 +1044,33 @@ export default function App() {
           />
         )
       case 'space':
-        return (
-          <Suspense fallback={<PageLoader />}>
-            <SpacePage />
-          </Suspense>
-        )
+        return <SpacePage />
       case 'settings':
-        return (
-          <Suspense fallback={<PageLoader />}>
-            <SettingsPage />
-          </Suspense>
-        )
+        return <SettingsPage />
       case 'apps':
-        return (
-          <Suspense fallback={<PageLoader />}>
-            <AppsPage />
-          </Suspense>
-        )
+        return <AppsPage />
       case 'tlon':
-        return (
-          <Suspense fallback={<PageLoader />}>
-            <TlonPage />
-          </Suspense>
-        )
+        return <TlonPage />
       case 'store':
-        return (
-          <Suspense fallback={<PageLoader />}>
-            <StorePage />
-          </Suspense>
-        )
+        return <StorePage />
       case 'spaces':
-        return (
-          <Suspense fallback={<PageLoader />}>
-            <SpacesPage />
-          </Suspense>
-        )
+        return <SpacesPage />
       default:
-        return <SplashPage />
+        return null
     }
+  }
+
+  // Heavy pages (SpacePage, SettingsPage, AppsPage, TlonPage, ...) are
+  // lazy-loaded. While the view is still 'splash', index.html's boot splash
+  // is the whole screen.
+  const renderView = () => {
+    if (view === 'splash') return null
+    return (
+      <Suspense fallback={<PageLoader />}>
+        {renderPage()}
+        <BootSplashRelease />
+      </Suspense>
+    )
   }
 
   return (
