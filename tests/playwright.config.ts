@@ -148,6 +148,11 @@ export default defineConfig({
       }
     },
     {
+      name: 'model-picker',
+      testMatch: '**/model-picker.spec.ts',
+      use: { actionTimeout: 10000 }
+    },
+    {
       name: 'apps',
       testMatch: '**/apps.spec.ts',
       use: {

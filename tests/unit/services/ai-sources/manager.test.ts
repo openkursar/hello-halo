@@ -1582,3 +1582,117 @@ describe('syncBuiltinModels (constructor)', () => {
     expect(saveConfig).not.toHaveBeenCalled()
   })
 })
+
+describe('vendor presentation and withdrawn models', () => {
+  function registerCatalogProvider(mgr: AISourceManager, refreshData: Record<string, unknown>, loginData?: Record<string, unknown>) {
+    const provider = {
+      type: 'catalog-prov',
+      checkTokenWithConfig: vi.fn().mockReturnValue({ valid: true, needsRefresh: false }),
+      refreshTokenWithConfig: vi.fn(),
+      refreshConfig: vi.fn().mockResolvedValue({ success: true, data: { 'catalog-prov': refreshData } }),
+      startLogin: vi.fn(async () => ({ success: true, data: { loginUrl: 'https://example.com/login', state: 'state' } })),
+      completeLogin: vi.fn(async () => ({
+        success: true,
+        data: { _tokenData: { accessToken: 'tok-2', refreshToken: 'ref-2', expiresAt: 1, uid: 'u1' }, user: { name: 'U' }, ...loginData }
+      })),
+      getBackendConfig: vi.fn()
+    }
+    ;(mgr as unknown as { providers: Map<string, unknown> }).providers.set('catalog-prov', provider)
+    return provider
+  }
+
+  const stored = () => (store.value.aiSources as AISourcesConfig).sources[0]
+
+  function seedAccount(over: Partial<AISource> = {}) {
+    seed({
+      currentId: 'o1',
+      sources: [oauthSource({
+        provider: 'catalog-prov' as never,
+        user: { name: 'U', uid: 'u1' },
+        model: 'old',
+        availableModels: [{ id: 'old', name: 'Old model' }, { id: 'kept', name: 'Kept', costMultiplier: 1 }],
+        ...over
+      })]
+    })
+  }
+
+  it('stores the vendor presentation, records what the vendor withdrew and why the account model moved', async () => {
+    seedAccount()
+    const mgr = new AISourceManager()
+    const provider = registerCatalogProvider(mgr, {
+      availableModels: ['kept', 'auto', 'custom:a'],
+      modelNames: { kept: 'Kept', auto: 'Auto', 'custom:a': 'Org model' },
+      modelPresentation: {
+        kept: { badge: { label: 'Night offer' }, costMultiplier: 0.5, regularCostMultiplier: 0.79 },
+        'custom:a': { group: 'enterprise', costMultiplier: 'cheap' }
+      },
+      model: 'auto'
+    })
+
+    await mgr.refreshSourceConfig('o1')
+
+    expect(provider.refreshConfig.mock.calls[0][0]['catalog-prov'].modelPresentation).toEqual({ kept: { costMultiplier: 1 } })
+    expect(stored().availableModels).toEqual([
+      { id: 'kept', name: 'Kept', badge: { label: 'Night offer' }, costMultiplier: 0.5, regularCostMultiplier: 0.79 },
+      { id: 'auto', name: 'Auto' },
+      { id: 'custom:a', name: 'Org model', group: 'enterprise' }
+    ])
+    expect(stored().model).toBe('auto')
+    expect(stored().withdrawnModels).toEqual([{ id: 'old', name: 'Old model', at: expect.any(String) }])
+    expect(stored().modelReplacement).toMatchObject({ from: 'old', fromName: 'Old model', to: 'auto' })
+  })
+
+  it('records nothing from a fallback list served while the vendor was unreachable', async () => {
+    seedAccount()
+    const mgr = new AISourceManager()
+    registerCatalogProvider(mgr, { degraded: true, catalogReconciled: true, availableModels: ['kept'], model: 'kept' })
+
+    await mgr.refreshSourceConfig('o1')
+
+    expect(stored().availableModels.map(model => model.id)).toEqual(['kept'])
+    expect(stored().withdrawnModels).toBeUndefined()
+    expect(stored().modelReplacement).toBeUndefined()
+  })
+
+  it('stores presentation from a login and records withdrawals when an existing account signs in again', async () => {
+    seedAccount()
+    const mgr = new AISourceManager()
+    registerCatalogProvider(mgr, {}, {
+      _availableModels: ['kept', 'new'],
+      _modelNames: { kept: 'Kept', new: 'New' },
+      _modelPresentation: { new: { badge: { label: 'Free' }, costMultiplier: 0 } },
+      _defaultModel: 'new'
+    })
+    const start = await mgr.startOAuthLogin('catalog-prov')
+    await mgr.completeOAuthLogin('catalog-prov', 'state', start.data!.loginId)
+
+    expect(stored().availableModels).toEqual([{ id: 'kept', name: 'Kept' }, { id: 'new', name: 'New', badge: { label: 'Free' }, costMultiplier: 0 }])
+    expect(stored().model).toBe('old')
+    expect(stored().withdrawnModels).toEqual([{ id: 'old', name: 'Old model', at: expect.any(String) }])
+  })
+
+  it('records no withdrawals when a sign-in sends no list and Halo fills in only the default model', async () => {
+    seedAccount()
+    const mgr = new AISourceManager()
+    registerCatalogProvider(mgr, {}, { _availableModels: [], _defaultModel: 'new' })
+    const start = await mgr.startOAuthLogin('catalog-prov')
+    await mgr.completeOAuthLogin('catalog-prov', 'state', start.data!.loginId)
+
+    expect(stored().availableModels.map(model => model.id)).toEqual(['new'])
+    expect(stored().withdrawnModels).toBeUndefined()
+  })
+
+  it('clears the replacement note once the user picks a model, and ignores history sent by a client', () => {
+    const history = [{ id: 'gone', name: 'Gone', at: '2026-10-21T10:00:00.000Z' }]
+    seedAccount({ model: 'kept', withdrawnModels: history, modelReplacement: { from: 'old', fromName: 'Old model', to: 'kept', at: '2026-10-21T10:00:00.000Z' } })
+    const mgr = new AISourceManager()
+
+    mgr.updateSource('o1', { name: 'Renamed', withdrawnModels: [], modelReplacement: undefined })
+    expect(stored().withdrawnModels).toEqual(history)
+    expect(stored().modelReplacement).toBeDefined()
+
+    mgr.setCurrentModel('kept')
+    expect(stored().modelReplacement).toBeUndefined()
+    expect(stored().withdrawnModels).toEqual(history)
+  })
+})

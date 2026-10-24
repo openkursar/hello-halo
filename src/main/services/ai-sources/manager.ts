@@ -68,6 +68,7 @@ import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 import { Emitter, type Event } from '../../platform/event'
 import { CatalogSchedule } from './catalog-schedule'
+import { catalogModel, presentationMap, recordCatalogChange } from './catalog-models'
 
 /**
  * Extended OAuth provider interface for token management
@@ -96,6 +97,7 @@ interface OAuthLoginPayload extends OAuthCompleteResult {
   _modelNames?: Record<string, string>
   _modelCapabilities?: Record<string, ModelOption['capabilities']>
   _modelVision?: Record<string, boolean>
+  _modelPresentation?: Record<string, unknown>
   _modelCatalogCache?: AISource['modelCatalogCache']
   _defaultModel?: string
   _catalogDegraded?: boolean
@@ -655,6 +657,10 @@ class AISourceManager {
     delete metadata.id
     delete metadata.createdAt
     delete metadata.authType
+    // Written only by catalog refreshes and sign-ins; a client's copy may be stale.
+    delete metadata.withdrawnModels
+    delete metadata.modelReplacement
+    if (metadata.model !== undefined) metadata.modelReplacement = undefined
     if (metadata.apiKey === MASK_SENTINEL) delete metadata.apiKey
     if (source.authType === 'oauth' || source.authType === 'delegated') {
       delete metadata.provider
@@ -1060,10 +1066,11 @@ class AISourceManager {
   ): string[] {
     const tokenData = data._tokenData
     const defaultModel = data._defaultModel || ''
-    const models: ModelOption[] = (data._availableModels || []).map(id => ({
-      id, name: data._modelNames?.[id] || id,
-      ...(data._modelCapabilities?.[id] ? { capabilities: data._modelCapabilities[id] } : {}),
-      ...(typeof data._modelVision?.[id] === 'boolean' ? { supportsVision: data._modelVision[id] } : {})
+    const models: ModelOption[] = (data._availableModels || []).map(id => catalogModel(id, {
+      modelNames: data._modelNames,
+      modelCapabilities: data._modelCapabilities,
+      modelVision: data._modelVision,
+      modelPresentation: data._modelPresentation
     }))
     if (!models.length && defaultModel) models.push({ id: defaultModel, name: data._modelNames?.[defaultModel] || defaultModel })
     const aiSources = this.getAiSourcesConfig()
@@ -1101,13 +1108,11 @@ class AISourceManager {
       const offlineData = (offline as Record<string, OAuthSourceConfig> | undefined)?.[providerType]
       const loginModels = offlineData?.availableModels?.map(modelId => ({
         ...existing?.availableModels.find(model => model.id === modelId),
-        id: modelId, name: offlineData.modelNames?.[modelId] || modelId,
-        ...(offlineData.modelCapabilities?.[modelId] ? { capabilities: offlineData.modelCapabilities[modelId] } : {}),
-        ...(typeof offlineData.modelVision?.[modelId] === 'boolean' ? { supportsVision: offlineData.modelVision[modelId] } : {})
+        ...catalogModel(modelId, offlineData)
       })) ?? (models.length ? models : existing?.availableModels || [])
       const name = existing?.name || (data._accounts?.length
         ? account.label : getBuiltinProvider(providerType)?.name || getProviderDisplayName(providerType))
-      const source: AISource = {
+      const signedIn: AISource = {
         ...existing,
         id, name, provider: providerType, authType: 'oauth',
         apiUrl: data._apiUrl ?? existing?.apiUrl ?? '',
@@ -1122,6 +1127,10 @@ class AISourceManager {
         modelCatalogCache: data._modelCatalogCache ?? existing?.modelCatalogCache,
         createdAt: existing?.createdAt || now, updatedAt: now
       }
+      // Only a list the provider sent; `models` may hold just the default Halo filled in.
+      const source = existing && !data._catalogDegraded && data._availableModels?.length
+        ? recordCatalogChange(existing, signedIn, now)
+        : signedIn
       sources = existing ? sources.map(item => item.id === id ? source : item) : [...sources, source]
       this.tokenRefreshes.delete(id)
       this.catalogRefreshes.delete(id)
@@ -1480,15 +1489,9 @@ class AISourceManager {
       return { success: true, data: { degraded: true } }
     }
 
-    // Convert provider's string[] + modelNames to v2 ModelOption[]
+    // Convert provider's string[] + per-model maps to v2 ModelOption[]
     const modelIds: string[] = providerData.availableModels || []
-    const modelNames: Record<string, string> = providerData.modelNames || {}
-    const models: ModelOption[] = modelIds.map(id => ({
-      id,
-      name: modelNames[id] || id,
-      ...(providerData.modelCapabilities?.[id] ? { capabilities: providerData.modelCapabilities[id] } : {}),
-      ...(typeof providerData.modelVision?.[id] === 'boolean' ? { supportsVision: providerData.modelVision[id] } : {})
-    }))
+    const models: ModelOption[] = modelIds.map(id => catalogModel(id, providerData))
 
     // Read fresh config from disk to avoid overwriting concurrent token rotations
     const freshAiSources = this.getAiSourcesConfig()
@@ -1518,8 +1521,9 @@ class AISourceManager {
           ? nextOverrides ?? s.modelOverrides : s.modelOverrides,
         updatedAt: now
       }
-      changed = catalogFingerprint(next) !== catalogFingerprint(s)
-      return next
+      const recorded = degraded || models.length === 0 ? next : recordCatalogChange(s, next, now)
+      changed = catalogFingerprint(recorded) !== catalogFingerprint(s)
+      return recorded
     })
 
     if (!changed) {
@@ -1654,6 +1658,7 @@ class AISourceManager {
         modelNames: Object.fromEntries((source.availableModels || []).map(m => [m.id, m.name])),
         modelCapabilities: Object.fromEntries((source.availableModels || []).filter(m => m.capabilities).map(m => [m.id, m.capabilities])),
         modelVision: Object.fromEntries((source.availableModels || []).filter(m => typeof m.supportsVision === 'boolean').map(m => [m.id, m.supportsVision])),
+        modelPresentation: presentationMap(source.availableModels || []),
         modelCatalogCache: source.modelCatalogCache,
         accessToken: source.accessToken,
         refreshToken: source.refreshToken,

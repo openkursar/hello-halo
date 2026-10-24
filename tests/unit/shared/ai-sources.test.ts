@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   resolveLocalizedText, getModelDisplayName, resolveModelSelection, getSourceAccountName,
+  findWithdrawnModel, activeModelReplacement, MODEL_REPLACEMENT_NOTICE_MS,
   type AISource, type AISourcesConfig,
 } from '../../../src/shared/types/ai-sources'
 
@@ -94,5 +95,36 @@ describe('resolveLocalizedText', () => {
   it('prefers exact match over prefix match', () => {
     const text = { 'zh': 'generic zh', 'zh-CN': 'simplified' }
     expect(resolveLocalizedText(text, 'zh-CN')).toBe('simplified')
+  })
+})
+
+describe('models the vendor withdrew', () => {
+  const at = '2026-10-21T10:00:00.000Z'
+  const account: AISource = {
+    id: 't', name: 'Vendor account', provider: 'vendor-oauth', authType: 'oauth', apiUrl: '', model: 'auto',
+    availableModels: [{ id: 'auto', name: 'Auto' }, { id: 'back', name: 'Back' }], createdAt: '', updatedAt: '',
+    withdrawnModels: [{ id: 'gone', name: 'Gone model', at }, { id: 'back', name: 'Back', at }],
+    modelReplacement: { from: 'gone', fromName: 'Gone model', to: 'auto', at }
+  }
+  const config: AISourcesConfig = { version: 2, currentId: 't', sources: [account] }
+
+  it('names a pinned withdrawn model by its last known name', () => {
+    expect(getModelDisplayName(config, 't', 'gone')).toBe('Gone model')
+    expect(getModelDisplayName(config, 't', 'never-listed')).toBe('never-listed')
+  })
+
+  it('reports a model as withdrawn only while the catalog does not list it', () => {
+    expect(findWithdrawnModel(account, 'gone')).toEqual({ id: 'gone', name: 'Gone model', at })
+    expect(findWithdrawnModel(account, 'back')).toBeUndefined()
+    expect(findWithdrawnModel(account, undefined)).toBeUndefined()
+    expect(findWithdrawnModel({ ...account, availableModels: undefined } as unknown as AISource, 'gone')?.name).toBe('Gone model')
+  })
+
+  it('mentions a replacement for a week, and only while the account still uses the model it moved to', () => {
+    const start = Date.parse(at)
+    expect(activeModelReplacement(account, start + 1000)).toEqual(account.modelReplacement)
+    expect(activeModelReplacement(account, start + MODEL_REPLACEMENT_NOTICE_MS)).toBeUndefined()
+    expect(activeModelReplacement({ ...account, model: 'back' }, start + 1000)).toBeUndefined()
+    expect(activeModelReplacement({ ...account, modelReplacement: { ...account.modelReplacement!, at: 'bad' } }, start)).toBeUndefined()
   })
 })

@@ -400,6 +400,16 @@ and `services/ai-sources/catalog-schedule.ts` decides which sources are due. A
 refresh that changed a stored list emits `ai-sources:catalog-changed` (IPC + WS)
 and every client re-reads its AI sources. Do not add renderer-driven refresh loops.
 
+A catalog entry may also carry the vendor's presentation (`ModelPresentation`
+in `shared/types/ai-sources.ts`: group, badge, current and usual credit
+multiplier). Providers report it per model (`_modelPresentation` at login,
+`modelPresentation` on refresh); `services/ai-sources/catalog-models.ts`
+validates it before the manager stores it. A catalog write that came from the
+vendor (never a fallback list) also records `withdrawnModels` and
+`modelReplacement` on the source; nothing else writes them, and setting the
+account's model clears the replacement. Every picker renders these through
+`renderer/components/ai-config/model-list-parts.tsx`.
+
 Two types:
 - **Request/Response** (renderer → main): registered via `ipcMain.handle()`
 - **Events** (main → renderer): pushed via `sendToRenderer()` / `broadcastToAll()`

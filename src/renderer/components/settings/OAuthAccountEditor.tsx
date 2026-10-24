@@ -15,6 +15,7 @@ import type { ModelCapabilityOverride } from '../../../shared/types/model-capabi
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import { ModelConfigPanel } from './ModelConfigPanel'
+import { groupModels, useModelGroupLabel } from '../ai-config/model-list-parts'
 
 interface OAuthAccountEditorProps {
   source: AISource
@@ -25,6 +26,7 @@ interface OAuthAccountEditorProps {
 
 export function OAuthAccountEditor({ source, onSaved, onCancel }: OAuthAccountEditorProps) {
   const { t } = useTranslation()
+  const groupLabel = useModelGroupLabel()
   const models = source.availableModels ?? []
   const [name, setName] = useState(source.name)
   const [modelId, setModelId] = useState(source.model || models[0]?.id || '')
@@ -86,11 +88,16 @@ export function OAuthAccountEditor({ source, onSaved, onCancel }: OAuthAccountEd
                        text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 appearance-none"
             >
               {modelId && !catalogModel && <option value={modelId}>{modelId}</option>}
-              {models.map(model => (
-                <option key={model.id} value={model.id}>
-                  {model.name || model.id}
-                </option>
-              ))}
+              {groupModels(models).map(section => {
+                const options = section.models.map(model => (
+                  <option key={model.id} value={model.id}>
+                    {model.name || model.id}
+                  </option>
+                ))
+                return section.group
+                  ? <optgroup key={section.group} label={groupLabel(section.group)}>{options}</optgroup>
+                  : options
+              })}
             </select>
             <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
           </div>

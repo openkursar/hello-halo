@@ -26,6 +26,14 @@ import {
   type ModelOption
 } from '../../types'
 import { ThinkingLevelControl } from './ThinkingLevelControl'
+import {
+  groupModels,
+  ModelAvailabilityNotice,
+  ModelBadgePill,
+  ModelGroupHeading,
+  ModelOfferFacts,
+  ModelRowLabel
+} from './model-list-parts'
 import { useTranslation } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useFreshModelCatalogs } from '../../hooks/useFreshModelCatalogs'
@@ -206,24 +214,33 @@ function ModelList({ onDone }: { onDone: () => void }) {
               {isActiveSource && <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-primary" title={t('Active')} />}
             </button>
 
-            {isExpanded && models.map((model) => {
-              const modelId = typeof model === 'string' ? model : model.id
-              const modelName = typeof model === 'string' ? model : (model.name || model.id)
-              const isSelected = selected.source?.id === source.id && selected.modelId === modelId
-
-              return (
-                <button
-                  key={modelId}
-                  onClick={() => handleSelectModel(source.id, modelId)}
-                  className={`w-full flex items-center gap-2 rounded-md py-2 pl-7 pr-2.5 text-left text-[13px] transition-colors ease-halo hover:bg-secondary ${
-                    isSelected ? 'bg-secondary/60 font-medium text-foreground' : 'text-foreground'
-                  }`}
-                >
-                  <span className="min-w-0 flex-1 truncate">{modelName}</span>
-                  {isSelected && <Check className="w-3.5 h-3.5 shrink-0 text-primary" />}
-                </button>
-              )
-            })}
+            {isExpanded && (
+              <>
+                {selected.source?.id === source.id && (
+                  <ModelAvailabilityNotice source={source} modelId={selected.modelId} className="py-1 pl-7 pr-2.5" />
+                )}
+                {groupModels(models).map(section => (
+                  <div key={section.group ?? 'vendor'}>
+                    {section.group && <ModelGroupHeading group={section.group} className="pl-7 pr-2.5" />}
+                    {section.models.map(model => {
+                      const isSelected = selected.source?.id === source.id && selected.modelId === model.id
+                      return (
+                        <button
+                          key={model.id}
+                          onClick={() => handleSelectModel(source.id, model.id)}
+                          className={`w-full flex items-center gap-2 rounded-md py-2 pl-7 pr-2.5 text-left text-[13px] transition-colors ease-halo hover:bg-secondary ${
+                            isSelected ? 'bg-secondary/60 font-medium text-foreground' : 'text-foreground'
+                          }`}
+                        >
+                          <ModelRowLabel model={model} />
+                          {isSelected && <Check className="w-3.5 h-3.5 shrink-0 text-primary" />}
+                        </button>
+                      )
+                    })}
+                  </div>
+                ))}
+              </>
+            )}
           </div>
         )
       })}
@@ -278,7 +295,7 @@ export function ModelSelectSheet({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const [isAnimatingOut, setIsAnimatingOut] = useState(false)
 
-  const { name: currentModelName } = useConversationModel()
+  const { name: currentModelName, model: currentModel } = useConversationModel()
 
   const handleClose = () => {
     setIsAnimatingOut(true)
@@ -339,6 +356,8 @@ export function ModelSelectSheet({ onClose }: { onClose: () => void }) {
 
         {/* Model list */}
         <div className="overflow-auto" style={{ maxHeight: 'calc(60vh - 150px)' }}>
+          {/* Inside the scrolling area: a taller fixed header would push the list's end off the sheet. */}
+          <ModelOfferFacts model={currentModel} className="px-4 pt-3 pb-1" />
           <ModelList onDone={handleClose} />
         </div>
       </div>
@@ -382,7 +401,7 @@ function DigitalHumanModelButton({ target }: { target: Extract<ActiveModelTarget
   const ref = useRef<HTMLDivElement>(null)
   // Its own account and model, or the global selection when it has none or
   // its account was removed — what its turns actually run on.
-  const { source, modelId } = resolveModelSelection(aiSources, target)
+  const { source, modelId, own } = resolveModelSelection(aiSources, target)
   const modelName = getModelDisplayName(aiSources, target.modelSourceId, target.modelId)
   const app = useAppsStore(state => state.apps.find(a => a.id === target.appId))
 
@@ -407,6 +426,7 @@ function DigitalHumanModelButton({ target }: { target: Extract<ActiveModelTarget
         <div className="absolute right-0 bottom-full mb-1 w-64 bg-card border border-border rounded-xl shadow-pop z-50 p-3">
           <div className="text-center text-xs text-muted-foreground">{t('{{name}} uses', { name: target.appName })}</div>
           <div className="mt-0.5 text-center text-[15px] font-semibold text-foreground break-words">{modelName}</div>
+          {source && <ModelAvailabilityNotice source={source} modelId={modelId} withReplacement={!own} className="mt-2" />}
           <div className="mt-3">
             {/* One level for the whole digital human, on every entry. */}
             <ThinkingLevelControl
@@ -485,6 +505,8 @@ function CurrentModelCard({ onSwitch }: { onSwitch: () => void }) {
   const navigate = useAppStore(state => state.navigate)
   const { aiSources, source, modelId, model, name } = useConversationModel()
   const { contextWindow, vision } = resolveCardFacts(source, modelId, model)
+  // The card shows cost and offers that change over time, like the list.
+  useFreshModelCatalogs(true)
 
   // Nothing to run on: no account at all, or none selected.
   if (!source) {
@@ -517,11 +539,15 @@ function CurrentModelCard({ onSwitch }: { onSwitch: () => void }) {
         className="group flex w-full items-center gap-2 rounded-lg bg-secondary/60 px-3 py-2 text-left hover:bg-secondary transition-colors ease-halo"
       >
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-[15px] font-semibold text-foreground">{name}</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-[15px] font-semibold text-foreground">{name}</span>
+            {model && <ModelBadgePill model={model} />}
+          </span>
           <span className="mt-0.5 truncate text-xs text-muted-foreground">{source.name}</span>
         </span>
         <ChevronRight className="w-4 h-4 shrink-0 text-subtle-foreground group-hover:text-foreground transition-colors ease-halo" />
       </button>
+      <ModelAvailabilityNotice source={source} modelId={modelId} className="mt-2 px-1.5" />
       <dl className="mt-2 space-y-1.5 px-1.5 text-xs">
         {contextWindow ? (
           <div className="flex justify-between gap-3">
@@ -536,6 +562,7 @@ function CurrentModelCard({ onSwitch }: { onSwitch: () => void }) {
           </div>
         )}
       </dl>
+      <ModelOfferFacts model={model} className="mt-1.5 px-1.5" />
       <div className="mt-3 px-1.5">
         <ConversationThinkingLevel />
       </div>

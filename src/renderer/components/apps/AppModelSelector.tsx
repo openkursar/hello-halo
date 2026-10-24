@@ -17,6 +17,7 @@ import { useAppStore } from '../../stores/app.store'
 import {
   resolveModelSelection,
   getCurrentModelName,
+  findWithdrawnModel,
   AVAILABLE_MODELS,
   type AISourcesConfig,
   type AISource,
@@ -26,6 +27,7 @@ import {
 import { isAnthropicProvider } from '../../types'
 import { useTranslation } from '../../i18n'
 import { useFreshModelCatalogs } from '../../hooks/useFreshModelCatalogs'
+import { groupModels, ModelAvailabilityNotice, ModelGroupHeading, ModelRowLabel } from '../ai-config/model-list-parts'
 
 // ============================================
 // Types
@@ -77,6 +79,7 @@ function resolveSelectionLabel(
   if (!selected.own) return `${t('Follow global')} (${getCurrentModelName(aiSources)})`
 
   const model = getModelsForSource(selected.source).find(m => m.id === selected.modelId)
+    ?? findWithdrawnModel(selected.source, selected.modelId)
   return `${getSourceDisplayName(selected.source, t)} / ${model?.name || selected.modelId}`
 }
 
@@ -254,24 +257,26 @@ export function AppModelSelector({
 
                   {isExpanded && (
                     <div className="bg-secondary/10 pb-1">
-                      {models.map(model => {
-                        const mid = typeof model === 'string' ? model : model.id
-                        const mname = typeof model === 'string' ? model : (model.name || model.id)
-                        const isSelected = isSelectedSource && selected.modelId === mid
-
-                        return (
-                          <button
-                            key={mid}
-                            onClick={() => handleSelectModel(source.id, mid)}
-                            className={`w-full px-3 py-2.5 text-left text-sm hover:bg-secondary/80 transition-colors flex items-center gap-2 pl-8 ${
-                              isSelected ? 'text-primary' : 'text-foreground'
-                            }`}
-                          >
-                            {isSelected ? <Check className="w-3 h-3 flex-shrink-0" /> : <span className="w-3" />}
-                            <span className="truncate">{mname}</span>
-                          </button>
-                        )
-                      })}
+                      {groupModels(models).map(section => (
+                        <div key={section.group ?? 'vendor'}>
+                          {section.group && <ModelGroupHeading group={section.group} className="pl-8 pr-3" />}
+                          {section.models.map(model => {
+                            const isSelected = isSelectedSource && selected.modelId === model.id
+                            return (
+                              <button
+                                key={model.id}
+                                onClick={() => handleSelectModel(source.id, model.id)}
+                                className={`w-full px-3 py-2.5 text-left text-sm hover:bg-secondary/80 transition-colors flex items-center gap-2 pl-8 ${
+                                  isSelected ? 'text-primary' : 'text-foreground'
+                                }`}
+                              >
+                                {isSelected ? <Check className="w-3 h-3 flex-shrink-0" /> : <span className="w-3 flex-shrink-0" />}
+                                <ModelRowLabel model={model} />
+                              </button>
+                            )
+                          })}
+                        </div>
+                      ))}
                     </div>
                   )}
 
@@ -282,6 +287,8 @@ export function AppModelSelector({
           </div>
         )}
       </div>
+
+      {selected.own && <ModelAvailabilityNotice source={selected.source} modelId={selected.modelId} withReplacement={false} />}
 
       {/* Description text */}
       <p className="text-xs text-muted-foreground">
