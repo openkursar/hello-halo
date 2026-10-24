@@ -130,8 +130,7 @@ class MessageCollector {
         break
 
       case 'error': {
-        // SSEWriter.writeError nests the detail under `message`.
-        const detail = event.error ?? event.message
+        const detail = event.error
         this.error = {
           type: detail?.type || 'api_error',
           message: detail?.message || 'Upstream stream failed'

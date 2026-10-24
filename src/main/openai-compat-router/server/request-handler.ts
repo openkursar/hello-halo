@@ -673,7 +673,11 @@ export async function handleMessagesRequest(
   // Run interceptors on Anthropic-format request (before any conversion)
   const interceptResult = await runInterceptors(
     anthropicRequest,
-    { originalModel: anthropicRequest.model, res }
+    {
+      originalModel: anthropicRequest.model,
+      stripImages: configApiType === 'anthropic_passthrough' && config.visionOverride === false,
+      res
+    }
   )
 
   // If interceptor sent a response, we're done

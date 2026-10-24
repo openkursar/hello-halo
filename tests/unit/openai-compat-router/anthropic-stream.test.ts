@@ -291,7 +291,7 @@ describe('AnthropicStreamHandler', () => {
     ])
   })
 
-  it('does not complete a command whose call a thinking block cuts off', async () => {
+  it('keeps tool input whole when a thinking block arrives between its chunks', async () => {
     // A malformed upstream starts thinking while the call is still streaming;
     // closed at the cut, `rm -rf ~/old-build` would run as `rm -rf ~`.
     const { res, chunks } = createMockRes()
@@ -308,7 +308,8 @@ describe('AnthropicStreamHandler', () => {
 
     await streamAnthropicPassthrough(sseToStream(upstream), res, 'claude-sonnet')
 
-    expect(toolCallsAtStop(parseSSEEvents(chunks))).toEqual([{ name: 'Bash', input: undefined }])
+    expect(toolCallsAtStop(parseSSEEvents(chunks))).toEqual([{ name: 'Bash', input: { command: 'rm -rf ~/old-build' } }])
+    expect(blockLifecycleViolations(parseSSEEvents(chunks))).toEqual([])
   })
 })
 

@@ -291,7 +291,7 @@ export interface AnthropicContentBlockStopEvent {
 export interface AnthropicMessageDeltaEvent {
   type: 'message_delta'
   delta: {
-    stop_reason: AnthropicStopReason
+    stop_reason: AnthropicStopReason | null
     stop_sequence?: string | null
   }
   usage: {

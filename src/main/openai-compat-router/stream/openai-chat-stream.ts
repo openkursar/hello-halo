@@ -49,7 +49,10 @@ export class OpenAIChatStreamHandler extends BaseStreamHandler {
           if (this.isFinished) break
 
           const { data, isDone } = this.parseSSEData(line)
-          if (isDone) continue
+          if (isDone) {
+            this.markStreamCompleted()
+            continue
+          }
           if (!data) continue
 
           if (this.debug) {
@@ -62,10 +65,8 @@ export class OpenAIChatStreamHandler extends BaseStreamHandler {
           this.processChunk(chunkJson)
         }
       }
-    } catch (error: any) {
-      if (!this.isFinished && this.debug) {
-        console.error('[OpenAIChatStream] Error:', error)
-      }
+    } catch (error) {
+      this.handleStreamError(error)
     } finally {
       await this.finishMessage()
     }

@@ -254,17 +254,17 @@ describe('stream usage fallback (OpenAIChatStreamHandler)', () => {
     expect(usage.output_tokens).toBeGreaterThan(0)
   })
 
-  it('applies fallback when the upstream stops without finish_reason or usage', async () => {
-    // Provider streams partial text then closes the connection — no
-    // finish_reason, no usage, no [DONE]. finishMessage still runs in the
-    // handler's finally block, so the fallback must populate usage from the
-    // text accumulated before the stream ended.
+  it('preserves estimated usage when a text-only response ends cleanly without finish_reason', async () => {
     const partial =
       'data: {"id":"c1","model":"qwen-plus","choices":[{"index":0,"delta":{"content":"partial answer before the connection closed"}}]}\n\n'
     const { res, chunks } = createMockRes()
     await streamOpenAIChatToAnthropic(sseToStream(partial), res, 'qwen-plus', false, () => Promise.resolve(512))
-    const usage = extractMessageDeltaUsage(chunks)
-    expect(usage.input_tokens).toBe(512)
-    expect(usage.output_tokens).toBeGreaterThan(0)
+    const output = chunks.join('')
+    expect(output).toContain('partial answer before the connection closed')
+    expect(output).not.toContain('event: error')
+    expect(extractMessageDeltaUsage(chunks)).toMatchObject({ input_tokens: 512, output_tokens: expect.any(Number) })
+    expect(extractMessageDeltaUsage(chunks).output_tokens).toBeGreaterThan(0)
+    expect(output).toContain('"stop_reason":"end_turn"')
+    expect(output).toContain('event: message_stop')
   })
 })

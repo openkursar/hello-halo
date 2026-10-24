@@ -120,9 +120,7 @@ describe('OpenAIChatStreamHandler empty-response repair', () => {
     expect(textDeltas[0].data.delta.text).toBe(' ')
   })
 
-  it('repairs a stream that dies without finish_reason after producing nothing', async () => {
-    // stopReason stays null; finishMessage defaults it to end_turn, so the
-    // repair gate must match the effective stop reason.
+  it('preserves the empty-response fallback on a clean EOF without finish_reason', async () => {
     const { res, chunks } = createMockRes()
     const stream = chatSSE([
       { id: 'c1', model: 'glm-5.1', choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] }
@@ -134,6 +132,7 @@ describe('OpenAIChatStreamHandler empty-response repair', () => {
     const textDeltas = textDeltasOf(events)
     expect(textDeltas).toHaveLength(1)
     expect(textDeltas[0].data.delta.text).toBe(' ')
+    expect(events.some(event => event.event === 'message_stop')).toBe(true)
   })
 
   it('does not inject placeholder when text content is present', async () => {
@@ -346,7 +345,7 @@ describe('OpenAIChatStreamHandler tool call cut off before its arguments end', (
     return parseSSEEvents(chunks)
   }
 
-  it('does not complete a command that another call cuts off', async () => {
+  it('waits for all interleaved command arguments before completing the call', async () => {
     // Closed at the cut, `rm -rf ~/old-build` would run as `rm -rf ~`.
     const events = await run([
       callStart(0, 'Bash'),
@@ -359,12 +358,13 @@ describe('OpenAIChatStreamHandler tool call cut off before its arguments end', (
     ])
 
     expect(toolCallsAtStop(events)).toEqual([
-      { name: 'Bash', input: undefined },
+      { name: 'Bash', input: { command: 'rm -rf ~/old-build' } },
       { name: 'Read', input: { file_path: 'b.ts' } }
     ])
+    expect(blockLifecycleViolations(events)).toEqual([])
   })
 
-  it('does not complete a number that another call cuts off', async () => {
+  it('keeps an interleaved numeric argument whole', async () => {
     const events = await run([
       callStart(0, 'Read'),
       callArgs(0, '{"file_path":"big.log","offset":90'),
@@ -374,10 +374,11 @@ describe('OpenAIChatStreamHandler tool call cut off before its arguments end', (
       end
     ])
 
-    expect(toolCallsAtStop(events)[0]).toEqual({ name: 'Read', input: undefined })
+    expect(toolCallsAtStop(events)[0]).toEqual({ name: 'Read', input: { file_path: 'big.log', offset: 9000 } })
+    expect(blockLifecycleViolations(events)).toEqual([])
   })
 
-  it('does not complete a command that text cuts off', async () => {
+  it('keeps a command whole when text arrives between its argument chunks', async () => {
     const events = await run([
       callStart(0, 'Bash'),
       callArgs(0, '{"command":"git reset --hard HEAD'),
@@ -386,7 +387,8 @@ describe('OpenAIChatStreamHandler tool call cut off before its arguments end', (
       end
     ])
 
-    expect(toolCallsAtStop(events)).toEqual([{ name: 'Bash', input: undefined }])
+    expect(toolCallsAtStop(events)).toEqual([{ name: 'Bash', input: { command: 'git reset --hard HEAD~3' } }])
+    expect(blockLifecycleViolations(events)).toEqual([])
   })
 
   it('still closes a call that lacks only its closing braces when the next call starts', async () => {

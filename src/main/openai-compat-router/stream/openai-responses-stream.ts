@@ -69,6 +69,7 @@ export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
 
           const { data, isDone } = this.parseSSEData(line)
           if (isDone) {
+            this.markStreamCompleted()
             this.markFinished()
             break
           }
@@ -84,10 +85,8 @@ export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
           this.processEvent(chunkJson)
         }
       }
-    } catch (error: any) {
-      if (this.debug) {
-        console.error('[OpenAIResponsesStream] Error:', error)
-      }
+    } catch (error) {
+      this.handleStreamError(error)
     } finally {
       await this.finishMessage()
     }
@@ -238,9 +237,7 @@ export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
         if (typeof item.arguments === 'string') {
           this.writeToolInputIfMissing(outputIndex, item.arguments)
         }
-        if (this.state.currentBlock?.index === blockIndex) {
-          this.closeCurrentBlock()
-        }
+        this.endToolBlock(outputIndex)
       }
     } else if (item.type === 'reasoning') {
       // Reasoning item complete
@@ -299,9 +296,11 @@ export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
    */
   private handleIncomplete(response: any): void {
     const reason = response.incomplete_details?.reason
-    const stopReason: AnthropicStopReason =
-      reason === 'max_output_tokens' ? 'max_tokens' : 'end_turn'
-    this.setStopReason(stopReason)
+    if (reason !== 'max_output_tokens') {
+      this.writeError('The model response was incomplete. Please retry.', 'incomplete_response')
+      return
+    }
+    this.setStopReason('max_tokens')
     this.markFinished()
   }
 
@@ -309,11 +308,7 @@ export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
    * Handle failed event
    */
   private handleFailed(response: any): void {
-    if (response.error) {
-      this.writeError(JSON.stringify(response.error))
-    }
-    this.setStopReason('end_turn')
-    this.markFinished()
+    this.writeError(response.error ? JSON.stringify(response.error) : 'The model response failed. Please retry.')
   }
 
   /**

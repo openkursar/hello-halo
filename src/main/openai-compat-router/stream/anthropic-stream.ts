@@ -56,10 +56,8 @@ export class AnthropicStreamHandler extends BaseStreamHandler {
           this.processEvent(event)
         }
       }
-    } catch (error: any) {
-      if (!this.isFinished && this.debug) {
-        console.error('[AnthropicStream] Error:', error)
-      }
+    } catch (error) {
+      this.handleStreamError(error)
     } finally {
       await this.finishMessage()
     }
@@ -88,9 +86,7 @@ export class AnthropicStreamHandler extends BaseStreamHandler {
         break
 
       case 'content_block_stop':
-        // Block lifecycle is managed by BaseStreamHandler — no explicit action
-        // needed here. The block will be closed by finishMessage or when the
-        // next block starts.
+        this.endToolBlock(event.index)
         break
 
       case 'message_delta':
