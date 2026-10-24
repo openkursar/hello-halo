@@ -113,6 +113,64 @@ describe('retained execution environments', () => {
     expect(() => validateEnvironmentConnections(environment, app, manager)).not.toThrow()
   })
 
+  it.each(['paused', 'error', 'needs_login'] as const)('keeps a chat usable when its original connection is %s', status => {
+    connections.a = [{ id: 'original-account', specId: 'calendar', status: 'active' } as InstalledApp]
+    const environment = resolveChatEnvironment(app, manager, store, 'app-chat:person')
+    connections.a[0].status = status
+
+    expect(() => validateEnvironmentConnections(environment, app, manager, 'chat')).not.toThrow()
+    expect(environment.mcpBindings).toEqual({ calendar: 'original-account' })
+
+    connections.a[0].status = 'active'
+    expect(() => validateEnvironmentConnections(environment, app, manager, 'chat')).not.toThrow()
+  })
+
+  it('continues a team chat after pausing an inherited connection, retaining its original space across reload', async () => {
+    connections.a = [{ id: 'inherited-account', specId: 'search', status: 'active' } as InstalledApp]
+    const conversationId = 'app-chat:person:team:team:epoch'
+    const original = resolveChatEnvironment(app, manager, store, conversationId, 'team')
+    await changeAppDefaultSpace({ manager, store, runtime }, app.id, 'b')
+    connections.a[0].status = 'paused'
+    connections.b = [{ id: 'other-account', specId: 'search', status: 'active' } as InstalledApp]
+    store = new ActivityStore(database.getAppDatabase())
+
+    const retained = resolveChatEnvironment(app, manager, store, conversationId, 'team')
+    expect(retained).toEqual(original)
+    expect(() => validateEnvironmentConnections(retained, app, manager, 'chat')).not.toThrow()
+    expect(resolveChatEnvironment(app, manager, store, 'app-chat:person:team:team:next', 'team')).toEqual(original)
+
+    connections.a[0] = { id: 'replacement-account', specId: 'search', status: 'active' } as InstalledApp
+    expect(() => validateEnvironmentConnections(retained, app, manager, 'chat')).toThrow(/switch accounts/)
+  })
+
+  it('leaves unavailable declared connections to the independent-run prerequisite check', () => {
+    connections.a = [{ id: 'original-account', specId: 'calendar', status: 'active', spec: { name: 'Calendar' } } as InstalledApp]
+    const environment = resolveExecutionEnvironment(app, manager)
+    connections.a[0].status = 'paused'
+
+    expect(() => validateEnvironmentConnections(environment, app, manager)).not.toThrow()
+    expect(missingConnections(app, manager, environment.spaceId!)).toEqual([
+      { id: 'calendar', name: 'Calendar', state: 'disabled' },
+    ])
+  })
+
+  it('still blocks a removed connection without silently forgetting its binding', () => {
+    connections.a = [{ id: 'original-account', specId: 'calendar', status: 'active' } as InstalledApp]
+    const environment = resolveChatEnvironment(app, manager, store, 'app-chat:person')
+    connections.a = []
+
+    expect(() => validateEnvironmentConnections(environment, app, manager, 'chat')).toThrow(/switch accounts/)
+    expect(environment.mcpBindings).toEqual({ calendar: 'original-account' })
+  })
+
+  it.each(['active', 'paused', 'error', 'needs_login'] as const)('does not accept a different original connection in state %s', status => {
+    connections.a = [{ id: 'original-account', specId: 'calendar', status: 'active' } as InstalledApp]
+    const environment = resolveChatEnvironment(app, manager, store, 'app-chat:person')
+    connections.a = [{ id: 'replacement-account', specId: 'calendar', status } as InstalledApp]
+
+    expect(() => validateEnvironmentConnections(environment, app, manager, 'chat')).toThrow(/switch accounts/)
+  })
+
   it('preserves chat inheritance without adding undeclared connections to independent tasks', () => {
     connections.a = [
       { id: 'declared', specId: 'calendar', status: 'active' } as InstalledApp,
