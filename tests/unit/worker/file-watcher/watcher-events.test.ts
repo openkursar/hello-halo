@@ -12,12 +12,12 @@ import type { ProcessedFsEvent } from '../../../../src/shared/protocol/file-watc
 
 type ParcelCallback = (err: Error | null, events: Array<{ type: 'create' | 'update' | 'delete'; path: string }>) => Promise<void>
 
-const subscriptions: Array<{ root: string; cb: ParcelCallback; ignore: string[] }> = []
+const subscriptions: Array<{ root: string; cb: ParcelCallback; ignore: string[]; backend?: string }> = []
 
 vi.mock('@parcel/watcher', () => ({
   default: {
-    subscribe: vi.fn(async (root: string, cb: ParcelCallback, opts: { ignore: string[] }) => {
-      subscriptions.push({ root, cb, ignore: opts.ignore })
+    subscribe: vi.fn(async (root: string, cb: ParcelCallback, opts: { ignore: string[]; backend?: string }) => {
+      subscriptions.push({ root, cb, ignore: opts.ignore, backend: opts.backend })
       return { unsubscribe: async () => {} }
     }),
   },
@@ -103,6 +103,27 @@ describe('symlinked space root', () => {
     await expect(subscriptions[0].cb(null, [malformed])).resolves.toBeUndefined()
     expect(errors).toHaveLength(1)
     expect(errors[0].spaceId).toBe('s1')
+  })
+})
+
+describe('backend choice', () => {
+  const realPlatform = process.platform
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true })
+  })
+
+  // The default backend probes for Watchman through `cmd.exe /c watchman`,
+  // which flashes a console window every time a space is watched again.
+  it('asks for the native backend on Windows', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    await watcher.startWatcher('s1', tmp)
+    expect(subscriptions[0].backend).toBe('windows')
+  })
+
+  it('keeps the default backend elsewhere', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    await watcher.startWatcher('s1', tmp)
+    expect(subscriptions[0].backend).toBeUndefined()
   })
 })
 

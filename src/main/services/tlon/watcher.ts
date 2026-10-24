@@ -17,6 +17,7 @@ import { existsSync, realpathSync } from 'fs'
 import { join } from 'path'
 import { CPP_LEVEL_IGNORE_DIRS } from '../../../shared/constants/ignore-patterns'
 import { isDiskRoot } from '../../../shared/disk-paths'
+import { watcherBackend } from '../../../shared/watcher-backend'
 import type { LinkedDirectory } from '../../../shared/types/tlon'
 import { getKBRawDir } from './paths'
 import { listKBs, getKB, collectIngestCandidates, checkLinkedDirAvailable } from './service'
@@ -75,6 +76,7 @@ async function subscribe(key: string, dir: string, kbId: string): Promise<void> 
       }
       scheduleScan(kbId)
     }, {
+      backend: watcherBackend(process.platform),
       // Native-level exclusion: events from top-level dependency/cache/VCS
       // directories never reach JavaScript. Nested ones (a monorepo's
       // packages/*/node_modules) still arrive but only re-arm the debounced

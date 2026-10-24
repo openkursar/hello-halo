@@ -77,7 +77,8 @@ interface SpaceCache {
   rootPath: string
   // Cache for tree structure: key = directory absolute path, value = sorted children
   treeNodes: Map<string, CachedTreeNode[]>
-  // Track loaded directories for lazy loading
+  // Directories clients listed; reconcile re-reads these. One whose listing
+  // failed has no treeNodes entry until a reconcile reads it.
   loadedDirs: Set<string>
   // Whether watcher has been requested for this space
   watcherInitialized: boolean
@@ -140,6 +141,12 @@ function removeTreeNodeDescendants(cache: SpaceCache, dirPath: string): void {
       cache.loadedDirs.delete(key)
     }
   }
+}
+
+/** The directory is not there (deleted, or now a file), as opposed to unreadable for now. */
+function isDirGone(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return code === 'ENOENT' || code === 'ENOTDIR'
 }
 
 // ============================================
@@ -571,7 +578,14 @@ export async function listArtifactsTree(
   // Cache miss: scan via worker
   console.debug(`[ArtifactCache] listArtifactsTree CACHE MISS, scanning: ${rootPath}`)
   const scannedRoot = cache.rootPath
-  const nodes = await scanTreeViaWorker(spaceId, rootPath, rootPath, 0)
+  let nodes: CachedTreeNode[]
+  try {
+    nodes = await scanTreeViaWorker(spaceId, rootPath, rootPath, 0)
+  } catch (error) {
+    // Not cached, but kept for the next reconcile (refresh, window focus) to read and send.
+    if (cache.rootPath === scannedRoot) cache.loadedDirs.add(rootPath)
+    throw error
+  }
   // The space moved to another folder during the scan; this listing is the old one's.
   if (cache.rootPath !== scannedRoot) return nodes
 
@@ -609,7 +623,14 @@ export async function loadDirectoryChildren(
   // Cache miss: scan via worker
   console.debug(`[ArtifactCache] loadDirectoryChildren CACHE MISS, scanning: ${dirPath} (depth=${depth + 1}, rootPath=${rootPath})`)
   const scannedRoot = cache.rootPath
-  const children = await scanTreeViaWorker(spaceId, dirPath, rootPath, depth + 1)
+  let children: CachedTreeNode[]
+  try {
+    children = await scanTreeViaWorker(spaceId, dirPath, rootPath, depth + 1)
+  } catch (error) {
+    // Not cached, but kept for the next reconcile (refresh, window focus) to read and send.
+    if (cache.rootPath === scannedRoot) cache.loadedDirs.add(dirPath)
+    throw error
+  }
   console.debug(`[ArtifactCache] loadDirectoryChildren scan result: ${children.length} nodes for ${dirPath}`)
   if (cache.rootPath !== scannedRoot) return children
 
@@ -718,7 +739,8 @@ async function runReconcile(spaceId: string, cache: SpaceCache, reason: string):
   const dirsToCheck = Array.from(cache.loadedDirs)
   const rootPath = cache.rootPath
   let changedDirCount = 0
-  const updatedDirs: Array<{ dirPath: string; children: CachedTreeNode[] }> = []
+  const changedDirs = new Set<string>()
+  const unreadable: Array<{ dirPath: string; error: unknown }> = []
 
   console.log(`[ArtifactCache] Reconcile run: reason=${reason}, ${dirsToCheck.length} loaded dirs, space=${spaceId}`)
 
@@ -737,32 +759,36 @@ async function runReconcile(spaceId: string, cache: SpaceCache, reason: string):
   }
 
   for (let i = 0; i < scanResults.length; i++) {
+    const dirPath = dirsToCheck[i]
+    // Removed meanwhile: by an event during the scan, or with a vanished ancestor
+    if (!cache.loadedDirs.has(dirPath)) continue
+
     const result = scanResults[i]
-    if (result.status === 'rejected') {
-      // Directory was likely deleted while we were away — clean up from cache
-      const failedDir = dirsToCheck[i]
-      const error = result.reason as Error
-      console.warn(`[ArtifactCache] Reconcile scan failed for ${failedDir}: ${error.message}. Removing from cache.`)
-      removeTreeNodeDescendants(cache, failedDir)
-      // Remove from parent's treeNodes children list
-      const parentDir = failedDir.substring(0, Math.max(failedDir.lastIndexOf('/'), failedDir.lastIndexOf('\\')))
-      if (parentDir && cache.treeNodes.has(parentDir)) {
-        const parentChildren = cache.treeNodes.get(parentDir)!
-        cache.treeNodes.set(parentDir, parentChildren.filter(n => n.path !== failedDir))
+    let freshNodes: CachedTreeNode[]
+    if (result.status === 'fulfilled') {
+      freshNodes = result.value.freshNodes
+    } else if (!isDirGone(result.reason)) {
+      // Unreadable for now (timeout, permission, busy disk, worker restart) is not
+      // a deletion: the cached listing stays, and the next reconcile reads it again.
+      unreadable.push({ dirPath, error: result.reason })
+      continue
+    } else if (dirPath === rootPath) {
+      // The space's folder itself is gone: it lists as empty and stays checked,
+      // so its files come back when it does.
+      freshNodes = []
+    } else {
+      removeTreeNodeDescendants(cache, dirPath)
+      const parentDir = getParentPath(dirPath)
+      const siblings = cache.treeNodes.get(parentDir)
+      if (siblings?.some(n => n.path === dirPath)) {
+        cache.treeNodes.set(parentDir, siblings.filter(n => n.path !== dirPath))
+        changedDirs.add(parentDir)
       }
       changedDirCount++
-      // Broadcast parent dir update so UI removes the dead entry
-      if (parentDir && cache.treeNodes.has(parentDir)) {
-        updatedDirs.push({ dirPath: parentDir, children: cache.treeNodes.get(parentDir)! })
-      }
       continue
     }
 
-    const { dirPath, freshNodes } = result.value
     const cachedNodes = cache.treeNodes.get(dirPath)
-
-    // If directory no longer has cache entry (was removed during scan), skip
-    if (!cache.loadedDirs.has(dirPath)) continue
 
     // Diff: compare cached vs fresh by building path-keyed maps
     const hasChanged = diffTreeNodes(cachedNodes, freshNodes)
@@ -782,7 +808,14 @@ async function runReconcile(spaceId: string, cache: SpaceCache, reason: string):
       }
     }
 
-    updatedDirs.push({ dirPath, children: freshNodes })
+    changedDirs.add(dirPath)
+  }
+
+  // Each changed directory is sent once, as it stands after the whole run
+  const updatedDirs: Array<{ dirPath: string; children: CachedTreeNode[] }> = []
+  for (const dirPath of changedDirs) {
+    const children = cache.treeNodes.get(dirPath)
+    if (children) updatedDirs.push({ dirPath, children })
   }
 
   // Broadcast changes through existing channel if anything changed
@@ -792,6 +825,15 @@ async function runReconcile(spaceId: string, cache: SpaceCache, reason: string):
     console.log(`[ArtifactCache] Reconciled ${changedDirCount}/${dirsToCheck.length} dirs with changes for space: ${spaceId}`)
   } else {
     console.debug(`[ArtifactCache] Reconcile complete: no drift detected (${dirsToCheck.length} dirs checked)`)
+  }
+
+  if (unreadable.length > 0) {
+    const first = unreadable[0]
+    const detail = first.error instanceof Error ? first.error.message : String(first.error)
+    console.warn(
+      `[ArtifactCache] Reconcile could not read ${unreadable.length}/${dirsToCheck.length} dirs for space ${spaceId} ` +
+      `(reason=${reason}); kept their cached listings. First: ${first.dirPath}: ${detail}`
+    )
   }
 }
 
@@ -803,7 +845,8 @@ function diffTreeNodes(
   cached: CachedTreeNode[] | undefined,
   fresh: CachedTreeNode[]
 ): boolean {
-  if (!cached) return fresh.length > 0
+  // No listing yet (its listing failed): even an empty one is news
+  if (!cached) return true
   if (cached.length !== fresh.length) return true
 
   // Build path → node map for O(n) comparison

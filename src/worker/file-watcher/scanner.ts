@@ -180,31 +180,30 @@ export function createTreeNodeFromArtifact(
 
 // --- Directory scanning ---
 
+/**
+ * A directory that cannot be read rejects with the read error and its OS
+ * `code` (ENOENT: not there), never resolves as empty: callers apply a
+ * listing as the directory's whole content.
+ */
 export async function scanDirectoryTreeShallow(
   dirPath: string,
   rootPath: string,
   depth: number,
   ig: Ignore | null
 ): Promise<CachedTreeNode[]> {
+  const entries = await fs.readdir(dirPath, { withFileTypes: true })
+  entries.sort((a, b) => {
+    if (a.isDirectory() && !b.isDirectory()) return -1
+    if (!a.isDirectory() && b.isDirectory()) return 1
+    return a.name.localeCompare(b.name)
+  })
+
   const nodes: CachedTreeNode[] = []
-
-  try {
-    const entries = await fs.readdir(dirPath, { withFileTypes: true })
-    entries.sort((a, b) => {
-      if (a.isDirectory() && !b.isDirectory()) return -1
-      if (!a.isDirectory() && b.isDirectory()) return 1
-      return a.name.localeCompare(b.name)
-    })
-
-    for (const entry of entries) {
-      if (shouldHide(entry.name)) continue
-      const entryRelative = relative(rootPath, join(dirPath, entry.name))
-      if (ig && isIgnored(ig, entryRelative)) continue
-      nodes.push(createTreeNodeFromDirent(entry, dirPath, entryRelative, depth))
-    }
-  } catch (error) {
-    console.error(`[Scanner] Failed to scan tree ${dirPath}:`, error)
+  for (const entry of entries) {
+    if (shouldHide(entry.name)) continue
+    const entryRelative = relative(rootPath, join(dirPath, entry.name))
+    if (ig && isIgnored(ig, entryRelative)) continue
+    nodes.push(createTreeNodeFromDirent(entry, dirPath, entryRelative, depth))
   }
-
   return nodes
 }
