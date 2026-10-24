@@ -175,7 +175,7 @@ npm run dev
 
 - **Open Source, läuft auf deinem eigenen Computer**: Du behältst die Kontrolle über deine Dateien und deine Arbeitsumgebung; Halo hat keinen eigenen Backend-Dienst.
 - **Austauschbare Agent-Engines**: Claude Code, Codex, unser eigenes Halo SDK (schlanker, startet schneller, auf Open-Weight-Modelle abgestimmt) und DeepSeek dsh – wähle, was passt.
-- **Dezentrale, verteilte Digitalmenschen-Teams**: Mitglieder arbeiten von verschiedenen Computern aus zusammen, ohne zentralen Server. Der Teamzustand folgt dem Ansatz des Raft-Konsensverfahrens – eine Mehrheit wählt den führenden Knoten, das Log wird pro Amtszeit repliziert, und wenn der Computer des Leaders offline geht, wird automatisch ein neuer gewählt, nie zwei gleichzeitig, sodass das Team weiterläuft.
+- **Dezentrale, verteilte Digitalmenschen-Teams**: Mitglieder arbeiten von verschiedenen Computern aus zusammen, ohne zentralen Server. Der Teamzustand folgt dem Ansatz des Raft-Konsensverfahrens – eine Mehrheit wählt den führenden Knoten, das Log wird pro Amtszeit repliziert, und wenn der Computer des Leaders offline geht, wird automatisch ein neuer gewählt, nie zwei gleichzeitig, sodass das Team weiterläuft. [So funktioniert es](https://hello-halo.cc/docs/en/advanced/team-consensus.html) (Englisch)
 - **Details**: isolierte Spaces, helles und dunkles Theme, Oberflächenzoom von 50 % bis 150 % und eine Oberfläche in 7 Sprachen.
 
 ---

@@ -175,7 +175,7 @@ npm run dev
 
 - **Open source, fonctionne sur votre propre ordinateur** : vous gardez la maîtrise de vos fichiers et de votre environnement de travail ; Halo n'a aucun service backend propre.
 - **Moteurs d'agent interchangeables** : Claude Code, Codex, notre propre Halo SDK (plus léger, plus rapide au démarrage, optimisé pour les modèles à poids ouverts) et DeepSeek dsh — choisissez celui qui vous convient.
-- **Équipes d'Humains Numériques décentralisées et distribuées** : les membres collaborent depuis différents ordinateurs, sans serveur central. L'état de l'équipe suit l'approche du consensus Raft — une majorité élit le nœud leader, le journal est répliqué par mandat, et quand l'ordinateur du leader se déconnecte, un nouveau est élu automatiquement, jamais deux à la fois, si bien que l'équipe continue de fonctionner.
+- **Équipes d'Humains Numériques décentralisées et distribuées** : les membres collaborent depuis différents ordinateurs, sans serveur central. L'état de l'équipe suit l'approche du consensus Raft — une majorité élit le nœud leader, le journal est répliqué par mandat, et quand l'ordinateur du leader se déconnecte, un nouveau est élu automatiquement, jamais deux à la fois, si bien que l'équipe continue de fonctionner. [Comment ça marche](https://hello-halo.cc/docs/en/advanced/team-consensus.html) (en anglais)
 - **Détails** : Spaces isolés, thèmes clair et sombre, zoom de l'interface de 50 % à 150 % et interface disponible en 7 langues.
 
 ---
