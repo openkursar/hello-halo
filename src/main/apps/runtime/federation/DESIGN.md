@@ -394,7 +394,43 @@ Shared per-node state (all keyed by officeId): `hosted`, `joined`,
 
 - **Lifecycle** — `hostOffice` / `joinOffice` build a `Federation` (link +
   coordinator + optional M2 authority + optional gateway attach); `teardownOffice`
-  (keeps the re-join record) vs `leaveOffice` (forgets it).
+  (keeps the re-join record) vs `leaveOffice` (forgets it). `joinOffice` starts
+  with `teardownOffice` (a re-join replaces what this node runs for the office),
+  so it is never called for an office this node hosts: `joinTeamOffice` refuses
+  one (`OWN_TEAM`). Otherwise the hosting stops, and with M2 this node grants
+  itself the join and its roster rewrites the team's `host_node_id` to its own
+  id — a read-only copy of its own team, deleted by Leave.
+- **Leaving, and taking members out (joiner)** — The re-join record's bring set
+  is what this node keeps in the office: a join bringing more adds to it, and
+  only an exit drops from it. Every exit of a member of this node that this node
+  hears of — taken out here (`withdrawMembers`) or removed by the authority
+  (`member-removed`) — passes `forgetInJoinRequest`. It adds the member to the
+  JoinedOffice's in-memory `departed` set and drops it from both copies of the
+  join-request this node sends again: the manager's (reconnect, re-enroll) and
+  the coordinator's (`rememberJoinRequest`; its answer to a host's
+  `rejoin-request` and to a heartbeat from a host it had confirmed offline). A
+  host holding a still-valid invite admits whatever a join-request names. A
+  member removed while this node was offline is not heard of, so its next join
+  brings it back (pre-existing; nothing in the join tells the two apart).
+  `withdrawMembers` sends the `member-leave` every build on this protocol
+  version handles, with a subset: the authority removes only those and keeps a
+  node that still has others. The local rows go when its roster says so. It
+  answers a `WithdrawOutcome`. What stays is counted without `departed` (rows
+  still shown for members already on their way out); when nothing would stay it
+  sends nothing and answers `last-members`, and the caller leaves instead, so no
+  node is left in an office with no member of its own. It sends nothing while
+  this node's join is refused, while the authority is confirmed offline, and
+  once the office has had an election (authority term > 0, whoever serves): an
+  elected authority applies a member-leave to its own copy only (Known gaps), so
+  the rest of the office would keep listing the member. `signalLeave` names
+  every member the roster has as this node's, `departed` included: a removal may
+  never have arrived. `departed` also rides into `materializeJoinedOffice`, so a
+  roster that still lists a member that left neither gives back its kept duty
+  nor uses it up (apps/team DESIGN). No frame or field was added. A host on an
+  earlier build evicts a relayed joiner's gateway session on every member-leave,
+  so there a withdraw drops the joiner's other members for the second or so its
+  client takes to reconnect; this build evicts only a node that took all its
+  members out.
 - **Inbound routing + origin assertions** — `handleHostInbound`,
   `handleGatewayInbound`, `handleJoinedInbound`. Every inbound frame is checked:
   its inner `officeId` must match the session's credentialed office, and its
@@ -554,7 +590,10 @@ roster, no `member-status`, no `member-removed`, no liveness re-baseline.
 gated on a hosted office, and the elected node stays a joined office. Run state
 and membership changes then reach joiners only through board replication, so a
 roster card can show a stale run state. This predates the current traffic
-rules; live streams after an election do follow them (`fanOutStream`).
+rules; live streams after an election do follow them (`fanOutStream`). Because
+a membership change stays on the elected node, taking one member out is refused
+once the office has had an election (`withdrawMembers` → `elected-authority`);
+a whole leave from such an office is not, and has the same limit.
 
 Intended fix (not implemented):
 - **Promote on win, demote on handover.** Replace the hosted-only gates with one

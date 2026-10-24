@@ -261,6 +261,12 @@ export interface FederationCoordinator {
   pendingWakeAdmissions(): number
   /** Client-side helper: send a join-request to the host via the link. */
   requestJoin(req: JoinRequest): void
+  /**
+   * Joiner role: replace the join-request the recovery paths re-send (a host's
+   * rejoin-request, a heartbeat from a host confirmed offline) without sending
+   * it, so a member that left is not brought back with it.
+   */
+  rememberJoinRequest(req: JoinRequest): void
   /** Broadcast one heartbeat for this node. Exposed for deterministic tests. */
   sendHeartbeat(): void
   /**
@@ -369,7 +375,8 @@ export function createFederationCoordinator(
 
   // Joiner-side: the last join-request this node sent, so it can re-send on a
   // host `rejoin-request` (or any future self-driven rejoin) without the manager
-  // re-supplying it. Set by requestJoin; null on a pure host coordinator.
+  // re-supplying it. Set by requestJoin, narrowed by rememberJoinRequest; null
+  // on a pure host coordinator.
   let lastJoinRequest: JoinRequest | null = null
 
   // Joiner-side latch: every JoinReject reason is non-retryable, so once a
@@ -1388,6 +1395,10 @@ export function createFederationCoordinator(
     link.send(req.fromNode, req) // peers resolve the host; in M1a the link routes it.
   }
 
+  function rememberJoinRequest(req: JoinRequest): void {
+    lastJoinRequest = req
+  }
+
   function start(): void {
     link.onMessage(onMessage)
     if (heartbeatTimer) return
@@ -1418,6 +1429,7 @@ export function createFederationCoordinator(
     stop,
     pendingWakeAdmissions: () => pendingAdmissions.size,
     requestJoin,
+    rememberJoinRequest,
     sendHeartbeat,
     sweepPresence,
     notifyResume,

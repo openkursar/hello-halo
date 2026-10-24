@@ -856,6 +856,11 @@ async function initPlatformAndApps(): Promise<void> {
             })
           }
         },
+        // Joiner-side: members back in an office with the duty kept when they
+        // left, which the office does not have; the owner's profile write tells it.
+        onDutiesRestored: (officeId, appIds) => {
+          for (const appId of appIds) publishMemberProfile(officeId, appId)
+        },
       })
       setFederationManager(federationManager)
       // Joined offices receive only the live member streams a local viewer shows.

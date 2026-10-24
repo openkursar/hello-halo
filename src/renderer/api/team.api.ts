@@ -285,9 +285,12 @@ export const teamApi = {
     return { success: false, error: 'DESKTOP_ONLY' }
   },
 
-  /** Leave a joined office, removing this node's local shadow of it (joiner). */
-  teamLeaveOffice: async (officeId: string): Promise<ApiResponse> => {
-    if (isElectron()) return window.halo.teamLeaveOffice({ officeId })
+  /**
+   * Leave a joined office, removing this node's local shadow of it (joiner).
+   * With `appIds`, only those of this node's members leave and the node stays.
+   */
+  teamLeaveOffice: async (officeId: string, appIds?: string[]): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.teamLeaveOffice({ officeId, ...(appIds ? { appIds } : {}) })
     return { success: false, error: 'DESKTOP_ONLY' }
   },
 

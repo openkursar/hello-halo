@@ -276,7 +276,10 @@ export const MODULE: RouteModuleMeta = {
       summary: 'Leave a team hosted on someone else\'s computer',
       body: '{}',
       returns: '{success:true} | {success:false,error}',
-      notes: 'Only for a joined team (hostNodeId set in GET /api/teams). The members this computer brought leave with it; coming back needs a new invite from the host. Confirm with the user first.',
+      notes: [
+        'Only for a team joined from another computer (hostNodeId set in GET /api/teams). All of this computer\'s digital humans in it leave with it; their duties there are kept on this computer and come back if they join the same team again, which needs a new invite from the host. Confirm with the user first.',
+        'NOT_JOINED: this computer has no team joined from elsewhere with that id; nothing changed. A team it hosts is not left but dissolved (DELETE /api/teams/:teamId), which deletes much more — ask the user, never switch to it on your own.',
+      ].join('\n'),
       impact: 'irreversible',
     },
     'GET /api/teams/:teamId/federation/presence': {

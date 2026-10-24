@@ -281,6 +281,12 @@ export interface FederationManagerDeps {
    * manager has already verified each appId is owned by the leaving node.
    */
   onMemberLeft?: (officeId: string, appIds: string[]) => void
+  /**
+   * Joiner role: members of this node rejoined a joined office and took back
+   * the duty this node kept when they left (see `TeamStore.materializeJoinedOffice`).
+   * Only the owner publishes a member's profile, so bootstrap publishes theirs.
+   */
+  onDutiesRestored?: (officeId: string, appIds: string[]) => void
 
   // ── M2 authority/replication/resilience (all optional; absent → M1b behaviour) ──
   /** Durable replication log + tenure water marks (app_federation). Enables M2. */
@@ -458,6 +464,27 @@ export interface HistoryFetchResult {
   stale: boolean
 }
 
+/**
+ * What `withdrawMembers` did. Only `sent` sent anything.
+ * - `last-members`: they are all this node still has in the office, so taking
+ *   them out is leaving it; the caller leaves instead.
+ * - `elected-authority`: the office has been served by an elected authority
+ *   since its first host was lost. Such an authority applies a member-leave to
+ *   its own copy only (it projects no roster), so the rest of the office would
+ *   keep the member. A stopgap until governance egress follows the current
+ *   authority rather than the first host (GitHub #468).
+ * - `authority-offline`: the authority is confirmed offline.
+ * - `refused`: the office refuses this node's join.
+ * - `not-joined`: no joined office here to send it on.
+ */
+export type WithdrawOutcome =
+  | 'sent'
+  | 'last-members'
+  | 'elected-authority'
+  | 'authority-offline'
+  | 'refused'
+  | 'not-joined'
+
 export interface FederationManager {
   /** Create (or return) the host-role coordinator for an office this node authorities. */
   hostOffice(officeId: string): Federation
@@ -468,10 +495,17 @@ export interface FederationManager {
   /** Stop + tear down a hosted or joined office. */
   leaveOffice(officeId: string): void
   /**
-   * Joiner role: tell the host this node is leaving (drop the members it brought)
-   * before tearing the joined office down locally, so the host roster converges.
+   * Joiner role: tell the host this node is leaving (drop every member it has
+   * there) before tearing the joined office down locally, so the host roster
+   * converges.
    */
   signalLeave(officeId: string): void
+  /**
+   * Joiner role: take some of this node's members out of a joined office while
+   * staying in it. The authority removes them and the roster converges; neither
+   * the re-join record nor a join-request this node re-sends brings them back.
+   */
+  withdrawMembers(officeId: string, appIds: string[]): WithdrawOutcome
   getOffice(officeId: string): Federation | null
   listHostedOffices(): string[]
   listJoinedOffices(): string[]
@@ -752,6 +786,13 @@ interface JoinedOffice {
    *  newly-elected authority (roster re-entry after a host loss). */
   joinRequest?: JoinRequest
   /**
+   * Members that left the office since it was joined here: taken out by this
+   * node, or removed by its authority (only this node's own are looked up). In
+   * memory only — a join builds a new JoinedOffice, and nothing short of a join
+   * brings a member back.
+   */
+  departed: Set<string>
+  /**
    * Set from a refused join until a grant. This node is not in the office
    * meanwhile: its presence FSM judges nobody (silence from an office that
    * refuses us must not start an election), the user is told once, and the log
@@ -847,6 +888,9 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   // Persist (or refresh) the re-join record for a joined office so a restart can
   // reconnect without the user re-entering the invite. The invite token is an
   // at-rest secret; the store envelope-encodes it on write.
+  //
+  // A join bringing more members adds to the members already there: the office
+  // keeps them, so the record must too (only an explicit exit drops one).
   function writeJoinedConnection(
     officeId: string,
     serverUrl: string,
@@ -856,15 +900,34 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     const existing = deps.federationStore
       .listJoinedOfficeConnections()
       .find((c) => c.officeId === officeId)
+    const bringAppIds = [...new Set([...(existing?.bringAppIds ?? []), ...bringMembers.map((m) => m.appId)])]
+    if (bringAppIds.length === 0) return
     const now = Date.now()
     deps.federationStore.upsertJoinedOfficeConnection({
       officeId,
       serverUrl,
       inviteToken,
-      bringAppIds: bringMembers.map((m) => m.appId),
+      bringAppIds,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     })
+  }
+
+  // Every exit this node hears of passes here: a member it took out, or any
+  // member the authority removed. The join-request this node re-sends — the
+  // manager's copy for a reconnect or re-enroll and the coordinator's for its
+  // recovery paths — must not bring one back: a host still holding a valid
+  // invite admits it again.
+  function forgetInJoinRequest(officeId: string, appIds: readonly string[]): void {
+    const live = joined.get(officeId)
+    if (!live) return
+    for (const appId of appIds) live.departed.add(appId)
+    if (!live.joinRequest) return
+    live.joinRequest = {
+      ...live.joinRequest,
+      bringMembers: live.joinRequest.bringMembers.filter((m) => !appIds.includes(m.appId)),
+    }
+    live.federation.coordinator.rememberJoinRequest(live.joinRequest)
   }
 
   // Remove one brought app from a joined office's re-join record. When that
@@ -872,6 +935,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   // delete the record so the next start does not auto-rejoin. Returns whether
   // the app was in this node's bring set (i.e. one of OUR members was removed).
   function dropBroughtApp(officeId: string, appId: string): boolean {
+    forgetInJoinRequest(officeId, [appId])
     const conn = deps.federationStore
       .listJoinedOfficeConnections()
       .find((c) => c.officeId === officeId)
@@ -2171,9 +2235,6 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     }
     console.log(`${LOG_TAG} member-leave from=${from} office=${officeId} apps=${owned.length}`)
     deps.onMemberLeft?.(officeId, owned)
-    // Relay cleanup: the departed node's gateway session serves nothing now.
-    const host = hosted.get(officeId)
-    if (host?.nodeToGateway.delete(from)) host.gateway?.evict(from)
     // Committed roster: a node that took ALL its members out has left the
     // office — replicate the departure and drop its ledger row, so the quorum
     // denominator stops counting it (a stale row would inflate the majority a
@@ -2182,19 +2243,34 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     if (ownedTotal.every((m) => owned.includes(m.appId))) {
       getOfficeAuthority(officeId)?.replicateNodeLeft(from)
       deps.federationStore.removeNode(officeId, from)
+      // Relay cleanup: the departed node's gateway session serves nothing now.
+      // One that keeps members keeps its session (it carries their traffic).
+      const host = hosted.get(officeId)
+      if (host?.nodeToGateway.delete(from)) host.gateway?.evict(from)
     }
+  }
+
+  /** Members the office's roster has as this node's, as materialized here. */
+  function ownMemberIds(officeId: string): string[] {
+    return deps.teamStore
+      .listMembersByTeam(officeId)
+      .filter((m) => m.ownerNodeId === SELF_NODE_ID)
+      .map((m) => m.appId)
   }
 
   /**
    * Joiner role: announce departure to the host before tearing down locally, so
    * the host removes the members this node brought and the roster converges on
    * both sides. Broadcasts over the joined link (its single peer is the host).
+   * Also names every member the roster has as ours: the re-join record can lack
+   * one (an older record kept only the latest join's members), and the person
+   * leaving was shown the roster's.
    */
   function signalLeave(officeId: string): void {
     const join = joined.get(officeId)
     if (!join) return
     const conn = deps.federationStore.listJoinedOfficeConnections().find((c) => c.officeId === officeId)
-    const appIds = conn?.bringAppIds ?? []
+    const appIds = [...new Set([...(conn?.bringAppIds ?? []), ...ownMemberIds(officeId)])]
     if (appIds.length === 0) return
     join.federation.link.broadcast({
       kind: 'member-leave',
@@ -2203,6 +2279,52 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       appIds,
     })
     console.log(`${LOG_TAG} signalLeave office=${officeId} apps=${appIds.length}`)
+  }
+
+  /**
+   * Joiner role: some members leave, this node stays. The same `member-leave`
+   * every build already handles: the authority removes only the members named
+   * and keeps a node that still has others. The local rows go when its roster
+   * says so, so a removal that never arrives leaves the member visibly in the
+   * team rather than gone here and back with the next roster.
+   *
+   * What stays is counted without the members already on their way out, whose
+   * rows the roster may still show: taking out the rest of them is leaving.
+   */
+  function withdrawMembers(officeId: string, appIds: string[]): WithdrawOutcome {
+    const join = joined.get(officeId)
+    if (!join) {
+      console.warn(`${LOG_TAG} withdraw refused office=${officeId} apps=${appIds.length} reason=not-joined`)
+      return 'not-joined'
+    }
+    const conn = deps.federationStore.listJoinedOfficeConnections().find((c) => c.officeId === officeId)
+    const kept = [...new Set([...(conn?.bringAppIds ?? []), ...ownMemberIds(officeId)])]
+      .filter((id) => !join.departed.has(id) && !appIds.includes(id))
+    if (kept.length === 0) return 'last-members'
+    const authority = believedAuthorityNode(officeId)
+    const refused: WithdrawOutcome | null = join.refusal
+      ? 'refused'
+      : authority === deps.getLocalNodeId() || (join.authority?.getTerm() ?? 0) > 0
+        ? 'elected-authority'
+        : !authority
+          ? 'not-joined'
+          : deps.federationStore.getNode(officeId, authority)?.status === 'offline'
+            ? 'authority-offline'
+            : null
+    if (refused) {
+      console.warn(`${LOG_TAG} withdraw refused office=${officeId} apps=${appIds.length} reason=${refused}`)
+      return refused
+    }
+    if (conn) deps.federationStore.upsertJoinedOfficeConnection({ ...conn, bringAppIds: kept, updatedAt: Date.now() })
+    forgetInJoinRequest(officeId, appIds)
+    join.federation.link.broadcast({
+      kind: 'member-leave',
+      officeId,
+      fromNode: deps.getLocalNodeId(),
+      appIds,
+    })
+    console.log(`${LOG_TAG} withdraw office=${officeId} apps=${appIds.length} kept=${kept.length} authority=${authority}`)
+    return 'sent'
   }
 
   /**
@@ -2537,7 +2659,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           // frames resume: re-baseline presence with a grace window (same
           // mechanism as OS resume) before re-entering the roster.
           live.federation.coordinator.notifyResume()
-          live.federation.coordinator.requestJoin(request)
+          live.federation.coordinator.requestJoin(live.joinRequest ?? request)
         },
       })
 
@@ -2615,7 +2737,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           // Persist the re-join record so a restart reconnects without re-prompting
           // for the invite. Written on grant (membership confirmed); refreshed on a
           // re-grant. Removed only on an explicit exit (leave / dissolved / kicked).
-          writeJoinedConnection(officeId, serverUrl, credentialToken, bringMembers)
+          writeJoinedConnection(officeId, serverUrl, credentialToken, live?.joinRequest?.bringMembers ?? bringMembers)
           // (Ctrl-feed subscribe to the host happens in onRoster, where the host's
           // node id is reliably known — the shadow team is not yet materialized at
           // grant time.)
@@ -2659,11 +2781,16 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
             rosterEntry.rosterVersion = version ?? null
             rosterEntry.rosterRequested = false
           }
-          deps.teamStore.materializeJoinedOffice({
+          const { dutiesRestored } = deps.teamStore.materializeJoinedOffice({
             hostNodeId: snapshot.team.hostNodeId,
             selfNodeId: selfContext.selfNodeId,
             snapshot,
+            departed: rosterEntry?.departed,
           })
+          if (dutiesRestored.length > 0) {
+            console.log(`${LOG_TAG} rejoined members took back their duty office=${officeId} apps=${dutiesRestored.length}`)
+            deps.onDutiesRestored?.(officeId, dutiesRestored)
+          }
           // Members' owners are known from here on; a shown session skipped before can subscribe now.
           setWatchedSessions(watchedSessions)
           // Reliable ctrl-plane: subscribe to the host's ctrl feed here (not at
@@ -2803,6 +2930,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         authority,
         ctrlFeed,
         sessionFeed,
+        departed: new Set(),
         rosterVersion: null,
         rosterRequested: false,
         streamRecipients: createStreamRecipients(),
@@ -3705,6 +3833,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     getRemoteMemberSpaceId: (appId) => remoteMemberSpaceIds.get(appId),
     sendWakeToMember,
     signalLeave,
+    withdrawMembers,
     registerTurnComplete,
     isMemberRemoteBusy: (appId) => remoteBusy.isBusy(appId),
     isMemberReachable,

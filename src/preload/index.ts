@@ -687,8 +687,8 @@ export interface HaloAPI extends BrowserHostBridge {
   teamRevokeInvite: (input: { jti: string }) => Promise<IpcResponse>
   /** Remote office: join an office hosted elsewhere, bringing local members (joiner). */
   teamJoinOffice: (input: { officeId: string; serverUrl: string; inviteToken: string; bringAppIds: string[] }) => Promise<IpcResponse>
-  /** Remote office: leave a joined office, removing the local shadow (joiner). */
-  teamLeaveOffice: (input: { officeId: string }) => Promise<IpcResponse>
+  /** Remote office: leave a joined office, removing the local shadow (joiner); with `appIds`, take only those members out. */
+  teamLeaveOffice: (input: { officeId: string; appIds?: string[] }) => Promise<IpcResponse>
   /** Send a message to a remote member via the office owner (team wake). */
   teamSendToMember: (input: { teamId: string; appId: string; epochId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; spaceId?: string; references?: ContentReference[] }) => Promise<IpcResponse>
   /** Stop a member's running turn, wherever that member runs. */

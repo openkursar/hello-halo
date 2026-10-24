@@ -7,7 +7,8 @@
  *     through the gateway (nodeToGateway learned from the inbound frame);
  *   - unicast prefers a direct client mapping and falls back to the gateway;
  *   - broadcast fans out to BOTH local clients and the gateway (to: null);
- *   - a member-leave from a gateway node drives gw:evict.
+ *   - a member-leave taking a gateway node's last member drives gw:evict; one
+ *     that leaves it other members keeps its session.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -80,6 +81,10 @@ describe('FederationManager gateway routing (fake gateway over real ws)', () => 
       getLocalNodeId: () => NODE_A,
       getGatewayUrl: () => gateway.url,
       makeAuthProof: (nonce) => ({ method: 'device-key', identityId: NODE_A, challenge: nonce }),
+      // The host's removal path, as bootstrap runs it (team service → store).
+      onMemberLeft: (officeId, appIds) => {
+        for (const appId of appIds) teamStore.removeMember(officeId, appId)
+      },
     })
     manager.hostOffice(OFFICE)
     await waitFor(() => gateway.attachCount() >= 1)
@@ -241,6 +246,34 @@ describe('FederationManager gateway routing (fake gateway over real ws)', () => 
 
     await waitFor(() => gateway.evictions.length >= 1)
     expect(gateway.evictions[0]).toBe(NODE_B)
+  })
+
+  it('a member-leave that leaves a gateway node other members keeps its session', async () => {
+    gateway.relayToHost({
+      kind: 'join-request',
+      officeId: OFFICE,
+      fromNode: NODE_B,
+      identityId: 'identity-b',
+      displayName: 'Node B',
+      credentialToken: VALID_TOKEN,
+      bringMembers: [
+        { appId: 'app-b-1', memberName: 'b-writer', role: 'Writer', spaceId: 'space-b-1' },
+        { appId: 'app-b-2', memberName: 'b-tester', role: 'Tester', spaceId: 'space-b-2' },
+      ],
+    })
+    await waitFor(() => teamStore.listMembersByTeam(OFFICE).length === 2)
+    expect(manager.isMemberReachable('app-b-2', OFFICE)).toBe(true)
+
+    gateway.relayToHost({ kind: 'member-leave', officeId: OFFICE, fromNode: NODE_B, appIds: ['app-b-1'] })
+
+    await waitFor(() => teamStore.getMember(OFFICE, 'app-b-1') === null)
+    expect(teamStore.listMembersByTeam(OFFICE).map((m) => m.appId)).toEqual(['app-b-2'])
+    expect(federationStore.getNode(OFFICE, NODE_B)).not.toBeNull()
+    // Its other member stays reachable: no eviction, so nothing sent to it is
+    // reported "not delivered" while the session would have been gone.
+    await new Promise((r) => setTimeout(r, 100))
+    expect(gateway.evictions).toEqual([])
+    expect(manager.isMemberReachable('app-b-2', OFFICE)).toBe(true)
   })
 
   describe('a node the office refused, over the relay', () => {

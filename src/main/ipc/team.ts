@@ -332,10 +332,13 @@ export function registerTeamIpc(): void {
     }
   )
 
-  // ── Remote office: leave a joined office (joiner) ─────────────────────────
-  ipcMain.handle(TEAM_IPC.leaveOffice, async (_e, input: { officeId: string }) => {
+  // ── Remote office: leave a joined office, or take some members out (joiner) ──
+  ipcMain.handle(TEAM_IPC.leaveOffice, async (_e, input: { officeId: string; appIds?: string[] }) => {
     try {
-      return await leaveTeamOffice(input.officeId)
+      const appIds = Array.isArray(input.appIds)
+        ? input.appIds.filter((id): id is string => typeof id === 'string')
+        : undefined
+      return await leaveTeamOffice(input.officeId, appIds)
     } catch (err) {
       const e = err as Error
       console.error('[TeamIPC] team:leave-office error:', e.message)

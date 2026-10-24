@@ -82,6 +82,7 @@ export type {
   FederationManager,
   FederationManagerDeps,
   JoinOfficeParams,
+  WithdrawOutcome,
 } from './manager'
 export type { OfficeCredentialLike } from './deps'
 export type {

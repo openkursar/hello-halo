@@ -15,7 +15,9 @@
  */
 
 import type Database from 'better-sqlite3'
+import { dirname, join } from 'path'
 import { workItemFromRow, applyWorkItem, updateWorkItem } from './work-items'
+import { createRetainedDuties, type RetainedDuties } from './retained-duties'
 import type { TeamWorkItem } from '../../../shared/apps/team-types'
 import type {
   Team,
@@ -61,6 +63,8 @@ import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-poli
  * from. Unset would grant a request from another computer everything.
  */
 const JOINED_MEMBER_POLICY_JSON = JSON.stringify(capabilityPolicyFromPreset('read_only'))
+
+const RETAINED_DUTIES_FILE = 'team-retained-duties.json'
 
 // ── Row <-> Domain Mapping ──
 
@@ -339,7 +343,12 @@ export class TeamStore implements ITeamStore {
     Map<string, { status: TeamMemberRuntimeStatus; taskTitle?: string; busy?: RosterBusyEntry[] }>
   >()
 
+  /** Duties of members that left a joined office, kept beside the database file. */
+  private readonly retainedDuties: RetainedDuties
+
   constructor(private readonly db: Database.Database) {
+    this.retainedDuties = createRetainedDuties(db.memory ? null : join(dirname(db.name), RETAINED_DUTIES_FILE))
+
     // ── teams ─────────────────────────────────────
     this.stmtInsertTeam = db.prepare(`
       INSERT INTO teams (
@@ -746,6 +755,16 @@ export class TeamStore implements ITeamStore {
     return removed
   }
 
+  /**
+   * Keep the duties of members this node is taking out of a joined office, so
+   * `materializeJoinedOffice` can give each back when it rejoins that office.
+   * An empty duty keeps nothing and forgets one kept before. While the member
+   * still has a row, its entry follows the row (`updateMemberFields`).
+   */
+  retainMemberDuties(teamId: string, duties: ReadonlyArray<{ appId: string; duty: string | null | undefined }>): number {
+    return this.retainedDuties.keep(teamId, duties)
+  }
+
   // ── team_members ────────────────────────────────
 
   /**
@@ -808,9 +827,12 @@ export class TeamStore implements ITeamStore {
       params.awaiting_decision = fields.awaitingDecision ? 1 : 0
     }
     if (sets.length === 0) return
-    this.db
+    const { changes } = this.db
       .prepare(`UPDATE team_members SET ${sets.join(', ')} WHERE team_id = @team_id AND app_id = @app_id`)
       .run(params)
+    // A duty kept for a member that has not left yet (its removal is on the
+    // way, or never arrived) must not hand back an older text than the row's.
+    if (fields.duty !== undefined && changes > 0) this.retainedDuties.follow(teamId, appId, fields.duty)
   }
 
   /** Flip a member's lead flag (used when an existing member is named lead). */
@@ -860,15 +882,23 @@ export class TeamStore implements ITeamStore {
    * is remapped to local-relative — a member owned by THIS node (ownerNodeId ===
    * selfNodeId) is stored as SELF/origin=local so this node's RelayCapture sees
    * it as its own; every other member is stored remote with the absolute owner.
+   *
+   * A member of this node that (re)enters the office takes back the duty
+   * retained when it left (`retainMemberDuties`); those whose duty that changes
+   * are returned so the caller can tell the office. One in `departed` has not
+   * re-entered: the roster listing it is behind.
    */
   materializeJoinedOffice(input: {
     hostNodeId: string
     selfNodeId: string
     snapshot: JoinedOfficeSnapshot
-  }): void {
-    const { hostNodeId, selfNodeId, snapshot } = input
+    departed?: ReadonlySet<string>
+  }): { dutiesRestored: string[] } {
+    const { hostNodeId, selfNodeId, snapshot, departed } = input
     const officeId = snapshot.team.id
     const now = Date.now()
+    const dutiesRestored: string[] = []
+    const reentered: string[] = []
 
     // The transient runtime-status overlay for this office, rebuilt from the
     // snapshot and published after the row apply succeeds (so a failed apply does
@@ -968,6 +998,17 @@ export class TeamStore implements ITeamStore {
       for (const m of snapshot.members) {
         const ownedHere = m.ownerNodeId === selfNodeId
         const mine = ownedHere ? ownRows.get(m.appId) : undefined
+        let duty = mine ? mine.duty : m.duty ?? null
+        if (ownedHere && !mine && !departed?.has(m.appId)) {
+          reentered.push(m.appId)
+          // Only this node writes its members' duties and the kept copy followed
+          // the row until it left, so a copy the office still holds is never newer.
+          const retained = this.retainedDuties.peek(officeId, m.appId)
+          if (retained && retained !== duty) {
+            duty = retained
+            dutiesRestored.push(m.appId)
+          }
+        }
         if ((m.status && m.status !== 'idle') || (m.busy && m.busy.length > 0)) {
           runtime.set(m.appId, {
             status: m.status ?? 'idle',
@@ -989,7 +1030,7 @@ export class TeamStore implements ITeamStore {
           member_identity: ownedHere ? null : m.memberIdentity,
           scope_json: null,
           owner_display_name: ownedHere ? null : m.ownerDisplayName ?? null,
-          duty: mine ? mine.duty : m.duty ?? null,
+          duty,
           delegated_policy_json: mine ? mine.delegated_policy_json : ownedHere ? JOINED_MEMBER_POLICY_JSON : null,
           accepts_checks: mine ? mine.accepts_checks : m.acceptsChecks === false ? 0 : 1,
           // Only this machine can answer its own members, so its own bit is the
@@ -1011,6 +1052,8 @@ export class TeamStore implements ITeamStore {
     })
     apply()
     this.joinedMemberRuntime.set(officeId, runtime)
+    if (reentered.length > 0) this.retainedDuties.release(officeId, reentered)
+    return { dutiesRestored }
   }
 
   getJoinedMemberStatuses(teamId: string): Map<string, TeamMemberRuntimeStatus> {

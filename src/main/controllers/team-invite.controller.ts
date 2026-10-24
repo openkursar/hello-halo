@@ -23,7 +23,7 @@ import {
 } from '../http/auth/office-credential'
 import { broadcastToAll } from '../http/websocket'
 import { sendToRenderer } from '../foundation/window.service'
-import { TEAM_EVENTS } from '../../shared/apps/team-types'
+import { TEAM_EVENTS, isRemoteMember } from '../../shared/apps/team-types'
 import type { JoinMember } from '../apps/runtime/federation/types'
 import type { OfficeScope } from '../apps/federation/index'
 import type { TeamUpdatedEvent, TeamVersionMismatch } from '../../shared/apps/team-types'
@@ -120,11 +120,21 @@ export interface JoinOfficeInput {
  * Join an office hosted elsewhere, bringing local digital humans. Resolves each
  * appId to a JoinMember (name + spaceId from the installed app), then drives the
  * federation join handshake. Unknown appIds are skipped; an empty result is a
- * caller error (NO_MEMBERS).
+ * caller error (NO_MEMBERS). A team this computer hosts is refused (OWN_TEAM).
  */
 export async function joinTeamOffice(
   input: JoinOfficeInput
 ): Promise<{ success: true } | { success: false; error: string; detail?: TeamVersionMismatch }> {
+  // A join first tears down what this computer runs for the office (a re-join
+  // replaces it). For its own team that is the hosting: every other computer is
+  // cut off, and this computer then grants itself the join, which rewrites the
+  // team as hosted elsewhere — read-only here, deleted by a Leave.
+  const team = getTeamStore()?.getTeamById(input.officeId)
+  if (team && team.hostNodeId == null) {
+    console.warn(`${LOG_TAG} join refused office=${input.officeId}: this computer's own team, hosted here`)
+    return { success: false, error: 'OWN_TEAM' }
+  }
+
   const appManager = getAppManager()
   const bringMembers: JoinMember[] = []
   for (const appId of input.bringAppIds) {
@@ -160,22 +170,69 @@ export async function joinTeamOffice(
 
 /**
  * Leave a joined office: drop the outbound federation connection and remove the
- * local shadow team row this node materialized for the office. Only meaningful
- * for a joined office (hostNodeId set); for a locally-hosted office this is a
- * no-op on the federation side and dissolve is the correct action instead. The
- * removal is broadcast so the office disappears from every connected view.
+ * local shadow team row this node materialized for the office. The removal is
+ * broadcast so the office disappears from every connected view. Only a team
+ * joined from elsewhere (hostNodeId set) can be left: one this node hosts is
+ * refused (NOT_JOINED) — its host dissolves it, and a leave would stop hosting
+ * it and delete it without telling anyone who joined.
+ *
+ * With `appIds`, only those of this node's members leave and the node stays —
+ * unless they are all it has there, which is leaving. Either way the duty of
+ * each member that leaves is kept here, so rejoining the same team gives it
+ * back: on both machines it lived only in the rows that leaving deletes. Which
+ * of the two a request is gets decided here, when it runs: a dialog opened
+ * earlier may name a member that has left since, or the last one left.
  */
 export async function leaveTeamOffice(
-  officeId: string
+  officeId: string,
+  appIds?: string[]
 ): Promise<{ success: true } | { success: false; error: string }> {
   const store = getTeamStore()
   if (!store) {
     return { success: false, error: 'TEAM_STORE_UNAVAILABLE' }
   }
+  const team = store.getTeamById(officeId)
+  if (team?.hostNodeId == null) {
+    console.warn(
+      `${LOG_TAG} ${appIds ? 'withdraw' : 'leave'} refused office=${officeId}: ` +
+        (team ? 'hosted here; a host dissolves its team instead' : 'no such team here')
+    )
+    return { success: false, error: 'NOT_JOINED' }
+  }
+  const manager = getFederationManager()
+  const own = store.listMembersByTeam(officeId).filter((m) => !isRemoteMember(m))
+
+  if (appIds) {
+    const leaving = own.filter((m) => appIds.includes(m.appId))
+    if (leaving.length === 0) {
+      console.warn(`${LOG_TAG} withdraw refused office=${officeId}: none of apps=${appIds.length} is this computer's`)
+      return { success: false, error: 'MEMBER_NOT_FOUND' }
+    }
+    if (leaving.length < own.length) {
+      // Read before sending: the office's answer removes the rows.
+      const duties = leaving.map((m) => ({ appId: m.appId, duty: m.duty }))
+      if (!manager) {
+        console.warn(`${LOG_TAG} withdraw refused office=${officeId}: federation manager unavailable`)
+        return { success: false, error: 'OFFICE_UNREACHABLE' }
+      }
+      const outcome = manager.withdrawMembers(officeId, leaving.map((m) => m.appId))
+      if (outcome === 'sent') {
+        const kept = store.retainMemberDuties(officeId, duties)
+        console.log(`${LOG_TAG} withdrew from office=${officeId} apps=${leaving.length} dutiesKept=${kept}`)
+        return { success: true }
+      }
+      if (outcome === 'elected-authority') return { success: false, error: 'ELECTED_AUTHORITY' }
+      if (outcome !== 'last-members') return { success: false, error: 'OFFICE_UNREACHABLE' }
+      // The others are already on their way out: this is leaving the team.
+      console.log(`${LOG_TAG} withdraw of apps=${leaving.length} takes the last members out; leaving office=${officeId}`)
+    }
+  }
+
+  // Members already on their way out included: their rows are still here.
+  const kept = store.retainMemberDuties(officeId, own.map((m) => ({ appId: m.appId, duty: m.duty })))
 
   // Tell the host we are leaving (drop the members we brought) BEFORE tearing the
   // connection down, so the host roster converges instead of keeping zombies.
-  const manager = getFederationManager()
   manager?.signalLeave(officeId)
   manager?.leaveOffice(officeId)
 
@@ -186,6 +243,6 @@ export async function leaveTeamOffice(
   broadcastToAll(TEAM_EVENTS.updated, event as unknown as Record<string, unknown>)
   sendToRenderer(TEAM_EVENTS.updated, event)
 
-  console.log(`${LOG_TAG} left office=${officeId}`)
+  console.log(`${LOG_TAG} left office=${officeId} apps=${own.length} dutiesKept=${kept}`)
   return { success: true }
 }
