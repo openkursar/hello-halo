@@ -21,6 +21,7 @@ vi.mock('electron', () => ({
 
 import { Readable } from 'node:stream'
 import { streamAnthropicPassthrough, pipeAnthropicPassthrough } from '../../../src/main/openai-compat-router/stream/anthropic-stream'
+import { blockLifecycleViolations, blockStarts, toolCallsAtStop } from './messages-stream-contract'
 
 /** Build a mock Express response that captures written chunks */
 function createMockRes() {
@@ -44,6 +45,16 @@ function sseToStream(lines: string): ReadableStream {
       controller.close()
     }
   })
+}
+
+/** Upstream SSE text for a message whose events after message_start are given as objects */
+function upstreamMessage(events: Array<Record<string, unknown>>, stopReason = 'tool_use'): string {
+  return [
+    { type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', content: [], model: 'claude-sonnet', stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } },
+    ...events,
+    { type: 'message_delta', delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: 20 } },
+    { type: 'message_stop' }
+  ].map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('')
 }
 
 /** Parse captured SSE chunks into typed events */
@@ -226,6 +237,78 @@ describe('AnthropicStreamHandler', () => {
 
     const msgDelta = events.find(e => e.event === 'message_delta')
     expect(msgDelta?.data.delta.stop_reason).toBe('end_turn')
+  })
+
+  it('gives the text and the tool call that follow a signed thinking block their own indices', async () => {
+    const { res, chunks } = createMockRes()
+    const upstream = [
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"glm-5.3","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"read it"}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-1"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Reading."}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_1","name":"read_file","input":{}}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":\\"a.txt\\"}"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":2}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":10}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+    ].join('')
+
+    await streamAnthropicPassthrough(sseToStream(upstream), res, 'glm-5.3')
+
+    const events = parseSSEEvents(chunks)
+    expect(blockStarts(events)).toEqual(['thinking@0', 'text@1', 'tool_use@2'])
+    expect(blockLifecycleViolations(events)).toEqual([])
+  })
+
+  it('keeps the text of a signed thinking block that follows a tool call', async () => {
+    const { res, chunks } = createMockRes()
+    const upstream = upstreamMessage([
+      { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"file_path":"a.ts"}' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'content_block_start', index: 1, content_block: { type: 'thinking', thinking: '' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'thinking_delta', thinking: 'Now the second file.' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'signature_delta', signature: 'sig-2' } },
+      { type: 'content_block_stop', index: 1 },
+      { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'toolu_2', name: 'Read', input: {} } },
+      { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{"file_path":"b.ts"}' } },
+      { type: 'content_block_stop', index: 2 }
+    ])
+
+    await streamAnthropicPassthrough(sseToStream(upstream), res, 'claude-sonnet')
+
+    const events = parseSSEEvents(chunks)
+    expect(blockStarts(events)).toEqual(['tool_use@0', 'thinking@1', 'tool_use@2'])
+    expect(blockLifecycleViolations(events)).toEqual([])
+    const thinking = events.filter(e => e.event === 'content_block_delta' && e.data.index === 1).map(e => e.data.delta)
+    expect(thinking).toEqual([
+      { type: 'thinking_delta', thinking: 'Now the second file.' },
+      { type: 'signature_delta', signature: 'sig-2' }
+    ])
+  })
+
+  it('does not complete a command whose call a thinking block cuts off', async () => {
+    // A malformed upstream starts thinking while the call is still streaming;
+    // closed at the cut, `rm -rf ~/old-build` would run as `rm -rf ~`.
+    const { res, chunks } = createMockRes()
+    const upstream = upstreamMessage([
+      { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"command":"rm -rf ~' } },
+      { type: 'content_block_start', index: 1, content_block: { type: 'thinking', thinking: '' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'thinking_delta', thinking: 'hmm' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '/old-build"}' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'content_block_delta', index: 1, delta: { type: 'signature_delta', signature: 'sig-1' } },
+      { type: 'content_block_stop', index: 1 }
+    ])
+
+    await streamAnthropicPassthrough(sseToStream(upstream), res, 'claude-sonnet')
+
+    expect(toolCallsAtStop(parseSSEEvents(chunks))).toEqual([{ name: 'Bash', input: undefined }])
   })
 })
 

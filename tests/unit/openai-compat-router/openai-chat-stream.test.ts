@@ -21,6 +21,7 @@ vi.mock('electron', () => ({
 }))
 
 import { streamOpenAIChatToAnthropic } from '../../../src/main/openai-compat-router/stream/openai-chat-stream'
+import { blockLifecycleViolations, blockStarts, toolCallsAtStop } from './messages-stream-contract'
 
 /** Build a mock Express response that captures written chunks */
 function createMockRes() {
@@ -234,5 +235,207 @@ describe('OpenAIChatStreamHandler empty-response repair', () => {
 
     const msgDelta = events.find(e => e.event === 'message_delta')
     expect(msgDelta?.data.delta.stop_reason).toBe('tool_use')
+  })
+})
+
+describe('OpenAIChatStreamHandler block lifecycle', () => {
+  const toolCall = (index: number, id: string, name: string, args: string) => ({
+    id: 'c1',
+    model: 'glm-5.3',
+    choices: [{ index: 0, delta: { tool_calls: [{ index, id, type: 'function', function: { name, arguments: args } }] }, finish_reason: null }]
+  })
+
+  it('gives the answer its own block after the reasoning', async () => {
+    // The text block used to reopen index 0 of the closed thinking block.
+    const { res, chunks } = createMockRes()
+    const stream = chatSSE([
+      { id: 'c1', model: 'glm-5.3', choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: 'The user said hello.' }, finish_reason: null }] },
+      { id: 'c1', model: 'glm-5.3', choices: [{ index: 0, delta: { content: '你好' }, finish_reason: null }] },
+      { id: 'c1', model: 'glm-5.3', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }
+    ])
+
+    await streamOpenAIChatToAnthropic(stream, res, 'glm-5.3')
+
+    const events = parseSSEEvents(chunks)
+    expect(blockStarts(events)).toEqual(['thinking@0', 'text@1'])
+    expect(blockLifecycleViolations(events)).toEqual([])
+  })
+
+  it('keeps reasoning, text and every tool call of a turn on their own indices', async () => {
+    const { res, chunks } = createMockRes()
+    const stream = chatSSE([
+      { id: 'c1', model: 'glm-5.3', choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: 'Read both files.' }, finish_reason: null }] },
+      { id: 'c1', model: 'glm-5.3', choices: [{ index: 0, delta: { content: 'Let me look.' }, finish_reason: null }] },
+      toolCall(0, 'call_1', 'Read', '{"path":"a.ts"}'),
+      toolCall(1, 'call_2', 'Read', '{"path":"b.ts"}'),
+      { id: 'c1', model: 'glm-5.3', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }
+    ])
+
+    await streamOpenAIChatToAnthropic(stream, res, 'glm-5.3')
+
+    const events = parseSSEEvents(chunks)
+    expect(blockStarts(events)).toEqual(['thinking@0', 'text@1', 'tool_use@2', 'tool_use@3'])
+    expect(blockLifecycleViolations(events)).toEqual([])
+  })
+
+  it('puts the reasoning-only placeholder after the thinking block', async () => {
+    const { res, chunks } = createMockRes()
+    const stream = chatSSE([
+      { id: 'c1', model: 'glm-5.1', choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: 'thinking hard' }, finish_reason: null }] },
+      { id: 'c1', model: 'glm-5.1', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }
+    ])
+
+    await streamOpenAIChatToAnthropic(stream, res, 'glm-5.1')
+
+    const events = parseSSEEvents(chunks)
+    expect(blockStarts(events)).toEqual(['thinking@0', 'text@1'])
+    expect(blockLifecycleViolations(events)).toEqual([])
+  })
+
+  it('opens a new text block for text that follows a tool call', async () => {
+    const { res, chunks } = createMockRes()
+    const stream = chatSSE([
+      { id: 'c1', model: 'glm-5.3', choices: [{ index: 0, delta: { role: 'assistant', content: 'Checking.' }, finish_reason: null }] },
+      toolCall(0, 'call_1', 'Read', '{"path":"a.ts"}'),
+      { id: 'c1', model: 'glm-5.3', choices: [{ index: 0, delta: { content: 'Done.' }, finish_reason: null }] },
+      { id: 'c1', model: 'glm-5.3', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }
+    ])
+
+    await streamOpenAIChatToAnthropic(stream, res, 'glm-5.3')
+
+    const events = parseSSEEvents(chunks)
+    expect(blockStarts(events)).toEqual(['text@0', 'tool_use@1', 'text@2'])
+    expect(blockLifecycleViolations(events)).toEqual([])
+  })
+
+  it('repairs the truncated JSON of an earlier tool call before its block stops', async () => {
+    const { res, chunks } = createMockRes()
+    const stream = chatSSE([
+      toolCall(0, 'call_1', 'Read', '{"path":"a.ts"'),
+      toolCall(1, 'call_2', 'Read', '{"path":"b.ts"}'),
+      { id: 'c1', model: 'glm-5.3', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }
+    ])
+
+    await streamOpenAIChatToAnthropic(stream, res, 'glm-5.3')
+
+    const events = parseSSEEvents(chunks)
+    expect(blockLifecycleViolations(events)).toEqual([])
+    const firstInput = events
+      .filter(e => e.event === 'content_block_delta' && e.data.index === 0)
+      .map(e => e.data.delta.partial_json)
+      .join('')
+    expect(JSON.parse(firstInput)).toEqual({ path: 'a.ts' })
+  })
+})
+
+describe('OpenAIChatStreamHandler tool call cut off before its arguments end', () => {
+  const chunk = (delta: Record<string, unknown>, finish: string | null = null) => ({
+    id: 'c1',
+    model: 'qwen3.6',
+    choices: [{ index: 0, delta, finish_reason: finish }]
+  })
+  const callStart = (index: number, name: string) =>
+    chunk({ tool_calls: [{ index, id: `call_${index}`, type: 'function', function: { name, arguments: '' } }] })
+  const callArgs = (index: number, args: string) => chunk({ tool_calls: [{ index, function: { arguments: args } }] })
+  const text = (content: string) => chunk({ content })
+  const end = chunk({}, 'tool_calls')
+
+  async function run(chunkObjects: unknown[]) {
+    const { res, chunks } = createMockRes()
+    await streamOpenAIChatToAnthropic(chatSSE(chunkObjects), res, 'qwen3.6')
+    return parseSSEEvents(chunks)
+  }
+
+  it('does not complete a command that another call cuts off', async () => {
+    // Closed at the cut, `rm -rf ~/old-build` would run as `rm -rf ~`.
+    const events = await run([
+      callStart(0, 'Bash'),
+      callArgs(0, '{"command":"rm -rf ~'),
+      callStart(1, 'Read'),
+      callArgs(1, '{"file_path":"b.ts"'),
+      callArgs(0, '/old-build"}'),
+      callArgs(1, '}'),
+      end
+    ])
+
+    expect(toolCallsAtStop(events)).toEqual([
+      { name: 'Bash', input: undefined },
+      { name: 'Read', input: { file_path: 'b.ts' } }
+    ])
+  })
+
+  it('does not complete a number that another call cuts off', async () => {
+    const events = await run([
+      callStart(0, 'Read'),
+      callArgs(0, '{"file_path":"big.log","offset":90'),
+      callStart(1, 'Read'),
+      callArgs(1, '{"file_path":"b.ts"}'),
+      callArgs(0, '00}'),
+      end
+    ])
+
+    expect(toolCallsAtStop(events)[0]).toEqual({ name: 'Read', input: undefined })
+  })
+
+  it('does not complete a command that text cuts off', async () => {
+    const events = await run([
+      callStart(0, 'Bash'),
+      callArgs(0, '{"command":"git reset --hard HEAD'),
+      text('Resetting.'),
+      callArgs(0, '~3"}'),
+      end
+    ])
+
+    expect(toolCallsAtStop(events)).toEqual([{ name: 'Bash', input: undefined }])
+  })
+
+  it('still closes a call that lacks only its closing braces when the next call starts', async () => {
+    const events = await run([
+      callStart(0, 'Edit'),
+      callArgs(0, '{"file_path":"a.ts","options":{"replace_all":true}'),
+      callStart(1, 'Read'),
+      callArgs(1, '{"file_path":"b.ts"}'),
+      end
+    ])
+
+    expect(toolCallsAtStop(events)).toEqual([
+      { name: 'Edit', input: { file_path: 'a.ts', options: { replace_all: true } } },
+      { name: 'Read', input: { file_path: 'b.ts' } }
+    ])
+    expect(blockLifecycleViolations(events)).toEqual([])
+  })
+
+  it('keeps calls whole when the server streams a newline inside their arguments', async () => {
+    // Shape reported for sglang serving Qwen3.6: content "\n" before each
+    // parallel call's closing brace.
+    const call = (index: number, path: string) => [
+      callStart(index, 'Read'),
+      callArgs(index, '{'),
+      callArgs(index, `"file_path": "${path}"`),
+      text('\n'),
+      callArgs(index, '}')
+    ]
+    const events = await run([...call(0, 'main.go'), ...call(1, 'weibo/weibo.go'), ...call(2, 'model/model.go'), end])
+
+    expect(toolCallsAtStop(events)).toEqual([
+      { name: 'Read', input: { file_path: 'main.go' } },
+      { name: 'Read', input: { file_path: 'weibo/weibo.go' } },
+      { name: 'Read', input: { file_path: 'model/model.go' } }
+    ])
+    expect(blockStarts(events)).toEqual(['tool_use@0', 'tool_use@1', 'tool_use@2'])
+    expect(blockLifecycleViolations(events)).toEqual([])
+  })
+
+  it('keeps a command whole when the server streams a newline inside it', async () => {
+    const events = await run([
+      callStart(0, 'Bash'),
+      callArgs(0, '{"command":"git reset --hard HEAD'),
+      text('\n'),
+      callArgs(0, '~3"}'),
+      end
+    ])
+
+    expect(toolCallsAtStop(events)).toEqual([{ name: 'Bash', input: { command: 'git reset --hard HEAD~3' } }])
+    expect(blockLifecycleViolations(events)).toEqual([])
   })
 })

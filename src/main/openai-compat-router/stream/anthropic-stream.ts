@@ -132,7 +132,11 @@ export class AnthropicStreamHandler extends BaseStreamHandler {
 
       case 'tool_use': {
         const toolBlock = block as { type: 'tool_use'; id: string; name: string }
+        // Thinking comes in its own blocks here, so a tool call does not end
+        // it: a signed thinking block after the call keeps its text.
+        const reasoningClosed = this.state.reasoningClosed
         this.startToolUseBlock(event.index, toolBlock.id, toolBlock.name)
+        this.state.reasoningClosed = reasoningClosed
         break
       }
 

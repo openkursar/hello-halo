@@ -22,6 +22,7 @@
  */
 
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'fs'
+import { createServer } from 'http'
 import { tmpdir } from 'os'
 import { deflateSync } from 'zlib'
 import path from 'path'
@@ -472,6 +473,74 @@ describe.skipIf(!enabled)('dsh adapter against a real runtime', () => {
     } finally {
       await session.close()
       await new Promise<void>((resolve) => router.close(() => resolve()))
+    }
+  }, 120_000)
+
+  it('runs a reasoning model\'s tool turn from a Chat Completions source, through the router', async () => {
+    // The router turns the source's reasoning, text and tool calls into
+    // Messages blocks; the runtime ends the turn on a block index used twice.
+    const chunk = (delta: Record<string, unknown>, finish: string | null = null): string =>
+      `data: ${JSON.stringify({ id: 'chatcmpl-e2e', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`
+    const replies = [
+      [
+        chunk({ role: 'assistant', reasoning_content: 'The user wants a marker printed.' }),
+        chunk({ content: 'Running it.' }),
+        chunk({
+          tool_calls: [{
+            index: 0,
+            id: 'call_e2e_bash',
+            type: 'function',
+            function: { name: 'bash', arguments: JSON.stringify({ command: SHELL_COMMAND, description: 'Print a marker' }) },
+          }],
+        }),
+        chunk({}, 'tool_calls'),
+      ],
+      [
+        chunk({ role: 'assistant', reasoning_content: 'The shell answered.' }),
+        chunk({ content: `The shell said ${SHELL_OUTPUT}.` }),
+        chunk({}, 'stop'),
+      ],
+    ]
+    const requests: string[] = []
+    const source = createServer((req, res) => {
+      let body = ''
+      req.on('data', (data) => { body += data })
+      req.on('end', () => {
+        const reply = replies[Math.min(requests.push(body) - 1, replies.length - 1)]
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.end(`${reply.join('')}data: [DONE]\n\n`)
+      })
+    }).listen(0, '127.0.0.1')
+    await new Promise<void>((resolve) => source.once('listening', () => resolve()))
+    const router = createApp().listen(0, '127.0.0.1')
+    await new Promise<void>((resolve) => router.once('listening', () => resolve()))
+    const routerUrl = `http://127.0.0.1:${(router.address() as AddressInfo).port}/v1`
+    const descriptor = encodeBackendConfig({
+      url: `http://127.0.0.1:${(source.address() as AddressInfo).port}/v1/chat/completions`,
+      key: 'upstream-secret',
+      model: 'glm-5.3',
+      apiType: 'chat_completions',
+    })
+
+    const session = await createSession(materializeCordisConfig(dataDir, { workDir }), undefined, {
+      DEEPSEEK_API_KEY: descriptor,
+      DEEPSEEK_BASE_URL: routerUrl,
+      DEEPSEEK_SEARCH_BASE_URL: routerUrl,
+    })
+
+    try {
+      const frames = await runTurn(session, 'print the marker')
+      expect(frames[frames.length - 1]).toMatchObject({
+        type: 'result',
+        is_error: false,
+        result: `The shell said ${SHELL_OUTPUT}.`,
+      })
+      expect(requests).toHaveLength(2)
+      expect(requests[1]).toContain(SHELL_OUTPUT)
+    } finally {
+      await session.close()
+      await new Promise<void>((resolve) => router.close(() => resolve()))
+      await new Promise<void>((resolve) => source.close(() => resolve()))
     }
   }, 120_000)
 

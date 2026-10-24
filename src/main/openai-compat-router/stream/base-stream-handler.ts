@@ -25,10 +25,16 @@ export interface StreamState {
   finished: boolean
   messageId: string
   model: string
-  currentBlockIndex: number
-  contentBlockIndex: number
-  hasTextBlock: boolean
-  hasThinkingBlock: boolean
+  /** The block deltas go to; null between blocks. */
+  currentBlock: {
+    index: number
+    type: 'text' | 'thinking' | 'tool_use' | 'web_search_tool_result'
+    /** Upstream tool-call key of a tool_use block. */
+    toolIndex?: number
+  } | null
+  /** Index the next block takes; an index is never reused within a message. */
+  nextBlockIndex: number
+  /** Set once a non-thinking block opens; thinking after that is dropped. */
   reasoningClosed: boolean
   usage: NormalizedUsage
   stopReason: AnthropicStopReason | null
@@ -37,22 +43,32 @@ export interface StreamState {
   accumulatedThinking: string
 }
 
+type BlockType = NonNullable<StreamState['currentBlock']>['type']
+
 export function createInitialState(model: string): StreamState {
   return {
     started: false,
     finished: false,
     messageId: `msg_${Date.now()}`,
     model,
-    currentBlockIndex: -1,
-    contentBlockIndex: 0,
-    hasTextBlock: false,
-    hasThinkingBlock: false,
+    currentBlock: null,
+    nextBlockIndex: 0,
     reasoningClosed: false,
     usage: createEmptyUsage(),
     stopReason: null,
     accumulatedText: '',
     accumulatedThinking: ''
   }
+}
+
+/**
+ * Whether tool arguments another block interrupted may be closed with
+ * `suffix`: it only closes brackets, and the arguments end right after a whole
+ * string, container, `true`, `false` or `null`. A number may still be growing
+ * (`90` of `9000`) and an unfinished string needs a quote, so neither passes.
+ */
+function closesAfterWholeValue(args: string, suffix: string): boolean {
+  return /^[\s\]}]+$/.test(suffix) && /["\]}el]\s*$/.test(args)
 }
 
 // ============================================================================
@@ -79,6 +95,8 @@ export abstract class BaseStreamHandler {
   // Tool call tracking
   protected toolCallMap = new Map<number, StreamToolCallState>()
   protected toolIndexToBlock = new Map<number, number>()
+  /** Whitespace-only text chunks dropped while a tool call was open. */
+  private droppedToolCallWhitespace = 0
 
   constructor(res: ExpressResponse, options: StreamHandlerOptions = {}) {
     this.writer = new SSEWriter(res, { debug: options.debug })
@@ -161,7 +179,10 @@ export abstract class BaseStreamHandler {
         ? this.state.accumulatedText.slice(0, 80).replace(/\n/g, '↵')
         : ''
       if (tools.length > 0) {
-        console.log(`[LLM] model=${this.state.model} stop=${this.state.stopReason} → tool_calls=[${tools.join(',')}]`)
+        const dropped = this.droppedToolCallWhitespace
+          ? ` (dropped ${this.droppedToolCallWhitespace} whitespace text chunks inside tool calls)`
+          : ''
+        console.log(`[LLM] model=${this.state.model} stop=${this.state.stopReason} → tool_calls=[${tools.join(',')}]${dropped}`)
         if (this.debug) {
           for (const [idx, tc] of this.toolCallMap) {
             console.log(`[LLM] tool[${idx}] ${tc.name} args (${tc.arguments.length} chars): ${tc.arguments}`)
@@ -174,14 +195,6 @@ export abstract class BaseStreamHandler {
       }
     }
 
-    // Repair malformed tool arguments before closing blocks.
-    // Some LLMs (e.g. GLM-5) produce incomplete JSON (missing closing braces)
-    // for tool call arguments. Inject a corrective input_json_delta event before
-    // content_block_stop so downstream consumers (CC SDK, stream-processor)
-    // receive valid JSON.
-    this.repairToolArguments()
-
-    // Close any open block
     this.closeCurrentBlock()
 
     // Repair turns that produced no actual text and no tool calls, regardless
@@ -206,7 +219,7 @@ export abstract class BaseStreamHandler {
       const hasToolCalls = this.toolCallMap.size > 0
 
       if (!hasActualText && !hasToolCalls) {
-        const idx = this.state.contentBlockIndex
+        const idx = this.state.nextBlockIndex++
         this.writer.writeTextBlockStart(idx)
         this.writer.writeTextDelta(idx, ' ')
         this.writer.writeBlockStop(idx)
@@ -286,114 +299,133 @@ export abstract class BaseStreamHandler {
   // ============================================================================
   // Block Lifecycle
   // ============================================================================
+  // One block is open at a time, and each block takes the next index: a client
+  // that checks the Messages stream rejects a start at an index already used,
+  // even one whose block has stopped.
 
-  protected closeCurrentBlock(): void {
-    if (this.state.currentBlockIndex >= 0) {
-      this.writer.writeBlockStop(this.state.currentBlockIndex)
-      this.state.currentBlockIndex = -1
+  /** Close the open block and give a new block the next index. */
+  private beginBlock(type: BlockType, toolIndex?: number): number {
+    this.closeCurrentBlock(true)
+    const index = this.state.nextBlockIndex++
+    this.state.currentBlock = { index, type, toolIndex }
+    if (type !== 'thinking') {
+      this.state.reasoningClosed = true
     }
+    return index
   }
 
   /**
-   * Validate accumulated tool arguments and repair malformed JSON.
+   * @param interrupted - another block is starting, so an open tool call may
+   *   still have arguments on the way
+   */
+  protected closeCurrentBlock(interrupted = false): void {
+    const block = this.state.currentBlock
+    if (!block) return
+
+    if (block.toolIndex !== undefined) {
+      this.repairToolArguments(block.toolIndex, interrupted)
+    }
+    this.writer.writeBlockStop(block.index)
+    this.state.currentBlock = null
+  }
+
+  /**
+   * Validate a tool call's accumulated arguments and repair malformed JSON.
    *
    * Some LLMs generate syntactically broken JSON for tool call arguments
-   * (e.g. missing closing braces for nested objects). This method runs
-   * after all streaming deltas have been received but BEFORE content_block_stop
-   * events are sent, so downstream consumers (CC SDK, stream-processor) see
-   * a corrective input_json_delta and can parse the result successfully.
+   * (e.g. missing closing braces for nested objects). This runs right before
+   * the call's content_block_stop, where downstream consumers (CC SDK,
+   * stream-processor) parse the input, so they see a corrective
+   * input_json_delta and can parse the result successfully.
    *
    * Safety constraints:
-   * - Only applies suffix-only repairs (appending missing brackets/braces).
-   *   If jsonrepair rewrites content in the middle, the fix is skipped because
-   *   the already-sent partial_json deltas cannot be retracted.
+   * - Only appends to the end. If jsonrepair rewrites content in the middle,
+   *   the fix is skipped because the already-sent partial_json deltas cannot
+   *   be retracted.
    * - The repaired output is verified with JSON.parse before being sent.
    * - Valid JSON is never touched (fast-path exit).
+   * - A call another block interrupts may still have arguments on the way, and
+   *   completing it there runs a different call (`rm -rf ~/old-build` cut to
+   *   `rm -rf ~`), so it is only completed when it stops after a whole value
+   *   and lacks nothing but brackets.
    */
-  protected repairToolArguments(): void {
-    for (const [toolIndex, state] of this.toolCallMap) {
-      if (!state.arguments) continue
+  private repairToolArguments(toolIndex: number, interrupted: boolean): void {
+    const state = this.toolCallMap.get(toolIndex)
+    if (!state?.arguments) return
 
-      // Fast path: valid JSON, nothing to do
-      try {
-        JSON.parse(state.arguments)
-        continue
-      } catch {
-        // Fall through to repair
-      }
+    // Fast path: valid JSON, nothing to do
+    try {
+      JSON.parse(state.arguments)
+      return
+    } catch {
+      // Fall through to repair
+    }
 
-      try {
-        const repaired = jsonrepair(state.arguments)
-        JSON.parse(repaired) // Verify repair produced valid JSON
+    try {
+      const repaired = jsonrepair(state.arguments)
+      JSON.parse(repaired) // Verify repair produced valid JSON
 
-        // Only apply suffix-only repairs (appended missing brackets/braces).
-        // If jsonrepair modified content in the middle, the already-sent
-        // partial_json deltas cannot be retracted — log and skip.
-        if (!repaired.startsWith(state.arguments)) {
-          console.warn(
-            `[StreamHandler] Tool args for "${state.name}" need non-suffix repair, cannot fix in-stream. ` +
-            `Original (${state.arguments.length} chars): ${state.arguments}`
-          )
-          continue
-        }
-
-        const suffix = repaired.slice(state.arguments.length)
-        if (!suffix) continue
-
-        const blockIndex = this.toolIndexToBlock.get(toolIndex)
-        if (blockIndex === undefined) continue
-
+      // Only apply suffix-only repairs. If jsonrepair modified content in the
+      // middle, the already-sent partial_json deltas cannot be retracted — log
+      // and skip.
+      if (!repaired.startsWith(state.arguments)) {
         console.warn(
-          `[StreamHandler] Repaired malformed tool args for "${state.name}": ` +
-          `appended "${suffix}" (${state.arguments.length} → ${repaired.length} chars)`
-        )
-        this.writer.writeInputJsonDelta(blockIndex, suffix)
-        state.arguments = repaired
-      } catch (e) {
-        console.warn(
-          `[StreamHandler] Cannot repair tool args for "${state.name}": ${(e as Error).message}. ` +
+          `[StreamHandler] Tool args for "${state.name}" need non-suffix repair, cannot fix in-stream. ` +
           `Original (${state.arguments.length} chars): ${state.arguments}`
         )
+        return
       }
+
+      const suffix = repaired.slice(state.arguments.length)
+      if (!suffix) return
+
+      if (interrupted && !closesAfterWholeValue(state.arguments, suffix)) {
+        console.warn(
+          `[StreamHandler] Tool args for "${state.name}" cut off mid-value by another block, left unrepaired ` +
+          `(model=${this.state.model}, ${state.arguments.length} chars)`
+        )
+        return
+      }
+
+      const blockIndex = this.toolIndexToBlock.get(toolIndex)
+      if (blockIndex === undefined) return
+
+      console.warn(
+        `[StreamHandler] Repaired malformed tool args for "${state.name}": ` +
+        `appended "${suffix}" (${state.arguments.length} → ${repaired.length} chars)`
+      )
+      this.writer.writeInputJsonDelta(blockIndex, suffix)
+      state.arguments = repaired
+    } catch (e) {
+      console.warn(
+        `[StreamHandler] Cannot repair tool args for "${state.name}": ${(e as Error).message}. ` +
+        `Original (${state.arguments.length} chars): ${state.arguments}`
+      )
     }
   }
 
-  protected startTextBlock(): boolean {
-    if (this.isFinished) return false
+  /** Returns the open text block's index, opening one if needed; -1 once finished. */
+  protected startTextBlock(): number {
+    if (this.isFinished) return -1
 
-    if (!this.state.hasTextBlock) {
-      // Close any previous block (e.g., thinking)
-      if (this.state.currentBlockIndex >= 0) {
-        this.closeCurrentBlock()
-      }
+    const open = this.state.currentBlock
+    if (open?.type === 'text') return open.index
 
-      this.state.hasTextBlock = true
-      this.writer.writeTextBlockStart(this.state.contentBlockIndex)
-      this.state.currentBlockIndex = this.state.contentBlockIndex
-
-      return true
-    }
-
-    return true
+    const index = this.beginBlock('text')
+    this.writer.writeTextBlockStart(index)
+    return index
   }
 
-  protected startThinkingBlock(): boolean {
-    if (this.isFinished) return false
+  /** Returns the open thinking block's index, opening one if needed; -1 once finished. */
+  protected startThinkingBlock(): number {
+    if (this.isFinished) return -1
 
-    if (!this.state.hasThinkingBlock) {
-      // Close any previous block
-      if (this.state.currentBlockIndex >= 0) {
-        this.closeCurrentBlock()
-      }
+    const open = this.state.currentBlock
+    if (open?.type === 'thinking') return open.index
 
-      this.state.hasThinkingBlock = true
-      this.writer.writeThinkingBlockStart(this.state.contentBlockIndex)
-      this.state.currentBlockIndex = this.state.contentBlockIndex
-
-      return true
-    }
-
-    return true
+    const index = this.beginBlock('thinking')
+    this.writer.writeThinkingBlockStart(index)
+    return index
   }
 
   protected startToolUseBlock(toolIndex: number, toolId: string, toolName: string): number {
@@ -404,15 +436,9 @@ export abstract class BaseStreamHandler {
       return this.toolIndexToBlock.get(toolIndex)!
     }
 
-    // Close any current block
-    this.closeCurrentBlock()
-
-    const blockIndex = this.state.contentBlockIndex
+    const blockIndex = this.beginBlock('tool_use', toolIndex)
     this.toolIndexToBlock.set(toolIndex, blockIndex)
-    this.state.contentBlockIndex++
-
     this.writer.writeToolUseBlockStart(blockIndex, toolId, toolName)
-    this.state.currentBlockIndex = blockIndex
 
     // Track tool state
     this.toolCallMap.set(toolIndex, {
@@ -432,20 +458,17 @@ export abstract class BaseStreamHandler {
   protected writeTextDelta(text: string): void {
     if (this.isFinished || !text) return
 
+    // Some servers stream whitespace as text between a tool call's argument
+    // chunks; it must not cut the call off.
+    if (this.state.currentBlock?.type === 'tool_use' && !text.trim()) {
+      this.droppedToolCallWhitespace++
+      return
+    }
+
     // Accumulate text for debug logging
     this.state.accumulatedText += text
 
-    // Close thinking block if open and start text block
-    this.state.reasoningClosed = true
-
-    if (!this.state.hasTextBlock) {
-      if (this.state.currentBlockIndex >= 0 && !this.state.hasTextBlock) {
-        this.closeCurrentBlock()
-      }
-      this.startTextBlock()
-    }
-
-    this.writer.writeTextDelta(this.state.currentBlockIndex, text)
+    this.writer.writeTextDelta(this.startTextBlock(), text)
   }
 
   protected writeThinkingDelta(thinking: string): void {
@@ -454,25 +477,21 @@ export abstract class BaseStreamHandler {
     // Accumulate thinking for debug logging
     this.state.accumulatedThinking += thinking
 
-    // Don't write thinking if we've already moved to text
-    if (this.state.reasoningClosed || this.state.hasTextBlock) return
+    // Don't write thinking if we've already moved past it (text or a tool call)
+    if (this.state.reasoningClosed) return
 
-    if (!this.state.hasThinkingBlock) {
-      this.startThinkingBlock()
-    }
-
-    this.writer.writeThinkingDelta(this.state.contentBlockIndex, thinking)
+    this.writer.writeThinkingDelta(this.startThinkingBlock(), thinking)
   }
 
   protected writeSignatureDelta(signature: string): void {
     if (this.isFinished || !signature) return
 
-    if (this.state.hasThinkingBlock) {
-      this.writer.writeSignatureDelta(this.state.contentBlockIndex, signature)
+    const open = this.state.currentBlock
+    if (open?.type === 'thinking') {
+      this.writer.writeSignatureDelta(open.index, signature)
 
-      // Close thinking block and move to next
+      // The signature ends its thinking block
       this.closeCurrentBlock()
-      this.state.contentBlockIndex++
     }
   }
 
@@ -530,16 +549,8 @@ export abstract class BaseStreamHandler {
   ): void {
     if (this.isFinished) return
 
-    // Close current block if needed
-    if (this.state.currentBlockIndex >= 0 && this.state.hasTextBlock) {
-      this.closeCurrentBlock()
-      this.state.hasTextBlock = false
-    }
-
-    this.state.contentBlockIndex++
-    this.writer.writeWebSearchBlockStart(this.state.contentBlockIndex, toolUseId, results)
-    this.writer.writeBlockStop(this.state.contentBlockIndex)
-    this.state.currentBlockIndex = -1
+    this.writer.writeWebSearchBlockStart(this.beginBlock('web_search_tool_result'), toolUseId, results)
+    this.closeCurrentBlock()
   }
 
   protected writeError(message: string): void {
