@@ -54,6 +54,15 @@ const ORPHAN_APP_ID = 'ghost-app-uninstalled'
  *  written). Node must be stopped (file lock). */
 function downgradeAppRuntimeToV3() {
   sql(`
+    DROP TABLE decision_continuations;
+    DROP TABLE app_session_environments;
+    DROP TABLE runtime_closed_runs;
+    DROP TABLE runtime_legacy_deadlines;
+    DROP TABLE runtime_decision_migration_backup;
+    DROP INDEX idx_runs_transcript_kept;
+    ALTER TABLE automation_runs DROP COLUMN transcript_cleared_at;
+    ALTER TABLE automation_runs DROP COLUMN stopped_at;
+    ALTER TABLE automation_runs DROP COLUMN environment_json;
     CREATE TABLE activity_entries_old (
       id TEXT PRIMARY KEY,
       app_id TEXT NOT NULL,
@@ -146,7 +155,6 @@ try {
   })
 
   const beforeActivity = await apiOk(node, 'GET', `/api/apps/${appId}/activity?limit=20`)
-  const beforeVersion = 4 // current build's namespace version before we tamper
   killAllInCluster()
   await sleep(1000)
 
@@ -164,7 +172,7 @@ try {
     const dataIntact = afterActivity.length === beforeActivity.length &&
       JSON.stringify(afterActivity.map((e) => e.id).sort()) === JSON.stringify(beforeActivity.map((e) => e.id).sort())
     const orphanDropped = countActivity(ORPHAN_APP_ID) === 0
-    mark(preVersion === 4 && downgradedVersion === 3 && postVersion === 4 && upgraded && dataIntact && orphanDropped ? 'PASS' : 'FAIL',
+    mark(preVersion >= 4 && downgradedVersion === 3 && postVersion === preVersion && upgraded && dataIntact && orphanDropped ? 'PASS' : 'FAIL',
       `pre=${preVersion} downgraded=${downgradedVersion} post=${postVersion} bootedOk=${!!upgraded} dataIntact=${dataIntact} orphanDropped=${orphanDropped} (before=${beforeActivity.length} after=${afterActivity.length})`)
   })
 
@@ -182,19 +190,23 @@ try {
     mark(fired && noFkError ? 'PASS' : 'FAIL', `newEntries=${fired ? fired.length - before.length : 0} noFkError=${noFkError}`)
   })
 
+  // Plain chat has not offered report_to_user since #200; a team member's report
+  // is what still writes the 'chat' sentinel run_id, so the request goes there.
   await report.run('4.3', async (mark) => {
-    await apiOk(node, 'POST', `/api/apps/${appId}/chat/send`, {
+    const members = (await apiOk(node, 'GET', `/api/teams/${oldTeam.id}/detail`)).members
+    const member = members.find((m) => !m.isLead) ?? members[0]
+    const sent = await apiOk(node, 'POST', `/api/teams/${oldTeam.id}/members/${member.appId}/send`, {
       message: 'Call report_to_user with type "run_complete" and summary "CHAT-REPORT-POST-UPGRADE", then stop.',
     })
     const gotEntry = await pollUntil(async () => {
-      const activity = await apiOk(node, 'GET', `/api/apps/${appId}/activity?limit=50`)
+      const activity = await apiOk(node, 'GET', `/api/apps/${member.appId}/activity?limit=50`)
       const found = activity.find((e) => JSON.stringify(e.content).includes('CHAT-REPORT-POST-UPGRADE'))
       return found ? { activity, found } : null
     }, { timeoutMs: 90_000, intervalMs: 2000 })
     runId = gotEntry?.found?.runId
     const noFkError = gotEntry ? !JSON.stringify(gotEntry.activity).includes('FOREIGN KEY') : false
     mark(gotEntry && noFkError && runId === 'chat' ? 'PASS' : 'FAIL',
-      `entryFound=${!!gotEntry} noFkError=${noFkError} runId=${runId}`)
+      `entryFound=${!!gotEntry} noFkError=${noFkError} runId=${runId} sendOk=${sent?.ok}`)
   })
 
   await report.run('4.4', async (mark) => {
