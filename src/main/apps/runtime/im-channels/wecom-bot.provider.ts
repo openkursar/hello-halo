@@ -4,7 +4,9 @@
  * ImChannelProvider implementation for WeCom Intelligent Bot (企业微信智能机器人).
  *
  * This is a thin adapter on top of `@wecom/aibot-node-sdk`. The SDK owns:
- *   - WebSocket lifecycle (connect / heartbeat / reconnect / auth)
+ *   - WebSocket connect / heartbeat / auth (its own reconnect is switched
+ *     off: every redial is a new client from the link supervisor, so it takes
+ *     the current route and is bounded by an attempt deadline)
  *   - Reply queueing per req_id with ack-waiting
  *   - Non-blocking back-pressure for stream frames
  *   - Chunked media upload (init → chunk → finish)
@@ -57,6 +59,7 @@ import {
   type ImChannelConfigFieldDef,
   type ImChannelType,
   type ImConnectionState,
+  type ImLinkStatus,
 } from '../../../../shared/types/im-channel'
 import type {
   InboundMessage,
@@ -78,7 +81,8 @@ import { sendAsMessages } from './message-parts'
 import { ConnectionArbiter } from './connection-arbiter'
 import { stageMediaFile, pruneMediaTempDir } from './media-temp-files'
 import { notifyAppEvent } from '../../../services/notification.service'
-import { resolveProxyAgent } from '../../../services/proxy-fetch'
+import { DIRECT_ROUTE, openLinkRoute, type LinkRoute } from './link-route'
+import { CredentialRejectionBudget, LinkSupervisor } from './link-supervisor'
 import { fetchWecomIdentityDirectory } from './wecom-identity-resolve'
 import { downloadWecomMedia } from './wecom-media-download'
 
@@ -103,6 +107,10 @@ const REQ_ID_CLEANUP_INTERVAL_MS = 5 * 60_000
  * kicked well before this elapses).
  */
 const STANDBY_CONFIRM_MS = 60_000
+/** Dial to authenticated; a healthy handshake takes about a second. */
+const ATTEMPT_TIMEOUT_MS = 25_000
+/** How the SDK words the platform refusing the bot's credentials. */
+const AUTH_REJECTED_PREFIX = 'Authentication failed'
 /** Local temp directory for downloaded WeCom media. */
 const TEMP_DIR = join(tmpdir(), 'halo-wecom')
 /** Image file extensions that map to WeCom 'image' media type. */
@@ -351,14 +359,32 @@ class WecomBotInstance implements ImChannelInstance {
   private connMode: 'active' | 'yielding' = 'active'
   /** The SDK client whose events we currently honor (guards stale-client events). */
   private currentClient: InstanceType<typeof AiBot.WSClient> | null = null
-  /** Pending active-mode reconnect timer (jittered backoff). */
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  /** Pending standby probe timer. */
-  private probeTimer: ReturnType<typeof setTimeout> | null = null
   /** Pending probe-confirm timer (probe survived long enough → recovered). */
   private confirmTimer: ReturnType<typeof setTimeout> | null = null
   /** Whether the standby desktop notification has fired for the current episode. */
   private standbyNotified = false
+
+  // ── Link supervision ───────────────────────────────────────────
+  /**
+   * Owns every redial: network losses on its own backoff, slot arbitration on
+   * the arbiter's delays (passed in through redialIn).
+   */
+  private readonly link: LinkSupervisor
+  /** Route of the current client; closed with it. */
+  private route: LinkRoute = DIRECT_ROUTE
+  /** Bumped by every dial and teardown, so a dial still resolving its route can tell it was replaced. */
+  private dialGeneration = 0
+  /** What the current client's transport last reported going wrong. */
+  private clientError: string | undefined
+  /** Whether the platform rejected the current client's credentials. */
+  private clientAuthRejected = false
+  /**
+   * Rejected authentications since the start, the last authenticated session
+   * or the user's reconnect, across clients; network failures in between
+   * neither count nor reset it. Retrying credentials the platform keeps
+   * refusing would only hide the problem.
+   */
+  private readonly authRejections = new CredentialRejectionBudget()
   /** Counters surfaced in the periodic health snapshot. */
   private counters = {
     totalInbound: 0,
@@ -375,6 +401,12 @@ class WecomBotInstance implements ImChannelInstance {
     this.instanceId = instanceId
     this.config = config
     this.identityCapability = this.buildIdentityCapability(config)
+    this.link = new LinkSupervisor({
+      log: (level, event, fields) => logEvent(this.instanceId, level, event, fields),
+      dial: () => this.openClient(),
+      isUp: () => this.wsClient?.isConnected === true,
+      attemptTimeoutMs: ATTEMPT_TIMEOUT_MS,
+    })
   }
 
   // ── ImChannelInstance interface ────────────────────────────────
@@ -407,13 +439,14 @@ class WecomBotInstance implements ImChannelInstance {
     this.connMode = 'active'
     this.standbyNotified = false
     this.arbiter.reset()
+    this.authRejections.reset()
     if (!this.config.botId || !this.config.secret) {
       logEvent(this.instanceId, 'warn', 'start_skip', {
         reason: 'missing botId or secret',
       })
       return
     }
-    this.openClient()
+    this.link.start()
     this.cacheCleanupTimer = setInterval(
       () => this.cleanupExpiredFrames(),
       REQ_ID_CLEANUP_INTERVAL_MS,
@@ -434,8 +467,8 @@ class WecomBotInstance implements ImChannelInstance {
     this.connMode = 'active'
     this.standbyNotified = false
     this.arbiter.reset()
-    this.clearConflictTimers()
-    this.currentClient = null
+    this.link.stop()
+    this.cancelProbeConfirm()
     this.emitHealthSnapshot('stop')
     if (this.cacheCleanupTimer) {
       clearInterval(this.cacheCleanupTimer)
@@ -454,14 +487,7 @@ class WecomBotInstance implements ImChannelInstance {
     }
     this.activeStreamSessions.forEach((s) => s.dispose())
     this.activeStreamSessions.clear()
-    try {
-      this.wsClient?.disconnect()
-    } catch (err) {
-      logEvent(this.instanceId, 'warn', 'ws_disconnect_error', {
-        err: err instanceof Error ? err.message : String(err),
-      })
-    }
-    this.wsClient = null
+    this.teardownClient()
     this.inboundHandler = null
     this.frameCache.clear()
     logEvent(this.instanceId, 'info', 'instance_stop', {})
@@ -472,17 +498,20 @@ class WecomBotInstance implements ImChannelInstance {
    * device" takeover: it forcibly exits standby and reclaims the bot slot
    * (WeCom hands the slot to this newest connection, and the other device then
    * detects the supersede storm and yields in turn). Resetting the arbiter here
-   * means an explicit user action always wins over the automatic backoff.
+   * means an explicit user action always wins over the automatic backoff, and
+   * it also lifts a halt after rejected credentials.
    */
   reconnect(): void {
     if (!this.active) return
     this.connMode = 'active'
     this.standbyNotified = false
     this.arbiter.reset()
-    this.clearConflictTimers()
-    this.teardownClient()
+    this.cancelProbeConfirm()
+    this.authRejections.reset()
     if (this.config.botId && this.config.secret) {
-      this.openClient()
+      this.link.redialNow('manual reconnect')
+    } else {
+      this.teardownClient()
     }
   }
 
@@ -496,10 +525,15 @@ class WecomBotInstance implements ImChannelInstance {
    * reclaim it when that device goes away.
    */
   getConnectionState(): ImConnectionState {
-    if (!this.active) return 'offline'
+    if (!this.active || !this.link.isRunning()) return 'offline'
     if (this.authenticated && this.wsClient?.isConnected === true) return 'online'
+    if (this.link.isHalted()) return 'offline'
     if (this.connMode === 'yielding') return 'standby'
-    return 'connecting'
+    return this.link.wasEverOnline() ? 'reconnecting' : 'connecting'
+  }
+
+  getLinkStatus(): ImLinkStatus | undefined {
+    return this.active && this.link.isRunning() ? this.link.status() : undefined
   }
 
   /**
@@ -562,43 +596,50 @@ class WecomBotInstance implements ImChannelInstance {
   // ── SDK client lifecycle ──────────────────────────────────────
 
   /**
-   * Open the WebSocket.
+   * Open a fresh client in place of whatever client exists. Only the link
+   * supervisor calls this, so every attempt runs under its deadline.
    *
-   * Kicked off without awaiting because the caller is synchronous; the proxy
-   * lookup it waits on is a local Chromium call, and `currentClient` already
-   * guards against a teardown landing mid-flight.
+   * Kicked off without awaiting because the caller is synchronous; the route
+   * lookup it waits on is a local Chromium call, and the dial generation tells
+   * it when a teardown or a newer dial landed in the meantime.
    */
   private openClient(): void {
-    void this.openClientWithProxy().catch((err: unknown) => {
-      logEvent(this.instanceId, 'error', 'ws_open_threw', {
-        cat: 'internal',
-        err: err instanceof Error ? err.message : String(err),
-      })
+    this.teardownClient()
+    const generation = this.dialGeneration
+    if (this.connMode === 'yielding') {
+      logEvent(this.instanceId, 'info', 'standby_probe_start', {})
+    }
+    void this.openClientOnRoute(generation).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err)
+      logEvent(this.instanceId, 'error', 'ws_open_threw', { cat: 'internal', err: message })
+      if (generation === this.dialGeneration) this.link.lost(`could not open the connection: ${message}`)
     })
   }
 
-  private async openClientWithProxy(): Promise<void> {
+  private async openClientOnRoute(generation: number): Promise<void> {
     const wsUrl = this.config.wsUrl || DEFAULT_WS_URL
 
-    // On a machine that only reaches the internet through a proxy, a WebSocket
-    // opened without an agent connects to nothing — the SDK reads neither
-    // Halo's proxy setting nor the system one. Resolving it here puts this
-    // connection on the same route as every other outbound request.
-    let agent: Awaited<ReturnType<typeof resolveProxyAgent>>
+    // The SDK reads neither Halo's proxy setting nor the system one, so the
+    // route is resolved here — per attempt, so a settings change reaches the
+    // next one — and handed to it as an agent.
+    let route: LinkRoute
     try {
-      agent = await resolveProxyAgent(wsUrl.replace(/^ws/, 'http'))
+      route = await openLinkRoute(wsUrl.replace(/^ws/, 'http'))
     } catch (err) {
-      agent = undefined
+      route = DIRECT_ROUTE
       logEvent(this.instanceId, 'warn', 'proxy_resolve_failed', {
         cat: 'network',
         err: err instanceof Error ? err.message : String(err),
       })
     }
-    if (!this.active) {
-      logEvent(this.instanceId, 'info', 'ws_open_abandoned', { reason: 'stopped' })
+    if (!this.active || generation !== this.dialGeneration) {
+      route.close()
+      logEvent(this.instanceId, 'info', 'ws_open_abandoned', { reason: this.active ? 'replaced' : 'stopped' })
       return
     }
-    if (agent) {
+    this.route = route
+    this.link.noteRoute(route.viaProxy)
+    if (route.viaProxy) {
       logEvent(this.instanceId, 'info', 'proxy_applied', { wsUrl })
     }
 
@@ -607,17 +648,17 @@ class WecomBotInstance implements ImChannelInstance {
       botId: this.config.botId,
       secret: this.config.secret,
       wsUrl,
-      // -1 = infinite — bot is long-lived; we'd rather keep retrying with
-      // exponential backoff than give up. Stop() always aborts cleanly.
-      maxReconnectAttempts: -1,
+      // Redialling is the link supervisor's: each attempt is a new client on
+      // the current route. Zero keeps the SDK from redialling behind its back.
+      maxReconnectAttempts: 0,
+      maxAuthFailureAttempts: 0,
       heartbeatInterval: 30_000,
       logger: sdkLogger,
-      ...(agent ? { wsOptions: { agent } } : {}),
+      ...(route.agent ? { wsOptions: { agent: route.agent } } : {}),
     })
 
-    // Ignore events from a superseded client object. teardownClient() /
-    // openClient() swap currentClient; the old client may still emit late
-    // events (or auto-reconnect) that must not mutate our state.
+    // Ignore events from a replaced client object; the old client may still
+    // emit late events that must not mutate our state.
     const isCurrent = (): boolean => this.currentClient === client
 
     client.on('connected', () => {
@@ -627,7 +668,9 @@ class WecomBotInstance implements ImChannelInstance {
     client.on('authenticated', () => {
       if (!isCurrent()) return
       this.authenticated = true
+      this.authRejections.reset()
       this.arbiter.resetReconnectBackoff()
+      this.link.connected()
       logEvent(this.instanceId, 'info', 'subscribe_ok', {})
       if (this.connMode === 'yielding') {
         // This authenticated session is a standby probe. If it survives the
@@ -641,7 +684,8 @@ class WecomBotInstance implements ImChannelInstance {
     client.on('disconnected', (reason: string) => {
       if (!isCurrent()) return
       const wasAuthenticated = this.authenticated
-      this.authenticated = false
+      const detail = this.clientError ?? reason
+      const authRejected = this.clientAuthRejected
       logEvent(this.instanceId, 'warn', 'ws_close', {
         reason,
         wasAuthenticated,
@@ -652,21 +696,32 @@ class WecomBotInstance implements ImChannelInstance {
       this.activeStreamSessions.forEach((s) =>
         s.markStreamBroken(`ws disconnected: ${reason}`),
       )
+      // Synchronously, inside the SDK's close handling: once the client is
+      // torn down the SDK cannot schedule a reconnect of its own after this.
+      this.teardownClient()
+      if (authRejected) {
+        if (this.authRejections.record()) {
+          this.link.halt(`WeCom rejected the bot credentials: ${detail}`)
+          return
+        }
+        this.link.lost(detail)
+        return
+      }
       // A standby probe that drops mid-confirm has NOT survived the window —
       // without this, the confirm timer would still fire and recoverToActive()
       // would flush pending pushes into a dead connection (all dropped).
       if (this.connMode === 'yielding' && this.confirmTimer) {
         this.cancelProbeConfirm()
-        this.scheduleProbe()
+        this.scheduleProbe('standby probe dropped', false)
+        return
       }
-    })
-    client.on('reconnecting', (attempt: number) => {
-      if (!isCurrent()) return
-      logEvent(this.instanceId, 'info', 'reconnect_scheduled', { attempt })
+      this.link.lost(detail)
     })
     client.on('error', (err: Error) => {
       if (!isCurrent()) return
       this.counters.totalError++
+      this.clientError = err.message
+      if (err.message.startsWith(AUTH_REJECTED_PREFIX)) this.clientAuthRejected = true
       logEvent(this.instanceId, 'error', 'ws_error', {
         cat: 'network',
         err: err.message,
@@ -700,6 +755,7 @@ class WecomBotInstance implements ImChannelInstance {
 
   /**
    * Decide how to react to a supersede ("a newer connection took the slot").
+   * The kicked connection is dead either way, so it is torn down at once.
    *
    *   yielding mode  — the superseded connection was a standby probe, so the
    *                    competing device is still present: give up the probe and
@@ -719,7 +775,7 @@ class WecomBotInstance implements ImChannelInstance {
       })
       this.cancelProbeConfirm()
       this.teardownClient()
-      this.scheduleProbe()
+      this.scheduleProbe('standby probe taken over', false)
       return
     }
 
@@ -731,19 +787,21 @@ class WecomBotInstance implements ImChannelInstance {
       supersedes: this.arbiter.supersedeCount(now),
       cat: 'protocol',
     })
+    this.teardownClient()
     if (decision === 'yield') {
       this.enterStandby()
     } else {
-      this.scheduleReconnect()
+      const delay = this.arbiter.nextReconnectDelay()
+      logEvent(this.instanceId, 'info', 'reconnect_backoff', { delayMs: delay })
+      this.link.redialIn(delay, 'a newer connection took the bot slot')
     }
   }
 
-  // ── Standby / slot-arbitration timers ──────────────────────────
+  // ── Standby / slot arbitration ─────────────────────────────────
 
   /** Yield the bot slot to another device and begin periodic probing. */
   private enterStandby(): void {
     this.connMode = 'yielding'
-    this.clearReconnectTimer()
     this.cancelProbeConfirm()
     this.teardownClient()
     this.arbiter.resetProbeBackoff()
@@ -752,34 +810,17 @@ class WecomBotInstance implements ImChannelInstance {
       cat: 'protocol',
     })
     this.notifyStandbyOnce()
-    this.scheduleProbe()
+    this.scheduleProbe('standby: another device holds the bot', true)
   }
 
-  /** Active-mode reconnect after a lone supersede, with jittered backoff. */
-  private scheduleReconnect(): void {
-    this.clearReconnectTimer()
-    const delay = this.arbiter.nextReconnectDelay()
-    logEvent(this.instanceId, 'info', 'reconnect_backoff', { delayMs: delay })
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null
-      if (!this.active || this.connMode !== 'active') return
-      this.teardownClient()
-      if (this.config.botId && this.config.secret) this.openClient()
-    }, delay)
-  }
-
-  /** Schedule the next standby probe (jittered exponential backoff). */
-  private scheduleProbe(): void {
-    this.clearProbeTimer()
+  /**
+   * Schedule the next standby probe (jittered exponential backoff). The
+   * supervisor runs it; a probe that is taken over again is expected, not a drop.
+   */
+  private scheduleProbe(reason: string, interrupted: boolean): void {
     const delay = this.arbiter.nextProbeDelay()
     logEvent(this.instanceId, 'info', 'standby_probe_scheduled', { delayMs: delay })
-    this.probeTimer = setTimeout(() => {
-      this.probeTimer = null
-      if (!this.active || this.connMode !== 'yielding') return
-      logEvent(this.instanceId, 'info', 'standby_probe_start', {})
-      this.teardownClient()
-      if (this.config.botId && this.config.secret) this.openClient()
-    }, delay)
+    this.link.redialIn(delay, reason, interrupted)
   }
 
   /** A standby probe authenticated — wait to see if it survives (competitor gone). */
@@ -822,8 +863,9 @@ class WecomBotInstance implements ImChannelInstance {
     }
   }
 
-  /** Disconnect and forget the current SDK client. */
+  /** Disconnect and forget the current SDK client and its route. */
   private teardownClient(): void {
+    this.dialGeneration++
     try {
       this.wsClient?.disconnect()
     } catch (err) {
@@ -834,26 +876,10 @@ class WecomBotInstance implements ImChannelInstance {
     this.wsClient = null
     this.currentClient = null
     this.authenticated = false
-  }
-
-  private clearConflictTimers(): void {
-    this.clearReconnectTimer()
-    this.clearProbeTimer()
-    this.cancelProbeConfirm()
-  }
-
-  private clearReconnectTimer(): void {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer)
-      this.reconnectTimer = null
-    }
-  }
-
-  private clearProbeTimer(): void {
-    if (this.probeTimer) {
-      clearTimeout(this.probeTimer)
-      this.probeTimer = null
-    }
+    this.clientError = undefined
+    this.clientAuthRejected = false
+    this.route.close()
+    this.route = DIRECT_ROUTE
   }
 
   private cancelProbeConfirm(): void {
@@ -882,6 +908,8 @@ class WecomBotInstance implements ImChannelInstance {
       totalStreamPackets: this.counters.totalStreamPackets,
       totalDispatched: this.counters.totalDispatched,
       totalError: this.counters.totalError,
+      connMode: this.connMode,
+      ...this.link.snapshotFields(),
     })
   }
 

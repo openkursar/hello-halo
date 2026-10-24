@@ -13,7 +13,9 @@
  * - Missing context_token is a hard error — send is blocked until next inbound msg
  * - errcode/ret === -14 means session expired → stop and require re-auth
  * - AbortController used for clean long-poll cancellation on stop()
- * - Exponential backoff reconnect: 2s base, 30s cap, 100 attempts max
+ * - The poll loop is a link kept up by the link supervisor: a failed poll ends
+ *   the session and the supervisor starts a new one after its backoff, on the
+ *   current route (the channels' proxy setting); only an expired session stops it
  * - context_token cache key: `${accountId}:${userId}` (accountId = ilink_bot_id)
  * - Media rides the WeChat C2C CDN in both directions — see ilink-media.ts;
  *   inbound handles are downloaded and staged as local files, outbound files
@@ -34,7 +36,9 @@ import type {
   ImChannelInstance,
   ImChannelConfigFieldDef,
   ImChannelType,
+  ImConnectionState,
   ImFileCapability,
+  ImLinkStatus,
 } from '../../../../shared/types/im-channel'
 import type {
   InboundMessage,
@@ -59,6 +63,8 @@ import {
 } from './ilink-media'
 import { stageMediaFile, pruneMediaTempDir } from './media-temp-files'
 import { sendAsMessagesOrThrow, type MessageLimit } from './message-parts'
+import { DIRECT_ROUTE, openLinkRoute, type LinkRoute } from './link-route'
+import { LinkSupervisor, type LinkLogFields, type LinkLogLevel } from './link-supervisor'
 
 // ============================================
 // Constants
@@ -70,9 +76,16 @@ import { sendAsMessagesOrThrow, type MessageLimit } from './message-parts'
  */
 const ILINK_MESSAGE_LIMIT: MessageLimit = { maxChars: 4000 }
 
-const RECONNECT_BASE_DELAY_MS = 2_000
-const RECONNECT_MAX_DELAY_MS = 30_000
-const MAX_RECONNECT_ATTEMPTS = 100
+/** How long the server holds a getupdates call when nothing arrives, unless it says otherwise. */
+const DEFAULT_POLL_HOLD_MS = 35_000
+/** Slack on top of the hold before a poll that has not answered counts as failed. */
+const POLL_DEADLINE_SLACK_MS = 25_000
+/**
+ * A session counts as up once its first poll answers, which can take a whole
+ * hold. The poll's own deadline normally fails it first; this is the backstop.
+ */
+const ATTEMPT_TIMEOUT_MS = 75_000
+const HEALTH_SNAPSHOT_INTERVAL_MS = 5 * 60_000
 const DEDUP_MAX_SIZE = 200
 
 /** Local temp directory for downloaded iLink media. */
@@ -112,6 +125,27 @@ const MEDIA_LABEL: Record<InboundMediaKind, string> = {
  */
 const MAX_CONCURRENT_MEDIA_DOWNLOADS = 3
 const mediaDownloadSlots = new Semaphore(MAX_CONCURRENT_MEDIA_DOWNLOADS)
+
+// ============================================
+// Structured logging
+// ============================================
+
+function formatLogValue(v: string | number | boolean | null): string {
+  if (typeof v === 'string' && /[\s=]/.test(v)) return `"${v.replace(/"/g, '\\"')}"`
+  return String(v)
+}
+
+/** Link and state lines in the `event=<name> key=value` shape the other providers use. */
+function logLinkEvent(instanceId: string, level: LinkLogLevel, event: string, fields: LinkLogFields): void {
+  const parts = [`[WeixinIlink:${instanceId}]`, `event=${event}`]
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) parts.push(`${key}=${formatLogValue(value)}`)
+  }
+  const line = parts.join(' ')
+  if (level === 'error') console.error(line)
+  else if (level === 'warn') console.warn(line)
+  else console.log(line)
+}
 
 // ============================================
 // Public temp-file cleanup
@@ -218,9 +252,16 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
   private config: WeixinIlinkConfig
   private active = false
   private connected = false
-  private reconnectAttempts = 0
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private pollAbortController: AbortController | null = null
+  private readonly link: LinkSupervisor
+  /** Route of the current poll session; closed when the session ends. */
+  private route: LinkRoute = DIRECT_ROUTE
+  /** Bumped per poll session, so a session that was replaced stops on its next step. */
+  private sessionGeneration = 0
+  /** The server's hold time for a getupdates call, as it last reported it. */
+  private pollHoldMs = DEFAULT_POLL_HOLD_MS
+  private healthSnapshotTimer: ReturnType<typeof setInterval> | null = null
+  private startedAt = 0
   /**
    * Aborted when the instance goes down for good — stop(), or a fatal error.
    * Media downloads outlive the poll iteration that dispatched them, so they
@@ -251,6 +292,12 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
   constructor(instanceId: string, config: WeixinIlinkConfig) {
     this.instanceId = instanceId
     this.config = config
+    this.link = new LinkSupervisor({
+      log: (level, event, fields) => logLinkEvent(this.instanceId, level, event, fields),
+      dial: () => this.startPollSession(),
+      isUp: () => this.connected,
+      attemptTimeoutMs: ATTEMPT_TIMEOUT_MS,
+    })
   }
 
   // ── ImChannelInstance interface ───────────────────────────────
@@ -268,37 +315,53 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
       console.log(`[WeixinIlink:${this.instanceId}] No bot_token configured — waiting for QR login`)
       return
     }
-    this.startPolling()
+    this.startedAt = Date.now()
+    this.link.start()
+    this.healthSnapshotTimer = setInterval(() => this.emitHealthSnapshot('periodic'), HEALTH_SNAPSHOT_INTERVAL_MS)
     console.log(`[WeixinIlink:${this.instanceId}] Started`)
   }
 
   stop(): void {
     this.active = false
-    this.connected = false
-    this.abortCurrentPoll()
+    this.link.stop()
+    this.endPollSession()
+    if (this.healthSnapshotTimer) {
+      this.emitHealthSnapshot('stop')
+      clearInterval(this.healthSnapshotTimer)
+      this.healthSnapshotTimer = null
+    }
     this.shutdownController.abort()
     this.inboundHandler = null
     this.contextTokens.clear()
     this.seenMessageIds = []
     this.chatQueues.clear()
     this.updatesBuf = ''
-    this.reconnectAttempts = 0
     console.log(`[WeixinIlink:${this.instanceId}] Stopped`)
   }
 
   reconnect(): void {
     if (!this.active) return
-    this.abortCurrentPoll()
-    this.connected = false
-    this.reconnectAttempts = 0
     this.updatesBuf = ''
     if (this.config.botToken) {
-      this.startPolling()
+      this.link.redialNow('manual reconnect')
+    } else {
+      this.endPollSession()
     }
   }
 
   isConnected(): boolean {
     return this.connected
+  }
+
+  getConnectionState(): ImConnectionState {
+    if (!this.active || !this.link.isRunning()) return 'offline'
+    if (this.connected) return 'online'
+    if (this.link.isHalted()) return 'offline'
+    return this.link.wasEverOnline() ? 'reconnecting' : 'connecting'
+  }
+
+  getLinkStatus(): ImLinkStatus | undefined {
+    return this.link.isRunning() ? this.link.status() : undefined
   }
 
   pushToChat(chatId: string, text: string, _chatType: 'direct' | 'group'): boolean {
@@ -322,19 +385,57 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
 
   // ── Long-poll loop ────────────────────────────────────────────
 
-  private startPolling(): void {
-    this.abortCurrentPoll()
-    this.connected = false
-    this.pollLoop()
+  /**
+   * Start a poll session in place of the current one. Only the link
+   * supervisor calls this; the session reports back through connected() on
+   * its first answer and lost() when a poll fails, then ends.
+   */
+  private startPollSession(): void {
+    this.endPollSession()
+    const generation = this.sessionGeneration
+    void this.runPollSession(generation).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[WeixinIlink:${this.instanceId}] Poll session threw:`, message)
+      if (generation === this.sessionGeneration) {
+        this.endPollSession()
+        this.link.lost(message)
+      }
+    })
   }
 
-  private async pollLoop(): Promise<void> {
-    while (this.active && this.config.botToken) {
+  /** Abort the current poll session, if any, and release its route. */
+  private endPollSession(): void {
+    this.sessionGeneration++
+    this.connected = false
+    if (this.pollAbortController) {
+      this.pollAbortController.abort()
+      this.pollAbortController = null
+    }
+    this.route.close()
+    this.route = DIRECT_ROUTE
+  }
+
+  private async runPollSession(generation: number): Promise<void> {
+    const baseUrl = this.config.baseUrl || ILINK_BASE_URL
+    let route: LinkRoute
+    try {
+      route = await openLinkRoute(baseUrl)
+    } catch (err) {
+      route = DIRECT_ROUTE
+      console.warn(`[WeixinIlink:${this.instanceId}] Could not resolve the route, polling directly:`, err)
+    }
+    if (!this.active || generation !== this.sessionGeneration) {
+      route.close()
+      return
+    }
+    this.route = route
+    this.link.noteRoute(route.viaProxy)
+
+    while (this.active && this.config.botToken && generation === this.sessionGeneration) {
       const abortController = new AbortController()
       this.pollAbortController = abortController
 
       try {
-        const baseUrl = this.config.baseUrl || ILINK_BASE_URL
         const url = `${baseUrl}/ilink/bot/getupdates`
         const headers = buildAuthHeaders(this.config.botToken)
         const body = {
@@ -347,10 +448,11 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
           url,
           headers,
           body,
-          abortController.signal
+          abortController.signal,
+          { agent: route.agent, deadlineMs: this.pollHoldMs + POLL_DEADLINE_SLACK_MS },
         )
 
-        if (!this.active) break
+        if (!this.active || generation !== this.sessionGeneration) return
 
         // iLink API omits `ret` on success — treat missing as 0.
         // Use errcode as fallback; errcode=-14 means session expired.
@@ -362,25 +464,28 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
             `[WeixinIlink:${this.instanceId}] Session expired (code -14) — re-auth via QR required`
           )
           this.haltOnFatal()
-          break
+          return
         }
 
         if (retCode !== 0) {
           console.warn(
             `[WeixinIlink:${this.instanceId}] getupdates error retCode=${retCode} errcode=${response.errcode ?? 'n/a'}, will retry`
           )
-          this.connected = false
-          await this.backoffDelay()
-          continue
+          this.endPollSession()
+          this.link.lost(`getupdates returned ${retCode}`)
+          return
         }
 
         // Successful response
         if (!this.connected) {
           this.connected = true
-          this.reconnectAttempts = 0
+          this.link.connected()
           console.log(`[WeixinIlink:${this.instanceId}] Connected (long-poll active)`)
         }
 
+        if (response.longpolling_timeout_ms && response.longpolling_timeout_ms > 0) {
+          this.pollHoldMs = response.longpolling_timeout_ms
+        }
         if (response.get_updates_buf) {
           this.updatesBuf = response.get_updates_buf
         }
@@ -396,64 +501,42 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
 
         // Re-poll immediately — server holds connection up to 35s
       } catch (err: unknown) {
-        if (!this.active) break
+        // A replaced or stopped session was aborted on purpose.
+        if (!this.active || generation !== this.sessionGeneration) return
 
         const errMsg = err instanceof Error ? err.message : String(err)
-        if (errMsg === 'Aborted') break
-
         console.error(`[WeixinIlink:${this.instanceId}] Poll error:`, errMsg)
-        this.connected = false
-        await this.backoffDelay()
+        this.endPollSession()
+        this.link.lost(errMsg)
+        return
       }
     }
-
-    this.pollAbortController = null
-  }
-
-  private async backoffDelay(): Promise<void> {
-    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      console.error(
-        `[WeixinIlink:${this.instanceId}] Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached, stopping`
-      )
-      this.haltOnFatal()
-      return
-    }
-    const delay = Math.min(
-      RECONNECT_BASE_DELAY_MS * Math.pow(2, this.reconnectAttempts),
-      RECONNECT_MAX_DELAY_MS
-    )
-    this.reconnectAttempts++
-    console.log(
-      `[WeixinIlink:${this.instanceId}] Backing off ${delay}ms (attempt ${this.reconnectAttempts})`
-    )
-    await new Promise<void>((resolve) => {
-      this.reconnectTimer = setTimeout(resolve, delay)
-    })
-    this.reconnectTimer = null
   }
 
   /**
-   * Give up on the channel from the inside — session expiry, exhausted
-   * reconnects. Downloads still in flight are aborted rather than left to run
-   * to their deadline and stage files nothing will ever read; start() issues a
-   * fresh controller once the channel is revived.
+   * Give up on the channel from the inside — an expired session, which only a
+   * new QR login fixes. Downloads still in flight are aborted rather than left
+   * to run to their deadline and stage files nothing will ever read; start()
+   * issues a fresh controller once the channel is revived.
    */
   private haltOnFatal(): void {
     this.active = false
-    this.connected = false
-    this.abortCurrentPoll()
+    this.link.halt('WeChat session expired — scan the QR code again')
+    this.endPollSession()
     this.shutdownController.abort()
   }
 
-  private abortCurrentPoll(): void {
-    if (this.pollAbortController) {
-      this.pollAbortController.abort()
-      this.pollAbortController = null
-    }
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer)
-      this.reconnectTimer = null
-    }
+  /** Periodic state line for this long-lived link (see the other providers). */
+  private emitHealthSnapshot(trigger: 'periodic' | 'stop'): void {
+    logLinkEvent(this.instanceId, 'info', 'health_snapshot', {
+      trigger,
+      uptimeMs: this.startedAt ? Date.now() - this.startedAt : 0,
+      active: this.active,
+      connected: this.connected,
+      chatsInFlight: this.chatQueues.size,
+      pollHoldMs: this.pollHoldMs,
+      ...this.link.snapshotFields(),
+    })
   }
 
   // ── Inbound message handling ─────────────────────────────────

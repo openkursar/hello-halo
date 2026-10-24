@@ -60,6 +60,7 @@ import type { ImPermissionDefaults } from './ImInstancePermissionSection'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { HelpHint } from '../ui/HelpHint'
 import { ImProcessingNoticeRow } from './ImProcessingNoticeRow'
+import { ImLinkStatusNotice, imConnectionState, imLinkView, imSectionSummary } from './ImLinkStatus'
 import { effectiveSmtpPort, parseSmtpPort, smtpPortAfterSecureChange } from './smtp-port'
 
 // ============================================
@@ -436,6 +437,8 @@ interface InstanceCardProps {
   onRebind: (appId: string) => void
   onDelete: () => void
   onReconnect: () => void
+  /** Take message channels off the proxy (offered when the proxy route keeps failing). */
+  onUseDirect: () => void
   /** Warning message when this instance's Bot ID conflicts with another instance */
   duplicateWarning?: string
   /** Product-level permission defaults */
@@ -453,36 +456,21 @@ function InstanceCard({
   onRebind,
   onDelete,
   onReconnect,
+  onUseDirect,
   duplicateWarning,
   permissionDefaults,
 }: InstanceCardProps) {
   const { t } = useTranslation()
-  // Prefer the fine-grained state; fall back to the connected boolean for
-  // providers/statuses that don't report it.
-  const state = status?.state ?? (status?.connected ? 'online' : 'offline')
+  const state = imConnectionState(status)
   const isConnected = state === 'online'
   const isStandby = state === 'standby'
   const isEnabled = instance.enabled
   const cfg = instance.config as Record<string, unknown>
   const botId = (cfg.botId as string) || ''
 
-  // Status indicator. Standby (superseded by another device) is informational
-  // rather than an error, so it gets its own colour.
-  const statusDot = !isEnabled
-    ? 'bg-muted-foreground/30'
-    : isConnected
-      ? 'bg-green-500'
-      : isStandby
-        ? 'bg-sky-500'
-        : 'bg-amber-500'
-
-  const statusText = !isEnabled
-    ? t('Disabled')
-    : isConnected
-      ? t('Connected')
-      : isStandby
-        ? t('Standby')
-        : t('Disconnected')
+  // Standby (superseded by another device) is informational rather than an
+  // error, so it gets its own colour.
+  const { dotClass: statusDot, label: statusText } = imLinkView(status, isEnabled, t)
 
   const [showMenu, setShowMenu] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -699,11 +687,8 @@ function InstanceCard({
               </button>
             </div>
           )}
-          {isEnabled && !isStandby && !isConnected && (
-            <div className="flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-600 theme-dark:text-amber-500">
-              <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-              {t('Disconnected')}
-            </div>
+          {isEnabled && (
+            <ImLinkStatusNotice status={status} onReconnect={onReconnect} onUseDirect={onUseDirect} />
           )}
 
           <InstanceSection title={t('Connection')} first>
@@ -1149,21 +1134,22 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
       .catch(() => { /* stays null — no help links */ })
   }, [])
 
-  // Poll IM channel statuses
-  useEffect(() => {
-    let cancelled = false
-    async function fetchStatuses() {
-      try {
-        const res = await api.imChannelsStatus() as { success: boolean; data?: ImChannelInstanceStatus[] }
-        if (!cancelled && res.success && res.data) {
-          setImStatuses(res.data)
-        }
-      } catch { /* ignore */ }
-    }
-    fetchStatuses()
-    const interval = setInterval(fetchStatuses, 10_000)
-    return () => { cancelled = true; clearInterval(interval) }
+  // Poll IM channel statuses; also read at once after an action that changes a link
+  const statusesMountedRef = useRef(true)
+  const fetchStatuses = useCallback(async () => {
+    try {
+      const res = await api.imChannelsStatus() as { success: boolean; data?: ImChannelInstanceStatus[] }
+      if (statusesMountedRef.current && res.success && res.data) {
+        setImStatuses(res.data)
+      }
+    } catch { /* ignore */ }
   }, [])
+  useEffect(() => {
+    statusesMountedRef.current = true
+    void fetchStatuses()
+    const interval = setInterval(fetchStatuses, 10_000)
+    return () => { statusesMountedRef.current = false; clearInterval(interval) }
+  }, [fetchStatuses])
 
   // ── IM Channel instances ────────────────────────────────────────
   // Main writes instance fields itself — the owner a first direct message
@@ -1432,7 +1418,23 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
     try {
       await api.imChannelsReconnect(instanceId)
     } catch { /* ignore */ }
-  }, [])
+    void fetchStatuses()
+  }, [fetchStatuses])
+
+  // Same setting as Settings → System → Proxy; every bot redials on the new
+  // route by itself once it is saved.
+  const handleUseDirect = useCallback(async () => {
+    const current = configRef.current
+    if (!current) return
+    const network = { ...current.network, imUseProxy: false }
+    try {
+      await api.setConfig({ network })
+      setConfig({ ...current, network } as HaloConfig)
+    } catch (error) {
+      console.error('[MessageChannelsSection] Failed to take message channels off the proxy:', error)
+    }
+    void fetchStatuses()
+  }, [setConfig, fetchStatuses])
 
   // ── Notification channel handling ──────────────────────────────
   const toggleExpanded = useCallback((channelId: string) => {
@@ -1497,51 +1499,12 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
 
   const feishuInstances = (instances as ImChannelInstanceConfig[]).filter(i => i.type === 'feishu-bot')
 
-  const wecomConnectedCount = imStatuses.filter(s => s.type === 'wecom-bot' && s.connected).length
-  const wecomStandbyCount = imStatuses.filter(s => s.type === 'wecom-bot' && s.state === 'standby').length
-  const weixinConnectedCount = imStatuses.filter(s => s.type === 'weixin-ilink-bot' && s.connected).length
-
-  const wecomStatusSummary = wecomInstances.length === 0
-    ? t('Not configured')
-    : wecomConnectedCount > 0
-      ? `${wecomConnectedCount} ${t('connected')}`
-      : wecomStandbyCount > 0
-        ? t('Standby')
-        : t('Disconnected')
-
-  const wecomStatusColor = wecomInstances.length === 0
-    ? 'bg-muted-foreground/30'
-    : wecomConnectedCount > 0
-      ? 'bg-green-500'
-      : wecomStandbyCount > 0
-        ? 'bg-sky-500'
-        : 'bg-amber-500'
-
-  const weixinStatusSummary = weixinIlinkInstances.length === 0
-    ? t('Not configured')
-    : weixinConnectedCount > 0
-      ? `${weixinConnectedCount} ${t('connected')}`
-      : t('Disconnected')
-
-  const weixinStatusColor = weixinIlinkInstances.length === 0
-    ? 'bg-muted-foreground/30'
-    : weixinConnectedCount > 0
-      ? 'bg-green-500'
-      : 'bg-amber-500'
-
-  const feishuConnectedCount = imStatuses.filter(s => s.type === 'feishu-bot' && s.connected).length
-
-  const feishuStatusSummary = feishuInstances.length === 0
-    ? t('Not configured')
-    : feishuConnectedCount > 0
-      ? `${feishuConnectedCount} ${t('connected')}`
-      : t('Disconnected')
-
-  const feishuStatusColor = feishuInstances.length === 0
-    ? 'bg-muted-foreground/30'
-    : feishuConnectedCount > 0
-      ? 'bg-green-500'
-      : 'bg-amber-500'
+  const { label: wecomStatusSummary, dotClass: wecomStatusColor } =
+    imSectionSummary(imStatuses, 'wecom-bot', wecomInstances.length, t)
+  const { label: weixinStatusSummary, dotClass: weixinStatusColor } =
+    imSectionSummary(imStatuses, 'weixin-ilink-bot', weixinIlinkInstances.length, t)
+  const { label: feishuStatusSummary, dotClass: feishuStatusColor } =
+    imSectionSummary(imStatuses, 'feishu-bot', feishuInstances.length, t)
 
   const isFeishuExpanded = expandedChannels.has('im-feishu-bot')
   const isImExpanded = expandedChannels.has('im-wecom-bot')
@@ -1621,6 +1584,9 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                   onChange={(patch) => handleInstanceChange(inst.id, patch)}
                   onRebind={(appId) => handleRebindInstance(inst.id, appId)}
                   onDelete={() => handleDeleteInstance(inst.id)}
+                  onReconnect={() => handleReconnectInstance(inst.id)}
+                  onUseDirect={handleUseDirect}
+                  onLinkChanged={() => { void fetchStatuses() }}
                 />
               ))}
 
@@ -1688,6 +1654,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                   onRebind={(appId) => handleRebindInstance(inst.id, appId)}
                   onDelete={() => handleDeleteInstance(inst.id)}
                   onReconnect={() => handleReconnectInstance(inst.id)}
+                  onUseDirect={handleUseDirect}
                   duplicateWarning={getDuplicateWarning(inst, instances)}
                   permissionDefaults={permissionDefaults}
                 />
@@ -1754,6 +1721,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                   onRebind={(appId) => handleRebindInstance(inst.id, appId)}
                   onDelete={() => handleDeleteInstance(inst.id)}
                   onReconnect={() => handleReconnectInstance(inst.id)}
+                  onUseDirect={handleUseDirect}
                   duplicateWarning={getDuplicateWarning(inst, instances)}
                   permissionDefaults={permissionDefaults}
                 />

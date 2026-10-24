@@ -31,6 +31,7 @@ import type { ImPermissionDefaults } from './ImInstancePermissionSection'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { HelpHint } from '../ui/HelpHint'
 import { ImProcessingNoticeRow } from './ImProcessingNoticeRow'
+import { ImLinkStatusNotice, imConnectionState, imLinkView } from './ImLinkStatus'
 import { Switch, switchRowHover } from '../ui/Switch'
 
 export interface FeishuInstanceCardProps {
@@ -46,6 +47,8 @@ export interface FeishuInstanceCardProps {
   onRebind: (appId: string) => void
   onDelete: () => void
   onReconnect: () => void
+  /** Take message channels off the proxy (offered when the proxy route keeps failing). */
+  onUseDirect: () => void
   /** Warning shown when this instance's App ID collides with another instance. */
   duplicateWarning?: string
   permissionDefaults?: ImPermissionDefaults | null
@@ -68,26 +71,16 @@ export function FeishuInstanceCard({
   onRebind,
   onDelete,
   onReconnect,
+  onUseDirect,
   duplicateWarning,
   permissionDefaults,
 }: FeishuInstanceCardProps) {
   const { t } = useTranslation()
-  const state = status?.state ?? (status?.connected ? 'online' : 'offline')
-  const isConnected = state === 'online'
+  const isConnected = imConnectionState(status) === 'online'
   const isEnabled = instance.enabled
   const cfg = instance.config as Record<string, unknown>
 
-  const statusDot = !isEnabled
-    ? 'bg-muted-foreground/30'
-    : isConnected
-      ? 'bg-green-500'
-      : 'bg-amber-500'
-
-  const statusText = !isEnabled
-    ? t('Disabled')
-    : isConnected
-      ? t('Connected')
-      : t('Disconnected')
+  const { dotClass: statusDot, label: statusText } = imLinkView(status, isEnabled, t)
 
   const [showMenu, setShowMenu] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -453,17 +446,18 @@ export function FeishuInstanceCard({
           />
 
           {/* Connection status */}
-          {isEnabled && (
-            <div className={`flex items-center gap-1.5 text-sm ${isConnected ? 'text-green-500' : 'text-amber-500'}`}>
-              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-amber-500'}`} />
+          {isEnabled && isConnected && (
+            <div className="flex items-center gap-1.5 text-sm text-green-500">
+              <div className="w-2 h-2 rounded-full bg-green-500" />
               <span>
-                {!isConnected
-                  ? t('Disconnected')
-                  : silentSinceConnect
-                    ? t('Connected · no messages received yet')
-                    : t('Connected')}
+                {silentSinceConnect
+                  ? t('Connected · no messages received yet')
+                  : t('Connected')}
               </span>
             </div>
+          )}
+          {isEnabled && (
+            <ImLinkStatusNotice status={status} onReconnect={onReconnect} onUseDirect={onUseDirect} />
           )}
 
           {isEnabled && silentSinceConnect && (
@@ -478,9 +472,6 @@ export function FeishuInstanceCard({
                 </p>
               </div>
             </div>
-          )}
-          {isEnabled && !isConnected && status?.reason && (
-            <p className="text-xs text-amber-500 break-words">{status.reason}</p>
           )}
         </div>
       )}

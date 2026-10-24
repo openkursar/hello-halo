@@ -52,8 +52,8 @@ export const MODULE: RouteModuleMeta = {
       expose: 'ai',
       group: 'channels',
       summary: 'Get connection status for all IM channel instances, or one via ?instanceId=',
-      returns: '{success:true,data:{id,type,enabled,connected,state?,appId,appName?,reason?,identityResolution?}[] | <single instance object>}',
-      notes: 'No credentials in this response. instanceId not found → {success:false,error}.',
+      returns: '{success:true,data:{id,type,enabled,connected,state?,link?,appId,appName?,reason?,identityResolution?}[] | <single instance object>}',
+      notes: 'No credentials in this response. state: online | connecting (not up yet since start) | reconnecting (was up, retrying on its own) | standby (another device holds the bot) | offline (disabled, or stopped until someone acts — see link.lastError). link: {attempt (failed attempts in a row), nextRetryAt? (epoch ms), lastError?, viaProxy, drops}. A link that is connecting or reconnecting recovers by itself; reconnect only to retry at once. instanceId not found → {success:false,error}.',
     },
     'POST /api/im-channels/reconnect': {
       expose: 'ai',

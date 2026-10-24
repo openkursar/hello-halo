@@ -14,8 +14,9 @@
 
 import https from 'https'
 import http from 'http'
-import type { IncomingHttpHeaders } from 'http'
+import type { Agent, IncomingHttpHeaders } from 'http'
 import { URL } from 'url'
+import { resolveLinkAgent } from './link-route'
 
 // ============================================
 // Constants
@@ -78,6 +79,11 @@ export interface IlinkRequestOptions {
   body?: Buffer | string
   /** Cancels a request in flight (e.g. the 35 s long-poll on stop()). */
   signal?: AbortSignal
+  /**
+   * Agent to send through. Absent means the IM channels' route for this URL
+   * (the app's proxy chain, or direct when the user took channels off it).
+   */
+  agent?: Agent
   /** Abort once the response body grows past this size. */
   maxBytes?: number
   /** Abort when the socket makes no progress for this long. */
@@ -95,8 +101,9 @@ export interface IlinkRequestOptions {
  * Used directly for binary transfers (CDN media download / upload);
  * {@link fetchJson} builds on it for the JSON API endpoints.
  */
-export function fetchBinary(options: IlinkRequestOptions): Promise<IlinkRawResponse> {
+export async function fetchBinary(options: IlinkRequestOptions): Promise<IlinkRawResponse> {
   const { method, url, headers = {}, body, signal, maxBytes, timeoutMs, deadlineMs } = options
+  const agent = options.agent ?? await resolveLinkAgent(url)
 
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -119,6 +126,7 @@ export function fetchBinary(options: IlinkRequestOptions): Promise<IlinkRawRespo
       path: parsedUrl.pathname + parsedUrl.search,
       method,
       headers: reqHeaders,
+      ...(agent ? { agent } : {}),
     }
 
     let deadlineTimer: ReturnType<typeof setTimeout> | null = null
@@ -188,13 +196,15 @@ export function fetchBinary(options: IlinkRequestOptions): Promise<IlinkRawRespo
  *
  * @param signal - Optional AbortSignal for cancelling long-running requests
  *                 (e.g., the 35 s long-poll in the provider).
+ * @param options - Agent and wall-clock deadline, see {@link IlinkRequestOptions}.
  */
 export async function fetchJson<T>(
   method: 'GET' | 'POST',
   urlStr: string,
   headers: Record<string, string>,
   body?: unknown,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: Pick<IlinkRequestOptions, 'agent' | 'deadlineMs'>,
 ): Promise<T> {
   const res = await fetchBinary({
     method,
@@ -202,6 +212,7 @@ export async function fetchJson<T>(
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
     signal,
+    ...options,
   })
 
   const raw = res.body.toString('utf8')

@@ -363,12 +363,30 @@ export interface ImChannelProvider {
  * yielded the connection because the same bot credential is active on another
  * device (protocols such as WeCom grant the slot to the newest connection).
  *
- *   'connecting' — starting up / retrying, not yet serving
- *   'online'     — connected and serving messages
- *   'standby'    — yielded; another device holds the bot slot
- *   'offline'    — disabled or stopped
+ *   'connecting'   — not up yet since the channel started
+ *   'online'       — connected and serving messages
+ *   'reconnecting' — was up since the channel started, lost the link, retrying
+ *   'standby'      — yielded; another device holds the bot slot
+ *   'offline'      — disabled, stopped, or given up until the user acts
  */
-export type ImConnectionState = 'connecting' | 'online' | 'standby' | 'offline'
+export type ImConnectionState = 'connecting' | 'online' | 'reconnecting' | 'standby' | 'offline'
+
+/**
+ * How a channel's link is doing, for the settings UI and diagnostics.
+ * Reported by instances whose link is kept up by the shared link supervisor.
+ */
+export interface ImLinkStatus {
+  /** Attempts that failed in a row since the link was last up. */
+  attempt: number
+  /** When the next attempt is due (epoch ms); absent while one is in flight or none is planned. */
+  nextRetryAt?: number
+  /** What the last failed attempt or dropped link reported, verbatim from the transport. */
+  lastError?: string
+  /** Whether the link goes through a proxy. */
+  viaProxy: boolean
+  /** How many times a link that was up dropped since the channel started. */
+  drops: number
+}
 
 /**
  * A running IM channel connection instance.
@@ -406,6 +424,9 @@ export interface ImChannelInstance {
    * falls back to deriving state from isConnected() when it is absent.
    */
   getConnectionState?(): ImConnectionState
+
+  /** Optional link detail; absent while the instance is not running a link. */
+  getLinkStatus?(): ImLinkStatus | undefined
 
   /**
    * Push a message proactively to a specific chat. `text` may be of any
@@ -606,6 +627,8 @@ export interface ImChannelInstanceStatus {
    * derives online/offline from `connected`.
    */
   state?: ImConnectionState
+  /** Link detail, present for instances that report it. */
+  link?: ImLinkStatus
   /** Bound digital human App ID */
   appId: string
   /** Bound digital human App name (resolved at query time) */

@@ -30,6 +30,9 @@ export function sanitizeReport(report: DiagnosticReport): DiagnosticReport {
     error.message = sanitizeString(error.message)
     error.source = sanitizeString(error.source)
   }
+  for (const channel of sanitized.imChannels) {
+    if (channel.lastError) channel.lastError = sanitizeString(channel.lastError)
+  }
 
   return sanitized
 }

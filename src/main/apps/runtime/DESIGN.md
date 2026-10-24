@@ -1692,6 +1692,12 @@ src/main/apps/runtime/
                                 (message_aibot_sessions_list over MCP Streamable HTTP)
     message-parts.ts         -- A text longer than one platform message as ordered
                                 `(i/n)` parts; the limit is each provider's (§4.2)
+    link-supervisor.ts       -- Keeps one instance's long-lived link up: attempt
+                                deadline, backoff, wake/route redials, halt (§4.5)
+    link-route.ts            -- Where IM traffic goes (proxy chain or direct per
+                                `network.imUseProxy`), per-dial abortable routes
+    link-signals.ts          -- Process-wide resume / address-change / route-change
+                                signals and the 30 s tick, held while links run
     *.provider.ts            -- Brand-specific provider implementations
                                 (wecom-bot.provider.ts, weixin-ilink.provider.ts, ...)
 ```
@@ -1810,6 +1816,54 @@ in the same chat — a stopped turn can take a while to wind down, and a notice
 after "Generation stopped." reads as the work starting again. Owners can turn the notice off per
 instance (`ImChannelInstanceConfig.processingNotice`, on unless `false`; the
 settings card greys it out while streaming is on).
+
+### 4.5 Keeping a link up
+
+A bot's long-lived link (WeCom WebSocket, Feishu long connection, WeChat
+long-poll) is kept up by `im-channels/link-supervisor.ts`, one per instance. The
+provider owns the protocol — how to dial, what "up" means, what a platform
+error says — and reports `connected()` / `lost(reason)` / `dropped(reason)`
+(the transport is reconnecting by itself) / `halt(reason)`. The supervisor owns
+that a link which is not up is always either being dialled under the
+provider's attempt deadline or waiting for a redial (1 s doubling to 30 s,
+jittered), never stuck: before it, a proxy that accepted the TCP connection and
+then said nothing held four WeCom bots "connecting" for an hour, and Feishu
+waited out the server's 120 s reconnect pace on the agent it was built with.
+Only a halt stops retrying until the user reconnects, changes the credentials
+or restarts Halo: an expired WeChat session, or WeCom / Feishu credentials the
+platform rejected five times, the first a minute or more before (Feishu by the
+platform's own codes, never a network error). The rejections are counted by
+`CredentialRejectionBudget` since the start, the last connection or the user's
+reconnect; network failures in between neither count nor reset them, and the
+minute lets a bot created moments ago come up before the platform knows it.
+Pacing a caller owns (WeCom slot arbitration, `connection-arbiter.ts`) goes
+through `redialIn`, so the supervisor stays the one timer; wake signals leave
+such a redial alone.
+
+Each redial is a fresh `dial()`: a new SDK client (WeCom, with the SDK's own
+reconnect at 0 so it never redials behind the supervisor), a rebuilt channel
+(Feishu, whose `disconnect()` skips a channel that never finished its handshake
+— so teardown also closes its raw WebSocket client, which would otherwise keep
+redialling and take a share of the app's event deliveries with no handler), or
+a new poll session (WeChat). The dial resolves its route through
+`im-channels/link-route.ts`: the app's proxy chain unless the user turned
+"Message channels use the proxy" (`network.imUseProxy`) off — a failing proxy is
+never bypassed on the channel's own initiative; the settings card offers a
+one-click switch instead. A dial's route has a private agent whose sockets die
+with it (`resolveProxyDialAgent`), including one to a proxy that never answered
+CONNECT; a pooled agent cannot reach those. Feishu keeps a replaced channel's
+route open for its in-flight API calls (10 min at most). One-off requests (media,
+lookups, the WeChat QR flow) use `linkFetch` / `resolveLinkAgent` on the same
+route.
+
+`im-channels/link-signals.ts` holds, for the whole process and only while a link
+is supervised, the moments that redial everything at once: system resume (+5 s),
+a change of the machine's external IPv4 addresses (checked on a 30 s tick, which
+also catches a link reported up whose transport is down), and a route change
+(debounced 1 s). State goes out as `getConnectionState()` (`reconnecting` = was
+up since start) and `getLinkStatus()` (failed attempts, next retry, last error,
+via proxy, drops); the manager forwards it, the settings cards show it, and the
+diagnostic report lists it through the app bridge.
 
 Tests live in `tests/unit/apps/runtime/` mirroring the source layout.
 

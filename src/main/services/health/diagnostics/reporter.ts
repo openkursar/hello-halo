@@ -69,6 +69,21 @@ export function formatReportAsText(report: DiagnosticReport): string {
     ''
   ]
 
+  if (report.imChannels.length > 0) {
+    lines.push('--- Message Channels ---')
+    for (const ch of report.imChannels) {
+      const detail = [
+        ch.enabled ? ch.state : 'disabled',
+        ch.failures ? `failures=${ch.failures}` : '',
+        ch.drops ? `drops=${ch.drops}` : '',
+        ch.viaProxy ? 'via proxy' : '',
+        ch.lastError ? `last error: ${ch.lastError}` : '',
+      ].filter(Boolean).join(', ')
+      lines.push(`${ch.type} #${ch.ordinal ?? '?'}: ${detail}`)
+    }
+    lines.push('')
+  }
+
   if (report.recentErrors.length > 0) {
     lines.push('--- Recent Errors ---')
     for (const error of report.recentErrors) {

@@ -9,12 +9,12 @@
  * (the ws handshake is proxied via wsOptions.agent, but that never covers
  * these plain HTTP downloads). This module reproduces the SDK's behaviour —
  * Content-Disposition filename parsing plus its public decryptFile helper —
- * on top of proxyFetch so media downloads follow the same proxy chain as
- * every other outbound HTTP call.
+ * on top of the channel's own route (link-route), so media downloads go the
+ * same way as the bot's connection.
  */
 
 import { decryptFile } from '@wecom/aibot-node-sdk'
-import { proxyFetch } from '../../../services/proxy-fetch'
+import { linkFetch } from './link-route'
 
 export interface WecomDownloadedMedia {
   buffer: Buffer
@@ -22,7 +22,7 @@ export interface WecomDownloadedMedia {
 }
 
 /**
- * Fetch a WeCom media URL through the app proxy chain and decrypt it.
+ * Fetch a WeCom media URL on the channel's route and decrypt it.
  *
  * @param aesKey - Base64 AES key from the message's image/file/video
  *   fragment. When absent the raw (unencrypted) body is returned, matching
@@ -32,7 +32,7 @@ export async function downloadWecomMedia(
   url: string,
   aesKey?: string,
 ): Promise<WecomDownloadedMedia> {
-  const response = await proxyFetch(url)
+  const response = await linkFetch(url)
   if (!response.ok) {
     throw new Error(`WeCom media download failed: HTTP ${response.status}`)
   }

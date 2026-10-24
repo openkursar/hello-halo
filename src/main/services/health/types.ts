@@ -331,6 +331,18 @@ export interface DiagnosticReport {
     message: string
   }>
 
+  /** Every configured IM channel and how its link is doing (errors sanitized) */
+  imChannels: Array<{
+    type: string
+    ordinal?: number
+    enabled: boolean
+    state: string
+    failures?: number
+    drops?: number
+    viaProxy?: boolean
+    lastError?: string
+  }>
+
   /** System info */
   system: {
     memory: { total: string; free: string }

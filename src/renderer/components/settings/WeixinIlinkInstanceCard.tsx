@@ -24,6 +24,7 @@ import type {
 import { ChannelBackendSelect, ChannelBackendName } from './ChannelBackendSelect'
 import { getImBotLabel } from '../apps/im-channel-labels'
 import { ImProcessingNoticeRow } from './ImProcessingNoticeRow'
+import { ImLinkStatusNotice, imConnectionState, imLinkView } from './ImLinkStatus'
 import type {
   ChannelBackendApp,
   ChannelBackendTeam,
@@ -55,6 +56,11 @@ export interface WeixinIlinkInstanceCardProps {
   /** Rebinding goes through main so its validation applies to both binding surfaces. */
   onRebind: (appId: string) => void
   onDelete: () => void
+  onReconnect: () => void
+  /** Take message channels off the proxy (offered when the proxy route keeps failing). */
+  onUseDirect: () => void
+  /** Ask for a fresh status at once, after this card changed the link (a confirmed sign-in). */
+  onLinkChanged: () => void
 }
 
 // ============================================
@@ -96,9 +102,17 @@ export function WeixinIlinkInstanceCard({
   onChange,
   onRebind,
   onDelete,
+  onReconnect,
+  onUseDirect,
+  onLinkChanged,
 }: WeixinIlinkInstanceCardProps) {
   const { t } = useTranslation()
-  const isConnected = status?.connected ?? false
+  const linkState = imConnectionState(status)
+  const isConnected = linkState === 'online'
+  // Signed in and polling (or retrying) — a link that is down is not a reason
+  // to show the QR sign-in again. An expired session is: only a new scan fixes it.
+  const isLinked = linkState !== 'offline'
+  const isExpired = linkState === 'offline' && Boolean(status?.link?.lastError)
   const isEnabled = instance.enabled
 
   const [authState, setAuthState] = useState<WeixinIlinkAuthState>({ status: 'idle' })
@@ -108,6 +122,8 @@ export function WeixinIlinkInstanceCard({
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const onChangeRef = useRef(onChange)
   useEffect(() => { onChangeRef.current = onChange })
+  const onLinkChangedRef = useRef(onLinkChanged)
+  useEffect(() => { onLinkChangedRef.current = onLinkChanged })
 
   // Close menu on outside click
   useEffect(() => {
@@ -132,12 +148,18 @@ export function WeixinIlinkInstanceCard({
     }
   }, [])
 
-  // When already connected in status, show connected state
+  // Follow the signed-in state main reports. Only a session that expires while
+  // shown sends the card back to the QR sign-in: right after a fresh scan the
+  // status can still be the old expired one until the next refresh.
+  const wasExpiredRef = useRef(isExpired)
   useEffect(() => {
-    if (isConnected && authState.status === 'idle') {
+    if (isLinked && authState.status === 'idle') {
       setAuthState({ status: 'connected' })
+    } else if (isExpired && !wasExpiredRef.current && authState.status === 'connected') {
+      setAuthState({ status: 'idle' })
     }
-  }, [isConnected, authState.status])
+    wasExpiredRef.current = isExpired
+  }, [isLinked, isExpired, authState.status])
 
   const stopPolling = useCallback(() => {
     if (pollIntervalRef.current) {
@@ -167,6 +189,8 @@ export function WeixinIlinkInstanceCard({
             enabled: true,
             config: { botToken, baseUrl: confirmedBaseUrl, accountId: accountId ?? '' },
           })
+          // The status shown is still the pre-scan one (e.g. an expired session).
+          onLinkChangedRef.current()
         } else if (pollStatus === 'expired') {
           stopPolling()
           setAuthState({ status: 'expired' })
@@ -216,17 +240,11 @@ export function WeixinIlinkInstanceCard({
     else onRebind(target.appId)
   }, [onChange, onRebind])
 
-  const statusDot = !isEnabled
-    ? 'bg-muted-foreground/30'
-    : (authState.status === 'connected' || isConnected)
-      ? 'bg-green-500'
-      : 'bg-amber-500'
-
-  const statusText = !isEnabled
-    ? t('Disabled')
-    : (authState.status === 'connected' || isConnected)
-      ? t('Connected')
-      : t('Not connected')
+  const isSignedIn = authState.status === 'connected' || isLinked
+  const linkView = imLinkView(status, isEnabled, t)
+  const showsLink = isSignedIn || isExpired || !isEnabled
+  const statusDot = showsLink ? linkView.dotClass : 'bg-amber-500'
+  const statusText = showsLink ? linkView.label : t('Not connected')
 
   return (
     <div className="rounded-lg bg-card">
@@ -302,6 +320,8 @@ export function WeixinIlinkInstanceCard({
       {/* Instance body */}
       {isExpanded && (
         <div className="px-3 pb-3 pt-1 space-y-3 animate-in slide-in-from-top-1 duration-150">
+          {isExpired && !isSignedIn && isEnabled && <ImLinkStatusNotice status={status} />}
+
           {/* Auth flow */}
           <div className="flex flex-col items-center gap-3 py-2">
             {authState.status === 'idle' && (
@@ -341,12 +361,18 @@ export function WeixinIlinkInstanceCard({
               </div>
             )}
 
-            {(authState.status === 'connected' || isConnected) && (
+            {isSignedIn && (
               <div className="flex flex-col items-center gap-2 w-full">
-                <div className="flex items-center gap-1.5 text-sm text-green-500">
-                  <div className="w-2 h-2 rounded-full bg-green-500" />
-                  <span>{t('Connected')}</span>
-                </div>
+                {isConnected ? (
+                  <div className="flex items-center gap-1.5 text-sm text-green-500">
+                    <div className="w-2 h-2 rounded-full bg-green-500" />
+                    <span>{t('Connected')}</span>
+                  </div>
+                ) : isEnabled && !isExpired && (
+                  <div className="w-full">
+                    <ImLinkStatusNotice status={status} onReconnect={onReconnect} onUseDirect={onUseDirect} />
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={handleDisconnect}

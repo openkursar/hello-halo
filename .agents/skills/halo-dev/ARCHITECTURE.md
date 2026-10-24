@@ -1056,6 +1056,7 @@ ImChannelProvider  — type-level driver (one per IM brand)
 
 ImChannelInstance  — running connection (N per provider type)
   ├── start() / stop() / reconnect() / isConnected()
+  ├── getConnectionState?() / getLinkStatus?()   # online / connecting / reconnecting / standby / offline + why
   ├── pushToChat(chatId, text, chatType)
   ├── onInbound(handler)
   └── fileCapability?                    # opt-in file send
@@ -1087,7 +1088,8 @@ InboundMessage / ReplyHandle  — normalized upward protocol
 4. If the brand has unique setup/auth flow (QR, OAuth, token refresh): add `ipc/<brand>.ts` + preload + renderer API + a setup UI component. Keep this file minimal — only brand-unique flows belong here.
 5. If the provider writes temp files: add a cleanup call in `cleanupImChannelTempFiles()`.
 6. If the platform caps one message: state the cap once in the provider and send text (replies, pushes, a stream's final answer) through `im-channels/message-parts.ts`. Callers hand over text of any length.
-7. Do NOT change `manager.ts`, `dispatch-inbound.ts`, or any other existing provider.
+7. If the brand holds a long-lived link (WebSocket, long-poll): keep it up with `im-channels/link-supervisor.ts` and dial through `im-channels/link-route.ts` — one fresh attempt per redial, never the SDK's own reconnect on a route resolved once. See `apps/runtime/DESIGN.md` §4.5.
+8. Do NOT change `manager.ts`, `dispatch-inbound.ts`, or any other existing provider.
 
 ### 22.5 Inter-Module Access
 
