@@ -27,6 +27,8 @@ const ENGINE_RUNTIMES = {
   halo: {
     name: 'Halo SDK engine',
     packageId: '@hello-halo/agent-sdk',
+    requiredFiles: ['dist/worker/index.js', 'dist/worker/entry.js'],
+    fingerprintFile: 'dist/worker/entry.js',
     fix: 'populate src/sdk/halo-sdk (local path dependency), then run npm install',
   },
   codex: {

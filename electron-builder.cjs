@@ -127,7 +127,8 @@ function resolveProviderFiles() {
  * resources/dsh-runtime until runtimes/dsh/build.mjs has run.
  */
 function resolveAsarUnpack(base) {
-  return [...new Set([...(base.asarUnpack || []), runtimeAsarUnpackGlob()])]
+  return [...new Set([...(base.asarUnpack || []), runtimeAsarUnpackGlob(),
+    'node_modules/@hello-halo/agent-sdk/dist/worker/entry.js*', 'out/main/worker/halo-setup.cjs'])]
 }
 
 const base = loadBaseConfig()

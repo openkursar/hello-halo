@@ -9,13 +9,9 @@
  * 200 characters it is cut and a hash of the full path appended, so a long one
  * is found by that prefix.
  *
- * The halo engine uses the same layout (its project dir is the path as given,
- * which is tried too), but running in-process it currently takes its config dir
- * from the process environment instead of the session's, so its sessions land
- * in `~/.claude` whatever Halo configures. Only the configured config dir is
- * looked in, so with the default setting they are not reached; they are covered
- * once the engine stores them in the session's config dir. Codex and dsh store
- * sessions elsewhere and are not covered.
+ * The Halo SDK uses the same config directory and layout (its project dir is
+ * the path as given, which is tried too). Codex and dsh store sessions elsewhere
+ * and are not covered.
  */
 
 import { randomUUID } from 'crypto'

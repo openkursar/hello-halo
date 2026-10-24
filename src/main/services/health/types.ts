@@ -292,6 +292,8 @@ export interface HealthStatusChange {
  * Diagnostic report for debugging
  */
 export interface DiagnosticReport {
+  /** Engine lifecycle and bounded runtime counters; contains no account or conversation content. */
+  sdk?: { engine: string | null; initialized: boolean; functions: string[]; runtime?: unknown }
   /** Report generation timestamp */
   timestamp: string
   /** App version */

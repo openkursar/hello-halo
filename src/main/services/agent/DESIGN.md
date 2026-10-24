@@ -10,7 +10,7 @@
 |---|---|---|
 | Session lifecycle (create / reuse / destroy / batch-invalidate on config change) | `session-manager.ts` | Largest file. V2 Session model. Registers callback on `config.service.ts` to auto-clean when API config changes. |
 | SDK stream → Thought[] translation | `stream-processor.ts`, `delta-coalescer.ts` | Second largest. Incremental push, partial tool calls, interruption recovery. Token deltas are published through the coalescer (see §3). |
-| SDK invocation & configuration | `sdk-config.ts`, `resolved-sdk.ts`, `codex/`, `dsh/` | Provider selection, model resolution, SDK option assembly through two named entries (`buildUserSessionSdkOptions`, `buildInternalTaskSdkOptions`; see §11). Alternate SDK engines are loaded only through `resolved-sdk.ts`; engine-specific translation is isolated under `codex/` and `dsh/`. |
+| SDK invocation & configuration | `sdk-config.ts`, `resolved-sdk.ts`, `codex/`, `dsh/`, `halo/` | Provider selection, model resolution, SDK option assembly through two named entries (`buildUserSessionSdkOptions`, `buildInternalTaskSdkOptions`; see §11). Alternate SDK engines are loaded only through `resolved-sdk.ts`; engine-specific translation is isolated under `codex/`, `dsh/` and `halo/`. |
 | User AI settings | `user-agent-settings.ts` | The one reader of the user's global AI settings for a session (`maxTurns`, `disabledTools`, `promptProfile`, digital-humans switch). Entries never pass them. See §11. |
 | Thinking depth → engine options | `reasoning-effort.ts` | Combines a picked level (conversation / digital human / API send), the per-request thinking flag and the per-model effort level into `effort` / `maxThinkingTokens` / Codex `model_reasoning_effort` / the router's picked level. Every SDK call site goes through `applyReasoningEffort`. See §9. |
 | Engine availability probe | `engine-availability.ts` | Detects which engine runtimes shipped in this build (manifest + entry file, platform binary for Codex, interpreter version for dsh) so `resolved-sdk.ts` can fall back instead of crashing at startup. Probed per engine on first demand and cached per process: startup asks only for the configured engine plus `FALLBACK_ORDER`, Settings asks for all of them (`agent:get-engine-availability`). |
@@ -21,7 +21,7 @@
 | Permission gating | `permission-handler.ts` | AskUserQuestion, and the optional `ToolGate` a caller supplies for calls the engine left undecided. Knows nothing about what a policy says — only whom to ask. |
 | MCP server routing | `mcp-manager.ts` | Registration, discovery, per-session MCP bindings. Owns the shared status cache (`agent:mcp-status` broadcast). |
 | MCP connection probe | `mcp-probe.ts` | Native initialize+tools/list handshake via `@modelcontextprotocol/sdk` — no agent session, no token cost. Classifies failures (401→needs-auth, refused/timeout→failed + `errorDetail`). Triggered by app lifecycle events (install/resume/spec-update, wired in `apps/runtime`), by SDK-reported `failed`/`needs-auth` (stream-processor follow-up), and manually via `agent:probe-mcp` IPC. A probe that connects also clears the server's CC auth record, and lets sessions that reported the server failed rebuild (see §2). |
-| Stored session removal and carry-over | `stored-session.ts` | Deletes what the default engine stored for one session — `<config dir>/projects/<project dir>/<id>.jsonl` and its `<id>/` folder — for a session that will never be resumed (apps/runtime's run transcript retention); and, when a space's working directory changes, copies a folder's stored sessions to the new folder's project dir (the engine's own name: resolved, NFC, cut at 200 with its Node hash), a newer file winning (staged beside it and renamed over it, so a cut-off copy never stands), folders merged, nothing moved. Only the configured config dir is looked in. Not covered: the halo engine's sessions, which currently land in `~/.claude` whatever Halo configures because the in-process engine reads its config dir from the process environment (so with the default setting they are not reached; covered once the engine uses the session's config dir), and codex and dsh, which store sessions elsewhere. |
+| Stored session removal and carry-over | `stored-session.ts` | Deletes what the default engine stored for one session — `<config dir>/projects/<project dir>/<id>.jsonl` and its `<id>/` folder — for a session that will never be resumed (apps/runtime's run transcript retention); and, when a space's working directory changes, copies a folder's stored sessions to the new folder's project dir (the engine's own name: resolved, NFC, cut at 200 with its Node hash), a newer file winning (staged beside it and renamed over it, so a cut-off copy never stands), folders merged, nothing moved. Only the configured config dir is looked in. The Halo SDK also uses the session's configured directory. Codex and dsh store sessions elsewhere and are not covered. |
 | Missing or left working directory | `working-dir.ts` | `WorkingDirectoryUnavailableError` (folder + space in its fields, never in its message, which travels to team leads and memory summaries), thrown by the spawn check in `sdk-config.ts` and by apps/runtime's environment check; `workingDirErrorDetail` turns it into the chat error event's `errorType: 'working_dir_unavailable'` + `workDirIssue`, which the chat shows with a change-folder button. The space controller changes a folder only when `session-manager.ts` reports nothing in the space running (`isSpaceBusy`) and no session of it asked for while the old folder's sessions were copied (`countSessionAcquisitions`, counted on every acquisition); then `retireWorkingDirs`, after which session acquisition refuses that space's sessions in the folders it left with `WorkingDirectoryChangedError` — a turn that read the old folder just before the change is sent again rather than run where nothing will read it. In memory only — after a restart no such turn exists. Deleting a space goes the same way: refused while `isSpaceBusy`, then `closeSpaceSessions` closes the space's idle sessions and waits (bounded) for their engine processes to exit, read from the engine-neutral `V2SDKSession.pid`, because Windows will not remove a folder a live process works in. |
 | Refused local connections | `local-connection.ts` | Engines reach every model through the router on 127.0.0.1; security software that filters per program can refuse the engine's process while the app gets through. `explainEngineError` turns the engine's bare EACCES/EPERM (Claude Code, Node, and the halo engine's `fetch failed (EACCES)`) into what happened and the program to allow — applied to every turn error (stream-processor) and run error (apps/runtime `execute.ts`); every engine reports a failed model call as an error result, never as a thrown exception, so those two places see them all. The program path is local: a surface outside this computer (IM) tests the text with `isRefusedLocalConnection` and says it without the path. `checkChildLocalConnection` makes that connection from a child process for Run diagnostics. |
 | CC MCP auth state | `mcp-auth-state.ts` | Removes stale OAuth records CC persists under `CLAUDE_CONFIG_DIR` after any 4xx from a URL-based MCP server. Such a record has no expiry and makes CC skip the server entirely, so it is cleared before session creation and after a successful probe. Mirrors CC-internal formats; a mismatch degrades to a no-op. |
@@ -77,7 +77,7 @@ reasoning, encrypted content and other event fields.
   | Engine (`config.agent.sdkEngine`) | Runtime | Adapter |
   |---|---|---|
   | `anthropic` (default) | `@anthropic-ai/claude-agent-sdk` in-process | — (canonical protocol) |
-  | `halo` | `@hello-halo/agent-sdk` in-process | — (same protocol surface) |
+  | `halo` | `@hello-halo/agent-sdk/worker`, bounded grouped Node workers | `halo/` (host lifecycle, grouping and identity) |
   | `codex` | `codex app-server` child process (binary from `@openai/codex`) | `codex/` |
   | `dsh` | prebuilt single-file runtime, child process, stdio JSON-RPC | `dsh/` |
 
@@ -116,7 +116,28 @@ reasoning, encrypted content and other event fields.
 - **No engine addresses a provider itself.** An AI source is not a URL and a key — it is also custom headers, a provider adapter, a wire format and a proxy policy, and `openai-compat-router` is the only code that turns that descriptor into an HTTP request. Every engine is therefore pointed at the loopback router and handed `encodeBackendConfig(credentialsToBackendConfig(...))` as its credential: CC and Codex as `ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY` (`sdk-config.ts`), dsh as `DEEPSEEK_BASE_URL` + `DEEPSEEK_API_KEY` (`dsh/options.ts`), each reaching the route that matches the dialect its runtime speaks (`/v1/messages` for CC and dsh, `/v1/responses` for Codex). dsh's own transport identity (the harness `User-Agent` and `x-deepseek-harness-*` ids) is removed inside its runtime before a request reaches the router, so the router needs no dsh-specific rule. An engine given the provider's own URL loses every part of the descriptor it cannot express: dsh shipped that way and sent the DeepSeek harness's hardcoded `User-Agent` to a provider gateway that checks it, which answered `HTTP 500 request illegal` — with the source's OAuth headers, its adapter and its error body all missing from the request and from the logs. A runtime whose transport cannot be configured is exactly the case that makes this mandatory, not the exception to it.
 - **BrowserWindow safety.** Always check `!mainWindow.isDestroyed()` before sending events in async callbacks. Stream processing is full of async callbacks; violations will crash on window close.
 
-- **Resident session limit.** Every resident session is one engine process, so their count is bounded by a number the budget policy owner pushes down: `setResidentSessionLimit(limit | null)` (set by `apps/runtime/session-budget.ts`; null = unlimited). Before a NEW session is created — never on reuse — the manager evicts least-recently-used idle sessions through `cleanupSession` until one more fits; busy, awaiting-init and in-creation sessions are never evicted, and if all are busy the new session is created over the limit (one warn per crossing, never refused). An evicted conversation resumes from its stored session id on its next turn, the same path as the 30-minute idle sweep. `listResidentSessions()` / `evictIdleSession(id, reason)` expose the same stats and safety check to callers that manage transient sessions (automation runs). The engine holds no memory logic; the limit is policy from above.
+- **Resident session limit.** Resident sessions retain engine resources (a child process for CC/Codex/dsh, a share of a grouped worker for Halo SDK), so their count is bounded by a number the budget policy owner pushes down: `setResidentSessionLimit(limit | null)` (set by `apps/runtime/session-budget.ts`; null = unlimited). Before a NEW session is created — never on reuse — the manager evicts least-recently-used idle sessions through `cleanupSession` until one more fits; busy, awaiting-init and in-creation sessions are never evicted, and if all are busy the new session is created over the limit (one warn per crossing, never refused). An evicted conversation resumes from its stored session id on its next turn, the same path as the 30-minute idle sweep. `listResidentSessions()` / `evictIdleSession(id, reason)` expose the same stats and safety check to callers that manage transient sessions (automation runs). The engine holds no memory logic; the limit is policy from above.
+
+History lookup uses the session's `env.CLAUDE_CONFIG_DIR` for Claude Code and
+Halo SDK. If missing there, legacy history in Halo's isolated directory or
+`~/.claude` is copied into that selected directory without overwriting an
+existing transcript. Codex and dsh keep their own resumption behavior.
+
+### Halo SDK adapter
+
+`halo/index.ts` consumes the independent SDK's public `/worker` entry and exposes
+the common engine interface. It maps spaces to opaque affinity keys and bridges
+host permissions, hooks and tools. Pooling, scheduling and their defaults belong
+to the SDK contract, not Halo's chat services.
+
+Bootstrap initializes the runtime after the first screen and awaits its shutdown
+before releasing host tools. A worker-backed session must never register the main
+process PID as a killable engine process.
+
+Request identity uses a pure Node setup module so history stays on the execution
+side. The setup consumes the router's public identity surface and is bundled by
+Halo. Packaging unpacks the bundled SDK Worker entry and this setup module for
+Node loading; the host-side SDK modules remain in asar.
 
 ## 3) Stream Processing Model
 
@@ -525,14 +546,16 @@ credential change — the toggle does not, since it is not config.
 
 ## 10) Request Identity (halo engine only)
 
-When the active engine is `halo`, the SDK option builders (`sdk-config.ts`) attach a
-`requestIdentity` to the SDK options. The SDK is identity-agnostic — it has a
+When the active engine is `halo`, the SDK option builders (`sdk-config.ts`) attach
+serializable `haloRequestIdentity` parameters. `halo/worker-setup.ts` builds the
+`requestIdentity` inside the Worker, so per-request callbacks stay beside history.
+The SDK is identity-agnostic — it has a
 `RequestIdentity` seam and forwards whatever it is handed; every
 provider-specific constant and algorithm lives host-side in
 `request-identity-factory.ts` — except the reported Claude Code version, its
 user-agent and its attribution line, which live in
 `openai-compat-router/utils/claude-code-identity.ts` (read through the
-router's index). The router applies the same
+router's public `identity.ts` surface). The router applies the same
 fixed version to every request it forwards on its Anthropic passthrough path,
 in both the header and the system prompt.
 
@@ -564,11 +587,10 @@ unaffected.
 session header and `metadata.user_id.session_id`. Dropping it silently halves
 the payload — as it did while the parameter went unpassed.
 
-**A failure here is degraded, not fatal.** The factory is built inside a
-`try/catch`: on failure the request still goes out, only without the identity
-headers. The catch logs the drop with the conversation id, because a silently
-unidentified session is indistinguishable from a correctly-identified one in
-every downstream log.
+**Failure handling follows the execution boundary.** If the host cannot read its
+device identity, it logs the missing identity and omits the setup parameters.
+Once parameters reach the Worker, a setup failure rejects session creation and
+follows the normal session error path.
 
 **This is deliberate product behavior**, chosen so hallucination-prone gateway
 paths see the same shape as a first-party client. It is not an accident of

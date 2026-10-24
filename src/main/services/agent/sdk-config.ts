@@ -38,7 +38,6 @@ import { getActiveEngine, getEngineCapabilities } from './resolved-sdk'
 import { getDeviceIdentity } from '../../foundation/device-identity'
 import { applyOfficeRuntimeEnv } from '../office-runtime'
 import { applyProxyEnv } from '../proxy-policy'
-import { buildRequestIdentity } from './request-identity-factory'
 import { WorkingDirectoryUnavailableError } from './working-dir'
 import { createMemoryWriteHooks, type MemoryWriteGuardConfig } from '../../platform/memory'
 import { buildModelPricingTable } from '../../../shared/constants/model-pricing'
@@ -1148,17 +1147,16 @@ async function assembleSdkOptions(
   // Request identity — host-injected headers, system prefix and metadata
   // (halo engine only).
   if (getActiveEngine() === 'halo') {
+    sdkOptions.workerGroup = spaceId
     try {
-      sdkOptions.requestIdentity = buildRequestIdentity({
+      sdkOptions.haloRequestIdentity = {
         deviceId: getDeviceIdentity().deviceId,
         // Halo's conversation id is a uuid, which is what this field requires.
         sessionId: conversationId,
-      })
+      }
     } catch (err) {
-      // Dropped, not fatal: the request still goes out, just without the
-      // identity headers.
       console.warn(
-        `[Agent][${conversationId}] requestIdentity dropped — this session's requests carry no host identity headers:`,
+        `[Agent][${conversationId}] Host identity unavailable — this session's requests carry no host identity headers:`,
         (err as Error).message,
       )
     }

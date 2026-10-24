@@ -76,6 +76,9 @@ interface SdkModule {
   unstable_v2_createSession?: (options: any) => Promise<any>
   query: (params: any) => AsyncIterable<any>
   capabilities?: EngineCapabilities
+  initialize?: () => Promise<void>
+  close?: () => Promise<void>
+  diagnostics?: () => unknown
 }
 
 // ============================================
@@ -239,9 +242,16 @@ async function loadHaloSdk(): Promise<SdkModule> {
   // when engine='halo'. If user deletes this package and uses CC SDK,
   // this code path is never executed.
   // @ts-ignore: Module path resolved at runtime, no static type declaration
-  const sdk = await import(/* @vite-ignore */ '@hello-halo/agent-sdk')
-  return sdk as unknown as SdkModule
+  const sdk = await import(/* @vite-ignore */ '@hello-halo/agent-sdk/worker')
+  const { createHaloSdkModule } = await import('./halo')
+  return createHaloSdkModule(sdk) as unknown as SdkModule
 }
+
+/** Called after the first screen; engines without a shared runtime pay no cost. */
+export async function initializeSdkRuntime(): Promise<void> { await _sdk?.initialize?.() }
+
+/** Called after session owners stop, before host tool services are torn down. */
+export async function closeSdkRuntime(): Promise<void> { await _sdk?.close?.() }
 
 async function loadCodexSdk(): Promise<SdkModule> {
   // Codex no longer depends on `@openai/codex-sdk`'s TypeScript surface at
@@ -437,10 +447,11 @@ export function isInitialized(): boolean {
  * Get diagnostic info about the current SDK state.
  * Useful for debugging and verification.
  */
-export function getSdkDiagnostics(): { engine: string | null; initialized: boolean; functions: string[] } {
+export function getSdkDiagnostics(): { engine: string | null; initialized: boolean; functions: string[]; runtime?: unknown } {
   return {
     engine: _engine,
     initialized: _sdk !== null,
+    runtime: _sdk?.diagnostics?.(),
     functions: _sdk ? Object.keys(_sdk).filter(k => typeof (_sdk as any)[k] === 'function') : []
   }
 }

@@ -83,13 +83,13 @@ export function prepareGoalInput(input: GoalInput): GoalInput {
  * first model step already works toward it. `persisted`: the conversation has a
  * recorded engine session id.
  */
-export function setGoalForTurn(
+export async function setGoalForTurn(
   spaceId: string,
   conversationId: string,
   session: V2SDKSession,
   input: GoalInput,
   persisted: boolean
-): Goal | null {
+): Promise<Goal | null> {
   const goalSession = session.getGoal && session.setGoal ? (session as GoalSession) : null
   if (!goalSession) {
     console.error(`[Agent][${conversationId}] Session exposes no goal methods; the message's goal is kept as a draft only`)
@@ -97,14 +97,14 @@ export function setGoalForTurn(
   return applyUserGoal(spaceId, conversationId, goalSession, persisted, input)
 }
 
-function applyUserGoal(
+async function applyUserGoal(
   spaceId: string,
   conversationId: string,
   session: GoalSession | null,
   persisted: boolean,
   input: GoalInput | null
-): Goal | null {
-  const goal = session ? session.setGoal(input) : input ? draftFrom(input) : null
+): Promise<Goal | null> {
+  const goal = session ? await session.setGoal(input) : input ? draftFrom(input) : null
   setGoalDraft(conversationId, persisted ? null : goal)
 
   console.log(

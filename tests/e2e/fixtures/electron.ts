@@ -271,7 +271,7 @@ export function cleanupTestConfigDir(testDir: string): void {
  * `createTestConfigDir()` and this call, then reuse the exact same launch
  * behavior (env vars, GPU/accel flags) instead of duplicating it.
  */
-export async function launchElectronApp(appEntryPath: string, testConfigDir: string): Promise<ElectronApplication> {
+export async function launchElectronApp(appEntryPath: string, testConfigDir: string, options: { bootstrapDirectory?: string } = {}): Promise<ElectronApplication> {
   console.log(`[E2E] App entry: ${appEntryPath}`)
   console.log(`[E2E] Test config dir: ${testConfigDir}`)
 
@@ -289,7 +289,7 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
     })
   }
 
-  const bootstrap = path.join(path.dirname(appEntryPath), `.e2e-bootstrap-${crypto.randomUUID()}.cjs`)
+  const bootstrap = path.join(options.bootstrapDirectory ?? path.dirname(appEntryPath), `.e2e-bootstrap-${crypto.randomUUID()}.cjs`)
   const appData = path.join(testConfigDir, 'electron-data')
   const userData = path.join(appData, 'user')
   fs.mkdirSync(userData, { recursive: true })

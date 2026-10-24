@@ -339,7 +339,7 @@ export async function sendMessage(
     if (!sessionLease.isCurrent) throw new Error('The acquired session is no longer available')
 
     if (turnGoal) {
-      setGoalForTurn(spaceId, conversationId, v2Session, turnGoal, Boolean(sessionId))
+      await setGoalForTurn(spaceId, conversationId, v2Session, turnGoal, Boolean(sessionId))
       goalApplied = true
     }
 

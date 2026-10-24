@@ -84,6 +84,10 @@ export function formatReportAsText(report: DiagnosticReport): string {
     lines.push('')
   }
 
+  if (report.sdk) {
+    lines.push('--- Agent Engine ---', JSON.stringify(report.sdk, null, 2), '')
+  }
+
   if (report.recentErrors.length > 0) {
     lines.push('--- Recent Errors ---')
     for (const error of report.recentErrors) {

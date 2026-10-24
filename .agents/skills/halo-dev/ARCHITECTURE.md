@@ -138,7 +138,7 @@ src/
 │   │                                  #   substrate log/, ctrl-feed, session-feed, authority/),
 │   │                                  #   runtime/im-channels (IM providers)
 │   ├── platform/                      # Platform Layer (store, scheduler, event, memory, background)
-│   ├── openai-compat-router/          # Anthropic <-> OpenAI bridge
+│   ├── openai-compat-router/          # Anthropic <-> OpenAI bridge; identity.ts is its pure Node identity surface
 │   └── services/                      # Domain services — grouped by role:
 │       ├── agent/                     # Agent engine — largest subsystem. See agent/DESIGN.md
 │       │   │                          #   One persistent consumer per session; per-surface
@@ -945,6 +945,12 @@ it a finished picture:
 - `before-quit` calls `cleanupExtendedServices()` via bootstrap shutdown flow.
 - `window-all-closed` keeps process alive when `background.shouldKeepAlive()` is true.
 - Cleanup order includes runtime/manager, platform modules, background, and cache cleanup.
+
+### SDK execution isolation
+
+Halo's SDK adapter uses the independent package's public Worker API. Host
+integration is defined in `src/main/services/agent/DESIGN.md`; execution internals
+and defaults are owned by the SDK.
 
 ## 17) Integration Surfaces
 

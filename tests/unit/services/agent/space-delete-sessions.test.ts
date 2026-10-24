@@ -90,6 +90,27 @@ afterAll(() => {
 })
 
 describe('closeSpaceSessions', () => {
+  it('awaits execution cleanup for a session that owns no process', async () => {
+    const session = await withSession('space-a', 'conv-worker', 401)
+    session.pid = undefined as unknown as number
+    let release!: () => void
+    Object.assign(session, { flush: () => new Promise<void>(resolve => { release = resolve }) })
+    let settled = false
+    const closing = closeSpaceSessions('space-a', 'space deleted').then(() => { settled = true })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(settled).toBe(false)
+    release()
+    await closing
+    expect(settled).toBe(true)
+  })
+
+  it('refuses folder removal when execution-side persistence has not settled', async () => {
+    const session = await withSession('space-a', 'conv-worker-stuck', 402)
+    session.pid = undefined as unknown as number
+    Object.assign(session, { flush: () => new Promise<void>(() => {}) })
+    await expect(closeSpaceSessions('space-a', 'space deleted', 20)).rejects.toThrow('cleanup has not finished')
+  })
+
   it('closes the space’s idle sessions and returns only after their processes are gone', async () => {
     const session = await withSession('space-a', 'conv-a', 101)
     session.close.mockImplementation(() => setTimeout(() => alive.delete(101), 120))

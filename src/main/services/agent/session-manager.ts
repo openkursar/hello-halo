@@ -724,73 +724,23 @@ export function stopSessionCleanup(): void {
 // Session Migration
 // ============================================
 
-/**
- * Migrate session file from old config directory to new config directory on demand.
- *
- * Background: We changed CLI config directory from ~/.claude/ to
- * ~/Library/Application Support/halo/claude-config/ (via CLAUDE_CONFIG_DIR env)
- * to isolate Halo from user's own Claude Code configuration.
- *
- * This causes historical conversations to fail because their sessionId points to
- * session files in the old directory. This function migrates session files on demand
- * when user opens a historical conversation.
- *
- * Session file path structure:
- *   $CLAUDE_CONFIG_DIR/projects/<project-dir>/<session-id>.jsonl
- *
- * Project directory naming rule (cross-platform):
- *   Replace all non-alphanumeric characters with '-' (same as Claude Code CLI)
- *   e.g., /Users/fly/Desktop/myproject -> -Users-fly-Desktop-myproject
- *   e.g., /Volumes/one_tb/code2/hello-halo -> -Volumes-one-tb-code2-hello-halo
- *
- * @param workDir - Working directory (used to compute project directory name)
- * @param sessionId - Session ID
- * @returns true if session file exists in new directory (or migration succeeded),
- *          false if not found in either directory
- */
-function migrateSessionIfNeeded(workDir: string, sessionId: string): boolean {
-  // 1. Compute project directory name using the same rule as Claude Code CLI:
-  //    Replace all non-alphanumeric characters with '-'
+/** Copy legacy history into the session's config directory without replacing its current history. */
+function migrateSessionIfNeeded(workDir: string, sessionId: string, configDir?: string): boolean {
   const projectDir = workDir.replace(/[^a-zA-Z0-9]/g, '-')
   const sessionFile = `${sessionId}.jsonl`
+  const haloConfigDir = path.join(app.getPath('userData'), 'claude-config')
+  const targetPath = path.join(configDir || haloConfigDir, 'projects', projectDir, sessionFile)
+  if (existsSync(targetPath)) return true
 
-  console.log(`[Agent] Migration check: workDir="${workDir}" -> projectDir="${projectDir}"`)
+  const sourcePath = [haloConfigDir, path.join(os.homedir(), '.claude')]
+    .map(directory => path.join(directory, 'projects', projectDir, sessionFile))
+    .find(candidate => candidate !== targetPath && existsSync(candidate))
+  if (!sourcePath) return false
 
-  // 2. Build old and new paths
-  const newConfigDir = path.join(app.getPath('userData'), 'claude-config')
-  const oldConfigDir = path.join(os.homedir(), '.claude')
-
-  const newPath = path.join(newConfigDir, 'projects', projectDir, sessionFile)
-  const oldPath = path.join(oldConfigDir, 'projects', projectDir, sessionFile)
-
-  console.log(`[Agent] Checking paths:`)
-  console.log(`[Agent]   New: ${newPath}`)
-  console.log(`[Agent]   Old: ${oldPath}`)
-
-  // 3. Check if already exists in new directory
-  if (existsSync(newPath)) {
-    console.log(`[Agent] ✓ Session file already exists in new directory: ${sessionId}`)
-    return true
-  }
-
-  // 4. Check if exists in old directory
-  if (!existsSync(oldPath)) {
-    console.log(`[Agent] ✗ Session file not found in old directory: ${sessionId}`)
-    return false
-  }
-
-  // 5. Ensure new project directory exists
-  const newProjectDir = path.join(newConfigDir, 'projects', projectDir)
-  if (!existsSync(newProjectDir)) {
-    mkdirSync(newProjectDir, { recursive: true })
-  }
-
-  // 6. Copy file (not move - preserve old directory for user's own Claude Code)
   try {
-    copyFileSync(oldPath, newPath)
-    console.log(`[Agent] Migrated session file: ${sessionId}`)
-    console.log(`[Agent]   From: ${oldPath}`)
-    console.log(`[Agent]   To: ${newPath}`)
+    mkdirSync(path.dirname(targetPath), { recursive: true })
+    copyFileSync(sourcePath, targetPath)
+    console.log(`[Agent] Migrated session ${sessionId}: ${sourcePath} -> ${targetPath}`)
     return true
   } catch (error) {
     console.error(`[Agent] Failed to migrate session file: ${sessionId}`, error)
@@ -1338,12 +1288,11 @@ async function getOrCreateV2SessionInner(
   let effectiveSessionId = sessionId
   if (sessionId && workDir && getActiveEngine() !== 'codex' && getActiveEngine() !== 'dsh') {
     // Attempt to migrate session file from old config directory if needed
-    const sessionExists = migrateSessionIfNeeded(workDir, sessionId)
+    const sessionExists = migrateSessionIfNeeded(workDir, sessionId, sdkOptions.env?.CLAUDE_CONFIG_DIR)
     if (sessionExists) {
       console.log(`[Agent][${conversationId}] With resume: ${sessionId}`)
     } else {
-      // Session file not found in either directory - start fresh conversation
-      console.log(`[Agent][${conversationId}] Session ${sessionId} not found, starting fresh conversation`)
+      console.warn(`[Agent][${conversationId}] Session ${sessionId} unavailable in the configured or legacy directories, starting fresh conversation`)
       effectiveSessionId = undefined
     }
   } else if (sessionId) {
@@ -1772,12 +1721,28 @@ export function isSpaceBusy(spaceId: string): boolean {
  */
 export async function closeSpaceSessions(spaceId: string, reason: string, timeoutMs = 3000): Promise<void> {
   const pids: number[] = []
+  const flushes: Promise<void>[] = []
   for (const [conversationId, info] of Array.from(v2Sessions.entries())) {
     if (info.spaceId !== spaceId || isEvictionUnsafe(conversationId)) continue
     // Read before closing: adapters drop their process handle on close().
     const pid = info.session.pid
     if (typeof pid === 'number') pids.push(pid)
     closeV2SessionForRebuild(conversationId, reason)
+    if (info.session.flush) flushes.push(info.session.flush())
+  }
+  if (flushes.length) {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        Promise.all(flushes),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('Engine session cleanup has not finished')), timeoutMs)
+        }),
+      ])
+    } catch (error) {
+      console.warn(`[Agent] Space ${spaceId}: session cleanup incomplete; folder removal must wait`, error)
+      throw error
+    } finally { clearTimeout(timer) }
   }
   if (pids.length === 0) return
 

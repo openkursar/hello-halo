@@ -34,6 +34,9 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   getActiveEngine: () => state.engine,
   getEngineCapabilities: () => ({ features: { hooks: true } }),
 }))
+vi.mock('../../../../src/main/foundation/device-identity', () => ({
+  getDeviceIdentity: () => ({ deviceId: 'test-device' }),
+}))
 
 import {
   buildUserSessionSdkOptions,
@@ -181,6 +184,15 @@ describe('buildInternalTaskSdkOptions', () => {
 })
 
 describe('the halo engine', () => {
+  it('passes serializable host identity to the worker through both entries', async () => {
+    state.engine = 'halo'
+    for (const build of [buildUserSessionSdkOptions, buildInternalTaskSdkOptions]) {
+      const options = await build(params())
+      expect(options.haloRequestIdentity).toEqual({ deviceId: expect.any(String), sessionId: 'conv-1' })
+      expect(options).not.toHaveProperty('requestIdentity')
+    }
+  })
+
   // The engine knows no model's size: without the window it compacts every
   // model at its 200K default, so a 1M model is compacted early.
   it('is given the model\'s context window and output cap through both entries', async () => {

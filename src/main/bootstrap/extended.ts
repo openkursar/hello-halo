@@ -56,7 +56,7 @@ import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '.
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
-import { closeAllV2Sessions } from '../services/agent'
+import { closeAllV2Sessions, initializeSdkRuntime, closeSdkRuntime } from '../services/agent'
 import { registerHealthHandlers } from '../ipc/health'
 import { initBackground, shutdownBackground, getBackgroundService, setDaemonStealthInjector } from '../platform/background'
 import { injectStealthScripts } from '../services/stealth'
@@ -1450,6 +1450,7 @@ async function initPlatformAndApps(): Promise<void> {
  * when their features are first accessed.
  */
 export function initializeExtendedServices(): void {
+  void initializeSdkRuntime().catch(error => console.error('[Bootstrap] SDK worker prewarm failed:', error))
   const start = performance.now()
   console.log('[Bootstrap] Extended services starting...')
 
@@ -1739,13 +1740,15 @@ export async function cleanupExtendedServices(): Promise<void> {
     // `RunFinishedEvent`s fired during deactivation are still delivered to the
     // analytics pipeline and buffered by the telemetry provider.
     const runtimeShutdown = shutdownAppRuntime().catch(err => console.error('[Bootstrap] AppRuntime shutdown error:', err))
+    let sdkShutdown: Promise<void>
     try {
       closeAllV2Sessions()
     } finally {
+      sdkShutdown = closeSdkRuntime().catch(error => console.error('[Bootstrap] SDK runtime shutdown failed:', error))
       cacheShutdown = cleanupAllCaches()
       void cacheShutdown.catch(error => console.error('[Bootstrap] Artifact cache shutdown failed:', error))
     }
-    await runtimeShutdown
+    await Promise.all([runtimeShutdown, sdkShutdown])
     await shutdownAppManager().catch(err => console.error('[Bootstrap] AppManager shutdown error:', err))
 
     // Analytics: Flush pending events (including anything buffered from the

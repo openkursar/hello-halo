@@ -245,7 +245,14 @@
       "!node_modules/@capacitor/**",
       "!node_modules/@hello-halo/agent-sdk/swe-bench-eval/**",
       "!node_modules/@hello-halo/agent-sdk/docs/**",
-      "!node_modules/@hello-halo/agent-sdk/.claude/**"
+      "!node_modules/@hello-halo/agent-sdk/.claude/**",
+      "!node_modules/@hello-halo/agent-sdk/validation/**",
+      "!node_modules/@hello-halo/agent-sdk/worker/**",
+      "!node_modules/@hello-halo/agent-sdk/scripts/**",
+      "!node_modules/@hello-halo/agent-sdk/.github/**",
+      "!node_modules/@hello-halo/agent-sdk/**/*.ts",
+      "!node_modules/@hello-halo/agent-sdk/**/*.test.*",
+      "!node_modules/@hello-halo/agent-sdk/**/*.spec.*"
     ],
     "extraResources": [
       {

@@ -164,9 +164,9 @@ describe('goal attached to a message', () => {
     expect(() => prepareGoalInput({ objective: 'o' })).toThrow(/does not support goals/)
   })
 
-  it('is set on the session that receives the message, drafted for a new conversation', () => {
+  it('is set on the session that receives the message, drafted for a new conversation', async () => {
     const session = goalSession()
-    const goal = setGoalForTurn(SPACE, CONV, session as never, { objective: 'o', doneWhen: [] }, false)
+    const goal = await setGoalForTurn(SPACE, CONV, session as never, { objective: 'o', doneWhen: [] }, false)
 
     expect(session.setGoal).toHaveBeenCalledWith({ objective: 'o', doneWhen: [] })
     expect(emitAgentEvent).toHaveBeenCalledWith('agent:goal-updated', SPACE, CONV, { goal, source: 'user', seenByModel: false })
@@ -175,8 +175,8 @@ describe('goal attached to a message', () => {
     expect(options.goal).toEqual({ objective: 'o', doneWhen: [] })
   })
 
-  it('leaves no draft for a resumed conversation', () => {
-    setGoalForTurn(SPACE, CONV, goalSession() as never, { objective: 'o' }, true)
+  it('leaves no draft for a resumed conversation', async () => {
+    await setGoalForTurn(SPACE, CONV, goalSession() as never, { objective: 'o' }, true)
     const options: Record<string, unknown> = {}
     applyGoalDraft(options, CONV)
     expect(options.goal).toBeUndefined()

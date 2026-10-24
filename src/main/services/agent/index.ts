@@ -114,6 +114,7 @@ export { WorkingDirectoryUnavailableError, workingDirErrorDetail, retireWorkingD
 
 // Conversation goal (engines with features.goal)
 export { getConversationGoal, setConversationGoal } from './goal'
+export { initializeSdkRuntime, closeSdkRuntime, getSdkDiagnostics } from './resolved-sdk'
 
 // ============================================
 // MCP Management

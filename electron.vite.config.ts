@@ -82,6 +82,20 @@ function sandboxedPreloads(): Plugin {
   }
 }
 
+function haloWorkerSetup(): Plugin {
+  return {
+    name: 'halo-worker-setup',
+    async buildStart() {
+      const result = await buildEsbuild({
+        entryPoints: [resolve(__dirname, 'src/main/services/agent/halo/worker-setup.ts')],
+        bundle: true, platform: 'node', format: 'cjs', write: false, metafile: true,
+      })
+      for (const input of Object.keys(result.metafile!.inputs)) this.addWatchFile(resolve(input))
+      this.emitFile({ type: 'asset', fileName: 'worker/halo-setup.cjs', source: result.outputFiles![0].text })
+    },
+  }
+}
+
 // Telemetry / analytics identifiers are deliberately NOT injected at build
 // time. They are per-variant configuration in product.json, read at runtime
 // by the analytics service — a missing value is a verify-inputs failure
@@ -101,12 +115,13 @@ export default defineConfig({
       // named imports from 'electron'. Bundle ESM-only packages (uuid, open,
       // proxy-agent) that cannot be require()'d. @xterm/headless is also bundled
       // for CJS-ESM interop. node-pty and better-sqlite3 stay external (native addons).
-      externalizeDepsPlugin({ exclude: ['@xterm/headless', '@electron-toolkit/utils', 'uuid', 'open', 'proxy-agent'] })
+      externalizeDepsPlugin({ exclude: ['@xterm/headless', '@electron-toolkit/utils', 'uuid', 'open', 'proxy-agent'] }),
+      haloWorkerSetup(),
     ],
     build: {
       sourcemap: true,
       rollupOptions: {
-        external: ['@hello-halo/agent-sdk', '@openai/codex-sdk'],
+        external: ['@hello-halo/agent-sdk', '@hello-halo/agent-sdk/worker', '@openai/codex-sdk'],
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
           // File watcher worker — runs in a separate child process

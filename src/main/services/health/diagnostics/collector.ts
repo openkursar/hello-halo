@@ -23,6 +23,9 @@ export async function collectDiagnosticReport(): Promise<DiagnosticReport> {
   const healthState = getHealthState()
   const registryStats = getRegistryStats()
   const recentEvents = getRecentEvents()
+  let sdk: DiagnosticReport['sdk']
+  try { sdk = (await import('../../agent')).getSdkDiagnostics() }
+  catch (error) { console.warn('[Diagnostics] SDK runtime snapshot unavailable:', error) }
 
   // Get AI source info (sanitized)
   const aiSources = config.aiSources
@@ -51,6 +54,7 @@ export async function collectDiagnosticReport(): Promise<DiagnosticReport> {
 
   // Build raw report
   const rawReport: DiagnosticReport = {
+    sdk,
     timestamp: new Date().toISOString(),
     version: app.getVersion(),
     platform: process.platform,

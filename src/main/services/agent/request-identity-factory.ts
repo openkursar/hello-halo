@@ -8,7 +8,7 @@ import {
   CLAUDE_CODE_USER_AGENT,
   buildAttributionLine,
   extractFirstUserMessageText,
-} from '../../openai-compat-router'
+} from '../../openai-compat-router/identity'
 
 // ---------------------------------------------------------------------------
 // Platform detection
@@ -48,7 +48,7 @@ function normalizeArch(arch: string): Arch {
 
 const DEFAULT_SDK_PACKAGE_VERSION = '0.74.0'
 
-interface IdentityParams {
+export interface IdentityParams {
   sdkPackageVersion?: string
   deviceId?: string
   sessionId?: string
