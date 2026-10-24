@@ -1,41 +1,49 @@
 /**
  * AppSessionsView
  *
- * The "IM sessions" tab of a digital human: conversations people have
- * with it over its bound IM/HTTP channels (customers talking to the bot), as
- * opposed to the owner's own conversation, which lives on the main board.
+ * The "IM / Remote" tab of a digital human: conversations other people and
+ * systems hold with it — over its bound IM bots (customers talking to the bot)
+ * and over Halo's HTTP API (remote calls) — as opposed to the owner's own
+ * conversations, which live on the main board.
  *
- * One bot bound — straight into that bot's session browser. Several — a chip
- * row picks the instance first. None — a pointer to Settings, where binding
- * lives; the tab itself only appears once a bot is bound, so this state is
- * reached mainly after an unbind.
+ * Each bound bot is a group, and the remote calls are one more. One group —
+ * straight into it. Several — a chip row picks the group first. None — a
+ * pointer to Settings, where binding lives; the tab itself only appears once
+ * there is a group, so this state is reached mainly after an unbind.
  */
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Loader2, Radio } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useAppImInstances } from '../../hooks/useAppImInstances'
+import { useAppHttpSessions } from '../../hooks/useAppHttpSessions'
 import { AppBotSessionsView } from './AppBotSessionsView'
+import { AppHttpSessionsView } from './AppHttpSessionsView'
 import { getImBotLabel } from './im-channel-labels'
+
+/** The remote calls' group id; bot instance ids are UUIDs, so it never names a bot. */
+const REMOTE_CALLS = 'remote-calls'
 
 export function AppSessionsView({ appId, spaceId }: { appId: string; spaceId: string | null }) {
   const { t } = useTranslation()
   const openAppConfigAt = useAppsPageStore(s => s.openAppConfigAt)
   const { instances, loading } = useAppImInstances(appId)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const { sessions: httpSessions, loading: httpLoading } = useAppHttpSessions(appId)
+  const [pickedId, setPickedId] = useState<string | null>(null)
 
-  // Follow the instance list: adopt the first instance, and drop a selection
-  // whose instance was unbound while this tab was open.
-  useEffect(() => {
-    setSelectedId(current => instances.some(instance => instance.id === current) ? current : instances[0]?.id ?? null)
-  }, [instances])
+  const groupIds = [...instances.map(instance => instance.id), ...(httpSessions.length > 0 ? [REMOTE_CALLS] : [])]
+  // A pick whose group went away (a bot unbound while this tab is open) falls
+  // back to the first group.
+  const selectedId = pickedId !== null && groupIds.includes(pickedId) ? pickedId : groupIds[0] ?? null
 
-  if (loading && instances.length === 0) {
+  // Choose the first group only once the bot list is known: remote calls read
+  // sooner would otherwise show, then give way to the first bot.
+  if ((loading && instances.length === 0) || (httpLoading && groupIds.length === 0)) {
     return <div className="flex h-full items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
   }
 
-  if (instances.length === 0 || !spaceId) {
+  if (groupIds.length === 0 || !spaceId) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
         <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-secondary"><Radio className="h-6 w-6 text-muted-foreground" /></div>
@@ -53,28 +61,45 @@ export function AppSessionsView({ appId, spaceId }: { appId: string; spaceId: st
     )
   }
 
+  const chipClass = (id: string) => `flex flex-shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors ${
+    selectedId === id
+      ? 'border-border bg-secondary text-foreground'
+      : 'border-border-faint text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+  }`
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {instances.length > 1 && (
+      {groupIds.length > 1 && (
         <div className="flex flex-shrink-0 items-center gap-1.5 overflow-x-auto border-b border-border-faint px-3 py-2 sm:px-4">
           {instances.map(instance => (
             <button
               key={instance.id}
-              onClick={() => setSelectedId(instance.id)}
+              onClick={() => setPickedId(instance.id)}
               aria-pressed={selectedId === instance.id}
-              className={`flex flex-shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors ${
-                selectedId === instance.id
-                  ? 'border-border bg-secondary text-foreground'
-                  : 'border-border-faint text-muted-foreground hover:text-foreground hover:bg-secondary/50'
-              }`}
+              className={chipClass(instance.id)}
             >
               <span className={`h-1.5 w-1.5 rounded-full ${instance.connected ? 'bg-halo-success' : 'bg-muted-foreground/30'}`} />
               {getImBotLabel(instance, t)}
             </button>
           ))}
+          {httpSessions.length > 0 && (
+            <button
+              onClick={() => setPickedId(REMOTE_CALLS)}
+              aria-pressed={selectedId === REMOTE_CALLS}
+              className={chipClass(REMOTE_CALLS)}
+            >
+              {t('Remote calls')}
+              <span className="text-muted-foreground">{httpSessions.length}</span>
+            </button>
+          )}
         </div>
       )}
-      {selectedId && (
+      {selectedId === REMOTE_CALLS ? (
+        <div className="min-h-0 flex-1">
+          {/* Keyed per digital human: switching people keeps this tab, not the call picked on it. */}
+          <AppHttpSessionsView key={appId} appId={appId} spaceId={spaceId} sessions={httpSessions} />
+        </div>
+      ) : selectedId && (
         <div className="min-h-0 flex-1">
           <AppBotSessionsView key={selectedId} appId={appId} spaceId={spaceId} instanceId={selectedId} />
         </div>

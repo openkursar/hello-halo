@@ -13,6 +13,16 @@ action row only links there. `conversation-navigation` owns that jump — reopen
 the person's most recent desktop conversation, or starting one — so every entry
 point (person card, directory, resource rail, bot session fork) shares it.
 
+What other people and systems hold with a person is read-only, on its IM / Remote
+tab (`AppSessionsView`): a group per bound bot, and one for its remote calls —
+sessions a backend opened through the HTTP API (registry `source: 'http'`), read
+from the shared registry feed and drawn newest first, a page at a time. Remote
+calls stay off the main board and the @ conversation candidates: a backend can
+open hundreds of them, and they are neither pushable nor reachable from other
+conversations (`apps/runtime/conversation-source.ts`). `ImChatView` reads and
+stops one by its key, the form the remote transport accepts for it, and offers no
+clear: its context belongs to the backend calling it.
+
 Capability surfaces are two-level: a wall is the first level and one card opens a
 full-width detail behind a back link. The walls carry the scope and install-source
 filters; the disk-scanned "unmanaged" group stays unfiltered by design, since

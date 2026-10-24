@@ -686,6 +686,20 @@ describe('sessions the chat board does not show', () => {
 
     expect(apiMock.getSessionState).not.toHaveBeenCalled()
   })
+
+  // What a digital human's remote calls list shows as running (#454).
+  it('holds a remote call as running from its turn start until it completes, with no completion badge', async () => {
+    const store = makeStore()
+    const remoteCall = `app-chat:${APP}:http:direct:order-42`
+
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: remoteCall })
+    expect(store.getState().sessions.get(remoteCall)?.isGenerating).toBe(true)
+
+    await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: remoteCall } as never)
+    expect(store.getState().sessions.get(remoteCall)?.isGenerating).toBe(false)
+    expect(store.getState().unseenCompletions.has(remoteCall)).toBe(false)
+    expect(apiMock.taskMarkUnseen).not.toHaveBeenCalled()
+  })
 })
 
 describe('space conversations through the same verbs', () => {
