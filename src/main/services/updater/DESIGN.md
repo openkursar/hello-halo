@@ -55,6 +55,24 @@ belong to `manifestPublicKey`, fails before anything is built
 publishes) instead of shipping a release whose clients would quietly keep the
 installer path.
 
+**On macOS, "downloaded" is not "ready".** electron-updater's
+`update-downloaded` fires when its own download finishes; it then hands the
+zip to Squirrel.Mac, which unpacks it and rejects it unless its code signature
+satisfies the running app's designated requirement. An ad-hoc signed app (any
+local build) has its own hash as that requirement, so every update is
+rejected. Prompting at electron-updater's event put a Restart button on screen
+that then did nothing, with the failure arriving ~8 s later as an error nobody
+showed. So on macOS the prompt waits for Electron's own `autoUpdater`
+`update-downloaded`, and a failure before it goes to the download page like any
+other update that never arrived. Squirrel only starts by itself because
+`autoInstallOnAppQuit` is on, which it always is on macOS.
+
+Once Squirrel holds a verified release, checks still read the feed but do not
+download it again (`autoDownload` off): a second hand-off makes Squirrel
+unpack and verify the same release again, and two Squirrel jobs at once break
+each other mid-unpack. The same release is re-announced with the feed's
+current `mandatory` flag; a newer one is downloaded and replaces it.
+
 On a staged build electron-updater never installs on quit
 (`autoInstallOnAppQuit` off). It is only a fallback there, and a quit that
 also ran a downloaded installer would have NSIS and the swap helper writing
