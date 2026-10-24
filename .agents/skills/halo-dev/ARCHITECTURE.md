@@ -194,7 +194,9 @@ src/
 │                                      #   watcher-host
 │                                      #   (+ utilities: browser-login-pages, proxy-fetch,
 │                                      #    proxy-policy — the one place proxy and NO_PROXY
-│                                      #    decisions are made, for fetch, browser and child envs)
+│                                      #    decisions are made, for fetch, browser and child envs;
+│                                      #    child-env — edit a child env's PATH only through
+│                                      #    updateEnvPath: a Windows copy of process.env keeps `Path`)
 │
 ├── worker/                            # Utility processes (file-watcher)
 ├── shared/                            # Cross-process types, constants, protocols

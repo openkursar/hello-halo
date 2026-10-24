@@ -24,6 +24,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'f
 import { delimiter, join } from 'path'
 import { execFile } from 'child_process'
 import { app } from 'electron'
+import { updateEnvPath } from '../child-env'
 // Reaches past the services/agent barrel, which is a known violation, because
 // routing through it closes a cycle: agent/index -> send-message -> sdk-config ->
 // office-runtime -> here. The resolution is to move this lookup out of the agent
@@ -185,8 +186,7 @@ export function applyOfficeRuntimeEnv(env: Record<string, string | number | unde
   const shimDir = ensureOfficeRuntimeShim()
   if (!shimDir) return
 
-  const currentPath = typeof env.PATH === 'string' ? env.PATH : undefined
-  env.PATH = currentPath ? `${currentPath}${delimiter}${shimDir}` : shimDir
+  updateEnvPath(env, current => (current ? `${current}${delimiter}${shimDir}` : shimDir))
 
   const fontsDir = getOfficeFontsDir()
   if (fontsDir) env.HALO_OFFICE_FONTS_DIR = fontsDir
