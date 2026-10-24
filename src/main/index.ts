@@ -248,7 +248,7 @@ import {
 } from './bootstrap'
 import { isServerMode } from './foundation/runtime-mode'
 import { getConfig, initializeApp } from './foundation/config.service'
-import { drawFirstFrameMaximized, startupWindowColors } from './foundation/window-startup'
+import { startupWindowColors } from './foundation/window-startup'
 import { applyDisplayScale, currentDisplayScale, nudgeDisplayScale, setDisplayScale, DISPLAY_STEP, registerDisplayHandlers } from './services/display.service'
 import { MAC_TRAFFIC_LIGHT_POSITION } from '../shared/constants/mac-traffic-lights'
 import { TITLE_BAR_OVERLAY_HEIGHT } from '../shared/constants/app-header'
@@ -292,7 +292,7 @@ let isAppQuitting = false
  * "The first screen is up" — the cue the deferred startup tier waits on.
  *
  * Kept separate from Electron's first-paint event because a launch that never
- * paints still has to reach this point; see the reveal logic in createWindow.
+ * paints still has to reach this point; see the fallback cues in createWindow.
  */
 let firstScreenReached = false
 const firstScreenListeners: Array<() => void> = []
@@ -520,51 +520,41 @@ function createWindow(): void {
     }
   })
 
-  drawFirstFrameMaximized(mainWindow)
+  mainWindow.once('show', () => {
+    console.log(`[Main] Main window shown (elapsed=${Math.round(process.uptime() * 1000)}ms)`)
+  })
+  mainWindow.maximize()
+  mainWindow.show()
 
   // The page's own <title> is the same for every product, so it must not replace the product name.
   mainWindow.on('page-title-updated', (event) => event.preventDefault())
 
   registerBrowserHostHandlers(mainWindow)
 
-  // The window is created hidden and revealed on first paint. When the process
-  // was started by something non-interactive — the installer's "run when
-  // finished" box, or the updater relaunching after a swap — Windows may never
-  // give it a foreground paint, so that event never arrives and the app runs
-  // with no window and no tray while its processes sit in Task Manager. The
-  // user's only recourse is launching it again, which merely reveals the
-  // window that was there all along.
-  //
-  // So first paint is the preferred cue, not the only one: a loaded page will
-  // do, and failing that a deadline. Whichever fires first wins.
-  // First paint normally arrives before the page has loaded (the boot splash
-  // needs none of the app's code). A loaded page that has not painted yet still
-  // gets a moment rather than an unpainted reveal; the outer deadline covers a
-  // launch where neither ever arrives.
-  const REVEAL_AFTER_LOAD_MS = 1500
-  const REVEAL_DEADLINE_MS = 8000
-  let revealed = false
-  let revealTimer: NodeJS.Timeout | undefined
-  let loadRevealTimer: NodeJS.Timeout | undefined
-  const reveal = (cue: string) => {
-    if (revealed || !mainWindow || mainWindow.isDestroyed()) return
-    revealed = true
-    clearTimeout(revealTimer)
-    clearTimeout(loadRevealTimer)
-    console.log(`[Main] Showing main window (${cue})`)
-    mainWindow.maximize()
-    mainWindow.show()
+  // Showing the native background is not first paint: deferred services must
+  // wait for the page. Load/deadline fallbacks cover launches without a paint cue.
+  const FIRST_SCREEN_AFTER_LOAD_MS = 1500
+  const FIRST_SCREEN_DEADLINE_MS = 8000
+  let firstScreenAnnounced = false
+  let firstScreenTimer: NodeJS.Timeout | undefined
+  let loadFirstScreenTimer: NodeJS.Timeout | undefined
+  const onFirstScreen = (cue: string) => {
+    if (firstScreenAnnounced || !mainWindow || mainWindow.isDestroyed()) return
+    firstScreenAnnounced = true
+    clearTimeout(firstScreenTimer)
+    clearTimeout(loadFirstScreenTimer)
+    console.log(`[Main] First screen reached (cue=${cue}, elapsed=${Math.round(process.uptime() * 1000)}ms)`)
     announceFirstScreen()
   }
-  revealTimer = setTimeout(() => reveal('deadline'), REVEAL_DEADLINE_MS)
+  firstScreenTimer = setTimeout(() => onFirstScreen('deadline'), FIRST_SCREEN_DEADLINE_MS)
 
-  mainWindow.on('ready-to-show', () => reveal('ready-to-show'))
+  mainWindow.on('ready-to-show', () => onFirstScreen('ready-to-show'))
   mainWindow.webContents.on('did-finish-load', () => {
-    loadRevealTimer ??= setTimeout(() => reveal('page loaded'), REVEAL_AFTER_LOAD_MS)
+    if (!firstScreenAnnounced) loadFirstScreenTimer ??= setTimeout(() => onFirstScreen('page loaded'), FIRST_SCREEN_AFTER_LOAD_MS)
   })
   mainWindow.on('closed', () => {
-    clearTimeout(revealTimer)
-    clearTimeout(loadRevealTimer)
+    clearTimeout(firstScreenTimer)
+    clearTimeout(loadFirstScreenTimer)
   })
 
   // Fix PATH after page loads (avoid blocking startup)
@@ -746,14 +736,8 @@ app.whenReady().then(async () => {
   // Window reference is managed by window.service.ts
   initializeEssentialServices()
 
-  // Phase 2: Extended Services (deferred until the first screen is up)
-  // This ensures Extended initialization NEVER affects startup speed.
-  //
-  // Tied to the same cue that reveals the window rather than to first paint
-  // alone: a launch that never paints — the installer's "run when finished"
-  // box, the updater relaunching after a swap — would otherwise leave the app
-  // running with no tray, no database and no automation, which is far worse
-  // than merely having no window.
+  // Deferred services wait for the first-screen cue, not native window display.
+  // Its load/deadline fallbacks prevent a missing paint signal from stranding them.
   registerFirstScreenListener(() => {
     // Yield first so the paint (when there was one) is not competing with it.
     setImmediate(() => {

@@ -1,10 +1,10 @@
 /**
  * The window shows the boot splash in its first frame only because the splash
- * holds a laid-out <canvas>: Electron reveals the window once Blink counts the
- * page as having content, and at a screen scale or display size other than 100%
- * nothing else in the splash counts (see index.html). Without it, or with it
- * under display:none, the window waits for the app's script, and every test
- * stays green.
+ * holds a laid-out <canvas>: Electron emits ready-to-show once Blink counts the
+ * page as having content. This starts deferred services after the first frame.
+ * At a screen scale or display size other than 100%, nothing else in the splash
+ * counts (see index.html). A missing or hidden canvas delays that cue until the
+ * app's script runs.
  */
 
 import { describe, expect, it } from 'vitest'

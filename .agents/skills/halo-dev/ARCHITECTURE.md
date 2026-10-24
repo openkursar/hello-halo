@@ -863,21 +863,18 @@ Notes:
 
 ### The first-screen cue (do not gate deferred work on `ready-to-show` alone)
 
-`ready-to-show` fires once the page has laid out content to show (see "The first
-frame" below), and the window is created hidden, so it doubles as "reveal the
-window" and "start the deferred tier". Both uses assume Windows will let the
-hidden page draw — which is false for a launch that has no
-foreground context: the installer's "run when finished" checkbox, or the
-updater relaunching after a swap. That process then runs with no window, no
-tray, no database and no automation while its processes sit in Task Manager,
-and the user's only recourse is launching it again, which merely reveals the
-window that was there all along.
+The window is maximized and shown immediately after creation, before loading
+the page. `ready-to-show` fires once the page has laid out content to show (see
+"The first frame" below); it starts the deferred tier, not window visibility.
+Showing the native window must never announce this cue: deferred services would
+compete with the renderer before its first frame.
 
-`createWindow` therefore drives a single `firstScreen` cue off three signals —
-first paint, page loaded (after a short grace period so a normal start is not
-revealed unpainted), and an absolute deadline — and `registerFirstScreenListener`
-is what the deferred tier subscribes to. Keep the two on the same cue: a launch
-that reaches one and not the other is worse than one that reaches neither.
+`createWindow` drives a single `firstScreen` cue off three signals — first
+paint, page loaded plus a 1.5 s grace period, and an 8 s deadline — and
+`registerFirstScreenListener` is what the deferred tier subscribes to. The
+fallbacks keep services reachable when a non-interactive Windows launch (the
+installer or updater) does not receive the normal paint signal. Startup logs
+record both window display and this cue with elapsed process time and cue reason.
 
 ### Code loads with its tier
 
@@ -915,10 +912,10 @@ So the tiers are also split in the bundle:
 
 ### The first frame (boot splash)
 
-The window is revealed at the page's first layout that counts as having content,
-just before that frame is presented and before the app bundle runs, so whatever
-the page draws then stays on screen until the bundle finishes. Three rules keep it
-a finished picture:
+The native window is visible before the page loads. Its first layout that counts
+as having content supplies the boot splash before the app bundle runs, so whatever
+the page draws then stays on screen until the bundle finishes. Three rules keep
+it a finished picture:
 
 - **The page draws the splash itself.** `index.html` holds the boot splash, a
   centered logo, as plain markup and CSS; its only script is
@@ -936,12 +933,12 @@ a finished picture:
   counts the image as 0×0 before it has loaded, and only once. So `#boot-splash`
   ends with a 0×0 `<canvas>`, which counts at every zoom; under `display:none` it
   is not laid out and does not count. `boot-splash-reveal.guard.test.ts` keeps it in
-  place. Without it the window waits for the bundle at 125%, 150% or Retina.
-- **The first frame is drawn at the revealed size.** The window is revealed
-  maximized with that first frame while the page is still busy, and a page busy
-  running code cannot redraw at a new size. `foundation/window-startup.ts` sizes
-  the hidden window to the work area before anything is drawn (Windows and macOS)
-  and puts the default size back on the first restore.
+  place. Without it the first-screen cue waits for the bundle at 125%, 150% or Retina.
+- **The first frame is drawn maximized.** The window is maximized and shown
+  immediately after creation, before loading the page. Its native background
+  matches the boot splash, so the page's first frame fills the window.
+  Electron retains the original 1200×800 bounds for native restore behavior;
+  `foundation/window-startup.ts` supplies only theme colors.
 
 ### Shutdown behavior
 
