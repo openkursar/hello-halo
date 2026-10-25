@@ -90,6 +90,7 @@ export interface TeamRow {
   ephemeral: number
   /** Coordinating space conversation of an ephemeral team; migration v18. */
   coordinator_conversation_id: string | null
+  saved_team_id: string | null
 }
 
 /** Row shape from the `team_members` table. */
@@ -290,8 +291,13 @@ export interface TeamStore {
   updateTeamStatus(teamId: string, status: TeamStatus): void
   updateTeamLeadAppId(teamId: string, leadAppId: string | null): void
   updateTeamCurrentEpoch(teamId: string, epochId: string | null): void
-  /** Promote an ephemeral collaboration to a persistent team ("save as team"). */
+  /** Legacy in-place promotion; new saves create a separate team. */
   clearEphemeral(teamId: string): void
+  /** Normalize an old saved collaboration without changing its history. */
+  repairCollabLead(teamId: string, expectedLeadAppId: string, member: TeamMember, edges?: TeamEdge[]): void
+  /** Commit the source's saved-configuration link after the new team is ready. */
+  attachSavedTeam(sourceTeamId: string, savedTeamId: string): void
+  listSavedTeamSources(savedTeamId: string): Team[]
   /** Bind/unbind the space conversation that coordinates a collaboration. */
   setCoordinatorConversation(teamId: string, conversationId: string | null): void
   /** The ephemeral collaboration coordinated by a space conversation, or null. */

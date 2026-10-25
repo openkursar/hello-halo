@@ -19,6 +19,8 @@ import {
   spaceCollabChatKey,
   spaceCoordinatorAppId,
   parseSpaceCoordinatorAppId,
+  isLegacyCoordinatorTeam,
+  isReadonlyCollaboration,
   SPACE_COORDINATOR_MEMBER_NAME,
   TEAM_FOLDER_REF_PREFIX,
   isTeamFolderRef,
@@ -64,8 +66,11 @@ import type {
 } from '../../../shared/apps/team-types'
 import { isRemoteMember, toLocalMembers } from '../../../shared/apps/team-types'
 import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
+import { parseSpaceCollabChatKey } from '../../../shared/apps/im-keys'
 
 const LOG_TAG = '[TeamService]'
+
+class LegacyTeamBusyError extends Error {}
 
 // ── Dependency injection seam ──
 
@@ -73,6 +78,8 @@ export interface TeamServiceDeps {
   store: TeamStore
   getViewerIdentity?: () => string
   getConversationMember?: (teamId: string, chatKey: string) => string | undefined
+  /** Live occupancy of the original space conversation, including its reserved turn. */
+  isConversationBusy?: (conversationId: string) => boolean
   appManager: AppManagerService
   getRuntime: () => TeamRuntime | null
   spaces: TeamSpaceDeps
@@ -228,14 +235,18 @@ export interface TeamService {
   createCollab(input: CreateCollabInput): Promise<{ team: Team; epochId: string }>
   /** The collaboration bound to a space conversation, compactly. Null when none. */
   getCollabForConversation(conversationId: string): CollabSummary | null
-  /** Keep an ephemeral collaboration: it becomes an ordinary persistent team. */
-  saveCollab(teamId: string, name?: string): Team
+  /** Save a separate ordinary team from configuration, leaving the current work here. */
+  saveCollab(teamId: string, name?: string): Promise<Team>
+  /** Repair a previously saved conversation-led team on explicit use. */
+  prepareTeam(teamId: string): Promise<void>
   /** End a collaboration's work: seal its conversation epoch as completed. */
   completeCollab(teamId: string, summary: string): Promise<void>
   getTeam(teamId: string): Team | null
   listTeams(spaceId?: string): Team[]
   listTeamItems(spaceId?: string): TeamListItem[]
   getTeamDetail(teamId: string): TeamDetail | null
+  /** Open an owned team, normalizing legacy saved collaborations on demand. */
+  openTeamDetail(teamId: string): Promise<TeamDetail | null>
   updateTeam(teamId: string, input: UpdateTeamInput): Promise<Team>
   addMember(teamId: string, member: TeamMemberInput): Promise<TeamMember>
   /**
@@ -252,9 +263,7 @@ export interface TeamService {
   /**
    * Start a saved team on its goal. `instruction` (optional) is this run's
    * concrete brief, appended to the lead's start wake — the delegation path the
-   * space agent uses. A saved collaboration provisions its real lead on its
-   * first standalone run (until then its lead pointer is the space coordinator
-   * sentinel).
+   * space agent uses. Legacy saved collaborations prepare their lead first.
    */
   runTeam(teamId: string, trigger?: TeamRunTrigger, instruction?: string): Promise<void>
   pauseTeam(teamId: string): Promise<void>
@@ -302,7 +311,7 @@ export interface TeamService {
    * Returns the epoch id the renderer chats against. Refused on a temporary
    * collaboration, which has exactly one conversation for its whole life.
    */
-  openConversation(teamId: string, title?: string, memberAppId?: string): { epochId: string }
+  openConversation(teamId: string, title?: string, memberAppId?: string): Promise<{ epochId: string }>
   /** Rename a conversation (office-shared: replicated to every node). */
   renameConversation(teamId: string, epochId: string, title: string | null): void
   /** Archive (seal) a single conversation — it moves to the History archived list. */
@@ -490,7 +499,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     return member
   }
 
-  function addManualMember(team: Team, input: TeamMemberInput): TeamMember {
+  function addManualMember(team: Team, input: TeamMemberInput, aiProvisioned = false): TeamMember {
     const app = appManager.getApp(input.appId)
     if (!app) throw new Error(`App not found for member: ${input.appId}`)
     const memberName = uniqueMemberName(team.id, input.memberName || app.spec.name || 'member')
@@ -504,7 +513,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       delegatedPolicy,
       acceptsChecks: delegatedPolicy?.allowChecks !== false,
       isLead: false,
-      aiProvisioned: false,
+      aiProvisioned,
       addedAt: Date.now(),
     }
     store.addMember(member)
@@ -512,6 +521,22 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   }
 
   // ── Lead provisioning ──
+
+  function leadMember(team: Team, appId: string): TeamMember {
+    const delegatedPolicy = startingDelegatedPolicy(team)
+    return {
+      teamId: team.id,
+      appId,
+      memberName: uniqueMemberName(team.id, 'Lead'),
+      role: 'Team Lead',
+      isLead: true,
+      aiProvisioned: true,
+      isSystemCoordinator: true,
+      addedAt: Date.now(),
+      delegatedPolicy,
+      acceptsChecks: delegatedPolicy?.allowChecks !== false,
+    }
+  }
 
   async function provisionLead(team: Team): Promise<string> {
     const req = provisionLeadSpec({
@@ -522,25 +547,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const leadAppId = await appManager.install(req.spaceId, req.spec as AppSpec, req.userConfig)
     store.updateTeamLeadAppId(team.id, leadAppId)
 
-    // CRITICAL: the lead must also be a member row (isLead:true). The runtime
-    // resolves the lead as a team participant exclusively through team_members
-    // (buildPromptContext / roster / topology); without this row the lead's turn
-    // gets no Team Entry and no halo-team tools, so a run does nothing. The lead
-    // app is system-created, so aiProvisioned:true makes dissolve clean it up as
-    // an orphan (no separate lead-cleanup path needed).
-    // A saved collaboration gets its lead on its first run, possibly after it
-    // was shared, so the lead is held like any member added late.
-    store.addMember({
-      teamId: team.id,
-      appId: leadAppId,
-      memberName: uniqueMemberName(team.id, 'Lead'),
-      role: 'Team Lead',
-      isLead: true,
-      aiProvisioned: true,
-      isSystemCoordinator: true,
-      addedAt: Date.now(),
-      delegatedPolicy: startingDelegatedPolicy(team),
-    })
+    // Membership supplies the lead's tools and owns cleanup when the team dissolves.
+    store.addMember(leadMember(team, leadAppId))
     return leadAppId
   }
 
@@ -568,7 +576,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   function defaultEdges(teamId: string, leadAppId: string | null, members: TeamMember[]): TeamEdge[] {
     if (!leadAppId) return []
     return members
-      .filter((m) => m.appId !== leadAppId)
+      .filter((m) => m.appId !== leadAppId && !parseSpaceCoordinatorAppId(m.appId))
       .map((m) => ({ teamId, fromAppId: leadAppId, toAppId: m.appId, sync: true }))
   }
 
@@ -583,8 +591,19 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     input: CreateTeamInput,
     confirmedProposal?: ProposedMember[]
   ): Promise<Team> {
+    return createTeamInternal(input, confirmedProposal)
+  }
+
+  async function createTeamInternal(
+    input: CreateTeamInput,
+    confirmedProposal?: ProposedMember[],
+    snapshot?: { ownedApps: Set<string>; model: AgentModelSelection | null; edges: TeamEdge[]; coordinatorAppId: string | null },
+  ): Promise<Team> {
     if (!spaces.spaceExists(input.owningSpaceId)) {
       throw new Error(`Owning space not found: ${input.owningSpaceId}`)
+    }
+    if (!snapshot && store.listTeamsBySpace(input.owningSpaceId).some(team => team.name === input.name)) {
+      throw new Error('A team with this name already exists in this space.')
     }
 
     const now = Date.now()
@@ -616,7 +635,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         }
       } else {
         for (const m of input.members ?? []) {
-          addManualMember(team, m)
+          addManualMember(team, m, snapshot?.ownedApps.has(m.appId))
         }
       }
 
@@ -625,12 +644,19 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       } else {
         promoteExistingLead(team, team.leadAppId)
       }
+      if (snapshot?.model) appManager.updateOverrides(team.leadAppId, snapshot.model)
 
       if (team.collabMode === 'structured') {
-        regenerateStructuredEdges(team)
+        if (snapshot) {
+          store.replaceEdgesForTeam(team.id, snapshot.edges.map(edge => ({
+            ...edge, teamId: team.id,
+            fromAppId: edge.fromAppId === snapshot.coordinatorAppId ? team.leadAppId! : edge.fromAppId,
+            toAppId: edge.toAppId === snapshot.coordinatorAppId ? team.leadAppId! : edge.toAppId,
+          })))
+        } else regenerateStructuredEdges(team)
       }
     } catch (err) {
-      console.error(`${LOG_TAG} createTeam failed, rolling back team=${team.id}:`, err)
+      if (!snapshot) console.error(`${LOG_TAG} createTeam failed, rolling back team=${team.id}:`, err)
       await dissolveTeamInternal(team.id, { silent: true }).catch((cleanupErr) => {
         console.warn(`${LOG_TAG} rollback cleanup error for team=${team.id}:`, cleanupErr)
       })
@@ -638,15 +664,16 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
 
     const finalTeam = requireTeam(team.id)
-    emitUpdated(finalTeam.id, { team: finalTeam })
+    // A snapshot is published only after its source link commits.
+    if (!snapshot) emitUpdated(finalTeam.id, { team: finalTeam })
     return finalTeam
   }
 
   // ── Temporary space collaborations ──
 
-  function uniqueTeamName(spaceId: string, preferred: string): string {
+  function uniqueTeamName(spaceId: string, preferred: string, ephemeral = true): string {
     const base = (preferred || 'Collaboration').trim() || 'Collaboration'
-    const taken = new Set(store.listTeamsBySpace(spaceId).map((t) => t.name))
+    const taken = new Set(store.listTeamsBySpace(spaceId).filter(team => ephemeral || !team.ephemeral).map(team => team.name))
     if (!taken.has(base)) return base
     for (let i = 2; i < 1000; i++) {
       const candidate = `${base} ${i}`
@@ -709,9 +736,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       throw new Error('A collaboration requires the coordinator source and model.')
     }
 
-    // One collaboration per conversation. A live one must be completed first; a
-    // finished ephemeral one is replaced (its record dissolves with it); a
-    // finished SAVED one is unbound and kept — it is a persistent team now.
+    // Replacing a finished collaboration preserves the source history when its
+    // configuration was saved; an unsaved source is dissolved.
     const previous = store.getCollabTeamByConversation(input.conversationId)
     if (previous) {
       const openEpoch = previous.coordinatorConversationId
@@ -723,7 +749,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
             'Finish it with team_complete before starting a new one.'
         )
       }
-      if (previous.ephemeral) {
+      if (previous.ephemeral && !previous.savedTeamId) {
         await dissolveTeamInternal(previous.id)
       } else {
         store.setCoordinatorConversation(previous.id, null)
@@ -816,8 +842,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const openTasks = store
       .listTasksByEpoch(team.id, epoch.id)
       .filter((task) => task.status === 'in_progress' || task.status === 'pending')
-    const members = store
-      .listMembersByTeam(team.id)
+    const members = store.listMembersByTeam(team.id)
       .filter((m) => !parseSpaceCoordinatorAppId(m.appId))
       .map((m) => {
         const task = openTasks.filter((tk) => tk.assigneeAppId === m.appId).at(-1)
@@ -835,23 +860,165 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       goal: team.goal,
       epochId: epoch.id,
       active: epoch.endedAt === null && epoch.workItem?.status !== 'completed',
-      saved: team.ephemeral !== true,
+      saved: !!team.savedTeamId || team.ephemeral !== true,
+      ...(team.savedTeamId ? { savedTeamId: team.savedTeamId } : {}),
       members,
     }
   }
 
-  function saveCollab(teamId: string, name?: string): Team {
-    const team = requireTeam(teamId)
-    if (!team.ephemeral) return team
-    const trimmed = name?.trim()
-    if (trimmed && trimmed !== team.name) {
-      store.updateTeamFields(teamId, { name: uniqueTeamName(team.owningSpaceId, trimmed) })
+  // In-flight work is shared per source and released on either outcome.
+  const collabSaves = new Map<string, Promise<Team>>()
+  const legacyRepairs = new Map<string, Promise<void>>()
+
+  function saveCollab(teamId: string, name?: string): Promise<Team> {
+    const existing = collabSaves.get(teamId)
+    if (existing) return existing
+    const saving = saveConfiguration(teamId, name)
+    collabSaves.set(teamId, saving)
+    void saving.then(() => collabSaves.delete(teamId), () => collabSaves.delete(teamId))
+    return saving
+  }
+
+  async function saveConfiguration(teamId: string, name?: string): Promise<Team> {
+    const source = requireTeam(teamId)
+    if (source.hostNodeId != null) throw new Error('Only the team creator can keep this configuration.')
+    if (!source.ephemeral) {
+      await prepareTeam(teamId)
+      return requireTeam(teamId)
     }
-    store.clearEphemeral(teamId)
-    const saved = requireTeam(teamId)
-    console.log(`${LOG_TAG} saveCollab: team=${teamId} name="${saved.name}"`)
-    emitUpdated(teamId, { team: saved })
+    const existing = source.savedTeamId ? store.getTeamById(source.savedTeamId) : null
+    if (existing) return existing
+    const members = store.listMembersByTeam(teamId).filter(member => !parseSpaceCoordinatorAppId(member.appId))
+    if (members.some(isRemoteMember)) {
+      console.warn(`${LOG_TAG} configuration save refused: team=${teamId} reason=remote-members-require-new-invitation`)
+      throw new Error('Create a new team and invite the teammates again to keep this configuration.')
+    }
+    const input: CreateTeamInput = {
+      owningSpaceId: source.owningSpaceId,
+      name: uniqueTeamName(source.owningSpaceId, name?.trim() || source.name, false),
+      goal: source.goal,
+      memberSourcing: 'manual',
+      collabMode: source.collabMode,
+      escalationRouting: source.escalationRouting,
+      members: members.map(member => ({
+        appId: member.appId, memberName: member.memberName, role: member.role,
+        duty: member.duty ?? undefined, delegatedPolicy: member.delegatedPolicy ?? undefined,
+      })),
+    }
+    let saved: Team | undefined
+    try {
+      saved = await createTeamInternal(input, undefined, {
+        ownedApps: new Set(members.filter(member => member.aiProvisioned).map(member => member.appId)),
+        model: collabModelSelection(teamId),
+        edges: store.listEdgesByTeam(teamId),
+        coordinatorAppId: source.leadAppId,
+      })
+      store.attachSavedTeam(teamId, saved.id)
+    } catch (error) {
+      console.error(`${LOG_TAG} configuration save failed: team=${teamId}`, error)
+      if (saved) await dissolveTeamInternal(saved.id, { silent: true }).catch(cleanupError => {
+        console.error(`${LOG_TAG} configuration rollback failed: team=${saved!.id}`, cleanupError)
+      })
+      throw error
+    }
+    emitUpdated(saved.id, { team: saved })
+    emitUpdated(teamId, { team: requireTeam(teamId) })
+    console.log(`${LOG_TAG} configuration saved: source=${teamId} saved=${saved.id}`)
     return saved
+  }
+
+  function legacyCoordinator(team: Team): TeamDetail['legacyCoordinator'] {
+    if (!isLegacyCoordinatorTeam(team)) return undefined
+    const coordinator = store.getMember(team.id, team.leadAppId!)
+    return {
+      ownedHere: coordinator ? !isRemoteMember(coordinator) : team.hostNodeId == null,
+      ownerName: coordinator?.ownerDisplayName?.trim() || null,
+    }
+  }
+
+  function assertLegacyTeamIdle(team: Team): void {
+    const epoch = collabEpoch(team)
+    const runtime = getRuntime()
+    const sourceBusy = team.coordinatorConversationId && deps.isConversationBusy?.(team.coordinatorConversationId)
+    const memberBusy = epoch && runtime && store.listMembersByTeam(team.id).some(member =>
+      runtime.getMemberBusy(member.appId, team.id).some(work => work.epochId === epoch.id))
+    if (sourceBusy || memberBusy) {
+      throw new LegacyTeamBusyError('The original collaboration is still working. Finish or stop it in the original conversation, then retry the repair.')
+    }
+  }
+
+  async function repairLegacyTeam(team: Team): Promise<void> {
+    const expectedLead = team.leadAppId!
+    const req = provisionLeadSpec({ teamName: team.name, goal: team.goal, owningSpaceId: team.owningSpaceId })
+    const inherited = collabModelSelection(team.id)
+    if (!inherited) console.warn(`${LOG_TAG} legacy lead model unavailable: team=${team.id}; using the current model selection`)
+    let appId: string | undefined
+    try {
+      assertLegacyTeamIdle(team)
+      appId = await appManager.install(req.spaceId, req.spec as AppSpec, req.userConfig)
+      if (inherited) appManager.updateOverrides(appId, inherited)
+      const current = requireTeam(team.id)
+      if (current.name !== team.name || current.goal !== team.goal) {
+        throw new Error('The team changed while it was being repaired. Please try again.')
+      }
+      assertLegacyTeamIdle(current)
+      const edges = store.listEdgesByTeam(team.id).map(edge => ({
+        ...edge,
+        fromAppId: edge.fromAppId === expectedLead ? appId! : edge.fromAppId,
+        toAppId: edge.toAppId === expectedLead ? appId! : edge.toAppId,
+      }))
+      store.repairCollabLead(team.id, expectedLead, leadMember(current, appId), edges)
+    } catch (error) {
+      if (error instanceof LegacyTeamBusyError) console.warn(`${LOG_TAG} legacy repair deferred: team=${team.id} reason=live-collaboration`)
+      else console.error(`${LOG_TAG} legacy team repair failed: team=${team.id}`, error)
+      if (appId) await appManager.deleteApp(appId).catch(cleanupError => {
+        console.error(`${LOG_TAG} legacy lead rollback failed: team=${team.id} app=${appId}`, cleanupError)
+      })
+      throw error
+    }
+    emitUpdated(team.id, { team: requireTeam(team.id) })
+    deps.onRosterMutated?.(team.id)
+    console.log(`${LOG_TAG} legacy team repaired: team=${team.id} lead=${appId}`)
+  }
+
+  async function prepareTeam(teamId: string): Promise<void> {
+    const team = store.getTeamById(teamId)
+    if (!team) return
+    const legacy = legacyCoordinator(team)
+    if (!legacy) return
+    if (!legacy.ownedHere) {
+      throw new Error('Ask this team’s creator to update their client and reopen the team. Your client does not need an update.')
+    }
+    if (team.hostNodeId != null) {
+      console.warn(`${LOG_TAG} legacy repair refused: team=${teamId} reason=joined-copy`)
+      throw new Error('This copy is hosted on another computer. Create a new team to keep using these members.')
+    }
+    let repairing = legacyRepairs.get(teamId)
+    if (!repairing) {
+      repairing = repairLegacyTeam(team)
+      legacyRepairs.set(teamId, repairing)
+      void repairing.then(() => legacyRepairs.delete(teamId), () => legacyRepairs.delete(teamId))
+    }
+    await repairing
+  }
+
+  async function openTeamDetail(teamId: string): Promise<TeamDetail | null> {
+    const team = store.getTeamById(teamId)
+    if (!team) return null
+    if (legacyCoordinator(team)?.ownedHere) {
+      try {
+        await prepareTeam(teamId)
+      } catch (error) {
+        // The repair boundary already logged the failure; history stays readable.
+        const detail = getTeamDetail(teamId)
+        return detail?.legacyCoordinator
+          ? { ...detail, legacyCoordinator: { ...detail.legacyCoordinator,
+              ...(error instanceof LegacyTeamBusyError ? { repairDeferred: true } : { repairFailed: true }),
+            } }
+          : detail
+      }
+    }
+    return getTeamDetail(teamId)
   }
 
   async function completeCollab(teamId: string, summary: string): Promise<void> {
@@ -884,7 +1051,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   function listTeamItems(spaceId?: string): TeamListItem[] {
     return listTeams(spaceId).map((team) => {
-      const members = store.listMembersByTeam(team.id)
+      const members = store.listMembersByTeam(team.id).filter(m => !parseSpaceCoordinatorAppId(m.appId))
       // Waiting decisions survive a run seal (P0-5), so a team can be idle yet
       // still have pending escalations — count them independently of run status.
       const waitingCount = pendingEscalationsForTeam(team.id).length
@@ -914,7 +1081,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     if (!team) return null
     if (team.hostNodeId != null) deps.onOfficeViewed?.(teamId)
 
-    const members = store.listMembersByTeam(teamId)
+    const legacy = legacyCoordinator(team)
+    const members = store.listMembersByTeam(teamId).filter(m => !parseSpaceCoordinatorAppId(m.appId))
     const edges = store.listEdgesByTeam(teamId)
     // Waiting decisions drive the cross-tab banner (C2) and survive a run seal.
     const pendingEscalations = pendingEscalationsForTeam(teamId)
@@ -940,6 +1108,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       const statuses = store.getJoinedMemberStatuses(teamId)
       return {
         team,
+        ...(legacy ? { legacyCoordinator: legacy } : {}),
         members,
         edges,
         roster: members.map((m) => {
@@ -989,11 +1158,20 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     if (epoch && runtime) {
       const callerAppId = team.leadAppId ?? members[0]?.appId ?? ''
       const board = runtime.blackboard.readBoard(teamId, epoch.id, callerAppId)
+      const boardMembers = new Map(board.roster.map(member => [member.appId, member]))
       return {
         team,
+        ...(legacy ? { legacyCoordinator: legacy } : {}),
         members,
         edges,
-        roster: board.roster,
+        roster: members.map(member => ({
+          ...(boardMembers.get(member.appId) ?? {
+            appId: member.appId, memberName: member.memberName, role: member.role,
+            duty: member.duty ?? null, status: runtime.getMemberStatus(member.appId),
+            ...projectOwnership(member),
+          }),
+          isLead: member.isLead, spaceId: appManager.getApp(member.appId)?.spaceId ?? null,
+        })),
         tasks: board.tasks,
         findings: board.findings,
         // The live projection is bounded; explicit task history reads the full board.
@@ -1007,6 +1185,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
     return {
       team,
+      ...(legacy ? { legacyCoordinator: legacy } : {}),
       members,
       edges,
       roster: members.map((m) => {
@@ -1038,6 +1217,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   async function updateTeam(teamId: string, input: UpdateTeamInput): Promise<Team> {
     const before = requireTeam(teamId)
+    if (input.leadAppId && parseSpaceCoordinatorAppId(input.leadAppId)) {
+      throw new Error('A saved team needs a digital human as its lead.')
+    }
 
     store.updateTeamFields(teamId, {
       ...(input.name !== undefined ? { name: input.name } : {}),
@@ -1141,6 +1323,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   async function removeMember(teamId: string, appId: string): Promise<void> {
     const team = requireTeam(teamId)
+    if (parseSpaceCoordinatorAppId(appId)) {
+      console.warn(`${LOG_TAG} member removal refused: team=${teamId} reason=source-conversation-identity`)
+      throw new Error('The original conversation is not a removable digital human.')
+    }
     const members = store.listMembersByTeam(teamId)
     const target = members.find((m) => m.appId === appId)
     if (!target) throw new Error(`Member not found: ${appId}`)
@@ -1154,7 +1340,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     // If the removed member was the lead, reassign so the next run does not
     // resolve a phantom lead (which would wedge orchestration).
     if (team.leadAppId === appId) {
-      const remaining = store.listMembersByTeam(teamId)
+      const remaining = store.listMembersByTeam(teamId).filter(member => !parseSpaceCoordinatorAppId(member.appId))
       const nextLead = remaining.find((m) => m.origin !== 'remote') ?? remaining[0] ?? null
       store.updateTeamLeadAppId(teamId, nextLead?.appId ?? null)
       if (nextLead) store.setMemberLead(teamId, nextLead.appId, true)
@@ -1203,30 +1389,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
           'Save it as a team first, then it can run on its own.'
       )
     }
-    // A saved collaboration keeps the space-conversation coordinator as its lead
-    // pointer until its first standalone run, which provisions the real lead.
-    if (!team.leadAppId || parseSpaceCoordinatorAppId(team.leadAppId)) {
-      const liveCollab = team.coordinatorConversationId
-        ? store.getOpenConversationEpoch(teamId, spaceCollabChatKey(team.coordinatorConversationId))
-        : null
-      if (liveCollab) {
-        throw new Error('The collaboration this team came from is still in progress. Finish it first.')
-      }
-      // The collaboration's members carry the coordinator's model; read it
-      // before the sentinel row goes so the new lead runs on the same one.
-      const inherited = collabModelSelection(teamId)
-      if (team.leadAppId) store.removeMember(teamId, team.leadAppId)
-      team.leadAppId = await provisionLead(team)
-      if (inherited) {
-        appManager.updateOverrides(team.leadAppId, inherited)
-      } else {
-        console.warn(`${LOG_TAG} runTeam: no member model to inherit for saved collaboration team=${teamId}; lead uses the global selection`)
-      }
-      if (team.collabMode === 'structured') {
-        regenerateStructuredEdges(requireTeam(teamId))
-      }
-      console.log(`${LOG_TAG} runTeam: provisioned lead for saved collaboration team=${teamId}`)
-    }
+    await prepareTeam(teamId)
     const rt = requireRuntime()
     const epoch = await rt.startEpoch(teamId, trigger, instruction)
     console.log(`${LOG_TAG} runTeam: team=${teamId} epoch=${epoch.id} trigger=${trigger.type}`)
@@ -1327,7 +1490,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     // runtime disarms as each row goes.
     const rt = getRuntime()
     for (const check of store.listChecksByTeam(teamId)) rt?.checks.cancelById(check.id)
+    const sources = store.listSavedTeamSources(teamId)
     store.deleteTeam(teamId)
+    for (const source of sources) emitUpdated(source.id, { team: requireTeam(source.id) })
     await rt?.teamFolders.remove(teamId, epochIds)
 
     for (const m of members) {
@@ -1380,8 +1545,6 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
     const teamFolderDir = getRuntime()?.teamFolders.sharedDir(teamId, epoch.id) ?? null
     for (const { appId, ref } of refs) {
-      const member = memberById.get(appId)
-      if (!member) continue
       // A coordinating space conversation has no app record; it works in the team's own space.
       const spaceId = parseSpaceCoordinatorAppId(appId)
         ? team.owningSpaceId
@@ -1407,13 +1570,12 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       g.artifacts.push(buildRefArtifact(path, ref, spaceId, createdAt))
     }
 
-    // Emit in member order, only members that produced something.
-    return members
-      .filter((m) => groups.get(m.appId)?.artifacts.length)
-      .map((m) => {
-        const g = groups.get(m.appId)!
-        return { appId: m.appId, memberName: m.memberName, spaceId: g.spaceId, epochId: epoch.id, artifacts: g.artifacts }
-      })
+    // Membership changes cannot remove a publication from the historical record.
+    return Array.from(groups, ([appId, g]) => {
+      const memberName = memberById.get(appId)?.memberName ??
+        (parseSpaceCoordinatorAppId(appId) ? SPACE_COORDINATOR_MEMBER_NAME : appManager.getApp(appId)?.spec.name ?? '')
+      return { appId, memberName, spaceId: g.spaceId, epochId: epoch.id, artifacts: g.artifacts }
+    })
   }
 
   /**
@@ -1461,7 +1623,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       epoch,
       tasks: store.listTasksByEpoch(teamId, epochId),
       findings: store.listFindingsByEpoch(teamId, epochId),
-      members: store.listMembersByTeam(teamId),
+      members: store.listMembersByTeam(teamId).filter(member => !parseSpaceCoordinatorAppId(member.appId)),
       activities: store.listActivityByEpoch(teamId, epochId),
     }
   }
@@ -1548,7 +1710,15 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   }
 
   async function sendToMember(params: SendToMemberParams): Promise<SendToMemberResult> {
-    requireTeam(params.teamId)
+    const team = requireTeam(params.teamId)
+    if (legacyCoordinator(team)) {
+      console.warn(`${LOG_TAG} direct message refused: team=${params.teamId} reason=legacy-team-needs-owner-repair`)
+      throw new Error('Ask the team creator to reopen this legacy team in the updated client before starting new work.')
+    }
+    if (parseSpaceCoordinatorAppId(params.appId)) {
+      console.warn(`${LOG_TAG} direct message refused: team=${params.teamId} reason=source-conversation-target`)
+      throw new Error('Continue this collaboration in its original conversation.')
+    }
     const target = store.listMembersByTeam(params.teamId).find((m) => m.appId === params.appId)
     if (!target) return { ok: false, finalMessage: null, reason: 'MEMBER_NOT_FOUND' }
 
@@ -1565,6 +1735,12 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       params.epochId ||
       store.getCurrentEpochForTeam(params.teamId)?.id ||
       rt.ensureConversationEpoch(params.teamId, memberChatKey(params.appId)).id
+
+    const epoch = store.getEpochById(epochId)
+    if (epoch && isReadonlyCollaboration(team, epoch)) {
+      console.warn(`${LOG_TAG} direct message refused: team=${params.teamId} epoch=${epochId} reason=source-task-readonly`)
+      throw new Error('This task is read-only.')
+    }
 
     // A sealed epoch drops completions, so the operator would see "sent, no
     // reply" after a run ended. Note the turn first (wakes a hibernated epoch); a
@@ -1675,6 +1851,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     return openEpochs.map((epoch) => {
       const chatKey = epoch.chatKey ?? ''
       const kind = epoch.lifecycle === 'run' ? 'run' : conversationKindOf(chatKey)
+      const sourceConversationId = parseSpaceCollabChatKey(chatKey)
       const memberAppId = parseMemberChatKey(chatKey) ?? epoch.workItem?.entryAppId ?? deps.getConversationMember?.(teamId, chatKey) ?? (kind === 'run' ? team.leadAppId : undefined) ?? undefined
       const localWaiting = localWaitingMembers.get(epoch.id) ?? []
       const sharedWaiting = (unansweredDecisionMembers.get(epoch.id) ?? []).filter((appId) => {
@@ -1694,6 +1871,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         epochId: epoch.id,
         teamId,
         kind,
+        ...(sourceConversationId && !isJoined
+          ? { sourceConversation: { spaceId: team.owningSpaceId, conversationId: sourceConversationId } }
+          : {}),
         workItemId: epoch.workItem?.id ?? epoch.id,
         completed: epoch.workItem?.status === 'completed',
         createdByMe: !!epoch.workItem?.createdBy && epoch.workItem.createdBy === deps.getViewerIdentity?.(),
@@ -1703,7 +1883,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         artifactCount: outputCounts.get(epoch.id) ?? 0,
         label: epoch.workItem?.title || (kind === 'run' ? team.name : deriveConversationLabel(store, epoch, deps.describeChatKey, members)),
         // IM chats are answered in the IM app; native + member chats are writable here.
-        readonly: kind === 'im' || kind === 'run',
+        readonly: kind === 'im' || kind === 'run' || isReadonlyCollaboration(team, epoch),
         ...(memberAppId ? { memberAppId } : {}),
         ...(kind === 'im' ? { channel: 'im' } : {}),
         startedAt: epoch.startedAt,
@@ -1716,7 +1896,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     })
   }
 
-  function openConversation(teamId: string, title?: string, memberAppId?: string): { epochId: string } {
+  async function openConversation(teamId: string, title?: string, memberAppId?: string): Promise<{ epochId: string }> {
     const team = requireTeam(teamId)
     // A collaboration works in ONE conversation, the one its space conversation
     // coordinates; a second one here would be a context nobody coordinates and
@@ -1727,6 +1907,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
           'save it as a team to keep separate tasks.'
       )
     }
+    await prepareTeam(teamId)
     const rt = requireRuntime()
     // A fresh, independent native session. The uuid makes each "New session" its
     // own context (never collapses into a prior one). The lead is the front desk.
@@ -1760,11 +1941,13 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     createCollab,
     getCollabForConversation,
     saveCollab,
+    prepareTeam,
     completeCollab,
     getTeam,
     listTeams,
     listTeamItems,
     getTeamDetail,
+    openTeamDetail,
     updateTeam,
     addMember,
     updateMember,

@@ -51,6 +51,8 @@ const listArtifacts = vi.fn<[string, string?], Promise<unknown[]>>()
 
 vi.mock('../../../../src/main/apps/team', () => ({
   getTeamService: () => ({
+    getTeam: (teamId: string) => getTeamById(teamId),
+    openTeamDetail: async (teamId: string) => getTeamDetail(teamId),
     listEpochs: (teamId: string) => listEpochs(teamId),
     getTeamDetail: (teamId: string) => getTeamDetail(teamId),
     getEpochBoard: (teamId: string, epochId: string) => getEpochBoard(teamId, epochId),

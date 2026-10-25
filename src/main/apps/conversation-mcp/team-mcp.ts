@@ -204,9 +204,9 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
 
   const collab_save = tool(
     SPACE_TEAM_TOOL_NAMES.collabSave,
-    'Keep the current collaboration as a persistent team: its members, roles and history stay ' +
-      'available in the Teams list, and it can be run again later with team_run. The current ' +
-      'work continues uninterrupted. Call only when the user asks to keep the team.',
+    'Save the current members, responsibilities and team configuration as a separate ordinary team ' +
+      'with its own lead. Do not transfer the current task, conversation, progress or results. ' +
+      'The original collaboration continues here. Call only when the user asks to keep the team.',
     {
       name: z.string().optional().describe('Optional new team name; defaults to the collaboration name.'),
     },
@@ -215,12 +215,12 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
       if (!service) return textResult(NOT_READY, true)
       const collab = service.getCollabForConversation(conversationId)
       if (!collab) return textResult('There is no collaboration in this conversation to save.', true)
-      if (collab.saved) return textResult(`This team is already saved ("${collab.name}").`)
+      if (collab.saved) return textResult(`This configuration is already saved${collab.savedTeamId ? ` (team id: ${collab.savedTeamId})` : ''}.`)
       try {
-        const team = service.saveCollab(collab.teamId, name)
+        const team = await service.saveCollab(collab.teamId, name)
         return textResult(
-          `Saved as team "${team.name}" (id: ${team.id}). The current work continues; later the team ` +
-            'can be run on new tasks with team_run.'
+          `Saved configuration as team "${team.name}" (id: ${team.id}). It has its own lead and no task history. ` +
+            'Continue the current work here; use the saved team for new tasks.'
         )
       } catch (error) {
         console.error(`${LOG_TAG} collab_save failed: team=${collab.teamId}`, error)

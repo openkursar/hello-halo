@@ -12,7 +12,7 @@ import type { CanvasContext } from '../../shared/types/canvas-context'
 import type { ContentReference } from '../../shared/types/content-reference'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
 import type { AppChatRequest } from '../apps/runtime'
-import { resolveAppChatTarget } from './app-chat-target.controller'
+import { resolveAppChatSendTarget } from './app-chat-target.controller'
 
 const MAX_CANVAS_TABS = 50
 const MAX_CANVAS_FIELD_CHARS = 500
@@ -94,12 +94,12 @@ export type AppChatRequestResult =
  * A person's message to a digital human, built field by field from what a
  * chat client sent — desktop IPC and remote HTTP alike. Who is speaking (the
  * team identity of a team session) is derived server-side by
- * `resolveAppChatTarget`; identity fields in the body (teamContext, an IM
+ * `resolveAppChatSendTarget`; identity fields in the body (teamContext, an IM
  * sender, a recorded provenance) are never taken.
  */
 export function toAppChatRequest(appId: string, body: unknown): AppChatRequestResult {
   const fields = (body && typeof body === 'object' ? body : {}) as AppChatInput
-  const target = resolveAppChatTarget(appId, fields.conversationId)
+  const target = resolveAppChatSendTarget(appId, fields.conversationId)
   if (!target.ok) return target
   if (typeof fields.spaceId !== 'string' || !fields.spaceId) {
     return { ok: false, status: 400, error: 'Missing required field: spaceId' }

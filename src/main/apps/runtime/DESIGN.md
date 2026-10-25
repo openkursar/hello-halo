@@ -1056,6 +1056,11 @@ JSONL storage is unchanged (append-only, written by `session-store`).
   `shared/rpc/contracts/app.contract.ts`) and
   `GET /api/apps/:appId/chat/transcript`, `GET /api/apps/:appId/chat/messages/:messageId/thoughts`
   (HTTP, same `resolveAppChatTarget` trust boundary as the other chat routes).
+  Address authorization is independent of permission to start more work:
+  `resolveAppChatSendTarget` additionally refuses new sends/injections to legacy
+  teams awaiting repair and read-only source collaborations, including unsealed
+  source tasks retained by a repaired team. History, state and
+  stopping an existing turn remain accessible through the address-only check.
   `app:chat-messages` keeps its full-array contract. Main-side loaders:
   `loadChatTranscriptForConversation`, `loadChatMessageThoughts`.
 - **Jumping to a message.** `through: <messageId>` returns the newest page widened

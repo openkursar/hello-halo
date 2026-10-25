@@ -790,30 +790,18 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       const res = await api.teamSaveCollab(teamId, name)
       if (res.success) {
         await get().loadTeams()
-        // The ephemeral workbench showed the collaboration's single room
-        // implicitly (it ignores the selection). Once saved, the Teams page
-        // routes by selection, so every surface showing this team reselects the
-        // room and records it as the team's last task — otherwise the Teams page
-        // lands in the blank new-task state and the conversation "disappears".
-        // A canvas tab keeps showing the room regardless (see TeamView).
+        // The source tab keeps its room; the Teams page opens ready for new work.
         if (get().currentTeamId === teamId || get().views[teamId]) {
           await get().loadDetail(teamId)
           await get().loadConversations(teamId)
         }
-        if (get().currentTeamId === teamId && !get().selectedConversationId) {
-          const room = get().conversations.find(c => c.kind === 'collab')
-          if (room) get().selectConversation(room.epochId)
-        }
-        const view = get().views[teamId]
-        if (view && !view.selectedConversationId) {
-          const room = view.conversations.find(c => c.kind === 'collab')
-          if (room) get().selectViewConversation(teamId, room.epochId)
-        }
         return true
       }
+      notifyError(i18n.t('Could not save the change.'), String(res.error || i18n.t('Please try again.')))
       return false
     } catch (err) {
       console.error('[TeamStore] saveCollab error:', err)
+      notifyError(i18n.t('Could not save the change.'), String((err as Error)?.message ?? err))
       return false
     }
   },

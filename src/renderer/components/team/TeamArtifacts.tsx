@@ -21,12 +21,14 @@ function baseName(p: string): string {
 }
 
 interface ArtifactGroup {
+  appId?: string
   memberName?: string
   epochId?: string
   artifacts: { name: string; path: string; relativePath?: string }[]
 }
 
 export interface ArtifactEntry {
+  appId?: string
   name: string
   path: string
   /** The reference this file was published under — how it is addressed to open. */
@@ -89,6 +91,7 @@ export function useTeamArtifacts(
           for (const a of g.artifacts) {
             const ref = a.relativePath || a.name
             const entry: ArtifactEntry = {
+              appId: g.appId,
               name: baseName(a.name),
               path: a.path,
               ref,

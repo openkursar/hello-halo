@@ -1,12 +1,4 @@
-/**
- * Ephemeral-collaboration routing in the team store.
- *
- * The ephemeral workbench shows the collaboration's single room implicitly (it
- * ignores the conversation selection). Saving the team flips the workbench to
- * selection-driven routing — so `saveCollab` must land the user IN that room,
- * or the running conversation silently "disappears" into the blank new-task
- * state (the room resolver finds nothing for a null selection).
- */
+/** Saving keeps source navigation independent of the saved team's new-task entry. */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -53,10 +45,10 @@ describe('saveCollab routing', () => {
     })
   })
 
-  it('keeps the user in the collaboration room after saving', async () => {
+  it('leaves the saved team ready for a new task without selecting its source room', async () => {
     const ok = await useTeamStore.getState().saveCollab('t1')
     expect(ok).toBe(true)
-    expect(useTeamStore.getState().selectedConversationId).toBe('room-1')
+    expect(useTeamStore.getState().selectedConversationId).toBeNull()
   })
 
   it('never steals an explicit selection', async () => {

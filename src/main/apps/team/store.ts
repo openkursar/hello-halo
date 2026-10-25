@@ -85,6 +85,7 @@ function rowToTeam(row: TeamRow): Team {
     hostNodeId: row.host_node_id ?? null,
     ephemeral: row.ephemeral === 1,
     coordinatorConversationId: row.coordinator_conversation_id ?? null,
+    ...(row.saved_team_id ? { savedTeamId: row.saved_team_id } : {}),
   }
 }
 
@@ -714,6 +715,37 @@ export class TeamStore implements ITeamStore {
     this.db
       .prepare(`UPDATE teams SET ephemeral = 0, updated_at = ? WHERE id = ?`)
       .run(Date.now(), teamId)
+  }
+
+  repairCollabLead(teamId: string, expectedLeadAppId: string, member: TeamMember, edges?: TeamEdge[]): void {
+    this.db.transaction(() => {
+      const team = this.getTeamById(teamId)
+      if (!team || team.leadAppId !== expectedLeadAppId || member.teamId !== teamId) {
+        throw new Error('The team changed while its lead was being prepared. Please try again.')
+      }
+      this.addMember(member)
+      this.removeMember(teamId, expectedLeadAppId)
+      this.updateTeamLeadAppId(teamId, member.appId)
+      if (edges) this.replaceEdgesForTeam(teamId, edges)
+      this.setCoordinatorConversation(teamId, null)
+    })()
+  }
+
+  attachSavedTeam(sourceTeamId: string, savedTeamId: string): void {
+    this.db.transaction(() => {
+      const source = this.getTeamById(sourceTeamId)
+      const saved = this.getTeamById(savedTeamId)
+      if (!source?.ephemeral || !saved || saved.ephemeral || !saved.leadAppId ||
+        (source.savedTeamId && this.getTeamById(source.savedTeamId))) {
+        throw new Error('The collaboration changed while its configuration was being saved. Please try again.')
+      }
+      this.db.prepare(`UPDATE teams SET saved_team_id = ?, updated_at = ? WHERE id = ?`)
+        .run(savedTeamId, Date.now(), sourceTeamId)
+    })()
+  }
+
+  listSavedTeamSources(savedTeamId: string): Team[] {
+    return (this.db.prepare('SELECT * FROM teams WHERE saved_team_id = ?').all(savedTeamId) as TeamRow[]).map(rowToTeam)
   }
 
   setCoordinatorConversation(teamId: string, conversationId: string | null): void {

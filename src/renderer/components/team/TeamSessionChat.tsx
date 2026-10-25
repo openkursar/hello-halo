@@ -507,8 +507,8 @@ export function TeamSessionChat({
           <span className="text-sm">{t('Loading chat...')}</span>
         </div>
       ) : (
-        <div ref={follower.scrollerRef} tabIndex={-1} className="flex-1 overflow-y-auto focus:outline-none" onScroll={handleScroll}>
-          <div ref={follower.contentRef} className="mx-auto max-w-3xl px-4 py-5">
+        <div ref={epochId ? follower.scrollerRef : undefined} tabIndex={-1} className="flex-1 overflow-y-auto focus:outline-none" onScroll={handleScroll}>
+          <div ref={epochId ? follower.contentRef : undefined} className="mx-auto max-w-3xl px-4 py-5">
             {topSlot}
 
             {loadState === 'empty' && !epochId && !hasStreaming && !showRelayedTranscript && (

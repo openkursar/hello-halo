@@ -85,7 +85,7 @@ else:
   and that save lends nothing; a member added to a team that already crosses
   machines carries the answer chosen while adding
   (`TeamMemberInput.delegatedPolicy`), or read-only when none was given — the
-  lead a saved collaboration provisions on its first run included
+  lead prepared while saving or repairing a collaboration included
   (`startingDelegatedPolicy`).
 
   Rows written before these writes existed keep what they hold, NULL included:
@@ -183,9 +183,30 @@ logged), written through on every change.
     flag (directory exclusion), `listTeamItems` carries it (Teams page and
     picker filtering), and one collaboration exists per conversation
     (`getCollabTeamByConversation`).
-  - `runTeam` refuses an ephemeral team; "save as team" (`saveCollab`) only
-    clears the flag — the real lead is provisioned lazily on the saved team's
-    first standalone run, so saving never disturbs the live collaboration.
+  - Saving snapshots configuration into a separate ordinary team with a real
+    lead. It reuses member apps and copies their team duties, never epochs,
+    messages, checks, findings or current work. The original collaboration stays
+    ephemeral and keeps its original coordinator. A local `saved_team_id` link
+    makes repeated saves idempotent; deleting the saved team clears the link.
+    Temporary and persistent team names have separate uniqueness namespaces.
+  - Source coordinator identities never enter the saved team's roster or the
+    federation contract. All peers continue using the existing single-lead
+    protocol. No per-task coordinator selection or protocol upgrade is needed.
+  - Legacy persistent teams still pointing to a source coordinator are repaired
+    once when their owner opens or explicitly uses them: prepare a real lead,
+    remove the sentinel membership and unbind the old conversation atomically.
+    Existing history and invitations stay. Live legacy migration is out of scope;
+    repair checks live source-conversation and member occupancy before preparing
+    the lead and again before committing. Busy work defers repair without changing
+    the source; an idle, unclosed task record does not prevent recovery.
+    Source-task history is read-only even if never sealed. The conversation
+    projection, app send/inject and member-direct send share this rule;
+    history reads and stopping remain available. Repair failure preserves
+    the existing team. Joined copies never repair somebody else's team; their
+    detail names the responsible owner so the UI does not ask the reader to update.
+  - Published outputs are projected from findings and task results, independently
+    of the current roster. Removing a publisher cannot hide its earlier files;
+    opening still requires a known local producer or the existing owner fetch.
   - collaboration creation requires the coordinator session's captured source and
     model, passed through the toolset scope (never read again from global selection
     or a conversation whose picker may have changed mid-turn). Before any member

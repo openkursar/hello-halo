@@ -26,10 +26,12 @@ import type { Express } from 'express'
 import type { AddressInfo } from 'net'
 import type { Server } from 'http'
 import { buildTeamSessionKey, buildImSessionKey } from '../../../../src/shared/apps/im-keys'
+import { spaceCollabChatKey, spaceCoordinatorAppId } from '../../../../src/shared/apps/team-types'
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
 const sendAppChatMessage = vi.fn<[Record<string, unknown>], Promise<void>>()
+const injectIntoAppChatWhenLive = vi.fn()
 const stopAppChat = vi.fn<[string], Promise<void>>()
 const stopAppChatConversation = vi.fn<[string], Promise<void>>()
 const clearAppChat = vi.fn<[string, string, string | undefined], Promise<void>>()
@@ -66,6 +68,8 @@ vi.mock('../../../../src/main/http/routes/_shared', () => {
     loadImChatMessages: () => [],
     loadChatMessagesForConversation: (spacePath: string, appId: string, conversationId: string) =>
       loadChatMessagesForConversation(spacePath, appId, conversationId),
+    loadChatTranscriptForConversation: () => ({ messages: [], hasMoreBefore: false }),
+    loadChatMessageThoughts: () => [],
     createNativeChatSession: vi.fn(),
     forkNativeChatSession: vi.fn(),
     deleteNativeChatSession: vi.fn(),
@@ -74,6 +78,7 @@ vi.mock('../../../../src/main/http/routes/_shared', () => {
     rejectIfRemoteMcpForbidden: () => false,
     restartAppChat: vi.fn(),
     sendAppChatMessage: (request: Record<string, unknown>) => sendAppChatMessage(request),
+    injectIntoAppChatWhenLive: (...args: unknown[]) => injectIntoAppChatWhenLive(...args),
     stopAppChat: (appId: string) => stopAppChat(appId),
     stopAppChatConversation: (conversationId: string) => stopAppChatConversation(conversationId),
     writeMcpCommandBlockedResponse: vi.fn(),
@@ -85,12 +90,15 @@ interface MockEpoch {
   id: string
   teamId: string
   endedAt?: number | null
+  chatKey?: string | null
 }
 const getEpochById = vi.fn<[string], MockEpoch | null>()
+const getTeamById = vi.fn(() => ({ leadAppId: 'ordinary-lead', ephemeral: false }))
 const getMember = vi.fn<[string, string], { appId: string; origin?: 'local' | 'remote'; ownerNodeId?: string } | null>()
 
 vi.mock('../../../../src/main/apps/team', () => ({
   getTeamStore: () => ({
+    getTeamById: () => getTeamById(),
     getEpochById: (epochId: string) => getEpochById(epochId),
     getMember: (teamId: string, appId: string) => getMember(teamId, appId),
   }),
@@ -135,6 +143,7 @@ function post(base: string, path: string, body: unknown): Promise<Response> {
 beforeEach(() => {
   vi.clearAllMocks()
   sendAppChatMessage.mockResolvedValue(undefined)
+  injectIntoAppChatWhenLive.mockResolvedValue('delivered')
   stopAppChat.mockResolvedValue(undefined)
   stopAppChatConversation.mockResolvedValue(undefined)
   clearAppChat.mockResolvedValue(undefined)
@@ -142,12 +151,52 @@ beforeEach(() => {
   loadChatMessagesForConversation.mockReturnValue([])
   getAppChatSessionState.mockReturnValue({})
   getEpochById.mockReturnValue({ id: EPOCH_ID, teamId: TEAM_ID })
+  getTeamById.mockReturnValue({ leadAppId: 'ordinary-lead', ephemeral: false })
   getMember.mockReturnValue({ appId: LEAD_APP })
 })
 
 // ── 1. A team session is reachable over HTTP at all ──────────────────────────
 
 describe('team sessions over the remote HTTP path', () => {
+  it.each(['legacy', 'completed collaboration', 'repaired unsealed collaboration'] as const)('keeps %s history and controls accessible while refusing new sends', async kind => {
+    if (kind === 'legacy') getTeamById.mockReturnValue({ leadAppId: spaceCoordinatorAppId('source-chat'), ephemeral: false })
+    else {
+      getEpochById.mockReturnValue({ id: EPOCH_ID, teamId: TEAM_ID, endedAt: kind === 'completed collaboration' ? Date.now() : null, chatKey: spaceCollabChatKey('source-chat') })
+      getTeamById.mockReturnValue({ leadAppId: 'ordinary-lead', ephemeral: kind === 'completed collaboration' })
+    }
+    await withServer(async base => {
+      const q = `conversationId=${encodeURIComponent(TEAM_KEY)}`
+      for (const path of ['status', 'messages?spaceId=space-a&', 'transcript', 'messages/message-1/thoughts', 'session-state']) {
+        const response = await fetch(`${base}/api/apps/${LEAD_APP}/chat/${path}${path.includes('?') ? '' : '?'}${q}`)
+        expect(response.status, path).toBe(200)
+        expect((await response.json()).success, path).toBe(true)
+      }
+      const stop = await post(base, `/api/apps/${LEAD_APP}/chat/stop`, { conversationId: TEAM_KEY })
+      expect(stop.status).toBe(200)
+      const sent = await post(base, `/api/apps/${LEAD_APP}/chat/send`, { spaceId: 'space-a', message: 'More work', conversationId: TEAM_KEY })
+      expect(sent.status).toBe(kind === 'legacy' ? 409 : 400)
+      const injected = await post(base, `/api/apps/${LEAD_APP}/chat/inject`, { message: 'More work', conversationId: TEAM_KEY })
+      expect(injected.status).toBe(kind === 'legacy' ? 409 : 400)
+      expect(sendAppChatMessage).not.toHaveBeenCalled()
+      expect(injectIntoAppChatWhenLive).not.toHaveBeenCalled()
+    })
+  })
+
+  it('continues to accept sends and additions to an active temporary collaboration', async () => {
+    getTeamById.mockReturnValue({ leadAppId: spaceCoordinatorAppId('source-chat'), ephemeral: true })
+    getEpochById.mockReturnValue({ id: EPOCH_ID, teamId: TEAM_ID, endedAt: null, chatKey: spaceCollabChatKey('source-chat') })
+    await withServer(async base => {
+      const body = { spaceId: 'space-a', message: 'More detail', conversationId: TEAM_KEY }
+      for (const action of ['send', 'inject']) {
+        const response = await post(base, `/api/apps/${LEAD_APP}/chat/${action}`, body)
+        expect(response.status).toBe(200)
+        expect((await response.json()).success).toBe(true)
+      }
+      expect(sendAppChatMessage).toHaveBeenCalledOnce()
+      expect(injectIntoAppChatWhenLive).toHaveBeenCalledOnce()
+    })
+  })
+
   it('POST chat/send accepts a team conversationId', async () => {
     await withServer(async (base) => {
       const res = await post(base, `/api/apps/${LEAD_APP}/chat/send`, {

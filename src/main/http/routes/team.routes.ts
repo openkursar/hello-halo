@@ -208,7 +208,7 @@ export function registerTeamRoutes(app: Express): void {
       const service = getServiceOrFail(res)
       if (!service) return
       const { name } = req.body as { name?: string }
-      res.json({ success: true, data: service.saveCollab(req.params.teamId, name) })
+      res.json({ success: true, data: await service.saveCollab(req.params.teamId, name) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -232,7 +232,9 @@ export function registerTeamRoutes(app: Express): void {
       if (!officeGateOk(req, res, req.params.teamId)) return
       const service = getServiceOrFail(res)
       if (!service) return
-      const detail = service.getTeamDetail(req.params.teamId)
+      const detail = getOfficeCredential(req)
+        ? service.getTeamDetail(req.params.teamId)
+        : await service.openTeamDetail(req.params.teamId)
       if (!detail) {
         res.json({ success: true, data: detail })
         return
@@ -537,7 +539,7 @@ export function registerTeamRoutes(app: Express): void {
       const service = getServiceOrFail(res)
       if (!service) return
       const title = typeof req.body?.title === 'string' ? req.body.title : undefined
-      res.json({ success: true, data: service.openConversation(req.params.teamId, title, typeof req.body?.memberAppId === 'string' ? req.body.memberAppId : undefined) })
+      res.json({ success: true, data: await service.openConversation(req.params.teamId, title, typeof req.body?.memberAppId === 'string' ? req.body.memberAppId : undefined) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

@@ -48,6 +48,7 @@ import {
   createConversationInteropMcpServer,
   deliverExternalMessage,
   registerConversationSource,
+  isNativeConversationBusy,
 } from '../services/conversation-interop'
 import { setConversationInteropFactory } from '../services/agent/toolsets/broker'
 import { getAISourceManager, watchCatalogSignals } from '../services/ai-sources'
@@ -1198,6 +1199,7 @@ async function initPlatformAndApps(): Promise<void> {
     )
     initTeamService({
       store: teamStore,
+      isConversationBusy: isNativeConversationBusy,
       getViewerIdentity: () => getLocalIdentity().id,
       getConversationMember: (teamId, chatKey) => {
         const parsed = parseTeamChatKey(chatKey)

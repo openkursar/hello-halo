@@ -6,9 +6,9 @@
  *     lead) + AI members, bound to the conversation, one collaboration at a time
  *   - hidden surfaces: directory memberships carry the ephemeral flag,
  *     listTeamItems carries it for renderer filtering
- *   - saveCollab: clears the flag, keeps everything else running
+ *   - saveCollab: snapshots configuration into a separate single-lead team
  *   - runTeam: refuses an ephemeral team; provisions the real lead on a saved
- *     collaboration's first standalone run
+ *     collaboration before independent work
  *   - completeCollab: seals the collaboration's conversation epoch
  */
 
@@ -33,7 +33,7 @@ import {
   spaceCoordinatorAppId,
   spaceCollabChatKey,
 } from '../../../../src/shared/apps/team-types'
-import type { TeamEpoch } from '../../../../src/shared/apps/team-types'
+import type { TeamEpoch, RosterBusyEntry } from '../../../../src/shared/apps/team-types'
 
 const SPACE = 'space-a'
 const CONVERSATION = 'conv-1'
@@ -100,7 +100,7 @@ function makeRuntime(store: TeamStore) {
     sealEpoch: vi.fn(async () => {}),
     getObservableStatus: vi.fn(() => 'idle'),
     getMemberStatus: vi.fn(() => 'working' as const),
-    getMemberBusy: vi.fn(() => []),
+    getMemberBusy: vi.fn((_appId: string, _teamId: string): RosterBusyEntry[] => []),
   teamFolders: {
     forMember: () => null,
     sharedDir: (teamId: string, epochId: string) => `/halo/team-work/${teamId}/${epochId}`,
@@ -118,7 +118,7 @@ function buildService(overrides?: Partial<TeamServiceDeps>) {
   const appManager = makeAppManager()
   const runtime = makeRuntime(store)
 
-  const service = createTeamService({
+  const deps: TeamServiceDeps = {
     store,
     appManager: appManager as never,
     getRuntime: () => runtime as never,
@@ -131,8 +131,9 @@ function buildService(overrides?: Partial<TeamServiceDeps>) {
     listArtifacts: vi.fn(async () => []),
     proposeMembersFromGoal: vi.fn(async () => []),
     ...overrides,
-  })
-  return { service, store, appManager, runtime, dbManager }
+  }
+  const service = createTeamService(deps)
+  return { service, store, appManager, runtime, dbManager, deps }
 }
 
 const collabInput = () => ({
@@ -203,7 +204,7 @@ describe('temporary space collaborations', () => {
     expect(ctx.appManager.updateOverrides).toHaveBeenCalledTimes(2)
     expect(ctx.appManager.updateOverrides.mock.invocationCallOrder.at(-1))
       .toBeLessThan(ctx.runtime.ensureConversationEpoch.mock.invocationCallOrder[0])
-    ctx.service.saveCollab(team.id)
+    await ctx.service.saveCollab(team.id)
     expect(ctx.appManager.getApp('app-1')?.userOverrides.modelId).toBe('parent-model')
   })
 
@@ -275,7 +276,7 @@ describe('temporary space collaborations', () => {
 
   it('replacing a finished SAVED collaboration unbinds it and announces the update', async () => {
     const { team } = await ctx.service.createCollab(collabInput())
-    ctx.service.saveCollab(team.id)
+    await ctx.service.saveCollab(team.id)
     await ctx.service.completeCollab(team.id, 'done')
 
     broadcastToAll.mockClear()
@@ -318,85 +319,208 @@ describe('temporary space collaborations', () => {
     expect(ctx.service.getCollabForConversation(CONVERSATION)?.active).toBe(false)
   })
 
-  it('saveCollab keeps the team and the running collaboration untouched', async () => {
+  it('saves only configuration into a separate ordinary team and preserves the running source', async () => {
     const { team, epochId } = await ctx.service.createCollab(collabInput())
-
-    const saved = ctx.service.saveCollab(team.id)
-    expect(saved.ephemeral).toBe(false)
-    // The live epoch is untouched — current work continues.
+    const workers = ctx.store.listMembersByTeam(team.id).filter(member => member.aiProvisioned)
+    ctx.store.insertFinding({ id: 'finding', teamId: team.id, epochId, authorAppId: workers[0].appId, body: 'Current result', ref: null, createdAt: Date.now() })
+    const saved = await ctx.service.saveCollab(team.id)
+    expect(saved.id).not.toBe(team.id)
+    expect(saved).toMatchObject({ name: team.name, goal: team.goal, ephemeral: false, coordinatorConversationId: null, currentEpochId: null })
+    expect(ctx.service.getTeam(team.id)).toMatchObject({ ephemeral: true, leadAppId: team.leadAppId, savedTeamId: saved.id })
     expect(ctx.store.getEpochById(epochId)?.endedAt).toBeNull()
-    // Members no longer read as ephemeral in the directory projection.
-    expect(
-      ctx.store.listDirectoryMemberships().filter(m => m.teamId === team.id).every(m => !m.ephemeral)
-    ).toBe(true)
+    expect(ctx.service.listConversations(saved.id)).toEqual([])
+    expect(ctx.service.getTeamDetail(saved.id)?.findings).toEqual([])
+    const members = ctx.store.listMembersByTeam(saved.id)
+    expect(members.filter(member => !member.isLead).map(member => member.appId).sort()).toEqual(workers.map(member => member.appId).sort())
+    expect(members.some(member => member.appId === team.leadAppId)).toBe(false)
+    expect(ctx.appManager.getApp(saved.leadAppId!)?.userOverrides).toEqual({ modelSourceId: 'parent-source', modelId: 'parent-model' })
+    ctx.store.updateMemberFields(team.id, workers[0].appId, { duty: 'A new temporary assignment' })
+    expect(ctx.store.getMember(saved.id, workers[0].appId)?.duty).toBe(workers[0].duty)
+    expect(ctx.service.getCollabForConversation(CONVERSATION)).toMatchObject({ teamId: team.id, saved: true, savedTeamId: saved.id, active: true })
+    expect(ctx.runtime.startEpoch).not.toHaveBeenCalled()
+    expect(ctx.service.listTeamItems(SPACE).filter(item => !item.ephemeral).map(item => item.id)).toEqual([saved.id])
   })
 
-  it('runTeam refuses an ephemeral collaboration outright', async () => {
+  it('coalesces concurrent saves and reuses the persisted link after restart', async () => {
     const { team } = await ctx.service.createCollab(collabInput())
-    await expect(ctx.service.runTeam(team.id)).rejects.toThrow(/Save it as a team/)
+    const first = ctx.service.saveCollab(team.id)
+    expect(ctx.service.saveCollab(team.id)).toBe(first)
+    const saved = await first
+    const reopened = createTeamService(ctx.deps)
+    expect((await reopened.saveCollab(team.id)).id).toBe(saved.id)
+    expect(ctx.appManager.install).toHaveBeenCalledTimes(3)
+    expect(ctx.store.listTeams()).toHaveLength(2)
   })
 
-  it('a collaboration works in one conversation and cannot open a second', async () => {
+  it.each(['configuration', 'link'])('rolls back a failed %s without changing source work or members', async stage => {
     const { team, epochId } = await ctx.service.createCollab(collabInput())
-
-    // The room is the conversation its space conversation coordinates — the
-    // kind is what lets a surface find it without guessing.
-    expect(ctx.service.listConversations(team.id)).toMatchObject([
-      { epochId, kind: 'collab', label: team.name, readonly: false },
-    ])
-
-    expect(() => ctx.service.openConversation(team.id, 'Side task')).toThrow(/temporary collaboration/)
-    expect(ctx.service.listConversations(team.id)).toHaveLength(1)
+    if (stage === 'configuration') ctx.appManager.updateOverrides.mockImplementationOnce(() => { throw new Error('save failed') })
+    else vi.spyOn(ctx.store, 'attachSavedTeam').mockImplementationOnce(() => { throw new Error('save failed') })
+    await expect(ctx.service.saveCollab(team.id)).rejects.toThrow('save failed')
+    expect(ctx.store.listTeams()).toHaveLength(1)
+    expect(ctx.store.listMembersByTeam(team.id)).toHaveLength(3)
+    expect(ctx.appManager.apps.size).toBe(2)
+    expect(ctx.store.getEpochById(epochId)?.endedAt).toBeNull()
+    expect(ctx.service.getCollabForConversation(CONVERSATION)?.saved).toBe(false)
+    await expect(ctx.service.saveCollab(team.id)).resolves.toMatchObject({ ephemeral: false })
   })
 
-  it('a completed collaboration keeps its room listed for review', async () => {
-    const { team, epochId } = await ctx.service.createCollab(collabInput())
-    await ctx.service.completeCollab(team.id, 'done')
-
-    // The room's record survives the seal: history stays reachable from the
-    // workbench instead of vanishing into an unrecoverable "unavailable" state.
-    const rooms = ctx.service.listConversations(team.id)
-    expect(rooms.find(c => c.epochId === epochId)).toMatchObject({ kind: 'collab' })
-  })
-
-  it('a saved collaboration opens tasks again, and its room still reads as the collaboration it was', async () => {
-    const { team, epochId } = await ctx.service.createCollab(collabInput())
-    ctx.service.saveCollab(team.id)
-
-    const { epochId: taskId } = ctx.service.openConversation(team.id, 'Follow-up')
-    const rooms = ctx.service.listConversations(team.id)
-    expect(rooms).toHaveLength(2)
-    // The room keeps its own identity: saving the team does not rewrite it into
-    // a task, and the task the team opened beside it is an ordinary one.
-    expect(rooms.find(c => c.epochId === epochId)?.kind).toBe('collab')
-    expect(rooms.find(c => c.epochId === taskId)?.kind).toBe('native')
-  })
-
-  it('a saved collaboration provisions its real lead on the first standalone run', async () => {
+  it('rolls back the saved team if the source was deleted while installing its lead', async () => {
     const { team } = await ctx.service.createCollab(collabInput())
-    await ctx.service.completeCollab(team.id, 'done')
-    ctx.service.saveCollab(team.id)
-
-    await ctx.service.runTeam(team.id, { type: 'manual' }, 'Compare pricing this time')
-
-    const after = ctx.service.getTeam(team.id)!
-    expect(after.leadAppId).toBeTruthy()
-    expect(after.leadAppId).not.toBe(spaceCoordinatorAppId(CONVERSATION))
-    // The sentinel member row is gone; the provisioned lead took its place.
-    const members = ctx.store.listMembersByTeam(team.id)
-    expect(members.some(m => m.appId === spaceCoordinatorAppId(CONVERSATION))).toBe(false)
-    expect(members.some(m => m.appId === after.leadAppId && m.isLead)).toBe(true)
-    expect(ctx.runtime.startEpoch).toHaveBeenCalledWith(team.id, { type: 'manual' }, 'Compare pricing this time')
-    // The provisioned lead runs on the model the collaboration was pinned to.
-    expect(ctx.appManager.getApp(after.leadAppId!)?.userOverrides).toEqual({
-      modelSourceId: 'parent-source', modelId: 'parent-model',
+    const install = ctx.appManager.install.getMockImplementation()!
+    ctx.appManager.install.mockImplementationOnce(async (spaceId, spec) => {
+      await ctx.service.dissolveTeam(team.id)
+      return install(spaceId, spec)
     })
+    await expect(ctx.service.saveCollab(team.id)).rejects.toThrow(/collaboration changed/)
+    expect(ctx.store.listTeams()).toHaveLength(0)
+    expect(ctx.appManager.apps.size).toBe(0)
   })
 
-  it('a live saved collaboration cannot be run standalone yet', async () => {
+  it('retains saved members when the temporary source is removed', async () => {
     const { team } = await ctx.service.createCollab(collabInput())
-    ctx.service.saveCollab(team.id)
-    await expect(ctx.service.runTeam(team.id)).rejects.toThrow(/still in progress/)
+    const saved = await ctx.service.saveCollab(team.id)
+    await ctx.service.dissolveTeam(team.id)
+    expect(ctx.store.getTeamById(saved.id)?.leadAppId).toBe(saved.leadAppId)
+    for (const member of ctx.store.listMembersByTeam(saved.id)) expect(ctx.appManager.getApp(member.appId)).not.toBeNull()
+    await ctx.service.dissolveTeam(saved.id)
+    expect(ctx.appManager.apps.size).toBe(0)
+  })
+
+  it('does not copy someone else’s remote membership into a new office without an invitation', async () => {
+    const { team } = await ctx.service.createCollab(collabInput())
+    ctx.store.addMember({ teamId: team.id, appId: 'remote-app', memberName: 'Remote', role: '', isLead: false, aiProvisioned: false, addedAt: Date.now(), origin: 'remote', ownerNodeId: 'another-node' })
+    await expect(ctx.service.saveCollab(team.id)).rejects.toThrow(/invite/)
+    expect(ctx.store.listTeams()).toHaveLength(1)
+    expect(ctx.appManager.install).toHaveBeenCalledTimes(2)
+  })
+
+  it('copies the collaboration topology as configuration without copying its work', async () => {
+    const { team } = await ctx.service.createCollab(collabInput())
+    await ctx.service.updateTeam(team.id, { collabMode: 'structured' })
+    const edges = ctx.store.listEdgesByTeam(team.id)
+    const saved = await ctx.service.saveCollab(team.id)
+    expect(ctx.store.listEdgesByTeam(saved.id)).toEqual(edges.map(edge => ({ ...edge, teamId: saved.id, fromAppId: saved.leadAppId })))
+    expect(ctx.service.listConversations(saved.id)).toEqual([])
+  })
+
+  it('allows saving again after the previously saved team was deleted', async () => {
+    const { team } = await ctx.service.createCollab(collabInput())
+    const first = await ctx.service.saveCollab(team.id)
+    broadcastToAll.mockClear()
+    await ctx.service.dissolveTeam(first.id)
+    expect(ctx.service.getCollabForConversation(CONVERSATION)?.saved).toBe(false)
+    expect(broadcastToAll.mock.calls.some(([channel, event]) => channel === TEAM_EVENTS.updated && event.teamId === team.id && !event.team.savedTeamId)).toBe(true)
+    const second = await ctx.service.saveCollab(team.id)
+    expect(second.id).not.toBe(first.id)
+    expect(second.name).toBe(team.name)
+  })
+
+  it('a saved configuration runs and opens tasks while its source remains a temporary single room', async () => {
+    const { team, epochId } = await ctx.service.createCollab(collabInput())
+    const saved = await ctx.service.saveCollab(team.id)
+    await expect(ctx.service.openConversation(team.id, 'Side task')).rejects.toThrow(/temporary collaboration/)
+    await expect(ctx.service.runTeam(team.id)).rejects.toThrow(/Save it as a team/)
+    await ctx.service.openConversation(saved.id, 'Next request')
+    await ctx.service.runTeam(saved.id)
+    expect(ctx.service.listConversations(team.id).map(task => task.epochId)).toEqual([epochId])
+    expect(ctx.service.getCollabForConversation(CONVERSATION)?.active).toBe(true)
+  })
+
+  it('normalizes an old saved team in place without starting or copying any work', async () => {
+    const { team, epochId } = await ctx.service.createCollab(collabInput())
+    ctx.store.clearEphemeral(team.id)
+    const notify = vi.fn()
+    ctx.deps.onRosterMutated = notify
+    const service = createTeamService(ctx.deps)
+    const detail = await service.openTeamDetail(team.id)
+    expect(detail?.team.id).toBe(team.id)
+    expect(detail?.team.leadAppId).not.toBe(team.leadAppId)
+    expect(detail?.team.coordinatorConversationId).toBeNull()
+    expect(detail?.legacyCoordinator).toBeUndefined()
+    expect(ctx.store.getMember(team.id, team.leadAppId!)).toBeNull()
+    expect(ctx.store.getEpochById(epochId)).not.toBeNull()
+    expect(service.listConversations(team.id)).toMatchObject([{ kind: 'collab', readonly: true }])
+    expect(ctx.runtime.startEpoch).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledWith(team.id)
+    await service.openTeamDetail(team.id)
+    expect(ctx.appManager.install).toHaveBeenCalledTimes(3)
+  })
+
+  it('defers legacy repair while the original conversation is busy, then repairs on retry', async () => {
+    const { team } = await ctx.service.createCollab(collabInput())
+    ctx.store.clearEphemeral(team.id)
+    const isConversationBusy = vi.fn(() => true)
+    const service = createTeamService({ ...ctx.deps, isConversationBusy })
+    const before = ctx.store.getTeamById(team.id)
+    const detail = await service.openTeamDetail(team.id)
+    expect(detail?.legacyCoordinator).toMatchObject({ ownedHere: true, repairDeferred: true })
+    expect(ctx.store.getTeamById(team.id)).toEqual(before)
+    expect(service.getCollabForConversation(CONVERSATION)?.active).toBe(true)
+    expect(ctx.appManager.install).toHaveBeenCalledTimes(2)
+    isConversationBusy.mockReturnValue(false)
+    expect((await service.openTeamDetail(team.id))?.legacyCoordinator).toBeUndefined()
+  })
+
+  it('defers legacy repair while a member is working in the original task', async () => {
+    const { team, epochId } = await ctx.service.createCollab(collabInput())
+    ctx.store.clearEphemeral(team.id)
+    const member = ctx.store.listMembersByTeam(team.id).find(row => row.aiProvisioned)!
+    ctx.runtime.getMemberBusy.mockImplementation(appId => appId === member.appId ? [{ epochId, kind: 'conversation', label: 'Research' }] : [])
+    const detail = await ctx.service.openTeamDetail(team.id)
+    expect(detail?.legacyCoordinator).toMatchObject({ repairDeferred: true })
+    expect(ctx.store.getTeamById(team.id)?.leadAppId).toBe(team.leadAppId)
+    expect(ctx.appManager.install).toHaveBeenCalledTimes(2)
+  })
+
+  it('rechecks live work after lead preparation and rolls back the unused lead', async () => {
+    const { team } = await ctx.service.createCollab(collabInput())
+    ctx.store.clearEphemeral(team.id)
+    const isConversationBusy = vi.fn().mockReturnValueOnce(false).mockReturnValue(true)
+    const service = createTeamService({ ...ctx.deps, isConversationBusy })
+    const detail = await service.openTeamDetail(team.id)
+    expect(detail?.legacyCoordinator).toMatchObject({ repairDeferred: true })
+    expect(service.getCollabForConversation(CONVERSATION)?.active).toBe(true)
+    expect(ctx.appManager.apps.size).toBe(2)
+    expect(ctx.store.getTeamById(team.id)?.leadAppId).toBe(team.leadAppId)
+  })
+
+  it('keeps failed legacy repair readable and retries without duplicating the lead', async () => {
+    const { team } = await ctx.service.createCollab(collabInput())
+    ctx.store.clearEphemeral(team.id)
+    vi.spyOn(ctx.store, 'setCoordinatorConversation').mockImplementationOnce(() => { throw new Error('repair failed') })
+    const failed = await ctx.service.openTeamDetail(team.id)
+    expect(failed?.legacyCoordinator).toMatchObject({ ownedHere: true, repairFailed: true })
+    expect(failed?.team.leadAppId).toBe(team.leadAppId)
+    expect(ctx.store.getMember(team.id, team.leadAppId!)).not.toBeNull()
+    expect(ctx.appManager.apps.size).toBe(2)
+    expect((await ctx.service.openTeamDetail(team.id))?.legacyCoordinator).toBeUndefined()
+    expect(ctx.store.listMembersByTeam(team.id)).toHaveLength(3)
+  })
+
+  it('names the creator of a joined legacy team without repairing another computer', async () => {
+    const { team } = await ctx.service.createCollab(collabInput())
+    ctx.store.materializeJoinedOffice({ hostNodeId: 'creator-node', selfNodeId: 'viewer-node', snapshot: {
+      team: { id: team.id, name: team.name, goal: team.goal, leadAppId: team.leadAppId, collabMode: 'free', hostNodeId: 'creator-node' },
+      members: [{ appId: team.leadAppId!, memberName: 'coordinator', role: 'Coordinator', isLead: true, ownerNodeId: 'creator-node', memberIdentity: null, ownerDisplayName: 'Alice' }], edges: [],
+    } })
+    ctx.store.clearEphemeral(team.id)
+    const detail = await ctx.service.openTeamDetail(team.id)
+    expect(detail?.legacyCoordinator).toEqual({ ownedHere: false, ownerName: 'Alice' })
+    expect(ctx.appManager.install).toHaveBeenCalledTimes(2)
+    await expect(ctx.service.openConversation(team.id, 'New work')).rejects.toThrow(/creator/)
+  })
+
+  it('does not call the local creator another teammate when only authority moved elsewhere', async () => {
+    const { team } = await ctx.service.createCollab(collabInput())
+    ctx.store.materializeJoinedOffice({ hostNodeId: 'other-authority', selfNodeId: 'creator-node', snapshot: {
+      team: { id: team.id, name: team.name, goal: team.goal, leadAppId: team.leadAppId, collabMode: 'free', hostNodeId: 'other-authority' },
+      members: [{ appId: team.leadAppId!, memberName: 'coordinator', role: 'Coordinator', isLead: true, ownerNodeId: 'creator-node', memberIdentity: null }], edges: [],
+    } })
+    ctx.store.clearEphemeral(team.id)
+    const detail = await ctx.service.openTeamDetail(team.id)
+    expect(detail?.legacyCoordinator).toMatchObject({ ownedHere: true, repairFailed: true })
+    expect(ctx.appManager.install).toHaveBeenCalledTimes(2)
   })
 
   it('dissolving an ephemeral collaboration cleans up its member apps', async () => {
@@ -437,5 +561,12 @@ describe('temporary space collaborations', () => {
     expect(byMember.get('coordinator')?.path).toBe('/work/project/plan.md')
     expect(byMember.get('researcher')?.path).toBe(`/halo/team-work/${team.id}/${epochId}/researcher/sources.md`)
     expect(byMember.get('researcher')?.relativePath).toBe('team:researcher/sources.md')
+
+    ctx.store.clearEphemeral(team.id)
+    await ctx.service.openTeamDetail(team.id)
+    expect(await ctx.service.listArtifacts(team.id, epochId)).toEqual(groups)
+    ctx.store.removeMember(team.id, researcher.appId)
+    expect((await ctx.service.listArtifacts(team.id, epochId)).flatMap(group => group.artifacts.map(artifact => artifact.relativePath)))
+      .toEqual(['plan.md', 'team:researcher/sources.md'])
   })
 })

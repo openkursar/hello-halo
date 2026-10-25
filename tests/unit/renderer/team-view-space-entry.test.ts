@@ -62,7 +62,7 @@ vi.mock('../../../src/renderer/components/team/workbench/model', () => ({
 
 const { TeamView } = await import('../../../src/renderer/components/team/TeamView')
 
-const detail = (team: { ephemeral?: boolean; coordinatorConversationId?: string | null }) => ({
+const detail = (team: { ephemeral?: boolean; coordinatorConversationId?: string | null; savedTeamId?: string }) => ({
   team: { id: 'team', name: 'Crew', goal: '', hostNodeId: null, ...team },
   members: [], roster: [], pendingEscalations: [],
 }) as never
@@ -80,10 +80,11 @@ describe('team view opened from a space conversation', () => {
   })
 
   it('keeps showing a kept collaboration as its single room, without team settings', () => {
-    const html = render({ ephemeral: false, coordinatorConversationId: 'conv' }, true)
+    const html = render({ ephemeral: true, coordinatorConversationId: 'conv', savedTeamId: 'saved' }, true)
     expect(html).toContain('data-room="room"')
     expect(html).not.toContain('data-task-sidebar')
     expect(html).not.toContain('Keep this team')
+    expect(html).toContain('Open saved team')
     expect(html).not.toContain('Team settings')
     expect(html).toContain('data-member-rail')
   })

@@ -126,7 +126,7 @@ export function registerTeamIpc(): void {
   )
 
   ipcMain.handle(TEAM_IPC.getDetail, async (_e, teamId: string) =>
-    handle('team:get-detail', (s) => s.getTeamDetail(teamId))
+    handle('team:get-detail', (s) => s.openTeamDetail(teamId))
   )
 
   ipcMain.handle(TEAM_IPC.listArtifacts, async (_e, teamId: string) =>

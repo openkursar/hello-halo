@@ -115,18 +115,18 @@ describe('TeamService — conversations + pending escalations', () => {
 
   afterEach(() => { dbManager.closeAll() })
 
-  it('new tasks addressed to the same member have independent contexts and titles', () => {
+  it('new tasks addressed to the same member have independent contexts and titles', async () => {
     const svc = build()
-    const first = svc.openConversation(TEAM_ID, 'First request', MEMBER_APP)
-    const second = svc.openConversation(TEAM_ID, 'Second request', MEMBER_APP)
+    const first = await svc.openConversation(TEAM_ID, 'First request', MEMBER_APP)
+    const second = await svc.openConversation(TEAM_ID, 'Second request', MEMBER_APP)
     expect(first.epochId).not.toBe(second.epochId)
     expect(store.getEpochById(first.epochId)!.title).toBe('First request')
     expect(store.getEpochById(second.epochId)!.title).toBe('Second request')
   })
 
-  it('conversation summaries do not materialize activity bodies or repeat member reads', () => {
+  it('conversation summaries do not materialize activity bodies or repeat member reads', async () => {
     const svc = build()
-    for (let index = 0; index < 200; index++) svc.openConversation(TEAM_ID, `Task ${index}`)
+    for (let index = 0; index < 200; index++) await svc.openConversation(TEAM_ID, `Task ${index}`)
     const activities = vi.spyOn(store, 'listActivityByTeam')
     const members = vi.spyOn(store, 'listMembersByTeam')
     expect(svc.listConversations(TEAM_ID)).toHaveLength(200)
@@ -134,15 +134,15 @@ describe('TeamService — conversations + pending escalations', () => {
     expect(members).toHaveBeenCalledTimes(1)
   })
 
-  it('openConversation mints a native session, listConversations projects it', () => {
+  it('openConversation mints a native session, listConversations projects it', async () => {
     const svc = build()
-    const { epochId } = svc.openConversation(TEAM_ID, 'Weekly plan')
+    const { epochId } = await svc.openConversation(TEAM_ID, 'Weekly plan')
     const list = svc.listConversations(TEAM_ID)
     expect(list).toHaveLength(1)
     expect(list[0]).toMatchObject({ epochId, kind: 'native', label: 'Weekly plan', readonly: false })
   })
 
-  it('projects member / IM conversations with the right kind, label and readonly', () => {
+  it('projects member / IM conversations with the right kind, label and readonly', async () => {
     const svc = build()
     // A member direct thread → labels as the member's name, writable.
     store.insertEpoch({
@@ -161,16 +161,16 @@ describe('TeamService — conversations + pending escalations', () => {
     expect(im).toMatchObject({ kind: 'im', readonly: true, label: 'WeCom Group', channel: 'im' })
   })
 
-  it('flags a conversation active when a member is busy on it', () => {
+  it('flags a conversation active when a member is busy on it', async () => {
     const svc = build()
-    const { epochId } = svc.openConversation(TEAM_ID)
+    const { epochId } = await svc.openConversation(TEAM_ID)
     busyByApp.set(MEMBER_APP, [{ epochId, kind: 'conversation', label: '' }])
     expect(svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)?.active).toBe(true)
   })
 
-  it('projects a teammate decision as visible but not answerable on this machine', () => {
+  it('projects a teammate decision as visible but not answerable on this machine', async () => {
     const svc = build()
-    const { epochId } = svc.openConversation(TEAM_ID, 'Review')
+    const { epochId } = await svc.openConversation(TEAM_ID, 'Review')
     store.updateMemberFields(TEAM_ID, MEMBER_APP, { awaitingDecision: true })
     store.insertActivity({
       id: 'decision-request:entry-1', teamId: TEAM_ID, epochId, kind: 'decision',
@@ -195,13 +195,13 @@ describe('TeamService — conversations + pending escalations', () => {
     })
   })
 
-  it('projects a remote decision on a joined office from roster state until its shared answer arrives', () => {
+  it('projects a remote decision on a joined office from roster state until its shared answer arrives', async () => {
     const svc = build()
     store.materializeJoinedOffice({
       hostNodeId: 'host-1',
       selfNodeId: 'viewer-1',
       snapshot: {
-        team: { id: TEAM_ID, name: 'Team', goal: 'g', leadAppId: LEAD_APP, collabMode: 'free' },
+        team: { id: TEAM_ID, name: 'Team', goal: 'g', leadAppId: LEAD_APP, collabMode: 'free', hostNodeId: 'host-1' },
         members: [
           { appId: LEAD_APP, memberName: 'Lead', role: 'Lead', isLead: true, ownerNodeId: 'host-1', memberIdentity: null },
           { appId: MEMBER_APP, memberName: 'Alice', role: 'R', isLead: false, ownerNodeId: 'owner-2', memberIdentity: null, status: 'waiting_user' },
@@ -237,9 +237,9 @@ describe('TeamService — conversations + pending escalations', () => {
     })
   })
 
-  it('merges a locally answerable decision with shared task state without duplicating its member', () => {
+  it('merges a locally answerable decision with shared task state without duplicating its member', async () => {
     const svc = build()
-    const { epochId } = svc.openConversation(TEAM_ID, 'Local review')
+    const { epochId } = await svc.openConversation(TEAM_ID, 'Local review')
     pending = [{
       appId: MEMBER_APP,
       entryId: 'entry-local',
@@ -261,7 +261,7 @@ describe('TeamService — conversations + pending escalations', () => {
     })
   })
 
-  it('on a JOINED office, active is derived from the federated roster busy, not local sessions', () => {
+  it('on a JOINED office, active is derived from the federated roster busy, not local sessions', async () => {
     const svc = build()
     // Turn TEAM_ID into a joined (shadow) office whose lead is busy on a
     // conversation — the "busy" arrives via the host's roster snapshot, since a
@@ -271,7 +271,7 @@ describe('TeamService — conversations + pending escalations', () => {
       hostNodeId: 'host-1',
       selfNodeId: 'self-1',
       snapshot: {
-        team: { id: TEAM_ID, name: 'T', goal: 'g', leadAppId: LEAD_APP, collabMode: 'free' },
+        team: { id: TEAM_ID, name: 'T', goal: 'g', leadAppId: LEAD_APP, collabMode: 'free', hostNodeId: 'host-1' },
         members: [
           {
             appId: LEAD_APP, memberName: 'Lead', role: 'Lead', isLead: true,
@@ -293,21 +293,21 @@ describe('TeamService — conversations + pending escalations', () => {
     expect(conv?.active).toBe(true)
   })
 
-  it('renameConversation relabels the session', () => {
+  it('renameConversation relabels the session', async () => {
     const svc = build()
-    const { epochId } = svc.openConversation(TEAM_ID, 'A')
+    const { epochId } = await svc.openConversation(TEAM_ID, 'A')
     svc.renameConversation(TEAM_ID, epochId, 'B')
     expect(svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)?.label).toBe('B')
   })
 
   it('archiveConversation retains a completed task in the list', async () => {
     const svc = build()
-    const { epochId } = svc.openConversation(TEAM_ID)
+    const { epochId } = await svc.openConversation(TEAM_ID)
     await svc.archiveConversation(TEAM_ID, epochId)
     expect(svc.listConversations(TEAM_ID)).toEqual([expect.objectContaining({ epochId, completed: true })])
   })
 
-  it('getTeamDetail carries the team\u2019s pending escalations; other teams\u2019 are excluded', () => {
+  it('getTeamDetail carries the team\u2019s pending escalations; other teams\u2019 are excluded', async () => {
     const svc = build()
     pending = [
       { appId: MEMBER_APP, entryId: 'e1', question: 'Pick A or B?', teamId: TEAM_ID },
@@ -318,7 +318,7 @@ describe('TeamService — conversations + pending escalations', () => {
     expect(detail.pendingEscalations![0]).toMatchObject({ appId: MEMBER_APP, memberName: 'Alice', question: 'Pick A or B?' })
   })
 
-  it('listTeamItems counts waiting decisions independent of run status', () => {
+  it('listTeamItems counts waiting decisions independent of run status', async () => {
     const svc = build()
     pending = [{ appId: MEMBER_APP, entryId: 'e1', question: 'q', teamId: TEAM_ID }]
     const item = svc.listTeamItems(SPACE).find(t => t.id === TEAM_ID)!

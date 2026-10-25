@@ -6,7 +6,8 @@ import { useTranslation } from '../../../i18n'
 import { useTeamViewPrefsStore } from '../../../stores/team-view-prefs.store'
 import { taskGroup, taskGroups, type TaskGroup } from './model'
 
-export function TaskSidebar({ teamId, roster, tasks, selectedId, isOwner, onSelect, onNew, query, onQuery: setQuery, status, onStatus: setStatus }: {
+export function TaskSidebar({ teamId, roster, tasks, selectedId, isOwner, onSelect, onNew, query, onQuery: setQuery, status, onStatus: setStatus, canCreate = true }: {
+  canCreate?: boolean
   query: string; onQuery: (value: string) => void; status: string; onStatus: (value: string) => void
   teamId: string; roster: RosterMember[]; tasks: TeamConversation[]; selectedId: string | null; isOwner: boolean
   onSelect: (id: string) => void; onNew: () => void
@@ -36,7 +37,7 @@ export function TaskSidebar({ teamId, roster, tasks, selectedId, isOwner, onSele
 
   return <nav aria-label={t('Tasks')} className="flex h-full min-h-0 flex-col">
     <div className="flex items-center justify-between px-3 pb-2 pt-3"><h2 className="text-sm font-medium">{t('Tasks')} <span className="ml-1 text-xs font-normal tabular-nums text-muted-foreground">{tasks.length}</span></h2>
-      <button onClick={onNew} title={t('New task')} className="rounded-lg p-2 text-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" aria-label={t('New task')}><Plus size={17} /></button>
+      {canCreate && <button onClick={onNew} title={t('New task')} className="rounded-lg p-2 text-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" aria-label={t('New task')}><Plus size={17} /></button>}
     </div>
     <div className="mx-3 mb-2 flex min-h-9 items-center gap-2 rounded-lg border border-border bg-background px-2 text-muted-foreground focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-primary/20"><Search size={14} className="shrink-0" aria-hidden="true" />
       <input type="search" aria-label={t('Search tasks')} placeholder={t('Search tasks')} value={query} onChange={event => setQuery(event.target.value)} className="min-w-0 w-full bg-transparent py-1.5 text-xs text-foreground outline-none [&::-webkit-search-cancel-button]:appearance-none" />
@@ -50,7 +51,7 @@ export function TaskSidebar({ teamId, roster, tasks, selectedId, isOwner, onSele
         {tasks.length ? <Search size={24} className="mx-auto mb-3 text-muted-foreground/40" /> : <ListTodo size={26} className="mx-auto mb-3 text-muted-foreground/40" />}
         <p className="text-xs font-medium">{tasks.length ? t('No matching tasks') : t('No tasks yet')}</p>
         <p className="mt-2 text-xs leading-5 text-muted-foreground">{tasks.length ? t('Try another search or status.') : t('Start with a message to your digital human.')}</p>
-        <button onClick={tasks.length ? () => { setQuery(''); setStatus('all') } : onNew} className="mt-3 rounded-lg px-3 py-2 text-xs text-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">{tasks.length ? t('Clear filters') : t('New task')}</button>
+        {(tasks.length > 0 || canCreate) && <button onClick={tasks.length ? () => { setQuery(''); setStatus('all') } : onNew} className="mt-3 rounded-lg px-3 py-2 text-xs text-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">{tasks.length ? t('Clear filters') : t('New task')}</button>}
       </div>}
       {taskGroups.map(group => {
         const grouped = matches.filter(task => taskGroup(task) === group)

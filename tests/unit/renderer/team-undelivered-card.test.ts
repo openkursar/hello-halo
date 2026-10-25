@@ -41,14 +41,15 @@ function card(activities: TeamActivity[], roster = detail.roster, taskCompleted 
 }
 
 describe('a team message that did not arrive', () => {
-  it('reads as the message it was, sender to recipient, with what to do instead of the system line', () => {
+  it('reads as the message it was, sender to recipient, with actions and expandable delivery evidence', () => {
     const html = card([fate])
     expect(html.indexOf('Requirements')).toBeLessThan(html.indexOf('Solution Design'))
     expect(html).toContain('>Message<')
     expect(html).not.toContain('>Reply<')
     expect(html).toContain('Not delivered')
-    expect(html).toContain('Solution Design did not receive this message. Jane’s computer is online now, so it can be sent again.')
-    expect(html).not.toContain('offline or unreachable')
+    expect(html).toContain('Solution Design did not receive this message. Send it again, or assign the work to another member.')
+    expect(html).toContain('Details')
+    expect(html).toContain('offline or unreachable')
   })
 
   it('says whose computer is offline, and when it can be sent again', () => {

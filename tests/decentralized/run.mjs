@@ -19,6 +19,10 @@ import path from 'node:path'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 const SUITES = {
+  'saved-team': {
+    file: 'checklist-saved-team.mjs',
+    blurb: 'Configuration-only save and legacy repair with a real older client (--legacy-root <built checkout>)',
+  },
   'live-turn': {
     file: 'checklist-live-turn.mjs',
     blurb: 'Real model, three-member space review: next-step delivery, original records, no queued wake storm (--engine, --model, --env-file)',

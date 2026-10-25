@@ -23,6 +23,7 @@ import { TeamStore } from '../../../../src/main/apps/team/store'
 import { MIGRATION_NAMESPACE, migrations } from '../../../../src/main/apps/team/migrations'
 import { createTeamService } from '../../../../src/main/apps/team/service'
 import type { TeamServiceDeps } from '../../../../src/main/apps/team/service'
+import { spaceCollabChatKey, nativeConversationChatKey } from '../../../../src/shared/apps/team-types'
 
 const SPACE = 'space-a'
 const LEAD = 'app-lead'
@@ -82,7 +83,7 @@ function build(busSend: (input: SendInputSeen) => unknown) {
  * row is needed; the no-run case passes an empty epochId and relies on the
  * conversation-epoch fallback (stubbed ensureConversationEpoch).
  */
-function seedTeam(store: TeamStore, opts?: { leadAppId?: string | null }) {
+function seedTeam(store: TeamStore, opts?: { leadAppId?: string | null; ephemeral?: boolean }) {
   const now = Date.now()
   const teamId = 'team-e1'
   const epochId = 'epoch-e1'
@@ -97,6 +98,7 @@ function seedTeam(store: TeamStore, opts?: { leadAppId?: string | null }) {
     escalationRouting: 'user',
     status: 'idle',
     currentEpochId: null,
+    ephemeral: opts?.ephemeral,
     createdAt: now,
     updatedAt: now,
   })
@@ -121,6 +123,40 @@ describe('E-1 — teamService.sendToMember (host-operator dispatch)', () => {
   })
   afterEach(() => {
     dbManager?.closeAll()
+  })
+
+  it.each([true, false])('keeps a repaired source task immutable (explicit target: %s)', async explicit => {
+    const ctx = build(() => ({ messageId: 'must-not-send' }))
+    dbManager = ctx.dbManager
+    const { teamId, epochId } = seedTeam(ctx.store)
+    ctx.store.insertEpoch({ id: epochId, teamId, startedAt: Date.now(), endedAt: null, endReason: null,
+      summary: null, lifecycle: 'conversation', chatKey: spaceCollabChatKey('original-chat') })
+    ctx.store.updateTeamCurrentEpoch(teamId, epochId)
+    const before = ctx.store.getEpochById(epochId)
+    const sending = ctx.service.sendToMember({ teamId, appId: WORKER, epochId: explicit ? epochId : '', message: 'New work' })
+    if (explicit) {
+      await expect(sending).rejects.toThrow(/read-only/)
+      expect(ctx.runtime.noteEpochTurn).not.toHaveBeenCalled()
+      expect(ctx.runtime.bus.send).not.toHaveBeenCalled()
+    } else {
+      await expect(sending).resolves.toMatchObject({ ok: true })
+      expect(ctx.sends[0].epochId).not.toBe(epochId)
+    }
+    expect(ctx.store.getEpochById(epochId)).toEqual(before)
+  })
+
+  it.each(['active collaboration', 'sealed native task'] as const)('still sends to an %s', async kind => {
+    const ctx = build(() => ({ from: 'worker', message: 'done', status: 'ok' }))
+    dbManager = ctx.dbManager
+    const ephemeral = kind === 'active collaboration'
+    const { teamId, epochId } = seedTeam(ctx.store, { ephemeral })
+    ctx.store.insertEpoch({ id: epochId, teamId, startedAt: Date.now(), endedAt: ephemeral ? null : Date.now(),
+      endReason: ephemeral ? null : 'completed', summary: null, lifecycle: 'conversation',
+      chatKey: ephemeral ? spaceCollabChatKey('original-chat') : nativeConversationChatKey('ordinary-chat') })
+    expect(await ctx.service.sendToMember({ teamId, appId: WORKER, epochId, message: 'Continue' }))
+      .toMatchObject({ ok: true, finalMessage: 'done' })
+    expect(ctx.runtime.noteEpochTurn).toHaveBeenCalledWith(teamId, epochId, true)
+    expect(ctx.runtime.bus.send).toHaveBeenCalledOnce()
   })
 
   it('delivered + answered (sync reply) → ok:true with the final message, sent as a person', async () => {

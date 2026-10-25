@@ -20,6 +20,19 @@ contains the selected task's team record, not a cross-task notification feed.
 
 ## Interaction contract
 
+A source conversation's coordinator is never a selectable digital human. Its
+activity is labelled as the main conversation, with an owner-local return link.
+Saving keeps this source view open and offers a link to the separately saved
+ordinary team, which has a real lead and no copied tasks or transcripts. Repeated
+saves use the persisted link, never create another copy. Legacy saved teams are
+repaired only on their owner's machine. A joined copy names that owner and tells
+the reader they do not need to update; a failed local repair offers retry or a
+new team while existing records remain readable. Neither case permits new work
+against the broken coordinator address.
+If the source conversation or its members are still working, local repair is
+deferred and the notice offers a return to that conversation and an explicit
+retry. An unfinished historical task alone never triggers this notice.
+
 The renderer has one task selection and a three-column workbench. A temporary
 space collaboration is the exception, and has no task selection at all: its one
 conversation (`kind: 'collab'`) is the room, so it is never a choice — the task
@@ -99,7 +112,8 @@ report is shown as unavailable rather than silently treated as empty: a warning
 names the members when they left a trace in the task or failed while reachable;
 otherwise a quiet line names the offline computers. A message that did not arrive
 is drawn as that message, sender to recipient, with whom it was for, what their
-computer is doing now and what can be done; the record keeps no reason.
+computer is doing now and what can be done. Failed receipts retain their reason
+in the activity details; being online never implies successful delivery.
 Task grouping prioritizes the human creator over member involvement. Completion
 is a filter/status within that relationship, not a separate destination.
 

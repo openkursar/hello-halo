@@ -377,18 +377,18 @@ with 4, so builds from before it (2.1.16-dev.0-rc.35 and earlier) and builds
 after it refuse each other; until the direction above existed, the newer
 joiner refused by an older host was the one told to update.
 
-This holds because federation ships only on internal experience builds whose
-users upgrade together. A breaking wire or semantic change ships by bumping the
-constant; nothing else is needed. A bump cuts every updated node off from every
-node not yet updated, so it is a release decision, not part of a feature
-change. An added optional field is not breaking — nodes ignore fields they do
-not know — and does not bump.
+Released clients must keep collaborating when people upgrade independently,
+including long audit freezes. Ordinary fixes retain protocol 4 and its existing
+wire semantics. An added optional field is not breaking: peers ignore fields
+they do not know. A version bump cuts updated nodes off from older ones and
+requires an explicit product/release decision, never just a local bug fix.
+Saving a temporary collaboration creates an ordinary single-lead team; legacy
+coordinator repair is local data normalization, not a new distributed mode.
 
-Revisit before either of these happens: federation ships to users who cannot be
-made to upgrade together, or two released versions must work in one office. At
-that point, choose between per-peer capability negotiation (and carrying both
-forms of every changed frame) and a longer support window at the gate
-(accepting a range of versions for one release).
+Normalize new behavior to the existing ordinary-team contract first. A future
+incompatible protocol needs a separate compatibility plan and explicit product
+approval covering older clients and ongoing work. Do not turn a rare-path data
+repair into a requirement for every participant to upgrade together.
 
 The gateway is not a federation peer. It is a separately deployed server that
 may lag the apps, so its wire version (v1 / v2-gw, `gateway-attach.ts`) is

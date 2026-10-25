@@ -260,7 +260,11 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   lookup of the producer's working directory; any other ref through
   `createMemberWorkDirResolver`, which also knows the coordinating space
   conversation — a roster entry with a placeholder appId no app record carries,
-  whose files were unreadable while the lookup went through the app manager. A ref claimed by two members resolves to `ambiguous`
+  whose retained publications remain readable after its roster entry is removed.
+  A former publisher's team-folder file is local only when its working directory
+  still resolves on this machine; missing membership alone never establishes
+  ownership, and a known remote member always stays remote.
+  A ref claimed by two members resolves to `ambiguous`
   and is refused by name — the publish gate above makes that rare, but it cannot
   be made impossible (two nodes publishing at once each see a free name until
   replication catches up), and a guess here is undetectable to the model that

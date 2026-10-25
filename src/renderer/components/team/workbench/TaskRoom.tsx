@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, AlertCircle, ArrowRight, Pencil, Check, X } from 'lucide-react'
 import type { RosterMember, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
-import { isRemoteMember } from '../../../../shared/apps/team-types'
+import { parseSpaceCoordinatorAppId } from '../../../../shared/apps/team-types'
 import { useTeamStore } from '../../../stores/team.store'
 import { useAppsStore } from '../../../stores/apps.store'
 import { useTeamViewPrefsStore } from '../../../stores/team-view-prefs.store'
@@ -14,17 +14,20 @@ import { TaskConversation } from './TaskConversation'
 import { ExecutionStatus } from './ExecutionStatus'
 import { TaskStartGuide } from './TaskStartGuide'
 import { AutomationAvatar } from '../../apps/AutomationAvatar'
+import { ownedTaskMembers } from './members'
+import { navigateToConversation } from '../../../utils/conversation-navigation'
 
-export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreated, onActivity, boardState, decisionTarget, tasks, onTask, onExecution }: {
+export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreated, onActivity, boardState, decisionTarget, tasks, onTask, onExecution, blocked = false }: {
+  blocked?: boolean
   detail: TeamDetail; task: TeamConversation | null; selectedAppId: string | null; onSelectMember: (member: RosterMember) => void
   onCreated: (id: string) => void; onActivity: (activityId?: string) => void; boardState: TaskBoardState; decisionTarget?: string; tasks: TeamConversation[]; onTask: (id: string, decisionEntry?: boolean) => void; onExecution: (appId: string) => void
 }) {
   const { t } = useTranslation()
   const apps = useAppsStore(s => s.apps)
-  const own = useMemo(() => detail.members.filter(m => !isRemoteMember(m) && apps.some(app => app.id === m.appId)), [detail.members, apps])
+  const own = useMemo(() => ownedTaskMembers(detail, apps), [detail, apps])
   const ids = useMemo(() => own.map(m => m.appId), [own])
   const setDefault = useTeamViewPrefsStore(s => s.setDefaultMember)
-  const appId = selectedAppId
+  const appId = selectedAppId && !parseSpaceCoordinatorAppId(selectedAppId) ? selectedAppId : null
   const member = detail.roster.find(m => m.appId === appId)
   const epochId = task?.epochId ?? null
   const [renaming, setRenaming] = useState(false)
@@ -109,14 +112,18 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
       {task?.completed && <span className="text-xs text-muted-foreground">{t('Completed')}</span>}
       {task && <button onClick={() => onActivity()} className={`flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1.5 text-xs ${pending.length ? 'border-halo-warning/30 text-halo-warning' : task.active ? 'border-halo-success/30 text-halo-success' : 'border-border text-muted-foreground'}`}><Activity size={14} />{t('Task activity')}{pending.length > 0 && <span>{pending.length}</span>}</button>}
     </header>
+    {task?.kind === 'collab' && <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+      <span>{t('Main chat')}</span>
+      {task.sourceConversation && <button onClick={() => navigateToConversation(task.sourceConversation!.spaceId, task.sourceConversation!.conversationId)} className="min-h-8 rounded text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">{t('Return to conversation')} →</button>}
+    </div>}
     {boardState.failed && <p role="alert" className="px-4 py-2 text-xs text-halo-warning">{t('Could not load collaboration updates.')} <button className="underline" onClick={boardState.retry}>{t('Retry')}</button></p>}
     {decisionHistory.failed && <p role="alert" className="px-4 py-2 text-xs text-halo-warning">{t('Could not load decision history.')} <button onClick={decisionHistory.retry} className="underline">{t('Retry')}</button></p>}
     {renameError && <p role="alert" className="p-2 text-xs text-destructive">{t('Could not rename this task. Please try again.')}</p>}
-    {task?.readonly && <p className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">{task.kind === 'im' ? t('External conversation is read-only. Internal decisions can be answered here.') : t('Run history is read-only. Internal decisions can be answered here.')}</p>}
+    {task?.readonly && task.kind !== 'collab' && <p className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">{task.kind === 'im' ? t('External conversation is read-only. Internal decisions can be answered here.') : t('Run history is read-only. Internal decisions can be answered here.')}</p>}
     {(task?.readonly || !appId) && <div className="shrink-0 px-3">{reminder}</div>}
     {appId && member ? <TeamSessionChat key={appId}
       appId={appId} spaceId={apps.find(app => app.id === appId)?.spaceId ?? member.spaceId ?? ''}
-      teamId={detail.team.id} epochId={epochId} isRemote={member.sameMachine === false} ownerName={member.owner} readonly={task?.readonly || member.sameMachine === false}
+      teamId={detail.team.id} epochId={epochId} isRemote={member.sameMachine === false} ownerName={member.owner} readonly={blocked || task?.readonly || !ids.includes(appId)}
       readonlyMessage={member.sameMachine === false
         ? member.owner ? t('Viewing {{name}}’s work. Only {{owner}} can send messages.', { name: member.memberName, owner: member.owner }) : t('Viewing this teammate’s digital human. Only its owner can send messages.')
         : t('This task is read-only.')}
