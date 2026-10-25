@@ -67,10 +67,7 @@ interface RawUsage {
 /**
  * Normalize a raw usage object, or null when it reports nothing.
  *
- * Engines split one API response into several frames (per content block /
- * streaming start); only one carries real usage, the rest report an all-zero
- * placeholder. Returning null for the all-zero case lets callers keep the
- * last real usage instead of a trailing placeholder zeroing it out.
+ * All-zero placeholders must not erase counts received in earlier frames.
  */
 function toSingleCallUsage(u: RawUsage | undefined): SingleCallUsage | null {
   if (!u) return null
@@ -138,6 +135,16 @@ export function computeContextUsed(usage: SingleCallUsage): number {
  */
 export function hasPromptAccounting(usage: SingleCallUsage): boolean {
   return usage.inputTokens + usage.cacheCreationTokens + usage.cacheReadTokens > 0
+}
+
+/** Counts are cumulative within a call; output-only updates retain its prompt accounting. */
+export function mergeCallUsage(
+  previous: SingleCallUsage | null,
+  latest: SingleCallUsage | null
+): SingleCallUsage | null {
+  if (!latest) return previous
+  if (!previous || hasPromptAccounting(latest)) return latest
+  return { ...previous, outputTokens: latest.outputTokens }
 }
 
 /**

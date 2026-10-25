@@ -575,22 +575,92 @@ describe('processStream llm.invocation token attribution', () => {
     ])
   })
 
-  it('prefers real assistant-frame usage over the delta', async () => {
+  it('uses final stream counts instead of initial assistant counts', async () => {
     await processStream(
       baseParams({
         v2Session: fakeSession([
           systemInit(),
           messageStart('msg_1'),
-          assistantText('msg_1', 'Answer.', { input_tokens: 7, output_tokens: 3 }),
-          messageDelta({ input_tokens: 9_999, output_tokens: 9_999 }),
+          assistantText('msg_1', 'Answer.', { input_tokens: 7, output_tokens: 1 }),
+          messageDelta({ input_tokens: 12, output_tokens: 20 }),
           resultCarrying('Answer.'),
         ]),
       })
     )
 
     expect(invocations()).toEqual([
+      expect.objectContaining({ inputTokens: 12, outputTokens: 20 }),
+    ])
+  })
+
+  it('merges output-only final counts with input and cache counts, once per call', async () => {
+    const initial = { input_tokens: 12, output_tokens: 1, cache_read_input_tokens: 40, cache_creation_input_tokens: 8 }
+    const result = await processStream(baseParams({
+      v2Session: fakeSession([
+        systemInit(), messageStart('msg_1'),
+        assistantText('msg_1', 'First block.', initial),
+        assistantText('msg_1', 'Second block.', initial),
+        messageDelta({ output_tokens: 20 }),
+        resultCarrying('Answer.'),
+      ]),
+    }))
+    expect(invocations()).toEqual([
+      expect.objectContaining({ inputTokens: 12, outputTokens: 20 }),
+    ])
+    expect(result.tokenUsage).toMatchObject({
+      inputTokens: 12, outputTokens: 20, cacheReadTokens: 40, cacheCreationTokens: 8,
+    })
+  })
+
+  it('retains a full stream usage update when a later delta reports output only', async () => {
+    const result = await processStream(baseParams({
+      v2Session: fakeSession([
+        systemInit(), messageStart('msg_1'),
+        assistantText('msg_1', 'Answer.', { input_tokens: 7, output_tokens: 1 }),
+        messageDelta({ input_tokens: 12, output_tokens: 10, cache_read_input_tokens: 40 }),
+        messageDelta({ output_tokens: 20 }),
+        messageDelta({ input_tokens: 0, output_tokens: 0 }),
+        resultCarrying('Answer.'),
+      ]),
+    }))
+    expect(invocations()).toEqual([
+      expect.objectContaining({ inputTokens: 12, outputTokens: 20 }),
+    ])
+    expect(result.tokenUsage).toMatchObject({ inputTokens: 12, outputTokens: 20, cacheReadTokens: 40 })
+  })
+
+  it('does not let a late assistant snapshot replace final stream counts', async () => {
+    const result = await processStream(baseParams({
+      v2Session: fakeSession([
+        systemInit(), messageStart('msg_1'),
+        messageDelta({ input_tokens: 12, output_tokens: 20, cache_read_input_tokens: 40 }),
+        assistantText('msg_1', 'First block.', { input_tokens: 7, output_tokens: 1 }),
+        assistantText('msg_1', 'Second block.', { output_tokens: 1 }),
+        resultCarrying('Answer.'),
+      ]),
+    }))
+    expect(invocations()).toEqual([
+      expect.objectContaining({ inputTokens: 12, outputTokens: 20 }),
+    ])
+    expect(result.tokenUsage).toMatchObject({ inputTokens: 12, outputTokens: 20, cacheReadTokens: 40 })
+  })
+
+  it('keeps initial-only usage separate from the preceding call final counts', async () => {
+    const result = await processStream(baseParams({
+      v2Session: fakeSession([
+        systemInit(), messageStart('msg_1'),
+        assistantText('msg_1', 'First.', { input_tokens: 12, output_tokens: 1 }),
+        messageDelta({ output_tokens: 20 }),
+        messageStart('msg_2'),
+        assistantText('msg_2', 'Second.', { input_tokens: 7, output_tokens: 3 }),
+        resultCarrying('Second.'),
+      ]),
+    }))
+    expect(invocations()).toEqual([
+      expect.objectContaining({ inputTokens: 12, outputTokens: 20 }),
       expect.objectContaining({ inputTokens: 7, outputTokens: 3 }),
     ])
+    expect(result.tokenUsage).toMatchObject({ inputTokens: 7, outputTokens: 3 })
   })
 
   it('still emits the call when nothing reported usage', async () => {
