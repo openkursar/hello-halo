@@ -161,7 +161,8 @@ function SectionHeaderButton({ section, label, hint, collapsed, attention, onTog
       }}
       aria-expanded={!collapsed}
       title={hint}
-      className="group flex w-full items-center gap-1 rounded-sm px-1.5 pb-1 text-xs font-medium text-subtle-foreground/70 theme-dark:text-subtle-foreground hover:text-subtle-foreground theme-dark:hover:text-muted-foreground transition-colors ease-halo"
+      // pl-2.5 matches the rows' inset, so a label starts where its titles do.
+      className="group flex w-full items-center gap-1 rounded-sm pl-2.5 pr-1.5 pb-1 text-xs font-medium text-subtle-foreground hover:text-muted-foreground transition-colors ease-halo"
     >
       <span>{label}</span>
       {collapsed && attention && <TaskStatusDot status={attention} size="sm" />}
