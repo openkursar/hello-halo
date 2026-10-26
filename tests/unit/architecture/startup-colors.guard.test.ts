@@ -1,7 +1,7 @@
 /**
- * Before globals.css has loaded, four places draw with literal copies of its
+ * Before globals.css has loaded, three places draw with literal copies of its
  * theme tokens: the native window (main process), index.html's anti-flash
- * background, the boot splash's fallbacks and its arc images. A copy that drifts from the
+ * background and the boot splash's fallbacks. A copy that drifts from the
  * token shows the wrong color for the first moments of every launch.
  */
 
@@ -63,11 +63,5 @@ describe('startup colors guard', () => {
     for (const [, name, fallback] of fallbacks) {
       expect(`${name}: ${fallback.trim()}`).toBe(`${name}: ${token(theme, name)}`)
     }
-  })
-
-  it.each<Theme>(['dark', 'light'])('the boot splash\'s spinning arc image is the %s theme\'s primary color', theme => {
-    const src = new RegExp(`class="boot-splash-arc-${theme}"[^>]*src="([^"]+)"`).exec(indexHtml)?.[1]
-    expect(src).toBeDefined()
-    expect(decodeURIComponent(src!)).toContain(`stroke='${hslToHex(token(theme, 'primary'))}'`)
   })
 })

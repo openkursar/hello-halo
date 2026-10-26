@@ -17,6 +17,7 @@ import { CustomApiSetupForm } from './CustomApiSetupForm'
 import { saveFirstRunSource } from './saveFirstRunSource'
 import type { AISource, AISourcesConfig } from '../../types'
 import { resolveLocalizedText, type AuthProviderConfig } from '../../../shared/types'
+import { HaloLogo } from '../brand/HaloLogo'
 
 interface SetupProviderConfigProps {
   /** Auth entry driving the config form (preset gateway or Custom API/BYOK). */
@@ -46,9 +47,7 @@ export function SetupProviderConfig({ entry, onBack }: SetupProviderConfigProps)
     <div className="h-full w-full flex flex-col items-center justify-center bg-background p-4 sm:p-8 relative overflow-auto">
       {/* Header */}
       <div className="flex flex-col items-center mb-6 sm:mb-8">
-        <div className="w-16 h-16 rounded-full border-2 border-primary/60 flex items-center justify-center halo-glow">
-          <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary/30 to-transparent" />
-        </div>
+        <HaloLogo size={64} />
         <h1 className="mt-4 text-2xl font-light">Halo</h1>
       </div>
 
