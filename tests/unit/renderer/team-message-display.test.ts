@@ -42,6 +42,7 @@ import { MessageRow } from '../../../src/renderer/components/chat/MessageRow'
 import { ArrivalCard } from '../../../src/renderer/components/chat/ArrivalCard'
 import { CollapsedThoughtProcess, LazyCollapsedThoughtProcess } from '../../../src/renderer/components/chat/CollapsedThoughtProcess'
 import { TeamMemberMessage } from '../../../src/renderer/components/chat/team-collab/TeamMemberMessage'
+import { ReplyOpeners } from '../../../src/renderer/components/chat/team-collab/ReplyOpeners'
 import type { Message, Thought } from '../../../src/renderer/types'
 
 type Node = { type?: unknown; props?: Record<string, unknown> & { children?: unknown } }
@@ -53,8 +54,9 @@ function nodes(tree: unknown): Node[] {
   return [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)]
 }
 
-function row(props: { message: Message; arrivals?: Message[] }): unknown {
-  return (MessageRow as unknown as { type: (props: { message: Message; arrivals?: Message[] }) => unknown }).type(props)
+type RowProps = { message: Message; arrivals?: Message[]; openers?: Message[]; senderName?: string }
+function row(props: RowProps): unknown {
+  return (MessageRow as unknown as { type: (props: RowProps) => unknown }).type(props)
 }
 
 const at = (seconds: number) => new Date(Date.UTC(2026, 9, 13, 10, 0, seconds)).toISOString()
@@ -86,6 +88,20 @@ describe('a teammate message in the transcript', () => {
     expect(lazy?.props?.arrivals).toEqual([arrival])
   })
 
+  it('that opened a reply’s turn is named on that reply’s sender line, collapsed', () => {
+    const reply: Message = { id: 'reply', role: 'assistant', content: 'On it', timestamp: at(30) }
+    const opener = team()
+    const tree = nodes(row({ message: reply, openers: [opener], senderName: 'Halo' }))
+    const line = tree.find(node => node.type === ReplyOpeners)
+    expect(line?.props?.openers).toEqual([opener])
+    expect(tree.some(node => node.type === TeamMemberMessage)).toBe(false)
+
+    const html = renderToStaticMarkup(createElement(ReplyOpeners, { senderName: 'Halo', openers: [opener, team({ id: 'team-2', metadata: { teamId: 'team', teamName: 'Crew', fromMemberName: 'Scout' } })] }))
+    expect(html).toContain('Halo')
+    expect(html).toContain('Received reports from Reviewer and 1 more')
+    expect(html).not.toContain('Details follow')
+  })
+
   it('received by a reply that did no work is drawn after it as its own card', () => {
     const reply: Message = { id: 'reply', role: 'assistant', content: 'Sure', timestamp: at(30) }
     const arrival = team({ id: 'live', metadata: { teamId: 'team', teamName: 'Crew', inputMode: 'live', inputReplyId: 'reply' } })
@@ -103,9 +119,11 @@ describe('the team card', () => {
     try {
       const html = renderToStaticMarkup(createElement(TeamMemberMessage, { message: team() }))
       expect(html).toContain('animate-fade-in')
-      expect(html).toContain('bg-primary text-primary-foreground')
+      // A fresh message lights its dot; an older one keeps it muted.
+      expect(html).toContain('bg-primary')
       expect(html).toContain('Details follow')
-      expect(html).toContain('Reviewer · Crew')
+      expect(html).toContain('Team: Crew')
+      expect(html).toContain('Reviewer')
     } finally {
       vi.useRealTimers()
     }

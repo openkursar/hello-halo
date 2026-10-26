@@ -20,6 +20,7 @@
 import { useRef, useMemo, useCallback, forwardRef, useImperativeHandle } from 'react'
 import type { ReactNode } from 'react'
 import { MessageRow } from './MessageRow'
+import { isTeamMessage, type TeamRunPosition } from './team-collab'
 import { StreamingSection } from './StreamingSection'
 import { withoutLiveInputs } from '../../utils/live-inputs'
 import type { LiveInput } from '../../types'
@@ -137,6 +138,7 @@ function StreamingFooter({
   onStop,
   senderName,
   arrivals,
+  openers,
 }: {
   conversationId: string
   streamingContent: string
@@ -153,6 +155,7 @@ function StreamingFooter({
   onStop?: () => void
   senderName?: string
   arrivals: Message[]
+  openers: readonly Message[]
 }) {
   const queuedMessages = useChatStore(s => s.sessions.get(conversationId)?.queuedMessages)
   const liveInputs = useChatStore(s => s.sessions.get(conversationId)?.liveInputs)
@@ -174,6 +177,7 @@ function StreamingFooter({
       queuedMessages={queuedMessages ?? EMPTY_QUEUE}
       liveInputs={liveInputs ?? EMPTY_LIVE_INPUTS}
       arrivals={arrivals}
+      openers={openers}
       senderName={senderName}
       apiRetry={apiRetry}
       onStop={onStop}
@@ -184,6 +188,16 @@ function StreamingFooter({
 const EMPTY_QUEUE: never[] = []
 const EMPTY_LIVE_INPUTS: LiveInput[] = []
 const EMPTY_ARRIVALS: Message[] = []
+
+function teamRunPosition(messages: readonly Message[], index: number): TeamRunPosition | undefined {
+  const message = messages[index]
+  if (!isTeamMessage(message)) return undefined
+  const sameTeam = (other: Message | undefined) =>
+    !!other && isTeamMessage(other) && other.metadata?.teamId === message.metadata?.teamId
+  const prev = sameTeam(messages[index - 1])
+  const next = sameTeam(messages[index + 1])
+  return prev ? (next ? 'middle' : 'last') : (next ? 'first' : 'single')
+}
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList({
   conversationId = '',
@@ -250,7 +264,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     transcriptRef.current = next
     return next
   }, [shownMessages, isGenerating])
-  const { messages: displayMessages, keys: rowKeys, previousCosts, injections, arrivals } = transcript
+  const { messages: displayMessages, keys: rowKeys, previousCosts, injections, arrivals, openers, liveOpeners } = transcript
 
   const follower = useStickToBottom({ onAtBottomChange: onAtBottomStateChange, live: isGenerating })
   const history = useHistoryWindow(rowKeys, follower.scroller, { onReachStart: onLoadEarlier })
@@ -299,6 +313,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   const { start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef } = history
   const rows = useMemo(() => {
     const out: ReactNode[] = []
+    const latestReply = displayMessages.findLastIndex(message => message.role === 'assistant')
     for (let index = start; index < displayMessages.length; index++) {
       const message = displayMessages[index]
       const key = rowKeys[index]
@@ -328,15 +343,18 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             allowViewChanges={allowViewChanges}
             injectionMessages={injections.get(message.id)}
             arrivals={arrivals.get(message.id)}
+            openers={openers.get(message.id)}
+            actionsOnHover={index !== latestReply}
             className={contentWidthClass}
             senderName={message.role === 'assistant' ? senderName : undefined}
+            teamRunPosition={teamRunPosition(displayMessages, index)}
           />
         </div>
       )
     }
     if (liveStart >= displayMessages.length) out.push(<div key="history-start" ref={sentinelRef} aria-hidden="true" />)
     return out
-  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCosts, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, allowViewChanges, rowKeys, injections, arrivals, contentWidthClass, senderName])
+  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCosts, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, allowViewChanges, rowKeys, injections, arrivals, openers, contentWidthClass, senderName])
 
   // Keep the footer mounted for an active question independently of isGenerating:
   // a recovered question can be paused on the answer with isGenerating false, and
@@ -371,6 +389,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               onStop={onStop}
               senderName={senderName}
               arrivals={activeArrivals}
+              openers={liveOpeners}
             />
           )}
 

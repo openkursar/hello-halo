@@ -1,4 +1,6 @@
 export { TeamMemberMessage } from './TeamMemberMessage'
+export type { TeamRunPosition } from './TeamMemberMessage'
+export { ReplyOpeners } from './ReplyOpeners'
 export { TeamCollabPanel } from './TeamCollabPanel'
 export { isTeamMessage, readTeamProvenance } from './message-source'
 export type { TeamMessageProvenance } from './message-source'
