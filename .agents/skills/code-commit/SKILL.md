@@ -107,5 +107,5 @@ git commit -m "<generated commit message>"
 ## Notes
 
 - If there are no changes, inform the user that there is nothing to commit.
-- Do not run `git push` unless the user explicitly asks.
+- Do not run `git push` unless the user explicitly asks. When pushing, follow the `gh-publish` skill first.
 - When issues are found during checks, list all of them and ask the user how to proceed. Do not skip issues on your own.
