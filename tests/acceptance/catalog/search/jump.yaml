@@ -1,0 +1,67 @@
+version: 1
+id: search.jump
+module: search
+title:
+  en: Jump to a person or task quickly
+  zh: 快速找到数字人或任务
+story:
+  en: I can use search as an entry to the work I need without remembering where it lives.
+  zh: 我能用搜索进入需要的工作，不必记住它在哪个页面。
+basis: observed
+references:
+  - src/renderer/components/search/SearchPanel.tsx
+  - src/renderer/components/search/useQuickJumpCandidates.ts
+  - tests/e2e/specs/acceptance-conversations.spec.ts
+promises:
+  jump:
+    en: Quick-jump entries resolve to the selected resource, distinct from full message-content search.
+    zh: 快速跳转定位所选资源，与完整消息内容检索区分。
+  keyboard:
+    en: Offered keyboard navigation selects, opens and closes the search surface.
+    zh: 提供的键盘操作可选择、打开及关闭搜索。
+scenarios:
+  - id: search.jump.resources
+    title:
+      en: Find different resource types
+      zh: 查找不同类型资源
+    verifies:
+      - jump
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Seed a conversation, person, task and knowledge base with distinct names.
+        zh: 预置名称不同的对话、数字人、任务和知识库。
+    steps:
+      - en: Find and open each quick-jump entry.
+        zh: 查找并打开各快速跳转项。
+    expected:
+      - en: Each entry opens its own correct resource and context.
+        zh: 各入口打开正确资源及上下文。
+  - id: search.jump.keyboard
+    title:
+      en: Navigate search by keyboard
+      zh: 用键盘操作搜索
+    verifies:
+      - keyboard
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: The quick-jump surface contains multiple candidates.
+        zh: 快速跳转界面有多个候选。
+    steps:
+      - en: Use arrow keys, Enter and Escape.
+        zh: 使用方向键、回车和 Escape。
+    expected:
+      - en: The indicated candidate opens and Escape closes without an unintended action.
+        zh: 被指示候选打开，Escape 关闭且不误触操作。

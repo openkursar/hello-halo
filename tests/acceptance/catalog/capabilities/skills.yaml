@@ -1,0 +1,246 @@
+version: 1
+id: capabilities.skills
+module: capabilities
+title:
+  en: Maintain a reusable skill
+  zh: 维护可复用技能
+story:
+  en: I can write or install a skill and make it available to the intended people.
+  zh: 我能编写或安装技能，并让指定数字人使用。
+basis: observed
+references:
+  - src/renderer/components/apps/SkillInstallDialog.tsx
+  - src/main/apps/manager/skill-sync.ts
+  - tests/e2e/specs/people-capabilities.spec.ts
+  - src/renderer/components/apps/AppSkillsSection.tsx
+  - src/renderer/components/apps/SkillInfoCard.tsx
+  - src/renderer/components/apps/SkillCopyDialog.tsx
+  - src/main/apps/skill-discovery.ts
+  - src/main/apps/manager/DESIGN.md
+  - tests/e2e/specs/acceptance-skills.spec.ts
+promises:
+  draft:
+    en: Closing the skill editor can retain the draft until it is installed.
+    zh: 关闭技能编辑器可保留草稿，之后再安装。
+  scope:
+    en: Skills are inherited from global settings and the digital human’s workspace; an active workspace copy overrides the global skill with the same command name.
+    zh: 技能从全局设置及数字人所在空间继承；活动的空间副本覆盖同名命令的全局技能。
+  remove:
+    en: Removing or disabling a skill changes availability without deleting unrelated skills.
+    zh: 移除或停用技能只改变该技能可用性，不删除其他技能。
+  edit:
+    en: Confirmed shared instruction edits reach the stored skill and its files while preserving supporting files and unrelated resources.
+    zh: 确认后的共享指令修改会写入技能记录及文件，同时保留配套文件和无关资源。
+  copy:
+    en: A custom copy has its own valid command name and preserves the original skill unchanged.
+    zh: 自定义副本使用独立的有效命令名，原技能保持不变。
+  invoke:
+    en: Using an available skill can pass its installed instructions into the conversation that invoked it.
+    zh: 使用可用技能时，其已安装指令会进入发起调用的对话。
+scenarios:
+  - id: capabilities.skills.draft
+    title:
+      en: Close and install a skill draft
+      zh: 关闭后再安装技能草稿
+    verifies:
+      - draft
+      - scope
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Two people share the test workspace.
+        zh: 两位数字人共享测试空间。
+    steps:
+      - en: Write a skill, close keeping its draft, reopen and install.
+        zh: 编写技能，保留草稿关闭，再打开并安装。
+    expected:
+      - en: The draft content returns and the installed skill is available to the intended workspace consumers.
+        zh: 草稿内容恢复，安装后目标空间使用者可用。
+  - id: capabilities.skills.remove
+    title:
+      en: Disable or remove a shared skill
+      zh: 停用或移除共享技能
+    verifies:
+      - remove
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Two digital humans inherit a shared skill and a separate control skill from the same workspace.
+        zh: 两位数字人从同一空间继承共享技能及另一个对照技能。
+    steps:
+      - en: Inspect affected people, cancel once, then confirm disabling or uninstalling; restart and restore the skill through Enable or Reinstall.
+        zh: 查看受影响数字人，先取消，再确认停用或卸载；重启后通过启用或重装恢复。
+    expected:
+      - en: Cancellation keeps the skill active. Confirmed removal withdraws its runtime-discoverable files for both consumers across restart while the control stays intact; restoration brings the same skill back.
+        zh: 取消保留活动技能；确认后两位使用者在重启前后均不能发现其文件，对照技能不变；恢复后同一技能重新可用。
+    variants:
+      operation:
+        - disable
+        - uninstall
+    notes:
+      en: Availability is established by actual skill discovery and filesystem state, not by claiming that an AI already invoked the skill.
+      zh: 通过真实技能发现和文件状态证明可用性，不声称 AI 已经调用该技能。
+  - id: capabilities.skills.edit
+    title:
+      en: Edit shared instructions without losing supporting files
+      zh: 编辑共享指令且不丢配套文件
+    verifies:
+      - edit
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A shared multi-file skill has two consumers and an unrelated control skill.
+        zh: 共享多文件技能有两位使用者，并有无关对照技能。
+    steps:
+      - en: Cancel an instruction edit, then cancel its shared-change confirmation; finally confirm the revised content and restart.
+        zh: 取消一次指令编辑，再取消一次共享变更确认；最后确认修改并重启。
+    expected:
+      - en: Cancelled changes do not alter the stored skill; confirmed content reaches disk and both availability views, while supporting files and the control stay unchanged.
+        zh: 取消不改变存储技能；确认内容写入磁盘及双方可用清单，配套文件和对照技能不变。
+  - id: capabilities.skills.custom-copy
+    title:
+      en: Save an independent custom skill copy
+      zh: 保存独立的自定义技能副本
+    verifies:
+      - copy
+      - edit
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An installed multi-file skill has an unsaved customized instruction draft.
+        zh: 已安装多文件技能有尚未保存的自定义指令草稿。
+    steps:
+      - en: Try an invalid command and a colliding name, then save under a new valid name and restart.
+        zh: 尝试无效命令及重名，再用新的有效名称保存并重启。
+    expected:
+      - en: Invalid choices do not alter the original; exactly one separate manual copy contains the custom instructions and supporting files after restart.
+        zh: 无效选择不改变原技能；重启后恰有一个独立手动副本，保留自定义指令及配套文件。
+  - id: capabilities.skills.scope-move
+    title:
+      en: Move a global skill into one workspace
+      zh: 把全局技能移入一个空间
+    verifies:
+      - scope
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Two people in different workspaces inherit the same global skill and a separate global control.
+        zh: 不同空间的两位数字人继承同一全局技能及一个独立全局对照。
+    steps:
+      - en: Inspect and cancel a scope change, then confirm the destination workspace and restart.
+        zh: 查看并取消范围变更，再确认目标空间并重启。
+    expected:
+      - en: The same installation moves to the selected workspace; its old files disappear, only that workspace retains access, and the unrelated global control remains available everywhere.
+        zh: 同一安装移到选定空间；旧位置文件消失，仅目标空间保留访问，无关全局对照在各处仍可用。
+    notes:
+      en: This verifies global/workspace inheritance. The current product has no per-person skill enable switch.
+      zh: 本场景验证全局与空间继承；当前产品没有逐人技能启用开关。
+  - id: capabilities.skills.scope-conflict
+    title:
+      en: Refuse a conflicting skill scope move
+      zh: 拒绝同名冲突的技能范围移动
+    verifies:
+      - scope
+      - edit
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: The destination workspace already has a different skill version with the source’s command name.
+        zh: 目标空间已有与来源命令同名的另一技能版本。
+    steps:
+      - en: Attempt the scope move through its confirmation and inspect the failure, then restart.
+        zh: 通过确认尝试范围移动并查看失败，然后重启。
+    expected:
+      - en: The failure is explicit and both original scopes, files and instruction versions remain intact.
+        zh: 失败明确，两份原有范围、文件及指令版本均保持完整。
+  - id: capabilities.skills.workspace-override
+    title:
+      en: Fall back to the global skill when a workspace override is disabled
+      zh: 停用空间覆盖后回退到全局技能
+    verifies:
+      - scope
+      - remove
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A workspace and global skill share a command name but contain different instructions.
+        zh: 空间及全局技能命令名相同，但指令不同。
+    steps:
+      - en: Disable the workspace copy with confirmation, restart and enable it again.
+        zh: 确认停用空间副本，重启后再次启用。
+    expected:
+      - en: Discovery selects exactly the active workspace copy, then the global copy while disabled, and the restored workspace copy afterwards; both stored definitions remain unchanged.
+        zh: 发现结果依次只选择活动空间副本、停用时的全局副本、恢复后的空间副本；两份存储定义均不改变。
+  - id: capabilities.skills.invoke
+    title:
+      en: Invoke the installed skill through a conversation
+      zh: 通过对话调用已安装技能
+    verifies:
+      - invoke
+      - scope
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A local scripted model and an installed skill are available in the selected workspace.
+        zh: 选定空间有本地脚本模型及已安装技能。
+    steps:
+      - en: Use the skill’s UI action or command, submit the request and inspect the real invocation result and persisted conversation.
+        zh: 使用技能界面操作或命令并提交，检查真实调用结果及保存对话。
+    expected:
+      - en: The model receives the actual installed instruction content for that skill and the conversation preserves the resulting reply.
+        zh: 模型接收该技能真实安装的指令内容，对话保留由此产生的回复。
+    requirements:
+      - halo-sdk

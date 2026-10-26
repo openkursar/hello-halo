@@ -18,6 +18,7 @@
 import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
+import { checkedRunPath, declareClusterCases, isMain, startAcceptanceRun } from './_acceptance.mjs'
 import {
   PROJECT_ROOT,
   clusterStart,
@@ -42,6 +43,51 @@ import {
   Reporter,
 } from './_lib.mjs'
 
+export const acceptanceCases = declareClusterCases('federation', import.meta.url, [
+  { nativeId: 'A1', caseId: 'offices.cluster.independent-identities', title: 'Independent nodes expose distinct identities and working endpoints' },
+  { nativeId: 'A2', caseId: 'offices.cluster.identity-restart', title: 'A restarted node retains its identity' },
+  { nativeId: 'A3', caseId: 'offices.cluster.profile-isolation', title: 'Node ports and data directories remain isolated' },
+  { nativeId: 'B1', caseId: 'offices.cluster.join-roster', title: 'An invited member joins a roster shared by both nodes' },
+  { nativeId: 'B2', caseId: 'offices.cluster.stable-invite', title: 'Repeated invitation creation retains the same invitation' },
+  { nativeId: 'B3', caseId: 'offices.cluster.revoked-invite', title: 'Revoking an invite blocks new joins without removing seated members' },
+  { nativeId: 'B5', caseId: 'offices.cluster.five-node-roster', title: 'Five joined nodes converge on the same roster', nodes: 5 },
+  { nativeId: 'B6', caseId: 'offices.cluster.invalid-dotted-credential', title: 'An invalid dotted credential is rejected without blocking the host' },
+  { nativeId: 'C1', caseId: 'offices.cluster.member-offline', title: 'A killed member owner is marked offline' },
+  { nativeId: 'C4', caseId: 'offices.cluster.member-rejoin', title: 'A restarted member owner rejoins its office' },
+  { nativeId: 'C5', caseId: 'offices.cluster.host-restart', title: 'A restarted host restores its office' },
+  { nativeId: 'C6', caseId: 'offices.cluster.minority-pauses', title: 'A survivor without quorum does not appoint itself authority', nodes: 2 },
+  { nativeId: 'D1', caseId: 'offices.cluster.lead-propagation', title: 'Changing the lead propagates to joined nodes' },
+  { nativeId: 'D2', caseId: 'offices.cluster.member-addition', title: 'Adding a member propagates to joined nodes' },
+  { nativeId: 'D3', caseId: 'offices.cluster.member-removal', title: 'Removing a member propagates to joined nodes' },
+  { nativeId: 'D4', caseId: 'offices.cluster.reporting-lines', title: 'Reporting lines converge across nodes' },
+  { nativeId: 'D5', caseId: 'offices.cluster.concurrent-roster', title: 'Concurrent lead and reporting-line changes both converge' },
+  { nativeId: 'E1', caseId: 'offices.cluster.shared-run', title: 'Starting work shares the active run identity', mode: 'live' },
+  { nativeId: 'E3', caseId: 'offices.cluster.shared-activity', title: 'Run activity is visible consistently across nodes', mode: 'live', requires: ['E1'] },
+  { nativeId: 'E4', caseId: 'offices.cluster.run-settles', title: 'Completing a run clears working state across nodes', mode: 'live', requires: ['E1'] },
+  { nativeId: 'F1', caseId: 'offices.cluster.board-replication', title: 'Work records converge without duplicate task identities', mode: 'live', requires: ['E1'] },
+  { nativeId: 'G1', caseId: 'offices.cluster.owner-history', title: 'Every participating node can read a remote member transcript', mode: 'live' },
+  { nativeId: 'G2', caseId: 'offices.cluster.reply-persistence', title: 'A newly delivered message and real reply persist consistently', mode: 'live' },
+  { nativeId: 'G3', caseId: 'offices.cluster.offline-history', title: 'An offline history owner produces a prompt readable result or unavailable response' },
+  { nativeId: 'G4', caseId: 'offices.cluster.history-isolation', title: 'A nonmember transcript request is refused' },
+  { nativeId: 'H1', caseId: 'offices.cluster.host-to-member', title: 'A host request reaches a remote member and returns a consistent reply', mode: 'live' },
+  { nativeId: 'H2', caseId: 'offices.cluster.member-to-host', title: 'A joined node can contact a host-owned member', mode: 'live' },
+  { nativeId: 'H3', caseId: 'offices.cluster.member-to-member', title: 'A joined node can contact another joined node member', mode: 'live' },
+  { nativeId: 'H4', caseId: 'offices.cluster.contact-after-completion', title: 'A member remains contactable after the previous run completes', mode: 'live' },
+  { nativeId: 'H6', caseId: 'offices.cluster.own-history', title: 'A joined node reads its own member transcript', mode: 'live' },
+  { nativeId: 'H7', caseId: 'offices.cluster.dispatch-receipt', title: 'A remote send receives a bounded backend acknowledgement', mode: 'live' },
+  { nativeId: 'I1', caseId: 'offices.cluster.kick-member', title: 'Removing a remote member converges in the host roster' },
+  { nativeId: 'I2', caseId: 'offices.cluster.leave-office', title: 'Leaving an office removes the joined membership' },
+  { nativeId: 'I3', caseId: 'offices.cluster.dissolve-office', title: 'Dissolving an office removes its joined copies' },
+  { nativeId: 'I5', caseId: 'offices.cluster.dissolve-keeps-local', title: 'Dissolving an office preserves the joined node local teams' },
+  { nativeId: 'K1', caseId: 'offices.cluster.concurrent-dispatch', title: 'Concurrent requests produce distinct consistent replies', mode: 'live' },
+  { nativeId: 'K3', caseId: 'offices.cluster.five-node-consistency', title: 'A five-node office retains a consistent roster', nodes: 5 },
+  { nativeId: 'K7', caseId: 'offices.cluster.office-isolation', title: 'Separate offices do not share member identities' },
+  { nativeId: 'L1', caseId: 'offices.cluster.multiple-offices', title: 'Multiple offices on one host keep distinct replicas' },
+  { nativeId: 'L2', caseId: 'offices.cluster.remote-lead', title: 'A remote member can become lead consistently' },
+  { nativeId: 'M1', caseId: 'offices.cluster.task-creation', title: 'A task created by a joined node is replicated office-wide' },
+  { nativeId: 'M2', caseId: 'offices.cluster.task-rename', title: 'A task rename converges across nodes', requires: ['M1'] },
+])
+
 function parseArgs(argv) {
   const args = { only: null }
   for (let i = 0; i < argv.length; i++) {
@@ -51,6 +97,10 @@ function parseArgs(argv) {
     else if (a === '--only') args.only = (argv[++i] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
     else if (a === '--nodes') args.nodes = Number(argv[++i])
     else if (a === '--cluster') args.cluster = argv[++i]
+    else if (a === '--list') args.list = true
+    else if (a === '--results') args.results = argv[++i]
+    else if (a === '--acceptance-selection') args.acceptanceSelection = argv[++i]
+    else if (a === '--acceptance-events') args.acceptanceEvents = argv[++i]
   }
   return args
 }
@@ -117,7 +167,17 @@ async function buildOffice(host, joiners, label) {
 }
 
 async function main() {
+  if (ARGS.list) { console.log(JSON.stringify(acceptanceCases)); return }
+  const acceptance = startAcceptanceRun({ root: PROJECT_ROOT, cases: acceptanceCases, selectionFile: ARGS.acceptanceSelection, eventFile: ARGS.acceptanceEvents })
+  if (acceptance) {
+    if (ARGS.noStart || ARGS.all || !ARGS.results || !ARGS.cluster) throw new Error('Acceptance cluster runs require isolated output and explicit selection')
+    checkedRunPath(PROJECT_ROOT, ARGS.results)
+    checkedRunPath(PROJECT_ROOT, ARGS.cluster)
+    if (JSON.stringify([...ARGS.only ?? []].sort()) !== JSON.stringify([...acceptance.nativeIds].sort())) throw new Error('Native cluster selection differs from its acceptance declaration')
+  }
+  let failure
   let manifest
+  try {
   if (ARGS.noStart) {
     manifest = loadManifest(CLUSTER_DIR)
   } else {
@@ -149,6 +209,8 @@ async function main() {
     writeResults(manifest, hasModel)
     if (!ARGS.noStart) clusterStop(CLUSTER_DIR)
   }
+  } catch (error) { failure = error; throw error }
+  finally { acceptance?.finish(reporter.records, failure) }
 }
 
 // ── A. Cluster & identity ────────────────────────────────────────────────────
@@ -1045,14 +1107,15 @@ function writeResults(manifest, hasModel) {
     lines.push(`| ${r.id} | ${icon[r.status]} ${r.status} | ${String(r.evidence).replace(/\|/g, '\\|')} |`)
   }
   lines.push('')
-  const out = path.join(PROJECT_ROOT, 'tests/decentralized/RESULTS.md')
+  const out = ARGS.results ? path.resolve(ARGS.results) : path.join(PROJECT_ROOT, 'tests/decentralized/RESULTS.md')
+  fs.mkdirSync(path.dirname(out), { recursive: true })
   fs.writeFileSync(out, lines.join('\n'))
   console.log(`\n=== TALLY: total=${t.total} PASS=${t.PASS} FAIL=${t.FAIL} PARTIAL=${t.PARTIAL} SKIP=${t.SKIP} ===`)
   console.log(`=== Wrote ${out} ===`)
   if (t.FAIL > 0) process.exitCode = 1
 }
 
-main().catch((err) => {
+if (isMain(import.meta.url)) main().catch((err) => {
   console.error('[run-scenarios] FATAL:', err.stack || err.message)
   // best-effort stop
   if (!ARGS.noStart) clusterStop(CLUSTER_DIR)

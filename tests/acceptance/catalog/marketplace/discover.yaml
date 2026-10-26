@@ -1,0 +1,102 @@
+version: 1
+id: marketplace.discover
+module: marketplace
+title:
+  en: Find a usable resource
+  zh: 找到适合的资源
+story:
+  en: I can search and compare resources even when one source is unavailable.
+  zh: 一个来源不可用时，我仍能搜索和查看其他资源。
+basis: documented
+references:
+  - src/main/store/DESIGN.md
+  - src/renderer/components/store/StoreView.tsx
+  - tests/e2e/specs/acceptance-marketplace.spec.ts
+promises:
+  query:
+    en: Search and category filters return matching resources, pagination preserves that selection, and category counts summarize the selected resource type.
+    zh: 搜索和分类筛选返回匹配资源，翻页保留筛选条件，分类数量汇总所选资源类型。
+  partial:
+    en: One source failure does not erase successful results from other sources.
+    zh: 一个来源失败不会抹掉其他来源的成功结果。
+  detail:
+    en: Details and installation requirements belong to the selected resource and source.
+    zh: 详情和安装要求属于选中的资源及来源。
+  mcp:
+    en: MCP catalog entries disclose the current manual-add path instead of offering an unsupported store installation.
+    zh: MCP 目录条目说明当前的手工添加路径，不提供尚未支持的商店安装。
+scenarios:
+  - id: marketplace.discover.filter
+    title:
+      en: Search and filter a multi-source catalog
+      zh: 搜索并筛选多个来源
+    verifies:
+      - query
+      - detail
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Two local registry fixtures expose different resources and categories.
+        zh: 两个本地来源提供不同资源与分类。
+    steps:
+      - en: Search, select a category, page results and open a detail.
+        zh: 搜索、选分类、翻页并查看详情。
+    expected:
+      - en: Type and category counts match the fixture catalog; filtered rows, pages and opened details match the selected query and source.
+        zh: 类型与分类数量匹配测试目录；筛选条目、分页及打开的详情匹配所选查询及来源。
+  - id: marketplace.discover.partial
+    title:
+      en: Browse when one source fails
+      zh: 一个来源失败时浏览
+    verifies:
+      - partial
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: One of two fixture registries fails.
+        zh: 两个测试来源中一个失败。
+    steps:
+      - en: Open and refresh the catalog.
+        zh: 打开并刷新目录。
+    expected:
+      - en: Healthy-source content remains usable and failure is not mistaken for an empty whole catalog.
+        zh: 健康来源内容仍可用，不把失败当作整个目录为空。
+  - id: marketplace.discover.mcp-guidance
+    title:
+      en: Explain the MCP catalog installation boundary
+      zh: 说明 MCP 目录安装边界
+    verifies:
+      - detail
+      - mcp
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A local registry offers a valid MCP catalog entry.
+        zh: 本地来源提供有效 MCP 目录条目。
+    steps:
+      - en: Open its details and inspect the available installation action.
+        zh: 打开详情并查看可用安装操作。
+    expected:
+      - en: Coming Soon is disabled and points to Manual Add; no installed MCP record is created.
+        zh: Coming Soon 处于禁用状态且提示手工添加；不产生已安装 MCP 记录。
+    notes:
+      en: Uses the built, unpackaged app and local HTTP source fixtures; no provider credentials or live model are exercised.
+      zh: 使用构建后的未打包应用与本机 HTTP 来源；不涉及供应商凭证或真实模型。

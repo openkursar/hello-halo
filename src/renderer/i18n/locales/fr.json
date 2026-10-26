@@ -224,7 +224,6 @@
   "Are you sure you want to delete": "Êtes-vous sûr de vouloir supprimer",
   "Are you sure you want to delete '{{name}}'?": "Êtes-vous sûr de vouloir supprimer '{{name}}' ?",
   "Are you sure you want to delete this workspace?\n\nAll conversations and files in the workspace will be deleted.": "Êtes-vous sûr de vouloir supprimer cet espace de travail ?\n\nToutes les conversations et fichiers de l'espace de travail seront supprimés.",
-  "Are you sure you want to delete this workspace?\n\nOnly Halo data (conversation history) will be deleted, your project files will be kept.": "Êtes-vous sûr de vouloir supprimer cet espace de travail ?\n\nSeules les données Halo (historique des conversations) seront supprimées, vos fichiers de projet seront conservés.",
   "Are you sure you want to delete {{count}} items?_many": "",
   "Are you sure you want to delete {{count}} items?_one": "Êtes-vous sûr de vouloir supprimer {{count}} élément ?",
   "Are you sure you want to delete {{count}} items?_other": "Êtes-vous sûr de vouloir supprimer {{count}} éléments ?",
@@ -2717,7 +2716,7 @@
   "The Lead assigns tasks and reviews results. Members communicate through the defined reporting hierarchy.": "Le Lead attribue les tâches et examine les résultats. Les membres communiquent via la hiérarchie de reporting définie.",
   "The MCP server failed to connect.": "Le serveur MCP n'a pas réussi à se connecter.",
   "The MCP server is disabled globally, so this digital human will not inject its tools at runtime.": "Le serveur MCP est désactivé globalement, donc cet humain numérique n'injectera pas ses outils lors de l'exécution.",
-  "The account it was set to use was removed, so it follows the global selection.": "",
+  "The account it was set to use was removed, so it follows the global selection.": "Le compte qu’il devait utiliser a été supprimé ; il suit donc la sélection globale.",
   "The app definition is invalid and cannot be published.": "La définition de l'application est invalide et ne peut pas être publiée.",
   "The app is installed into the selected workspace and runs and is managed within that workspace; other workspaces are not affected.": "L'application est installée dans l'espace de travail sélectionné, s'y exécute et y est gérée ; les autres espaces de travail ne sont pas affectés.",
   "The author’s version could not be loaded. Please try again.": "La version de l'auteur n'a pas pu être chargée. Veuillez réessayer.",
@@ -3521,5 +3520,15 @@
   "{{who}} joined \"{{office}}\".": "{{who}} a rejoint \"{{office}}\".",
   "{{who}} · {{when}}": "{{who}} · {{when}}",
   "↑↓ Navigate · {{shortcut}} Edit · Esc Close": "↑↓ Naviguer · {{shortcut}} Modifier · Échap Fermer",
-  "🤖 AI Browser": "🤖 Navigateur IA"
+  "🤖 AI Browser": "🤖 Navigateur IA",
+  "Are you sure you want to delete this workspace?\n\nHalo workspace data, including conversation history and any files stored with it, will be deleted; your project files will be kept in the current project folder.": "Voulez-vous vraiment supprimer cet espace de travail ?\n\nLes données de l’espace de travail enregistrées par Halo, y compris l’historique des conversations et les fichiers stockés avec ces données, seront supprimées ; vos fichiers de projet seront conservés dans le dossier actuel du projet.\n",
+  "Please select a model before testing the connection": "Veuillez sélectionner un modèle avant de tester la connexion",
+  "Connection timeout - server may be slow or unreachable": "La connexion a expiré ; le serveur est peut-être lent ou inaccessible",
+  "Invalid API key": "Clé API non valide",
+  "Access denied - check API key permissions": "Accès refusé ; vérifiez les autorisations de la clé API",
+  "Requested model is not available": "Le modèle demandé n’est pas disponible",
+  "API endpoint not found - check URL": "Point de terminaison API introuvable ; vérifiez l’URL",
+  "Rate limited - try again later": "Limite de requêtes atteinte ; réessayez plus tard",
+  "Cannot connect to API server - check URL": "Impossible de se connecter au serveur API ; vérifiez l’URL",
+  "No response received from API": "Aucune réponse reçue de l’API"
 }

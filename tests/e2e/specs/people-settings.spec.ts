@@ -21,7 +21,7 @@ async function openSettings(page: Page) {
   await page.getByRole('button', { name: 'Capabilities and settings', exact: true }).click()
 }
 
-test('nav entries address the groups they render, and a jump brings its group into view', async ({ window }) => {
+test('nav entries address the groups they render, and a jump brings its group into view', { annotation: { type: 'acceptance', description: "{\"caseId\":\"people.settings.group-navigation\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
   await openSettings(window)
   const nav = window.locator('nav').filter({ hasText: 'Identity & Instructions' })
 
@@ -51,7 +51,7 @@ test('nav entries address the groups they render, and a jump brings its group in
   await expect(advanced.getByRole('heading', { name: 'App Spec', exact: true })).toBeVisible()
 })
 
-test('an unsaved edit marks its group in the nav and clears when saved', async ({ window }) => {
+test('an unsaved edit marks its group in the nav and clears when saved', { annotation: { type: 'acceptance', description: "{\"caseId\":\"people.settings.save-identity\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
   await openSettings(window)
   const nav = window.locator('nav').filter({ hasText: 'Identity & Instructions' })
   const identityEntry = nav.getByRole('button', { name: 'Identity & Instructions', exact: true })
@@ -120,7 +120,7 @@ async function botStatuses(page: Page) {
 }
 
 for (const width of [1280, 375]) {
-  test(`the scan menu dismisses outside, on Escape, and before opening a scan dialog at ${width}px`, async ({ window, electronApp }) => {
+  test(`the scan menu dismisses outside, on Escape, and before opening a scan dialog at ${width}px`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "channels.connect.scan-navigation", evidence: "ui", mode: "none", variant: { width: String(width) } }) } }, async ({ window, electronApp }) => {
     await window.setViewportSize({ width, height: 900 })
     await electronApp.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler('wecom-bot:scan-auth:start')
@@ -153,7 +153,7 @@ for (const width of [1280, 375]) {
     await expect(trigger).toHaveAttribute('aria-expanded', 'false')
   })
 
-  test(`bot numbers and current owners stay consistent, and transfer requires confirmation at ${width}px`, async ({ window }) => {
+  test(`bot numbers and current owners stay consistent, and transfer requires confirmation at ${width}px`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "channels.connect.person-transfer", evidence: "app-e2e", mode: "none", variant: { width: String(width) } }) } }, async ({ window }) => {
     await window.setViewportSize({ width, height: 900 })
     await seedBots(window)
     await openSettings(window)
@@ -192,7 +192,7 @@ for (const width of [1280, 375]) {
     expect(dimensions.content).toBeLessThanOrEqual(dimensions.viewport + 1)
   })
 
-  test(`long digital human names wrap in the picker and confirmation at ${width}px`, async ({ window }) => {
+  test(`long digital human names wrap in the picker and confirmation at ${width}px`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "people.settings.long-names", evidence: "app-e2e", mode: "none", variant: { width: String(width) } }) } }, async ({ window }) => {
     await window.setViewportSize({ width, height: 900 })
     await seedBots(window)
     const name = 'CustomerSupport'.repeat(14)
@@ -211,7 +211,7 @@ for (const width of [1280, 375]) {
     await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click()
   })
 
-  test(`an outdated transfer confirmation cannot take over a bot rebound elsewhere at ${width}px`, async ({ window }) => {
+  test(`an outdated transfer confirmation cannot take over a bot rebound elsewhere at ${width}px`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "channels.connect.stale-transfer", evidence: "app-e2e", mode: "none", variant: { width: String(width) } }) } }, async ({ window }) => {
     await window.setViewportSize({ width, height: 900 })
     await seedBots(window)
     await openSettings(window)
@@ -228,7 +228,7 @@ for (const width of [1280, 375]) {
     await expect(section.getByRole('button', { name: 'WeCom bot 1 Not bound', exact: true })).toBeEnabled()
   })
 
-  test(`global connection settings also confirm before transferring a bot at ${width}px`, async ({ window }) => {
+  test(`global connection settings also confirm before transferring a bot at ${width}px`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "channels.connect.global-transfer", evidence: "app-e2e", mode: "none", variant: { width: String(width) } }) } }, async ({ window }) => {
     await window.setViewportSize({ width, height: 900 })
     await seedBots(window)
     await window.reload()
@@ -250,7 +250,7 @@ for (const width of [1280, 375]) {
     await expect.poll(async () => (await botStatuses(window)).find(bot => bot.id === 'bot-sales')?.appId).toBe('person-000')
   })
 
-  test(`a working-days switch stays reversible outside China at ${width}px`, async ({ window }) => {
+  test(`a working-days switch stays reversible outside China at ${width}px`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "automation.schedule.calendar-toggle", evidence: "app-e2e", mode: "none", variant: { width: String(width) } }) } }, async ({ window }) => {
     const cdp = await window.context().newCDPSession(window)
     await cdp.send('Emulation.setTimezoneOverride', { timezoneId: 'Europe/Berlin' })
     await window.setViewportSize({ width, height: 900 })
@@ -293,7 +293,7 @@ for (const width of [1280, 375]) {
   })
 }
 
-test('the nav collapses to a scrolling strip and the panel stays inside the viewport at 375px', async ({ window }) => {
+test('the nav collapses to a scrolling strip and the panel stays inside the viewport at 375px', { annotation: { type: 'acceptance', description: "{\"caseId\":\"people.settings.narrow-groups\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
   await openSettings(window)
   const nav = window.locator('nav').filter({ hasText: 'Identity & Instructions' })
   const strip = nav.locator('> div')

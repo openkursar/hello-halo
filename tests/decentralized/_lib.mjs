@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url'
 import crypto from 'crypto'
 import path from 'path'
 import fs from 'fs'
+import { clusterDetached } from './_acceptance.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const PROJECT_ROOT = path.resolve(__dirname, '../..')
@@ -355,7 +356,7 @@ export async function reviveNode(node, clusterDir = '.cluster') {
   const { ELECTRON_RUN_AS_NODE: _ignored, ...cleanEnv } = process.env
   const child = spawn(electronBinary, [appEntry], {
     cwd: PROJECT_ROOT,
-    detached: true,
+    detached: clusterDetached(),
     stdio: ['ignore', out, out],
     env: {
       ...cleanEnv,

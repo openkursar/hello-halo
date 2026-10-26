@@ -16,7 +16,7 @@
 import { join } from 'path'
 import { existsSync, statSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync } from 'fs'
 import { isReasoningEffortLevel, type ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
-import { getHaloSpace, getSpace, listSpaces, touchSpaceActivity } from './space.service'
+import { getHaloSpace, getSpace, hasSpace, listSpaces, touchSpaceActivity } from './space.service'
 import { getSeedKBIds } from './tlon'
 import { getConfig } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
@@ -146,7 +146,7 @@ const CACHE_MAX_SIZE = 3  // Keep at most 3 conversations in memory (~1-6MB)
 
 /**
  * LRU cache for active conversations.
- * - Key: conversationId
+ * - Key: [spaceId, conversationId]
  * - Value: { conversation, filePath, conversationsDir, spaceId }
  *
  * On read: cache hit → 0 IO. Cache miss → disk read + cache store.
@@ -167,18 +167,19 @@ function cachePut(
   conversationsDir: string,
   spaceId: string
 ): void {
+  const key = JSON.stringify([spaceId, conversationId])
   // Evict oldest if at capacity
-  if (conversationCache.size >= CACHE_MAX_SIZE && !conversationCache.has(conversationId)) {
+  if (conversationCache.size >= CACHE_MAX_SIZE && !conversationCache.has(key)) {
     const oldestKey = conversationCache.keys().next().value
     if (oldestKey) {
       conversationCache.delete(oldestKey)
     }
   }
-  conversationCache.set(conversationId, { conversation, filePath, conversationsDir, spaceId })
+  conversationCache.set(key, { conversation, filePath, conversationsDir, spaceId })
 }
 
-function cacheEvict(conversationId: string): void {
-  conversationCache.delete(conversationId)
+function cacheEvict(spaceId: string, conversationId: string): void {
+  conversationCache.delete(JSON.stringify([spaceId, conversationId]))
 }
 
 /**
@@ -189,12 +190,21 @@ function cachedRead(spaceId: string, conversationId: string): { conversation: Co
   // Reject path traversal — conversationId is used as a filename segment below.
   if (conversationId.includes('..')) return null
 
+  if (!hasSpace(spaceId)) {
+    for (const [key, cached] of conversationCache) {
+      if (cached.spaceId === spaceId) conversationCache.delete(key)
+    }
+    console.warn(`[Conversation] Read refused for an unregistered space: space=${spaceId}, conversation=${conversationId}`)
+    return null
+  }
+
   // Cache hit
-  const cached = conversationCache.get(conversationId)
+  const key = JSON.stringify([spaceId, conversationId])
+  const cached = conversationCache.get(key)
   if (cached) {
     // LRU touch
-    conversationCache.delete(conversationId)
-    conversationCache.set(conversationId, cached)
+    conversationCache.delete(key)
+    conversationCache.set(key, cached)
     return cached
   }
 
@@ -304,6 +314,11 @@ function flushIndexWrites(conversationsDir: string): void {
 
   clearTimeout(pending.timer)
   pendingIndexWrites.delete(conversationsDir)
+
+  if (!hasSpace(pending.spaceId)) {
+    console.warn(`[Conversation] Pending index writes discarded for an unregistered space: space=${pending.spaceId}, entries=${pending.entries.size}`)
+    return
+  }
 
   // Read current index once
   const index = readIndex(conversationsDir)
@@ -551,6 +566,10 @@ function fullScanConversations(conversationsDir: string, spaceId: string): Conve
 
 function rebuildIndexAsync(conversationsDir: string, spaceId: string): void {
   setImmediate(() => {
+    if (!hasSpace(spaceId)) {
+      console.warn(`[Conversation] Index rebuild discarded for an unregistered space: space=${spaceId}`)
+      return
+    }
     try {
       const metas = fullScanConversations(conversationsDir, spaceId)
       writeIndex(conversationsDir, metas)
@@ -1153,7 +1172,7 @@ export function deleteConversation(spaceId: string, conversationId: string): boo
 
   if (existsSync(filePath)) {
     // Evict from cache before deleting
-    cacheEvict(conversationId)
+    cacheEvict(spaceId, conversationId)
 
     rmSync(filePath)
 

@@ -418,7 +418,6 @@
   "Are you sure you want to delete {{count}} items?_one": "Are you sure you want to delete {{count}} items?",
   "Are you sure you want to delete {{count}} items?_other": "Are you sure you want to delete {{count}} items?",
   "Are you sure you want to delete this workspace?\n\nAll conversations and files in the workspace will be deleted.": "Are you sure you want to delete this workspace?\n\nAll conversations and files in the workspace will be deleted.",
-  "Are you sure you want to delete this workspace?\n\nOnly Halo data (conversation history) will be deleted, your project files will be kept.": "Are you sure you want to delete this workspace?\n\nOnly Halo data (conversation history) will be deleted, your project files will be kept.",
   "Are you sure you want to proceed?": "Are you sure you want to proceed?",
   "Are you sure you want to uninstall this app? You can reinstall it later.": "Are you sure you want to uninstall this app? You can reinstall it later.",
   "Args": "Args",
@@ -3396,5 +3395,15 @@
   "Zoom in": "Zoom in",
   "Zoom in (+)": "Zoom in (+)",
   "Zoom out": "Zoom out",
-  "Zoom out (-)": "Zoom out (-)"
+  "Zoom out (-)": "Zoom out (-)",
+  "Are you sure you want to delete this workspace?\n\nHalo workspace data, including conversation history and any files stored with it, will be deleted; your project files will be kept in the current project folder.": "Are you sure you want to delete this workspace?\n\nHalo workspace data, including conversation history and any files stored with it, will be deleted; your project files will be kept in the current project folder.",
+  "Please select a model before testing the connection": "Please select a model before testing the connection",
+  "Connection timeout - server may be slow or unreachable": "Connection timeout - server may be slow or unreachable",
+  "Invalid API key": "Invalid API key",
+  "Access denied - check API key permissions": "Access denied - check API key permissions",
+  "Requested model is not available": "Requested model is not available",
+  "API endpoint not found - check URL": "API endpoint not found - check URL",
+  "Rate limited - try again later": "Rate limited - try again later",
+  "Cannot connect to API server - check URL": "Cannot connect to API server - check URL",
+  "No response received from API": "No response received from API"
 }

@@ -1,0 +1,91 @@
+version: 1
+id: permissions.enforcement
+module: permissions
+title:
+  en: Apply permissions at every entry
+  zh: 在各入口执行权限限制
+story:
+  en: I can choose what another person may ask my digital human to do and trust the same limits across entry points.
+  zh: 我能决定别人可让我的数字人做什么，并相信各入口使用同样限制。
+basis: documented
+references:
+  - src/shared/apps/capability-policy.ts
+  - src/main/apps/runtime/capability-policy.ts
+  - src/main/services/agent/DESIGN.md
+promises:
+  restrict:
+    en: A policy can narrow existing permissions but cannot grant a disabled underlying capability.
+    zh: 策略可收窄权限，不能重新授予底层已禁用能力。
+  isolate:
+    en: Restricted guest input cannot join the owner’s privileged running turn.
+    zh: 受限访客消息不能进入主人高权限的运行轮次。
+  engine:
+    en: An engine lacking required enforcement refuses restricted execution rather than silently allowing it.
+    zh: 引擎缺少必要权限执行能力时拒绝受限任务，而不是悄悄放行。
+scenarios:
+  - id: permissions.enforcement.tool-denied
+    title:
+      en: Refuse a withheld tool
+      zh: 拒绝未开放工具
+    verifies:
+      - restrict
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A guest policy withholds a side-effecting test tool.
+        zh: 访客策略未开放一个有副作用的测试工具。
+    steps:
+      - en: Deliver a guest request that asks for that tool by name.
+        zh: 投递明确请求该工具的访客消息。
+    expected:
+      - en: The tool side effect never occurs and the request settles with a refusal result.
+        zh: 工具副作用未发生，请求以拒绝结果结束。
+  - id: permissions.enforcement.live-isolation
+    title:
+      en: Receive guest input during owner work
+      zh: 主人工作时收到访客输入
+    verifies:
+      - isolate
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: An owner turn is running with permissions broader than the guest’s.
+        zh: 主人任务正在运行，权限高于访客。
+    steps:
+      - en: Deliver a guest message while the owner’s tool is running.
+        zh: 主人工具运行时投递访客消息。
+    expected:
+      - en: The guest message waits for its own restricted turn and never receives the owner’s authority.
+        zh: 访客消息进入自己的受限轮次，不获得主人权限。
+  - id: permissions.enforcement.unsupported-engine
+    title:
+      en: Refuse unsupported enforcement
+      zh: 拒绝无法执行权限限制的引擎
+    verifies:
+      - engine
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Select an engine whose advertised capability cannot enforce the required restricted policy.
+        zh: 选择不具备所需权限限制能力的引擎。
+    steps:
+      - en: Attempt a guest or external member request.
+        zh: 发起访客或外部成员请求。
+    expected:
+      - en: The request is refused before native execution with a capability explanation.
+        zh: 原生执行前拒绝，并说明能力不支持。

@@ -1,0 +1,148 @@
+version: 1
+id: remote.access
+module: remote
+title:
+  en: Enable and revoke remote access
+  zh: 启用和撤销远程访问
+story:
+  en: I can control who connects to my Halo and revoke old access.
+  zh: 我能控制谁连接我的 Halo，并撤销旧访问。
+basis: observed
+references:
+  - src/renderer/components/settings/RemoteAccessSection.tsx
+  - src/main/http/auth/index.ts
+  - tests/e2e/specs/remote.spec.ts
+  - tests/e2e/specs/acceptance-remote.spec.ts
+promises:
+  enable:
+    en: Enabling access exposes the current address and authentication information; disabling stops new access.
+    zh: 启用显示当前地址和认证信息，关闭后停止新访问。
+  rotate:
+    en: Rotating credentials invalidates old authorization and permits login with current credentials.
+    zh: 更新访问凭证使旧授权失效，并允许用新凭证登录。
+  tunnel:
+    en: A tunnel is reported ready only after a real public address is available.
+    zh: 实际公共地址可用后才将隧道报告为就绪。
+  secrecy:
+    en: The access credential stays masked unless the user explicitly reveals it.
+    zh: 访问凭证默认隐藏，仅在用户明确选择时显示。
+scenarios:
+  - id: remote.access.lan
+    title:
+      en: Enable and disable LAN access
+      zh: 开启及关闭局域网访问
+    verifies:
+      - enable
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A desktop profile has remote access disabled.
+        zh: 桌面资料未开启远程访问。
+    steps:
+      - en: Enable LAN access, connect a local browser, disable it and try a new connection.
+        zh: 启用局域网访问并用本地浏览器连接，关闭后再尝试新连接。
+    expected:
+      - en: Only enabled authenticated access succeeds; the UI matches the actual server state.
+        zh: 只有启用且认证的访问成功，界面与实际服务状态一致。
+    requirements:
+      - chromium-browser
+  - id: remote.access.rotate
+    title:
+      en: Rotate the access credential
+      zh: 轮换访问凭证
+    verifies:
+      - rotate
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: An authenticated browser is connected to a real test desktop server.
+        zh: 已认证浏览器连接到真实测试桌面服务。
+    steps:
+      - en: Rotate the access credential, request from the old client and sign in with the new credential.
+        zh: 轮换凭证，用旧客户端请求，再用新凭证登录。
+    expected:
+      - en: The old client loses authorization and current credentials establish a usable new session.
+        zh: 旧客户端授权失效，新凭证建立可用新会话。
+    requirements:
+      - halo-sdk
+      - chromium-browser
+  - id: remote.access.tunnel
+    title:
+      en: Create and stop a real tunnel
+      zh: 创建及停止真实隧道
+    verifies:
+      - tunnel
+    platforms: *a1
+    profiles:
+      - external
+    evidence: external
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A dedicated test host is allowed to expose its isolated test profile.
+        zh: 专用测试主机获准暴露其隔离测试资料。
+    steps:
+      - en: Start a tunnel, authenticate from a test client and stop it.
+        zh: 启动隧道，由测试客户端认证，再停止。
+    expected:
+      - en: The public route is usable only with authorization while enabled and stops after shutdown.
+        zh: 开启时公共路径仅授权后可用，停止后关闭。
+    requirements:
+      - test-tunnel
+      - chromium-browser
+  - id: remote.access.mask
+    title:
+      en: Reveal and hide the access credential
+      zh: 显示及隐藏访问凭证
+    verifies:
+      - secrecy
+    platforms: &a2
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Enable local access, reveal the credential and hide it again.
+        zh: 启用本地访问，显示凭证后再次隐藏。
+    expected:
+      - en: The credential begins masked and follows the explicit reveal/hide choice.
+        zh: 凭证初始隐藏，遵循明确的显示或隐藏选择。
+  - id: remote.access.qr-scope
+    title:
+      en: Avoid a misleading public QR code without a tunnel
+      zh: 无隧道时不显示误导的公共二维码
+    verifies:
+      - tunnel
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Enable LAN access without starting a tunnel.
+        zh: 只启用局域网访问而不启动隧道。
+    expected:
+      - en: A local address appears, while public QR and Scan to Access guidance stay absent.
+        zh: 显示本地地址，不显示公共二维码及扫码访问指引。

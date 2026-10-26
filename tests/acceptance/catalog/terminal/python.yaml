@@ -1,0 +1,54 @@
+version: 1
+id: terminal.python
+module: terminal
+title:
+  en: Define supported Python work on Windows
+  zh: 明确 Windows 上支持的 Python 工作
+story:
+  en: I can run supported Python tasks after normal product setup without depending on a developer shell.
+  zh: 我完成常规产品配置后可执行支持的 Python 任务，不依赖开发者终端。
+basis: proposed
+references:
+  - src/main/services/agent/sdk-config.ts
+  - src/main/services/office-runtime/runtime.ts
+  - tests/e2e/specs/cli-tools-packaged.spec.ts
+promises:
+  environment:
+    en: Supported Python commands receive the selected workspace and the application’s intended environment.
+    zh: 受支持 Python 命令使用选定空间及应用的预期环境。
+  packaged:
+    en: The declared Python prerequisite is available after the agreed installation or setup path.
+    zh: 约定的安装或配置流程完成后，声明的 Python 前置环境可用。
+scenarios:
+  - id: terminal.environment.windows-python
+    title:
+      en: Run supported Python work on clean Windows
+      zh: 在干净 Windows 执行支持的 Python 工作
+    verifies:
+      - environment
+      - packaged
+    platforms:
+      - win32
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A dedicated Windows test profile launches the packaged app with a minimal non-development PATH.
+        zh: 专用 Windows 测试资料以不含开发配置的最小 PATH 启动安装包。
+    steps:
+      - en: Ask the AI to run a Python fixture that reports selected non-secret environment markers and writes a workspace file.
+        zh: 让 AI 执行 Python 测试，报告非敏感环境标记并生成空间文件。
+    expected:
+      - en: The declared supported Python entry resolves, environment markers arrive and output is created in the selected workspace.
+        zh: 声明支持的 Python 入口可找到，环境标记传入，产物生成在选定空间。
+    requirements:
+      - packaged-app
+      - windows-tools
+    notes:
+      en: The supported command name and runtime source must be stated by the product before this becomes a release promise; a developer-installed Python is not evidence of bundled capability.
+      zh: 成为发布承诺前须明确支持的命令名称及运行时来源；开发者额外安装 Python 不能证明附带能力。
+questions:
+  - en: Should a Windows release provide an isolated Python runtime, or support Python only after a user-managed installation?
+    zh: Windows 发布版是否应提供隔离的 Python 运行时，还是仅在用户自行安装后支持 Python？

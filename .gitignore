@@ -37,6 +37,9 @@ resources/dsh-runtime/
 
 # E2E test results
 tests/e2e/results/
+tests/e2e/report/
+tests/acceptance/output/
+/.e2e-bootstrap-*.cjs
 tests/e2e/fixtures/.e2e-seed-tmp/
 
 # Perf measurement output: per-run residue, except the two frozen baselines the

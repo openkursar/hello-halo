@@ -76,6 +76,47 @@ A single `npm run test:team` entry dispatches to all suites (see `run.mjs`), rat
 than five top-level scripts — the launcher self-documents the catalog and forwards
 any extra args (e.g. `-- federation --only G1,K1`) to the driver.
 
+### Acceptance integration
+
+The federation driver and the single-machine creation checks declare their
+acceptance bindings beside their executable code. Discovery reads those exports;
+it does not start a node or infer verification from a historical report:
+
+```bash
+npm run test:team -- federation --list
+npm run test:team -- single --list
+node --test tests/decentralized/acceptance-adapter.test.mjs
+```
+
+`scripts/acceptance/adapters/cluster.mjs` exposes `discoverClusterTests(root)` and
+`executeClusterTests(root, tests, { outputDirectory, eventFile, environment,
+timeoutMs })`. The latter validates the complete selected declarations, expands
+their prerequisite checks and runs groups sequentially. Node topology is part of
+the group: the two-node minority case cannot share a three-node office fixture.
+The shared acceptance runner owns the build identity, run budget and live-model
+broker. Protocol-only groups clear model credentials and signed-in sources,
+including names that `.env.local` could otherwise restore. Live groups require
+the explicitly supplied local budget broker.
+
+These bindings are `integration` evidence, never UI end-to-end evidence. Native
+`PARTIAL` is a failure; `SKIP` remains skipped; missing records establish no pass.
+Prerequisite failures also fail the dependent acceptance case. Structured
+`begin`/`test`/`end` events carry the actual bindings and native check evidence.
+Per-case duration is omitted where the original driver shares setup; the final
+event records the measured group duration.
+
+Acceptance execution writes reports to its ignored run directory and never
+overwrites the tracked `RESULTS.md`. Node profiles contain ephemeral credentials
+and are removed after owned-process cleanup. New and revived nodes inherit the
+acceptance process group so a timeout can stop them even during startup, before
+the cluster manifest exists. Ordinary standalone cluster runs retain their
+existing detached behavior and report location.
+
+Only cases with executable assertions are bound. Permanently skipped, obsolete
+or insufficiently asserted historical scenarios remain outside this manifest
+until their executable contract is reconciled; listing a scenario is not a
+claim that it has run successfully.
+
 A suite keeps its previous run's cluster dir as `<dir>.prev` (one generation), so a
 red run can still be diffed after the next one starts; stale nodes from that run are
 stopped before the dir is moved.

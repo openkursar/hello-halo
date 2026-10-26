@@ -1,0 +1,104 @@
+version: 1
+id: remote.session
+module: remote
+title:
+  en: Continue work from a remote client
+  zh: 从远程客户端继续工作
+story:
+  en: I can chat and inspect results remotely, including after a temporary disconnect.
+  zh: 我能远程聊天和查看结果，短暂断线后仍可继续。
+basis: observed
+references:
+  - src/renderer/api/transport.ts
+  - src/renderer/hooks/useWsRecovery.ts
+  - src/renderer/components/setup/ServerConnect.tsx
+  - tests/e2e/specs/acceptance-remote.spec.ts
+  - tests/e2e/specs/browser-carrier-packaged.spec.ts
+promises:
+  chat:
+    en: Authenticated remote messages and streaming replies use the same authoritative conversation as desktop.
+    zh: 认证后的远程消息与流式回复使用与桌面相同的权威对话。
+  reconnect:
+    en: Reconnect restores current state and allows new messages without lost or duplicate history.
+    zh: 重连恢复当前状态，允许继续发消息，不丢失或重复历史。
+  limits:
+    en: Desktop-only folder operations clearly direct the user to desktop instead of pretending success remotely.
+    zh: 桌面专有目录操作明确引导用户回桌面，而非远程假装成功。
+scenarios:
+  - id: remote.session.chat-reconnect
+    title:
+      en: Chat through a real browser and reconnect
+      zh: 通过真实浏览器聊天并重连
+    verifies:
+      - chat
+      - reconnect
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: A real test desktop exposes authenticated HTTP and WebSocket routes.
+        zh: 真实测试桌面开放认证 HTTP 与 WebSocket。
+    steps:
+      - en: Sign in through browser UI, send a streaming request, interrupt the connection, reconnect and send again.
+        zh: 通过浏览器界面登录并发送流式请求，中断连接后重连并再次发消息。
+    expected:
+      - en: The same conversation remains readable and new messages complete without duplicate prior content.
+        zh: 同一对话仍可读，新消息完成且旧内容不重复。
+    requirements:
+      - halo-sdk
+      - chromium-browser
+  - id: remote.session.desktop-only
+    title:
+      en: Use a desktop-only action remotely
+      zh: 远程执行桌面专有操作
+    verifies:
+      - limits
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: The browser client is connected.
+        zh: 浏览器客户端已连接。
+    steps:
+      - en: Attempt an action that requires choosing a local host folder.
+        zh: 尝试需选择主机本地目录的操作。
+    expected:
+      - en: The UI explains the desktop requirement and does not claim a path was opened.
+        zh: 界面说明需在桌面操作，不声称已打开路径。
+    requirements:
+      - chromium-browser
+  - id: remote.session.packaged-login
+    title:
+      en: Authenticate the remote UI of an installed app
+      zh: 认证安装包的远程界面
+    verifies:
+      - chat
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Enable the packaged HTTP server and enter its current access code in a separate browser window.
+        zh: 启用安装包 HTTP 服务，在独立浏览窗口输入当前访问码。
+    expected:
+      - en: The shared remote shell and chat composer load without the desktop preload API.
+        zh: 共享远程主界面及输入框可用，不依赖桌面预加载 API。
+    requirements:
+      - packaged-app

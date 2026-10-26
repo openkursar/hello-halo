@@ -83,7 +83,7 @@ test.describe('Smoke Tests', () => {
     expect(criticalErrors).toHaveLength(0)
   })
 
-  test('basic navigation does not produce unhandled rejections in main or renderer', async ({ electronApp, window }) => {
+  test('basic navigation does not produce unhandled rejections in main or renderer', { annotation: { type: 'acceptance', description: "{\"caseId\":\"startup.navigation.no-unhandled\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     const rendererErrors: string[] = []
     window.on('pageerror', error => rendererErrors.push(error.message))
     await electronApp.evaluate(() => {

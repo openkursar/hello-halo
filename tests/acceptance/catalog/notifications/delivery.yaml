@@ -1,0 +1,97 @@
+version: 1
+id: notifications.delivery
+module: notifications
+title:
+  en: Receive completion notices where intended
+  zh: 在预期位置收到完成通知
+story:
+  en: I can receive useful task notices without confusing a failed send with delivery.
+  zh: 我能收到有用的任务通知，并分清发送失败与送达。
+basis: observed
+references:
+  - src/main/services/notification.service.ts
+  - src/renderer/components/settings/MessageChannelsSection.tsx
+  - src/renderer/components/settings/SystemSection.tsx
+promises:
+  destination:
+    en: A configured notice goes to its intended enabled destination.
+    zh: 配置的通知发往预期且已启用的目的地。
+  failure:
+    en: Unavailable notification permission or delivery does not falsely report successful delivery.
+    zh: 通知权限或投递不可用时不虚报送达。
+  navigate:
+    en: Opening a supported local notification returns to the referenced task.
+    zh: 打开支持的本地通知会回到引用的任务。
+scenarios:
+  - id: notifications.delivery.background
+    title:
+      en: Receive and open a background completion notice
+      zh: 接收并打开后台完成通知
+    verifies:
+      - destination
+      - navigate
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - external
+    evidence: external
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: System notifications are permitted on a dedicated test desktop.
+        zh: 专用测试桌面已允许系统通知。
+    steps:
+      - en: Run a background test task to completion and activate its notice.
+        zh: 让后台测试任务完成并激活通知。
+    expected:
+      - en: The notice appears according to settings and opens the correct task.
+        zh: 通知按设置出现并打开正确任务。
+    requirements:
+      - native-dialog
+  - id: notifications.delivery.channel
+    title:
+      en: Send an outbound notice to a local fixture
+      zh: 向本地测试服务发送外发通知
+    verifies:
+      - destination
+      - failure
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A local notification endpoint records messages and can fail one request.
+        zh: 本地通知服务记录消息并可使一次请求失败。
+    steps:
+      - en: Send a notice, force a delivery failure, then restore and retry.
+        zh: 发送通知，制造一次投递失败，恢复后重试。
+    expected:
+      - en: Payload and destination match; failed delivery remains visible without duplicate successful sends.
+        zh: 内容和目的地正确；失败可见且成功发送不重复。
+  - id: notifications.delivery.denied
+    title:
+      en: Handle system notification denial
+      zh: 处理系统通知权限拒绝
+    verifies:
+      - failure
+    platforms: *a1
+    profiles:
+      - external
+    evidence: external
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Native notification permission is denied in an isolated test environment.
+        zh: 隔离测试环境拒绝原生通知权限。
+    steps:
+      - en: Finish a background task and inspect in-app activity.
+        zh: 完成后台任务并查看应用内活动。
+    expected:
+      - en: The task result remains available and no successful external delivery is claimed.
+        zh: 任务结果仍可查看，不声称外部成功送达。
+    requirements:
+      - native-dialog

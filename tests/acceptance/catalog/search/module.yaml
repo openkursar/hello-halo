@@ -1,0 +1,21 @@
+version: 1
+id: search
+title:
+  en: Find work and navigate
+  zh: 查找工作并导航
+description:
+  en: Search messages and jump to work across the application.
+  zh: 搜索消息并跳转到应用内的工作。
+paths:
+  - src/main/services/search.service.ts
+  - src/renderer/components/search/**
+  - src/renderer/stores/search.store.ts
+  - src/renderer/utils/conversation-navigation.ts
+dependsOn:
+  - conversations
+  - people
+  - knowledge
+  - teams
+scope:
+  en: Current conversation, current workspace and all-workspace search; quick jumps to conversations/files/people/tasks/knowledge and cancellable progress.
+  zh: 当前对话、当前空间及全空间搜索；快速跳转对话、文件、数字人、任务和知识库，以及可取消的搜索进度。

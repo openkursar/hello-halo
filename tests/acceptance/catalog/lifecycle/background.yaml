@@ -1,0 +1,122 @@
+version: 1
+id: lifecycle.background
+module: lifecycle
+title:
+  en: Close the window or quit intentionally
+  zh: 明确关闭窗口或退出应用
+story:
+  en: I can understand whether work continues when the window closes and still return to it.
+  zh: 我能理解关闭窗口后任务是否继续，并能回到它。
+basis: documented
+references:
+  - src/main/platform/background/DESIGN.md
+  - src/main/services/lifecycle.ts
+  - tests/e2e/specs/chat.spec.ts
+promises:
+  close:
+    en: "Window close follows the documented platform behavior: hide on macOS/Windows and quit on Linux."
+    zh: 关闭窗口遵循系统约定：macOS/Windows 隐藏，Linux 退出。
+  quit:
+    en: Explicit quit ends application-owned work through bounded cleanup.
+    zh: 明确退出会在有界清理后结束应用拥有的工作。
+  restore:
+    en: A retained process can restore its main window through the supported entry.
+    zh: 保留进程可通过支持入口恢复主窗口。
+scenarios:
+  - id: lifecycle.background.hide
+    title:
+      en: Close and restore a desktop window
+      zh: 关闭并恢复桌面窗口
+    verifies:
+      - close
+      - restore
+    platforms:
+      - darwin
+      - win32
+    profiles:
+      - external
+    evidence: external
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: An isolated macOS or Windows profile has a running test task.
+        zh: macOS 或 Windows 隔离资料有运行中的测试任务。
+    steps:
+      - en: Close the window, inspect background work and restore through the supported tray/dock entry.
+        zh: 关闭窗口，检查后台工作，再从托盘或 Dock 恢复。
+    expected:
+      - en: The same application and work remain accessible without launching duplicate execution.
+        zh: 同一应用与任务仍可访问，不启动重复执行。
+    requirements:
+      - native-dialog
+  - id: lifecycle.background.linux-close
+    title:
+      en: Quit on Linux window close
+      zh: Linux 关闭窗口时退出
+    verifies:
+      - close
+      - quit
+    platforms:
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A Linux test profile has a main window and controlled work.
+        zh: Linux 测试资料有主窗口及受控任务。
+    steps:
+      - en: Close the last window.
+        zh: 关闭最后窗口。
+    expected:
+      - en: The application shuts down instead of leaving an inaccessible tray-only process.
+        zh: 应用退出，不留下无法访问的仅托盘进程。
+  - id: lifecycle.background.quit
+    title:
+      en: Quit during active work
+      zh: 工作期间退出
+    verifies:
+      - quit
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A controlled streamed task owns a child process.
+        zh: 受控流式任务拥有子进程。
+    steps:
+      - en: Use explicit quit and inspect process termination and saved partial history.
+        zh: 明确退出并检查进程结束及保存的部分记录。
+    expected:
+      - en: The app exits in the bounded shutdown window and does not falsely mark partial work complete.
+        zh: 应用在有界关闭时间内退出，不把部分工作标为完成。
+  - id: lifecycle.background.active-stream-quit
+    title:
+      en: Exit cleanly during a real streamed SDK request
+      zh: 真实 SDK 输出时正常退出
+    verifies:
+      - quit
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: Use isolated seeded data and the production UI with the fixture boundary stated below.
+        zh: 使用隔离预置数据及真实界面，测试替换边界见说明。
+    steps:
+      - en: Send to a local streaming endpoint, wait for actual SDK output and close the application.
+        zh: 向本地流式端点发送，等待真实 SDK 输出后关闭应用。
+    expected:
+      - en: Application exit and pipes close normally, and the owned process tree has no surviving non-zombie child.
+        zh: 应用及输出管道正常关闭，其进程树没有存活的非僵尸子进程。

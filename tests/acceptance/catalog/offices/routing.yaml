@@ -1,0 +1,49 @@
+version: 1
+id: offices.routing
+module: offices
+title:
+  en: Use the intended office connection route
+  zh: 使用预期办公室连接路径
+story:
+  en: I can distinguish a built-in relay setting from my own override.
+  zh: 我能分清内置中继设置与自己的覆盖设置。
+basis: observed
+references:
+  - src/renderer/components/settings/RemoteAccessSection.tsx
+  - tests/e2e/specs/settings.spec.ts
+promises:
+  default:
+    en: A displayed built-in gateway remains a default rather than being silently saved as a user override.
+    zh: 界面显示的内置网关仍是默认值，不会悄悄保存为用户覆盖。
+scenarios:
+  - id: offices.routing.default-display
+    title:
+      en: Show a built-in gateway without changing saved settings
+      zh: 显示内置网关而不改变保存设置
+    verifies:
+      - default
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    variants:
+      width:
+        - "1280"
+        - "375"
+    preconditions:
+      - en: A controlled configuration response supplies a synthetic product-default gateway.
+        zh: 受控配置响应提供合成的产品默认网关。
+    steps:
+      - en: Open remote settings at each width and inspect the blank override, default placeholder and saved configuration.
+        zh: 在各宽度打开远程设置，检查空覆盖值、默认占位说明及保存配置。
+    expected:
+      - en: The default is explained, the override remains blank and configuration bytes are unchanged.
+        zh: 默认值有说明，覆盖仍为空，配置文件字节不变。
+    notes:
+      en: The configuration read is replaced for presentation; this does not verify relay connectivity.
+      zh: 配置读取为呈现而替换，不验证中继连通性。

@@ -1,0 +1,66 @@
+version: 1
+id: memory.control
+module: memory
+title:
+  en: Control which memory is used
+  zh: 控制使用哪些记忆
+story:
+  en: I can disable memory without deleting it and understand its ownership.
+  zh: 我能关闭记忆而不删除它，并理解记忆属于谁。
+basis: documented
+references:
+  - src/main/platform/memory/DESIGN.md
+  - src/renderer/components/memory/MemorySettingsPanel.tsx
+promises:
+  owner:
+    en: Workspace and digital-human memories have distinct ownership and sharing rules.
+    zh: 空间与数字人记忆具有不同归属及共享规则。
+  disable:
+    en: Turning memory off stops reads and writes while keeping existing memory.
+    zh: 关闭记忆会停止读写，但保留已有记忆。
+scenarios:
+  - id: memory.control.scope
+    title:
+      en: Use workspace and person memory deliberately
+      zh: 按配置使用空间和个人记忆
+    verifies:
+      - owner
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A workspace and two people have distinct memory markers.
+        zh: 空间与两位数字人有不同记忆标记。
+    steps:
+      - en: Start turns with workspace-memory inheritance on and off.
+        zh: 分别开启和关闭空间记忆继承后启动任务。
+    expected:
+      - en: Each request receives only memory allowed by the documented ownership and settings.
+        zh: 请求仅接收归属及设置所允许的记忆。
+  - id: memory.control.disable
+    title:
+      en: Disable and restore memory
+      zh: 关闭并恢复记忆
+    verifies:
+      - disable
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Existing memory contains a known synthetic fact.
+        zh: 记忆中已有已知合成事实。
+    steps:
+      - en: Turn memory off, run a turn, then re-enable.
+        zh: 关闭记忆并执行一轮，再恢复。
+    expected:
+      - en: Disabled work neither reads nor changes it; the old fact remains after re-enabling.
+        zh: 关闭时不读取也不修改记忆，恢复后旧事实仍在。

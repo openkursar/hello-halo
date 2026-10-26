@@ -16,6 +16,7 @@ vi.mock('fs', async importOriginal => {
 })
 
 vi.mock('../../../src/main/services/space.service', () => ({
+  hasSpace: (spaceId: string) => spaces.has(spaceId),
   getSpace: (spaceId: string) => spaces.get(spaceId) ?? null,
   touchSpaceActivity: () => undefined,
 }))

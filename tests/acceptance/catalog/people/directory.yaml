@@ -1,0 +1,67 @@
+version: 1
+id: people.directory
+module: people
+title:
+  en: Find a digital human
+  zh: 找到需要的数字人
+story:
+  en: I can find a person by name or team and return to the same list.
+  zh: 我能按名字或团队找到数字人，并回到原列表。
+basis: observed
+references:
+  - src/renderer/components/apps/PeopleDirectory.tsx
+  - tests/e2e/specs/people-upgrade.spec.ts
+promises:
+  browse:
+    en: Search, paging and return navigation preserve list context and include persistent coordinators.
+    zh: 搜索、分页和返回保留列表上下文，长期协调者也能找到。
+  scale:
+    en: Large directories remain bounded and usable at narrow widths.
+    zh: 大量数字人时列表仍有限加载，窄屏也可操作。
+scenarios:
+  - id: people.directory.browse
+    title:
+      en: Search, open and return to the directory
+      zh: 搜索、查看并返回目录
+    verifies:
+      - browse
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - fast
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Seed multiple digital humans and a persistent team coordinator.
+        zh: 预置多个数字人与长期团队协调者。
+    steps:
+      - en: Search by team, open a person’s settings, return and page the list.
+        zh: 按团队搜索，进入个人设置，返回并翻页。
+    expected:
+      - en: The correct people appear, search text is retained and pages stay bounded.
+        zh: 显示正确数字人，搜索词保留，分页大小受控。
+  - id: people.directory.scale
+    title:
+      en: Browse a large directory on a narrow screen
+      zh: 窄屏浏览大量数字人
+    verifies:
+      - scale
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Seed 200 people and pending requests.
+        zh: 预置 200 位数字人与待处理请求。
+    steps:
+      - en: Browse at desktop, 375px and 320px in both themes.
+        zh: 在桌面、375px 与 320px 下切换两种主题浏览。
+    expected:
+      - en: Cards remain paged, detail controls remain reachable and the page does not overflow horizontally.
+        zh: 卡片分页显示，详情控件可达，页面不横向溢出。

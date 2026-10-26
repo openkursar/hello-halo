@@ -222,7 +222,6 @@
   "Are you sure you want to delete": "確定要刪除嗎？",
   "Are you sure you want to delete '{{name}}'?": "確定要刪除 '{{name}}' 嗎？",
   "Are you sure you want to delete this workspace?\n\nAll conversations and files in the workspace will be deleted.": "確定要刪除此工作區嗎?\n\n工作區中的所有對話和檔案都將被刪除。",
-  "Are you sure you want to delete this workspace?\n\nOnly Halo data (conversation history) will be deleted, your project files will be kept.": "確定要刪除此工作區嗎?\n\n僅會刪除 Halo 資料(對話記錄),您的專案檔案將會保留。",
   "Are you sure you want to delete {{count}} items?_one": "確定要刪除 {{count}} 個項目嗎？",
   "Are you sure you want to delete {{count}} items?_other": "確定要刪除 {{count}} 個項目嗎？",
   "Are you sure you want to proceed?": "確定要繼續嗎？",
@@ -974,7 +973,7 @@
   "Event": "事件",
   "Event filters": "事件篩選器",
   "Every day": "每天",
-  "Every tool it reached for while a request from another computer — or from a guest your team answers in IM — was driving it. Your own conversations with it, and your own digital humans’ work with it, are not listed.": "",
+  "Every tool it reached for while a request from another computer — or from a guest your team answers in IM — was driving it. Your own conversations with it, and your own digital humans’ work with it, are not listed.": "當來自另一台電腦的請求——或你團隊在 IM 中回覆的訪客——正在驅動它時，它取用過的每一項工具。你與它本身的對話，以及你自己的數位人與它進行的工作，都不會列出。",
   "Every {{count}}d_one": "每 {{count}} 天",
   "Every {{count}}d_other": "每 {{count}} 天",
   "Every {{count}}h_one": "每 {{count}} 小時",
@@ -3396,5 +3395,15 @@
   "{{who}} joined \"{{office}}\".": "{{who}} 加入了「{{office}}」。",
   "{{who}} · {{when}}": "{{who}} · {{when}}",
   "↑↓ Navigate · {{shortcut}} Edit · Esc Close": "↑↓ 導覽 · {{shortcut}} 編輯 · Esc 關閉",
-  "🤖 AI Browser": "🤖 AI 瀏覽器"
+  "🤖 AI Browser": "🤖 AI 瀏覽器",
+  "Are you sure you want to delete this workspace?\n\nHalo workspace data, including conversation history and any files stored with it, will be deleted; your project files will be kept in the current project folder.": "確定要刪除此工作空間嗎？\n\nHalo 儲存的工作空間資料，包括對話紀錄及一併儲存的檔案，都將被刪除；你的專案檔案會保留在目前的專案資料夾中。\n",
+  "Please select a model before testing the connection": "請先選擇模型，再測試連線",
+  "Connection timeout - server may be slow or unreachable": "連線逾時，伺服器可能回應緩慢或無法存取",
+  "Invalid API key": "API 金鑰無效",
+  "Access denied - check API key permissions": "存取遭拒，請檢查 API 金鑰權限",
+  "Requested model is not available": "要求的模型無法使用",
+  "API endpoint not found - check URL": "找不到 API 端點，請檢查 URL",
+  "Rate limited - try again later": "請求過於頻繁，請稍後再試",
+  "Cannot connect to API server - check URL": "無法連線至 API 伺服器，請檢查 URL",
+  "No response received from API": "未收到 API 回應"
 }

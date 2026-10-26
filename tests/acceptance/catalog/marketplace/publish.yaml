@@ -1,0 +1,71 @@
+version: 1
+id: marketplace.publish
+module: marketplace
+title:
+  en: Share an authored resource
+  zh: 分享自己制作的资源
+story:
+  en: I can review what will be published and send it to an authorized destination.
+  zh: 我能检查将发布的内容，并发送到获准的目标。
+basis: observed
+references:
+  - src/renderer/components/store/ShareToStoreDialog.tsx
+  - src/renderer/components/store/publish-preflight.ts
+  - src/main/store/publish/index.ts
+promises:
+  review:
+    en: Publishing presents metadata and preflight validation before sending.
+    zh: 发布前展示元信息并执行预检查。
+  scope:
+    en: Published files and source selection follow the chosen resource boundaries.
+    zh: 发布文件及来源选择遵循所选资源范围。
+scenarios:
+  - id: marketplace.publish.preflight
+    title:
+      en: Inspect a publish preflight
+      zh: 检查发布前预检
+    verifies:
+      - review
+      - scope
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A synthetic authored skill contains only public-safe fixture files.
+        zh: 合成技能仅含可公开测试文件。
+    steps:
+      - en: Open share, edit metadata and exercise validation with missing fields.
+        zh: 打开分享，编辑元信息并测试必填项缺失。
+    expected:
+      - en: Invalid drafts cannot submit; the preview names the exact resource and destination.
+        zh: 无效草稿不能提交，预览明确资源及目标。
+  - id: marketplace.publish.test-destination
+    title:
+      en: Publish to a dedicated test registry
+      zh: 发布到专用测试来源
+    verifies:
+      - review
+      - scope
+    platforms: *a1
+    profiles:
+      - external
+    evidence: external
+    mode: none
+    automation: planned
+    preconditions:
+      - en: An explicitly authorized isolated publishing destination is configured.
+        zh: 已配置明确授权的隔离发布目标。
+    steps:
+      - en: Publish the synthetic resource and retrieve it from that destination.
+        zh: 发布合成资源并从该目标读取。
+    expected:
+      - en: Published metadata and files match the reviewed payload, without unrelated local files.
+        zh: 发布元信息与文件匹配确认内容，不含无关本地文件。
+    requirements:
+      - test-registry

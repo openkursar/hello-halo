@@ -1,0 +1,17 @@
+version: 1
+id: conversations
+title:
+  en: Conversation history
+  zh: 对话记录
+description:
+  en: Create, organize, revisit and remove conversations.
+  zh: 创建、整理、回看和移除对话。
+paths:
+  - src/main/services/conversation.service.ts
+  - src/renderer/components/chat/ConversationList.tsx
+  - src/renderer/stores/chat.store.ts
+dependsOn:
+  - workspaces
+scope:
+  en: Space conversations and digital-human conversations on desktop and remote views; history, drafts, deletion and long transcripts.
+  zh: 桌面及远程界面的空间对话与数字人对话；包括历史、草稿、删除及长记录。

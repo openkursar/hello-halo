@@ -13,7 +13,7 @@ async function openCapabilities(page: Page) {
   await page.getByRole('button', { name: 'Capabilities and settings', exact: true }).click()
 }
 
-test('skill draft survives closing, installation stays in context and workspace inheritance is real', async ({ window }) => {
+test('skill draft survives closing, installation stays in context and workspace inheritance is real', { annotation: { type: 'acceptance', description: "{\"caseId\":\"capabilities.skills.draft\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
   await openCapabilities(window)
   await window.getByRole('button', { name: 'New skill', exact: true }).click()
   let dialog = window.getByRole('dialog', { name: 'Add Skill', exact: true })
@@ -37,7 +37,7 @@ test('skill draft survives closing, installation stays in context and workspace 
   expect(inventory?.entries.find(entry => entry.type === 'skill' && entry.specId === 'evidence-checklist')?.consumers.map(person => person.appId)).toEqual(expect.arrayContaining(['person-000', 'person-001']))
 })
 
-test('MCP save, person enablement and live connection checks are independent; shared changes show impact', async ({ window }) => {
+test('MCP save, person enablement and live connection checks are independent; shared changes show impact', { annotation: { type: 'acceptance', description: "{\"caseId\":\"capabilities.connections.health\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
   let healthy = false
   const methods: string[] = []
   const server = createServer(async (request, response) => {

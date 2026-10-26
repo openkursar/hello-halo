@@ -1,0 +1,72 @@
+version: 1
+id: references.context
+module: references
+title:
+  en: Discuss a precise piece of work
+  zh: 讨论明确的一段内容
+story:
+  en: I can select the exact passage or change I mean and let the AI see that context.
+  zh: 我能选中要讨论的具体段落或修改，让 AI 理解上下文。
+basis: observed
+references:
+  - tests/e2e/specs/references.spec.ts
+  - src/renderer/components/references/ReferenceChips.tsx
+  - src/main/services/agent/references.ts
+promises:
+  source:
+    en: A reference retains the selected source and location.
+    zh: 引用保留选定来源及位置。
+  control:
+    en: References can be inspected, removed and restored through the offered undo.
+    zh: 引用可检查、移除，并通过提供的撤销恢复。
+  send:
+    en: Submitted references reach the model as the intended context once.
+    zh: 发送的引用只作为预期上下文传给模型一次。
+scenarios:
+  - id: references.context.manage
+    title:
+      en: Create, inspect and remove reference cards
+      zh: 创建、检查和移除引用卡片
+    verifies:
+      - source
+      - control
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Open a diff and a readable source file.
+        zh: 打开差异及可读源文件。
+    steps:
+      - en: Create a comment and selection reference, inspect the list, remove a group and undo.
+        zh: 创建评论及选区引用，检查列表，移除分组后撤销。
+    expected:
+      - en: Cards identify the right sources and removal/undo changes only the selected references.
+        zh: 卡片指向正确来源，移除与撤销仅影响选定引用。
+  - id: references.context.send
+    title:
+      en: Send selected context
+      zh: 发送选中上下文
+    verifies:
+      - send
+      - source
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A message draft includes two distinct source references.
+        zh: 消息草稿含两个不同来源引用。
+    steps:
+      - en: Send through the UI to a scripted model and inspect the request.
+        zh: 通过界面发送到脚本模型并检查请求。
+    expected:
+      - en: Both selected excerpts and locations reach the model without unrelated content or duplication.
+        zh: 两个选区及位置传给模型，不夹带无关内容或重复。

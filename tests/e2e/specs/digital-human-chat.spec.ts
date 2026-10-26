@@ -115,7 +115,7 @@ const COMPOSER_IS_MARKED = () => {
 }
 
 test.describe('digital-human conversation on the chat page', () => {
-  test('opens without rebuilding the composer, and the draft typed while it loads survives', async () => {
+  test('opens without rebuilding the composer, and the draft typed while it loads survives', { annotation: { type: 'acceptance', description: "{\"caseId\":\"conversations.read.loading-draft\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async () => {
     test.setTimeout(90000)
     const session = await launch({ width: 1280, height: 800 })
     try {
@@ -143,7 +143,7 @@ test.describe('digital-human conversation on the chat page', () => {
     }
   })
 
-  test('reopens a conversation it has already read without a loading state', async () => {
+  test('reopens a conversation it has already read without a loading state', { annotation: { type: 'acceptance', description: "{\"caseId\":\"conversations.read.cached-reopen\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async () => {
     test.setTimeout(90000)
     const session = await launch({ width: 1280, height: 800 })
     try {
@@ -173,7 +173,7 @@ test.describe('digital-human conversation on the chat page', () => {
     }
   })
 
-  test('a finished reply settles in place: no frame without it, the messages already shown are not rebuilt', async () => {
+  test('a finished reply settles in place: no frame without it, the messages already shown are not rebuilt', { annotation: { type: 'acceptance', description: "{\"caseId\":\"conversations.read.reply-settles\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async () => {
     test.setTimeout(90000)
     const session = await launch({ width: 1280, height: 800 })
     try {
@@ -229,7 +229,7 @@ test.describe('digital-human conversation on the chat page', () => {
     }
   })
 
-  test('adds to the running turn, and continues an interrupted one', async () => {
+  test('adds to the running turn, and continues an interrupted one', { annotation: { type: 'acceptance', description: "{\"caseId\":\"chat.messages.person-input-routing\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async () => {
     test.setTimeout(90000)
     const session = await launch({ width: 1280, height: 800 })
     try {
@@ -308,7 +308,7 @@ test.describe('digital-human conversation on the chat page', () => {
     }
   })
 
-  test('keeps a completion unread on settings and reads it when the existing chat returns', async () => {
+  test('keeps a completion unread on settings and reads it when the existing chat returns', { annotation: { type: 'acceptance', description: "{\"caseId\":\"notifications.attention.unread-settings\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async () => {
     test.setTimeout(90000)
     const session = await launch({ width: 1280, height: 800 })
     try {
@@ -346,7 +346,7 @@ test.describe('digital-human conversation on the chat page', () => {
     }
   })
 
-  test('keeps a completion unread behind the full-screen canvas and reads it on reveal', async () => {
+  test('keeps a completion unread behind the full-screen canvas and reads it on reveal', { annotation: { type: 'acceptance', description: "{\"caseId\":\"notifications.attention.unread-canvas\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async () => {
     test.setTimeout(90000)
     const session = await launch({ width: 1280, height: 800 })
     try {
@@ -375,7 +375,7 @@ test.describe('digital-human conversation on the chat page', () => {
   })
 
   for (const width of [390, 1280]) {
-    test(`folds long user messages at 24 rows and previews 20 at ${width}px without folding the AI reply`, async () => {
+    test(`folds long user messages at 24 rows and previews 20 at ${width}px without folding the AI reply`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "conversations.read.fold-user-message", evidence: "ui", mode: "none", variant: { width: String(width) } }) } }, async () => {
       test.setTimeout(90000)
       const session = await launch({ width, height: 844 })
       try {
@@ -422,7 +422,7 @@ test.describe('digital-human conversation on the chat page', () => {
     })
   }
 
-  test('is usable at phone width: its conversations are in the history sheet, and @ starts a new one', async () => {
+  test('is usable at phone width: its conversations are in the history sheet, and @ starts a new one', { annotation: { type: 'acceptance', description: "{\"caseId\":\"conversations.read.person-narrow\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async () => {
     test.setTimeout(90000)
     const session = await launch({ width: 390, height: 844 })
     try {

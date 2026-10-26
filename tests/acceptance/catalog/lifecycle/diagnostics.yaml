@@ -1,0 +1,72 @@
+version: 1
+id: lifecycle.diagnostics
+module: lifecycle
+title:
+  en: Recover a fault with useful diagnostics
+  zh: 用有效诊断恢复故障
+story:
+  en: I can see a failure, recover the application and share a report without exposing secrets.
+  zh: 我能看见故障、恢复应用，并分享不暴露秘密的报告。
+basis: observed
+references:
+  - src/main/services/health/diagnostics/sanitizer.ts
+  - src/main/services/health/recovery-manager/index.ts
+  - src/renderer/components/settings/SystemSection.tsx
+promises:
+  diagnostics:
+    en: Diagnostics explain detected service/process problems and report what recovery changed.
+    zh: 诊断说明发现的服务或进程问题，并报告恢复改变。
+  privacy:
+    en: Exported diagnostics redact credentials and keep local crash reports local until explicitly shared.
+    zh: 导出诊断清理凭证，崩溃报告在明确分享前留在本机。
+  recover:
+    en: A recovered UI or engine can accept new work without silently discarding prior completed records.
+    zh: 界面或引擎恢复后可接受新工作，不静默丢弃已完成记录。
+scenarios:
+  - id: lifecycle.diagnostics.export
+    title:
+      en: Export a sanitized diagnostic report
+      zh: 导出清理敏感数据的诊断报告
+    verifies:
+      - diagnostics
+      - privacy
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: The isolated profile contains synthetic secret-shaped values and a controlled service fault.
+        zh: 隔离资料含合成秘密形态值及受控服务故障。
+    steps:
+      - en: Run diagnostics and export its report.
+        zh: 运行诊断并导出报告。
+    expected:
+      - en: The report describes the fault without including synthetic credential values.
+        zh: 报告描述故障，但不含合成凭证值。
+  - id: lifecycle.diagnostics.recover
+    title:
+      en: Recover an engine or renderer fault
+      zh: 恢复引擎或界面故障
+    verifies:
+      - diagnostics
+      - recover
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A completed conversation exists before a controlled engine or renderer fault.
+        zh: 受控引擎或界面故障前已有完成对话。
+    steps:
+      - en: Use the supported recovery action and send a fresh request.
+        zh: 执行支持的恢复操作并发新请求。
+    expected:
+      - en: Completed history remains and new work can finish; interrupted work has its actual state.
+        zh: 已完成历史保留，新任务可结束，中断任务保留真实状态。

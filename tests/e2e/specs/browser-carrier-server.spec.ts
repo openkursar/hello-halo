@@ -14,7 +14,7 @@ test.describe('server-mode browser guests', () => {
   test.use({ browserServerMode: true })
   test.setTimeout(120000)
 
-  test('actual headless boot runs watchable contexts, silent automation and temporary search without a main window', async ({ electronApp, browserSite }) => {
+  test('actual headless boot runs watchable contexts, silent automation and temporary search without a main window', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.headless-runtime\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, browserSite }) => {
     await expect.poll(() => electronApp.evaluate(() => {
       const driver = (globalThis as unknown as { browserServerTest: BrowserServerRuntimeDriver }).browserServerTest
       return { ready: driver.ready, error: driver.error }

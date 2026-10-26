@@ -1,0 +1,229 @@
+version: 1
+id: teams.decisions
+module: teams
+title:
+  en: Understand coordination and decisions
+  zh: 理解协作与决策
+story:
+  en: I can see who is working, what was delivered and which questions need my answer.
+  zh: 我能看见谁在工作、消息是否送达，以及哪些问题需要我回答。
+basis: documented
+references:
+  - src/renderer/components/team/workbench/DESIGN.md
+  - src/main/apps/runtime/team/DESIGN.md
+  - tests/e2e/specs/team-render.spec.ts
+promises:
+  audience:
+    en: Internal team inputs are distinct from human messages and unrelated private results are not exposed.
+    zh: 内部团队输入与人的消息区分，不暴露无关私有结果。
+  delivery:
+    en: Undelivered messages and unavailable history are visible as such, not successful or empty.
+    zh: 未送达消息与不可用历史有明确状态，不伪装成成功或空记录。
+  owner:
+    en: Only the question owner can answer; other teammates can see its relevant shared status.
+    zh: 只有问题主人能回答，其他队友可查看相关共享状态。
+  timeline:
+    en: Malformed timestamps preserve task content with an explicit unknown-time presentation.
+    zh: 异常时间戳保留任务内容，并明确显示时间未知。
+scenarios:
+  - id: teams.decisions.audience
+    title:
+      en: Open member activity and conversation
+      zh: 查看成员活动与对话
+    verifies:
+      - audience
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A task includes internal coordination and human exchanges.
+        zh: 任务含内部协作及人与成员的交流。
+    steps:
+      - en: Inspect the member’s conversation and full task activity.
+        zh: 查看成员对话及完整任务活动。
+    expected:
+      - en: Human exchanges and internal coordination are separated by provenance without cross-task leakage.
+        zh: 按来源区分人的交流与内部协作，不串入其他任务。
+  - id: teams.decisions.delivery
+    title:
+      en: Recover missing history and inspect a failed delivery
+      zh: 恢复缺失历史并查看投递失败
+    verifies:
+      - delivery
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A controlled history read and member message delivery fail.
+        zh: 受控历史读取与成员消息投递失败。
+    steps:
+      - en: Open the task, inspect failure and retry after recovery.
+        zh: 打开任务、查看失败，恢复后重试。
+    expected:
+      - en: Failures remain distinguishable from no history and delivered messages.
+        zh: 失败始终能与没有历史或已送达消息区分。
+  - id: teams.decisions.owner
+    title:
+      en: Inspect another owner’s pending question
+      zh: 查看他人的待决问题
+    verifies:
+      - owner
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Two team members belong to different owners.
+        zh: 两位团队成员属于不同主人。
+    steps:
+      - en: Create a decision for the other owner and inspect both views.
+        zh: 为另一主人创建待决问题并检查双方界面。
+    expected:
+      - en: Only the correct owner sees answer controls and Needs my decision counts.
+        zh: 只有正确主人看到回答控件及需要自己决策的计数。
+  - id: teams.decisions.teammate-question
+    title:
+      en: Observe a teammate’s decision without answering for them
+      zh: 查看队友决策但不代替回答
+    verifies:
+      - owner
+    platforms: &a2
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Open a fixture task with another owner’s pending question.
+        zh: 打开含另一主人待决问题的测试任务。
+    expected:
+      - en: The question and owner appear, with no answer action for this viewer.
+        zh: 显示问题及主人，当前查看者没有回答操作。
+  - id: teams.decisions.history-retry
+    title:
+      en: Retry unavailable task history
+      zh: 重试不可用任务历史
+    verifies:
+      - delivery
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Fail a fixture history load, inspect the message and click Try again.
+        zh: 使测试历史加载失败，查看提示并点击重试。
+    expected:
+      - en: The failure is not shown as an empty conversation and retry reveals the prior history.
+        zh: 失败不显示为空对话，重试显示旧历史。
+    notes:
+      en: History responses are injected at the IPC boundary; this proves error-state presentation and retry interaction only.
+      zh: 历史响应在 IPC 边界注入，仅证明错误状态呈现与重试交互。
+  - id: teams.decisions.preview-scope
+    title:
+      en: Expand a compact collaboration preview
+      zh: 展开紧凑协作预览
+    verifies:
+      - audience
+    platforms: &a3
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Expand a seeded coordination segment and open full task activity.
+        zh: 展开预置协作片段，再打开完整任务活动。
+    expected:
+      - en: The preview is bounded, the complete task record is reachable and other task/member conversations stay excluded.
+        zh: 预览有界，完整任务记录可达，无关任务或成员对话不混入。
+  - id: teams.decisions.delegated-audience
+    title:
+      en: Keep requested answers separate from earlier internal work
+      zh: 把请求的回答与较早内部工作区分
+    verifies:
+      - audience
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Inspect delegated results, then directly ask the contributing member and inspect activity.
+        zh: 查看委托结果，再直接询问贡献成员并查看活动。
+    expected:
+      - en: Human-facing answers appear where requested while earlier internal results stay in task activity.
+        zh: 面向人的回答出现在请求位置，较早内部结果留在任务活动。
+  - id: teams.decisions.unknown-time
+    title:
+      en: Keep records with invalid dates readable
+      zh: 保留日期异常记录可读
+    verifies:
+      - timeline
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Open fixture coordination records with valid, invalid and missing timestamps and inspect full activity.
+        zh: 打开有效、无效及缺失时间戳的测试协作记录并查看完整活动。
+    expected:
+      - en: All records remain readable; invalid dates show unknown time without crashing the conversation.
+        zh: 记录均可读，无效日期显示未知时间，不导致对话崩溃。
+  - id: teams.decisions.answer-location
+    title:
+      en: Return from activity to the decision’s answer location
+      zh: 从活动返回正确回答位置
+    verifies:
+      - owner
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Open a pending question from task activity and follow its answer link.
+        zh: 从任务活动打开待决问题并点击回答链接。
+    expected:
+      - en: Activity has no duplicate answer action; the link focuses the conversation’s single answer surface.
+        zh: 活动中无重复回答操作，链接聚焦对话中唯一回答入口。

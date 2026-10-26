@@ -62,7 +62,7 @@ test.describe('references', () => {
       },
     })
 
-    test('opens named relative and absolute files in Canvas, including keyboard and mobile activation', async ({ window, electronApp }) => {
+    test('opens named relative and absolute files in Canvas, including keyboard and mobile activation', { annotation: { type: 'acceptance', description: "{\"caseId\":\"references.return.links\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, electronApp }) => {
       const reply = window.locator('.markdown-content').filter({ hasText: 'Relative report' })
       await expect(reply).toBeVisible()
       await expect(reply.getByText('Relative report', { exact: true })).not.toContainText('[blocked]')
@@ -91,7 +91,7 @@ test.describe('references', () => {
     })
   })
 
-  test('returns to a comment after another file replaces its editors in a large diff', async ({ window, workspace }) => {
+  test('returns to a comment after another file replaces its editors in a large diff', { annotation: { type: 'acceptance', description: "{\"caseId\":\"references.return.replaced-editor\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, workspace }) => {
     const folder = path.join(workspace.repoRoot, 'src', 'bulk')
     fs.mkdirSync(folder, { recursive: true })
     for (let i = 0; i < 12; i++) fs.writeFileSync(path.join(folder, `item-${i}.ts`), `export const item${i} = ${i}\n`)
@@ -116,7 +116,7 @@ test.describe('references', () => {
     await expect(comment).toBeInViewport()
   })
 
-  test('comments and a selection become pills; the popover lists, removes and goes back; removing a group can be undone', async ({ window }) => {
+  test('comments and a selection become pills; the popover lists, removes and goes back; removing a group can be undone', { annotation: { type: 'acceptance', description: "{\"caseId\":\"references.context.manage\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await openChangesWithShortcut(window)
     await ensureFilePanel(window)
     await filePanel(window).locator('button[title="src/app.ts"]').click()

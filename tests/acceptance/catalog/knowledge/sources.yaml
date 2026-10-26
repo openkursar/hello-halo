@@ -1,0 +1,103 @@
+version: 1
+id: knowledge.sources
+module: knowledge
+title:
+  en: Build a knowledge base from source files
+  zh: 用源文件建立知识库
+story:
+  en: I can add source material and know which files were learned, skipped or failed.
+  zh: 我能添加材料，并知道哪些已学习、跳过或失败。
+basis: observed
+references:
+  - src/renderer/components/tlon/CreateKBDialog.tsx
+  - src/renderer/components/tlon/RawFilesTab.tsx
+  - src/main/services/tlon/extract.ts
+promises:
+  import:
+    en: Supported sources are registered with a visible learning state.
+    zh: 支持的资料被登记并显示学习状态。
+  failure:
+    en: Unreadable and textless sources are distinguished from successful learning.
+    zh: 不可读与无文字资料能与学习成功区分。
+  remove:
+    en: Removing a knowledge-base entry does not silently delete the original file.
+    zh: 移除知识库条目不悄悄删除原始文件。
+scenarios:
+  - id: knowledge.sources.import
+    title:
+      en: Import supported document types
+      zh: 导入支持的文档类型
+    verifies:
+      - import
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Prepare synthetic text-bearing source documents.
+        zh: 准备包含文字的合成文档。
+    steps:
+      - en: Create a knowledge base, import each supported format and run learning.
+        zh: 创建知识库，导入各支持格式并执行学习。
+    expected:
+      - en: Each source is listed and successfully extracted content is usable.
+        zh: 各来源出现在列表中，成功提取的内容可用。
+    variants:
+      format:
+        - text
+        - markdown
+        - pdf
+        - docx
+        - xlsx
+        - csv
+        - html
+        - image
+    requirements:
+      - packaged-app
+  - id: knowledge.sources.failures
+    title:
+      en: Import corrupt and textless documents
+      zh: 导入损坏及无文字文档
+    verifies:
+      - failure
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Prepare a corrupt document and a PDF without readable text.
+        zh: 准备损坏文档及无可读文字的 PDF。
+    steps:
+      - en: Import and learn them alongside a valid text file.
+        zh: 与有效文本一起导入学习。
+    expected:
+      - en: Failures and skipped items are labelled distinctly while the valid file remains usable.
+        zh: 失败与跳过有不同标记，有效文件仍可用。
+  - id: knowledge.sources.remove
+    title:
+      en: Remove imported records and keep originals
+      zh: 移除导入条目并保留源文件
+    verifies:
+      - remove
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A source file was imported from outside the knowledge-base store.
+        zh: 从知识库之外导入了源文件。
+    steps:
+      - en: Cancel removal, then confirm removal for that entry.
+        zh: 取消一次移除，再确认移除该条目。
+    expected:
+      - en: Cancellation retains it; confirmed removal leaves the original source on disk.
+        zh: 取消保留条目，确认后原始磁盘文件仍在。

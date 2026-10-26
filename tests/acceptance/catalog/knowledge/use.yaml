@@ -1,0 +1,91 @@
+version: 1
+id: knowledge.use
+module: knowledge
+title:
+  en: Use and pause the right knowledge
+  zh: 使用并暂停指定知识
+story:
+  en: I can choose which knowledge my conversations and digital humans use.
+  zh: 我能选择对话与数字人使用哪些知识。
+basis: observed
+references:
+  - src/renderer/components/tlon/SettingsTab.tsx
+  - src/renderer/pages/TlonPage.tsx
+  - src/main/services/tlon/service.ts
+promises:
+  scope:
+    en: Knowledge attachment and workspace connection determine where it is available.
+    zh: 知识绑定与空间连接决定可用范围。
+  pause:
+    en: Pausing a knowledge base stops learning and use until it is re-enabled.
+    zh: 暂停知识库后停止学习及使用，恢复后才重新启用。
+  watch:
+    en: Watched-folder changes can be learned without importing duplicate records.
+    zh: 监视目录中的变更可被学习，不重复导入条目。
+scenarios:
+  - id: knowledge.use.attach
+    title:
+      en: Use selected knowledge in a conversation
+      zh: 在对话中使用选定知识
+    verifies:
+      - scope
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Two knowledge bases contain distinct synthetic facts.
+        zh: 两个知识库含不同合成事实。
+    steps:
+      - en: Attach one to a conversation and ask for its fact and source.
+        zh: 给对话绑定其中一个，询问事实及来源。
+    expected:
+      - en: The selected knowledge is available and the source citation opens the correct material.
+        zh: 选定知识可用，来源引用打开正确材料。
+  - id: knowledge.use.pause
+    title:
+      en: Pause and re-enable a knowledge base
+      zh: 暂停并恢复知识库
+    verifies:
+      - pause
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: An active knowledge base is attached to a person and conversation.
+        zh: 活动知识库已绑定数字人及对话。
+    steps:
+      - en: Pause it, start fresh work, then enable and retry.
+        zh: 暂停后开始新任务，再恢复并重试。
+    expected:
+      - en: Paused knowledge is not used; re-enabled knowledge returns through the supported next-turn path.
+        zh: 暂停时不使用该知识，恢复后按支持的下一轮路径重新可用。
+  - id: knowledge.use.watch
+    title:
+      en: Learn an edited watched file
+      zh: 学习监视目录的文件变更
+    verifies:
+      - watch
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A watched folder contains a known source file.
+        zh: 监视目录含已知源文件。
+    steps:
+      - en: Edit the file, observe learning, then remove the watch.
+        zh: 修改文件，观察学习，再移除监视。
+    expected:
+      - en: The existing source updates once and subsequent changes stop triggering after removal.
+        zh: 原来源更新一次，移除监视后变更不再触发。

@@ -1,0 +1,730 @@
+version: 1
+id: browser.work
+module: browser
+title:
+  en: Inspect the page the AI is using
+  zh: 查看 AI 正在使用的网页
+story:
+  en: I can watch a live page, interact with it and let the AI continue from the same state.
+  zh: 我能查看实时网页并操作，再让 AI 从同一状态继续。
+basis: documented
+references:
+  - src/main/services/ai-browser/DESIGN.md
+  - src/main/services/browser-host/DESIGN.md
+  - tests/e2e/specs/browser-view-reveal.spec.ts
+  - tests/e2e/specs/browser-view-frame.spec.ts
+  - tests/e2e/specs/browser-carrier-packaged.spec.ts
+  - tests/e2e/specs/browser-carrier-server.spec.ts
+promises:
+  identity:
+    en: Showing or hiding a page preserves its browser state instead of silently opening a different session.
+    zh: 显示或隐藏页面保留原浏览状态，不悄悄开启另一会话。
+  input:
+    en: Supported typing, selection and trusted gestures affect the intended page or frame.
+    zh: 输入、选中及可信手势作用于目标页面或框架。
+  context:
+    en: Automation browser pages remain isolated from unrelated interactive conversations.
+    zh: 自动化浏览页面与无关交互对话保持隔离。
+  capture:
+    en: A requested screenshot contains the actual selected page surface rather than an empty or transparent substitute.
+    zh: 请求截图包含所选页面的真实画面，而不是空白或透明替代。
+scenarios:
+  - id: browser.work.reveal
+    title:
+      en: Reveal and hide an active AI page
+      zh: 显示和隐藏 AI 活动页面
+    verifies:
+      - identity
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: An AI context has opened a controlled local page.
+        zh: AI 上下文已打开受控本地网页。
+    steps:
+      - en: Enter a value, reveal it in the canvas, hide it and reveal again.
+        zh: 输入值，在画布显示，隐藏后再显示。
+    expected:
+      - en: The same page retains its entered state and can continue navigation.
+        zh: 同一页面保留输入状态并能继续导航。
+  - id: browser.work.input
+    title:
+      en: Type and paste into the intended frame
+      zh: 在目标框架中输入与粘贴
+    verifies:
+      - input
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A local fixture contains normal and iframe inputs.
+        zh: 本地测试网页含普通和 iframe 输入框。
+    steps:
+      - en: Use native typing, keyboard shortcuts and paste, including a page-cancelled gesture.
+        zh: 使用原生输入、快捷键及粘贴，包括网页取消的手势。
+    expected:
+      - en: The intended field changes and cancelled input does not leak into another field or host editor.
+        zh: 目标字段改变，被取消输入不泄漏到其他字段或宿主编辑器。
+  - id: browser.work.isolation
+    title:
+      en: Keep browser contexts apart
+      zh: 保持浏览上下文独立
+    verifies:
+      - context
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: planned
+    preconditions:
+      - en: An automation and two interactive conversations each own test pages.
+        zh: 自动化与两个交互对话分别拥有测试页面。
+    steps:
+      - en: List and operate pages from each context.
+        zh: 从各上下文列出并操作页面。
+    expected:
+      - en: Only the context’s permitted pages are visible and operable.
+        zh: 只能看到和操作该上下文获准页面。
+  - id: browser.work.hide-show
+    title:
+      en: Retain page draft and scroll through hide/show
+      zh: 隐藏显示时保留网页草稿及滚动
+    verifies:
+      - identity
+    platforms: &a2
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Set a page draft and scroll position, then repeatedly hide and show through public browser APIs.
+        zh: 设置网页草稿及滚动位置，通过公共浏览 API 反复隐藏和显示。
+    expected:
+      - en: The same page retains draft and scroll and continues to paint actual pixels.
+        zh: 同一页面保留草稿与滚动，并持续绘制真实画面。
+  - id: browser.work.canvas-navigation
+    title:
+      en: Keep a webpage while navigating the app
+      zh: 应用导航时保留网页
+    verifies:
+      - identity
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Use real canvas tabs, collapse, settings navigation and fullscreen with a page draft.
+        zh: 带网页草稿使用真实标签切换、折叠、设置导航及全屏。
+    expected:
+      - en: Page identity and draft survive those transitions until the user explicitly closes the page tab.
+        zh: 页面身份及草稿保留，直到用户明确关闭该页面标签。
+  - id: browser.work.composer-focus
+    title:
+      en: Keep typing while a hidden page is inspected
+      zh: 隐藏网页被检查时继续输入
+    verifies:
+      - input
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Focus a chat draft, inspect and capture a parked page, then continue typing.
+        zh: 聚焦聊天草稿，检查截图隐藏网页，再继续输入。
+    expected:
+      - en: The composer keeps focus and its draft while the hidden page receives only its own change.
+        zh: 聊天输入框保留焦点及草稿，隐藏网页仅接收自己的变更。
+  - id: browser.work.packaged-frame
+    title:
+      en: Display a real browser page in the installed app
+      zh: 在安装包中显示真实网页
+    verifies:
+      - identity
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Launch the packaged app, show a controlled page, hide it and capture it.
+        zh: 启动安装包，显示受控网页，隐藏后截图。
+    expected:
+      - en: The packaged runtime captures a real page surface while shown and parked.
+        zh: 打包运行时在显示和隐藏状态均能获取真实页面画面。
+    requirements:
+      - packaged-app
+  - id: browser.work.watch-takeover
+    title:
+      en: Watch, take over and return an AI page
+      zh: 观看、接手并交还 AI 网页
+    verifies:
+      - identity
+      - input
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Open through the selected browser context, let tools fill it, make user edits during reveal and continue tools while parked.
+        zh: 从选定浏览上下文打开，用工具填写，显示时由用户编辑，再隐藏并继续工具操作。
+    expected:
+      - en: The same page retains both user and tool changes and the host input keeps its own focus.
+        zh: 同一页面保留用户及工具变更，宿主输入保留自身焦点。
+    variants:
+      context:
+        - main
+        - human
+    notes:
+      en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
+      zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。
+  - id: browser.work.unattended-reload
+    title:
+      en: Continue unattended browsing during main-view reload
+      zh: 主界面重载时继续无人值守浏览
+    verifies:
+      - context
+      - identity
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Open an unattended page, reload the main fixture renderer and inspect the page again.
+        zh: 打开无人值守页面，重载主测试界面，再检查页面。
+    expected:
+      - en: The automation keeps its separate page and continues reading and capturing it.
+        zh: 自动化保留独立页面，仍可读取和截图。
+    notes:
+      en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
+      zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。
+  - id: browser.work.background-create
+    title:
+      en: Open new pages while the window is away
+      zh: 主窗口不在前台时打开新页
+    verifies:
+      - context
+      - identity
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Minimize or hide the window, then create interactive and unattended pages.
+        zh: 最小化或隐藏窗口，再创建交互及无人值守页面。
+    expected:
+      - en: Both page types work with their proper ownership without requiring a visible main window.
+        zh: 两类页面使用正确归属工作，不依赖主窗口可见。
+    variants:
+      window:
+        - minimized
+        - hidden
+    notes:
+      en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
+      zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。
+  - id: browser.work.tab-ownership
+    title:
+      en: Keep unattended tabs out of unrelated tab lists
+      zh: 不把无人值守标签混入无关列表
+    verifies:
+      - context
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Open pages in main, human and automation contexts, list them and remove one.
+        zh: 在主对话、数字人和自动化上下文开页、列出并移除一个。
+    expected:
+      - en: Each list respects ownership and subsequent work uses a valid new page after removal.
+        zh: 各列表遵循归属，移除后后续工作使用有效新页面。
+    notes:
+      en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
+      zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。
+  - id: browser.work.submit-form
+    title:
+      en: Submit a web form without stealing the chat draft
+      zh: 提交网页表单而不抢走聊天草稿
+    verifies:
+      - input
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Keep a host draft focused and use the browser key tool to submit the page form.
+        zh: 保持宿主草稿焦点，用浏览按键工具提交网页表单。
+    expected:
+      - en: The form navigates to its destination while host text, selection and focus stay unchanged.
+        zh: 表单导航到目标，宿主文字、选区与焦点不变。
+    notes:
+      en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
+      zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。
+  - id: browser.work.input-target
+    title:
+      en: Keep pending input on its original page
+      zh: 待处理输入仍属于原页面
+    verifies:
+      - input
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Start a fill operation and switch the active browser tab before it completes.
+        zh: 启动填写操作，在完成前切换活动标签。
+    expected:
+      - en: Only the originally addressed field changes.
+        zh: 只有最初指定的输入框改变。
+    notes:
+      en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
+      zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。
+  - id: browser.work.capture-target
+    title:
+      en: Capture the requested page while tabs switch
+      zh: 标签切换时仍截图指定页面
+    verifies:
+      - identity
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Start a screenshot, immediately select another differently colored page and inspect captured pixels.
+        zh: 启动截图，立即选择另一不同颜色页面，再检查截图像素。
+    expected:
+      - en: The screenshot contains the original page’s pixels.
+        zh: 截图包含原页面像素。
+    notes:
+      en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
+      zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。
+  - id: browser.work.headless-runtime
+    title:
+      en: Browse and download without a visible desktop window
+      zh: 没有桌面窗口时浏览下载
+    verifies:
+      - identity
+      - context
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Boot the actual server-mode runtime, navigate/fill/capture through each context, download and search, then release.
+        zh: 启动实际服务端模式，在各上下文导航填写截图、下载搜索，最后释放。
+    expected:
+      - en: Operations succeed without visible windows and temporary browser resources are removed at the end.
+        zh: 操作无需可见窗口即可完成，结束时临时浏览资源移除。
+    notes:
+      en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
+      zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。
+  - id: browser.work.page-switch
+    title:
+      en: Switch between retained pages
+      zh: 切换保留的网页
+    verifies:
+      - identity
+    platforms: &a3
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Create two pages and repeatedly alternate which one is shown.
+        zh: 创建两个页面并反复交替显示。
+    expected:
+      - en: Both retain their original document state and render the selected page.
+        zh: 两者保留原文档状态，并绘制选中页面。
+  - id: browser.work.first-frame
+    title:
+      en: Capture a page immediately after showing it
+      zh: 显示网页后立即截图
+    verifies:
+      - capture
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Show a newly created page and immediately capture.
+        zh: 显示新建页面后立即截图。
+    expected:
+      - en: Capture waits for real presentation and returns the expected visible pixels.
+        zh: 截图等待真实呈现并返回预期可见像素。
+  - id: browser.work.background-pixels
+    title:
+      en: Preserve webpage backgrounds in screenshots
+      zh: 截图保留网页背景
+    verifies:
+      - capture
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Capture light, dark and explicitly colored local pages through native and AI screenshot paths.
+        zh: 分别通过原生和 AI 截图路径获取浅色、深色及明确背景色页面。
+    expected:
+      - en: Captured images remain opaque and match each page’s expected background.
+        zh: 截图保持不透明，并匹配页面预期背景。
+    notes:
+      en: The dedicated browser fixture invokes real production tools without a model or the full chat path.
+      zh: 专用浏览测试壳调用真实生产工具，不包含模型及完整聊天链路。
+  - id: browser.work.tool-chain
+    title:
+      en: Use browser actions across multiple tabs
+      zh: 跨标签使用浏览操作
+    verifies:
+      - input
+      - identity
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Hover, type, submit, run a local browser script, inspect its network/console output and switch tabs.
+        zh: 悬停、输入、提交、运行本地浏览脚本，检查网络控制台输出并切换标签。
+    expected:
+      - en: Each real tool affects the selected page and preserved tabs keep their original state.
+        zh: 真实工具作用于选定页面，保留标签保持原状态。
+    notes:
+      en: The dedicated browser fixture invokes real production tools without a model or the full chat path.
+      zh: 专用浏览测试壳调用真实生产工具，不包含模型及完整聊天链路。
+  - id: browser.work.field-editing
+    title:
+      en: Edit text, numbers and rich fields without changing the host draft
+      zh: 编辑网页字段而不改变宿主草稿
+    verifies:
+      - input
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Fill text/number/multiline/editable fields, use cut/copy/paste/undo and change page focus through a script.
+        zh: 填写文本、数值、多行及富文本字段，使用剪切复制粘贴撤销，并通过脚本改变页内焦点。
+    expected:
+      - en: Page fields receive correct native input while host draft, selection and focus remain intact.
+        zh: 网页字段接收正确原生输入，宿主草稿、选区和焦点完整。
+    notes:
+      en: The dedicated browser fixture invokes real production tools without a model or the full chat path.
+      zh: 专用浏览测试壳调用真实生产工具，不包含模型及完整聊天链路。
+  - id: browser.work.drag
+    title:
+      en: Complete a browser drag in a hidden page
+      zh: 在隐藏网页完成拖动
+    verifies:
+      - input
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Use the production drag gesture between two local page elements.
+        zh: 使用生产拖动手势在本地网页两元素间拖动。
+    expected:
+      - en: The expected trusted down/up sequence reaches source and target and no pressed state is left behind.
+        zh: 预期可信按下抬起事件到达源与目标，未遗留按住状态。
+    notes:
+      en: The dedicated browser fixture invokes real production tools without a model or the full chat path.
+      zh: 专用浏览测试壳调用真实生产工具，不包含模型及完整聊天链路。
+  - id: browser.work.cancelled-key
+    title:
+      en: Respect a website’s cancelled shortcut
+      zh: 遵守网站取消快捷键的行为
+    verifies:
+      - input
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Use copy/select/paste shortcuts that the test page explicitly cancels.
+        zh: 使用被测试网页明确取消的复制、全选及粘贴快捷键。
+    expected:
+      - en: The webpage’s cancellation prevents default editing and the host draft and clipboard are not accidentally changed.
+        zh: 网页取消阻止默认编辑，宿主草稿及剪贴板不被意外改变。
+    notes:
+      en: The dedicated browser fixture invokes real production tools without a model or the full chat path.
+      zh: 专用浏览测试壳调用真实生产工具，不包含模型及完整聊天链路。
+  - id: browser.work.rich-paste
+    title:
+      en: Paste rich text and images with website cancellation
+      zh: 粘贴富文本图片并遵守网站取消
+    verifies:
+      - input
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Paste synthetic rich text and image content, then repeat with the page cancelling paste.
+        zh: 粘贴合成富文本及图片，再让网页取消后重复。
+    expected:
+      - en: Expected formats reach the page and cancellation prevents a second insertion without changing host input.
+        zh: 预期格式送达网页，取消阻止第二次插入，不改变宿主输入。
+    notes:
+      en: The dedicated browser fixture invokes real production tools without a model or the full chat path.
+      zh: 专用浏览测试壳调用真实生产工具，不包含模型及完整聊天链路。
+  - id: browser.work.iframe-paste
+    title:
+      en: Copy and paste inside an embedded frame
+      zh: 在嵌入框架中复制粘贴
+    verifies:
+      - input
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Focus an iframe input and use cut/copy/paste through the real browser tools.
+        zh: 聚焦 iframe 输入框，通过真实浏览工具剪切复制粘贴。
+    expected:
+      - en: Frame-local handlers receive the intended clipboard content and the host editor is untouched.
+        zh: 框架本地处理器收到预期剪贴板内容，宿主编辑器不受影响。
+    notes:
+      en: The dedicated browser fixture invokes real production tools without a model or the full chat path.
+      zh: 专用浏览测试壳调用真实生产工具，不包含模型及完整聊天链路。
+  - id: browser.work.iframe-origins
+    title:
+      en: Edit same-site and cross-site embedded frames
+      zh: 编辑同站及跨站嵌入框架
+    verifies:
+      - input
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Use trusted typing, navigation keys and clipboard shortcuts in each declared iframe origin.
+        zh: 在各声明框架来源使用可信输入、导航键及剪贴板快捷键。
+    expected:
+      - en: Only the focused frame changes; host native input and selection continue independently.
+        zh: 只有聚焦框架改变，宿主原生输入及选区独立继续。
+    variants:
+      origin:
+        - different-port
+        - cross-site
+    notes:
+      en: The dedicated browser fixture invokes real production tools without a model or the full chat path.
+      zh: 专用浏览测试壳调用真实生产工具，不包含模型及完整聊天链路。
+  - id: browser.work.punctuation
+    title:
+      en: Type punctuation and function keys correctly
+      zh: 正确输入符号及功能键
+    verifies:
+      - input
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Send a percent character and a function key through the browser key tool.
+        zh: 通过浏览按键工具发送百分号及功能键。
+    expected:
+      - en: The percent character is inserted once with a completed key pair, and the function-key name is not typed as text.
+        zh: 百分号只输入一次且按键成对完成，功能键名称不会作为文本输入。
+    notes:
+      en: The dedicated browser fixture invokes real production tools without a model or the full chat path.
+      zh: 专用浏览测试壳调用真实生产工具，不包含模型及完整聊天链路。
+  - id: browser.work.first-navigation
+    title:
+      en: A new page starts with clean Back history
+      zh: 新网页的后退历史保持清晰
+    verifies:
+      - identity
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated local page and conversation fixtures.
+        zh: 使用隔离的本地网页及对话测试资料。
+    steps:
+      - en: Open a newly created page and inspect its Back capability.
+        zh: 打开新创建页面并检查后退能力。
+    expected:
+      - en: Back does not lead to an internal attachment document.
+        zh: 后退不会进入内部挂载页面。
+  - id: browser.work.native-hidden
+    title:
+      en: Keep hidden browsing observable without stealing focus
+      zh: 保持隐藏浏览可观察且不抢焦点
+    verifies:
+      - capture
+      - input
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated local page and conversation fixtures.
+        zh: 使用隔离的本地网页及对话测试资料。
+    steps:
+      - en: Run the native visibility fixture through parked, minimized and hidden states.
+        zh: 让原生可见性测试经历停放、最小化和隐藏状态。
+    expected:
+      - en: Timers, accessible content and fresh painted screenshots remain available without unexpected focus or leftover resources.
+        zh: 计时器、可访问内容及新截图仍可用，不意外抢焦点或遗留资源。
+  - id: browser.work.navigation-modes
+    title:
+      en: Navigate, zoom and emulate a mobile web page
+      zh: 导航、缩放并模拟移动网页
+    verifies:
+      - identity
+      - input
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated local page and conversation fixtures.
+        zh: 使用隔离的本地网页及对话测试资料。
+    steps:
+      - en: Enter native text, change page zoom and mobile emulation, navigate away and back, then reveal again.
+        zh: 输入原生文字、改变网页缩放和移动模拟，导航离开并返回，再显示。
+    expected:
+      - en: The same browser page supports the selected mode and navigation while retaining its page identity.
+        zh: 同一浏览页支持所选模式和导航，并保留页面身份。

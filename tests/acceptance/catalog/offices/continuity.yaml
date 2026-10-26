@@ -1,0 +1,120 @@
+version: 1
+id: offices.continuity
+module: offices
+title:
+  en: Continue through a peer disconnect
+  zh: 队友断线后保持连续
+story:
+  en: I can tell unavailable work from lost work and recover when the connection returns.
+  zh: 我能分清暂不可用与数据丢失，连接恢复后继续。
+basis: documented
+references:
+  - src/main/apps/runtime/federation/DESIGN.md
+  - src/main/apps/runtime/federation/log/DESIGN.md
+  - tests/decentralized/SCENARIOS.md
+promises:
+  recover:
+    en: Reconnect converges task state and durable messages without replaying side effects.
+    zh: 重连后任务状态与持久消息收敛，不重复副作用。
+  history:
+    en: Unavailable remote history is labelled unavailable rather than empty.
+    zh: 暂不可用的远程历史显示不可用而不是空白。
+  authority:
+    en: Authority recovery preserves one accepted version of shared work.
+    zh: 协作控制节点恢复保持共享工作的唯一有效版本。
+scenarios:
+  - id: offices.continuity.reconnect
+    title:
+      en: Disconnect and rejoin during coordination
+      zh: 协作中断开并重新加入
+    verifies:
+      - recover
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Two nodes exchange identified messages.
+        zh: 两个节点交换带标识消息。
+    steps:
+      - en: Disconnect one, continue work, reconnect and compare records.
+        zh: 断开一个节点，继续工作，再重连并比较记录。
+    expected:
+      - en: Accepted messages and task changes converge once without duplicate effects.
+        zh: 已接受消息和任务变更最终一致，副作用不重复。
+    requirements: []
+  - id: offices.continuity.history
+    title:
+      en: Read history while its serving peer is offline
+      zh: 提供历史的节点离线时读取
+    verifies:
+      - history
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Required history is not present locally.
+        zh: 所需历史不在本机。
+    steps:
+      - en: Take its serving node offline, open history, restore the node and retry.
+        zh: 让提供历史的节点离线并读取，恢复后重试。
+    expected:
+      - en: The UI reports unavailability first and shows recovered history later.
+        zh: 先提示不可用，恢复后能看到原历史。
+    requirements: []
+  - id: offices.continuity.takeover
+    title:
+      en: Recover after the coordinating node disappears
+      zh: 协调节点消失后恢复
+    verifies:
+      - authority
+      - recover
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Three isolated nodes share a task.
+        zh: 三个隔离节点共享一个任务。
+    steps:
+      - en: Remove the coordinating node, elect a survivor, then reconnect the old node.
+        zh: 移除协调节点，由存活节点接管，再恢复旧节点。
+    expected:
+      - en: Only the accepted authority changes shared state and all nodes converge.
+        zh: 仅有效控制节点修改共享状态，各节点最终收敛。
+    requirements: []
+  - id: offices.continuity.real-network
+    title:
+      en: Use two physical machines across a real relay path
+      zh: 两台真实机器通过中继协作
+    verifies:
+      - recover
+      - history
+    platforms: *a1
+    profiles:
+      - external
+    evidence: external
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Two dedicated test machines and a test relay are available.
+        zh: 有两台专用测试机器及测试中继。
+    steps:
+      - en: Join, exchange a task, interrupt a network link and reconnect.
+        zh: 加入并协作任务，中断链路后再恢复。
+    expected:
+      - en: User-visible work and history recover across the actual network path.
+        zh: 用户看到的工作及历史在真实网络链路上恢复。
+    requirements:
+      - multi-host
+      - test-relay

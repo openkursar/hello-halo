@@ -31,6 +31,15 @@ const TEST_MODEL = process.env.HALO_TEST_MODEL || ''
 const TEST_PROVIDER = process.env.HALO_TEST_PROVIDER || ''
 const TEST_OAUTH_SOURCE = process.env.HALO_TEST_OAUTH_SOURCE || ''
 const TEST_SDK_ENGINE = process.env.HALO_TEST_SDK_ENGINE || ''
+const ACCEPTANCE_MODE = process.env.HALO_ACCEPTANCE_MODE || ''
+
+if (ACCEPTANCE_MODE && TEST_OAUTH_SOURCE) throw new Error('Acceptance profiles cannot borrow a signed-in account')
+if (ACCEPTANCE_MODE === 'brokered-live') {
+  const endpoint = new URL(TEST_API_URL)
+  if (endpoint.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(endpoint.hostname) || !TEST_API_KEY.startsWith('acceptance-')) {
+    throw new Error('Live acceptance profiles must use the temporary local budget broker')
+  }
+}
 
 if (TEST_SDK_ENGINE && !['anthropic', 'halo', 'codex', 'dsh'].includes(TEST_SDK_ENGINE)) {
   throw new Error('HALO_TEST_SDK_ENGINE must name a supported SDK engine')
@@ -219,7 +228,11 @@ export function createTestConfigDir(appPath: string, registries?: RegistrySource
       completed: true  // Skip onboarding in tests
     },
     mcpServers: {},
-    ...(TEST_SDK_ENGINE ? { agent: { sdkEngine: TEST_SDK_ENGINE } } : {}),
+    ...(TEST_SDK_ENGINE || ACCEPTANCE_MODE ? { agent: {
+      ...(TEST_SDK_ENGINE ? { sdkEngine: TEST_SDK_ENGINE } : {}),
+      ...(ACCEPTANCE_MODE ? { configDirMode: 'custom', customConfigDir: path.join(testDir, 'engine-state') } : {})
+    } } : {}),
+    ...(ACCEPTANCE_MODE ? { imChannels: [], notificationChannels: [] } : {}),
     ...(registries ? { appStore: { registries, cacheTtlMs: 3600000, autoCheckUpdates: true } } : {}),
     isFirstLaunch: false  // Skip first launch flow
   }
@@ -228,6 +241,9 @@ export function createTestConfigDir(appPath: string, registries?: RegistrySource
     path.join(haloDir, 'config.json'),
     JSON.stringify(config, null, 2)
   )
+  if (ACCEPTANCE_MODE) {
+    base.info().annotations.push({ type: 'acceptance-isolation', description: ACCEPTANCE_MODE === 'brokered-live' ? 'brokered-fresh-profile' : 'fresh-profile' })
+  }
 
   // Create headless-electron symlink for Claude Agent SDK
   // SDK uses this to spawn child processes without Dock icon on macOS
@@ -271,7 +287,7 @@ export function cleanupTestConfigDir(testDir: string): void {
  * `createTestConfigDir()` and this call, then reuse the exact same launch
  * behavior (env vars, GPU/accel flags) instead of duplicating it.
  */
-export async function launchElectronApp(appEntryPath: string, testConfigDir: string): Promise<ElectronApplication> {
+export async function launchElectronApp(appEntryPath: string, testConfigDir: string, options: { bootstrapDirectory?: string } = {}): Promise<ElectronApplication> {
   console.log(`[E2E] App entry: ${appEntryPath}`)
   console.log(`[E2E] Test config dir: ${testConfigDir}`)
 
@@ -285,11 +301,11 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
     return electron.launch({
       executablePath: appEntryPath,
       args: ['--lang=en-US', ...(process.env.HALO_E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : [])],
-      env: { ...cleanEnv, HALO_DATA_DIR: path.join(testConfigDir, '.halo'), HALO_E2E_TEST: '1', ELECTRON_DISABLE_GPU: '1' },
+      env: { ...cleanEnv, HOME: testConfigDir, USERPROFILE: testConfigDir, HALO_DATA_DIR: path.join(testConfigDir, '.halo'), HALO_E2E_TEST: '1', ELECTRON_DISABLE_GPU: '1' },
     })
   }
 
-  const bootstrap = path.join(path.dirname(appEntryPath), `.e2e-bootstrap-${crypto.randomUUID()}.cjs`)
+  const bootstrap = path.join(options.bootstrapDirectory ?? path.dirname(appEntryPath), `.e2e-bootstrap-${crypto.randomUUID()}.cjs`)
   const appData = path.join(testConfigDir, 'electron-data')
   const userData = path.join(appData, 'user')
   fs.mkdirSync(userData, { recursive: true })

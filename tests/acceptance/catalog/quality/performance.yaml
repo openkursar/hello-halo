@@ -1,0 +1,98 @@
+version: 1
+id: quality.performance
+module: quality
+title:
+  en: Keep interaction responsive at real scale
+  zh: 在真实规模下保持响应
+story:
+  en: I can keep working as history, files and digital humans grow.
+  zh: 历史、文件和数字人增多时，我仍能继续工作。
+basis: documented
+references:
+  - .agents/skills/product-principles/SKILL.md
+  - .agents/skills/halo-dev/references/performance-and-scale.md
+  - tests/perf/docs/README.md
+promises:
+  bounded:
+    en: Opening lists and menus does not perform work proportional to all user data just to decorate the view.
+    zh: 打开列表和菜单不会只为装饰界面而处理全部用户数据。
+  stable:
+    en: Repeated use and background streams stay within the declared resource budgets for the tested build and machine.
+    zh: 反复使用及后台输出在所测构建和机器的已声明资源预算内。
+scenarios:
+  - id: quality.performance.startup
+    title:
+      en: Open Halo with a large saved profile
+      zh: 使用大量保存数据启动 Halo
+    verifies:
+      - bounded
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A versioned profile contains large but supported numbers of spaces, conversations and people.
+        zh: 版本化资料包含大量但受支持的空间、对话及数字人。
+    steps:
+      - en: Measure cold start and navigation using the performance harness.
+        zh: 使用性能测试工具测量冷启动及导航。
+    expected:
+      - en: Measurements meet the applicable declared thresholds, with build and fixture identities retained.
+        zh: 测量满足适用阈值，并保留构建及测试数据身份。
+    requirements:
+      - performance-host
+  - id: quality.performance.streams
+    title:
+      en: Keep typing while background replies stream
+      zh: 后台回复输出时继续输入
+    verifies:
+      - bounded
+      - stable
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A bounded fixture starts multiple background streams and a large visible transcript.
+        zh: 有界测试启动多个后台输出及大型可见对话。
+    steps:
+      - en: Type and switch supported views while measuring responsiveness and memory.
+        zh: 输入并切换支持视图，同时测响应和内存。
+    expected:
+      - en: The UI remains responsive and resource use meets the declared scenario limits.
+        zh: 界面仍响应，资源使用符合声明的场景限制。
+    requirements:
+      - performance-host
+  - id: quality.performance.soak
+    title:
+      en: Repeat browsing and tool sessions for the declared duration
+      zh: 按声明时长重复浏览及工具会话
+    verifies:
+      - stable
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: The exact build and full-duration workload are recorded.
+        zh: 已记录准确构建及完整时长负载。
+    steps:
+      - en: Run repeated open/close and idle cycles for the planned duration.
+        zh: 按计划时长重复打开关闭及空闲循环。
+    expected:
+      - en: The actual duration is reported and resource growth satisfies the workload’s published gate.
+        zh: 报告真实时长，资源增长满足负载公开门槛。
+    requirements:
+      - performance-host
+    notes:
+      en: A shortened run remains shortened evidence and cannot certify the full-duration scenario.
+      zh: 缩短运行仅是缩短证据，不能认证完整时长场景。

@@ -1,0 +1,156 @@
+version: 1
+id: files.preview
+module: files
+title:
+  en: Open the file the AI produced
+  zh: 打开 AI 交付的文件
+story:
+  en: I can find a generated file and inspect it in the right viewer.
+  zh: 我能找到生成文件，并在合适的查看器中检查。
+basis: observed
+references:
+  - src/renderer/components/artifact/ArtifactFilesTab.tsx
+  - src/renderer/components/canvas/ContentCanvas.tsx
+  - src/renderer/components/canvas/viewers/OfficeFallback.tsx
+  - tests/e2e/specs/acceptance-artifacts.spec.ts
+  - tests/e2e/specs/browser-view-frame.spec.ts
+promises:
+  open:
+    en: A selected file opens the appropriate viewer for its supported format.
+    zh: 选中文件后使用支持该格式的查看器。
+  updates:
+    en: Generated and changed files appear in the correct workspace.
+    zh: 新增及变更文件出现在正确空间。
+  failure:
+    en: Unreadable or unsupported content has an actionable state instead of a blank successful preview.
+    zh: 不可读或不支持内容有可处理状态，不以空白伪装成功预览。
+scenarios:
+  - id: files.preview.formats
+    title:
+      en: Preview supported formats
+      zh: 预览支持格式
+    verifies:
+      - open
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: The current workspace contains safe fixture files.
+        zh: 当前空间中有安全测试文件。
+    steps:
+      - en: Open each selected format from the file rail.
+        zh: 从文件栏打开各选定格式。
+    expected:
+      - en: Recognizable fixture content appears in the matching viewer without changing the file.
+        zh: 对应查看器显示可识别测试内容，不修改文件。
+    variants:
+      format:
+        - markdown
+        - code
+        - html
+        - image
+        - json
+        - csv
+        - pdf
+        - docx
+        - xlsx
+        - pptx
+  - id: files.preview.watcher
+    title:
+      en: Find newly generated and renamed files
+      zh: 找到新生成和重命名文件
+    verifies:
+      - updates
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: The workspace rail is open.
+        zh: 空间文件栏已打开。
+    steps:
+      - en: Create, rename and remove a fixture file while the UI is running.
+        zh: 界面运行时创建、重命名和移除测试文件。
+    expected:
+      - en: The rail follows the actual filesystem changes in that workspace only.
+        zh: 文件栏仅跟随该空间真实文件变更。
+  - id: files.preview.corrupt
+    title:
+      en: Recover from an unreadable preview
+      zh: 从不可读预览恢复
+    verifies:
+      - failure
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A corrupt supported-format fixture exists.
+        zh: 有一个支持格式的损坏文件。
+    steps:
+      - en: Open it, then open a valid file without restarting the app.
+        zh: 打开损坏文件，再不重启应用打开有效文件。
+    expected:
+      - en: The failed preview does not crash the app or prevent the valid preview.
+        zh: 失败预览不导致应用崩溃，也不阻止有效预览。
+  - id: files.preview.tool-preview
+    title:
+      en: Open a file created and updated by real tools
+      zh: 打开真实工具创建并修改的文件
+    verifies:
+      - open
+      - updates
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: An isolated workspace uses a scripted model and real file tools.
+        zh: 隔离空间使用脚本模型及真实文件工具。
+    steps:
+      - en: Ask through chat to write Markdown, open the file from the rail, let a real edit update it, then restart.
+        zh: 通过对话要求写 Markdown，从文件栏打开，再用真实编辑更新并重启。
+    expected:
+      - en: The canvas shows real written and edited content; the disk file and conversation remain after restart.
+        zh: 画布显示真实创建及编辑内容；重启后磁盘文件与对话均保留。
+  - id: files.preview.pdf-canvas
+    title:
+      en: Read a local PDF and return to it
+      zh: 阅读本地 PDF 并返回
+    verifies:
+      - open
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Open a PDF from the workspace file rail, switch away and reopen its tab.
+        zh: 从空间文件栏打开 PDF，切走后重开其标签。
+    expected:
+      - en: The PDF paints actual content and its browser-backed view survives supported switching.
+        zh: PDF 绘制真实内容，其浏览查看器在支持的切换中保留。

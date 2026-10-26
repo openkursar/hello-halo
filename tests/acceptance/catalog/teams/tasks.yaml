@@ -1,0 +1,304 @@
+version: 1
+id: teams.tasks
+module: teams
+title:
+  en: Work in the right task and member view
+  zh: 在正确任务与成员中工作
+story:
+  en: I can switch tasks and members without mixing their discussions.
+  zh: 我能切换任务和成员，而不混淆他们的讨论。
+basis: documented
+references:
+  - src/renderer/components/team/workbench/DESIGN.md
+  - src/main/apps/team/DESIGN.md
+  - tests/e2e/specs/team-render.spec.ts
+promises:
+  scope:
+    en: Selecting a member changes the member view within the selected task.
+    zh: 切换成员只切换当前任务中的成员视图。
+  draft:
+    en: Each task/member draft remains recoverable after a rejected send.
+    zh: 各任务及成员草稿在发送被拒绝后可恢复。
+  ownership:
+    en: A teammate-owned member remains read-only and does not grant private chat access.
+    zh: 队友拥有的成员保持只读，不因此获得私聊权限。
+  lifetime:
+    en: Archived tasks remain readable and reopen only on a human request.
+    zh: 归档任务仍可读，仅在人的请求下重新开启。
+  layout:
+    en: The task room and its drawers remain usable in narrow layouts and both themes.
+    zh: 任务房间及抽屉在窄屏和两种主题中仍可使用。
+scenarios:
+  - id: teams.tasks.member-draft
+    title:
+      en: Switch members with different drafts
+      zh: 带不同草稿切换成员
+    verifies:
+      - scope
+      - draft
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Two owned members have different unsent drafts in one task.
+        zh: 同一任务中两位自己的成员各有不同草稿。
+    steps:
+      - en: Switch members, trigger a rejected send and return.
+        zh: 切换成员，触发发送被拒绝后再返回。
+    expected:
+      - en: The correct member and draft are retained inside the same task.
+        zh: 同一任务中保留正确成员及其草稿。
+  - id: teams.tasks.readonly
+    title:
+      en: Inspect a teammate’s work
+      zh: 查看队友的工作
+    verifies:
+      - ownership
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: The task includes a member owned on another machine.
+        zh: 任务含另一机器拥有的成员。
+    steps:
+      - en: Select that member and inspect history and member details.
+        zh: 选择该成员，查看历史与成员详情。
+    expected:
+      - en: History is readable where authorized, with no editable composer for that member.
+        zh: 授权范围内历史可读，该成员无可编辑输入框。
+  - id: teams.tasks.archive
+    title:
+      en: Archive and deliberately reopen a task
+      zh: 归档并主动重开任务
+    verifies:
+      - lifetime
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A task has completed work and history.
+        zh: 任务已有完成工作及历史。
+    steps:
+      - en: Archive, deliver a background wake, then explicitly reopen it.
+        zh: 归档，投递后台唤醒，再主动重开。
+    expected:
+      - en: Background work cannot reopen the task; explicit reopening retains history.
+        zh: 后台事件不能重开任务；主动重开后历史保留。
+  - id: teams.tasks.task-switch
+    title:
+      en: Keep task conversations and activity separate
+      zh: 保持任务对话和活动独立
+    verifies:
+      - scope
+      - draft
+    platforms: &a2
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Type a draft, select a second task and its activity, then return.
+        zh: 输入草稿，选择另一任务及其活动，再返回。
+    expected:
+      - en: Each task shows its own conversation and activity and the original draft returns.
+        zh: 各任务显示自己的对话与活动，原草稿恢复。
+  - id: teams.tasks.send-rejected
+    title:
+      en: Recover a rejected message after member switching
+      zh: 成员切换后恢复被拒绝消息
+    verifies:
+      - draft
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Send through a rejecting fixture and switch away and back.
+        zh: 通过会拒绝发送的测试处理器发消息，切走后回来。
+    expected:
+      - en: The rejected text returns to the intended member composer.
+        zh: 被拒绝文字回到正确成员输入框。
+  - id: teams.tasks.first-send
+    title:
+      en: Create a task on its first submitted message
+      zh: 首次发送消息时创建任务
+    verifies:
+      - scope
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Open New task, type a title-like message and send.
+        zh: 打开新任务，输入消息并发送。
+    expected:
+      - en: No task appears before submit and exactly one corresponding task appears after it.
+        zh: 提交前不创建任务，提交后只出现一个对应任务。
+  - id: teams.tasks.rename
+    title:
+      en: Rename a task consistently
+      zh: 一致地重命名任务
+    verifies:
+      - scope
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Cancel a proposed title, then save a different title.
+        zh: 取消一个新标题，再保存另一个标题。
+    expected:
+      - en: Cancel leaves the original; save updates both the room and task-list title.
+        zh: 取消保留原名，保存同时更新任务房间及列表。
+  - id: teams.tasks.first-send-rejected
+    title:
+      en: Keep a rejected first message recoverable
+      zh: 保留发送失败的首条消息
+    verifies:
+      - draft
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Create a task whose first send is rejected, switch tasks and return.
+        zh: 创建首条发送被拒绝的任务，切换任务后返回。
+    expected:
+      - en: The new task is retained with its original unsent text.
+        zh: 新任务保留，其原未发送文字仍在。
+  - id: teams.tasks.readonly-kind
+    title:
+      en: Inspect read-only channel and run history
+      zh: 查看只读渠道与运行历史
+    verifies:
+      - ownership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated seeded data and the production UI with the fixture boundary stated below.
+        zh: 使用隔离预置数据及真实界面，测试替换边界见说明。
+    steps:
+      - en: Open each read-only history kind and its task activity drawer.
+        zh: 打开各只读历史类型及任务活动抽屉。
+    expected:
+      - en: The history and activity remain available without a composer or sender picker.
+        zh: 历史和活动可查看，但没有输入框或发送者选择器。
+    variants:
+      kind:
+        - im
+        - run
+  - id: teams.tasks.observer-only
+    title:
+      en: Inspect a team without owning a member
+      zh: 没有自有成员时查看团队
+    verifies:
+      - ownership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Open a task as a viewer with no owned team members.
+        zh: 作为没有自有团队成员的查看者打开任务。
+    expected:
+      - en: Activity remains accessible and neither composer nor sender selection grants sending authority.
+        zh: 活动仍可查看，输入框与发送者选择不会授予发言权限。
+  - id: teams.tasks.narrow-drawers
+    title:
+      en: Read expanded task activity on a narrow screen
+      zh: 窄屏阅读展开的任务活动
+    verifies:
+      - layout
+    platforms: &a3
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: At 375px expand coordination, open activity and close it with Escape in light and dark themes.
+        zh: 在 375px 下展开协作并打开活动，在明暗主题中用 Escape 关闭。
+    expected:
+      - en: The composer and preview remain usable, the drawer fits and closing returns to the task.
+        zh: 输入框及预览可用，抽屉适配，关闭返回任务。
+  - id: teams.tasks.pending-rejection
+    title:
+      en: Restore rejected text after a quick member round trip
+      zh: 快速切换成员后恢复被拒绝文字
+    verifies:
+      - draft
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Submit through a delayed rejection fixture, switch members and return before it settles.
+        zh: 通过延迟拒绝的测试处理器提交，结束前切换成员并返回。
+    expected:
+      - en: The eventual rejection restores the original text in the active matching composer.
+        zh: 最终拒绝将原文字恢复到匹配的活动输入框。

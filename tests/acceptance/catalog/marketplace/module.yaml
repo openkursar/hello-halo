@@ -1,0 +1,18 @@
+version: 1
+id: marketplace
+title:
+  en: Discover and share resources
+  zh: 发现与分享资源
+description:
+  en: Browse sources, install resources, update and publish.
+  zh: 浏览来源、安装资源、更新及发布。
+paths:
+  - src/main/store/**
+  - src/renderer/pages/StorePage.tsx
+  - src/renderer/components/store/**
+  - src/renderer/components/settings/RegistrySection.tsx
+dependsOn:
+  - capabilities
+scope:
+  en: Supported registry protocols and optional source capabilities; digital humans/skills/MCP, offline or partial-source failure, dependencies, updates and authorized test publishing.
+  zh: 支持的注册源协议及其可选能力；数字人、技能、MCP、离线或部分来源故障、依赖、升级及获准的测试发布。

@@ -1,0 +1,204 @@
+version: 1
+id: startup.navigation
+module: startup
+title:
+  en: Reach every primary destination
+  zh: 找到主要功能入口
+story:
+  en: I can move between conversations, digital humans, knowledge, store and settings without losing where I was.
+  zh: 我能在对话、数字人、知识库、市场和设置之间切换，并返回原来的位置。
+basis: observed
+references:
+  - src/renderer/components/layout/NavRail.tsx
+  - src/renderer/App.tsx
+  - tests/e2e/specs/navigation.spec.ts
+  - tests/e2e/specs/settings.spec.ts
+  - tests/e2e/specs/smoke.spec.ts
+promises:
+  routes:
+    en: Primary destinations remain reachable from the application shell.
+    zh: 主要页面都能从应用导航到达。
+  back:
+    en: Returning from settings restores the previous conversation view.
+    zh: 从设置返回会回到原来的对话界面。
+scenarios:
+  - id: startup.navigation.destinations
+    title:
+      en: Navigate through primary pages
+      zh: 遍历主要页面
+    verifies:
+      - routes
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Halo has a configured isolated profile.
+        zh: Halo 使用已配置的隔离资料。
+    steps:
+      - en: Open each navigation destination and return to Conversation.
+        zh: 依次打开各导航入口，再回到对话。
+    expected:
+      - en: Each destination renders its own content and the chat composer is available on return.
+        zh: 每个入口显示正确页面，返回后输入框可用。
+  - id: startup.navigation.back
+    title:
+      en: Return to the current conversation
+      zh: 返回当前对话
+    verifies:
+      - back
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A named conversation is open.
+        zh: 已打开一个有名称的对话。
+    steps:
+      - en: Open Settings and use its back action.
+        zh: 打开设置再点击返回。
+    expected:
+      - en: The same conversation remains selected.
+        zh: 仍选中同一个对话。
+  - id: startup.navigation.rail
+    title:
+      en: Find the primary navigation entries
+      zh: 找到主要导航入口
+    verifies:
+      - routes
+    platforms: &a2
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - fast
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Open the configured application shell.
+        zh: 打开已配置的应用主界面。
+    expected:
+      - en: Conversation, people, knowledge, store, tasks and settings entries are visible.
+        zh: 对话、数字人、知识库、市场、任务及设置入口可见。
+  - id: startup.navigation.people-library
+    title:
+      en: Open people and capability categories
+      zh: 打开数字人与能力分类
+    verifies:
+      - routes
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Open Digital Humans through global navigation.
+        zh: 通过全局导航打开数字人。
+    expected:
+      - en: People, Teams and Capability library are reachable and navigation shows the active destination.
+        zh: 数字人、团队及能力库可达，导航标明当前页面。
+  - id: startup.navigation.workspace-return
+    title:
+      en: Return from workspace management
+      zh: 从空间管理返回
+    verifies:
+      - routes
+      - back
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Open workspace management, then choose the default workspace.
+        zh: 打开空间管理，再选择默认空间。
+    expected:
+      - en: The selected workspace name and usable chat composer return.
+        zh: 返回选定空间名称与可用输入框。
+  - id: startup.navigation.settings-groups
+    title:
+      en: Jump between settings sections
+      zh: 在设置分组之间跳转
+    verifies:
+      - routes
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Open settings and activate Appearance and AI Model navigation entries.
+        zh: 打开设置并激活外观与 AI 模型分组。
+    expected:
+      - en: Each named settings group moves into the visible viewport.
+        zh: 对应设置分组进入可见范围。
+  - id: startup.navigation.header-back
+    title:
+      en: Return to chat with the settings header
+      zh: 用设置标题返回对话
+    verifies:
+      - back
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Open settings from chat and use its header back control.
+        zh: 从对话打开设置并使用标题返回。
+    expected:
+      - en: Chat is visible again and settings content is no longer shown.
+        zh: 再次看到对话，设置内容不再显示。
+  - id: startup.navigation.no-unhandled
+    title:
+      en: Navigate without unhandled application failures
+      zh: 导航时无未处理应用失败
+    verifies:
+      - routes
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - fast
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Open chat, settings and chat again while observing main-process and renderer errors.
+        zh: 观察主进程及界面错误，同时依次打开对话、设置和对话。
+    expected:
+      - en: No unhandled rejection or renderer page error occurs during the observed navigation.
+        zh: 观察到的导航期间没有未处理拒绝或界面页面错误。

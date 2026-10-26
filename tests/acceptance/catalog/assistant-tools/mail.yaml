@@ -1,0 +1,102 @@
+version: 1
+id: assistant-tools.mail
+module: assistant-tools
+title:
+  en: Work with authorized test email and calendar data
+  zh: 处理获准的测试邮件及日历
+story:
+  en: I can ask for email and calendar work and see which external action actually occurred.
+  zh: 我能请求邮件和日历工作，并知道实际发生了什么外部操作。
+basis: observed
+references:
+  - src/main/services/email-mcp/index.ts
+  - src/main/services/email-mcp/tools/email-send.ts
+  - src/main/services/email-mcp/tools/calendar-create.ts
+promises:
+  read:
+    en: Reading/searching identifies the correct mailbox item and attachments.
+    zh: 读取搜索定位正确邮件及附件。
+  write:
+    en: Send, reply, move and calendar changes target only the requested account and item.
+    zh: 发送、回复、移动及日历修改只针对请求的账户与项目。
+  error:
+    en: Authentication and transport failures are reported without claiming delivery.
+    zh: 认证和传输失败不会被报告为已送达。
+scenarios:
+  - id: assistant-tools.mail.read
+    title:
+      en: Read and search a test mailbox
+      zh: 读取搜索测试邮箱
+    verifies:
+      - read
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A local protocol fixture exposes synthetic messages and attachments.
+        zh: 本地协议测试服务提供合成邮件及附件。
+    steps:
+      - en: Search and read a specific message and its attachment.
+        zh: 搜索并读取指定邮件和附件。
+    expected:
+      - en: Returned content matches the selected item without exposing another mailbox.
+        zh: 返回内容匹配选定项目，不暴露其他邮箱。
+  - id: assistant-tools.mail.write
+    title:
+      en: Exercise mail and calendar writes against a fixture
+      zh: 对测试服务执行邮件与日历写入
+    verifies:
+      - write
+      - error
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: All email and calendar endpoints are isolated fixtures.
+        zh: 所有邮件及日历端点均为隔离测试服务。
+    steps:
+      - en: Send/reply/move a synthetic message and create/delete a test event, including one forced transport failure.
+        zh: 发送回复移动合成邮件，创建删除测试事件，并触发一次传输错误。
+    expected:
+      - en: Only intended fixture records change and the failed operation is not reported successful.
+        zh: 仅预期测试记录改变，失败操作不被报告成功。
+    variants:
+      operation:
+        - send
+        - reply
+        - move
+        - calendar-create
+        - calendar-delete
+  - id: assistant-tools.mail.external
+    title:
+      en: Send to an authorized test recipient
+      zh: 发送给获准测试收件人
+    verifies:
+      - write
+      - error
+    platforms: *a1
+    profiles:
+      - external
+    evidence: external
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: An authorized dedicated mailbox and test recipient are supplied for this run.
+        zh: 本次运行提供明确授权的专用邮箱及测试收件人。
+    steps:
+      - en: Send a unique harmless message and verify receipt in that mailbox.
+        zh: 发送无害唯一标记邮件并在目标邮箱验证。
+    expected:
+      - en: The recipient receives the intended message once with the expected attachments.
+        zh: 收件人收到一次预期邮件及附件。
+    requirements:
+      - test-mail-account

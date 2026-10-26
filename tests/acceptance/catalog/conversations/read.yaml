@@ -1,0 +1,287 @@
+version: 1
+id: conversations.read
+module: conversations
+title:
+  en: Read long and changing conversations
+  zh: 阅读长对话和实时回复
+story:
+  en: I can read older messages while new work arrives without losing my position.
+  zh: 新回复出现时，我仍能阅读旧消息而不丢失位置。
+basis: observed
+references:
+  - tests/e2e/specs/transcript-scroll.spec.ts
+  - tests/e2e/specs/digital-human-chat.spec.ts
+  - src/renderer/components/chat/transcript/DESIGN.md
+promises:
+  anchor:
+    en: Reading old messages is not interrupted by new streamed content.
+    zh: 阅读旧消息时不会被新流式内容强行拖走。
+  draft:
+    en: Opening and switching conversations preserve the intended unsent draft.
+    zh: 打开和切换对话时保留对应的未发送草稿。
+  history:
+    en: Older pages remain reachable without rendering the whole history at once.
+    zh: 更早记录可继续读取，无需一次渲染全部历史。
+scenarios:
+  - id: conversations.read.anchor
+    title:
+      en: Read history while a response grows
+      zh: 回复增长时阅读历史
+    verifies:
+      - anchor
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A long seeded transcript has an active streamed reply.
+        zh: 长测试记录中有正在输出的回复。
+    steps:
+      - en: Scroll away from the bottom, receive more output and return to latest.
+        zh: 向上阅读，接收更多输出，再回到最新位置。
+    expected:
+      - en: The old reading position stays stable and the latest action reaches the newest reply.
+        zh: 旧阅读位置稳定，回到最新能找到最新回复。
+  - id: conversations.read.draft
+    title:
+      en: Keep a draft during conversation loading
+      zh: 加载对话时保留草稿
+    verifies:
+      - draft
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A digital-human conversation loads its history.
+        zh: 数字人对话正在载入历史。
+    steps:
+      - en: Type while loading, switch away and return.
+        zh: 加载时输入，切走后再回来。
+    expected:
+      - en: The draft belongs to the same conversation and the composer remains usable.
+        zh: 草稿仍属于同一对话，输入框可继续使用。
+  - id: conversations.read.pagination
+    title:
+      en: Open older pages of a long transcript
+      zh: 打开长记录的更早页面
+    verifies:
+      - history
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A conversation has more messages than one history page.
+        zh: 对话记录超过一页。
+    steps:
+      - en: Load older pages and navigate to a known older message.
+        zh: 加载前面的记录并找到指定旧消息。
+    expected:
+      - en: No messages duplicate or disappear at page boundaries.
+        zh: 分页边界不重复也不丢消息。
+  - id: conversations.read.loading-draft
+    title:
+      en: Keep text typed while a person’s history loads
+      zh: 加载个人历史时保留正在输入的文字
+    verifies:
+      - draft
+    platforms: &a2
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Open the seeded person conversation and type during history loading.
+        zh: 打开预置数字人对话，在历史加载期间输入。
+    expected:
+      - en: The original composer remains and retains the typed draft after history appears.
+        zh: 原输入框保持且历史出现后草稿仍在。
+  - id: conversations.read.reply-settles
+    title:
+      en: Keep a streamed reply visible when it finishes
+      zh: 回复完成时内容持续可见
+    verifies:
+      - anchor
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Deliver controlled streaming and completed events into the chat renderer.
+        zh: 向对话界面发送受控输出与完成事件。
+    expected:
+      - en: The final reply replaces the live rendering without an empty frame or rebuilding earlier message rows.
+        zh: 最终回复替换实时内容时无空帧，也不重建早先消息行。
+  - id: conversations.read.person-narrow
+    title:
+      en: Open a person conversation on a narrow screen
+      zh: 在窄屏打开数字人对话
+    verifies:
+      - draft
+      - history
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Open a conversation from the narrow history sheet and use @ to start another with the same person.
+        zh: 从窄屏历史面板打开对话，并用 @ 与同一数字人新建另一对话。
+    expected:
+      - en: The selected history and usable composer fit the screen with the correct person identity.
+        zh: 选定历史和可用输入框适配屏幕，身份正确。
+  - id: conversations.read.person-pagination
+    title:
+      en: Read old digital-human history in bounded pages
+      zh: 分页阅读较早数字人记录
+    verifies:
+      - history
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Open a long person conversation, read older pages and navigate to a historical target.
+        zh: 打开长数字人对话，读取旧页面并跳转到历史目标。
+    expected:
+      - en: The old content stays reachable, mounted rows stay bounded when returning, and the target is positioned visibly.
+        zh: 旧内容可到达，返回后渲染行数受控，目标定位可见。
+  - id: conversations.read.scroll-states
+    title:
+      en: Read long history through streaming and pagination
+      zh: 在输出及分页期间阅读长历史
+    verifies:
+      - anchor
+      - history
+    platforms: &a3
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated seeded data and the production UI with the fixture boundary stated below.
+        zh: 使用隔离预置数据及真实界面，测试替换边界见说明。
+    steps:
+      - en: At each declared viewport, follow synthetic live output, scroll into older history, load previous pages and jump to latest.
+        zh: 在每个声明视口中跟随合成实时输出、阅读旧历史、加载之前页面并跳到最新。
+    expected:
+      - en: Reading anchors stay stable, latest-follow works and earlier content stays reachable.
+        zh: 阅读锚点稳定，跟随最新正常，更早内容可到达。
+    variants:
+      viewport:
+        - standard
+        - 4k-fractional-dpr
+        - narrow
+    notes:
+      en: Seeded history and injected stream events prove renderer scrolling, not actual model streaming or backend history durability.
+      zh: 预置历史和注入输出事件证明界面滚动，不证明真实模型输出或后端历史持久性。
+  - id: conversations.read.composer-growth
+    title:
+      en: Keep the reading position while the composer grows
+      zh: 输入框增长时保留阅读位置
+    verifies:
+      - anchor
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated seeded data and the production UI with the fixture boundary stated below.
+        zh: 使用隔离预置数据及真实界面，测试替换边界见说明。
+    steps:
+      - en: Type multiple lines, clear them and repeat while reading old history at each declared viewport.
+        zh: 在各声明视口输入多行、清除，并在阅读旧历史时重复。
+    expected:
+      - en: The composer stays bounded and typing does not unexpectedly move the old reading position.
+        zh: 输入框大小受控，输入不意外移动旧阅读位置。
+    variants:
+      viewport:
+        - standard
+        - 4k-fractional-dpr
+        - narrow
+  - id: conversations.read.fold-user-message
+    title:
+      en: Expand a long user message without hiding the reply
+      zh: 展开长用户消息但不折叠回复
+    verifies:
+      - history
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated seeded data and the production UI with the fixture boundary stated below.
+        zh: 使用隔离预置数据及真实界面，测试替换边界见说明。
+    steps:
+      - en: Open seeded short and long user messages, expand and collapse the long one at each width.
+        zh: 在各宽度打开预置短长用户消息，展开并收起长消息。
+    expected:
+      - en: Only the long user message folds; expansion restores its full content and the AI reply remains complete.
+        zh: 仅长用户消息折叠，展开恢复全文，AI 回复保持完整。
+    variants:
+      width:
+        - "390"
+        - "1280"
+  - id: conversations.read.cached-reopen
+    title:
+      en: Reopen recently read history without a loading flash
+      zh: 重新打开近期记录时不闪现加载
+    verifies:
+      - history
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated local page and conversation fixtures.
+        zh: 使用隔离的本地网页及对话测试资料。
+    steps:
+      - en: Read a seeded person conversation, open a new conversation and return to the previously read one.
+        zh: 读取预置个人对话，打开新对话后返回已读对话。
+    expected:
+      - en: The known history appears without an intermediate loading screen.
+        zh: 已知历史出现，不经过中间加载画面。

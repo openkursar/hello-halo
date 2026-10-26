@@ -1,0 +1,66 @@
+version: 1
+id: models.selection
+module: models
+title:
+  en: Choose a model for each conversation
+  zh: 为各对话选择模型
+story:
+  en: I can select a model without unexpectedly changing other conversations.
+  zh: 我选择模型时，不会意外改掉其他对话。
+basis: documented
+references:
+  - src/main/services/agent/DESIGN.md
+  - src/renderer/components/ai-config/ModelSelector.tsx
+promises:
+  pinned:
+    en: A conversation retains its selected account and model.
+    zh: 对话保留选定的账户与模型。
+  missing:
+    en: A removed account and an existing but unauthenticated account have distinct recovery behavior.
+    zh: 账户被移除与账户仍在但未认证具有不同恢复行为。
+scenarios:
+  - id: models.selection.per-chat
+    title:
+      en: Keep different models in different chats
+      zh: 不同对话保留不同模型
+    verifies:
+      - pinned
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Two model choices are available.
+        zh: 有两个模型可选。
+    steps:
+      - en: Choose one per conversation, switch between them and restart.
+        zh: 各对话选一个，来回切换并重启。
+    expected:
+      - en: Each conversation shows and uses its stored model selection.
+        zh: 各对话显示并使用原先选定模型。
+  - id: models.selection.account-gone
+    title:
+      en: Remove a selected account
+      zh: 移除已选定账户
+    verifies:
+      - missing
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A conversation selects account A and a valid global account B exists.
+        zh: 对话选 A，同时有有效的全局账户 B。
+    steps:
+      - en: Remove A; separately test A existing but authentication failing.
+        zh: 移除 A；另测 A 仍在但认证失败。
+    expected:
+      - en: Removal follows documented global fallback; existing invalid authentication fails instead of substituting an account.
+        zh: 移除按约定回退全局账户；账户仍在却认证无效时应报错而非换账户。

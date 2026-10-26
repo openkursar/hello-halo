@@ -1,0 +1,22 @@
+version: 1
+id: automation
+title:
+  en: Recurring and event-driven work
+  zh: 定时与事件工作
+description:
+  en: Configure triggers, observe runs and resume interrupted work.
+  zh: 配置触发条件、查看执行并恢复中断工作。
+paths:
+  - src/main/apps/runtime/execute.ts
+  - src/main/apps/runtime/sources/**
+  - src/main/platform/scheduler/**
+  - src/main/platform/event/**
+  - src/renderer/components/apps/ActivityThread.tsx
+  - src/renderer/components/apps/SessionDetailView.tsx
+dependsOn:
+  - people
+  - chat
+  - notifications
+scope:
+  en: Manual, schedule and event triggers for digital humans; working-day calendars, pause/resume, concurrent arrivals and persisted activity.
+  zh: 数字人的手动、定时和事件触发；包括工作日历、暂停恢复、并发到达和持久活动记录。

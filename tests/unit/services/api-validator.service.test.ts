@@ -37,7 +37,7 @@ describe('validateApiConnection captured credentials', () => {
     const close = vi.fn()
     createSessionMock.mockResolvedValue({
       send: vi.fn(), close,
-      stream: async function* () { yield { type: 'result' } },
+      stream: async function* () { yield { type: 'result', subtype: 'success', is_error: false, result: 'OK' } },
     })
     const params = { provider, apiKey: 'test-validation-only', apiUrl: 'https://validation.example/v1', model: 'validation-model' }
     expect(await validateApiConnection(params)).toMatchObject({ valid: true, model: params.model })

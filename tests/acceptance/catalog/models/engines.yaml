@@ -1,0 +1,70 @@
+version: 1
+id: models.engines
+module: models
+title:
+  en: Select an installed application engine
+  zh: 选择已安装的应用执行引擎
+story:
+  en: I can choose an available engine, understand the required restart and recognize fallback when a configured engine is missing.
+  zh: 我能选择可用引擎，理解何时需要重启，并识别配置引擎缺失时的回退。
+basis: documented
+references:
+  - src/main/services/agent/resolved-sdk.ts
+  - src/main/services/agent/engine-availability.ts
+  - src/renderer/components/settings/AdvancedSection.tsx
+promises:
+  selection:
+    en: An engine change is saved with a restart notice rather than silently changing the already initialized engine.
+    zh: 引擎切换会保存并提示重启，不会悄悄替换已经初始化的引擎。
+  fallback:
+    en: A missing configured engine is distinguished from the engine actually running, and its saved choice is retained.
+    zh: 配置引擎缺失时，显示实际运行引擎与回退情况，并保留原配置选择。
+scenarios:
+  - id: models.engines.global-selection
+    title:
+      en: Apply an application engine choice after restart
+      zh: 重启后应用引擎选择
+    verifies:
+      - selection
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Use isolated application data and supported installed engines.
+        zh: 使用隔离应用数据及受支持的已安装引擎。
+    steps:
+      - en: Select a different installed engine, inspect the restart notice, restart and create fresh work.
+        zh: 选择另一已安装引擎，查看重启提示，重启后开始新工作。
+    expected:
+      - en: The configured selection is saved; before restart the current engine remains, and fresh work after restart uses the selected available engine.
+        zh: 配置选择已保存；重启前仍使用当前引擎，重启后的新工作使用所选可用引擎。
+  - id: models.engines.unavailable
+    title:
+      en: Explain fallback from a missing engine
+      zh: 说明缺失引擎的回退
+    verifies:
+      - fallback
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Use isolated application data and supported installed engines.
+        zh: 使用隔离应用数据及受支持的已安装引擎。
+    steps:
+      - en: Start a disposable build configured for an absent engine with another supported engine installed.
+        zh: 启动一个配置引擎缺失、但装有其他受支持引擎的可丢弃构建。
+    expected:
+      - en: The application remains usable and identifies both the unavailable choice and actual fallback without rewriting the saved preference.
+        zh: 应用仍可使用，说明不可用选择与实际回退，不改写保存偏好。

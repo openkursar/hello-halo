@@ -27,7 +27,7 @@ function guestHost(app: ElectronApplication, url: string, mainUrl: string): Prom
 test.describe('AI tools on persistent webview guests', () => {
   test.setTimeout(120000)
 
-  test('native and AI screenshots preserve opaque default, dark and explicit page backgrounds', async ({ electronApp, window }, testInfo) => {
+  test('native and AI screenshots preserve opaque default, dark and explicit page backgrounds', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.background-pixels\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }, testInfo) => {
     const fixtures = new Map([
       ['default', { root: '', body: '', rgb: [255, 255, 255] }],
       ['dark', { root: ' style="color-scheme:dark"', body: '', rgb: [18, 18, 18] }],
@@ -131,7 +131,7 @@ test.describe('AI tools on persistent webview guests', () => {
   })
 
   for (const kind of ['main', 'human'] as ContextKind[]) {
-    test(`${kind} conversation keeps one page through watching, takeover, parking and further AI work`, async ({ electronApp, window, browserSite }) => {
+    test(`${kind} conversation keeps one page through watching, takeover, parking and further AI work`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "browser.work.watch-takeover", evidence: "integration", mode: "none", variant: { context: kind } }) } }, async ({ electronApp, window, browserSite }) => {
       const url = browserSite.pageUrl(`ai-${kind}`)
       const opened = await callBrowserTool(window, kind, 'browser_navigate', { url })
       expect(opened.viewId).not.toBeNull()
@@ -180,7 +180,7 @@ test.describe('AI tools on persistent webview guests', () => {
     })
   }
 
-  test('an unattended run owns a separate host and continues when the main host reloads', async ({ electronApp, window, browserSite }) => {
+  test('an unattended run owns a separate host and continues when the main host reloads', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.unattended-reload\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const url = browserSite.pageUrl('automation')
     const opened = await callBrowserTool(window, 'automation', 'browser_navigate', { url })
     expect(opened.viewId).not.toBeNull()
@@ -207,7 +207,7 @@ test.describe('AI tools on persistent webview guests', () => {
   // minimized or closed to the tray: a new page must still open, and an
   // unattended one must not depend on the main window at all.
   for (const state of ['minimized', 'hidden'] as const) {
-    test(`new pages open while the main window is ${state}, unattended ones outside it`, async ({ electronApp, window, browserSite }) => {
+    test(`new pages open while the main window is ${state}, unattended ones outside it`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "browser.work.background-create", evidence: "integration", mode: "none", variant: { window: state } }) } }, async ({ electronApp, window, browserSite }) => {
       const mainUrl = window.url()
       await electronApp.evaluate(({ BrowserWindow }, { mainUrl, state }) => {
         const main = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL() === mainUrl)!
@@ -237,7 +237,7 @@ test.describe('AI tools on persistent webview guests', () => {
   // The main renderer stops attaching new pages, as the Windows main window did
   // for an hour while nobody was there: a page the user could have watched
   // still opens, in the hidden host, and the wait is paid once.
-  test('a watchable context still opens pages when the main window cannot attach them in time', async ({ electronApp, window, browserSite }) => {
+  test('a watchable context still opens pages when the main window cannot attach them in time', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.late-host\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const mainUrl = window.url()
     const beforeUrl = browserSite.pageUrl('watched-before-stall')
     const before = await callBrowserTool(window, 'human', 'browser_navigate', { url: beforeUrl })
@@ -276,7 +276,7 @@ test.describe('AI tools on persistent webview guests', () => {
     expect(recovered.pages.some(page => page.viewId === recovered.viewId)).toBe(true)
   })
 
-  test('the production MCP upload and silent download tools use the same guest and isolated test files', async ({ electronApp, window, browserSite }, testInfo) => {
+  test('the production MCP upload and silent download tools use the same guest and isolated test files', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.boundaries.file-tools\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }, testInfo) => {
     const opened = await callBrowserTool(window, 'human', 'browser_navigate', { url: browserSite.pageUrl('files') })
     const viewId = opened.viewId!
     const upload = testInfo.outputPath('carrier-upload.txt')
@@ -293,7 +293,7 @@ test.describe('AI tools on persistent webview guests', () => {
     await assertBrowserFrame(electronApp, window, viewId)
   })
 
-  test('tab ownership isolates unattended work and guest destruction reconciles the AI pointer', async ({ window, browserSite }) => {
+  test('tab ownership isolates unattended work and guest destruction reconciles the AI pointer', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.tab-ownership\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, browserSite }) => {
     const human = await callBrowserTool(window, 'human', 'browser_navigate', { url: browserSite.pageUrl('human-owned') })
     const automation = await callBrowserTool(window, 'automation', 'browser_navigate', { url: browserSite.pageUrl('automation-owned') })
     const main = await callBrowserTool(window, 'main', 'browser_navigate', { url: browserSite.pageUrl('main-owned') })
@@ -312,7 +312,7 @@ test.describe('AI tools on persistent webview guests', () => {
     expect(reopened.pages.some(page => page.viewId === automation.viewId)).toBe(false)
   })
 
-  test('the remaining production tools preserve keyboard, hover, script, inspection and multi-tab behavior', async ({ electronApp, window, browserSite }) => {
+  test('the remaining production tools preserve keyboard, hover, script, inspection and multi-tab behavior', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.tool-chain\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const url = browserSite.pageUrl('tool-chain')
     const opened = await callBrowserTool(window, 'main', 'browser_navigate', { url })
     const viewId = opened.viewId!
@@ -349,7 +349,7 @@ test.describe('AI tools on persistent webview guests', () => {
     expect(toolText(await callBrowserTool(window, 'main', 'browser_tab', { action: 'list' }))).not.toContain('tool-chain-second')
   })
 
-  test('closing the page cancels a pending download wait promptly', async ({ window, browserSite }) => {
+  test('closing the page cancels a pending download wait promptly', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.boundaries.cancel-download\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, browserSite }) => {
     const opened = await callBrowserTool(window, 'human', 'browser_navigate', { url: browserSite.pageUrl('pending-download') })
     const outcome = await window.evaluate(async viewId => {
       const runtime = (window as unknown as { browserTest: { tool: (kind: string, name: string, args: Record<string, unknown>) => Promise<{ result: { isError?: boolean; content: Array<{ text?: string }> } }> } }).browserTest
@@ -365,7 +365,7 @@ test.describe('AI tools on persistent webview guests', () => {
     expect(outcome.result.content.map(item => item.text).join('\n')).toMatch(/closed|lost|destroyed|cancel/i)
   })
 
-  test('native editing targets every guest field and preserves the host editor through shortcuts and script focus', async ({ electronApp, window, browserSite }) => {
+  test('native editing targets every guest field and preserves the host editor through shortcuts and script focus', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.field-editing\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const opened = await callBrowserTool(window, 'main', 'browser_navigate', { url: browserSite.pageUrl('native-editing') })
     const viewId = opened.viewId!
     await executeBrowser(window, viewId, `
@@ -443,7 +443,7 @@ test.describe('AI tools on persistent webview guests', () => {
     expect(await hostState()).toEqual(expectedHost)
   })
 
-  test('the production drag tool dispatches a complete trusted gesture into the parked guest', async ({ window, browserSite }) => {
+  test('the production drag tool dispatches a complete trusted gesture into the parked guest', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.drag\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, browserSite }) => {
     const opened = await callBrowserTool(window, 'main', 'browser_navigate', { url: browserSite.pageUrl('native-drag') })
     const viewId = opened.viewId!
     await executeBrowser(window, viewId, `
@@ -461,7 +461,7 @@ test.describe('AI tools on persistent webview guests', () => {
     expect(await executeBrowser(window, viewId, 'document.querySelector("#drag-target").matches(":active")')).toBe(false)
   })
 
-  test('guest keydown cancellation suppresses editing defaults without touching the host editor', async ({ electronApp, window, browserSite }) => {
+  test('guest keydown cancellation suppresses editing defaults without touching the host editor', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.cancelled-key\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const opened = await callBrowserTool(window, 'main', 'browser_navigate', { url: browserSite.pageUrl('cancel-shortcuts') })
     const viewId = opened.viewId!
     await executeBrowser(window, viewId, `
@@ -496,7 +496,7 @@ test.describe('AI tools on persistent webview guests', () => {
     }
   })
 
-  test('clipboard paste preserves rich content and lets the guest paste handler cancel insertion', async ({ electronApp, window, browserSite }) => {
+  test('clipboard paste preserves rich content and lets the guest paste handler cancel insertion', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.rich-paste\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const opened = await callBrowserTool(window, 'main', 'browser_navigate', { url: browserSite.pageUrl('paste-formats') })
     const viewId = opened.viewId!
     await executeBrowser(window, viewId, `
@@ -542,7 +542,7 @@ test.describe('AI tools on persistent webview guests', () => {
     }
   })
 
-  test('guest editing shortcuts and paste handlers operate inside a focused iframe', async ({ electronApp, window, browserSite }) => {
+  test('guest editing shortcuts and paste handlers operate inside a focused iframe', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.iframe-paste\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const opened = await callBrowserTool(window, 'main', 'browser_navigate', { url: browserSite.pageUrl('frame-editing') })
     const viewId = opened.viewId!
     await executeBrowser(window, viewId, `
@@ -590,7 +590,7 @@ test.describe('AI tools on persistent webview guests', () => {
   })
 
   for (const originKind of ['different-port', 'cross-site'] as const) {
-    test(`${originKind} iframe receives trusted keyboard editing while the host editor keeps its native input`, async ({ electronApp, window, browserSite }) => {
+    test(`${originKind} iframe receives trusted keyboard editing while the host editor keeps its native input`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "browser.work.iframe-origins", evidence: "integration", mode: "none", variant: { origin: originKind } }) } }, async ({ electronApp, window, browserSite }) => {
       const parentUrl = browserSite.pageUrl(`iframe-${originKind}`)
       const opened = await callBrowserTool(window, 'main', 'browser_navigate', { url: parentUrl })
       await expect.poll(() => guestIdentity(electronApp, parentUrl)).toBeGreaterThan(0)
@@ -652,7 +652,7 @@ test.describe('AI tools on persistent webview guests', () => {
     })
   }
 
-  test('Enter completes a real form navigation without leaving pressed input or taking host focus', async ({ electronApp, window, browserSite }) => {
+  test('Enter completes a real form navigation without leaving pressed input or taking host focus', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.submit-form\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const initial = browserSite.pageUrl('enter-navigation')
     const opened = await callBrowserTool(window, 'main', 'browser_navigate', { url: initial })
     await expect.poll(() => guestIdentity(electronApp, initial)).toBeGreaterThan(0)
@@ -675,7 +675,7 @@ test.describe('AI tools on persistent webview guests', () => {
     })).toEqual({ value: 'host submit draft', start: 4, end: 4, active: 'host-submit-editor' })
   })
 
-  test('printable punctuation completes trusted native key pairs and function keys do not insert their names', async ({ window, browserSite }) => {
+  test('printable punctuation completes trusted native key pairs and function keys do not insert their names', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.punctuation\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, browserSite }) => {
     const opened = await callBrowserTool(window, 'main', 'browser_navigate', { url: browserSite.pageUrl('punctuation-key') })
     await executeBrowser(window, opened.viewId!, `
       window.carrierKeys = [];
@@ -693,7 +693,7 @@ test.describe('AI tools on persistent webview guests', () => {
     expect(await executeBrowser(window, opened.viewId!, `document.querySelector('#draft').value`)).toBe('%')
   })
 
-  test('an input operation stays on its original page while the context selects another page', async ({ window, browserSite }) => {
+  test('an input operation stays on its original page while the context selects another page', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.input-target\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, browserSite }) => {
     const first = await callBrowserTool(window, 'main', 'browser_navigate', { url: browserSite.pageUrl('input-first') })
     const second = await callBrowserTool(window, 'main', 'browser_tab', { action: 'new', url: browserSite.pageUrl('input-second') })
     await callBrowserTool(window, 'main', 'browser_tab', { action: 'select', pageIdx: 0 })
@@ -710,7 +710,7 @@ test.describe('AI tools on persistent webview guests', () => {
     expect(await executeBrowser(window, second.viewId!, `document.querySelector('#draft').value`)).toBe('')
   })
 
-  test('a screenshot keeps its original page pixels while the context selects another tab', async ({ electronApp, window, browserSite }, testInfo) => {
+  test('a screenshot keeps its original page pixels while the context selects another tab', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.capture-target\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }, testInfo) => {
     const first = await callBrowserTool(window, 'main', 'browser_navigate', { url: browserSite.pageUrl('capture-first') })
     await executeBrowser(window, first.viewId!, 'document.body.style.background = "#ff6600"; true')
     const second = await callBrowserTool(window, 'main', 'browser_tab', { action: 'new', url: browserSite.pageUrl('capture-second') })
@@ -731,7 +731,7 @@ test.describe('AI tools on persistent webview guests', () => {
     expect(pixels.blue).toBeLessThan(100)
   })
 
-  test('releasing a context while input awaits its frame prevents late input and guest revival', async ({ electronApp, window, browserSite }) => {
+  test('releasing a context while input awaits its frame prevents late input and guest revival', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.release-input\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const url = browserSite.pageUrl('released-input')
     const opened = await callBrowserTool(window, 'human', 'browser_navigate', { url })
     const snapshot = toolText(await callBrowserTool(window, 'human', 'browser_snapshot'))
@@ -748,7 +748,7 @@ test.describe('AI tools on persistent webview guests', () => {
     expect(state).toMatchObject({ success: true, data: null })
   })
 
-  test('browser pages, standalone login and silent AI downloads share the configured session proxy', async ({ electronApp, window }) => {
+  test('browser pages, standalone login and silent AI downloads share the configured session proxy', { annotation: { type: 'acceptance', description: "{\"caseId\":\"settings.network.browser-proxy\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     const requests: string[] = []
     const proxy = createServer((request, response) => {
       const url = new URL(request.url!, 'http://carrier-proxy.invalid')
@@ -792,7 +792,7 @@ test.describe('production browser policy', () => {
   test.use({ browserPolicy: { mode: 'allowlist', allowlist: ['127.0.0.1'], userExtensible: true } })
   test.setTimeout(90000)
 
-  test('blocks initial creation, page navigation, redirects and popups without replacing the allowed guest', async ({ electronApp, window, browserSite }) => {
+  test('blocks initial creation, page navigation, redirects and popups without replacing the allowed guest', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.boundaries.policy-routes\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const blocked = `${browserSite.origin.replace('127.0.0.1', 'localhost')}/page?case=blocked`
     const rejected = await window.evaluate(async url => (window as unknown as { halo: HaloAPI }).halo.createBrowserView('blocked-initial', url), blocked)
     expect(rejected).toMatchObject({ success: false, code: 'BROWSER_POLICY_BLOCKED' })

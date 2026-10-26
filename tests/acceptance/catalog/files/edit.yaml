@@ -1,0 +1,103 @@
+version: 1
+id: files.edit
+module: files
+title:
+  en: Edit without losing unsaved work
+  zh: 编辑时不丢未保存内容
+story:
+  en: I can edit a text file, keep the draft and deliberately save or discard it.
+  zh: 我能编辑文本、保留草稿，并主动保存或放弃。
+basis: observed
+references:
+  - src/renderer/components/canvas/viewers/CodeViewer.tsx
+  - src/renderer/components/canvas/CanvasTabs.tsx
+  - src/renderer/stores/canvas.store.ts
+  - tests/e2e/specs/acceptance-artifacts.spec.ts
+promises:
+  save:
+    en: Saved edits reach the intended file; unsaved edits remain visibly dirty.
+    zh: 保存写入目标文件，未保存编辑有明显标识。
+  close:
+    en: Closing a dirty text tab follows its explicit save/discard/cancel policy.
+    zh: 关闭未保存文本标签遵循明确的保存、放弃或取消规则。
+  conflict:
+    en: An external file change does not silently overwrite an unsaved local draft; the user can choose which version to retain.
+    zh: 外部文件改变不会悄悄覆盖未保存本地草稿，用户可选择保留哪个版本。
+scenarios:
+  - id: files.edit.save
+    title:
+      en: Save a text-file edit
+      zh: 保存文本编辑
+    verifies:
+      - save
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Open a text fixture in editable mode.
+        zh: 以编辑模式打开文本测试文件。
+    steps:
+      - en: Change a known line, save, close and reopen.
+        zh: 修改已知行并保存，关闭后重开。
+    expected:
+      - en: Disk and reopened content match the saved edit, and dirty state clears.
+        zh: 磁盘和重开内容匹配保存编辑，未保存标识清除。
+  - id: files.edit.dirty-close
+    title:
+      en: Close a tab with an unsaved draft
+      zh: 关闭有草稿的标签
+    verifies:
+      - save
+      - close
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A text tab has unsaved edits.
+        zh: 文本标签有未保存修改。
+    steps:
+      - en: Try the supported cancel, save and discard close paths on isolated fixtures.
+        zh: 在不同测试文件中尝试支持的取消、保存和放弃关闭流程。
+    expected:
+      - en: Each choice preserves or discards exactly the work described by that choice.
+        zh: 各选择仅保留或放弃其所说明的工作。
+  - id: files.edit.unsaved-conflict
+    title:
+      en: Resolve a disk change while an editor has a draft
+      zh: 编辑器有草稿时解决磁盘变更
+    verifies:
+      - save
+      - conflict
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A real tool created the file and the user has unsaved edits in the canvas.
+        zh: 真实工具已创建文件，用户在画布中有未保存编辑。
+    steps:
+      - en: Have a real tool edit the disk file, inspect the retained local draft and conflict notice, choose disk or local resolution, save if required and restart.
+        zh: 让真实工具修改磁盘文件，检查保留的本地草稿及冲突提示，选择磁盘或本地版本，按需保存并重启。
+    expected:
+      - en: The selected resolution determines the final file; neither version disappears before the user chooses.
+        zh: 所选处理决定最终文件；用户选择前任一版本不被悄悄丢弃。
+    variants:
+      resolution:
+        - disk
+        - local

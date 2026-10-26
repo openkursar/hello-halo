@@ -1,0 +1,95 @@
+version: 1
+id: settings.network
+module: settings
+title:
+  en: Apply the intended proxy settings
+  zh: 应用预期代理设置
+story:
+  en: I can choose network routing and understand which services use it.
+  zh: 我能选择网络代理，并理解哪些服务会使用。
+basis: observed
+references:
+  - src/renderer/components/settings/SystemSection.tsx
+  - src/main/services/proxy-fetch.ts
+  - tests/e2e/specs/browser-view-reveal.spec.ts
+  - tests/e2e/specs/acceptance-settings.spec.ts
+promises:
+  validation:
+    en: Invalid proxy input is rejected without replacing the last valid setting.
+    zh: 无效代理输入被拒绝，不覆盖最后有效配置。
+  scope:
+    en: AI requests follow the configured proxy and browser traffic follows the available browser proxy choice.
+    zh: AI 请求遵循配置代理，浏览器流量遵循已有的浏览代理选项。
+scenarios:
+  - id: settings.network.validation
+    title:
+      en: Reject an invalid proxy URL
+      zh: 拒绝无效代理地址
+    verifies:
+      - validation
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A valid test proxy is configured.
+        zh: 已配置有效测试代理。
+    steps:
+      - en: Enter an invalid protocol or URL and attempt to save.
+        zh: 输入无效协议或地址并保存。
+    expected:
+      - en: The validation error is visible and the previous valid route is retained.
+        zh: 校验错误可见，原有效路由保留。
+  - id: settings.network.scope
+    title:
+      en: Route only selected services through a proxy
+      zh: 仅让选定服务经过代理
+    verifies:
+      - scope
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A local counting proxy and controlled service endpoints are available.
+        zh: 有本地计数代理及受控服务端点。
+    steps:
+      - en: Change the application proxy and the browser-use-proxy option, then exercise both services.
+        zh: 修改应用代理及浏览器使用代理选项，分别调用两类服务。
+    expected:
+      - en: Observed requests use exactly the configured routing for each service.
+        zh: 观察到的请求恰好遵循各服务配置路由。
+  - id: settings.network.browser-proxy
+    title:
+      en: Use one configured browser route for pages, login and downloads
+      zh: 网页、登录及下载使用同一浏览代理
+    verifies:
+      - scope
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Configure a local browser-session proxy and navigate, log in and download through it.
+        zh: 配置本地浏览会话代理，分别导航、登录及下载。
+    expected:
+      - en: The proxy observes all three requests and the browser shares the intended login state.
+        zh: 代理观察到三种请求，浏览器共享预期登录状态。
+    notes:
+      en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
+      zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。

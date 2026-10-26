@@ -1,0 +1,177 @@
+version: 1
+id: chat.messages
+module: chat
+title:
+  en: Send, continue and supplement work
+  zh: 发送、继续和补充任务
+story:
+  en: I can tell the AI what I need and add information while it is working.
+  zh: 我能告诉 AI 要做什么，并在它工作时补充信息。
+basis: documented
+references:
+  - .agents/skills/product-principles/SKILL.md
+  - src/main/services/agent/DESIGN.md
+  - src/renderer/components/chat/InputArea.tsx
+  - tests/e2e/specs/digital-human-chat.spec.ts
+  - tests/e2e/specs/chat.spec.ts
+promises:
+  persist:
+    en: Messages and completed replies remain readable after restart and support a follow-up.
+    zh: 消息和完整回复在重启后仍可读，并能继续追问。
+  live:
+    en: A compatible supplement reaches ongoing work before its next step after the current tool returns.
+    zh: 权限兼容的补充在当前工具返回后、下一步工作前送达。
+  separate:
+    en: Separate conversations do not receive each other’s replies or supplements.
+    zh: 不同对话不会收到彼此的回复或补充。
+scenarios:
+  - id: chat.messages.persist
+    title:
+      en: Continue a conversation after restarting
+      zh: 重启后继续对话
+    verifies:
+      - persist
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - fast
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: A fresh isolated workspace uses a scripted model.
+        zh: 隔离空间使用脚本化模型。
+    steps:
+      - en: Send two messages through the UI, restart the app and continue the same conversation.
+        zh: 通过界面发送两轮消息，重启后继续同一对话。
+    expected:
+      - en: Prior messages remain visible and the next model request receives their context.
+        zh: 之前消息仍可见，下一模型请求携带原上下文。
+    requirements:
+      - halo-sdk
+  - id: chat.messages.live-input
+    title:
+      en: Supplement a real running tool
+      zh: 真实工具执行时补充信息
+    verifies:
+      - live
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: A scripted model starts a controllable real tool.
+        zh: 脚本化模型启动可控制的真实工具。
+    steps:
+      - en: Send a supplement in the UI while the tool runs, then let it finish.
+        zh: 工具运行时通过界面补充信息，再让工具结束。
+    expected:
+      - en: The next model step receives the supplement and the final record includes it once.
+        zh: 下一模型步骤收到补充，最终记录中仅保留一次。
+    requirements:
+      - halo-sdk
+  - id: chat.messages.isolation
+    title:
+      en: Switch conversations while one is working
+      zh: 一边工作一边切换对话
+    verifies:
+      - separate
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Two conversations have distinct marker tasks.
+        zh: 两个对话包含不同标记的任务。
+    steps:
+      - en: Start A, switch to B, send B’s message, then revisit A.
+        zh: 启动 A，切到 B 发消息，再查看 A。
+    expected:
+      - en: Messages, live state and final replies stay with their originating conversation.
+        zh: 消息、运行状态及最终回复各归原对话。
+  - id: chat.messages.person-input-routing
+    title:
+      en: Send a supplement and continue from the person chat UI
+      zh: 在数字人界面补充并继续
+    verifies:
+      - live
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Use a live-turn renderer fixture, submit a supplement, then expose and activate Continue.
+        zh: 使用运行轮次界面测试资料，提交补充，再显示并点击继续。
+    expected:
+      - en: The UI calls inject once for the running turn and send once for continuation, with the intended conversation identity.
+        zh: 运行时调用一次补充，继续时调用一次发送，携带正确对话身份。
+    notes:
+      en: Recording IPC handlers verify renderer routing only; no real engine receives these messages.
+      zh: 记录型 IPC 处理器仅验证界面路由，没有真实引擎接收这些消息。
+  - id: chat.messages.live-reply
+    title:
+      en: Complete and persist a real model reply
+      zh: 完成并保存真实模型回复
+    verifies:
+      - persist
+    platforms: &a2
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: live-model
+    mode: live
+    automation: automated
+    preconditions:
+      - en: Use isolated seeded data and the production UI with the fixture boundary stated below.
+        zh: 使用隔离预置数据及真实界面，测试替换边界见说明。
+    steps:
+      - en: Send a simple message to the configured live model and wait for actual completion and clean app exit.
+        zh: 向配置的真实模型发送简单消息，等待真实完成并正常退出应用。
+    expected:
+      - en: UI and stored transcript agree, the turn is inactive and the application closes normally.
+        zh: 界面与保存记录一致，轮次已结束，应用正常关闭。
+    requirements:
+      - live-model
+  - id: chat.messages.live-sequence
+    title:
+      en: Receive two distinct live replies
+      zh: 收到两轮不同的真实回复
+    verifies:
+      - persist
+    platforms: *a2
+    profiles:
+      - live
+    evidence: live-model
+    mode: live
+    automation: automated
+    preconditions:
+      - en: Use isolated seeded data and the production UI with the fixture boundary stated below.
+        zh: 使用隔离预置数据及真实界面，测试替换边界见说明。
+    steps:
+      - en: Send one marked request, wait until it settles, then send another.
+        zh: 发送一个标记请求并等待结束，再发送另一个。
+    expected:
+      - en: Both replies remain separately visible in order.
+        zh: 两轮回复按顺序分别可见。
+    requirements:
+      - live-model
+    notes:
+      en: This evidence checks visible sequential replies; it does not independently prove cross-restart context.
+      zh: 证据检查界面连续回复，不独立证明重启后的上下文。

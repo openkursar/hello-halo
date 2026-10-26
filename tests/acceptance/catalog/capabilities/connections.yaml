@@ -1,0 +1,125 @@
+version: 1
+id: capabilities.connections
+module: capabilities
+title:
+  en: Save and test a tool connection
+  zh: 保存并测试工具连接
+story:
+  en: I can distinguish saved connection settings, enabled use and an actually healthy connection.
+  zh: 我能分清配置已保存、已启用和连接真正健康。
+basis: observed
+references:
+  - tests/e2e/specs/people-capabilities.spec.ts
+  - src/main/services/agent/mcp-manager.ts
+  - src/main/services/agent/DESIGN.md
+  - tests/e2e/specs/acceptance-mcp.spec.ts
+promises:
+  states:
+    en: Saving, enabling and connection health are separate observable states.
+    zh: 保存、启用和连接健康是可分别观察的状态。
+  impact:
+    en: A shared connection change identifies affected people before confirmation where required.
+    zh: 共享连接变更在需要确认时说明受影响数字人。
+  recover:
+    en: A recovered connection becomes usable through the supported next-turn recovery path.
+    zh: 连接恢复后通过支持的下一轮恢复流程重新可用。
+  call:
+    en: An enabled healthy connection can serve real tool calls, while tool errors remain distinguishable from successful results.
+    zh: 启用且健康的连接可执行真实工具调用，工具错误能与成功结果区分。
+scenarios:
+  - id: capabilities.connections.health
+    title:
+      en: Save an unhealthy connection and retest
+      zh: 保存不健康连接并重测
+    verifies:
+      - states
+      - impact
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A local MCP fixture initially returns unavailable.
+        zh: 本地 MCP 测试服务起初不可用。
+    steps:
+      - en: Create and enable the connection, test failure, restore the server, test again and inspect shared impact.
+        zh: 创建启用连接，测试失败，恢复服务重测并查看共享影响。
+    expected:
+      - en: Configuration persists despite failure; restored health is shown separately; impact confirmation can be cancelled.
+        zh: 失败不丢配置；健康状态单独更新；共享影响确认可取消。
+  - id: capabilities.connections.reconnect
+    title:
+      en: Use a recovered server in a new turn
+      zh: 在新一轮使用恢复的服务
+    verifies:
+      - recover
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: An engine session has observed a failed MCP server.
+        zh: 引擎会话已观察到 MCP 失败。
+    steps:
+      - en: Restore the server and send the next supported turn.
+        zh: 恢复服务并发送下一轮。
+    expected:
+      - en: The next turn receives the working tool without an endless session rebuild loop.
+        zh: 下一轮能使用工具，不陷入无限重建会话。
+  - id: capabilities.connections.active-change
+    title:
+      en: Change tool settings during active work
+      zh: 工作期间修改工具配置
+    verifies:
+      - recover
+      - states
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A controlled turn is running.
+        zh: 受控任务正在运行。
+    steps:
+      - en: Change tool enablement or connection settings, then send a later turn.
+        zh: 修改工具启用或连接设置，再发送后续消息。
+    expected:
+      - en: The running turn is not interrupted solely by the change; later work applies the new setting.
+        zh: 仅因设置改变不会中断当前任务，后续工作采用新设置。
+  - id: capabilities.connections.tool-call
+    title:
+      en: Install a connection and use its real tool through chat
+      zh: 安装连接并在对话中调用真实工具
+    verifies:
+      - states
+      - recover
+      - call
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A local HTTP MCP fixture can return success, tool error and connection failure.
+        zh: 本地 HTTP MCP 测试服务可返回成功、工具错误及连接失败。
+    steps:
+      - en: Install through the UI, test the connection, call its tool successfully and with a tool error, force a connection failure and recover before calling again.
+        zh: 通过界面安装并测试连接，分别调用成功和错误工具，制造连接失败，恢复后再次调用。
+    expected:
+      - en: Actual initialize, listing and tool calls reach the same server; user-visible state distinguishes saved settings, connection health and tool outcome.
+        zh: 真实初始化、工具列表及调用到达同一服务；界面区分已保存配置、连接健康及工具执行结果。

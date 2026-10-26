@@ -1,0 +1,102 @@
+version: 1
+id: chat.attachments
+module: chat
+title:
+  en: Give the AI images and files
+  zh: 向 AI 提供图片和文件
+story:
+  en: I can attach relevant material and know what the AI received.
+  zh: 我能附上相关材料，并知道 AI 实际收到了什么。
+basis: observed
+references:
+  - src/renderer/components/chat/ImageAttachmentPreview.tsx
+  - src/main/services/agent/image-attachments.ts
+  - src/main/services/agent/message-utils.ts
+  - tests/e2e/specs/acceptance-input.spec.ts
+promises:
+  image:
+    en: Attached images reach the selected model and remain part of the conversation.
+    zh: 附图会传给选定模型，并保留在对话记录中。
+  files:
+    en: Attached file references point to the selected file in the working context.
+    zh: 文件引用指向工作上下文中选定的文件。
+  remove:
+    en: Removing a pending attachment prevents it from being sent.
+    zh: 发送前移除附件后，该附件不会发送。
+scenarios:
+  - id: chat.attachments.image
+    title:
+      en: Send an image from the composer
+      zh: 从输入框发送图片
+    verifies:
+      - image
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: Use a synthetic image with a unique marker.
+        zh: 准备带唯一标记的合成图片。
+    steps:
+      - en: Attach it in the composer and submit a message.
+        zh: 在输入框添加图片并发送。
+    expected:
+      - en: The model request includes image content and the saved user message retains the attachment.
+        zh: 模型请求含图片内容，保存的用户消息保留附件。
+    requirements:
+      - halo-sdk
+  - id: chat.attachments.file
+    title:
+      en: Ask about a selected local file
+      zh: 询问指定本地文件
+    verifies:
+      - files
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: A workspace file has unique fixture content.
+        zh: 空间文件含唯一测试内容。
+    steps:
+      - en: Attach the file and ask the model to read it.
+        zh: 附上文件并让模型读取。
+    expected:
+      - en: The tool reads that file and the response can be traced to its content.
+        zh: 工具读取的是指定文件，回复可对应文件内容。
+    requirements:
+      - halo-sdk
+  - id: chat.attachments.remove
+    title:
+      en: Remove an attachment before sending
+      zh: 发送前移除附件
+    verifies:
+      - remove
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: The composer has one attachment and a draft.
+        zh: 输入框已有附件和草稿。
+    steps:
+      - en: Remove the attachment, then submit.
+        zh: 移除附件后发送。
+    expected:
+      - en: The draft sends without that attachment or its content.
+        zh: 草稿发送时不包含该附件及内容。
+    requirements:
+      - halo-sdk
+    variants:
+      kind:
+        - image
+        - file

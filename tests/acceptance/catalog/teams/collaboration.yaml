@@ -1,0 +1,98 @@
+version: 1
+id: teams.collaboration
+module: teams
+title:
+  en: Work in a temporary collaboration and keep its team
+  zh: 在临时协作中工作并保留团队
+story:
+  en: I can follow a collaboration in its source conversation and keep that team for later access.
+  zh: 我能在源对话中跟进协作，并保留这个团队以便之后访问。
+basis: documented
+references:
+  - src/main/apps/team/DESIGN.md
+  - src/renderer/components/team/workbench/DESIGN.md
+  - tests/e2e/specs/team-collab.spec.ts
+  - tests/e2e/specs/team-render.spec.ts
+promises:
+  room:
+    en: A temporary collaboration has one source task and keeps its members reachable.
+    zh: 临时协作只有一个源任务，其成员始终可访问。
+  keep:
+    en: Keeping the collaboration retains the same team and its original conversation association.
+    zh: 保留协作会保存同一团队及其原对话关联。
+  history:
+    en: Keeping a collaboration does not discard its existing task history.
+    zh: 保留协作不会丢弃已有任务历史。
+scenarios:
+  - id: teams.collaboration.single-room
+    title:
+      en: Keep temporary collaboration in its source room
+      zh: 让临时协作停留在原任务中
+    verifies:
+      - room
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Open a seeded temporary collaboration and resize to a narrow screen.
+        zh: 打开预置临时协作并切到窄屏。
+    expected:
+      - en: The one room and members are accessible, without controls that create unrelated tasks in the temporary collaboration.
+        zh: 唯一任务及成员可访问，不出现会在临时协作里创建无关任务的控件。
+  - id: teams.collaboration.keep-existing
+    title:
+      en: Keep the current collaboration team
+      zh: 保留当前协作团队
+    verifies:
+      - keep
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Use isolated application data and supported installed engines.
+        zh: 使用隔离应用数据及受支持的已安装引擎。
+    steps:
+      - en: Keep a seeded collaboration, open the Teams page and restart the application.
+        zh: 保留预置协作，打开团队页并重启应用。
+    expected:
+      - en: The original team becomes persistent with the same team identity and source conversation association.
+        zh: 原团队变为持久团队，团队身份及源对话关联保持不变。
+  - id: teams.collaboration.keep-history
+    title:
+      en: Read the original task after keeping the team
+      zh: 保留团队后阅读原任务
+    verifies:
+      - history
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Use isolated application data and supported installed engines.
+        zh: 使用隔离应用数据及受支持的已安装引擎。
+    steps:
+      - en: Record messages in a collaboration, keep it, then open its original conversation and task history.
+        zh: 在协作中记录消息，保留后打开原对话及任务历史。
+    expected:
+      - en: The same recorded messages remain readable in their originating task.
+        zh: 同样的消息记录仍可在其原任务中阅读。

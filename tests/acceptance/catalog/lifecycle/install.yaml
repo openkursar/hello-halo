@@ -1,0 +1,93 @@
+version: 1
+id: lifecycle.install
+module: lifecycle
+title:
+  en: Start an installed release with existing work
+  zh: 安装发布版并打开已有工作
+story:
+  en: I can install Halo and reopen my existing conversations and people after an upgrade.
+  zh: 我能安装 Halo，并在升级后重新找到原来的对话和数字人。
+basis: documented
+references:
+  - src/main/platform/store/DESIGN.md
+  - tests/decentralized/checklist-upgrade-migration.mjs
+  - tests/check/binaries.mjs
+promises:
+  package:
+    en: The packaged app starts using its shipped dependencies, not the source checkout.
+    zh: 打包应用使用随包依赖启动，而非依赖源码目录。
+  migration:
+    en: Supported older data migrates with readable history and consistent activity.
+    zh: 支持的旧数据迁移后历史可读、活动一致。
+  failure:
+    en: A failed upgrade or migration does not silently present missing records as an empty successful installation.
+    zh: 升级或迁移失败不把缺失记录悄悄展示为空白成功安装。
+scenarios:
+  - id: lifecycle.install.packaged
+    title:
+      en: Launch a release package from a clean test location
+      zh: 从干净测试位置启动发布包
+    verifies:
+      - package
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A built release package is available in a disposable installation location.
+        zh: 可丢弃安装位置中已有发布包。
+    steps:
+      - en: Launch outside the source tree, open settings and perform a scripted chat tool action.
+        zh: 在源码树之外启动，打开设置并执行脚本模型工具任务。
+    expected:
+      - en: The packaged runtime is identified and its shipped tools work.
+        zh: 确认运行的是安装包，其附带工具可用。
+    requirements:
+      - packaged-app
+  - id: lifecycle.install.migrate
+    title:
+      en: Upgrade a supported older profile
+      zh: 升级支持的旧资料
+    verifies:
+      - migration
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Prepare a documented older profile with conversations, people and activity records.
+        zh: 准备文档支持的旧资料，包含对话、数字人及活动。
+    steps:
+      - en: Open it with the current build, inspect old records and execute a new task.
+        zh: 用当前版本打开，查看旧记录并执行新任务。
+    expected:
+      - en: Existing records remain readable and new activity persists without database constraints failing.
+        zh: 旧记录可读，新活动保存成功且无数据库约束错误。
+  - id: lifecycle.install.migration-failure
+    title:
+      en: Report a controlled migration failure
+      zh: 报告受控迁移失败
+    verifies:
+      - failure
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A copy of a test profile cannot complete one migration.
+        zh: 复制的测试资料无法完成某迁移。
+    steps:
+      - en: Start the build and inspect the error and retained data.
+        zh: 启动并查看错误及保留数据。
+    expected:
+      - en: The failure is explicit and original recoverable data is retained.
+        zh: 错误明确，原有可恢复数据保留。

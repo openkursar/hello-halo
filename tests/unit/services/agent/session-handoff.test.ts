@@ -72,6 +72,7 @@ vi.mock('../../../../src/main/services/space.service', async () => {
   const { resolveMemoryLayout } = await import('../../../../src/main/platform/memory')
   return {
     getSpace: (id: string) => ({ id, name: 'Fixture space', path: m.workDir }),
+    hasSpace: () => true,
     getSpaceDir: () => m.workDir,
     touchSpaceActivity: vi.fn(),
     isSpaceMemoryEnabled: () => m.memoryEnabled,

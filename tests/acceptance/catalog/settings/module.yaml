@@ -1,0 +1,20 @@
+version: 1
+id: settings
+title:
+  en: Personal preferences and system settings
+  zh: 个人偏好与系统设置
+description:
+  en: Change appearance, input behavior, proxy and diagnostics settings deliberately.
+  zh: 明确修改外观、输入行为、代理及诊断设置。
+paths:
+  - src/renderer/components/settings/**
+  - src/renderer/pages/SettingsPage.tsx
+  - src/main/foundation/config.service.ts
+  - src/main/foundation/config-encryption.ts
+  - src/main/foundation/credential-safety.ts
+  - src/main/services/proxy-fetch.ts
+dependsOn:
+  - startup
+scope:
+  en: Desktop and remote settings with explicit desktop-only groups; theme/language/scale/send key, proxy, credential faults and shared browser cleanup.
+  zh: 桌面与远程设置及明确的桌面专用分组；主题、语言、缩放、发送键、代理、凭证问题和共享浏览数据清理。

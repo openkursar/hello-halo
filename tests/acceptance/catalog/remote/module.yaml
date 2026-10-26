@@ -1,0 +1,26 @@
+version: 1
+id: remote
+title:
+  en: Remote and mobile access
+  zh: 远程与移动访问
+description:
+  en: Connect an authenticated client to a Halo desktop and recover its connection.
+  zh: 将认证客户端连接到 Halo 桌面并恢复连接。
+paths:
+  - src/main/services/remote/**
+  - src/main/http/**
+  - src/renderer/api/**
+  - src/renderer/pages/Server*Page.tsx
+  - src/renderer/components/setup/ServerConnect.tsx
+  - src/renderer/components/settings/RemoteAccessSection.tsx
+  - src/renderer/hooks/useWsRecovery.ts
+  - android/**
+  - ios/**
+  - capacitor.config.ts
+dependsOn:
+  - chat
+  - workspaces
+  - files
+scope:
+  en: Host OS is darwin/win32/linux; client is browser, Android or iOS as a separate variant. LAN/tunnel, PIN/password, reconnect and desktop-only actions. A desktop viewport test is not native mobile evidence.
+  zh: 主机系统为 darwin/win32/linux；浏览器、Android 或 iOS 是独立客户端维度。包括局域网/隧道、访问码、重连及桌面专有操作。桌面窄屏不代表原生手机验证。

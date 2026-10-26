@@ -1,0 +1,67 @@
+version: 1
+id: files.navigation
+module: files
+title:
+  en: Manage the canvas while continuing chat
+  zh: 一边管理画布一边聊天
+story:
+  en: I can switch file tabs, resize the canvas and return to my conversation.
+  zh: 我能切换文件标签、调整画布并返回对话。
+basis: observed
+references:
+  - src/renderer/components/canvas/CanvasTabs.tsx
+  - src/renderer/components/canvas/ContentCanvas.tsx
+  - src/renderer/hooks/useLayoutPreferences.ts
+promises:
+  tabs:
+    en: Tab selection and canvas collapse do not silently discard the current content state.
+    zh: 切换标签和折叠画布不会悄悄丢失内容状态。
+  layout:
+    en: Narrow and fullscreen layouts keep chat and exit controls reachable.
+    zh: 窄屏和全屏布局仍能找到聊天及退出入口。
+scenarios:
+  - id: files.navigation.tabs
+    title:
+      en: Switch tabs and collapse the canvas
+      zh: 切换标签并折叠画布
+    verifies:
+      - tabs
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Several file tabs are open with known reading positions.
+        zh: 多个文件标签打开并有已知阅读位置。
+    steps:
+      - en: Switch tabs, collapse the canvas and reopen it.
+        zh: 切换标签，折叠后重开画布。
+    expected:
+      - en: The selected content and supported reading state are retained.
+        zh: 选定内容及支持的阅读状态保留。
+  - id: files.navigation.narrow
+    title:
+      en: Use canvas at mobile width
+      zh: 窄屏使用画布
+    verifies:
+      - layout
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A file and chat are open.
+        zh: 已打开文件及对话。
+    steps:
+      - en: Resize to 375px, open fullscreen canvas, then return to chat.
+        zh: 改为 375px，打开全屏画布再返回对话。
+    expected:
+      - en: Content fits the viewport and return controls remain operable.
+        zh: 内容适配视口，返回控件可操作。

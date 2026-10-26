@@ -1,0 +1,96 @@
+version: 1
+id: terminal.sessions
+module: terminal
+title:
+  en: Keep command sessions controllable
+  zh: 让命令会话始终可控制
+story:
+  en: I can see a running terminal, return after closing its tab and deliberately terminate it.
+  zh: 我能看到运行终端，关闭标签后找回，并主动终止。
+basis: documented
+references:
+  - src/main/services/ai-terminal/DESIGN.md
+  - src/renderer/components/canvas/TerminalCloseGuard.tsx
+  - src/main/services/ai-terminal/available.ts
+promises:
+  lifetime:
+    en: An AI-touched terminal offers background retention versus termination when its tab is closed.
+    zh: AI 使用过的终端关闭标签时可选择后台保留或终止。
+  reachable:
+    en: Every retained live terminal remains reachable through its workspace’s live-session entry.
+    zh: 保留的活动终端可从所属空间的活动会话入口找到。
+  output:
+    en: The terminal presents real command output and input reaches the same session.
+    zh: 终端显示真实输出，输入送达同一会话。
+scenarios:
+  - id: terminal.sessions.interact
+    title:
+      en: Share one terminal with the AI
+      zh: 与 AI 使用同一终端
+    verifies:
+      - output
+    platforms:
+      - darwin
+      - win32
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A local terminal runs a harmless interactive fixture.
+        zh: 本地终端运行无害交互测试。
+    steps:
+      - en: Let the AI read/write it, then type a user response in the canvas.
+        zh: 让 AI 读取并写入，再在画布输入用户回答。
+    expected:
+      - en: Both sides observe the same live session and ordered output.
+        zh: 双方观察同一活动会话及有序输出。
+  - id: terminal.sessions.keep
+    title:
+      en: Keep a terminal after closing its tab
+      zh: 关闭标签后保留终端
+    verifies:
+      - lifetime
+      - reachable
+    platforms:
+      - darwin
+      - win32
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A running terminal has been used by the AI.
+        zh: 运行中的终端已被 AI 使用。
+    steps:
+      - en: Close its tab, choose background retention and reopen from live sessions.
+        zh: 关闭标签选择后台保留，再从活动会话重开。
+    expected:
+      - en: The process is unchanged and its output remains visible.
+        zh: 进程未替换，输出仍可见。
+  - id: terminal.sessions.terminate
+    title:
+      en: Terminate retained work
+      zh: 终止保留的任务
+    verifies:
+      - lifetime
+      - reachable
+    platforms:
+      - darwin
+      - win32
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A test process runs in a retained terminal.
+        zh: 测试进程在保留终端运行。
+    steps:
+      - en: Choose termination and inspect the process and live-session list.
+        zh: 选择终止并检查进程及活动列表。
+    expected:
+      - en: The intended process ends and no stale live entry claims it is running.
+        zh: 指定进程结束，不遗留声称仍运行的活动入口。

@@ -1,0 +1,66 @@
+version: 1
+id: assistant-tools.search
+module: assistant-tools
+title:
+  en: Search for information with usable sources
+  zh: 检索信息并保留可用来源
+story:
+  en: I can ask the AI to find information and trace the answer to its sources.
+  zh: 我能让 AI 查找信息，并追溯答案来源。
+basis: observed
+references:
+  - src/main/services/web-search/mcp-server.ts
+  - src/main/services/web-search/engines/index.ts
+promises:
+  sources:
+    en: Search results preserve titles, links and available snippets.
+    zh: 搜索结果保留标题、链接及可用摘要。
+  failure:
+    en: No results and unavailable search service are distinguishable.
+    zh: 无结果与搜索服务不可用能区分。
+scenarios:
+  - id: assistant-tools.search.results
+    title:
+      en: Search a controlled fixture
+      zh: 搜索受控测试资料
+    verifies:
+      - sources
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A controlled search fixture offers two uniquely marked results.
+        zh: 受控搜索提供两项不同标记结果。
+    steps:
+      - en: Ask the AI to search and cite one result.
+        zh: 让 AI 搜索并引用一项结果。
+    expected:
+      - en: The result and cited link identify the same source.
+        zh: 结果及引用链接指向同一来源。
+  - id: assistant-tools.search.unavailable
+    title:
+      en: Handle search unavailability
+      zh: 处理搜索不可用
+    verifies:
+      - failure
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: The configured search backend is intentionally unavailable.
+        zh: 配置的搜索后端被设为不可用。
+    steps:
+      - en: Request a search and then restore the backend.
+        zh: 请求搜索，再恢复后端。
+    expected:
+      - en: The failure is explicit and retry works without fabricating results.
+        zh: 失败明确，恢复后重试可用且不编造结果。

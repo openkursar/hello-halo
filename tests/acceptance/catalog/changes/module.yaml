@@ -1,0 +1,20 @@
+version: 1
+id: changes
+title:
+  en: Code changes and review
+  zh: 代码变更与审阅
+description:
+  en: Inspect repositories, perform explicit Git operations and request AI review.
+  zh: 检查仓库、执行明确 Git 操作并请求 AI 审阅。
+paths:
+  - src/main/services/git/**
+  - src/main/services/code-review/**
+  - src/renderer/components/canvas/viewers/changes/**
+  - src/renderer/hooks/useReviewProgress.ts
+dependsOn:
+  - files
+  - chat
+  - teams
+scope:
+  en: Workspace repositories; compare scopes and commit history, stage/unstage/discard/commit/amend/sync, quick/team review; no native branch checkout, stash or conflict editor promised.
+  zh: 空间仓库；比较范围与提交历史、暂存/取消暂存/放弃/提交/修订/同步、快速或团队审阅；不承诺原生分支切换、stash 或冲突编辑器。

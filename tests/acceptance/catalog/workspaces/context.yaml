@@ -1,0 +1,119 @@
+version: 1
+id: workspaces.context
+module: workspaces
+title:
+  en: Keep each workspace context
+  zh: 保留各空间的工作现场
+story:
+  en: I can switch projects without mixing their files, drafts or running terminals.
+  zh: 我切换项目时，文件、草稿和运行中的终端不会串到另一个空间。
+basis: observed
+references:
+  - src/main/services/space.service.ts
+  - tests/e2e/specs/spaces.spec.ts
+  - src/renderer/services/canvas-lifecycle.ts
+promises:
+  isolation:
+    en: Open files and unsaved edits belong to their workspace.
+    zh: 打开的文件与未保存编辑属于各自空间。
+  terminal:
+    en: Switching workspaces does not terminate that workspace’s running terminal.
+    zh: 切换空间不会终止原空间正在运行的终端。
+  directory:
+    en: An unavailable or invalid working folder is not silently replaced by an unrelated folder.
+    zh: 工作目录无效或不可用时，不会悄悄改到无关目录执行。
+scenarios:
+  - id: workspaces.context.keep-edit
+    title:
+      en: Keep an unsaved edit across workspace switches
+      zh: 跨空间切换保留未保存编辑
+    verifies:
+      - isolation
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Open a file and make an unsaved edit in workspace A.
+        zh: 在空间 A 打开文件并编辑但不保存。
+    steps:
+      - en: Switch to workspace B and back to A.
+        zh: 切换到 B 再回到 A。
+    expected:
+      - en: B does not show A’s tab; A retains its dirty tab and the disk file remains unchanged.
+        zh: B 不显示 A 的标签；A 的编辑仍在，磁盘原文件未被改写。
+  - id: workspaces.context.keep-terminal
+    title:
+      en: Keep a terminal running while away
+      zh: 离开空间时终端继续运行
+    verifies:
+      - terminal
+    platforms:
+      - darwin
+      - win32
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A terminal is running in workspace A.
+        zh: 空间 A 有运行中的终端。
+    steps:
+      - en: Switch to B, return to A and send a harmless marker command.
+        zh: 切换到 B 再返回 A，执行无副作用的标记命令。
+    expected:
+      - en: The same terminal remains alive and returns the marker.
+        zh: 同一终端仍存活并输出标记。
+    notes:
+      en: The existing scenario skips Linux; Linux terminal support needs explicit capability review, not an inferred pass.
+      zh: 现有场景跳过 Linux；Linux 终端能力需明确复核，不能推定通过。
+  - id: workspaces.context.missing-folder
+    title:
+      en: Recover an unavailable project folder
+      zh: 处理失效的项目目录
+    verifies:
+      - directory
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: The selected project folder is temporarily unavailable.
+        zh: 选定的项目目录暂时不可访问。
+    steps:
+      - en: Try to send a task, then restore or change the folder through the offered action.
+        zh: 尝试发送任务，再通过提供的入口恢复或修改目录。
+    expected:
+      - en: The user sees the directory problem; retry targets the restored selected folder.
+        zh: 用户看见目录问题，重试使用恢复后的选定目录。
+  - id: workspaces.context.terminal-session
+    title:
+      en: Return to the same live terminal after switching spaces
+      zh: 切换空间后返回同一活动终端
+    verifies:
+      - terminal
+    platforms:
+      - darwin
+      - win32
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Open a terminal, switch spaces, return, issue a marker command and terminate it.
+        zh: 打开终端，切换空间再返回，执行标记命令并终止。
+    expected:
+      - en: The same terminal remains running in its own space and returns the expected marker.
+        zh: 同一终端在所属空间保持运行并返回预期标记。

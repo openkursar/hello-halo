@@ -75,7 +75,10 @@
     "release:android": "npm run cap:sync && ANDROID_HOME=$HOME/Library/Android/sdk ./android/gradlew -p android assembleRelease && node -e \"const v=require('./package.json').version; const fs=require('fs'); fs.mkdirSync('dist',{recursive:true}); fs.copyFileSync('android/app/build/outputs/apk/release/app-release.apk','dist/Halo-'+v+'.apk'); console.log('Output: dist/Halo-'+v+'.apk')\"",
     "cap:open:ios": "npx cap open ios",
     "cap:run:ios": "npm run cap:sync && npx cap run ios",
-    "build:update-helper": "node scripts/build-update-helper.mjs"
+    "build:update-helper": "node scripts/build-update-helper.mjs",
+    "acceptance": "node scripts/acceptance/cli.mjs",
+    "acceptance:schema": "node scripts/acceptance/schema.mjs",
+    "test:acceptance:harness": "node --test tests/acceptance/harness/*.test.mjs tests/acceptance/ci/*.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.89",
@@ -218,7 +221,8 @@
     "tailwindcss": "^3.4.0",
     "typescript": "^5.3.0",
     "vite": "^5.0.0",
-    "vitest": "^1.6.1"
+    "vitest": "^1.6.1",
+    "zod-to-json-schema": "^3.25.2"
   },
   "optionalDependencies": {
     "@hello-halo/agent-sdk": "file:src/sdk/halo-sdk",
@@ -236,6 +240,7 @@
     },
     "files": [
       "out/**/*",
+      "!out/.acceptance-*.json",
       "resources/**/*",
       "!resources/ocr/**/*",
       "!resources/git-bash/**/*",

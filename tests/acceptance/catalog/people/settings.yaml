@@ -1,0 +1,217 @@
+version: 1
+id: people.settings
+module: people
+title:
+  en: Configure a digital human independently
+  zh: 独立配置数字人
+story:
+  en: I can adjust one digital human’s identity, working context and capabilities without changing everyone else.
+  zh: 我能修改某位数字人的身份、工作环境和能力，而不影响所有其他数字人。
+basis: observed
+references:
+  - src/renderer/components/apps/AppConfigPanel.tsx
+  - tests/e2e/specs/people-settings.spec.ts
+  - src/main/apps/manager/service.ts
+  - tests/e2e/specs/acceptance-people.spec.ts
+promises:
+  save:
+    en: Unsaved settings remain identifiable until saved or cancelled.
+    zh: 未保存设置有明确标识，可保存或取消。
+  workspace:
+    en: Changing or retiring a person preserves or removes workspace data only as stated by the action.
+    zh: 修改或停用数字人只按操作说明保留或移除工作数据。
+  legible:
+    en: Settings sections and long person names remain usable on narrow screens.
+    zh: 设置分组和长数字人名称在窄屏仍可使用。
+  validation:
+    en: Invalid required identity fields are explained without replacing the last saved person definition.
+    zh: 无效必填身份字段有说明，不替换最后保存的数字人定义。
+scenarios:
+  - id: people.settings.unsaved
+    title:
+      en: Save one settings group
+      zh: 保存一组个人设置
+    verifies:
+      - save
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A person’s settings page is open.
+        zh: 已打开个人设置页。
+    steps:
+      - en: Edit identity text, navigate between groups and save.
+        zh: 修改身份文字，在分组间切换后保存。
+    expected:
+      - en: The edited group is marked before save and persisted values appear after reopening.
+        zh: 保存前分组有未保存标记，重开后保留保存值。
+  - id: people.settings.retire
+    title:
+      en: Retire a person and inspect retained work
+      zh: 停用数字人并查看保留的工作
+    verifies:
+      - workspace
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A disposable person owns messages and generated files.
+        zh: 测试数字人已有消息与生成文件。
+    steps:
+      - en: Use the retire/uninstall action and inspect its retained detail and files.
+        zh: 执行停用或卸载并查看保留详情与文件。
+    expected:
+      - en: The person stops receiving new work and retention follows the stated choice.
+        zh: 数字人不再接收新任务，数据按所选保留规则处理。
+  - id: people.settings.save-identity
+    title:
+      en: Save a changed person name
+      zh: 保存修改后的数字人名称
+    verifies:
+      - save
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Change the person name, inspect its dirty marker and save the identity group.
+        zh: 修改名称，查看未保存标识并保存身份分组。
+    expected:
+      - en: The marker clears and the application API reads the saved name.
+        zh: 标识清除，应用 API 读到已保存名称。
+  - id: people.settings.group-navigation
+    title:
+      en: Navigate to the intended settings group
+      zh: 导航到预期设置分组
+    verifies:
+      - legible
+    platforms: &a2
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Use each settings-group navigation entry, including collapsed advanced settings.
+        zh: 使用设置分组导航，包括折叠的高级设置。
+    expected:
+      - en: The selected group appears in view and advanced sections open through their own controls.
+        zh: 选定分组进入视口，高级分组通过自己的控件展开。
+  - id: people.settings.narrow-groups
+    title:
+      en: Reach every settings group at narrow width
+      zh: 窄屏到达每个设置分组
+    verifies:
+      - legible
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Resize person settings to 375px and navigate to a far group in the scrolling strip.
+        zh: 把个人设置缩至 375px，并从滚动导航到远处分组。
+    expected:
+      - en: The strip scrolls, the requested group is reachable and the panel does not overflow.
+        zh: 导航可滚动，目标分组可达，面板不溢出。
+  - id: people.settings.long-names
+    title:
+      en: Read long names during bot reassignment
+      zh: 重新绑定机器人时阅读长名称
+    verifies:
+      - legible
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Give a person a long name and inspect the bot picker and transfer confirmation.
+        zh: 为数字人设置长名称并查看机器人选择器及转移确认。
+    expected:
+      - en: The full identifying name remains present and its containers do not overflow horizontally.
+        zh: 身份名称完整保留，容器不横向溢出。
+    variants:
+      width:
+        - "1280"
+        - "375"
+  - id: people.settings.validation
+    title:
+      en: Reject invalid identity edits and restore saved values
+      zh: 拒绝无效身份修改并恢复保存值
+    verifies:
+      - save
+      - validation
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A valid digital human has a saved name, description and instructions.
+        zh: 有效数字人已保存名称、描述和指令。
+    steps:
+      - en: Try saving a blank name and then a blank description, inspect validation errors and Reset.
+        zh: 尝试保存空名称和空描述，查看校验错误并重置。
+    expected:
+      - en: Each validation failure preserves the stored definition; Reset restores the saved fields.
+        zh: 每次校验失败保留存储定义，重置恢复保存字段。
+  - id: people.settings.purge
+    title:
+      en: Confirm permanent removal separately from uninstall
+      zh: 在卸载之后单独确认永久删除
+    verifies:
+      - workspace
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Two manual digital humans have files in their own isolated data folders.
+        zh: 两位手动创建数字人在各自隔离数据目录中有文件。
+    steps:
+      - en: Uninstall one person, cancel permanent removal, then confirm it and restart.
+        zh: 卸载其中一位，取消永久删除，再确认删除并重启。
+    expected:
+      - en: Cancellation retains the removed person and files; confirmation removes only that person’s record and data, leaving the other intact.
+        zh: 取消保留已卸载数字人及文件；确认只删除该人的记录与数据，另一位保持完整。

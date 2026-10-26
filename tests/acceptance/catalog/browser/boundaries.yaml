@@ -1,0 +1,191 @@
+version: 1
+id: browser.boundaries
+module: browser
+title:
+  en: Handle website boundaries and files
+  zh: 处理网站边界及文件
+story:
+  en: I can rely on website access rules and understand where uploaded or downloaded files go.
+  zh: 我能依赖网站访问规则，并知道上传下载文件的去向。
+basis: documented
+references:
+  - src/main/services/ai-browser/DESIGN.md
+  - src/renderer/components/settings/BrowserAllowlistCard.tsx
+  - tests/e2e/specs/browser-view-reveal.spec.ts
+  - tests/e2e/specs/browser-view-frame.spec.ts
+promises:
+  domains:
+    en: Restricted browser access applies to navigation, redirects and popups.
+    zh: 浏览访问限制适用于导航、重定向及弹窗。
+  files:
+    en: Upload and download tools act on the intended page and selected file paths.
+    zh: 上传下载工具作用于指定页面及文件路径。
+  privileges:
+    en: Web content shares the documented login session without gaining Halo’s privileged desktop API.
+    zh: 网页共享约定的登录会话，但不会获得 Halo 的高权限桌面 API。
+scenarios:
+  - id: browser.boundaries.allowlist
+    title:
+      en: Follow and reject website navigations
+      zh: 允许和拒绝网站导航
+    verifies:
+      - domains
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A local allowed origin links and redirects to a denied origin.
+        zh: 允许的本地来源链接及重定向到拒绝来源。
+    steps:
+      - en: Try direct navigation, redirect and popup.
+        zh: 分别尝试直接导航、重定向和弹窗。
+    expected:
+      - en: Denied destinations do not replace or escape the allowed browser context.
+        zh: 拒绝目标不会替换或绕过允许的浏览上下文。
+  - id: browser.boundaries.files
+    title:
+      en: Upload and download a test file
+      zh: 上传与下载测试文件
+    verifies:
+      - files
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A local site supports upload and attachment download.
+        zh: 本地网站支持上传及附件下载。
+    steps:
+      - en: Upload a synthetic fixture and download its returned artifact.
+        zh: 上传合成文件并下载返回产物。
+    expected:
+      - en: Transferred bytes and final paths match the intended files without affecting another context.
+        zh: 传输字节及最终路径正确，不影响其他上下文。
+  - id: browser.boundaries.file-tools
+    title:
+      en: Upload and download through real browser tools
+      zh: 通过真实浏览工具上传下载
+    verifies:
+      - files
+    platforms: &a2
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Use the production upload tool with a fixture file and the silent download tool against a local site.
+        zh: 用生产上传工具发送测试文件，再从本地网站静默下载。
+    expected:
+      - en: The page receives the selected filename and the downloaded file contains the expected bytes.
+        zh: 网页收到选定文件名，下载文件包含预期字节。
+    notes:
+      en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
+      zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。
+  - id: browser.boundaries.cancel-download
+    title:
+      en: Cancel a download wait when its page closes
+      zh: 关闭页面时取消下载等待
+    verifies:
+      - files
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Start waiting for a download and close the owning page before it arrives.
+        zh: 开始等待下载，在到达前关闭其页面。
+    expected:
+      - en: The wait settles promptly with a cancellation error rather than hanging or reporting a download.
+        zh: 等待及时以取消错误结束，不挂起也不报告下载成功。
+    notes:
+      en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
+      zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。
+  - id: browser.boundaries.policy-routes
+    title:
+      en: Enforce website access on all navigation paths
+      zh: 在全部导航路径执行网站限制
+    verifies:
+      - domains
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Attempt denied initial creation, direct navigation, redirect and popup, then explicitly extend the allowlist.
+        zh: 尝试被拒绝的初次创建、直接导航、重定向和弹窗，再明确扩展允许名单。
+    expected:
+      - en: Denied pages never load; an explicit permitted extension enables navigation without replacing the page identity.
+        zh: 被拒绝页面不加载，明确扩展后可导航且页面身份不变。
+    notes:
+      en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
+      zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。
+  - id: browser.boundaries.login-isolation
+    title:
+      en: Share website login without exposing desktop privileges
+      zh: 共享网站登录但不暴露桌面权限
+    verifies:
+      - privileges
+    platforms: &a3
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Open a local login window and inspect the related browser page’s cookie and exposed APIs.
+        zh: 打开本地登录窗口，检查关联浏览页的 Cookie 及暴露 API。
+    expected:
+      - en: Login state is shared as intended while Node and Halo privileged APIs stay absent from website content.
+        zh: 登录状态按预期共享，网页仍不能访问 Node 及 Halo 高权限 API。
+  - id: browser.boundaries.rogue-page
+    title:
+      en: Refuse unapproved privileged webpage creation
+      zh: 拒绝未经允许的高权限网页创建
+    verifies:
+      - privileges
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Attempt unsolicited browser attachment and replay a retired attachment identity with unsafe preferences.
+        zh: 尝试未经请求的浏览附着，并用不安全偏好重放旧附着身份。
+    expected:
+      - en: Both attempts are refused and the existing valid page remains unchanged.
+        zh: 两次尝试均被拒绝，已有合法页面不变。

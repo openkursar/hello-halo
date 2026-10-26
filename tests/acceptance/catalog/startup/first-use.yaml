@@ -1,0 +1,66 @@
+version: 1
+id: startup.first-use
+module: startup
+title:
+  en: Complete or defer setup
+  zh: 完成或稍后配置
+story:
+  en: I can enter Halo without knowing its internals, and configure an AI account when ready.
+  zh: 我不必理解内部机制就能进入 Halo，准备好后再配置 AI 账户。
+basis: observed
+references:
+  - src/renderer/pages/SetupPage.tsx
+  - src/renderer/stores/app.store.ts
+promises:
+  entry:
+    en: A new profile presents setup; completing setup leads to the workspace.
+    zh: 新用户会看到配置入口，完成后进入工作空间。
+  defer:
+    en: An explicit deferral is remembered rather than repeatedly forcing setup.
+    zh: 明确选择稍后配置后，不应每次启动都被迫重新配置。
+scenarios:
+  - id: startup.first-use.configure
+    title:
+      en: Configure the first account
+      zh: 配置首个账户
+    verifies:
+      - entry
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A disposable new profile has no AI account.
+        zh: 全新测试资料没有 AI 账户。
+    steps:
+      - en: Complete setup with a local test endpoint, then reopen Halo.
+        zh: 用本地测试模型端点完成配置，然后重新打开 Halo。
+    expected:
+      - en: The workspace opens and the configured account is selected.
+        zh: 进入工作空间，已配置账户可用。
+  - id: startup.first-use.defer
+    title:
+      en: Defer configuration and return later
+      zh: 稍后配置并再次进入
+    verifies:
+      - defer
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A new profile is on the setup page.
+        zh: 新资料停留在首次配置页。
+    steps:
+      - en: Choose the offered deferral, restart, then open AI settings.
+        zh: 选择稍后配置，重启后打开 AI 设置。
+    expected:
+      - en: The app remembers deferral and still provides a clear account setup entry.
+        zh: 应用记住稍后配置，并保留清晰的账户配置入口。

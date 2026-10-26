@@ -14,7 +14,7 @@ import { waitForHomePage } from '../fixtures/helpers'
 
 test.setTimeout(60000)
 
-test('a collaboration is one room: no task list, no task to create', async ({ window }) => {
+test('a collaboration is one room: no task list, no task to create', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.collaboration.single-room\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
   await waitForHomePage(window)
 
   await window.getByText(COLLAB_CONVERSATION_TITLE, { exact: true }).first().click()

@@ -222,7 +222,6 @@
   "Are you sure you want to delete": "Sind Sie sicher, dass Sie löschen möchten",
   "Are you sure you want to delete '{{name}}'?": "Sind Sie sicher, dass Sie '{{name}}' löschen möchten?",
   "Are you sure you want to delete this workspace?\n\nAll conversations and files in the workspace will be deleted.": "Sind Sie sicher, dass Sie diesen Arbeitsbereich löschen möchten?\n\nAlle Konversationen und Dateien in diesem Arbeitsbereich werden gelöscht.",
-  "Are you sure you want to delete this workspace?\n\nOnly Halo data (conversation history) will be deleted, your project files will be kept.": "Sind Sie sicher, dass Sie diesen Arbeitsbereich löschen möchten?\n\nNur Halo-Daten (Konversationsverlauf) werden gelöscht, Ihre Projektdateien bleiben erhalten.",
   "Are you sure you want to delete {{count}} items?_one": "Sind Sie sicher, dass Sie {{count}} Element löschen möchten?",
   "Are you sure you want to delete {{count}} items?_other": "Sind Sie sicher, dass Sie {{count}} Elemente löschen möchten?",
   "Are you sure you want to proceed?": "Sind Sie sicher, dass Sie fortfahren möchten?",
@@ -2664,7 +2663,7 @@
   "The Lead assigns tasks and reviews results. Members communicate through the defined reporting hierarchy.": "Der Lead weist Aufgaben zu und prüft die Ergebnisse. Mitglieder kommunizieren über die definierte Berichtshierarchie.",
   "The MCP server failed to connect.": "Der MCP-Server konnte keine Verbindung herstellen.",
   "The MCP server is disabled globally, so this digital human will not inject its tools at runtime.": "Der MCP-Server ist global deaktiviert, daher wird dieser digitale Mensch seine Werkzeuge zur Laufzeit nicht injizieren.",
-  "The account it was set to use was removed, so it follows the global selection.": "",
+  "The account it was set to use was removed, so it follows the global selection.": "Das Konto, das verwendet werden sollte, wurde entfernt, daher gilt nun die globale Auswahl.",
   "The app definition is invalid and cannot be published.": "Die App-Definition ist ungültig und kann nicht veröffentlicht werden.",
   "The app is installed into the selected workspace and runs and is managed within that workspace; other workspaces are not affected.": "Die App wird im ausgewählten Arbeitsbereich installiert, ausgeführt und verwaltet; andere Arbeitsbereiche sind nicht betroffen.",
   "The author’s version could not be loaded. Please try again.": "Die Version des Autors konnte nicht geladen werden. Bitte versuchen Sie es erneut.",
@@ -3396,5 +3395,15 @@
   "{{who}} joined \"{{office}}\".": "{{who}} ist \"{{office}}\" beigetreten.",
   "{{who}} · {{when}}": "{{who}} · {{when}}",
   "↑↓ Navigate · {{shortcut}} Edit · Esc Close": "↑↓ Navigieren · {{shortcut}} Bearbeiten · Esc Schließen",
-  "🤖 AI Browser": "🤖 AI-Browser"
+  "🤖 AI Browser": "🤖 AI-Browser",
+  "Are you sure you want to delete this workspace?\n\nHalo workspace data, including conversation history and any files stored with it, will be deleted; your project files will be kept in the current project folder.": "Möchten Sie diesen Arbeitsbereich wirklich löschen?\n\nDie von Halo gespeicherten Arbeitsbereichsdaten einschließlich des Gesprächsverlaufs und aller zusammen mit diesen Daten gespeicherten Dateien werden gelöscht. Ihre Projektdateien bleiben im aktuellen Projektordner erhalten.\n",
+  "Please select a model before testing the connection": "Bitte vor dem Verbindungstest ein Modell auswählen",
+  "Connection timeout - server may be slow or unreachable": "Zeitüberschreitung bei der Verbindung – der Server ist möglicherweise langsam oder nicht erreichbar",
+  "Invalid API key": "Ungültiger API-Schlüssel",
+  "Access denied - check API key permissions": "Zugriff verweigert – bitte die Berechtigungen des API-Schlüssels prüfen",
+  "Requested model is not available": "Das angeforderte Modell ist nicht verfügbar",
+  "API endpoint not found - check URL": "API-Endpunkt nicht gefunden – bitte die URL prüfen",
+  "Rate limited - try again later": "Anfragelimit erreicht – bitte später erneut versuchen",
+  "Cannot connect to API server - check URL": "Keine Verbindung zum API-Server möglich – bitte die URL prüfen",
+  "No response received from API": "Keine Antwort von der API erhalten"
 }

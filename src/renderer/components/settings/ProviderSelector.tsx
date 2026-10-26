@@ -399,6 +399,31 @@ export function ProviderSelector({
     }
   }
 
+  const getConnectionFailureMessage = (message: unknown): string => {
+    switch (message) {
+      case 'Please select a model before testing the connection':
+        return t('Please select a model before testing the connection')
+      case 'Connection timeout - server may be slow or unreachable':
+        return t('Connection timeout - server may be slow or unreachable')
+      case 'Invalid API key':
+        return t('Invalid API key')
+      case 'Access denied - check API key permissions':
+        return t('Access denied - check API key permissions')
+      case 'Requested model is not available':
+        return t('Requested model is not available')
+      case 'API endpoint not found - check URL':
+        return t('API endpoint not found - check URL')
+      case 'Rate limited - try again later':
+        return t('Rate limited - try again later')
+      case 'Cannot connect to API server - check URL':
+        return t('Cannot connect to API server - check URL')
+      case 'No response received from API':
+        return t('No response received from API')
+      default:
+        return t('Connection failed')
+    }
+  }
+
   // Handle test connection (optional validation)
   const handleTestConnection = async () => {
     if (!apiKey) {
@@ -426,7 +451,7 @@ export function ProviderSelector({
       if (!validationResponse.success || !validationResponse.data?.valid) {
         setValidationResult({
           valid: false,
-          message: validationResponse.data?.message || validationResponse.error || t('Connection failed')
+          message: getConnectionFailureMessage(validationResponse.data?.message || validationResponse.error)
         })
       } else {
         const normalizedUrl = validationResponse.data.normalizedUrl || apiUrl

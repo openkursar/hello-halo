@@ -1,0 +1,163 @@
+version: 1
+id: marketplace.install
+module: marketplace
+title:
+  en: Install and update a resource
+  zh: 安装和升级资源
+story:
+  en: I can install a selected resource with its dependencies and understand the effect of an update.
+  zh: 我能安装资源及其依赖，并理解更新会影响什么。
+basis: documented
+references:
+  - src/main/store/DESIGN.md
+  - src/renderer/components/store/StoreInstallDialog.tsx
+  - src/renderer/components/store/StoreUpdateDialog.tsx
+  - tests/e2e/specs/acceptance-marketplace.spec.ts
+promises:
+  install:
+    en: One user install intent produces one local installation despite transport retries.
+    zh: 一次安装意图即使网络重试也只产生一次本地安装。
+  dependencies:
+    en: Required dependencies are acquired from their declared sources or a failure is reported.
+    zh: 必要依赖从声明来源获得，失败则有明确结果。
+  update:
+    en: An update previews which local fields are retained, preserves supported user configuration and adopts unchanged fields from the author.
+    zh: 更新预览说明保留哪些本地字段，保留支持的用户配置，并采用未被修改的作者字段。
+  configuration:
+    en: Installation asks for a workspace when there is a choice and validates required settings before creating an instance.
+    zh: 有多个可选空间时安装要求明确选择位置，并在创建实例前校验必填配置。
+  identity:
+    en: A downloaded package must match the resource selected from the catalog before it can be installed.
+    zh: 下载包必须与目录中选定的资源匹配，才能安装。
+scenarios:
+  - id: marketplace.install.dependencies
+    title:
+      en: Install with declared dependencies
+      zh: 连同声明依赖一起安装
+    verifies:
+      - install
+      - dependencies
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A local registry offers a digital human requiring a skill from a second enabled local registry.
+        zh: 本地来源提供数字人，依赖第二个已启用本地来源中的技能。
+    steps:
+      - en: Install it, including a controlled interrupted download retry.
+        zh: 安装并模拟一次下载中断后重试。
+    expected:
+      - en: The intended resources install once with correct source identities.
+        zh: 目标资源各安装一次，来源身份正确。
+    notes:
+      en: Uses local HTTP registries with the real application installer, persistence and UI. The production model endpoint is not invoked.
+      zh: 使用本机 HTTP 来源及真实应用安装、持久化与界面，不调用真实模型服务。
+  - id: marketplace.install.failure
+    title:
+      en: Recover a failed dependency fetch
+      zh: 处理依赖下载失败
+    verifies:
+      - dependencies
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: One required dependency returns a controlled error.
+        zh: 一个必要依赖返回可控错误。
+    steps:
+      - en: Attempt installation, inspect failure and retry after recovery.
+        zh: 尝试安装，查看错误，恢复后重试。
+    expected:
+      - en: Failure is visible and retry does not leave duplicate or falsely usable resources.
+        zh: 失败可见，重试不遗留重复或伪可用资源。
+    notes:
+      en: Uses local HTTP registries with the real application installer, persistence and UI. The production model endpoint is not invoked.
+      zh: 使用本机 HTTP 来源及真实应用安装、持久化与界面，不调用真实模型服务。
+  - id: marketplace.install.update
+    title:
+      en: Preview and apply an update while preserving local choices
+      zh: 预览并应用更新，保留本地选择
+    verifies:
+      - update
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An installed digital human has required user settings, edited instructions, notification-only upgrades and a newer fixture version.
+        zh: 已安装数字人具有必填用户配置、自定义指令、仅通知更新策略和新的测试版本。
+    steps:
+      - en: Open the update preview, inspect retained fields, cancel once, then apply and restart.
+        zh: 打开更新预览并检查保留字段，先取消，再应用并重启。
+    expected:
+      - en: Cancellation keeps version one; updating keeps the installation identity, custom instructions and settings while adopting the unchanged description from version two.
+        zh: 取消保留版本一；更新保留安装身份、自定义指令与配置，并采用版本二中未被用户修改的描述。
+    notes:
+      en: Uses local HTTP registries with the real application installer, persistence and UI. The production model endpoint is not invoked.
+      zh: 使用本机 HTTP 来源及真实应用安装、持久化与界面，不调用真实模型服务。
+  - id: marketplace.install.configuration
+    title:
+      en: Validate location and required installation settings
+      zh: 校验安装位置及必填配置
+    verifies:
+      - install
+      - configuration
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: The catalog contains a configurable digital human and multiple workspaces exist.
+        zh: 目录中有需要配置的数字人，且存在多个空间。
+    steps:
+      - en: Try to advance without choosing a workspace, select a workspace, try missing required fields, then complete installation and restart.
+        zh: 先不选空间尝试继续，再选择空间并尝试缺失必填配置，补全后安装并重启。
+    expected:
+      - en: Incomplete input leaves no installation; the completed instance and settings persist in the selected workspace.
+        zh: 输入不完整不产生安装记录；完成后实例和配置保存在选定空间。
+    notes:
+      en: Uses the built, unpackaged app and local HTTP source fixtures; no provider credentials or live model are exercised.
+      zh: 使用构建后的未打包应用与本机 HTTP 来源；不涉及供应商凭证或真实模型。
+  - id: marketplace.install.identity
+    title:
+      en: Reject a mismatched package and recover its details
+      zh: 拒绝不匹配的包并恢复详情
+    verifies:
+      - identity
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A fixture package declares a slug different from its catalog entry.
+        zh: 测试包声明与目录记录不一致的资源标识。
+    steps:
+      - en: Open its details, inspect the failure, correct the served package and retry.
+        zh: 打开详情查看失败，修正来源中的包后重试。
+    expected:
+      - en: No install action is available for the mismatched package; corrected details load without silently installing anything.
+        zh: 不匹配的包无法安装；修正后详情可加载，且不会擅自安装资源。
+    notes:
+      en: Uses the built, unpackaged app and local HTTP source fixtures; no provider credentials or live model are exercised.
+      zh: 使用构建后的未打包应用与本机 HTTP 来源；不涉及供应商凭证或真实模型。

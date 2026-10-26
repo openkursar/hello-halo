@@ -1,0 +1,143 @@
+version: 1
+id: conversations.organize
+module: conversations
+title:
+  en: Find and organize conversations
+  zh: 整理并找回对话
+story:
+  en: I can name and pin important conversations and keep different discussions separate.
+  zh: 我能命名并置顶重要对话，让不同讨论保持独立。
+basis: observed
+references:
+  - src/main/services/conversation.service.ts
+  - src/renderer/components/chat/ConversationList.tsx
+  - tests/e2e/specs/spaces.spec.ts
+  - tests/e2e/specs/acceptance-conversations.spec.ts
+promises:
+  identity:
+    en: A new conversation has independent history and a blank composer.
+    zh: 新对话拥有独立记录与空白输入框。
+  organize:
+    en: Names and pinned state survive reopening.
+    zh: 名称与置顶状态在重新打开后保留。
+  delete:
+    en: Removing a selected conversation affects only its history; clearing a digital-human conversation requires its explicit confirmation.
+    zh: 移除选中对话只影响其历史；清空数字人对话需要明确确认。
+scenarios:
+  - id: conversations.organize.new
+    title:
+      en: Create independent conversations
+      zh: 创建独立对话
+    verifies:
+      - identity
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A conversation already contains messages.
+        zh: 现有对话已有消息。
+    steps:
+      - en: Create a new conversation and return to the original.
+        zh: 新建对话后再返回原对话。
+    expected:
+      - en: The new composer is blank and the old history remains in the original.
+        zh: 新输入框为空，旧记录仍属于原对话。
+  - id: conversations.organize.pin
+    title:
+      en: Rename and pin a conversation
+      zh: 重命名并置顶对话
+    verifies:
+      - organize
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Two conversations exist.
+        zh: 已有两个对话。
+    steps:
+      - en: Rename one, pin it, reload and unpin it.
+        zh: 重命名其中一个并置顶，刷新后取消置顶。
+    expected:
+      - en: Only that conversation changes name and pinned placement.
+        zh: 只有该对话改变名称和置顶位置。
+  - id: conversations.organize.delete
+    title:
+      en: Cancel then confirm clearing
+      zh: 取消后确认清空
+    verifies:
+      - delete
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use disposable history and keep another conversation untouched.
+        zh: 使用可丢弃历史，并保留另一对话作对照。
+    steps:
+      - en: Cancel the clearing action, then confirm it for the selected history.
+        zh: 先取消清空，再确认清空选定记录。
+    expected:
+      - en: Cancellation preserves messages; confirmation clears only the chosen history.
+        zh: 取消后消息仍在；确认仅清空选定历史。
+  - id: conversations.organize.persisted-new
+    title:
+      en: Create a persisted blank conversation
+      zh: 创建已保存的空白对话
+    verifies:
+      - identity
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Create a new conversation from the workspace UI and read its conversation list.
+        zh: 从空间界面创建新对话并读取对话列表。
+    expected:
+      - en: A distinct conversation record exists and the new composer is blank.
+        zh: 存在独立对话记录，新输入框为空。
+  - id: conversations.organize.delete-space
+    title:
+      en: Delete a space conversation and keep unrelated history
+      zh: 删除空间对话并保留无关历史
+    verifies:
+      - delete
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Two isolated space conversations have distinct messages.
+        zh: 两个隔离的空间对话包含不同消息。
+    steps:
+      - en: Use the selected conversation’s Delete menu action, inspect the other conversation and restart.
+        zh: 使用选定对话菜单中的删除操作，查看另一个对话并重启。
+    expected:
+      - en: Only the chosen history is removed; it stays absent after restart while the other messages remain intact.
+        zh: 仅选中历史移除；重启后仍不存在，另一对话消息保持完整。
+    notes:
+      en: Current space-conversation Delete is immediate. The separate digital-human Clear chat path has Cancel/Confirm; this scenario does not invent a confirmation dialog.
+      zh: 当前空间对话删除立即生效；数字人的清空聊天另有取消与确认。本场景不虚构确认弹窗。

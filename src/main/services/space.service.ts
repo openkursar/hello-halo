@@ -8,14 +8,14 @@
  * - Halo temp space is unified into the registry (no special branches)
  * - Lazy-loaded on first access; auto-migrates from v1/v2 formats if needed
  * - Mutations (create/update/delete) update both memory and disk atomically
- * - listSpaces() is pure memory read — zero disk I/O after startup
- * - getSpace() is pure memory read — zero disk I/O (no preferences)
+ * - hasSpace() checks registration in memory after the index is loaded
+ * - getSpace() and listSpaces() check path availability without loading preferences
  * - getSpaceWithPreferences() loads preferences from meta.json on demand (for IPC/UI only)
  * - listSpaces() preserves missing paths and marks them unavailable instead of deleting entries
  */
 
 import { shell } from 'electron'
-import { isAbsolute, join, resolve } from 'path'
+import { isAbsolute, join, relative, resolve, sep } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync, renameSync } from 'fs'
 import { rm } from 'fs/promises'
 import { getHaloDir, getTempSpacePath, getSpacesDir, resolveClaudeConfigDir } from '../foundation/config.service'
@@ -25,6 +25,7 @@ import { getAppManager } from './app-bridge'
 import { getTaskStateService } from '../platform/task-state'
 import { resolveMemoryLayout, type MemoryLayout } from '../platform/memory'
 import { resolveMemorySettings, sanitizeMemorySettings, type MemorySettings, type ResolvedMemorySettings } from '../../shared/types/memory'
+import type { SpaceDeletionEffect } from '../../shared/types/space'
 
 // Re-export config helper for backward compatibility with existing imports
 export { getSpacesDir } from '../foundation/config.service'
@@ -45,6 +46,7 @@ interface Space {
   lastActiveAt?: string  // Last user activity time (cached, used for sorting/display)
   preferences?: SpacePreferences
   workingDir?: string  // Project directory for custom spaces (agent cwd, artifacts, file explorer)
+  deletionEffect?: SpaceDeletionEffect
   isMissing?: boolean  // True when the space data path is currently unavailable (e.g. external drive disconnected)
   sortOrder?: number  // User-defined display order (lower = earlier). Absent = legacy fallback to activity sort.
 }
@@ -418,14 +420,26 @@ function entryToSpace(id: string, entry: SpaceIndexEntry): Space {
   }
 }
 
+function deletionDetails(entry: SpaceIndexEntry): { target: string; effect: SpaceDeletionEffect } {
+  // rm removes the registered entry, so storage ownership follows that path rather than a symlink target.
+  const dataRelative = relative(getSpacesDir(), entry.path)
+  const centralized = dataRelative === '' || (
+    dataRelative !== '..' && !dataRelative.startsWith(`..${sep}`) && !isAbsolute(dataRelative)
+  )
+  const target = centralized ? entry.path : join(entry.path, '.halo')
+  const effect = isPathWithin(entry.workingDir || entry.path, target) ? 'workspace-files' : 'halo-data-only'
+  return { target, effect }
+}
+
 /**
- * Build a Space object with preferences loaded from meta.json.
+ * Detail reads include preferences and deletion impact; list reads do not resolve physical paths.
  */
 function entryToSpaceWithPreferences(id: string, entry: SpaceIndexEntry): Space {
   const space = entryToSpace(id, entry)
   if (space.isMissing) {
     return space
   }
+  if (!space.isTemp) space.deletionEffect = deletionDetails(entry).effect
   const meta = tryReadMeta(entry.path)
   if (meta?.preferences) {
     space.preferences = meta.preferences
@@ -448,6 +462,11 @@ export function getSpace(spaceId: string): Space | null {
   const entry = getRegistry().get(spaceId)
   if (!entry) return null
   return entryToSpace(spaceId, entry)
+}
+
+/** Registration only; an unavailable drive remains registered and no path is probed. */
+export function hasSpace(spaceId: string): boolean {
+  return getRegistry().has(spaceId)
 }
 
 /**
@@ -646,9 +665,7 @@ export async function deleteSpace(spaceId: string): Promise<boolean> {
   const entry = getRegistry().get(spaceId)
   if (!entry || entry.isTemp) return false
 
-  const spacePath = entry.path
-  const spacesDir = getSpacesDir()
-  const isCentralized = spacePath.startsWith(spacesDir)
+  const { target } = deletionDetails(entry)
 
   // The entry stays in memory until cleanup is done: app cleanup resolves
   // this space's paths through the registry.
@@ -684,7 +701,6 @@ export async function deleteSpace(spaceId: string): Promise<boolean> {
 
   // Centralized storage: delete the entire folder. Legacy custom path: only
   // its .halo folder, keeping the user's files.
-  const target = isCentralized ? spacePath : join(spacePath, '.halo')
   // Async: its retries (a file briefly held by another program) must not block the main process.
   try {
     await rm(target, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 })

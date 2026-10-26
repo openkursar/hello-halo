@@ -1,0 +1,69 @@
+version: 1
+id: goals.control
+module: goals
+title:
+  en: Keep work focused on a goal
+  zh: 让任务围绕目标推进
+story:
+  en: I can state the objective and completion conditions, then see whether work is still pursuing them.
+  zh: 我能设定目标和完成条件，知道 AI 是否仍在推进。
+basis: observed
+references:
+  - src/shared/types/goal.ts
+  - src/renderer/components/goal/GoalEditor.tsx
+  - src/main/services/agent/goal/index.ts
+promises:
+  state:
+    en: The objective, completion conditions and current state are shown together.
+    zh: 目标、完成条件及当前状态一起展示。
+  control:
+    en: User changes reach the supported engine and completed or abandoned goals stop steering new work.
+    zh: 用户修改会送达支持的引擎，完成或放弃的目标不再引导后续工作。
+scenarios:
+  - id: goals.control.set
+    title:
+      en: Set and revise a goal
+      zh: 设置并修改目标
+    verifies:
+      - state
+      - control
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: The current engine supports goals.
+        zh: 当前引擎支持目标。
+    steps:
+      - en: Set an objective and completion conditions, then revise them during a tool call.
+        zh: 设置目标及完成条件，并在工具执行时修改。
+    expected:
+      - en: The UI shows the latest goal and indicates when the model has received it.
+        zh: 界面显示最新目标，并表明模型是否已收到。
+  - id: goals.control.finish
+    title:
+      en: Complete, abandon or clear a goal
+      zh: 完成、放弃或移除目标
+    verifies:
+      - state
+      - control
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A goal is active.
+        zh: 当前有活动目标。
+    steps:
+      - en: Exercise supported completion, abandonment and clearing actions in separate conversations.
+        zh: 在独立对话中分别执行支持的完成、放弃和移除操作。
+    expected:
+      - en: The resulting state is visible and the previous active goal no longer steers a later turn.
+        zh: 结果状态可见，旧目标不再引导之后的对话。

@@ -1,0 +1,115 @@
+version: 1
+id: notifications.attention
+module: notifications
+title:
+  en: Open the work that needs attention
+  zh: 打开需要处理的工作
+story:
+  en: I can find running work and unanswered questions and land on the right task.
+  zh: 我能找到运行任务和未回答问题，并进入正确任务。
+basis: observed
+references:
+  - src/renderer/components/layout/TaskPanel.tsx
+  - src/renderer/stores/task.store.ts
+  - tests/e2e/specs/people-tasks.spec.ts
+  - tests/e2e/specs/digital-human-chat.spec.ts
+promises:
+  target:
+    en: A task-panel entry opens the corresponding conversation, person or team task.
+    zh: 任务面板入口打开对应对话、数字人或团队任务。
+  status:
+    en: Running, waiting and pinned work remain distinguishable.
+    zh: 运行中、等待处理与置顶工作能区分。
+scenarios:
+  - id: notifications.attention.team
+    title:
+      en: Open a waiting team from Tasks
+      zh: 从任务面板打开等待中的团队
+    verifies:
+      - target
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - fast
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A seeded team is waiting for its owner.
+        zh: 预置团队正在等待主人。
+    steps:
+      - en: Open Tasks and select the team entry.
+        zh: 打开任务面板并选择团队项。
+    expected:
+      - en: The correct team workbench opens, with navigation back to teams.
+        zh: 正确团队工作台打开，并能返回团队列表。
+  - id: notifications.attention.status
+    title:
+      en: Follow a task as its status changes
+      zh: 跟随任务状态变化
+    verifies:
+      - status
+      - target
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A controlled task can transition from running to waiting to complete.
+        zh: 受控任务可从运行变为等待再完成。
+    steps:
+      - en: Observe the panel through each transition and open its entry.
+        zh: 观察每个转换并打开其入口。
+    expected:
+      - en: Labels and counts follow real state and always target the same work.
+        zh: 标识及数量跟随真实状态，始终定位同一工作。
+  - id: notifications.attention.unread-settings
+    title:
+      en: Keep unseen completion unread while on settings
+      zh: 停留设置时保留未读完成状态
+    verifies:
+      - status
+    platforms: &a2
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Open settings, deliver a controlled completion, then return to its existing conversation.
+        zh: 打开设置，投递受控完成事件，再回到原对话。
+    expected:
+      - en: Completion remains unseen on settings and becomes read only when the chat is shown.
+        zh: 在设置中仍未读，显示对话后才变为已读。
+  - id: notifications.attention.unread-canvas
+    title:
+      en: Keep unseen completion unread behind fullscreen content
+      zh: 全屏内容遮住对话时保留未读
+    verifies:
+      - status
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Cover chat with fullscreen canvas, deliver completion, then reveal chat.
+        zh: 以全屏画布遮住对话，投递完成事件，再显示对话。
+    expected:
+      - en: The result remains unread until the conversation becomes visible.
+        zh: 对话可见前结果一直未读。

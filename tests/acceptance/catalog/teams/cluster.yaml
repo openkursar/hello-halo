@@ -1,0 +1,161 @@
+version: 1
+id: teams.cluster
+module: teams
+title:
+  en: Create and assemble teams reliably
+  zh: 可靠地创建和组织团队
+story:
+  en: I can create a team, reuse existing members and keep several teams separate.
+  zh: 我能创建团队、复用已有成员，并让多个团队各自独立。
+basis: documented
+references:
+  - tests/decentralized/README.md
+  - src/main/apps/team/DESIGN.md
+  - tests/decentralized/checklist-single-machine.mjs
+promises:
+  creation:
+    en: A confirmed team is discoverable and has a lead belonging to its named member roster.
+    zh: 确认创建的团队可以找到，并具有属于成员名单的负责人。
+  reuse:
+    en: Reusing a member does not duplicate it or mix unrelated team members.
+    zh: 复用成员不会产生重复成员，也不会混入无关团队的成员。
+  boundaries:
+    en: Unusual creation inputs produce a response without crashing the host or creating duplicate
+      member names.
+    zh: 异常创建输入能得到响应，不使主机崩溃，也不产生重名成员。
+scenarios:
+  - id: teams.cluster.create-team
+    title:
+      en: A confirmed team appears with an assigned lead
+      zh: 确认创建团队后团队出现并具有负责人
+    verifies:
+      - creation
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 1 isolated built Halo processes run on one computer.
+        zh: 1 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A confirmed team appears with an assigned lead
+        zh: 确认创建团队后团队出现并具有负责人
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: teams.cluster.reuse-member
+    title:
+      en: An existing member can be reused without duplication
+      zh: 复用已有成员不会重复添加
+    verifies:
+      - reuse
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 1 isolated built Halo processes run on one computer.
+        zh: 1 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: An existing member can be reused without duplication
+        zh: 复用已有成员不会重复添加
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: teams.cluster.lead-and-roles
+    title:
+      en: A created team has one usable lead and named roles
+      zh: 团队负责人属于具有名字和角色的成员名单
+    verifies:
+      - creation
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 1 isolated built Halo processes run on one computer.
+        zh: 1 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A created team has one usable lead and named roles
+        zh: 团队负责人属于具有名字和角色的成员名单
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: teams.cluster.creation-boundaries
+    title:
+      en: Unusual creation inputs neither crash the host nor create duplicate member names
+      zh: 异常创建输入不会使主机崩溃或产生重名成员
+    verifies:
+      - boundaries
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 1 isolated built Halo processes run on one computer.
+        zh: 1 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Unusual creation inputs neither crash the host nor create duplicate member names
+        zh: 异常创建输入不会使主机崩溃或产生重名成员
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: teams.cluster.multiple-teams
+    title:
+      en: Multiple created teams retain separate member sets
+      zh: 同时创建多个团队时各自成员保持独立
+    verifies:
+      - reuse
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 1 isolated built Halo processes run on one computer.
+        zh: 1 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Multiple created teams retain separate member sets
+        zh: 同时创建多个团队时各自成员保持独立
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。

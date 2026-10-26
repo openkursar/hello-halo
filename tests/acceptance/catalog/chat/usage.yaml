@@ -1,0 +1,67 @@
+version: 1
+id: chat.usage
+module: chat
+title:
+  en: Inspect usage without disrupting work
+  zh: 不打断工作地查看用量
+story:
+  en: I can inspect the usage shown for a reply and keep reading the conversation.
+  zh: 我能查看回复显示的用量，并继续阅读对话。
+basis: observed
+references:
+  - src/renderer/components/chat/TokenUsageIndicator.tsx
+  - tests/e2e/specs/token-usage-popup.spec.ts
+promises:
+  display:
+    en: Usage details correspond to the selected reply and stay attached to their visible anchor while open.
+    zh: 用量详情对应选定回复，打开时跟随显示锚点。
+  meaning:
+    en: Context usage and reported cost are not conflated with an independent provider invoice.
+    zh: 上下文用量及报告费用不被等同于独立的服务商账单。
+scenarios:
+  - id: chat.usage.popup
+    title:
+      en: Inspect usage while scrolling
+      zh: 滚动时查看用量
+    verifies:
+      - display
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A seeded transcript contains known usage values.
+        zh: 预置对话含已知用量值。
+    steps:
+      - en: Open the usage popup, scroll its reply and leave the pointer or tap away.
+        zh: 打开用量浮层，滚动回复后移出指针或点击外部。
+    expected:
+      - en: The popup follows its anchor and dismisses through the supported interaction.
+        zh: 浮层跟随锚点，并按支持的交互关闭。
+  - id: chat.usage.values
+    title:
+      en: Read a known usage record
+      zh: 读取已知用量记录
+    verifies:
+      - display
+      - meaning
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A controlled provider response reports known input, cache and output usage.
+        zh: 受控模型响应报告已知输入、缓存及输出用量。
+    steps:
+      - en: Complete the turn and inspect saved and displayed usage.
+        zh: 完成一轮并查看保存及显示的用量。
+    expected:
+      - en: Displayed values follow the documented calculation and missing price data is not a fabricated invoice.
+        zh: 显示符合文档计算，缺失价格数据不伪造账单。

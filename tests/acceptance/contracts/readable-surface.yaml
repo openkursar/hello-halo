@@ -1,0 +1,108 @@
+version: 1
+id: readable-surface
+title:
+  en: Readable and operable surfaces
+  zh: 可读且可操作的界面
+promises:
+  narrow:
+    en: Essential reading and actions fit a narrow viewport without horizontal page overflow.
+    zh: 关键内容及操作适配窄屏，不产生页面横向溢出。
+  theme:
+    en: Both supported themes retain legible content, visible controls and clear focus.
+    zh: 两种主题均保留可读内容、可见控件和清晰焦点。
+  keyboard:
+    en: Primary actions have names and can be reached and cancelled using the offered keyboard interactions.
+    zh: 主要操作有名称，可通过提供的键盘交互到达及取消。
+scenarios:
+  - id: narrow
+    title:
+      en: Operate at narrow width
+      zh: 在窄屏操作
+    verifies:
+      - narrow
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: planned
+    preconditions:
+      - en: The selected product surface has representative nonempty data.
+        zh: 选定页面含有代表性的非空数据。
+    steps:
+      - en: Open its main controls at 320px and 375px, including drawers and a dialog.
+        zh: 在 320px 与 375px 打开主要控件、抽屉及弹窗。
+    expected:
+      - en: Required text and controls remain reachable without page overflow.
+        zh: 必要文字及控件可达，页面不溢出。
+    variants:
+      surface:
+        - chat
+        - people
+        - team-task
+        - knowledge
+        - store
+        - settings
+        - canvas
+  - id: themes
+    title:
+      en: Read both themes
+      zh: 阅读两种主题
+    verifies:
+      - theme
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: planned
+    preconditions:
+      - en: The selected surface includes normal, disabled, warning and selected content.
+        zh: 选定页面含普通、禁用、警告及选中内容。
+    steps:
+      - en: Switch between light and dark and inspect text and focus states.
+        zh: 切换明暗主题并检查文字及焦点状态。
+    expected:
+      - en: Content and controls remain distinguishable without stale theme colors.
+        zh: 内容和控件仍可区分，无残留错误主题色。
+    variants:
+      surface:
+        - chat
+        - people
+        - team-task
+        - knowledge
+        - store
+        - settings
+        - canvas
+  - id: keyboard
+    title:
+      en: Use primary keyboard controls
+      zh: 使用主要键盘控件
+    verifies:
+      - keyboard
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: planned
+    preconditions:
+      - en: The selected surface is open without pointer interaction.
+        zh: 打开选定页面，不使用指针。
+    steps:
+      - en: Navigate primary controls with Tab, activate the selected action and cancel its dialog.
+        zh: 用 Tab 到达主要控件，激活选定操作并取消弹窗。
+    expected:
+      - en: Focus remains visible, the intended action runs and cancellation returns to a usable focus target.
+        zh: 焦点可见，预期操作执行，取消后返回可用焦点。
+    variants:
+      surface:
+        - chat
+        - people
+        - team-task
+        - knowledge
+        - store
+        - settings

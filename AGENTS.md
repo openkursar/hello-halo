@@ -28,3 +28,8 @@ Always design with high maintainability and modularity, aligned with long-term a
 - Never run raw `git commit`. All commits go through the `code-commit` skill, and only when the human explicitly triggers or authorizes it — never on your own initiative.
 **tips.**
 This project is 100% AI-generated, so humans may not necessarily know more than you do. You need to proactively review documentation, manage documents, and examine code to confirm details and direction (for matters involving architecture and direction, actively discuss with users).
+
+**User-outcome acceptance**
+- Before changing user-visible behavior or planning regression coverage, read `.agents/skills/acceptance-testing/SKILL.md` and the affected stories under `tests/acceptance/catalog/`.
+- Preserve the distinction between product expectations, executable coverage and actual evidence. Missing environments, skipped tests and partial UI checks never establish a complete user journey.
+- Keep product changes, scenario bindings and verification records aligned. Existing documented behavior can be tested directly; new product choices require explicit human direction.

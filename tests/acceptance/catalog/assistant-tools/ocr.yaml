@@ -1,0 +1,65 @@
+version: 1
+id: assistant-tools.ocr
+module: assistant-tools
+title:
+  en: Read text from an image
+  zh: 提取图片中的文字
+story:
+  en: I can ask Halo to extract text from a supported local image.
+  zh: 我能让 Halo 提取支持的本地图片中的文字。
+basis: observed
+references:
+  - src/main/services/ocr/mcp-server.ts
+  - src/main/services/ocr/engine.ts
+promises:
+  extract:
+    en: OCR returns text from the selected permitted image and reports unusable input.
+    zh: OCR 从选定且允许的图片提取文字，不可用输入有报告。
+scenarios:
+  - id: assistant-tools.ocr.extract
+    title:
+      en: Extract known synthetic text
+      zh: 提取已知合成文字
+    verifies:
+      - extract
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A permitted synthetic image contains clear English and Chinese markers.
+        zh: 允许的合成图片含清晰中英文标记。
+    steps:
+      - en: Invoke OCR through the configured AI capability.
+        zh: 通过配置的 AI 能力调用 OCR。
+    expected:
+      - en: The result contains the visible markers without reading another path.
+        zh: 结果包含可见标记，未读取其他路径。
+    requirements:
+      - packaged-app
+  - id: assistant-tools.ocr.invalid
+    title:
+      en: Reject an invalid image input
+      zh: 拒绝无效图片输入
+    verifies:
+      - extract
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A selected fixture is not a valid image.
+        zh: 选定测试文件不是有效图片。
+    steps:
+      - en: Attempt extraction.
+        zh: 尝试提取。
+    expected:
+      - en: A useful failure is returned and no unrelated file is interpreted as the input.
+        zh: 返回可理解失败，不把无关文件当作输入。

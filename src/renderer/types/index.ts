@@ -12,6 +12,7 @@ import {
 import { NotificationChannelsConfig }  from '../../shared/types/notification-channels';
 import type { KBSource } from '../../shared/types/tlon';
 import type { MemorySettings } from '../../shared/types/memory';
+import type { SpaceDeletionEffect } from '../../shared/types/space';
 // Re-exported below as well, but `export … from` creates no local binding, so the
 // declarations in this file that USE these names need their own import.
 import type { ApiProvider } from '../../shared/types/ai-sources';
@@ -368,6 +369,7 @@ export interface Space {
   lastActiveAt?: string;  // Last user activity time (conversations/messages)
   preferences?: SpacePreferences;  // User preferences for this space
   workingDir?: string;  // Project directory for custom spaces (agent cwd, artifacts, file explorer)
+  deletionEffect?: SpaceDeletionEffect;
   isMissing?: boolean;  // True when the space data path is currently unavailable
   sortOrder?: number;  // User-defined display order (lower = earlier); absent on legacy spaces
 }

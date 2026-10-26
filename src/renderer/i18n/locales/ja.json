@@ -222,7 +222,6 @@
   "Are you sure you want to delete": "削除してもよろしいですか",
   "Are you sure you want to delete '{{name}}'?": "'{{name}}'を削除してもよろしいですか？",
   "Are you sure you want to delete this workspace?\n\nAll conversations and files in the workspace will be deleted.": "このワークスペースを削除してもよろしいですか?\n\nワークスペース内のすべての会話とファイルが削除されます。",
-  "Are you sure you want to delete this workspace?\n\nOnly Halo data (conversation history) will be deleted, your project files will be kept.": "このワークスペースを削除してもよろしいですか?\n\nHaloデータ(会話履歴)のみが削除され、プロジェクトファイルは保持されます。",
   "Are you sure you want to delete {{count}} items?_one": "{{count}}個のアイテムを削除してもよろしいですか？",
   "Are you sure you want to delete {{count}} items?_other": "{{count}}個のアイテムを削除してもよろしいですか？",
   "Are you sure you want to proceed?": "本当に続行しますか？",
@@ -2664,7 +2663,7 @@
   "The Lead assigns tasks and reviews results. Members communicate through the defined reporting hierarchy.": "リードがタスクを割り当て、結果をレビューします。メンバーは、定められた報告ラインに沿ってコミュニケーションを行います。",
   "The MCP server failed to connect.": "MCPサーバーへの接続に失敗しました。",
   "The MCP server is disabled globally, so this digital human will not inject its tools at runtime.": "MCPサーバーはグローバルで無効になっているため、このデジタルヒューマンは実行時にツールを注入しません。",
-  "The account it was set to use was removed, so it follows the global selection.": "",
+  "The account it was set to use was removed, so it follows the global selection.": "使用するように設定されていたアカウントが削除されたため、グローバル設定の選択に従います。",
   "The app definition is invalid and cannot be published.": "アプリ定義が無効で、公開できません。",
   "The app is installed into the selected workspace and runs and is managed within that workspace; other workspaces are not affected.": "アプリは選択したワークスペースにインストールされ、そのワークスペース内で実行・管理されます。他のワークスペースには影響しません。",
   "The author’s version could not be loaded. Please try again.": "作者のバージョンを読み込めませんでした。もう一度お試しください。",
@@ -3396,5 +3395,15 @@
   "{{who}} joined \"{{office}}\".": "{{who}} が「{{office}}」に参加しました。",
   "{{who}} · {{when}}": "{{who}} · {{when}}",
   "↑↓ Navigate · {{shortcut}} Edit · Esc Close": "↑↓ 移動 · {{shortcut}} 編集 · Esc 閉じる",
-  "🤖 AI Browser": "🤖 AIブラウザ"
+  "🤖 AI Browser": "🤖 AIブラウザ",
+  "Are you sure you want to delete this workspace?\n\nHalo workspace data, including conversation history and any files stored with it, will be deleted; your project files will be kept in the current project folder.": "このワークスペースを削除してもよろしいですか？\n\nHalo が保存したワークスペースのデータ（会話履歴および一緒に保存されたファイルを含む）は削除されます。プロジェクトのファイルは、現在のプロジェクトフォルダーに保持されます。\n",
+  "Please select a model before testing the connection": "接続をテストする前にモデルを選択してください",
+  "Connection timeout - server may be slow or unreachable": "接続がタイムアウトしました。サーバーの応答が遅いか、接続できない可能性があります",
+  "Invalid API key": "APIキーが無効です",
+  "Access denied - check API key permissions": "アクセスが拒否されました。APIキーの権限を確認してください",
+  "Requested model is not available": "指定されたモデルは利用できません",
+  "API endpoint not found - check URL": "APIエンドポイントが見つかりません。URLを確認してください",
+  "Rate limited - try again later": "リクエスト数の上限に達しました。しばらくしてから再試行してください",
+  "Cannot connect to API server - check URL": "APIサーバーに接続できません。URLを確認してください",
+  "No response received from API": "APIから応答がありません"
 }

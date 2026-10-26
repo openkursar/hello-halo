@@ -1,0 +1,19 @@
+version: 1
+id: references
+title:
+  en: Citations and selected context
+  zh: 引用与选中上下文
+description:
+  en: Attach selected context to messages and return to its source.
+  zh: 把选中内容带入消息并返回来源。
+paths:
+  - src/renderer/components/references/**
+  - src/shared/types/content-reference.ts
+  - src/main/services/agent/references.ts
+  - src/renderer/components/chat/open-table-context.ts
+dependsOn:
+  - files
+  - chat
+scope:
+  en: Chat selections, file lines and diff comments; reference pills, remove/undo and relative/absolute file links on desktop and remote permitted paths.
+  zh: 对话选区、文件行与差异评论；引用卡片、移除撤销、桌面及远程允许范围的相对/绝对文件链接。

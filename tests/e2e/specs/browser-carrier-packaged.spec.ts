@@ -6,7 +6,7 @@ import { createBrowser, showBrowser, hideBrowser, destroyBrowser, assertBrowserF
 
 test.setTimeout(90000)
 
-test('the packaged Electron 43 app starts and captures its persistent guest', async ({ electronApp, window, browserSite }) => {
+test('the packaged Electron 43 app starts and captures its persistent guest', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.packaged-frame\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
   expect(await electronApp.evaluate(({ app }) => app.isPackaged)).toBe(true)
   expect(await electronApp.evaluate(() => process.versions.electron)).toMatch(/^43\./)
   await navigateToChat(window)
@@ -19,7 +19,7 @@ test('the packaged Electron 43 app starts and captures its persistent guest', as
   await destroyBrowser(window, viewId)
 })
 
-test('the packaged HTTP server authenticates and renders the shared remote application', async ({ electronApp, window }) => {
+test('the packaged HTTP server authenticates and renders the shared remote application', { annotation: { type: 'acceptance', description: "{\"caseId\":\"remote.session.packaged-login\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
   expect(await electronApp.evaluate(({ app }) => app.isPackaged)).toBe(true)
   await navigateToChat(window)
   const reservation = createServer()

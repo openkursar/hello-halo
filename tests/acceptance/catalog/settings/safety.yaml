@@ -1,0 +1,71 @@
+version: 1
+id: settings.safety
+module: settings
+title:
+  en: Recover settings and clear browser data deliberately
+  zh: 恢复设置并明确清理浏览数据
+story:
+  en: I can resolve configuration problems without silently overwriting unreadable data or deleting unrelated work.
+  zh: 我能处理配置问题，不悄悄覆盖无法读取的数据或删除无关工作。
+basis: observed
+references:
+  - src/renderer/components/settings/ConfigUnreadableBanner.tsx
+  - src/renderer/components/settings/CredentialAlertBanner.tsx
+  - src/renderer/components/settings/SystemSection.tsx
+  - tests/e2e/specs/acceptance-settings.spec.ts
+promises:
+  unreadable:
+    en: Unreadable configuration is reported and protected from an ordinary stale save.
+    zh: 配置不可读会提示，并避免普通旧状态保存覆盖。
+  clear:
+    en: Shared browser cleanup explains sign-outs and preserves Halo data and unrelated sessions.
+    zh: 共享浏览数据清理说明会退出登录，并保留 Halo 数据及无关会话。
+scenarios:
+  - id: settings.safety.unreadable
+    title:
+      en: Handle a damaged configuration file
+      zh: 处理损坏配置文件
+    verifies:
+      - unreadable
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: An isolated profile has deliberately unreadable configuration.
+        zh: 隔离资料的配置被故意设为不可读。
+    steps:
+      - en: Open Halo, inspect the warning and attempt a normal settings save.
+        zh: 打开 Halo 查看警告并尝试普通设置保存。
+    expected:
+      - en: The read failure remains explicit and the damaged source is not silently replaced by an empty default.
+        zh: 读取失败明确，不用空默认值悄悄覆盖损坏来源。
+  - id: settings.safety.clear-browser
+    title:
+      en: Cancel and confirm shared-browser cleanup
+      zh: 取消后确认共享浏览数据清理
+    verifies:
+      - clear
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: The isolated application has a persisted shared-browser login cookie, a cookie in a different browser partition, and unrelated saved Halo history and files.
+        zh: 隔离应用中已有共享浏览器登录 Cookie、另一浏览分区中的 Cookie，以及无关的 Halo 历史和文件。
+    steps:
+      - en: Open cleanup confirmation, cancel, then confirm it.
+        zh: 打开清理确认，先取消再确认。
+    expected:
+      - en: Cancellation preserves the cookie; confirmation clears shared site data while unrelated Halo records remain.
+        zh: 取消保留 Cookie，确认清理共享网站数据，无关 Halo 记录保留。
+    notes:
+      en: Preconditions use real Electron session storage. The cleanup is initiated through the product UI; this verifies storage isolation, not an external provider’s login protocol.
+      zh: 前置数据写入真实 Electron 会话存储；清理由产品界面发起，验证的是存储隔离，不是外部供应商登录协议。

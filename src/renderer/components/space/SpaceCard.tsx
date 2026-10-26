@@ -14,6 +14,7 @@ import { useSpaceStore } from '../../stores/space.store'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { useNotificationStore } from '../../stores/notification.store'
 import { useTranslation } from '../../i18n'
+import { api } from '../../api'
 import { formatTimeAgo } from '../../utils/format-time'
 import { trackHome } from '../../services/home-telemetry'
 
@@ -52,17 +53,24 @@ export function SpaceCard({ space, onOpen }: SpaceCardProps) {
     void openSpaceFolder(space.id)
   }, [space.id, openSpaceFolder])
 
-  // Same project-vs-centralized-space detection SpaceSelector used to use.
   const handleDelete = useCallback(async () => {
     setMenuOpen(false)
-    const lastSegment = space.path.split(/[/\\]/).pop() ?? ''
-    const isCentralizedSpace = space.path.includes('/spaces/') && lastSegment.length === 36
-    const isProjectSpace = !!space.workingDir || !isCentralizedSpace
+    let effect: Space['deletionEffect']
+    try {
+      const result = await api.getSpace(space.id)
+      if (!result.success || !result.data) throw new Error(result.error ?? 'Workspace details unavailable')
+      effect = (result.data as Space).deletionEffect
+      if (effect !== 'workspace-files' && effect !== 'halo-data-only') throw new Error('Workspace deletion impact unavailable')
+    } catch (error) {
+      console.warn('[SpaceCard] Delete refused: could not determine its impact', { spaceId: space.id, error })
+      notifyFailure(t('Could not delete this workspace. Please try again.'))
+      return
+    }
 
     const confirmed = await showConfirm({
       title: t('Delete this workspace?'),
-      message: isProjectSpace
-        ? t('Are you sure you want to delete this workspace?\n\nOnly Halo data (conversation history) will be deleted, your project files will be kept.')
+      message: effect === 'halo-data-only'
+        ? t('Are you sure you want to delete this workspace?\n\nHalo workspace data, including conversation history and any files stored with it, will be deleted; your project files will be kept in the current project folder.')
         : t('Are you sure you want to delete this workspace?\n\nAll conversations and files in the workspace will be deleted.'),
       confirmLabel: t('Delete'),
       cancelLabel: t('Cancel'),

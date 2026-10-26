@@ -47,6 +47,7 @@ vi.mock('fs', () => {
 })
 
 vi.mock('../../../src/main/services/space.service', () => ({
+  hasSpace: () => true,
   getSpace: (spaceId: string) => ({
     id: spaceId,
     path: `/spaces/${spaceId}`,

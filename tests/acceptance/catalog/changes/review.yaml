@@ -1,0 +1,68 @@
+version: 1
+id: changes.review
+module: changes
+title:
+  en: Ask AI to review a precise snapshot
+  zh: 让 AI 审阅明确的修改快照
+story:
+  en: I can request a quick or team review and return to its findings while continuing other work.
+  zh: 我能请求快速或团队审阅，并在继续其他工作时回看结果。
+basis: documented
+references:
+  - src/main/services/code-review/DESIGN.md
+  - src/main/services/code-review/start-review.ts
+promises:
+  snapshot:
+    en: The review describes the selected repository and captured comparison scope.
+    zh: 审阅针对选定仓库和捕获的比较范围。
+  conversation:
+    en: Review progress and findings live in a resumable conversation that can be opened or stopped.
+    zh: 审阅进度和结论保存在可打开、停止及继续的对话。
+scenarios:
+  - id: changes.review.quick
+    title:
+      en: Start and revisit a quick review
+      zh: 发起并回看快速审阅
+    verifies:
+      - snapshot
+      - conversation
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A fixture repository has a known change.
+        zh: 测试仓库有已知修改。
+    steps:
+      - en: Choose quick review, keep browsing, then open its conversation.
+        zh: 选择快速审阅，继续浏览后打开审阅对话。
+    expected:
+      - en: The review names the captured change and the conversation retains its result.
+        zh: 审阅针对捕获的修改，对话保留结果。
+  - id: changes.review.team
+    title:
+      en: Start a team review and stop it
+      zh: 发起并停止团队审阅
+    verifies:
+      - snapshot
+      - conversation
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Team collaboration is available for a fixture review.
+        zh: 测试审阅可使用团队协作。
+    steps:
+      - en: Start a team review, observe collaboration, then stop through its conversation.
+        zh: 发起团队审阅，查看协作，再通过对话停止。
+    expected:
+      - en: The selected snapshot is shared with reviewers and stopped work is not reported complete.
+        zh: 审阅者收到所选快照，停止的工作不报告为已完成。

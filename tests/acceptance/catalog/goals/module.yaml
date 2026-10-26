@@ -1,0 +1,17 @@
+version: 1
+id: goals
+title:
+  en: Conversation goals
+  zh: 对话目标
+description:
+  en: Set a checkable objective and follow its status.
+  zh: 设置可验证的目标并跟踪状态。
+paths:
+  - src/renderer/components/goal/**
+  - src/main/services/agent/goal/**
+  - src/shared/types/goal.ts
+dependsOn:
+  - chat
+scope:
+  en: Conversations on engines advertising goal support; active/completed/abandoned goals, updates during work and removal.
+  zh: 支持目标能力的引擎对话；活动、完成、放弃状态，工作中修改及移除。

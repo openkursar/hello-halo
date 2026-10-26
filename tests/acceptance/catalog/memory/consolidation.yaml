@@ -1,0 +1,68 @@
+version: 1
+id: memory.consolidation
+module: memory
+title:
+  en: Reorganize memory without losing work
+  zh: 整理记忆而不丢工作
+story:
+  en: I can tidy growing memory and see whether the attempt succeeded.
+  zh: 我能整理不断增长的记忆，并知道整理是否成功。
+basis: documented
+references:
+  - src/main/platform/memory/DESIGN.md
+  - src/main/services/memory-consolidation/DESIGN.md
+  - src/renderer/components/memory/MemorySettingsPanel.tsx
+promises:
+  outcome:
+    en: Consolidation status distinguishes success, already running, nothing to do and failure.
+    zh: 整理状态区分成功、正在整理、无需整理和失败。
+  retain:
+    en: Interrupted consolidation does not replace good memory with a partial result.
+    zh: 中断整理不会用不完整结果替换有效记忆。
+scenarios:
+  - id: memory.consolidation.now
+    title:
+      en: Consolidate on demand
+      zh: 主动整理记忆
+    verifies:
+      - outcome
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A memory exceeds a fixture consolidation threshold.
+        zh: 记忆达到测试整理阈值。
+    steps:
+      - en: Click Consolidate now and inspect status after completion.
+        zh: 点击立即整理，完成后检查状态。
+    expected:
+      - en: The resulting memory and last-consolidated status agree; a repeated click does not start duplicate work.
+        zh: 整理结果与上次整理状态一致，重复点击不启动重复工作。
+  - id: memory.consolidation.interrupt
+    title:
+      en: Interrupt a consolidation attempt
+      zh: 中断整理过程
+    verifies:
+      - retain
+      - outcome
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A controlled consolidating model is running.
+        zh: 受控整理模型正在运行。
+    steps:
+      - en: Interrupt before replacement and reopen memory settings.
+        zh: 替换前中断并重新打开记忆设置。
+    expected:
+      - en: Original usable memory remains and the incomplete attempt is reported.
+        zh: 原有可用记忆保留，并说明此次未完成。

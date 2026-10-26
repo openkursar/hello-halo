@@ -1,0 +1,139 @@
+version: 1
+id: terminal.commands
+module: terminal
+title:
+  en: Run command work in the right place and recover from failure
+  zh: 在正确位置执行命令并从失败中恢复
+story:
+  en: I can ask the Halo engine to run commands in my chosen workspace, inspect a failed command and stop work before continuing.
+  zh: 我能让 Halo 引擎在选定空间执行命令、查看失败结果，并停止任务后继续工作。
+basis: observed
+references:
+  - src/main/services/agent/sdk-config.ts
+  - src/main/services/agent/control.ts
+  - src/main/services/agent/stream-processor.ts
+  - src/renderer/components/chat/ThoughtPanel.tsx
+  - tests/e2e/specs/acceptance-terminal.spec.ts
+promises:
+  location:
+    en: A command writes relative output in its selected workspace rather than another workspace.
+    zh: 命令把相对路径产物写到选定空间，而非另一个空间。
+  state:
+    en: Halo-engine commands in one resident conversation retain their selected directory and exported variables; a new conversation starts with independent command state.
+    zh: 同一驻留对话中的 Halo 引擎命令保留选定目录和导出变量；新对话拥有独立命令状态。
+  failure:
+    en: An unsuccessful command retains its failure status and available output, and a later valid command can complete.
+    zh: 失败命令保留失败状态和已有输出，后续有效命令仍可完成。
+  cancellation:
+    en: Stopping foreground command work ends its owned process tree and leaves the conversation able to accept another task.
+    zh: 停止前台命令任务会结束其进程树，对话仍能接受下一项任务。
+scenarios:
+  - id: terminal.commands.workspace-isolation
+    title:
+      en: Keep command output inside the selected project
+      zh: 让命令产物留在选定项目
+    verifies: [location]
+    platforms: [darwin]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: Two real workspaces use distinct test directories containing spaces.
+        zh: 两个真实空间使用不同的含空格测试目录。
+    steps:
+      - en: Open each workspace through the interface and request a command that writes a relative output file.
+        zh: 从界面分别打开两个空间，让命令写入相对路径产物。
+    expected:
+      - en: Each command reports its chosen directory and creates its own output without replacing the other workspace's file.
+        zh: 每次命令报告所选目录并生成自己的产物，不覆盖另一空间的文件。
+  - id: terminal.commands.session-environment
+    title:
+      en: Retain command state only within its resident conversation
+      zh: 仅在所属驻留对话内保留命令状态
+    verifies: [state, location]
+    platforms: [darwin]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: An isolated workspace uses the Halo engine with no personal shell startup files.
+        zh: 隔离空间使用 Halo 引擎，不载入个人 Shell 启动文件。
+    steps:
+      - en: Export a unique non-secret variable and change directory, inspect both in the next command, then open a new conversation and inspect again.
+        zh: 导出唯一非敏感变量并切换目录，在下一条命令中检查两者，再新建对话重新检查。
+    expected:
+      - en: The second command retains both changes; the new conversation starts in the workspace directory without the earlier variable.
+        zh: 第二条命令保留两项更改；新对话从空间目录开始且不继承此前变量。
+    notes:
+      en: This concerns resident Halo-engine command state. It does not establish shell-function, alias or application-restart persistence.
+      zh: 本场景限定驻留 Halo 引擎的命令状态，不据此承诺 Shell 函数、别名或应用重启后的持久性。
+  - id: terminal.commands.missing-command
+    title:
+      en: Recover after requesting an unavailable executable
+      zh: 请求不存在的程序后继续工作
+    verifies: [failure]
+    platforms: [darwin]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: The requested command has a unique nonexistent name; a separate known executable is available.
+        zh: 请求的命令名唯一且不存在，另有已知可用程序。
+    steps:
+      - en: Request the missing command, inspect its actual returned failure, then request the available command in the same conversation.
+        zh: 请求缺失命令，查看真实返回的失败结果，再在同一对话请求可用命令。
+    expected:
+      - en: The failed tool record names the missing command and records a nonzero exit; the next command succeeds and its output is visible.
+        zh: 失败工具记录包含缺失命令及非零退出状态；下一条命令成功且输出可见。
+    notes:
+      en: Scripted replies relay the actual tool result; this verifies application delivery and recovery, not a real model's explanation quality.
+      zh: 脚本回复转述真实工具结果；本场景验证应用传递和恢复，不验证真实模型的解释质量。
+  - id: terminal.commands.nonzero-exit
+    title:
+      en: Preserve partial output and failure details
+      zh: 保留部分产物输出与失败详情
+    verifies: [failure]
+    platforms: [darwin]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: A harmless fixture emits distinct standard-output and standard-error markers before exiting unsuccessfully.
+        zh: 无害测试程序先输出不同的标准输出与标准错误标记，然后以失败状态退出。
+    steps:
+      - en: Request that command and inspect its completed response and saved tool result.
+        zh: 请求该命令，检查完成后的回复及保存的工具结果。
+    expected:
+      - en: Both output markers and the actual exit code remain available, and the tool is recorded as failed rather than successful.
+        zh: 两个输出标记和真实退出码均保留，工具记录标明失败而非成功。
+  - id: terminal.commands.cancel-tree
+    title:
+      en: Stop the command and its owned child process
+      zh: 停止命令及其子进程
+    verifies: [cancellation]
+    platforms: [darwin]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: A harmless foreground command records its parent and child process identities inside the isolated test profile.
+        zh: 无害前台命令在隔离测试资料中记录父子进程身份。
+    steps:
+      - en: Wait for both owned processes, click Stop, inspect their termination, then request another command.
+        zh: 等待两个测试进程启动，点击停止，检查其结束，再请求另一条命令。
+    expected:
+      - en: Both identified processes stop and the next command completes in the same conversation; no unrelated process is targeted.
+        zh: 两个已识别进程均结束，下一条命令在同一对话完成；不操作任何无关进程。
+    notes:
+      en: This checks macOS foreground command cancellation. Windows process cleanup and retained interactive terminal lifetime require their own host-specific runs.
+      zh: 本场景验证 macOS 前台命令取消；Windows 进程清理及保留交互终端的生命周期须分别在对应主机运行。

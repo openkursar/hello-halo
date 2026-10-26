@@ -1,0 +1,66 @@
+version: 1
+id: assistant-tools.interop
+module: assistant-tools
+title:
+  en: Connect work across conversations
+  zh: 连接多个对话的工作
+story:
+  en: I can ask the AI to consult or contact another permitted conversation without mixing identities.
+  zh: 我能让 AI 查看或联系另一个获准对话，不混淆身份。
+basis: documented
+references:
+  - src/main/services/conversation-interop/DESIGN.md
+promises:
+  identity:
+    en: Read and send operations resolve the intended permitted conversation and retain message provenance.
+    zh: 读取和发送定位获准目标对话，并保留消息来源。
+  delivery:
+    en: Messages reaching compatible active work are delivered at the supported next-step boundary.
+    zh: 到达权限兼容活动任务的消息在支持的下一步边界送达。
+scenarios:
+  - id: assistant-tools.interop.send
+    title:
+      en: Send a message to another active conversation
+      zh: 向另一活动对话发消息
+    verifies:
+      - identity
+      - delivery
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Two authorized conversations have distinct known identities.
+        zh: 两个获准对话有不同已知身份。
+    steps:
+      - en: Ask A to send a marked message to B while B is running a controlled tool.
+        zh: B 运行受控工具时，让 A 给 B 发送标记消息。
+    expected:
+      - en: B receives it at the next eligible step with A identified as the source.
+        zh: B 在下一合适步骤收到消息，来源标记为 A。
+  - id: assistant-tools.interop.read
+    title:
+      en: Read permitted history and reject an invalid target
+      zh: 读取获准历史并拒绝无效目标
+    verifies:
+      - identity
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A known readable conversation and an invalid target are available.
+        zh: 有已知可读对话及无效目标。
+    steps:
+      - en: Read both through the tool interface.
+        zh: 通过工具分别读取。
+    expected:
+      - en: The valid target returns its own history; invalid targeting is explicit and leaks no other history.
+        zh: 有效目标返回自身历史，无效目标明确失败且不泄漏其他历史。

@@ -1,0 +1,121 @@
+version: 1
+id: lifecycle.updates
+module: lifecycle
+title:
+  en: Apply only a ready compatible update
+  zh: 只应用就绪且兼容的更新
+story:
+  en: I can tell when an update is ready and recover if the new version cannot start.
+  zh: 我能知道更新何时就绪，新版本无法启动时能恢复。
+basis: documented
+references:
+  - src/main/services/updater/DESIGN.md
+  - src/renderer/components/updater/UpdateNotification.tsx
+promises:
+  ready:
+    en: Restart to update is offered only after the platform-specific update is ready.
+    zh: 平台所需更新准备完成后才提供重启更新。
+  valid:
+    en: The selected update matches product, channel, platform and version constraints.
+    zh: 所选更新符合产品、渠道、平台及版本限制。
+  rollback:
+    en: The Windows staged path restores the prior working version if the new version fails startup acknowledgement.
+    zh: Windows 分阶段更新在新版启动确认失败时恢复原可用版本。
+scenarios:
+  - id: lifecycle.updates.ready
+    title:
+      en: Wait until the update is genuinely ready
+      zh: 等待更新真正就绪
+    verifies:
+      - ready
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A controlled updater emits download completion before platform installation readiness.
+        zh: 受控更新器先报告下载完成，再报告平台安装就绪。
+    steps:
+      - en: Observe the update action through preparation and a failed verification.
+        zh: 观察准备过程及验证失败时的更新操作。
+    expected:
+      - en: The UI does not offer a misleading ready restart before readiness and reports failed preparation.
+        zh: 未就绪前不提供误导的可重启更新，准备失败有报告。
+  - id: lifecycle.updates.validate
+    title:
+      en: Refuse incompatible or unauthenticated update descriptions
+      zh: 拒绝不兼容或未认证更新描述
+    verifies:
+      - valid
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Use local update fixtures with wrong platform, product, version or signature.
+        zh: 使用平台、产品、版本或签名错误的本地更新数据。
+    steps:
+      - en: Check each update description.
+        zh: 检查每项更新描述。
+    expected:
+      - en: No incompatible package is applied and the existing installation remains usable.
+        zh: 不应用不兼容包，现有安装保持可用。
+  - id: lifecycle.updates.rollback
+    title:
+      en: Roll back a failed staged Windows startup
+      zh: 回退启动失败的 Windows 更新
+    verifies:
+      - rollback
+    platforms:
+      - win32
+    profiles:
+      - external
+    evidence: external
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A disposable Windows installation and signed test update are available.
+        zh: 可丢弃 Windows 安装及签名测试更新已就绪。
+    steps:
+      - en: Apply a new version that intentionally does not confirm startup.
+        zh: 应用故意不确认启动的新版本。
+    expected:
+      - en: All helper-owned new processes stop before rollback and the previous app relaunches with intact data.
+        zh: 先停止更新助手拥有的新进程，再回退并以完整数据启动旧版。
+    requirements:
+      - packaged-app
+      - signing
+      - windows-tools
+  - id: lifecycle.updates.signed-mac
+    title:
+      en: Install a signed macOS update end to end
+      zh: 完整安装已签名 macOS 更新
+    verifies:
+      - ready
+      - valid
+    platforms:
+      - darwin
+    profiles:
+      - external
+    evidence: external
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A disposable signed macOS app and compatible signed update fixture are available.
+        zh: 有可丢弃签名 macOS 应用及兼容签名更新。
+    steps:
+      - en: Download, wait for platform readiness and choose Restart.
+        zh: 下载，等待平台就绪后选择重启。
+    expected:
+      - en: The app exits, the intended version starts and prior work is still available.
+        zh: 应用退出，目标版本启动，之前工作仍可用。
+    requirements:
+      - packaged-app
+      - signing

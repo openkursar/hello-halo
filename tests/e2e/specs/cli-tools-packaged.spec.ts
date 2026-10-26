@@ -153,7 +153,7 @@ function seedProject(workDir: string): void {
   fs.writeFileSync(path.join(workDir, 'e43-large.png'), largePng())
 }
 
-test('the packaged AI can search files, run the bundled ripgrep and Office runtime, read large images, and sees project agents and commands', async ({ electronApp, window }) => {
+test('the packaged AI can search files, run the bundled ripgrep and Office runtime, read large images, and sees project agents and commands', { annotation: { type: 'acceptance', description: "{\"caseId\":\"terminal.environment.packaged-tools\",\"evidence\":\"app-e2e\",\"mode\":\"scripted\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
   expect(await electronApp.evaluate(({ app }) => app.isPackaged)).toBe(true)
   const dataDir = await electronApp.evaluate(() => process.env.HALO_DATA_DIR)
   expect(dataDir).toBeTruthy()

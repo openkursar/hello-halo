@@ -1,0 +1,423 @@
+version: 1
+id: changes.inspect
+module: changes
+title:
+  en: Understand the current code changes
+  zh: 理解当前代码变更
+story:
+  en: I can see what changed and choose what comparison I am looking at.
+  zh: 我能看到改了什么，并选择正在比较的范围。
+basis: documented
+references:
+  - src/main/services/git/DESIGN.md
+  - tests/e2e/specs/changes-view.spec.ts
+promises:
+  scopes:
+    en: The change list and diff agree with the chosen comparison scope and repository.
+    zh: 变更列表与差异匹配选定比较范围及仓库。
+  large:
+    en: Large diffs remain navigable with explicit loading limits.
+    zh: 大差异仍可导航，并明确加载限制。
+  read:
+    en: Opening a diff does not execute repository-provided programs as an unintended side effect.
+    zh: 打开差异不会意外执行仓库自带程序。
+  readable:
+    en: Diff text and navigation remain readable in supported layouts and themes.
+    zh: 差异文字及导航在支持的布局和主题下保持可读。
+  reply:
+    en: A reply’s recorded edits open read-only and remain distinct from current staging operations.
+    zh: 某轮回复记录的编辑以只读方式打开，与当前暂存操作区分。
+scenarios:
+  - id: changes.inspect.scopes
+    title:
+      en: Switch comparison scopes
+      zh: 切换比较范围
+    verifies:
+      - scopes
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - fast
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A disposable repository has staged, unstaged and generated-file changes.
+        zh: 测试仓库含已暂存、未暂存及生成文件变更。
+    steps:
+      - en: Open changes and switch between supported scopes.
+        zh: 打开变更并切换支持的范围。
+    expected:
+      - en: Rows, status and file diffs match the selected scope.
+        zh: 列表、状态与差异符合所选范围。
+  - id: changes.inspect.large
+    title:
+      en: Browse a large diff without losing selection
+      zh: 浏览大差异且不丢选择
+    verifies:
+      - large
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A fixture repository exceeds the viewer’s text budget.
+        zh: 测试仓库超过查看器文本预算。
+    steps:
+      - en: Load one file, scroll, filter the list and switch away and back.
+        zh: 加载单文件、滚动、筛选，再切走并返回。
+    expected:
+      - en: Loading is bounded and the selected file and supported scroll position persist.
+        zh: 加载受控，选定文件及支持的滚动位置保留。
+  - id: changes.inspect.safe-read
+    title:
+      en: Inspect a repository with executable local filters
+      zh: 检查含可执行本地过滤器的仓库
+    verifies:
+      - read
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A fixture repository configures a harmless marker-writing local filter.
+        zh: 测试仓库配置会写标记的无害本地过滤器。
+    steps:
+      - en: Open and refresh status and diffs without choosing a write operation.
+        zh: 只打开刷新状态和差异，不选择写操作。
+    expected:
+      - en: The marker program is not run by read-only inspection.
+        zh: 只读检查未运行该标记程序。
+  - id: changes.inspect.large-selection
+    title:
+      en: Navigate a large diff one file at a time
+      zh: 逐文件导航大差异
+    verifies:
+      - large
+    platforms: &a2
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Filter and select a file, move to its next file and switch overview tabs.
+        zh: 筛选选择文件，移到下一文件并切换概览标签。
+    expected:
+      - en: Exactly one large-diff file is mounted and the selected file returns after tab switching.
+        zh: 大差异一次只挂载一文件，切换标签后恢复选择。
+  - id: changes.inspect.reading-anchor
+    title:
+      en: Keep a diff reading position while filtering
+      zh: 筛选时保留差异阅读位置
+    verifies:
+      - large
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Scroll a large diff, change its file filter and refresh.
+        zh: 滚动大差异，改变文件筛选并刷新。
+    expected:
+      - en: The selected file and reading offset remain stable.
+        zh: 选定文件及阅读位置保持稳定。
+  - id: changes.inspect.narrow-selection
+    title:
+      en: Choose a diff file from a narrow drawer
+      zh: 从窄屏抽屉选择差异文件
+    verifies:
+      - large
+      - readable
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Open the narrow file drawer and select a different large-diff file.
+        zh: 打开窄屏文件抽屉，选择另一大差异文件。
+    expected:
+      - en: The drawer closes, the selected diff appears and focus moves to that file’s control.
+        zh: 抽屉关闭，选定差异出现，焦点移到该文件控件。
+  - id: changes.inspect.contrast-layout
+    title:
+      en: Read split and inline diffs in both themes
+      zh: 在两种主题阅读并排及行内差异
+    verifies:
+      - readable
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Switch diff layouts and themes, inspect rendered contrast, then select a file from the narrow drawer.
+        zh: 切换差异布局及主题，检查渲染对比度，再从窄屏抽屉选文件。
+    expected:
+      - en: Text contrast meets the asserted threshold and controls remain within the viewport.
+        zh: 文字对比度达到断言阈值，控件保留在视口内。
+  - id: changes.inspect.reply-pagination
+    title:
+      en: Navigate many edits from one reply
+      zh: 导航一轮回复中的大量编辑
+    verifies:
+      - reply
+      - large
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Open a reply with many edit fragments, page and keyboard-navigate them, switch tabs and return.
+        zh: 打开含大量编辑片段的回复，翻页及键盘导航，切换标签后返回。
+    expected:
+      - en: Fragment pages and selected file/position are retained while editor counts stay bounded.
+        zh: 片段页、文件及位置保留，编辑器数量受控。
+  - id: changes.inspect.reply-readonly
+    title:
+      en: Read a reply’s edits without staging controls
+      zh: 只读查看回复编辑且无暂存控件
+    verifies:
+      - reply
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Prepare an isolated workspace with the records and failure conditions described by this scenario.
+        zh: 在隔离空间准备本场景所述记录及失败条件。
+    steps:
+      - en: Click View changes on a seeded reply.
+        zh: 点击预置回复中的查看变更。
+    expected:
+      - en: The reply’s files appear with read-only identity and no stage or commit controls.
+        zh: 回复文件以只读身份显示，没有暂存或提交控件。
+  - id: changes.inspect.chunk-navigation
+    title:
+      en: Move between changes with keyboard shortcuts
+      zh: 使用快捷键在修改间跳转
+    verifies:
+      - scopes
+      - readable
+    platforms: &a3
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Select a file, move to the next change across a file boundary and then back.
+        zh: 选择文件，跳到跨文件的下一处修改再返回。
+    expected:
+      - en: The intended changed lines are brought into view in both directions.
+        zh: 双向导航均把预期修改行带到可见位置。
+  - id: changes.inspect.file-order
+    title:
+      en: Keep diff order consistent with the file list
+      zh: 让差异顺序与文件列表一致
+    verifies:
+      - scopes
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Switch tree/list mode and navigate numbered files in a large diff.
+        zh: 切换树形和列表模式，在大差异中导航带编号文件。
+    expected:
+      - en: Diff order matches the list and natural filename ordering is preserved.
+        zh: 差异顺序匹配列表，并保持自然文件名排序。
+  - id: changes.inspect.scope-budget
+    title:
+      en: Reconsider loading limits after changing scope
+      zh: 改变比较范围后重新判断加载限制
+    verifies:
+      - scopes
+      - large
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Switch between a large uncommitted scope and a small staged scope.
+        zh: 在大范围未提交变更与小范围已暂存变更之间切换。
+    expected:
+      - en: The current scope determines the loading mode, not the size of the previous scope.
+        zh: 加载方式由当前范围决定，不沿用上个范围大小。
+  - id: changes.inspect.explicit-load
+    title:
+      en: Keep the file explicitly requested for loading
+      zh: 保留用户明确要求加载的文件
+    verifies:
+      - large
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Reveal generated files and explicitly load a large file’s diff.
+        zh: 显示生成文件并明确加载大文件差异。
+    expected:
+      - en: The requested file becomes the selected bounded view instead of disappearing when the limit is reached.
+        zh: 到达限制时指定文件成为有界选定视图，不会消失。
+  - id: changes.inspect.deep-paths
+    title:
+      en: Read and select deeply nested files
+      zh: 阅读并选择深层文件
+    verifies:
+      - readable
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Open a deep file tree at its narrowest supported panel size.
+        zh: 以最窄支持面板打开深层文件树。
+    expected:
+      - en: Deep names and their selection controls remain visible and usable.
+        zh: 深层名称及选择控件仍可见可用。
+  - id: changes.inspect.tree-folders
+    title:
+      en: Expand and collapse nested folders
+      zh: 展开及收起嵌套目录
+    verifies:
+      - scopes
+      - readable
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Collapse a parent, filter a nested path and expand it with the keyboard.
+        zh: 折叠父目录，筛选嵌套路径并用键盘展开。
+    expected:
+      - en: Each folder appears once and descendants follow the intended collapse and keyboard focus state.
+        zh: 各目录只出现一次，子项遵循折叠及键盘焦点状态。
+  - id: changes.inspect.panel-width
+    title:
+      en: Resize and cancel resizing the file list
+      zh: 调整及取消调整文件列表宽度
+    verifies:
+      - readable
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Resize with pointer and keyboard, cancel an in-progress drag, reset and resize the viewport.
+        zh: 用指针及键盘调整宽度，取消进行中拖动，重置并改变视口。
+    expected:
+      - en: Accepted width persists; cancellation restores the saved width and narrowing does not overwrite the preference.
+        zh: 接受的宽度保留，取消恢复保存宽度，窄屏不覆盖偏好。
+  - id: changes.inspect.overview-folder
+    title:
+      en: Inspect a folder from the change overview
+      zh: 从变更概览查看目录
+    verifies:
+      - scopes
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Open a folder from Overview and return with Escape.
+        zh: 从概览进入目录并用 Escape 返回。
+    expected:
+      - en: The folder detail is scoped correctly and Escape returns within the view without closing the canvas.
+        zh: 目录详情范围正确，Escape 在视图内返回而不关闭画布。
+  - id: changes.inspect.page-controls
+    title:
+      en: Keep comparison navigation reachable
+      zh: 保持比较导航可达
+    verifies:
+      - readable
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Switch Changes, Overview and Graph, then narrow the canvas.
+        zh: 切换变更、概览及图谱，再缩窄画布。
+    expected:
+      - en: Navigation stays stable and the file-list control remains reachable.
+        zh: 导航位置稳定，文件列表控件仍可达。

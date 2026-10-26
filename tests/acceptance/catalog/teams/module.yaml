@@ -1,0 +1,20 @@
+version: 1
+id: teams
+title:
+  en: Digital teams
+  zh: 数字团队
+description:
+  en: Create teams, keep temporary collaborations and work in task rooms.
+  zh: 创建团队、保留临时协作并在任务中工作。
+paths:
+  - src/main/apps/team/**
+  - src/main/apps/runtime/team/**
+  - src/main/apps/conversation-mcp/**
+  - src/renderer/components/team/**
+  - src/renderer/components/chat/team-collab/**
+dependsOn:
+  - people
+  - chat
+scope:
+  en: Owned team members and read-only teammate members; temporary space collaborations, saved teams, task conversations, decisions and archives.
+  zh: 自己拥有的成员及只读队友成员；临时空间协作、保留团队、任务对话、决策和归档。

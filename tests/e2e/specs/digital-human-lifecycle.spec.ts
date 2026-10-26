@@ -188,7 +188,7 @@ test.describe('Digital Human — real scheduled trigger (no manual click)', () =
   // and fired the job, not just that manual triggers still work.
   test.use({ seedOptions: { scheduleEvery: '10s', notificationLevel: 'all' } })
 
-  test('the scheduled subscription fires on its own and completes', async ({ window, seededApp }) => {
+  test('the scheduled subscription fires on its own and completes', { annotation: { type: 'acceptance', description: "{\"caseId\":\"automation.schedule.live-interval\",\"evidence\":\"live-model\",\"mode\":\"live\",\"variant\":{}}" } }, async ({ window, seededApp }) => {
     test.skip(!hasCredentials(), 'Requires HALO_TEST_API_KEY or HALO_TEST_OAUTH_SOURCE')
 
     await openSeededApp(window, seededApp.name)

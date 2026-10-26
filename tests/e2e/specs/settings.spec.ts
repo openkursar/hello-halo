@@ -34,7 +34,7 @@ test.describe('Settings Page', () => {
     await window.screenshot({ path: 'tests/e2e/results/settings-about.png' })
   })
 
-  test('has a settings navigation sidebar with working section links', async ({ window }) => {
+  test('has a settings navigation sidebar with working section links', { annotation: { type: 'acceptance', description: "{\"caseId\":\"startup.navigation.settings-groups\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await navigateToSettings(window)
     const nav = window.locator('nav').filter({ has: window.getByRole('button', { name: 'AI Model', exact: true }) })
 
@@ -48,7 +48,7 @@ test.describe('Settings Page', () => {
     await expect(window.locator('#ai-model').getByRole('heading', { name: 'AI Model', exact: true })).toBeInViewport()
   })
 
-  test('can switch between light and dark themes', async ({ window }) => {
+  test('can switch between light and dark themes', { annotation: { type: 'acceptance', description: "{\"caseId\":\"settings.preferences.theme-toggle\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await navigateToSettings(window)
     await window.locator('nav').getByRole('button', { name: 'Appearance', exact: true }).click()
     const appearance = window.locator('#appearance')
@@ -65,7 +65,7 @@ test.describe('Settings Page', () => {
   })
 
   for (const width of [1280, 375]) {
-    test(`the built-in federation gateway is visible without becoming a user override at ${width}px`, async ({ window, electronApp }) => {
+    test(`the built-in federation gateway is visible without becoming a user override at ${width}px`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: 'offices.routing.default-display', evidence: 'ui', mode: 'none', variant: { width: String(width) } }) } }, async ({ window, electronApp }) => {
       await navigateToChat(window)
       const response = await window.evaluate(async () => {
         return (globalThis.window as unknown as { halo: HaloAPI }).halo.getConfig()
@@ -105,7 +105,7 @@ test.describe('Settings Page', () => {
     })
   }
 
-  test('the header back button returns to the previous conversation view', async ({ window }) => {
+  test('the header back button returns to the previous conversation view', { annotation: { type: 'acceptance', description: "{\"caseId\":\"startup.navigation.header-back\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await navigateToChat(window)
     await navigateToSettings(window)
     await window.locator('header').getByRole('button', { name: 'Settings', exact: true }).click()

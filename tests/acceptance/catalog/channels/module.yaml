@@ -1,0 +1,22 @@
+version: 1
+id: channels
+title:
+  en: Messaging channels
+  zh: 消息渠道
+description:
+  en: Connect bots, route conversations and diagnose delivery.
+  zh: 连接机器人、路由对话并诊断投递。
+paths:
+  - src/main/apps/runtime/im-channels/**
+  - src/main/apps/runtime/dispatch-inbound.ts
+  - src/main/apps/runtime/im-session*.ts
+  - src/renderer/components/settings/MessageChannelsSection.tsx
+  - src/renderer/components/settings/*InstanceCard.tsx
+  - src/renderer/components/settings/*Scan*Dialog.tsx
+  - src/renderer/components/apps/AppBotSessionsView.tsx
+dependsOn:
+  - people
+  - permissions
+scope:
+  en: WeCom, WeChat and Feishu providers declared by the current product; owner/guest and direct/group messages, connection expiry, bind/rebind and inbound/outbound media. Live platform evidence is separate from simulated provider messages.
+  zh: 当前产品声明支持的企微、微信和飞书；主人/访客、单聊/群聊、连接过期、绑定迁移及媒体收发。真实平台证据与模拟消息分开。
