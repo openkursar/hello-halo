@@ -15,6 +15,7 @@ import { useOAuthLogin } from '../hooks/useOAuthLogin'
 import { useTranslation } from '../i18n'
 import { Loader2 } from 'lucide-react'
 import type { HaloConfig } from '../types'
+import { HaloLogo } from '../components/brand/HaloLogo'
 
 // First step is `preferences` only on the very first launch (gated by
 // config.isFirstLaunch). Old users re-entering Setup (e.g., after clearing
@@ -100,9 +101,7 @@ export function SetupPage() {
     return (
       <div className="h-full w-full overflow-y-auto flex flex-col items-center bg-background p-4 sm:p-8">
         <div className="flex flex-col items-center shrink-0 mt-auto mb-8">
-          <div className="w-20 h-20 rounded-full border-2 border-primary/60 flex items-center justify-center halo-glow">
-            <div className="w-14 h-14 rounded-full bg-gradient-to-br from-primary/30 to-transparent" />
-          </div>
+          <HaloLogo size={80} />
           <h1 className="mt-4 text-3xl font-light tracking-wide">{t('Halo')}</h1>
         </div>
         <div className="w-full min-w-0 max-w-md shrink-0 mb-auto">
@@ -129,9 +128,7 @@ export function SetupPage() {
       <div className="h-full w-full overflow-y-auto flex flex-col items-center bg-background p-4 sm:p-8">
         {/* Header with Logo */}
         <div className="flex flex-col items-center shrink-0 mt-auto mb-10">
-          <div className="w-20 h-20 rounded-full border-2 border-primary/60 flex items-center justify-center halo-glow">
-            <div className="w-14 h-14 rounded-full bg-gradient-to-br from-primary/30 to-transparent" />
-          </div>
+          <HaloLogo size={80} />
           <h1 className="mt-4 text-3xl font-light tracking-wide">{t('Halo')}</h1>
         </div>
 

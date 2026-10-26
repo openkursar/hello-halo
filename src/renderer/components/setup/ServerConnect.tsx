@@ -15,6 +15,7 @@ import { Wifi, QrCode, ArrowRight, Loader2, AlertCircle, X, Server, ArrowLeft } 
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { isAccessCodeSubmittable, normalizeAccessCodeInput } from '../../../shared/auth/password-policy'
+import { HaloLogo } from '../brand/HaloLogo'
 
 /** Info returned to the caller after a successful connection */
 export interface ServerAddedInfo {
@@ -328,9 +329,7 @@ export function ServerConnect({ onServerAdded, onBack }: ServerConnectProps) {
 
         {/* Logo / Brand */}
         <div className="mb-8 flex flex-col items-center">
-          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full border-2 border-primary/40 flex items-center justify-center mb-4 halo-breathe">
-            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-primary/20" />
-          </div>
+          <HaloLogo size={64} className="mb-4 sm:!w-20 sm:!h-20" />
           <h1 className="text-xl sm:text-2xl font-semibold text-foreground">
             Halo
           </h1>

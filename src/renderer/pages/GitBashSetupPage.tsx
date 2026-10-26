@@ -82,7 +82,7 @@ export function GitBashSetupPage({ onComplete }: GitBashSetupPageProps) {
       <div className="fixed inset-0 bg-background flex items-center justify-center overflow-auto">
         <div className="w-[520px] p-8 rounded-2xl bg-card border border-border shadow-xl">
           <div className="flex items-center gap-3 mb-6">
-            <HaloLogo size={40} animated={false} />
+            <HaloLogo size={40} />
             <h2 className="text-xl font-semibold">{t('First-time setup required')}</h2>
           </div>
 
