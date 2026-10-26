@@ -20,7 +20,8 @@
 import { existsSync, readFileSync } from 'fs'
 import path from 'path'
 import { resolveClaudeConfigDir } from '../../foundation/config.service'
-import { getActiveEngine } from './resolved-sdk'
+import { getDefaultEngine } from './resolved-sdk'
+import type { EngineId } from '../../../shared/types/engine'
 
 /** Login state of Halo's credential slot in the bundled CLI. */
 export interface CliAuthState {
@@ -77,12 +78,11 @@ export function readCliAuthState(): CliAuthState {
  * at startup leaving only a stderr line — so they are caught at credential
  * resolution, where the message can name the fix.
  */
-export function assertDelegatedAuthReady(): void {
-  const engine = getActiveEngine()
+export function assertDelegatedAuthReady(engine: EngineId = getDefaultEngine()): void {
   if (engine && engine !== 'anthropic') {
     throw new Error(
-      `CLI-delegated sources run on the Claude Code engine; the active engine is "${engine}". ` +
-      'Switch the engine in Settings, or pick another AI source.'
+      `CLI-delegated sources run on the Claude Code engine; this session uses "${engine}". ` +
+      'Choose Claude Code for this conversation, or pick another AI source.'
     )
   }
 

@@ -47,6 +47,10 @@ const engine = vi.hoisted(() => {
     credentials: null as Promise<void> | null,
     releaseCredentials: () => {},
     failNextCredentials: false,
+    realHistory: false,
+    afterRecord: undefined as (() => void) | undefined,
+    recordedIds: [] as string[],
+    sdkOptions: [] as Record<string, any>[],
   }
   function holdColdStart(): void {
     state.coldStart = new Promise<void>((resolve) => { state.releaseColdStart = resolve })
@@ -91,17 +95,23 @@ const engine = vi.hoisted(() => {
     state.coldStart = null
     state.credentials = null
     state.failNextCredentials = false
+    state.realHistory = false
+    state.afterRecord = undefined
+    state.recordedIds = []
+    state.sdkOptions = []
   }
   return { state, send, stopConsumer, holdColdStart, holdCredentials, reset }
 })
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
+  getSessionEngineId: () => undefined,
   activeSessions: new Map(),
   hasPendingSessionInput: () => false,
   v2Sessions: engine.state.sessions,
   closeV2Session: vi.fn(),
   acquireV2Session: vi.fn(async (_spaceId: string, conversationId: string, _options: unknown, _resume: unknown, _workDir: unknown, consumer: { sink: unknown }) => {
     engine.state.sinks.set(conversationId, consumer.sink)
+    engine.state.sdkOptions.push(_options as Record<string, any>)
     if (engine.state.coldStart) await engine.state.coldStart
     const session = {
       send: (content: string) => engine.send(conversationId, content),
@@ -114,7 +124,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
       isCurrent: true,
       isUsable: true,
       onRetired: () => () => {},
-      send: async (content: string) => engine.send(conversationId, content),
+      send: async (content: string) => engine.send(conversationId, engine.state.realHistory && (_options as any).engineHandoffContent ? prependEngineHandoff(content, (_options as any).engineHandoffContent) : content),
       release: vi.fn(),
     }
   }),
@@ -145,6 +155,8 @@ const { buildUserSessionSdkOptions } = vi.hoisted(() => ({
 }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../src/main/services/agent/resolved-sdk')>()),
+  getDefaultEngine: () => 'anthropic', getStartupEngine: () => 'anthropic',
+  resolveDefaultEngine: async () => 'anthropic', ensureEngineAvailable: async () => {},
   getEngineCapabilities: () => ({ features: { permissionRules: true, hooks: true } }),
 }))
 vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
@@ -254,15 +266,29 @@ const { sessions, registry } = vi.hoisted(() => {
   }
 })
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({ getImSessionRegistry: () => registry }))
-vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
-  loadChatSessionId: vi.fn(() => undefined),
-  saveChatSessionId: vi.fn(),
-  deleteChatSessionId: vi.fn(),
-  copySessionJsonl: vi.fn(),
-  readSessionMessages: () => [],
-  resolveTranscriptPath: () => '',
-  openSessionWriter: () => ({ writeTrigger: vi.fn(), writeEvent: vi.fn() }),
-}))
+vi.mock('../../../../src/main/apps/runtime/session-store', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../src/main/apps/runtime/session-store')>()
+  return {
+    ...actual,
+    saveChatEngineRouting: (...args: Parameters<typeof actual.saveChatEngineRouting>) => engine.state.realHistory ? actual.saveChatEngineRouting(...args) : args[4]?.sessionId || args[4]?.binding || args[4]?.routingEngine ? args[4] : { routingEngine: args[3] },
+    loadChatEngineState: (...args: Parameters<typeof actual.loadChatEngineState>) => engine.state.realHistory ? actual.loadChatEngineState(...args) : {},
+    saveChatEngineBinding: vi.fn(() => true), loadChatSessionId: vi.fn(() => undefined), saveChatSessionId: vi.fn(), deleteChatSessionId: vi.fn(), copySessionJsonl: vi.fn(),
+    readSessionMessages: () => [],
+    resolveTranscriptPath: (...args: Parameters<typeof actual.resolveTranscriptPath>) => engine.state.realHistory ? actual.resolveTranscriptPath(...args) : '',
+    openSessionWriter: (...args: Parameters<typeof actual.openSessionWriter>) => {
+      if (!engine.state.realHistory) return { writeTrigger: vi.fn(), writeEvent: vi.fn() }
+      const writer = actual.openSessionWriter(...args)
+      return { ...writer, writeTrigger: (...input: Parameters<typeof writer.writeTrigger>) => {
+        const written = writer.writeTrigger(...input)
+        if (written) engine.state.recordedIds.push(written.inputId)
+        const afterRecord = engine.state.afterRecord
+        engine.state.afterRecord = undefined
+        afterRecord?.()
+        return written
+      } }
+    },
+  }
+})
 vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: () => ({}),
   getHaloDir: () => '/tmp/halo-test',
@@ -371,10 +397,11 @@ vi.mock('../../../../src/main/apps/runtime/relay-actions', async importOriginal 
 // Imports (after all mocks)
 // ============================================
 
-import { dispatchInboundMessage, releaseSupplementsWhenIdle } from '../../../../src/main/apps/runtime/dispatch-inbound'
+import { dispatchInboundMessage, releaseSupplementsWhenIdle, holdSupplementsAfterStop, getPendingSupplementInputIds } from '../../../../src/main/apps/runtime/dispatch-inbound'
 import { clearAllImPermissionContexts } from '../../../../src/main/apps/runtime/im-permission-registry'
 import { disposeAppChatSink } from '../../../../src/main/apps/runtime/app-chat-sink'
-import { beginAppChatTurnStart, isAppChatConversationGenerating } from '../../../../src/main/apps/runtime/app-chat-live-turn'
+import { beginAppChatTurnStart, isAppChatConversationGenerating, cancelAppChatTurnStarts } from '../../../../src/main/apps/runtime/app-chat-live-turn'
+import { prependEngineHandoff } from '../../../../src/main/services/agent/engine-handoff'
 import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'
 import { clearAllImStreamHandles, getImStreamHandle } from '../../../../src/main/apps/runtime/im-stream-registry'
 import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/inbound-message'
@@ -421,6 +448,8 @@ afterAll(() => {
 
 beforeEach(() => {
   engine.reset()
+  Object.assign(app, { userOverrides: undefined })
+  environment.spacePath = '/tmp/halo-test/space'
   channel.config = { id: 'inst-1', type: 'wecom-bot', enabled: true, appId: 'app-1', config: {} }
   channel.pushed.length = 0
   sessions.clear()
@@ -568,6 +597,37 @@ describe('a message stopped or failing on its way to the engine', () => {
       [expect.stringContaining('tidy the repo')],
       [expect.stringContaining('read my notes')],
     ])
+  })
+
+  it('excludes a held guest input from a new owner-engine handoff before the guest is delivered separately', async () => {
+    const store = await vi.importActual<typeof import('../../../../src/main/apps/runtime/session-store')>('../../../../src/main/apps/runtime/session-store')
+    engine.state.realHistory = true
+    environment.spacePath = globalThis.__HALO_TEST_DIR__
+    const runId = `run-${CHAT}-app-1`
+    const writer = store.openSessionWriter(environment.spacePath, 'app-1', runId)
+    writer.writeTrigger('PRIOR_ACCEPTED_CONTEXT')
+    writer.writeEvent({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Prior answer' }] } })
+    store.saveChatEngineBinding(environment.spacePath, 'app-1', runId, { version: 1, engineId: 'anthropic', sessionId: 'previous-native' })
+    channel.config = { ...channel.config, permissionEnabled: true, owners: ['boss'], guestPolicy: { allowedTools: ['Read'] } }
+    engine.state.afterRecord = () => {
+      holdSupplementsAfterStop(CHAT)
+      cancelAppChatTurnStarts(CHAT, 'user')
+    }
+    const guest = replyTo()
+    await dispatchInboundMessage(message('HELD_GUEST_REQUEST', 'stranger'), guest, 'app-1', 'inst-1')
+    expect(engine.state.answered).toHaveLength(0)
+    expect(engine.state.recordedIds).toHaveLength(1)
+    expect(getPendingSupplementInputIds(CHAT)).toEqual(engine.state.recordedIds)
+    Object.assign(app, { userOverrides: { engineId: 'halo' } })
+    const owner = replyTo()
+    await dispatchInboundMessage(message('OWNER_AFTER_STOP', 'boss'), owner, 'app-1', 'inst-1')
+    await vi.waitFor(() => expect(guest.sent.some(isAnswer)).toBe(true))
+    expect(engine.state.answered).toHaveLength(2)
+    expect(getPendingSupplementInputIds(CHAT)).toEqual([])
+    expect(engine.state.answered[0].join('\n')).toContain('PRIOR_ACCEPTED_CONTEXT')
+    expect(engine.state.answered[0].join('\n')).not.toContain('HELD_GUEST_REQUEST')
+    expect(engine.state.answered[1].join('\n').match(/HELD_GUEST_REQUEST/g)).toHaveLength(1)
+    expect(store.readSessionMessages(environment.spacePath, 'app-1', runId).filter(record => record.role === 'user' && record.content.includes('HELD_GUEST_REQUEST'))).toHaveLength(1)
   })
 
   it("voids the owner's own message a stop caught on its way, and tells whoever shows the chat", async () => {

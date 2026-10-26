@@ -72,6 +72,8 @@ import {
   loadAppChatMessages,
   loadImChatMessages,
   loadChatMessagesForConversation,
+  loadChatEngineMetadata,
+  buildImSessionKey,
   loadChatTranscriptForConversation,
   loadChatMessageThoughts,
   getAppChatSessionState,
@@ -565,7 +567,8 @@ export function registerAppHandlers(): void {
       try {
         const r = requireManager()
         if (!r.success) return r
-        r.manager.updateOverrides(input.appId, input.overrides)
+        const result = await appController.updateOverrides(input.appId, input.overrides)
+        if (!result.success) return result
         console.log(`[AppIPC] app:update-overrides: appId=${input.appId}`)
         return { success: true }
       } catch (error: unknown) {
@@ -783,7 +786,7 @@ export function registerAppHandlers(): void {
         const messages = input.conversationId
           ? loadChatMessagesForConversation(space.path, input.appId, input.conversationId)
           : loadAppChatMessages(space.path, input.appId)
-        return { success: true, data: messages }
+        return { success: true, data: messages, ...loadChatEngineMetadata(space.path, input.appId, input.conversationId ?? getAppChatConversationId(input.appId)) }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:chat-messages error:', err.message)
@@ -912,7 +915,7 @@ export function registerAppHandlers(): void {
           return { success: false, error: 'The conversation storage is unavailable.' }
         }
         const messages = loadImChatMessages(space.path, input.appId, input.channel, input.chatType, input.chatId)
-        return { success: true, data: messages }
+        return { success: true, data: messages, ...loadChatEngineMetadata(space.path, input.appId, buildImSessionKey(input.appId, input.channel, input.chatType, input.chatId)) }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:im-chat-messages error:', err.message)

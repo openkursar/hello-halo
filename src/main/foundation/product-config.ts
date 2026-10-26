@@ -39,8 +39,8 @@ export type WindowsUpdateMode = 'legacy' | 'staged'
  * Update configuration for auto-updater
  */
 export interface UpdateConfig {
-  /** Provider type: 'github' for GitHub Releases, 'generic' for custom server */
-  provider: 'github' | 'generic'
+  /** Feed provider, or disabled for builds that must never update themselves. */
+  provider: 'github' | 'generic' | 'disabled'
   /** URL for generic provider (empty string = disabled) */
   url?: string
   /** GitHub repository owner (for github provider) */
@@ -239,6 +239,8 @@ export interface ProductConfig {
    * Electron userData directory. Defaults to 'halo' when omitted.
    */
   dataFolderName?: string
+  /** OS protocol handler owned by this product; defaults to halo. */
+  deepLinkScheme?: string
   authProviders: AuthProviderConfig[]
   /** Update configuration (optional, defaults to GitHub if not specified) */
   updateConfig?: UpdateConfig
@@ -528,6 +530,14 @@ export const DEFAULT_DATA_FOLDER_NAME = 'halo'
  */
 export function getDataFolderName(): string {
   return loadProductConfig().dataFolderName || DEFAULT_DATA_FOLDER_NAME
+}
+
+export function getDeepLinkScheme(): string {
+  const scheme = loadProductConfig().deepLinkScheme?.trim() || 'halo'
+  if (!/^[a-z][a-z0-9+.-]*$/.test(scheme)) {
+    throw new Error('[ProductConfig] Invalid deepLinkScheme; refusing to register an ambiguous protocol')
+  }
+  return scheme
 }
 
 /** Default appId when product.json omits it (the open-source build's) */

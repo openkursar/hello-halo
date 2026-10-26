@@ -18,7 +18,8 @@ import type { EscalationResponse, EscalationQuestion } from './types'
 import { formatEscalationAnswer } from '../../../shared/apps/app-types'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
-import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../services/agent/system-prompt'
+import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../services/agent'
+import type { EngineId } from '../../../shared/types/engine'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../../services/ai-browser'
 import { AI_TERMINAL_SYSTEM_PROMPT } from '../../services/ai-terminal'
 import { HALO_API_USAGE_GUIDE } from '../../services/api-ref'
@@ -200,6 +201,7 @@ audience-facing artifact of this run.
 // ============================================
 
 export interface AppPromptOptions {
+  engineId?: EngineId
   /** ID of the installed App (used to look up bound knowledge bases) */
   appId: string
   /** The App's specification (must be automation type) */
@@ -267,6 +269,7 @@ export function buildAppSystemPrompt(options: AppPromptOptions): string {
   //    100% of the same capabilities as the interactive agent
   //    When AI Browser is enabled, append full browser tool workflow guide
   const promptCtx = {
+    engineId: options.engineId,
     workDir: options.workDir,
     modelInfo: options.modelInfo,
     knowledgeBases: getKBReferencesForApp(options.appId),

@@ -32,6 +32,34 @@ Does NOT:
 
 ### 2.1 Own Session Assembly on the Shared Engine
 
+Each digital human may select an engine through `userOverrides.engineId`.
+Runtime resolves that preference once per turn, before credentials, prompt and
+permission assembly. A running session keeps its original engine; a changed
+preference applies when it becomes idle. Without an explicit preference, an
+existing session keeps its persisted engine binding, a legacy session uses the
+retained legacy default, and only a new conversation or run reads the current
+default. An unavailable explicitly selected engine fails rather than falling
+back. Team and IM turns enter the same app-chat path, so their capability and
+permission checks use the resolved session engine too.
+
+The first engine choice is persisted before SDK creation, so a failed first start
+still retries on the same engine after a default change or restart. This routing
+record contains no native session ID; the first native acknowledgement replaces
+it with the engine/session binding. A consumer captures
+the prior binding before preparation and writes through compare-and-swap; its
+late completion cannot replace a newer engine's binding. Switching engines uses
+bounded neutral transcript context in the next user input, never native resume
+of another engine's session id or replayed tool calls. Active tasks are not
+interrupted by a preference write.
+
+History reads also report engine ownership without starting a runtime. Paged
+chat transcripts carry optional `engineId` and `engineBinding` metadata; legacy
+full-message IPC/HTTP responses retain their `data` array and add those fields
+to the response envelope. The renderer uses this identity for cold IM views and
+digital-human chat capabilities, rather than borrowing the current global
+default. A failed strict native resume reads bounded history only on that
+failure path and hands it over once to a fresh session on the same engine.
+
 **Decision**: Runtime assembles its own sessions (automation runs in `execute.ts`,
 digital-human chat in `app-chat.ts`) rather than routing through the space chat's
 `sendMessage()` — but it builds on the same engine layer, not a copy of it.
@@ -1518,8 +1546,13 @@ member here or from another machine, a run's Stop or Close) stops everything:
   message stopped on its way to the engine;
 - what others sent and the AI had not read (teammates, reminders, other
   conversations, events, guests, other machines) is taken back into its mailbox
-  (`turn-gate.park` / `putBack`), with records written once (`inputRecorded`),
-  and waits: it neither joins the stopping turn nor starts one, and is released
+  (`turn-gate.park` / `putBack`), with records written once (`inputRecorded`).
+  Receiver-local `recordedInputIds` travel with those queued inputs and are
+  excluded by exact identity from an engine-handoff snapshot before they are
+  delivered again. The persistent transcript is unchanged; identical text in
+  another record remains history. These identities never cross the federation
+  wire and cannot be supplied through the public chat HTTP/IPC request.
+  The queued message waits: it neither joins the stopping turn nor starts one, and is released
   when the conversation's next turn starts or something arrives after the stop.
   A caller awaiting its answer is settled at once with an empty one (the sink
   handle's `cancel`), because the stopped turn's reply answered a different
@@ -1528,6 +1561,16 @@ member here or from another machine, a run's Stop or Close) stops everything:
   `AppChatRequest.onHeldBack` (with the records written so far); chat delivery,
   IM dispatch and the team session layer each void their person's words and
   put the rest back, and no turn-end report is made for a turn that never ran.
+An engine-handoff reader also excludes receiver-local inputs still held in any
+mailbox for that conversation. An owner's new turn can switch engines before a
+guest's held message is delivered separately or injected into the new turn; that
+message must not arrive first through historical context. `app-chat` owns the
+aggregation: it passes a lazy reader to `engine-selection`, which reads existing
+chat, IM, team and cross-conversation queues only when building a handoff. Queue
+owners project stable IDs from their current jobs; consumed or discarded jobs
+stop contributing immediately. No pending-ID mirror or extra persistent state is
+maintained, and healthy native resume does not inspect history or these queues.
+
 The system (`'internal'`: an escalation cut, clear, restart, closing a task,
 shutdown) keeps the earlier behavior: unread input runs after the stop, and a
 clear still keeps waiting reminders and teammates' messages. A system stop of a
@@ -2181,3 +2224,9 @@ itself has no switch: it exists for a caller exactly when some skill does.
   whatever the owner chose. Aliases live in `shared/apps/capability-policy`, so
   the withheld list is exactly the tools no switch offers.
 
+
+### Engine bindings and handoff reads
+
+`session-store` keeps legacy `_session-ids.json` string rows unchanged. A fresh run first records `{ version: 1, engineId }` before SDK creation, without claiming native context exists. Native acknowledgement replaces it with a versioned `{ engineId, sessionId }` binding in that same row; replacing it uses an expected-state comparison and atomic rename after session preparation. There is no per-engine native-ID cache. Legacy session-ID callbacks cannot overwrite routing records or a different bound session. Run retention removes the corresponding row with its transcript.
+
+`readChatHandoffHistory` reads a bounded JSONL tail only when an engine changes, without building a whole-file index. Its message IDs use byte positions for audit, not UI pagination. It excludes reasoning, keeps completed tool observations, reports omitted or malformed records explicitly, and supplies the full transcript path. Missing history rejects the change instead of silently starting empty. Ordinary transcript and native-resume paths are unchanged.

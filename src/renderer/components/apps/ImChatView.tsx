@@ -16,7 +16,6 @@ import { api } from '../../api'
 import { useChatStore } from '../../stores/chat.store'
 import { useTeamStore } from '../../stores/team.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
-import { useEngineCapabilities } from '../../stores/engine.store'
 import { MessageList } from '../chat/MessageList'
 import type { MessageListHandle } from '../chat/MessageList'
 import { ScrollToBottomButton } from '../chat/ScrollToBottomButton'
@@ -31,6 +30,7 @@ import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 import { buildImSessionKey } from '../../../shared/apps/im-keys'
 import { CHANNEL_LABELS } from './im-channel-labels'
 import type { ApiRetryState } from '../../../shared/types/api-retry'
+import type { AppChatEngineMetadata } from '../../../shared/apps/app-types'
 
 interface ImChatViewProps {
   appId: string
@@ -40,6 +40,7 @@ interface ImChatViewProps {
   clearKey?: number
   /** Rendered at the right edge of the read-only bar — the one action that applies to this conversation (fork to client). */
   footerAction?: React.ReactNode
+  onEngineMetadata?: (conversationId: string, metadata: AppChatEngineMetadata) => void
 }
 
 type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
@@ -64,10 +65,12 @@ function sessionApi(appId: string, spaceId: string, session: ImSessionRecord) {
   }
 }
 
-export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: ImChatViewProps) {
+export function ImChatView({ appId, spaceId, session, clearKey, footerAction, onEngineMetadata }: ImChatViewProps) {
   const { t } = useTranslation()
 
   const conversationId = buildImSessionKey(appId, session.channel, session.chatType, session.chatId)
+  const engineMetadataListener = useRef(onEngineMetadata)
+  engineMetadataListener.current = onEngineMetadata
 
   // Live reply detail for this conversation, desktop and remote alike.
   useConversationDetail(conversationId)
@@ -125,6 +128,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
         const res = await sessionApi(appId, spaceId, session).read()
         if (cancelled) return
         if (res.success && res.data) {
+          engineMetadataListener.current?.(conversationId, res)
           const msgs = (res.data as Message[]) ?? []
           setMessages(previous => reconcileTranscript(previous, msgs, { dropUnconfirmed: !useChatStore.getState().getSession(conversationId).isGenerating }).messages)
           setLoadState(msgs.length > 0 ? 'loaded' : 'empty')
@@ -155,6 +159,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
         .then(res => {
           if (cancelled) return
           if (res.success && res.data) {
+            engineMetadataListener.current?.(conversationId, res)
             const msgs = (res.data as Message[]) ?? []
             setMessages(previous => reconcileTranscript(previous, msgs, { dropUnconfirmed: !useChatStore.getState().getSession(conversationId).isGenerating }).messages)
             setLoadState(msgs.length > 0 ? 'loaded' : 'empty')
@@ -177,6 +182,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
         .then(res => {
           if (cancelled) return
           if (res.success && res.data) {
+            engineMetadataListener.current?.(conversationId, res)
             const msgs = (res.data as Message[]) ?? []
             setMessages(previous => reconcileTranscript(previous, msgs, { dropUnconfirmed: !useChatStore.getState().getSession(conversationId).isGenerating }).messages)
             setLoadState(msgs.length > 0 ? 'loaded' : 'empty')
@@ -198,6 +204,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
     sessionApi(appId, spaceId, session).read()
       .then(res => {
         if (res.success && res.data) {
+          engineMetadataListener.current?.(conversationId, res)
           const msgs = (res.data as Message[]) ?? []
           setMessages(previous => reconcileTranscript(previous, msgs, { dropUnconfirmed: !useChatStore.getState().getSession(conversationId).isGenerating }).messages)
           setLoadState(msgs.length > 0 ? 'loaded' : 'empty')

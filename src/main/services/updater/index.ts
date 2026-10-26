@@ -141,7 +141,7 @@ export function initAutoUpdater(): void {
   legacyEnabled = configureLegacyFeed(updateConfig)
   stagedFeed = resolveStagedFeed()
   stagedPathActive = stagedFeed !== null
-  setLegacyInstallOnQuit(!stagedPathActive)
+  setLegacyInstallOnQuit(legacyEnabled && !stagedPathActive)
 
   console.log(
     `[Updater] channel=${getUpdateChannel()} platform=${process.platform} ` +
@@ -350,6 +350,11 @@ async function performCheck(): Promise<void> {
  * falls back rather than leaving the user on a dead button.
  */
 export function quitAndInstall(): void {
+  if (updateConfig?.provider === 'disabled') {
+    console.warn('[Updater] Install ignored: updates are disabled for this product')
+    sendUpdateStatus('not-available', { version: app.getVersion() })
+    return
+  }
   const announced = getAnnounced()
   console.log(
     `[Updater] User chose to install ${announced?.version ?? 'unknown version'} ` +

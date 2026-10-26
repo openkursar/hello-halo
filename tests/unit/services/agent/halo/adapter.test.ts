@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createHaloSdkModule } from '../../../../../src/main/services/agent/halo'
+import { app } from 'electron'
+import * as fs from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => '/application' } }))
 
@@ -12,6 +17,20 @@ function fixture() {
 }
 
 describe('Halo host worker adapter', () => {
+  it('finds setup beside a built unpackaged main entry', async () => {
+    const root = fs.mkdtempSync(join(tmpdir(), 'halo-adapter-'))
+    const main = join(root, 'out/main')
+    const setup = join(main, 'worker/halo-setup.cjs')
+    fs.mkdirSync(join(main, 'worker'), { recursive: true })
+    fs.writeFileSync(setup, '')
+    const appPath = vi.spyOn(app, 'getAppPath').mockReturnValue(main)
+    try {
+      const { module, runtime } = fixture()
+      await module.createSession({ haloRequestIdentity: { sessionId: 'conversation' } })
+      expect(runtime.createSession.mock.calls[0][1]).toMatchObject({ setup: { module: pathToFileURL(setup).href } })
+    } finally { appPath.mockRestore(); fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
   it('loads without starting a worker and exposes explicit startup and shutdown', async () => {
     const { runtime, module } = fixture()
     expect(runtime.initialize).not.toHaveBeenCalled()

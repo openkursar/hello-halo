@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { unstable_v2_createSession } from '@anthropic-ai/claude-agent-sdk'
+import { CcSession } from '../../../../src/main/services/agent/cc/session'
 
 const cleanups: Array<() => void> = []
 afterEach(() => {
@@ -81,10 +81,10 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   write({ type: 'result', subtype: 'success', session_id: 'cc-session', result: 'updated' });
 });
 `)
-  const session = unstable_v2_createSession({
+  const session = new CcSession({
     model: 'test', pathToClaudeCodeExecutable: script, executable: process.execPath,
     cwd: directory, env: { ...process.env },
-  } as any) as any
+  }, { command: process.execPath, argsPrefix: [script], env: {}, path: script, kind: 'javascript', version: 'test' })
   cleanups.push(() => {
     session.close()
     session.query.transport.close()

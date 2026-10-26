@@ -43,6 +43,8 @@ export interface TurnGate<TJob> {
   /** The consumer has a live turn now, including turns started outside this gate. */
   notifyReady(sessionKey: string): void
   isOccupied(sessionKey: string): boolean
+  /** Read-only view of queued jobs; dispatched work and exclusive callbacks are not included. */
+  bufferedJobs(sessionKey: string): readonly Readonly<TJob>[]
   bufferedCount(sessionKey: string): number
   hasBuffered(sessionKey: string): boolean
   hasAnyBuffered(match: (sessionKey: string) => boolean): boolean
@@ -487,6 +489,10 @@ export function createTurnGate<TJob>(hooks: TurnGateHooks<TJob>, options: TurnGa
     if (!held) drain(key)
   }
 
+  function bufferedJobs(key: string): readonly Readonly<TJob>[] {
+    return (mailboxes.get(key) ?? []).flatMap(entry => entry.kind === 'job' ? [entry.job] : [])
+  }
+
   function bufferedCount(key: string): number { return mailboxes.get(key)?.length ?? 0 }
   function hasBuffered(key: string): boolean { return bufferedCount(key) > 0 }
   function hasAnyBuffered(match: (key: string) => boolean): boolean {
@@ -539,5 +545,5 @@ export function createTurnGate<TJob>(hooks: TurnGateHooks<TJob>, options: TurnGa
     return dropped
   }
 
-  return { deliver, tryDeliverLive, runExclusive, release, drain, notifyReady, isOccupied, bufferedCount, hasBuffered, hasAnyBuffered, discard, discardJobs, park, putBack }
+  return { deliver, tryDeliverLive, runExclusive, release, drain, notifyReady, isOccupied, bufferedJobs, bufferedCount, hasBuffered, hasAnyBuffered, discard, discardJobs, park, putBack }
 }

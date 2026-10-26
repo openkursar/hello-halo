@@ -12,13 +12,15 @@
  */
 
 import type { AppSpec } from '../../spec'
-import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../../services/agent/system-prompt'
+import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../../services/agent'
+import type { EngineId } from '../../../../shared/types/engine'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../../../services/ai-browser'
 import { AI_TERMINAL_SYSTEM_PROMPT } from '../../../services/ai-terminal'
 import { HALO_API_USAGE_GUIDE } from '../../../services/api-ref'
 import { getKBReferencesForApp } from '../../../services/tlon'
 
 export interface IdentityFragmentsInput {
+  engineId?: EngineId
   appId: string
   appSpec: AppSpec
   memoryInstructions: string
@@ -54,6 +56,7 @@ export function buildIdentityFragments(input: IdentityFragmentsInput): string[] 
   const fragments: string[] = []
 
   const promptCtx = {
+    engineId: input.engineId,
     workDir: input.workDir,
     modelInfo: input.modelInfo,
     knowledgeBases: getKBReferencesForApp(input.appId),

@@ -10,13 +10,8 @@
 //
 // 2. Keep and validate the target platform's better-sqlite3 N-API binary.
 //
-// 3. Keep only the target platform's @img/sharp-* package (plus its libvips
-//    sibling) and fail the build if its prebuilt binary is absent. Same
-//    rationale as @parcel/watcher, with an assertion because a missing sharp
-//    binary only surfaces at runtime, on the first oversized image.
-//
 // 4. Ensure executable permissions on all native binaries in the unpacked
-//    output. Some npm packages (e.g. @anthropic-ai/claude-code v2.1.89)
+//    output. Some npm packages
 //    ship tarballs with missing +x on vendored binaries. This step detects
 //    ELF and Mach-O files by magic bytes and adds +x if missing.
 //
@@ -71,14 +66,6 @@ const NODE_PTY_PREBUILD_TARGETS = {
   'win32-x64':    'win32-x64',
 };
 
-// Packages that vendor per-platform binaries under vendor/<tool>/{arch}-{platform}/.
-// Their runtime resolves paths via `${process.arch}-${process.platform}`, so only
-// the target directory is needed; the other 5 platform directories are dead weight.
-const ANTHROPIC_VENDOR_PACKAGES = [
-  '@anthropic-ai/claude-agent-sdk',
-  '@anthropic-ai/claude-code',
-];
-
 // Maps platform-arch to the cloudflared binary variant stored by
 // prepare-binaries.mjs in node_modules/cloudflared/bin/. At runtime the
 // cloudflared lib only reads bin/cloudflared (bin/cloudflared.exe on Windows),
@@ -88,17 +75,6 @@ const CLOUDFLARED_VARIANTS = {
   'darwin-x64':   'cloudflared-darwin-x64',
   'win32-x64':    'cloudflared.exe',
   'linux-x64':    'cloudflared-linux-x64',
-};
-
-// Maps platform-arch to the @img/sharp-* package required at runtime. The
-// Claude engines resize oversized images through sharp, which dlopens the
-// prebuilt .node from this package; the libvips sibling it declares is resolved
-// from the same @img directory and kept alongside it.
-const SHARP_TARGETS = {
-  'darwin-arm64': 'sharp-darwin-arm64',
-  'darwin-x64':   'sharp-darwin-x64',
-  'win32-x64':    'sharp-win32-x64',
-  'linux-x64':    'sharp-linux-x64',
 };
 
 // Maps platform-arch to the @openai/codex native package required at runtime.
@@ -451,69 +427,6 @@ function cleanAndValidateCodexNativePackage(context) {
 }
 
 /**
- * Keep only the target platform's @img/sharp-* package (and the libvips sibling
- * it declares) in the unpacked output, and fail the build when its prebuilt
- * binary is missing.
- *
- * The binary must live outside the asar archive: a .node cannot be dlopened
- * from inside the archive, and sharp's only fallback is to give up, which
- * surfaces to the user as "Unable to resize image" on any oversized image.
- */
-function cleanAndValidateSharpNativePackage(context) {
-  const platform = context.electronPlatformName;
-  const archStr = ARCH_NAMES[context.arch] || String(context.arch);
-  const key = `${platform}-${archStr}`;
-  const targetPkg = SHARP_TARGETS[key];
-
-  if (!targetPkg) {
-    console.warn(`[afterPack] No sharp package mapping for ${key}, skipping cleanup`);
-    return;
-  }
-
-  const unpackedDir = getUnpackedDir(context);
-  const imgDir = path.join(unpackedDir, 'node_modules', '@img');
-  const targetDir = path.join(imgDir, targetPkg);
-  const targetLibDir = path.join(targetDir, 'lib');
-
-  const hasBinary = fs.existsSync(targetLibDir)
-    && fs.readdirSync(targetLibDir).some(f => f.endsWith('.node'));
-
-  if (!hasBinary) {
-    console.error(`[afterPack] ${key}: missing sharp native binary: ${targetLibDir}`);
-    console.error(`[afterPack] Run "npm run prepare:all" before cross-platform/cross-arch packaging`);
-    console.error(`[afterPack] Also check that asarUnpack includes "node_modules/@img/**/*"`);
-    throw new Error(`Missing @img/${targetPkg} native binary for ${key}`);
-  }
-
-  // The .node links against libvips through an @rpath/RUNPATH pointing at a
-  // sibling directory under @img, so the sibling must survive the cleanup.
-  const manifest = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf-8'));
-  const siblings = Object.keys(manifest.optionalDependencies || {}).map(dep => dep.split('/').pop());
-
-  const missingSiblings = siblings.filter(name => !fs.existsSync(path.join(imgDir, name, 'lib')));
-  if (missingSiblings.length > 0) {
-    console.error(`[afterPack] ${key}: @img/${targetPkg} needs ${missingSiblings.join(', ')}, not in the unpacked output`);
-    console.error(`[afterPack] Run "npm run prepare:all" to install the libvips sibling`);
-    throw new Error(`Missing libvips package(s) for ${key}: ${missingSiblings.join(', ')}`);
-  }
-
-  const keep = new Set([targetPkg, ...siblings]);
-  const removed = [];
-  for (const entry of fs.readdirSync(imgDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    if (keep.has(entry.name)) continue;
-
-    fs.rmSync(path.join(imgDir, entry.name), { recursive: true });
-    removed.push(entry.name);
-  }
-
-  if (removed.length > 0) {
-    console.log(`[afterPack] ${key}: removed ${removed.length} non-target sharp package(s): ${removed.join(', ')}`);
-  }
-  console.log(`[afterPack] ${key}: keeping ${[...keep].map(name => `@img/${name}`).join(', ')}`);
-}
-
-/**
  * Identify an executable's target platform-arch from its file header.
  * Returns a `${platform}-${arch}` key (win32/linux assume x64, matching the
  * only shipped targets) or null if unrecognized.
@@ -541,51 +454,6 @@ function detectExecutableTarget(filePath) {
     return null;
   } finally {
     fs.closeSync(fd);
-  }
-}
-
-/**
- * Keep only the target {arch}-{platform} directory in the vendored binary
- * trees of @anthropic-ai/claude-agent-sdk and @anthropic-ai/claude-code
- * (vendor/ripgrep, vendor/audio-capture). Non-directory files (e.g. COPYING)
- * are preserved.
- */
-function cleanAnthropicVendorBinaries(context) {
-  const platform = context.electronPlatformName;
-  const archStr = ARCH_NAMES[context.arch] || String(context.arch);
-  const targetDir = `${archStr}-${platform}`;
-
-  const unpackedDir = getUnpackedDir(context);
-
-  for (const pkg of ANTHROPIC_VENDOR_PACKAGES) {
-    const vendorDir = path.join(unpackedDir, 'node_modules', pkg, 'vendor');
-    if (!fs.existsSync(vendorDir)) {
-      console.warn(`[afterPack] No vendor dir for ${pkg} in unpacked output, skipping cleanup`);
-      continue;
-    }
-
-    const removed = [];
-    let targetFound = false;
-
-    for (const tool of fs.readdirSync(vendorDir, { withFileTypes: true })) {
-      if (!tool.isDirectory()) continue;
-      const toolDir = path.join(vendorDir, tool.name);
-
-      for (const entry of fs.readdirSync(toolDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        if (entry.name === targetDir) {
-          targetFound = true;
-          continue;
-        }
-        fs.rmSync(path.join(toolDir, entry.name), { recursive: true });
-        removed.push(`${tool.name}/${entry.name}`);
-      }
-    }
-
-    if (!targetFound) {
-      console.warn(`[afterPack] ${pkg}: no ${targetDir} vendor binaries found in unpacked output`);
-    }
-    console.log(`[afterPack] ${pkg}: removed ${removed.length} non-target vendor dir(s), keeping */${targetDir}`);
   }
 }
 
@@ -656,7 +524,7 @@ function installCloudflaredBinary(context) {
  * Ensure all native binaries in the unpacked output have executable permission.
  *
  * npm packages occasionally ship tarballs with missing +x on vendored binaries
- * (e.g. @anthropic-ai/claude-code v2.1.89 lost +x on ripgrep). This causes
+ * (some upstream packages lose +x on vendored helpers). This causes
  * EACCES at runtime with no fallback, silently breaking core tools like
  * Grep/Glob.
  *
@@ -818,7 +686,8 @@ function createPackageReader(context) {
  */
 function getRequiredEngines() {
   const raw = process.env.HALO_REQUIRE_ENGINES;
-  if (!raw) return [];
+  const defaults = VALID_ENGINES.filter(id => ENGINE_RUNTIMES[id].required);
+  if (!raw) return defaults;
   const requested = raw.split(',').map(e => e.trim()).filter(Boolean);
   const unknown = requested.filter(e => !VALID_ENGINES.includes(e));
   if (unknown.length > 0) {
@@ -827,10 +696,15 @@ function getRequiredEngines() {
       `Valid engines: ${VALID_ENGINES.join(', ')}`
     );
   }
-  return requested;
+  return [...new Set([...defaults, ...requested])];
 }
 
 function validateEngineRuntimes(pkg) {
+  for (const packageId of ['@anthropic-ai/claude-code', '@anthropic-ai/claude-agent-sdk']) {
+    if (pkg.exists(`node_modules/${packageId}/package.json`)) {
+      throw new Error(`[afterPack] Optional Claude Code runtime must not be bundled: ${packageId}`);
+    }
+  }
   const required = getRequiredEngines();
   const missing = [];
 
@@ -877,9 +751,16 @@ function validateEngineRuntimes(pkg) {
  * configured. Without it electron-updater can check for updates but fails to
  * download them, so a build that advertises updates must carry the file.
  */
-function validateUpdaterConfig(context) {
+function validateUpdaterConfig(context, product) {
   const publish = context.packager.config && context.packager.config.publish;
   const configured = Array.isArray(publish) ? publish.length > 0 : Boolean(publish);
+  if (product.updateConfig?.provider === 'disabled') {
+    if (configured || fs.existsSync(path.join(getResourcesDir(context), 'app-update.yml'))) {
+      throw new Error('[afterPack] Disabled updates must not ship a publish target or app-update.yml');
+    }
+    console.log('[afterPack] Updates disabled; no feed metadata shipped');
+    return;
+  }
   if (!configured) {
     console.log('[afterPack] No publish target configured — skipping app-update.yml check');
     return;
@@ -974,56 +855,6 @@ function validateDshRuntimeBundle(context) {
   console.log(`[afterPack] ${key}: dsh runtime bundle present (${sizeMB} MB)`);
 }
 
-function validateWindowsConsoleBootstrap(context, pkg) {
-  if (context.electronPlatformName !== 'win32') return;
-  const cliPath = 'node_modules/@anthropic-ai/claude-code/cli.js';
-  if (!pkg.exists(cliPath)) {
-    console.log('[afterPack] Claude Code CLI not bundled — no Windows console bootstrap required');
-    return;
-  }
-  const bootstrapPath = 'node_modules/@anthropic-ai/claude-code/windows-hide.cjs';
-  if (!pkg.exists(bootstrapPath) || !pkg.read(cliPath).toString('utf-8').includes("import '../claude-code/windows-hide.cjs';")) {
-    throw new Error(
-      '[afterPack] Windows Claude Code console bootstrap is missing or not loaded. ' +
-      'Run postinstall to apply the CLI patch before packaging.'
-    );
-  }
-  console.log('[afterPack] Windows Claude Code console bootstrap present');
-}
-
-/**
- * Halo launches the Claude Code CLI from its real file on disk (app.asar.unpacked
- * in an archived build): the CLI runs programs found next to its own file
- * (ripgrep behind Grep and Glob), and no OS can execute a file inside an
- * archive. Assert that copy is complete for this target whenever the CLI ships.
- */
-function validateClaudeCodeCliOnDisk(context, pkg) {
-  const packageDir = 'node_modules/@anthropic-ai/claude-code';
-  if (!pkg.exists(`${packageDir}/package.json`)) {
-    console.log('[afterPack] Claude Code CLI not bundled — skipping its on-disk check');
-    return;
-  }
-
-  const platform = context.electronPlatformName;
-  const target = `${ARCH_NAMES[context.arch] || String(context.arch)}-${platform}`;
-  const resourcesDir = getResourcesDir(context);
-  const diskRoot = fs.existsSync(path.join(resourcesDir, 'app.asar')) ? getUnpackedDir(context) : path.join(resourcesDir, 'app');
-  const required = [`${packageDir}/cli.js`, `${packageDir}/vendor/ripgrep/${target}/${platform === 'win32' ? 'rg.exe' : 'rg'}`];
-  const cliPath = path.join(diskRoot, packageDir, 'cli.js');
-  if (fs.existsSync(cliPath) && fs.readFileSync(cliPath, 'utf-8').includes("import '../claude-code/windows-hide.cjs';")) {
-    required.push(`${packageDir}/windows-hide.cjs`);
-  }
-
-  const missing = required.filter(rel => !fs.existsSync(path.join(diskRoot, ...rel.split('/'))));
-  if (missing.length > 0) {
-    throw new Error(
-      `[afterPack] ${target}: the Claude Code CLI ships but is not on disk in ${path.basename(diskRoot)}: ${missing.join(', ')}. ` +
-      `Check the "${packageDir}/**/*" asarUnpack rule.`
-    );
-  }
-  console.log(`[afterPack] ${target}: Claude Code CLI and its ripgrep are on disk in ${path.basename(diskRoot)}`);
-}
-
 /**
  * The Office runtime behind the built-in document skills (`halo-node`) ships
  * through extraResources. electron-builder 26 silently drops a node_modules
@@ -1063,11 +894,9 @@ function validatePackagedArtifact(context) {
   console.log('[afterPack] Validating packaged artifact...');
   const pkg = createPackageReader(context);
   validateEngineRuntimes(pkg);
-  validateClaudeCodeCliOnDisk(context, pkg);
   validateOfficeRuntime(context);
-  validateWindowsConsoleBootstrap(context, pkg);
   const product = validateProductConfig(pkg);
-  validateUpdaterConfig(context);
+  validateUpdaterConfig(context, product);
   validateUpdateHelper(context, product);
   console.log('[afterPack] Packaged artifact validation passed');
 }
@@ -1091,18 +920,11 @@ module.exports = async function(context) {
   // Ensure the packaged app contains the Codex native binary for this arch.
   cleanAndValidateCodexNativePackage(context);
 
-  // Ensure the packaged app contains the sharp native binary for this arch.
-  cleanAndValidateSharpNativePackage(context);
-
-  // Keep only target-platform binaries in @anthropic-ai vendored trees.
-  cleanAnthropicVendorBinaries(context);
-
   // Install the target cloudflared binary under its runtime name.
   const cloudflaredBinary = installCloudflaredBinary(context);
 
   // Ensure all native binaries in unpacked output have +x permission.
   // Defends against upstream npm packages shipping broken permissions
-  // (e.g. @anthropic-ai/claude-code v2.1.89 ripgrep EACCES bug).
   ensureNativeBinaryPermissions(context);
 
   // Last gate before the artifact leaves the packer: assert it actually

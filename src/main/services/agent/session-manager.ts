@@ -1,3 +1,8 @@
+import { NativeSessionResumeError, isNativeSessionResumeError } from '../../../shared/types/engine-session'
+import { prepareConversationContinuation, resolveConversationEngine } from './engine-routing'
+import { prependEngineHandoff } from './engine-handoff'
+import { isEngineId, type EngineId } from '../../../shared/types/engine'
+import { bindSinkToEngine } from './turn-sink'
 /**		      	    				  	  	  	 		 		       	 	 	         	 	    					 
  * Agent Module - Session Manager
  *
@@ -10,7 +15,6 @@
 
 import path from 'path'
 import os from 'os'
-import { existsSync, copyFileSync, mkdirSync } from 'fs'
 import { app } from 'electron'
 import { createSession, getActiveEngine } from './resolved-sdk'
 import { onApiConfigChange, getCredentialsGeneration, type ApiConfigChange } from '../../foundation/config.service'
@@ -45,6 +49,7 @@ import { HALO_API_TOOLSET_ID } from '../api-ref'
 import { resolveConversationKnowledgeBases, resolveConversationKnowledgeBaseIds } from './knowledge-context'
 import { appendToSystemPrompt, buildKnowledgeSection } from './system-prompt'
 import { assertWorkingDirCurrent } from './working-dir'
+import { prepareStoredSession } from './stored-session'
 import type { KBReference } from '../../../shared/types/tlon'
 
 /**
@@ -231,7 +236,8 @@ export interface V2SessionLease {
 function leaseSession(
   conversationId: string,
   session: V2SDKSession,
-  onFailureBeforeInit?: (error: Error) => void
+  onFailureBeforeInit?: (error: Error) => void,
+  preparedHandoff?: () => string | undefined,
 ): V2SessionLease {
   if (v2Sessions.get(conversationId)?.session !== session) {
     console.warn(`[Agent][${conversationId}] Session acquisition discarded: the instance was closed or replaced`)
@@ -290,7 +296,15 @@ function leaseSession(
       pending.add(lease)
       markTurnDispatched(conversationId)
       try {
-        await session.send(message)
+        const pendingHandoff = pendingEngineHandoffs.get(session)
+        const handoff = pendingHandoff ? preparedHandoff?.() ?? pendingHandoff : undefined
+        if (handoff) pendingEngineHandoffs.delete(session)
+        try {
+          await session.send(handoff ? prependEngineHandoff(message as any, handoff) : message)
+        } catch (error) {
+          if (handoff && lease.isCurrent) pendingEngineHandoffs.set(session, handoff)
+          throw error
+        }
       } catch (error) {
         pending.delete(lease)
         if (!failed && lease.isCurrent) {
@@ -725,27 +739,14 @@ export function stopSessionCleanup(): void {
 // ============================================
 
 /** Copy legacy history into the session's config directory without replacing its current history. */
-function migrateSessionIfNeeded(workDir: string, sessionId: string, configDir?: string): boolean {
-  const projectDir = workDir.replace(/[^a-zA-Z0-9]/g, '-')
-  const sessionFile = `${sessionId}.jsonl`
+async function migrateSessionIfNeeded(workDir: string, sessionId: string, configDir?: string, engineId?: EngineId, strict = false): Promise<boolean> {
   const haloConfigDir = path.join(app.getPath('userData'), 'claude-config')
-  const targetPath = path.join(configDir || haloConfigDir, 'projects', projectDir, sessionFile)
-  if (existsSync(targetPath)) return true
-
-  const sourcePath = [haloConfigDir, path.join(os.homedir(), '.claude')]
-    .map(directory => path.join(directory, 'projects', projectDir, sessionFile))
-    .find(candidate => candidate !== targetPath && existsSync(candidate))
-  if (!sourcePath) return false
-
-  try {
-    mkdirSync(path.dirname(targetPath), { recursive: true })
-    copyFileSync(sourcePath, targetPath)
-    console.log(`[Agent] Migrated session ${sessionId}: ${sourcePath} -> ${targetPath}`)
-    return true
-  } catch (error) {
-    console.error(`[Agent] Failed to migrate session file: ${sessionId}`, error)
-    return false
-  }
+  return prepareStoredSession({
+    workDir, sessionId, configDir: configDir || haloConfigDir,
+    legacyConfigDirs: [haloConfigDir, path.join(os.homedir(), '.claude')],
+    engine: engineId === 'halo' ? 'halo' : 'anthropic',
+    ...(strict ? { requireCurrentFile: true } : {}),
+  })
 }
 
 /**
@@ -832,8 +833,7 @@ function assertMcpInstancesUnbound(
  * V2 Session enables process reuse: subsequent messages in the same conversation
  * reuse the running CC process, avoiding process restart each time (cold start ~3-5s).
  *
- * Note: Requires SDK patch for full parameter pass-through.
- * When sessionId is provided, CC restores conversation history from disk.
+ * When sessionId is provided, the active engine restores compatible saved history.
  *
  * @param spaceId - Space ID
  * @param conversationId - Conversation ID
@@ -893,15 +893,33 @@ export async function acquireV2Session(
   gates?: SessionGates,
   onFailureBeforeInit?: (error: Error) => void
 ): Promise<V2SessionLease> {
-  const request: SessionLeaseRequest = { onFailureBeforeInit }
+  const request: SessionLeaseRequest = {
+    onFailureBeforeInit,
+    engineHandoffContent: typeof sdkOptions.engineHandoffContent === 'string' ? sdkOptions.engineHandoffContent : undefined,
+  }
   await getOrCreateSessionResult(
     spaceId, conversationId, sdkOptions, sessionId, workDir,
     consumer, resolvedKbIds, buildMcpServers, resolveKnowledgeBases, gates, request
   )
-  return request.lease!
+  const lease = request.lease!
+  try {
+    if (!request.engineHandoffContent && pendingEngineHandoffs.has(lease.session) && gates?.recoverNativeSession) {
+      const refreshed = await gates.recoverNativeSession()
+      if (!refreshed.trim()) {
+        console.warn(`[Agent][${conversationId}] Input refused: pending engine handoff has no refreshed context`)
+        throw new Error('The conversation history could not be prepared for the engine change')
+      }
+      request.engineHandoffContent = refreshed
+    }
+    return lease
+  } catch (error) {
+    lease.release()
+    throw error
+  }
 }
 
 interface SessionLeaseRequest {
+  engineHandoffContent?: string
   lease?: V2SessionLease
   onFailureBeforeInit?: (error: Error) => void
 }
@@ -919,6 +937,8 @@ async function getOrCreateSessionResult(
   gates?: SessionGates,
   leaseRequest?: SessionLeaseRequest
 ): Promise<V2SessionInfo['session']> {
+  const engineId = isEngineId(sdkOptions.engineId) ? sdkOptions.engineId : getActiveEngine() ?? 'halo'
+  sdkOptions = { ...sdkOptions, engineId }
   assertWorkingDirCurrent(spaceId, workDir ?? sdkOptions.cwd)
   sessionAcquisitions.set(spaceId, (sessionAcquisitions.get(spaceId) ?? 0) + 1)
 
@@ -940,14 +960,14 @@ async function getOrCreateSessionResult(
   const inFlight = inFlightSessionCreations.get(conversationId)
   if (inFlight) {
     const sameSource = inFlight.sourceId === getSdkSourceId(sdkOptions)
-    const shareable = sameSource && (
+    const shareable = sameSource && inFlight.engineId === engineId && (
       !gates?.requireFreshInputs ||
       (inFlight.inputsFingerprint !== undefined &&
         inFlight.inputsFingerprint === computeSessionInputsFingerprint(sdkOptions))
     )
     if (shareable) {
       if (leaseRequest) {
-        if (inFlight.session) leaseRequest.lease = leaseSession(conversationId, inFlight.session, leaseRequest.onFailureBeforeInit)
+        if (inFlight.session) leaseRequest.lease = leaseSession(conversationId, inFlight.session, leaseRequest.onFailureBeforeInit, () => leaseRequest.engineHandoffContent)
         else inFlight.leaseRequests.add(leaseRequest)
       }
       console.log(`[Agent][${conversationId}] Session creation already in flight, sharing result`)
@@ -975,10 +995,11 @@ async function getOrCreateSessionResult(
     consumer, resolvedKbIds, buildMcpServers, resolveKnowledgeBases, gates
   ).then(session => {
     record.session = session
-    for (const request of leaseRequests) request.lease = leaseSession(conversationId, session, request.onFailureBeforeInit)
+    for (const request of leaseRequests) request.lease = leaseSession(conversationId, session, request.onFailureBeforeInit, () => request.engineHandoffContent)
     return session
   })
   const record: InFlightSessionCreation = {
+    engineId,
     spaceId,
     promise,
     leaseRequests,
@@ -1000,6 +1021,7 @@ async function getOrCreateSessionResult(
 }
 
 interface InFlightSessionCreation {
+  engineId: EngineId
   spaceId: string
   promise: Promise<V2SessionInfo['session']>
   leaseRequests: Set<SessionLeaseRequest>
@@ -1011,6 +1033,9 @@ interface InFlightSessionCreation {
 
 /** conversationId -> in-flight getOrCreateV2Session creation. */
 const inFlightSessionCreations = new Map<string, InFlightSessionCreation>()
+
+/** Released with the session; populated only for an explicit context handoff. */
+const pendingEngineHandoffs = new WeakMap<V2SDKSession, string>()
 
 /** spaceId -> how many times a session of the space has been asked for. */
 const sessionAcquisitions = new Map<string, number>()
@@ -1034,6 +1059,8 @@ export type SessionConsumerOptions = Omit<ConsumerContext, 'spaceId' | 'conversa
 
 /** Conditions a caller needs the returned session to actually meet. */
 export interface SessionGates {
+  /** Read neutral history only after a bound native resume fails, before retrying a fresh session. */
+  recoverNativeSession?: () => string | Promise<string>
   /**
    * Refuse rather than hand back a busy session built on different inputs
    * (system prompt, MCP set, permission rules — computeSessionInputsFingerprint).
@@ -1061,8 +1088,10 @@ export interface SessionGates {
  * is free.
  */
 export class SessionOptionsStaleError extends Error {
-  constructor(conversationId: string, reason: 'restricted-inputs' | 'source-switch') {
-    super(reason === 'source-switch'
+  constructor(conversationId: string, reason: 'restricted-inputs' | 'source-switch' | 'engine-switch') {
+    super(reason === 'engine-switch'
+      ? 'This conversation is still working with its previous engine. The engine can change after the current task finishes.'
+      : reason === 'source-switch'
       ? 'This conversation is still busy on its previous account (a reply or team task is running), ' +
         'so this message was not sent. Send it again when that finishes, stop the running task, ' +
         'or start a new conversation to use the new account now.'
@@ -1117,6 +1146,7 @@ async function getOrCreateV2SessionInner(
   resolveKnowledgeBases?: () => KBReference[],
   gates?: SessionGates
 ): Promise<V2SessionInfo['session']> {
+  const engineId = sdkOptions.engineId as EngineId
   const sourceId = getSdkSourceId(sdkOptions)
   // Capture before any async creation work; never stamp a newer epoch on old options.
   const creationCredentialsGeneration = sdkOptions.credentialsGeneration ?? getCredentialsGeneration(sourceId)
@@ -1165,7 +1195,9 @@ async function getOrCreateV2SessionInner(
       // This catches race conditions where session was created with stale credentials
       // (e.g., warm-up started before config save completed)
       const currentGen = getCredentialsGeneration(existing.sourceId)
+      const engineChanged = existing.engineId !== undefined && existing.engineId !== engineId
       const needsCredentialRebuild =
+        engineChanged ||
         existing.sourceId !== sourceId ||
         existing.credentialsGeneration !== currentGen ||
         existing.credentialsFingerprint !== currentFingerprint ||
@@ -1184,14 +1216,14 @@ async function getOrCreateV2SessionInner(
         // change on the same source still defers. A source switch fails closed.
         const restrictedInputsChanged = gates?.requireFreshInputs === true &&
           existing.inputsFingerprint !== currentInputsFingerprint
-        if ((restrictedInputsChanged || existing.sourceId !== sourceId) && deferral.any) {
+        if ((engineChanged || restrictedInputsChanged || existing.sourceId !== sourceId) && deferral.any) {
           pendingConsumerRebuilds.add(conversationId)
           console.warn(
             `[Agent][${conversationId}] Refusing to reuse a busy session: ` +
-            `${restrictedInputsChanged ? 'restricted inputs changed' : `source changed ${existing.sourceId ?? 'legacy'}→${sourceId ?? 'legacy'}`}; ` +
+            `${engineChanged ? `engine changed ${existing.engineId}→${engineId}` : restrictedInputsChanged ? 'restricted inputs changed' : `source changed ${existing.sourceId ?? 'legacy'}→${sourceId ?? 'legacy'}`}; ` +
             `the request was not started.`
           )
-          throw new SessionOptionsStaleError(conversationId, restrictedInputsChanged ? 'restricted-inputs' : 'source-switch')
+          throw new SessionOptionsStaleError(conversationId, engineChanged ? 'engine-switch' : restrictedInputsChanged ? 'restricted-inputs' : 'source-switch')
         }
 
         if (deferral.leased) {
@@ -1286,22 +1318,33 @@ async function getOrCreateV2SessionInner(
 
   // Handle session resumption with migration support
   let effectiveSessionId = sessionId
-  if (sessionId && workDir && getActiveEngine() !== 'codex' && getActiveEngine() !== 'dsh') {
+  let recoveredNativeSession = false
+  const recoverNativeSession = async (error: unknown): Promise<void> => {
+    if (recoveredNativeSession || !gates?.recoverNativeSession) throw error
+    const content = await gates.recoverNativeSession()
+    if (!content.trim()) throw error
+    recoveredNativeSession = true
+    effectiveSessionId = undefined
+    sdkOptions = { ...sdkOptions, resume: undefined, engineHandoffContent: content }
+    console.warn(`[Agent][${conversationId}] Native ${engineId} session unavailable; continuing from Halo's recorded context`)
+  }
+  if (sessionId && workDir && engineId !== 'codex' && engineId !== 'dsh') {
     // Attempt to migrate session file from old config directory if needed
-    const sessionExists = migrateSessionIfNeeded(workDir, sessionId, sdkOptions.env?.CLAUDE_CONFIG_DIR)
+    const sessionExists = await migrateSessionIfNeeded(workDir, sessionId, sdkOptions.env?.CLAUDE_CONFIG_DIR, engineId, sdkOptions.strictNativeResume === true)
     if (sessionExists) {
       console.log(`[Agent][${conversationId}] With resume: ${sessionId}`)
     } else {
-      console.warn(`[Agent][${conversationId}] Session ${sessionId} unavailable in the configured or legacy directories, starting fresh conversation`)
-      effectiveSessionId = undefined
+      if (sdkOptions.strictNativeResume) await recoverNativeSession(new NativeSessionResumeError(engineId, sessionId))
+      else {
+        console.warn(`[Agent][${conversationId}] Legacy session ${sessionId} unavailable in the configured or legacy directories, starting fresh conversation`)
+        effectiveSessionId = undefined
+      }
     }
   } else if (sessionId) {
     console.log(`[Agent][${conversationId}] With resume: ${sessionId}`)
   }
   const startTime = Date.now()
 
-  // Requires SDK patch: resume parameter lets CC restore history from disk
-  // Native SDK V2 Session doesn't support resume parameter
   if (effectiveSessionId) {
     sdkOptions.resume = effectiveSessionId
   }
@@ -1316,7 +1359,13 @@ async function getOrCreateV2SessionInner(
   sessionsUnderCreation.add(conversationId)
   let session: V2SDKSession
   try {
-    session = (await createSession(sdkOptions)) as unknown as V2SDKSession
+    try {
+      session = (await createSession(sdkOptions)) as unknown as V2SDKSession
+    } catch (error) {
+      if (!isNativeSessionResumeError(error)) throw error
+      await recoverNativeSession(error)
+      session = (await createSession(sdkOptions)) as unknown as V2SDKSession
+    }
   } finally {
     sessionsUnderCreation.delete(conversationId)
   }
@@ -1343,6 +1392,7 @@ async function getOrCreateV2SessionInner(
 
   // Keep the credential snapshot's version, even if config changed during creation.
   v2Sessions.set(conversationId, {
+    engineId,
     session,
     spaceId,
     conversationId,
@@ -1366,6 +1416,10 @@ async function getOrCreateV2SessionInner(
     throw new Error('The engine session ended during initialization')
   }
 
+  if (typeof sdkOptions.engineHandoffContent === 'string' && sdkOptions.engineHandoffContent) {
+    pendingEngineHandoffs.set(session, sdkOptions.engineHandoffContent)
+  }
+
   // Start cleanup if not already running
   startSessionCleanup()
 
@@ -1373,7 +1427,10 @@ async function getOrCreateV2SessionInner(
   // app chat). Automation runs drive their own processStream() and pass none, so
   // nothing competes for the stream.
   if (consumerOptions) {
-    const consumer = startConsumer(session, { spaceId, conversationId, ...consumerOptions })
+    const consumer = startConsumer(session, {
+      spaceId, conversationId, ...consumerOptions, engineId,
+      sink: bindSinkToEngine(consumerOptions.sink, engineId),
+    })
     consumers.set(conversationId, consumer)
     console.log(`[Agent][${conversationId}] Persistent consumer started`)
   }
@@ -1405,7 +1462,10 @@ export async function ensureSessionWarm(
 
   const workDir = getWorkingDir(spaceId)
   const conversation = getConversation(spaceId, conversationId)
-  const sessionId = conversation?.sessionId
+  if (!conversation) return
+  const engineId = await resolveConversationEngine(conversation, getSessionEngineId(conversationId), isSessionBusy(conversationId))
+  const continuation = await prepareConversationContinuation(spaceId, conversationId, conversation, engineId)
+  const sessionId = continuation.resumeSessionId
   const electronPath = getHeadlessElectronPath()
 
   // The conversation's pinned account, or the global selection when it has no
@@ -1418,7 +1478,7 @@ export async function ensureSessionWarm(
   // Resolve credentials for SDK (handles OpenAI compat router for non-Anthropic providers).
   // The conversation's own level, as the first send will resolve it.
   const pickedEffort = pickReasoningEffort(conversation?.reasoningEffort)
-  const resolvedCredentials = await resolveCredentialsForSdk(credentials, pickedEffort)
+  const resolvedCredentials = await resolveCredentialsForSdk(credentials, pickedEffort, engineId)
 
   // Creation-time MCP servers: assembled lazily at actual session creation
   // (must match sendMessage exactly to avoid a session rebuild on the first message).
@@ -1445,6 +1505,7 @@ export async function ensureSessionWarm(
 
   // Build SDK options using shared configuration
   const sdkOptions = await buildUserSessionSdkOptions({
+    engineId,
     // Must match send-message.ts: a warmed session is reused for the first
     // turn, so deriving this differently there would hand that turn a process
     // whose credentials disagree with its tools.
@@ -1463,6 +1524,9 @@ export async function ensureSessionWarm(
     memoryGuard: spaceMemory?.guard,
   })
 
+  sdkOptions.strictNativeResume = continuation.strictNativeResume
+  if (continuation.engineHandoffContent) sdkOptions.engineHandoffContent = continuation.engineHandoffContent
+
   applySessionReasoningEffort(sdkOptions, resolvedCredentials.capabilities, pickedEffort)
 
   try {
@@ -1471,12 +1535,17 @@ export async function ensureSessionWarm(
       {
         displayModel: resolvedCredentials.displayModel,
         contextWindow: resolvedCredentials.capabilities?.contextWindow,
-        sink: createConversationSink(spaceId, conversationId),
+        sink: createConversationSink(spaceId, conversationId, continuation.engineState),
       },
       resolvedKbIds,
       buildMcpServers,
       resolveKnowledgeBases,
-      { creationContext: spaceMemory?.contextKey }
+      {
+        creationContext: spaceMemory?.contextKey,
+        recoverNativeSession: continuation.strictNativeResume ? async () => (await prepareConversationContinuation(
+          spaceId, conversationId, conversation, engineId, { forceHandoff: true }
+        )).engineHandoffContent ?? '' : undefined,
+      }
     )
 
     // Ensure consumer's displayModel is up-to-date (same as sendMessage)
@@ -1494,6 +1563,7 @@ export async function ensureSessionWarm(
 
       // Send session-info to renderer (same format as system:init message)
       emitAgentEvent('agent:session-info', spaceId, conversationId, {
+        engineId,
         slashCommands,
         skills: [],  // Let frontend/later logic handle classification
         agents: []   // Not available from supportedCommands
@@ -2068,4 +2138,9 @@ export function handleMcpAppsChange(spaceId: string | null): void {
   } else {
     invalidateSessionsForSpace(spaceId)
   }
+}
+
+/** The resident session's engine, including while a later preference waits for a safe boundary. */
+export function getSessionEngineId(conversationId: string): EngineId | undefined {
+  return v2Sessions.get(conversationId)?.engineId
 }

@@ -1,3 +1,4 @@
+import { isEngineId } from '../../../../shared/types/engine'
 /**
  * Goals held for conversations whose engine session has no id of its own yet.
  *
@@ -34,7 +35,7 @@ export function setGoalDraft(conversationId: string, goal: Goal | null): void {
 export function applyGoalDraft(sdkOptions: Record<string, unknown>, conversationId: string): void {
   const draft = drafts.get(conversationId)
   if (!draft) return
-  if (getEngineCapabilities()?.features.goal !== true) {
+  if (getEngineCapabilities(isEngineId(sdkOptions.engineId) ? sdkOptions.engineId : undefined)?.features.goal !== true) {
     console.warn(`[Agent][${conversationId}] Goal draft not seeded: the active engine keeps no goals`)
     return
   }

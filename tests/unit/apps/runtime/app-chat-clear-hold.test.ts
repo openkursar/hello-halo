@@ -147,7 +147,15 @@ vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   appChatRunId: (conversationId: string, appId: string) => conversationId === `app-chat:${appId}` ? 'chat' : `chat-${conversationId.slice(`app-chat:${appId}:`.length).replace(/:/g, '-')}`,
   legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy-file:${appId}:${runId}`,
 }))
+vi.mock('../../../../src/main/apps/runtime/engine-selection', () => ({
+  resolveAppSessionEngine: async (selection: { engineId?: string }) => selection.engineId ?? 'halo',
+  prepareAppEngineSession: (options: { state: { sessionId?: string }; legacySessionId?: string }) => ({ resumeSessionId: options.state.sessionId ?? options.legacySessionId }),
+}))
+
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
+  saveChatEngineRouting: (_space: string, _app: string, _run: string, engineId: string, state: any = {}) => state.sessionId || state.binding || state.routingEngine ? state : { routingEngine: engineId },
+  loadChatEngineState: () => ({ sessionId: 'original-sdk-session' }),
+  saveChatEngineBinding: vi.fn(() => true),
   copySessionJsonl,
   loadChatSessionId: vi.fn(() => 'original-sdk-session'),
   deleteChatSessionId: vi.fn(),

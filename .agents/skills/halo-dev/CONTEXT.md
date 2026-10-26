@@ -7,9 +7,13 @@
 
 ### Vision & Positioning
 
-> Turn Claude Code — a "DOS-era AI" — into a "Windows-era AI companion"
+> A local-first AI companion with a complete default experience and optional execution engines
 
-Halo = Claude Code SDK capabilities + ChatGPT-level UI/UX
+Halo uses Halo SDK by default. Claude Code is an optional external installation,
+discovered locally or downloaded explicitly; it does not ship inside the app.
+Each session owns its engine. The global setting is a default for new sessions;
+digital humans may override it in Advanced settings. Existing sessions retain
+their engine until an explicit safe transition, without restarting the app.
 
 **Core value**: Wrap complex technical concepts (Agent Loop / CLI / tool calling) into an intuitive human interaction model. Every UI surface must feel polished, responsive, and production-ready.
 

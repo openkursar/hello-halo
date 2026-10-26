@@ -14,7 +14,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/mcp-manager', () => ({ broadcastMcpStatus: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/mcp-probe', () => ({ probeUnhealthyServers: vi.fn() }))
-vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ getActiveEngine: () => 'anthropic' }))
+vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ getActiveEngine: () => 'anthropic', getDefaultEngine: () => 'anthropic' }))
 vi.mock('../../../../src/main/services/agent/helpers', () => ({ getHeadlessElectronPath: () => 'C:\\Program Files\\Halo\\Halo.exe' }))
 vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
 vi.mock('../../../../src/main/foundation/logging', () => ({ isDeveloperMode: () => false }))

@@ -105,6 +105,8 @@ import { registerImSessionHandlers } from '../ipc/im-sessions'
 import { registerStoreHandlers } from '../ipc/store'
 import { registerCliConfigHandlers } from '../ipc/cli-config'
 import { registerModelCapabilitiesHandlers } from '../ipc/model-capabilities'
+import { registerCcRuntimeHandlers } from '../ipc/cc-runtime'
+import { shutdownCcRuntime } from '../services/cc-runtime'
 import { registerWeixinIlinkHandlers } from '../ipc/weixin-ilink'
 import { registerTlonHandlers } from '../ipc/tlon'
 import { registerGitHandlers } from '../ipc/git'
@@ -1620,6 +1622,7 @@ export function initializeExtendedServices(): void {
 
   // Model Capabilities: IPC handlers for model capability lookups (preset + user overrides)
   registerModelCapabilitiesHandlers()
+  registerCcRuntimeHandlers()
 
   // WeChat iLink Bot: QR code login + token management IPC handlers
   registerWeixinIlinkHandlers()
@@ -1690,6 +1693,7 @@ export function initializeExtendedServices(): void {
  */
 export async function cleanupExtendedServices(): Promise<void> {
   let cacheShutdown: Promise<void> | null = null
+  const ccShutdown = shutdownCcRuntime().catch(error => console.error('[Bootstrap] CC runtime shutdown failed:', error))
   try {
     // Space: Flush any throttled activity timestamps to disk before teardown
     flushSpaceActivity()
@@ -1750,7 +1754,7 @@ export async function cleanupExtendedServices(): Promise<void> {
       cacheShutdown = cleanupAllCaches()
       void cacheShutdown.catch(error => console.error('[Bootstrap] Artifact cache shutdown failed:', error))
     }
-    await Promise.all([runtimeShutdown, sdkShutdown])
+    await Promise.all([runtimeShutdown, sdkShutdown, ccShutdown])
     await shutdownAppManager().catch(err => console.error('[Bootstrap] AppManager shutdown error:', err))
 
     // Analytics: Flush pending events (including anything buffered from the

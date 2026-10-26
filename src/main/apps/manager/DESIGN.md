@@ -134,6 +134,19 @@ space-level handlers can ignore it.
 
 ### 2.6b Applying an App's Own Config Changes to Its Chat
 
+An optional `userOverrides.engineId` is the digital human's explicit engine
+preference. Only automation apps accept a recognized engine id; clearing it
+restores the default for new sessions. This is a plain override write, with no
+runtime event or forced interruption. Runtime owns the next safe session handoff,
+and a running task retains its original engine.
+
+Engine/account/model writes from IPC and HTTP share `app.controller` preflight:
+the selected engine must accept the account's actual model protocol. It reads
+local source metadata without refreshing credentials, then rejects concurrent
+selection changes before saving. The manager also checks known incompatible
+explicit pairs with the shared protocol policy. Unrelated preferences remain
+editable even when an existing engine/account selection needs repair.
+
 **Decision**: The manager emits no event for this. Changing permissions, user
 config, or a spec field is a plain store write.
 

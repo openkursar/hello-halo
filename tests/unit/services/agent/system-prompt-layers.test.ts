@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const engine = vi.hoisted(() => ({ id: 'dsh' as string | null }))
 
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
-  getActiveEngine: () => engine.id,
+  getDefaultEngine: () => engine.id, resolveDefaultEngine: async () => engine.id,
 }))
 
 import { buildSystemPrompt } from '../../../../src/main/services/agent/system-prompt'

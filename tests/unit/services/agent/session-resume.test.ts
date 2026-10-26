@@ -9,7 +9,7 @@ const { createSession, getActiveEngine, paths } = vi.hoisted(() => ({
   getActiveEngine: vi.fn(() => 'halo'),
   paths: { userData: '', home: '' },
 }))
-vi.mock('electron', () => ({ app: { getPath: vi.fn(() => paths.userData), getVersion: vi.fn(() => '0.0.0'), isPackaged: false } }))
+vi.mock('electron', () => ({ app: { getPath: vi.fn(() => paths.userData), getVersion: vi.fn(() => '0.0.0'), getAppPath: vi.fn(() => '/tmp/halo-resume-app'), isPackaged: false } }))
 vi.mock('os', async importOriginal => {
   const actual = await importOriginal<typeof import('os')>()
   return { ...actual, default: { ...actual, homedir: () => paths.home } }

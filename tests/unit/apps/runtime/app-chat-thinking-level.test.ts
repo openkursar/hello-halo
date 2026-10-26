@@ -139,7 +139,15 @@ vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   appChatRunId: (conversationId: string, appId: string) => conversationId === `app-chat:${appId}` ? 'chat' : `chat-${conversationId.slice(`app-chat:${appId}:`.length).replace(/:/g, '-')}`,
   legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy-file:${appId}:${runId}`,
 }))
+vi.mock('../../../../src/main/apps/runtime/engine-selection', () => ({
+  resolveAppSessionEngine: async (selection: { engineId?: string }) => selection.engineId ?? 'halo',
+  prepareAppEngineSession: (options: { state: { sessionId?: string }; legacySessionId?: string }) => ({ resumeSessionId: options.state.sessionId ?? options.legacySessionId }),
+}))
+
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
+  saveChatEngineRouting: (_space: string, _app: string, _run: string, engineId: string, state: any = {}) => state.sessionId || state.binding || state.routingEngine ? state : { routingEngine: engineId },
+  loadChatEngineState: () => ({ sessionId: 'original-sdk-session' }),
+  saveChatEngineBinding: vi.fn(() => true),
   copySessionJsonl,
   loadChatSessionId: vi.fn(() => 'original-sdk-session'),
   deleteChatSessionId: vi.fn(),
@@ -195,5 +203,15 @@ describe('the digital human’s own thinking level', () => {
   it('leaves the send’s level or the model’s configured effort when it has none', async () => {
     expect(await pickedFor(imTurn)).toBeUndefined()
     expect(await pickedFor({ reasoningEffort: 'low' })).toBe('low')
+  })
+
+  it.each([
+    ['native', {}],
+    ['IM', imTurn],
+    ['team', { conversationId: 'app-chat:person:team:office:task', teamContext: { teamId: 'office', epochId: 'task', kind: 'message', fromAppId: 'teammate' } }],
+  ] as const)('passes the digital human’s engine through its %s entry', async (_entry, turn) => {
+    levels.overrides = { engineId: 'anthropic', chatReasoningEffort: 'high' }
+    await pickedFor(turn)
+    expect(vi.mocked(resolveCredentialsForSdk).mock.calls[0][2]).toBe('anthropic')
   })
 })

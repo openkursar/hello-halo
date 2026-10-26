@@ -68,6 +68,7 @@ const { registry, createLocalSession } = vi.hoisted(() => {
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   activeSessions: new Map(),
   hasPendingSessionInput: () => false,
+  getSessionEngineId: vi.fn(() => undefined),
   v2Sessions,
   closeV2Session,
   acquireV2Session: vi.fn(),
@@ -153,7 +154,15 @@ vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   appChatRunId: (conversationId: string, appId: string) => conversationId === `app-chat:${appId}` ? 'chat' : `chat-${conversationId.slice(`app-chat:${appId}:`.length).replace(/:/g, '-')}`,
   legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy-file:${appId}:${runId}`,
 }))
+vi.mock('../../../../src/main/apps/runtime/engine-selection', () => ({
+  resolveAppSessionEngine: async (selection: { engineId?: string }) => selection.engineId ?? 'halo',
+  prepareAppEngineSession: (options: { state: { sessionId?: string }; legacySessionId?: string }) => ({ resumeSessionId: options.state.sessionId ?? options.legacySessionId }),
+}))
+
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
+  saveChatEngineRouting: (_space: string, _app: string, _run: string, engineId: string, state: any = {}) => state.sessionId || state.binding || state.routingEngine ? state : { routingEngine: engineId },
+  loadChatEngineState: vi.fn(() => ({ sessionId: 'original-sdk-session' })),
+  saveChatEngineBinding: vi.fn(() => true),
   copySessionJsonl,
   loadChatSessionId: vi.fn(() => 'original-sdk-session'),
   deleteChatSessionId: vi.fn(),
@@ -179,7 +188,10 @@ import {
   clearAppChat,
   forkNativeChatSession,
   getAppChatConversationId,
+  loadChatEngineMetadata,
 } from '../../../../src/main/apps/runtime/app-chat'
+import { loadChatEngineState } from '../../../../src/main/apps/runtime/session-store'
+import { getSessionEngineId } from '../../../../src/main/services/agent/session-manager'
 import { filterMcpServersByPolicy } from '../../../../src/main/apps/runtime/capability-policy'
 import type { GuestPolicy } from '../../../../src/shared/types/im-channel'
 
@@ -192,6 +204,21 @@ const buildGuestMcpServers = (
 
 const APP = 'target-app'
 const OTHER = 'other-app'
+
+describe('cold digital-human engine metadata', () => {
+  it('uses the saved native owner rather than the application default', () => {
+    const binding = { version: 1 as const, engineId: 'anthropic' as const, sessionId: 'cc-native' }
+    vi.mocked(loadChatEngineState).mockReturnValueOnce({ sessionId: binding.sessionId, binding })
+    expect(loadChatEngineMetadata('/space', APP, `app-chat:${APP}`)).toEqual({ engineId: 'anthropic', engineBinding: binding })
+  })
+
+  it('reports the resident engine during a handoff before its binding is committed', () => {
+    const binding = { version: 1 as const, engineId: 'anthropic' as const, sessionId: 'cc-native' }
+    vi.mocked(loadChatEngineState).mockReturnValueOnce({ sessionId: binding.sessionId, binding })
+    vi.mocked(getSessionEngineId).mockReturnValueOnce('halo')
+    expect(loadChatEngineMetadata('/space', APP, `app-chat:${APP}`)).toEqual({ engineId: 'halo', engineBinding: binding })
+  })
+})
 
 describe('clearAppChat trust boundary', () => {
   beforeEach(() => {

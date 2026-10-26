@@ -6,7 +6,8 @@
 
 import { getAppManager, type InstalledApp } from '../manager'
 import { getApiCredentialsForSelection } from '../../services/agent/helpers'
-import { resolveCredentialsForSdk } from '../../services/agent/sdk-config'
+import { resolveCredentialsForSdk } from '../../services/agent'
+import { resolveAppSessionEngine } from './engine-selection'
 import { getSpace } from '../../services/space.service'
 import { resolveMemoryLayout, type MemoryCallerScope } from '../../platform/memory'
 import type { MemoryStatus } from '../../../shared/types/memory'
@@ -26,7 +27,16 @@ export function appConsolidationInputs(app: InstalledApp, selfId?: string): AppC
   return {
     appName: app.spec.name,
     settings: appMemorySettings(app),
-    resolveCredentials: async () => resolveCredentialsForSdk(await getApiCredentialsForSelection(app.userOverrides)),
+    resolveCredentials: async () => {
+      const current = getAppManager()?.getApp(app.id)
+      if (!current || current.status === 'uninstalled') {
+        console.warn('[AppMemory] Consolidation refused for an unavailable digital human', { appId: app.id })
+        throw new Error('The digital human is no longer available for memory consolidation')
+      }
+      const selection = { ...current.userOverrides }
+      const engineId = await resolveAppSessionEngine({ engineId: selection.engineId })
+      return resolveCredentialsForSdk(await getApiCredentialsForSelection(selection), undefined, engineId)
+    },
     isBusy: () => hasOtherAppExecution(app.id, selfId),
   }
 }

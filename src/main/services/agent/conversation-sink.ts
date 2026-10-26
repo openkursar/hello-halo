@@ -9,6 +9,8 @@
  * to hold inline.
  */
 
+import type { EngineId } from '../../../shared/types/engine'
+import type { EngineSessionState } from '../../../shared/types/engine-session'
 import type { Thought } from './types'
 import type { StreamResult } from './stream-processor'
 import type { TurnSink } from './turn-sink'
@@ -17,6 +19,8 @@ import {
   updateLastMessage,
   removeEmptyReplyPlaceholder,
   saveSessionId,
+  getConversationEngineState,
+  saveConversationEngineBinding,
   getConversation
 } from '../conversation.service'
 import { notifyTaskComplete } from '../notification.service'
@@ -30,7 +34,15 @@ import type { KBSource } from '../../../shared/types/tlon'
  * Stateless across turns: every hook derives what it needs from the store, so
  * the same sink instance can serve a session that is rebuilt underneath it.
  */
-export function createConversationSink(spaceId: string, conversationId: string): TurnSink {
+export function createConversationSink(spaceId: string, conversationId: string, preparedState?: EngineSessionState): TurnSink {
+  let expected = preparedState ?? getConversationEngineState(spaceId, conversationId) ?? {}
+  const commit = (sessionId: string, engineId?: EngineId): boolean => {
+    if (!engineId) { saveSessionId(spaceId, conversationId, sessionId); return true }
+    const binding = { version: 1 as const, engineId, sessionId }
+    if (!saveConversationEngineBinding(spaceId, conversationId, binding, expected)) return false
+    expected = { sessionId, binding }
+    return true
+  }
   return {
     onTurnStart() {
       // Placeholder for the assistant reply, created uniformly for user-initiated
@@ -43,7 +55,7 @@ export function createConversationSink(spaceId: string, conversationId: string):
     },
 
     onTurnComplete(result: StreamResult) {
-      persistTurnResult(spaceId, conversationId, result)
+      persistTurnResult(spaceId, conversationId, result, commit)
 
       const conversation = getConversation(spaceId, conversationId)
       notifyTaskComplete(conversation?.title || 'Conversation')
@@ -51,14 +63,14 @@ export function createConversationSink(spaceId: string, conversationId: string):
 
     onConsumerStopped(partial) {
       if (partial) {
-        persistTurnResult(spaceId, conversationId, partial, 'Chat session ended before the reply completed.')
+        persistTurnResult(spaceId, conversationId, partial, commit, 'Chat session ended before the reply completed.')
       }
     },
 
     onTurnError(error: Error, turnStarted: boolean, partial?: StreamResult) {
       // A failure before init has no placeholder and must not overwrite the previous reply.
       if (turnStarted && partial) {
-        persistTurnResult(spaceId, conversationId, partial, error.message)
+        persistTurnResult(spaceId, conversationId, partial, commit, error.message)
       } else if (turnStarted) {
         updateLastMessage(spaceId, conversationId, { error: error.message })
       } else {
@@ -80,13 +92,14 @@ function persistTurnResult(
   spaceId: string,
   conversationId: string,
   result: StreamResult,
+  commit: (sessionId: string, engineId?: EngineId) => boolean,
   error?: string,
 ): void {
   const { finalContent, hasMeaningfulContent, thoughts, tokenUsage, capturedSessionId, hasErrorThought, errorThought } = result
 
   // Save session ID for future resumption
   if (capturedSessionId) {
-    saveSessionId(spaceId, conversationId, capturedSessionId)
+    if (!commit(capturedSessionId, result.engineId)) return
   }
 
   // Never persist the empty-response repair placeholder as message content —

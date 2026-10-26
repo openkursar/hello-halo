@@ -1,3 +1,4 @@
+vi.mock('../../../src/main/services/agent', () => ({ getDefaultEngine: () => 'halo' }))
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
@@ -18,6 +19,7 @@ vi.mock('../../../src/main/controllers/config.controller', async (importOriginal
 vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(),
   saveConfig: vi.fn(),
+  recordAgentEngineChoice: vi.fn(),
   isConfigUnreadable: vi.fn(() => false),
   getConfigReadFailureCount: vi.fn(() => 0),
   getConfigPath: vi.fn(() => '/home/user/.halo/config.json')
@@ -70,6 +72,7 @@ import {
   getConfig,
   getConfigReadFailureCount,
   isConfigUnreadable,
+  recordAgentEngineChoice,
   saveConfig
 } from '../../../src/main/foundation/config.service'
 import { getAISourceManager } from '../../../src/main/services/ai-sources'
@@ -211,5 +214,46 @@ describe('config IPC model fetching', () => {
       'sk-test-placeholder',
       'https://example.com/v1'
     )
+  })
+
+  it('records an explicit engine choice even when the saved value stays Halo', async () => {
+    const live = { agent: { maxTurns: 50, sdkEngine: 'halo' } }
+    vi.mocked(getConfig).mockReturnValue(live as any)
+    vi.mocked(saveConfig).mockReturnValueOnce(live as any)
+    vi.mocked(recordAgentEngineChoice).mockClear()
+    registerConfigHandlers()
+    const handlers = registerRawRpcHandlersMock.mock.calls[0][1]
+    await expect(handlers.setConfig({ agent: { sdkEngine: 'halo' } })).resolves.toMatchObject({ success: true })
+    expect(saveConfig).toHaveBeenLastCalledWith({ agent: { sdkEngine: 'halo' } })
+    expect(recordAgentEngineChoice).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not overwrite the runtime manager selection with a stale desktop snapshot', async () => {
+    const runtime = { selectedPath: '/checked/claude', sourceId: 'custom', installVersion: '2.1.310' }
+    const live = { agent: { maxTurns: 50, sdkEngine: 'halo', ccRuntime: runtime } }
+    vi.mocked(getConfig).mockReturnValue(live as any)
+    vi.mocked(saveConfig).mockImplementationOnce(patch => ({ ...live, agent: { ...live.agent, ...patch.agent } } as any))
+    registerConfigHandlers()
+    const handlers = registerRawRpcHandlersMock.mock.calls[0][1]
+    const result = await handlers.setConfig({ agent: { maxTurns: 80, ccRuntime: { selectedPath: '/stale/claude' } } })
+    expect(saveConfig).toHaveBeenLastCalledWith({ agent: { maxTurns: 80 } })
+    expect(result).toMatchObject({ success: true, data: { agent: { maxTurns: 80, ccRuntime: runtime } } })
+  })
+
+  it.each(['throws', 'unreadable'])('does not record an engine intent when saving %s', async failure => {
+    const live = { agent: { maxTurns: 50, sdkEngine: 'halo' } }
+    vi.mocked(getConfig).mockReturnValue(live as any)
+    vi.mocked(recordAgentEngineChoice).mockClear()
+    if (failure === 'throws') vi.mocked(saveConfig).mockImplementationOnce(() => { throw new Error('disk full') })
+    else {
+      vi.mocked(saveConfig).mockReturnValueOnce(live as any)
+      vi.mocked(isConfigUnreadable).mockReturnValue(true)
+    }
+    try {
+      registerConfigHandlers()
+      const handlers = registerRawRpcHandlersMock.mock.calls[0][1]
+      await expect(handlers.setConfig({ agent: { sdkEngine: 'halo' } })).resolves.toMatchObject({ success: false })
+      expect(recordAgentEngineChoice).not.toHaveBeenCalled()
+    } finally { vi.mocked(isConfigUnreadable).mockReturnValue(false) }
   })
 })

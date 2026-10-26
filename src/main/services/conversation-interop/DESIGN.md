@@ -32,15 +32,14 @@ engine already exposes; busyness is the engine's own check, exported for it:
 - **D16 persistence shape** — `sendMessage`/`injectMessage` always persist
   their input as `role:'user'` with no override. Rather than add one, the
   dispatch hook lets `sendMessage` run normally (the model must still receive
-  the real text) and immediately rewrites the message it just wrote via the
-  already-exported `getConversation`/`updateConversation` (in
+  the real text) and rewrites the exact record identified by its internal
+  recording callback via `getConversation`/`updateMessageById` (in
   `conversation.service.ts`, not `services/agent`). See §2.
 
-The one change that WAS made outside this module: `conversation.service.ts`'s
-`Message`/`Conversation` interfaces are now exported (previously internal),
-and `Message.metadata` gained three optional fields
-(`fromConversationId`/`fromConversationTitle`/`summary`) for D16. Both are
-additive, backward-compatible, and outside `services/agent`.
+`conversation.service.ts` exposes `Message`/`Conversation` and optional
+provenance metadata (`fromConversationId`/`fromConversationTitle`/`summary`).
+The agent's recording callback and history exclusions are a second internal
+`sendMessage` argument; HTTP/IPC request bodies cannot supply them.
 
 ## 2. Model input and transcript provenance
 
@@ -49,9 +48,11 @@ original sender content/provenance the transcript keeps. A same-permission batch
 becomes one model input while remaining several original transcript records.
 
 The built-in space source starts ordinary `sendMessage` with the combined input.
-That entry point persists synchronously before its first await. The source locates
-that exact message by id, rewrites it with the first original message, then appends
-the remaining originals before awaiting acceptance. Its writes are id-keyed; an
+That entry point may await engine preparation before persisting. An internal
+`onUserMessageRecorded` callback supplies the exact stored ID synchronously after
+the write and before history handoff. The source rewrites only that ID with the
+first unrecorded original and appends the other new originals. Their IDs and the
+already-recorded redelivery IDs are excluded from that turn's history handoff. Its writes are id-keyed; an
 assistant placeholder inserted concurrently is never overwritten by an old snapshot.
 
 Live delivery first obtains synchronous engine acceptance, then records each
@@ -81,6 +82,14 @@ record it already has; it may join the next turn or ride in a batch with a new
 message, but never opens a turn on its own (`canOpenTurn`), so no opener is
 written twice. When the stop withdrew a continuation nothing had started, no
 turn end follows; `onUserStopSettled` runs the turn-end bookkeeping instead.
+
+Digital-human recipients retain the locally generated input IDs with withdrawn
+mail. `getPendingConversationInputIds` projects these IDs from the existing
+mailbox, without a second pending registry. A handoff started by another entry
+omits those exact records until delivery; identical older messages remain.
+These IDs are local runtime metadata, never fields accepted from senders or
+carried in federation frames. Once the mailbox consumes or discards a delivery,
+the projection no longer includes it.
 
 ## 3. D9/D17, corrected twice under review
 
@@ -392,12 +401,12 @@ and a stale registration cannot remove its replacement. Sources must therefore
 resolve their own dependencies lazily. `disposeConversationInterop()` unregisters
 only what it registered.
 
-**Built-in chat source** (`chat-source.ts`). Moved over unchanged from the
-earlier code: `sendMessage` then an id-keyed rewrite of the persisted message
-(§2). One tightening: the rewritten message is located by index-then-content
-(`role:'user'` with exactly the turn input), where the cross-conversation path
-used to trust the captured index alone; a delivery it cannot locate is logged and
-left as a plain user message rather than patching whatever sits at that index.
+**Built-in chat source** (`chat-source.ts`). The internal recording callback from
+`sendMessage` identifies the persisted opener (§2); array position and text never
+identify it. A missing ID is logged without changing another record. Live
+withdrawal returns recipient-generated record IDs, including IDs retained from
+an earlier withdrawal. These IDs stay in the local mailbox and are excluded from
+neutral history until their current delivery is sent.
 `writeNotice` is `addMessage` with `source:'cross-conversation-notice'`; a notice
 that cannot be written is logged and never turns the send's answer into an error.
 

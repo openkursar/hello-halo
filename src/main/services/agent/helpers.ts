@@ -289,12 +289,15 @@ async function resolveSourceCredentials(
     console.warn(`[AgentService] Credential resolution refused: source ${sourceId} has no usable backend config`)
     throw new Error(`AI source "${sourceId}" is not configured or unavailable. Please configure it or login again.`)
   }
-  if (backendConfig.delegatedAuth) assertDelegatedAuthReady()
+  if (backendConfig.delegatedAuth) assertDelegatedAuthReady('anthropic')
 
   const provider = source.authType === 'oauth' || source.authType === 'delegated'
     ? 'oauth'
     : source.provider === 'anthropic' ? 'anthropic' : 'openai'
-  const effectiveModelId = resolveModelId(backendConfig.model || modelId || source.model)
+  const backendModel = backendConfig.model || modelId || source.model
+  const effectiveModelId = backendConfig.apiType === 'chat_completions' || backendConfig.apiType === 'responses'
+    ? backendModel
+    : resolveModelId(backendModel)
   const modelOption = source.availableModels?.find(model => model.id === effectiveModelId)
 
   return {

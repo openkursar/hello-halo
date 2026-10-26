@@ -15,7 +15,7 @@
  *   - Server-rendered strings (office/inviter names) are HTML-escaped.
  */
 
-import { loadProductConfig } from '../foundation/product-config'
+import { getDeepLinkScheme, loadProductConfig } from '../foundation/product-config'
 
 function escapeHtml(value: string): string {
   return value
@@ -125,7 +125,7 @@ export function getInvitePage(ctx: InvitePageContext): string {
       // Hand off into the installed app. The deep link is built from THIS page's
       // own query string, so the invite secret never appears in the page body.
       var params = new URLSearchParams(location.search)
-      var deepLink = 'halo://join?office=' + encodeURIComponent(params.get('office') || '')
+      var deepLink = ${JSON.stringify(getDeepLinkScheme() + '://join?office=')} + encodeURIComponent(params.get('office') || '')
         + '&invite=' + encodeURIComponent(params.get('invite') || '')
         + '&server=' + encodeURIComponent(location.origin)
       var open = document.getElementById('open')

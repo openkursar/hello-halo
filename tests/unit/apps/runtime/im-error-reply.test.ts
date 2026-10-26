@@ -10,7 +10,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ getActiveEngine: () => 'anthropic' }))
+vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ getActiveEngine: () => 'anthropic', getDefaultEngine: () => 'anthropic' }))
 vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getHeadlessElectronPath: () => '/Applications/Halo.app/Contents/Frameworks/Halo Helper.app/Contents/MacOS/Halo Helper',
 }))

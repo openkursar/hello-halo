@@ -73,6 +73,10 @@ vi.mock('../../../../src/main/services/agent', () => ({
 import { createDigitalHumanConversationSource } from '../../../../src/main/apps/runtime/conversation-source'
 import { COLLAB_OFF_REASON } from '../../../../src/main/apps/runtime/conversation-collab'
 import { buildImSessionKey, buildLocalSessionKey, buildTeamSessionKey, getAppChatConversationId } from '../../../../src/shared/apps/im-keys'
+import { registerConversationSource } from '../../../../src/main/services/conversation-interop/source'
+import { deliverToConversation, holdConversationAfterStop, releaseConversationTurn, drainConversationTurn, getPendingConversationInputIds } from '../../../../src/main/services/conversation-interop/delivery'
+import { openSessionWriter, readChatHandoffHistory } from '../../../../src/main/apps/runtime/session-store'
+import { serializeEngineHandoff } from '../../../../src/main/services/agent/engine-handoff'
 
 const SPACE = 'space-1'
 const T0 = Date.UTC(2026, 0, 1)
@@ -101,6 +105,7 @@ beforeEach(() => {
   s.transcripts.clear()
   s.agentListener = null
   h.sendAppChatMessage.mockReset()
+  h.injectIntoAppChatBatch.mockReset().mockReturnValue(true)
   h.agentDispose.mockClear()
   h.loadChatMessagesForConversation.mockReset()
 })
@@ -256,6 +261,74 @@ describe('dispatch', () => {
     record: { content: 'the words', source: 'cross-conversation' as const, metadata: { fromConversationId: 'c-1', fromConversationTitle: 'Notes', summary: 's', forwardDepth: 1 } },
   }
   const key = 'app-chat:app-1:local:direct:s1'
+
+  it('keeps only receiver-generated IDs through withdrawal and excludes that delivery without removing identical older history', async () => {
+    const receiver = getAppChatConversationId('app-1')
+    const sender = getAppChatConversationId('app-2')
+    h.state.records = [record('app-1', 'native', 'default', { messageCount: 3 }), record('app-2', 'native', 'default', { messageCount: 1 })]
+    h.state.generating.add(receiver)
+    h.state.sessions.add(receiver)
+    const registration = registerConversationSource(source)
+    const root = globalThis.__HALO_TEST_DIR__
+    const writer = openSessionWriter(root, 'app-1', 'chat')
+    const older = writer.writeTrigger('IDENTICAL_WORDS')!
+    writer.writeTrigger('KEEP_THE_OLDER_DECISION')
+    let currentId = ''
+    let withdraw = () => {}
+    h.injectIntoAppChatBatch.mockImplementation((_conversationId, messages, callback) => {
+      const inputs = messages as Array<{ recorded: { content: string }; recordedInputIds?: string[] }>
+      expect(inputs[0].recordedInputIds).toBeUndefined()
+      currentId = writer.writeTrigger(inputs[0].recorded.content)!.inputId
+      withdraw = () => (callback as (indexes: number[], ids: string[][]) => void)([0], [[currentId]])
+      return true
+    })
+    let handoff = ''
+    h.sendAppChatMessage.mockImplementation(async request => {
+      expect(request.recordedInputIds).toEqual([currentId])
+      expect(request.recordedMessages).toEqual([expect.objectContaining({ content: 'NEW_ARRIVAL' })])
+      const history = readChatHandoffHistory(root, 'app-1', 'chat', { excludeInputIds: request.recordedInputIds })
+      expect(history.messages.filter(item => item.content === 'IDENTICAL_WORDS')).toHaveLength(1)
+      expect(history.messages.some(item => item.content === 'KEEP_THE_OLDER_DECISION')).toBe(true)
+      handoff = serializeEngineHandoff({ ...history, sourceEngine: 'halo', targetEngine: 'codex', historyTruncated: history.truncated }).text
+      request.onMessageAccepted()
+    })
+    try {
+      const malicious = { spaceId: SPACE, fromConversationId: sender, toConversationId: receiver, message: 'IDENTICAL_WORDS', summary: 's', inputRecorded: true, recordedInputIds: [older.inputId] }
+      expect(getPendingConversationInputIds(receiver)).toEqual([])
+      expect(await deliverToConversation(malicious)).toMatchObject({ ok: true })
+      expect(currentId).not.toBe(older.inputId)
+      holdConversationAfterStop(receiver)
+      withdraw()
+      expect(getPendingConversationInputIds(receiver)).toEqual([currentId])
+      expect(getPendingConversationInputIds(sender)).toEqual([])
+      const beforeRedelivery = readChatHandoffHistory(root, 'app-1', 'chat', { excludeInputIds: getPendingConversationInputIds(receiver) })
+      expect(beforeRedelivery.messages.filter(item => item.content === 'IDENTICAL_WORDS')).toHaveLength(1)
+      h.state.generating.delete(receiver)
+      await releaseConversationTurn(receiver)
+      drainConversationTurn(receiver)
+      expect(h.sendAppChatMessage).not.toHaveBeenCalled()
+      expect(await deliverToConversation({ spaceId: SPACE, fromConversationId: sender, toConversationId: receiver, message: 'NEW_ARRIVAL', summary: 's' })).toMatchObject({ ok: true })
+      await vi.waitFor(() => expect(h.sendAppChatMessage).toHaveBeenCalledTimes(1))
+      expect(getPendingConversationInputIds(receiver)).toEqual([])
+      expect(handoff.match(/IDENTICAL_WORDS/g)).toHaveLength(1)
+      expect(handoff).not.toContain('NEW_ARRIVAL')
+      expect(h.sendAppChatMessage.mock.calls[0][0].message.match(/IDENTICAL_WORDS/g)).toHaveLength(1)
+      expect(readChatHandoffHistory(root, 'app-1', 'chat').messages.filter(item => item.content === 'IDENTICAL_WORDS')).toHaveLength(2)
+    } finally {
+      await releaseConversationTurn(receiver)
+      registration.dispose()
+    }
+  })
+
+  it('passes prior receiver IDs to another live attempt and returns IDs in their original batch positions', () => {
+    const withdrawn = vi.fn()
+    source.deliverMidTurn!(SPACE, key, [{ ...message, inputRecorded: true, recordedInputIds: ['receiver-input'] }, message], withdrawn)
+    const inputs = h.injectIntoAppChatBatch.mock.calls[0][1] as Array<{ recordedInputIds?: string[] }>
+    expect(inputs[0].recordedInputIds).toEqual(['receiver-input'])
+    const callback = h.injectIntoAppChatBatch.mock.calls[0][2] as (indexes: number[], ids: string[][]) => void
+    callback([0, 1], [['receiver-input'], ['receiver-input-2']])
+    expect(withdrawn).toHaveBeenCalledWith([['receiver-input'], ['receiver-input-2']])
+  })
 
   it('runs an ordinary chat turn with the framed text, recording the sender\'s own words with provenance', async () => {
     h.sendAppChatMessage.mockImplementation(async (request: { onMessageAccepted: () => void }) => { request.onMessageAccepted() })

@@ -30,6 +30,7 @@ import { useTaskPanelStore } from '../../stores/taskPanel.store'
 import { MessageList } from './MessageList'
 import type { MessageListHandle, MessageListProps } from './MessageList'
 import { InputArea } from './InputArea'
+import { EngineRecoveryNotice } from '../settings/EngineRecoveryNotice'
 import { useConversationMentionCandidates } from './cross-conversation'
 import { TeamCollabPanel } from './team-collab'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
@@ -42,6 +43,7 @@ import {
 } from '../onboarding/onboardingData'
 import { api } from '../../api'
 import { useConversationDetail } from '../../hooks/useConversationDetail'
+import { useConversationEngineId } from '../../hooks/useConversationEngine'
 import { useVisibleConversation } from '../../hooks/useVisibleConversation'
 import type { ImageAttachment, Thought } from '../../types'
 import type { SlashCommandItem } from '../../types/slash-command'
@@ -115,6 +117,8 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
   })
   const activeAppId = activeConversationId ? digitalHumanAppId(activeConversationId) : null
   const activeApp = useAppsStore(s => activeAppId ? s.apps.find(app => app.id === activeAppId) : undefined)
+  const engineId = useConversationEngineId(activeConversationId, currentSpaceId, activeApp?.userOverrides.engineId)
+  const requestedEngine = useChatStore(state => activeConversationId ? state.conversationCache.get(activeConversationId)?.engineOverride : undefined)
   const activeAppName = activeApp ? resolveSpecI18n(activeApp.spec, getCurrentLanguage()).name || activeApp.id : undefined
   // The roster, not the conversation list: a digital human you have never
   // talked to has no conversation rows but still has to be selectable.
@@ -341,6 +345,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
     },
   } : undefined, [currentSpaceId, selectedAppId, digitalHumanOptions, digitalHumanSelectorLocked, clearAppChatSelection, selectAppChatConversation])
 
+  const composerEngineId = isGenerating ? engineId : (isDigitalHuman ? activeApp?.userOverrides.engineId : requestedEngine) ?? engineId
   const sendWithGoal = useCallback(
     (content: string, images: ImageAttachment[] | undefined, thinkingEnabled: boolean, goal: GoalInput, references?: ContentReference[]) =>
       sendMessage(content, images, thinkingEnabled, { goal, ...(references?.length ? { references } : {}) }),
@@ -348,6 +353,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
   )
   // Goals belong to space conversations; a digital human keeps none.
   const goalComposer = useGoalComposer({
+    engineId: composerEngineId,
     spaceId: currentSpaceId,
     conversationId: isDigitalHuman ? null : activeConversationId,
     draftKey: activeConversationId ?? undefined,
@@ -534,6 +540,8 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
   )
 
   const inputArea = (
+    <>
+    <EngineRecoveryNotice engineId={composerEngineId} />
     <InputArea
       key={activeConversationId ?? 'none'}
       onSend={handleSend}
@@ -555,6 +563,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
       goal={goalComposer}
       sendSlot={sendControls}
     />
+    </>
   )
 
   if (isFullTakeoverEmpty) {

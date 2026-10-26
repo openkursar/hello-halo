@@ -26,6 +26,7 @@ import {
   type ModelOption
 } from '../../types'
 import { ThinkingLevelControl } from './ThinkingLevelControl'
+import { ConversationEngineSection } from './ConversationEngineSelector'
 import {
   groupModels,
   ModelAvailabilityNotice,
@@ -70,6 +71,7 @@ function ModelList({ onDone }: { onDone: () => void }) {
   const { config, setConfig, navigate } = useAppStore()
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshStatus, setRefreshStatus] = useState<'success' | 'cached' | 'failed' | null>(null)
+  const spaceId = useChatStore(state => state.currentSpaceId)
   useFreshModelCatalogs(true)
 
   const aiSources = useAiSources()
@@ -254,6 +256,8 @@ function ModelList({ onDone }: { onDone: () => void }) {
               : t('Models refreshed successfully.')}
         </p>
       )}
+
+      {currentConversation && spaceId && <ConversationEngineSection key={currentConversation.id} conversation={currentConversation} spaceId={spaceId} />}
 
       {/* Footer: Add/Manage source + Refresh */}
       {aiSources.sources.length === 0 ? (
@@ -503,6 +507,8 @@ function resolveCardFacts(source: AISource | null | undefined, modelId: string |
 function CurrentModelCard({ onSwitch }: { onSwitch: () => void }) {
   const { t } = useTranslation()
   const navigate = useAppStore(state => state.navigate)
+  const conversation = useCurrentConversation()
+  const spaceId = useChatStore(state => state.currentSpaceId)
   const { aiSources, source, modelId, model, name } = useConversationModel()
   const { contextWindow, vision } = resolveCardFacts(source, modelId, model)
   // The card shows cost and offers that change over time, like the list.
@@ -566,6 +572,7 @@ function CurrentModelCard({ onSwitch }: { onSwitch: () => void }) {
       <div className="mt-3 px-1.5">
         <ConversationThinkingLevel />
       </div>
+      {conversation && spaceId && <div className="mt-3"><ConversationEngineSection key={conversation.id} conversation={conversation} spaceId={spaceId} /></div>}
     </div>
   )
 }

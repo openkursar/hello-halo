@@ -1,3 +1,4 @@
+import type { EngineId } from '../../shared/types/engine'
 /**
  * SlashCommandItem - Represents a single entry in the slash-command autocomplete menu.
  *
@@ -24,6 +25,7 @@ export interface SlashCommandItem {
  * Stored in the chat store per conversation and consumed by ChatView.
  */
 export interface SessionInitInfo {
+  engineId?: EngineId
   /** Built-in slash commands registered by Claude Code (e.g. ["compact", "review"]) */
   slashCommands: string[]
   /** Active skill slugs in this session (e.g. ["research-lookup"]) */

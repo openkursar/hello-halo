@@ -1,4 +1,5 @@
 import { app } from 'electron'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type * as WorkerSdk from '@hello-halo/agent-sdk/worker'
@@ -12,7 +13,12 @@ export function createHaloSdkModule(sdk: typeof WorkerSdk) {
     // Leave room for the remaining services within the application's five-second quit budget.
     shutdownTimeoutMs: 3000,
   })
-  const setupModule = pathToFileURL(unpack(join(app.getAppPath(), 'out/main/worker/halo-setup.cjs'))).href
+  const appPath = app.getAppPath()
+  const builtSetup = join(appPath, 'worker/halo-setup.cjs')
+  const setupPath = !app.isPackaged && existsSync(builtSetup)
+    ? builtSetup
+    : join(appPath, 'out/main/worker/halo-setup.cjs')
+  const setupModule = pathToFileURL(unpack(setupPath)).href
   const prepare = (options: Record<string, any>) => {
     const { haloRequestIdentity, workerGroup, ...sessionOptions } = options
     if (haloRequestIdentity) delete sessionOptions.requestIdentity

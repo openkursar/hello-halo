@@ -131,6 +131,22 @@ describe('updater coordinator', () => {
       expect(listeners.size).toBe(0)
     })
 
+    it('never checks or installs updates for an isolated experimental product', async () => {
+      productConfig = { updateConfig: { provider: 'disabled' } }
+      const module = await initUpdater()
+      await module.manualCheckForUpdates()
+      module.quitAndInstall()
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000)
+
+      expect(autoUpdater.setFeedURL).not.toHaveBeenCalled()
+      expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled()
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled()
+      expect(autoUpdater.autoDownload).toBe(false)
+      expect(autoUpdater.autoInstallOnAppQuit).toBe(false)
+      expect(listeners.size).toBe(0)
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
     it('downloads in the background on every platform', async () => {
       await initUpdater()
 

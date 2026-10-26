@@ -150,7 +150,7 @@ import {
 import { isHostnameTrustedForCertificates } from './services/browser-policy.service'
 import { join as joinPath } from 'path'
 import { isolateLogPath, logFatal } from './foundation/logging'
-const dataFolderName = getDataFolderName()
+const dataFolderName = app.isPackaged ? getDataFolderName() : `${getDataFolderName()}-dev`
 if (dataFolderName !== DEFAULT_DATA_FOLDER_NAME) {
   const appDataPath = app.getPath('appData')
   app.setPath('userData', joinPath(appDataPath, dataFolderName))
@@ -692,11 +692,6 @@ app.whenReady().then(async () => {
   // Initialize app data directories
   await initializeApp()
 
-  // Initialize SDK engine (must be after config is loaded, before any SDK usage)
-  // This loads the configured engine (halo or anthropic) dynamically.
-  // Hard constraint: if the configured SDK is not available, startup fails.
-  await initSdk()
-
   // Initialize health system instance ID (synchronous, <1ms)
   // Must be called before any subprocess is spawned
   initInstanceId()
@@ -706,6 +701,7 @@ app.whenReady().then(async () => {
   // window's ready-to-show, which never fires here) and force-starts remote
   // access.
   if (isServerMode()) {
+    await initSdk()
     await bootServerMode().catch((err) => {
       // Fail fast with a non-zero exit so the orchestrator restarts the
       // container instead of leaving a process up with no HTTP server.
@@ -735,6 +731,11 @@ app.whenReady().then(async () => {
   // These services are needed for the initial UI render
   // Window reference is managed by window.service.ts
   initializeEssentialServices()
+
+  // Optional-runtime discovery runs after the window and its basic handlers exist.
+  // Early AI requests wait on this same initialization promise.
+  await initSdk()
+  if (isAppQuitting) return
 
   // Deferred services wait for the first-screen cue, not native window display.
   // Its load/deadline fallbacks prevent a missing paint signal from stranding them.

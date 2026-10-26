@@ -348,7 +348,7 @@ source APIs, so stale snapshots cannot delete/revive accounts or roll back edits
 boundaries, and login responses never expose provider token payloads.
 
 **`delegated` auth type** (`claude-cli` source): Halo holds no credential — the
-bundled Claude Code CLI authenticates itself from its own store, keyed by
+selected external Claude Code CLI authenticates itself from its own store, keyed by
 `CLAUDE_CONFIG_DIR`. Consequences for any code touching sources:
 
 - Never gate a delegated source on `apiKey` / `accessToken`; they are absent by design.
@@ -433,7 +433,7 @@ When adding a new IPC channel, update these files in sync:
 Renderer (UI)
   → api adapter (IPC in Electron, HTTP in Web/Capacitor)
   → Main Process (controllers/services)
-  → Agent Loop (@anthropic-ai/claude-code)
+  → Agent engine (Halo SDK by default; external Claude Code through its adapter)
   → Events (IPC or WebSocket for remote/Capacitor)
   → UI Update
 ```
@@ -948,9 +948,51 @@ it a finished picture:
 
 ### SDK execution isolation
 
+`services/agent/resolved-sdk.ts` owns a bounded lazy registry of available engines.
+Every execution entry captures an engine before credentials, prompts and tools are
+prepared. Sessions retain that engine and share the existing resident budget;
+changing the default never closes another conversation's borrowed runtime.
+`shared/types/engine.ts` is the engine identity contract. `engine-session.ts`
+defines versioned native ownership. `agent/engine-routing.ts` and
+`agent/engine-handoff.ts` own space routing and neutral context handoff;
+`apps/runtime/engine-selection.ts` uses the same public agent contracts for
+digital humans, IM, teams and automation. No engine switch imports one engine's
+private session ID into an incompatible engine. See `agent/DESIGN.md` for the
+binding commit, legacy baseline, recovery and resource lifecycle contracts.
+
+
 Halo's SDK adapter uses the independent package's public Worker API. Host
 integration is defined in `src/main/services/agent/DESIGN.md`; execution internals
 and defaults are owned by the SDK.
+
+### External Claude Code and experimental distribution
+
+`services/cc-runtime` owns bounded discovery, interface checks, source preferences
+and explicit installation of external Claude Code. It never imports the agent
+engine. `services/agent/cc` implements the stream-json adapter; the app bundles
+neither the upstream Claude Agent SDK nor the Claude Code executable. Halo SDK
+is a required dependency and the default when no user preference exists.
+
+Only a legacy explicit CC preference triggers one bounded discovery attempt.
+Engine initialization has a shared readiness promise; the window and essential
+settings become available before external checks, and AI entry points await the
+same selection. Missing or unusable CC falls back to Halo without overwriting
+the user's preference. CC-only delegated accounts retain their credentials and
+receive a recovery notice; the app never silently selects a different account.
+CC and Halo saved transcripts are reconciled through `agent/stored-session`.
+
+The desktop-only `cc-runtime:*` typed RPC contract exposes management operations.
+Remote clients cannot install or select a host executable. Settings reads known
+state and initiates scans only on user action; installation polling exists only
+while the visible panel observes an active install. Bootstrap cancels runtime
+downloads and probes on shutdown. See `services/cc-runtime/DESIGN.md`.
+
+Experimental products use their own appId, productName, dataFolderName and
+deepLinkScheme. Development data lives in `.<dataFolderName>-dev`; packaged data
+and Electron userData use the product identity. An update provider of `disabled`
+means no updater timer and no packaged feed. `product:experimental` and
+`build:experimental` create this parallel distribution without publishing it or
+changing the production version. No production profile is imported automatically.
 
 ## 17) Integration Surfaces
 
@@ -1071,7 +1113,7 @@ shapes. The fullscreen chat capsule is ordinary DOM.
 | Diff | @codemirror/merge |
 | HTTP | Express 5 |
 | WebSocket | ws 8 |
-| Agent | @anthropic-ai/claude-code (claude-agent-sdk) |
+| Agent | Halo SDK (default), external Claude Code, Codex and optional dsh adapters |
 | Icons | lucide-react |
 | Build | electron-vite 2 + Vite 5 |
 

@@ -25,6 +25,7 @@ import type { AddressInfo } from 'node:net'
 
 const resolveProxy = vi.fn(async (_url: string) => 'DIRECT')
 const setProxy = vi.fn(async () => {})
+const httpLogging = vi.hoisted(() => ({ enabled: false, responseBody: vi.fn() }))
 type NetworkChange = { proxy?: string; browserUseProxy?: boolean; noProxy?: string }
 let networkChangeHandler: ((cfg: NetworkChange) => void) | null = null
 
@@ -44,10 +45,10 @@ vi.mock('../../../src/main/foundation/config.service', () => ({
 }))
 
 vi.mock('../../../src/main/foundation/logging', () => ({
-  isHttpLoggingEnabled: () => false,
+  isHttpLoggingEnabled: () => httpLogging.enabled,
   logHttpRequest: vi.fn(),
   logHttpResponse: vi.fn(),
-  logHttpResponseBody: vi.fn(),
+  logHttpResponseBody: httpLogging.responseBody,
 }))
 
 // Replace global fetch BEFORE importing proxy-fetch so `_originalFetch` binds to it.
@@ -275,5 +276,181 @@ describe('proxyFetch — hosts listed to bypass the proxy', () => {
       proxyRules: deadProxy,
       proxyBypassRules: 'localhost,127.0.0.1,[::1],10.0.0.0/8',
     })
+  })
+})
+
+describe('proxyFetch — redirects and bounded downloads', () => {
+  let server: http.Server
+
+  async function start(handler: http.RequestListener): Promise<void> {
+    server = http.createServer(handler)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    networkChangeHandler?.({ proxy: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, noProxy: '' })
+  }
+
+  afterEach(() => {
+    networkChangeHandler?.({ proxy: '', noProxy: '' })
+    server?.closeAllConnections()
+    server?.close()
+  })
+
+  it.each(['manual', 'error', 'follow'] as const)('respects redirect=%s through the proxy', async redirect => {
+    const requests: string[] = []
+    await start((req, res) => {
+      requests.push(req.url!)
+      if (req.url?.endsWith('/start')) res.writeHead(302, { location: '/destination' }).end('redirect body')
+      else res.writeHead(200).end('arrived')
+    })
+    const request = proxyFetch('http://download.example/start', { redirect })
+    if (redirect === 'error') {
+      await expect(request).rejects.toThrow('Redirect refused')
+      expect(requests).toHaveLength(1)
+    } else {
+      const response = await request
+      expect(response.status).toBe(redirect === 'manual' ? 302 : 200)
+      expect(await response.text()).toBe(redirect === 'manual' ? 'redirect body' : 'arrived')
+      expect(requests).toHaveLength(redirect === 'manual' ? 1 : 2)
+      if (redirect === 'manual') expect(response.headers.get('location')).toBe('/destination')
+    }
+  })
+
+  it('keeps the default redirect-follow behavior', async () => {
+    await start((req, res) => req.url?.endsWith('/start')
+      ? res.writeHead(307, { location: '/destination' }).end()
+      : res.end('arrived'))
+    expect(await (await proxyFetch('http://download.example/start')).text()).toBe('arrived')
+  })
+
+  it('does not create a decompressor for a HEAD response with encoding metadata', async () => {
+    await start((_req, res) => res.writeHead(200, { 'content-encoding': 'gzip', 'content-length': 100 }).end())
+    const response = await proxyFetch('http://download.example/metadata', { method: 'HEAD' })
+    expect(response.body).toBeNull()
+    expect(response.headers.get('content-length')).toBe('100')
+  })
+
+  it('stops reading a large proxied download while the caller is idle, and closes on cancel', async () => {
+    const totalBytes = 64 * 1024 * 1024
+    const chunk = Buffer.alloc(64 * 1024, 1)
+    let sentBytes = 0
+    let connectionClosed = false
+    await start((_req, res) => {
+      res.on('close', () => { connectionClosed = true })
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': totalBytes })
+      const send = () => {
+        while (sentBytes < totalBytes && !res.destroyed) {
+          sentBytes += chunk.length
+          if (!res.write(chunk)) { res.once('drain', send); return }
+        }
+        if (sentBytes === totalBytes) res.end()
+      }
+      send()
+    })
+
+    const response = await proxyFetch('http://download.example/large')
+    await new Promise(resolve => setTimeout(resolve, 150))
+    expect(sentBytes).toBeLessThan(totalBytes / 2)
+    const reader = response.body!.getReader()
+    expect((await reader.read()).value?.byteLength).toBeGreaterThan(0)
+    await reader.cancel()
+    await vi.waitFor(() => expect(connectionClosed).toBe(true))
+  })
+
+  it('cancels the underlying request when a decompressed response is cancelled', async () => {
+    let connectionClosed = false
+    await start((_req, res) => {
+      res.on('close', () => { connectionClosed = true })
+      res.writeHead(200, { 'content-encoding': 'gzip', 'content-type': 'text/plain' })
+      res.write(zlib.gzipSync('first frame'))
+    })
+    const response = await proxyFetch('http://download.example/compressed')
+    const reader = response.body!.getReader()
+    expect((await reader.read()).value?.byteLength).toBeGreaterThan(0)
+    await reader.cancel()
+    await vi.waitFor(() => expect(connectionClosed).toBe(true))
+  })
+
+  it('propagates a failed compressed download to the caller', async () => {
+    await start((_req, res) => {
+      res.writeHead(200, { 'content-encoding': 'gzip' })
+      res.flushHeaders()
+      res.write(zlib.gzipSync('partial frame'))
+      setTimeout(() => res.destroy(), 20)
+    })
+    const response = await proxyFetch('http://download.example/interrupted')
+    await expect(response.text()).rejects.toThrow()
+  })
+
+  it.each([false, true])('aborts an in-flight response after headers (compressed=%s)', async compressed => {
+    let connectionClosed = false
+    await start((_req, res) => {
+      res.on('close', () => { connectionClosed = true })
+      res.writeHead(200, compressed ? { 'content-encoding': 'gzip' } : {})
+      res.flushHeaders()
+    })
+    const controller = new AbortController()
+    const response = await proxyFetch('http://download.example/pending', { signal: controller.signal })
+    const read = response.text()
+    controller.abort()
+    await expect(read).rejects.toThrow()
+    await vi.waitFor(() => expect(connectionClosed).toBe(true))
+  })
+})
+
+describe('proxyFetch — bounded developer HTTP previews', () => {
+  beforeEach(() => {
+    httpLogging.enabled = true
+    httpLogging.responseBody.mockClear()
+    networkChangeHandler?.({ proxy: '', noProxy: '' })
+    clearProxyCache()
+    resolveProxy.mockResolvedValue('DIRECT')
+  })
+
+  afterEach(() => { httpLogging.enabled = false })
+
+  it.each([
+    { 'content-type': 'application/octet-stream', 'content-length': '274000000' },
+    { 'content-type': 'application/json', 'content-length': '274000000' },
+    { 'content-type': 'text/event-stream' },
+  ] as Record<string, string>[])('does not clone binary, large, or event-stream bodies (%j)', async headers => {
+    const response = new Response('body remains available', { headers })
+    const clone = vi.spyOn(response, 'clone')
+    originalFetchMock.mockResolvedValueOnce(response)
+    const received = await proxyFetch('https://preview.example/binary')
+    expect(clone).not.toHaveBeenCalled()
+    expect(await received.text()).toBe('body remains available')
+    expect(httpLogging.responseBody.mock.calls[0][2]).toContain('Body omitted')
+  })
+
+  it('captures a finite text body without consuming the caller response', async () => {
+    originalFetchMock.mockResolvedValueOnce(new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }))
+    const response = await proxyFetch('https://preview.example/json')
+    expect(await response.json()).toEqual({ ok: true })
+    await vi.waitFor(() => expect(httpLogging.responseBody).toHaveBeenCalledWith('GET', 'https://preview.example/json', '{"ok":true}'))
+  })
+
+  it('bounds a text preview even when the server omits content-length', async () => {
+    const payload = 'x'.repeat(256 * 1024)
+    originalFetchMock.mockResolvedValueOnce(new Response(payload, { headers: { 'content-type': 'text/plain' } }))
+    const response = await proxyFetch('https://preview.example/unknown-length')
+    expect((await response.text()).length).toBe(payload.length)
+    await vi.waitFor(() => expect(httpLogging.responseBody).toHaveBeenCalled())
+    const preview = httpLogging.responseBody.mock.calls[0][2] as string
+    expect(preview.length).toBeLessThan(33 * 1024)
+    expect(preview).toContain('Preview truncated')
+  })
+
+  it('stops waiting for text that never finishes without cancelling the caller', async () => {
+    vi.useFakeTimers()
+    let sourceCancelled = false
+    const stream = new ReadableStream<Uint8Array>({ cancel() { sourceCancelled = true } })
+    originalFetchMock.mockResolvedValueOnce(new Response(stream, { headers: { 'content-type': 'text/plain' } }))
+    try {
+      const response = await proxyFetch('https://preview.example/stalled')
+      await vi.advanceTimersByTimeAsync(2100)
+      expect(httpLogging.responseBody.mock.calls[0][2]).toContain('Preview stopped')
+      expect(sourceCancelled).toBe(false)
+      await response.body!.cancel()
+      expect(sourceCancelled).toBe(true)
+    } finally { vi.useRealTimers() }
   })
 })

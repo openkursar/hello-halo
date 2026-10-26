@@ -14,6 +14,7 @@ import type { Server } from 'http'
 const clearImSession = vi.fn<[string, string, string, string, string], Promise<void>>()
 const stopImSession = vi.fn<[string, string, string, string], Promise<{ stopped: boolean }>>()
 const loadImChatMessages = vi.fn<[string, string, string, string, string], unknown[]>()
+const loadChatEngineMetadata = vi.fn((..._args: unknown[]) => ({}))
 
 vi.mock('../../../../src/main/http/routes/_shared', () => {
   class AppAlreadyInstalledError extends Error {}
@@ -40,6 +41,7 @@ vi.mock('../../../../src/main/http/routes/_shared', () => {
     loadAppChatMessages: () => [],
     loadImChatMessages: (...args: [string, string, string, string, string]) => loadImChatMessages(...args),
     loadChatMessagesForConversation: () => [],
+    loadChatEngineMetadata: (...args: unknown[]) => loadChatEngineMetadata(...args),
     createNativeChatSession: vi.fn(),
     forkNativeChatSession: vi.fn(),
     deleteNativeChatSession: vi.fn(),
@@ -90,6 +92,16 @@ beforeEach(() => {
 })
 
 describe('reading an IM session', () => {
+  it('keeps message arrays compatible while returning the session’s actual engine', async () => {
+    const engineBinding = { version: 1, engineId: 'anthropic', sessionId: 'native-cc' }
+    loadChatEngineMetadata.mockReturnValueOnce({ engineId: 'anthropic', engineBinding })
+    await withServer(async base => {
+      const res = await fetch(`${base}${messagesQuery({ channel: 'weixin-ilink-bot', chatId: WECHAT_ID })}`)
+      expect(await res.json()).toMatchObject({ success: true, data: [{ id: 'm1' }], engineId: 'anthropic', engineBinding })
+      expect(loadChatEngineMetadata).toHaveBeenCalledWith('/tmp/space-a', APP, `app-chat:${APP}:weixin-ilink-bot:direct:${WECHAT_ID}`)
+    })
+  })
+
   it('passes a well-formed session to the runtime as given, a missing chat type read as direct', async () => {
     await withServer(async (base) => {
       const res = await fetch(`${base}${messagesQuery({ channel: 'weixin-ilink-bot', chatId: WECHAT_ID })}`)

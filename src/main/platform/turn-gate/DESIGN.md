@@ -39,6 +39,10 @@ known permission identities. No caller should reimplement that comparison.
 - `tryDeliverLive(key, job)` offers caller-owned durable context without taking queue
   ownership. False leaves the caller's spool unchanged. True may also consume queued
   compatible messages that precede it. It never starts a turn.
+- `bufferedJobs(key)` returns a read-only job-only snapshot from that key's
+  current mailbox, excluding exclusive callbacks and already dispatched work.
+  It changes no scheduling state and creates no second queue. Receivers use it
+  to project their own pending-input identities when transferring context.
 - `bufferedCount` is the authority for capacity checks; consumers must not maintain
   an asynchronously incremented mirror of mailbox depth.
 - `park(key)` is for a person stopping the work: what waits for the key, and

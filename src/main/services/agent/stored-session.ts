@@ -16,7 +16,7 @@
 
 import { randomUUID } from 'crypto'
 import { existsSync, readdirSync, realpathSync, rmSync } from 'fs'
-import { copyFile, cp, mkdir, readdir, rename, rm, stat } from 'fs/promises'
+import { copyFile, cp, link, mkdir, readdir, rename, rm, stat } from 'fs/promises'
 import { join } from 'path'
 import { resolveClaudeConfigDir } from '../../foundation/config.service'
 
@@ -61,6 +61,67 @@ function projectDirs(projects: string, workDir: string): Set<string> {
     for (const entry of listing) if (entry === name || entry.startsWith(prefix)) dirs.add(entry)
   }
   return dirs
+}
+
+/**
+ * Carry one transcript into the active engine's path convention. CC canonicalizes
+ * cwd; Halo uses the supplied cwd, so a symlink alone changes the lookup directory.
+ * A newer alias in the same store wins; legacy stores never replace existing history.
+ */
+export async function prepareStoredSession(options: {
+  workDir: string
+  sessionId: string
+  configDir: string
+  legacyConfigDirs?: string[]
+  engine: 'halo' | 'anthropic'
+  requireCurrentFile?: boolean
+}): Promise<boolean> {
+  const { workDir, sessionId, configDir, legacyConfigDirs = [], engine } = options
+  if (!SESSION_ID.test(sessionId)) {
+    console.warn('[Agent] Session history migration refused an invalid session identifier')
+    return false
+  }
+  let canonical = workDir
+  try { canonical = realpathSync(workDir).normalize('NFC') } catch { /* The working-directory guard reports a missing folder. */ }
+  const targetDir = join(configDir, 'projects', engine === 'halo' ? workDir.replace(/[^a-zA-Z0-9]/g, '-') : projectDirName(canonical))
+  const target = join(targetDir, `${sessionId}.jsonl`)
+  const targetExists = existsSync(target)
+  if (options.requireCurrentFile) return targetExists
+  const targetTime = targetExists ? await mtimeOf(target) : -Infinity
+  for (const root of new Set([configDir, ...legacyConfigDirs])) {
+    if (root !== configDir && targetExists) return true
+    const projects = join(root, 'projects')
+    const candidates = await Promise.all([...projectDirs(projects, workDir)].map(async directory => ({
+      directory, time: await mtimeOf(join(projects, directory, `${sessionId}.jsonl`)),
+    })))
+    candidates.sort((left, right) => right.time - left.time)
+    for (const { directory, time } of candidates) {
+      const sourceDir = join(projects, directory)
+      const source = join(sourceDir, `${sessionId}.jsonl`)
+      if (source === target || !Number.isFinite(time) || (targetExists && time <= targetTime)) continue
+      const staged = `${target}.${randomUUID()}.tmp`
+      try {
+        await mkdir(targetDir, { recursive: true })
+        const sidecar = join(sourceDir, sessionId)
+        if (existsSync(sidecar)) await cp(sidecar, join(targetDir, sessionId), { recursive: true, force: false, errorOnExist: false })
+        await copyFile(source, staged)
+        if (targetExists) await rename(staged, target)
+        else {
+          // A hard link publishes the complete copy without replacing a racing writer.
+          try { await link(staged, target) }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+        }
+        console.log(`[Agent] Session history prepared session=${sessionId} engine=${engine}`)
+        return true
+      } catch (error) {
+        console.error(`[Agent] Session history migration failed session=${sessionId} engine=${engine}:`, error)
+        return false
+      } finally {
+        await rm(staged, { force: true }).catch(error => console.warn(`[Agent] Session migration staging cleanup failed session=${sessionId}:`, error))
+      }
+    }
+  }
+  return targetExists
 }
 
 /**

@@ -624,6 +624,13 @@ export async function handleResponsesRequest(
   const { debug = false, timeoutMs = DEFAULT_TIMEOUT_MS, sdkHeaders } = options
   const { url: backendUrl, key: apiKey, headers: customHeaders, apiType: configApiType, adapterId } = config
 
+  if (configApiType !== undefined && configApiType !== 'chat_completions' && configApiType !== 'responses') {
+    console.warn('[CodexResponsesHandler] Unsupported upstream protocol refused', {
+      apiType: configApiType === 'anthropic_passthrough' || configApiType === 'kiro' ? configApiType : 'unknown',
+    })
+    return sendResponsesError(res, 400, 'invalid_request_error', 'Codex supports only OpenAI-compatible Chat Completions and Responses upstream protocols.')
+  }
+
   if (!isValidEndpointUrl(backendUrl)) {
     return sendResponsesError(res, 400, 'invalid_request_error', getEndpointUrlError(backendUrl))
   }

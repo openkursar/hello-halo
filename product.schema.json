@@ -24,6 +24,11 @@
       "pattern": "^[a-z][a-z0-9-]*$",
       "examples": ["halo", "halo-enterprise"]
     },
+    "deepLinkScheme": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9+.-]*$",
+      "description": "OS deep-link protocol owned by this product. Side-by-side builds must use different schemes. Defaults to halo."
+    },
     "trayIconDir": {
       "type": "string",
       "description": "Custom system tray icon directory, relative to product.json. Lets a brand build ship its own tray icon set (trayTemplate.png, trayTemplate@2x.png, tray-16.png, tray-16@2x.png, tray-24.png, tray-24@2x.png; optionally tray-win-white.ico / tray-win-black.ico for Windows and tray-color.png / tray-color@2x.png for Linux). Defaults to 'resources/tray' when omitted.",
@@ -45,7 +50,7 @@
       "properties": {
         "provider": {
           "type": "string",
-          "enum": ["github", "generic"],
+          "enum": ["github", "generic", "disabled"],
           "description": "Update provider type"
         },
         "url": {

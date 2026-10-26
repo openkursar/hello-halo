@@ -14,6 +14,7 @@
  * consumption model: a new entry point supplies a sink, never its own loop.
  */
 
+import type { EngineId } from '../../../shared/types/engine'
 import type { StreamResult } from './stream-processor'
 
 export interface TurnSink {
@@ -50,4 +51,16 @@ export interface TurnSink {
    * a successor can enqueue new rounds.
    */
   onConsumerStopped?(partial?: StreamResult): void
+}
+
+/** Bind completion identity when the consumer is created, including its retirement paths. */
+export function bindSinkToEngine(sink: TurnSink, engineId: EngineId): TurnSink {
+  const stamp = (result: StreamResult): StreamResult => ({ ...result, engineId })
+  return {
+    onTurnStart: () => sink.onTurnStart?.(),
+    onRawMessage: message => sink.onRawMessage?.(message),
+    onTurnComplete: result => sink.onTurnComplete(stamp(result)),
+    onTurnError: (error, started, partial) => sink.onTurnError?.(error, started, partial && stamp(partial)),
+    onConsumerStopped: partial => sink.onConsumerStopped?.(partial && stamp(partial)),
+  }
 }

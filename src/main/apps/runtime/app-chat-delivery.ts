@@ -39,9 +39,12 @@ export function isPersonRequest(request: AppChatRequest): boolean {
 }
 
 /** Handed back after a stop: delivered again later, recorded once, its earlier callers already answered. */
-function takenBack(message: PendingChatMessage, recorded: boolean): PendingChatMessage {
+function takenBack(message: PendingChatMessage, recorded: boolean, recordedInputIds: readonly string[] = []): PendingChatMessage {
   return {
-    request: recorded ? { ...message.request, inputRecorded: true } : message.request,
+    request: recorded ? {
+      ...message.request, inputRecorded: true,
+      recordedInputIds: [...new Set([...message.request.recordedInputIds ?? [], ...recordedInputIds])],
+    } : message.request,
     resolve: () => {},
     reject: () => {},
   }
@@ -115,7 +118,7 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
             message.resolve()
             return false
           }
-          message.request = { ...current, refreshBeforeDelivery: refresh, inputRecorded: message.request.inputRecorded }
+          message.request = { ...current, refreshBeforeDelivery: refresh, inputRecorded: message.request.inputRecorded, recordedInputIds: message.request.recordedInputIds }
         }
         return stillRelevant(message)
       })
@@ -137,11 +140,12 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
         images: request.images,
         recordedMessages: request.recordedMessages,
         inputRecorded: request.inputRecorded,
+        recordedInputIds: request.recordedInputIds,
         personal: isPersonRequest(request),
-      })), indexes => {
+      })), (indexes, recordedInputIds) => {
         // The stopped turn never read these: its reply is not their answer.
         for (const index of indexes) observations[index]?.cancel()
-        gate.putBack(conversationId, [{ identity: job.identity, messages: indexes.map(index => takenBack(messages[index], true)) }])
+        gate.putBack(conversationId, [{ identity: job.identity, messages: indexes.map(index => takenBack(messages[index], true, recordedInputIds?.[index])) }])
       })) return false
       for (const message of messages) {
         const observation = sink.observeLiveTurn({ onReply: message.request.onReply, onResult: message.request.onResult, onProgress: message.request.onProgress })
@@ -167,7 +171,7 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
       }
       // A person's stop held the batch back before the engine got it: the
       // person's own words are void, everything else waits for the next turn.
-      const heldBack = (records: readonly TranscriptMessage[]): void => {
+      const heldBack = (records: readonly TranscriptMessage[], recordedInputIds: readonly (string | undefined)[] = []): void => {
         const returned: PendingChatMessage[] = []
         const voided: TranscriptMessage[] = []
         const unwritten: UnwrittenStoppedInput[] = []
@@ -175,8 +179,9 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
         for (const message of live) {
           const count = recordCount(message.request)
           const written = records.slice(at, at + count)
+          const inputIds = recordedInputIds.slice(at, at + count).filter((id): id is string => Boolean(id))
           at += count
-          if (!isPersonRequest(message.request)) returned.push(takenBack(message, written.length > 0))
+          if (!isPersonRequest(message.request)) returned.push(takenBack(message, written.length > 0, inputIds))
           else if (written.length) voided.push(...written)
           else if (!message.request.inputRecorded) unwritten.push(unwrittenInput(message.request))
         }
@@ -206,6 +211,7 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
           teamOrigin: item.teamContext,
         }]),
         inputRecorded: undefined,
+        recordedInputIds: requests.flatMap(item => item.recordedInputIds ?? []),
         onMessageAccepted: () => notify(item => item.onMessageAccepted?.()),
         onProgress: event => notify(item => item.onProgress?.(event)),
         onResult: (content, ending) => notify(item => item.onResult?.(content, ending)),
@@ -242,6 +248,9 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
   })
 
   return {
+    pendingRecordedInputIds(conversationId: string): readonly string[] {
+      return gate.bufferedJobs(conversationId).flatMap(job => job.messages.flatMap(message => message.request.recordedInputIds ?? []))
+    },
     send(request: AppChatRequest): Promise<void> {
       if (disposed) {
         const error = new Error('Chat delivery is shut down')

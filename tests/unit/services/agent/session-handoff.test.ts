@@ -17,13 +17,24 @@ const m = vi.hoisted(() => ({
   memoryEnabled: false,
   app: null as InstalledApp | null,
   conversations: new Map<string, Record<string, any>>(),
+  appBindings: new Map<string, any>(),
+  defaultEngine: 'anthropic',
+  handoffHistory: [] as Array<Record<string, any>>,
 }))
 
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSession: m.createSession,
   query: vi.fn(),
   getActiveEngine: () => 'anthropic',
+  getDefaultEngine: () => m.defaultEngine, getStartupEngine: () => 'anthropic',
+  resolveDefaultEngine: async () => m.defaultEngine, ensureEngineAvailable: async () => {},
   getEngineCapabilities: () => ({ features: { permissionRules: true, hooks: true, goal: true } }),
+}))
+vi.mock('../../../../src/main/services/agent/initialization', () => ({ waitForSdkInitialization: async () => {} }))
+// The fake SDK retains sessions without writing its own native transcripts.
+vi.mock('../../../../src/main/services/agent/stored-session', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../../src/main/services/agent/stored-session')>(),
+  prepareStoredSession: vi.fn(async () => true),
 }))
 vi.mock('../../../../src/main/openai-compat-router', async () => ({
   ...await import('../../../../src/main/openai-compat-router/utils/config'),
@@ -51,6 +62,17 @@ vi.mock('../../../../src/main/services/ai-sources', async () => {
 })
 vi.mock('../../../../src/main/services/conversation.service', () => ({
   getConversation: (_space: string, id: string) => m.conversations.get(id) ?? null,
+  getConversationEngineState: (_space: string, id: string) => {
+    const conversation = m.conversations.get(id)
+    return conversation ? { sessionId: conversation.sessionId, binding: conversation.engineBinding } : null
+  },
+  saveConversationEngineBinding: vi.fn((_space: string, id: string, binding: any, expected?: any) => {
+    const conversation = m.conversations.get(id)
+    if (!conversation || (expected && (conversation.sessionId !== expected.sessionId || JSON.stringify(conversation.engineBinding) !== JSON.stringify(expected.binding)))) return false
+    conversation.sessionId = binding.sessionId
+    conversation.engineBinding = binding
+    return true
+  }),
   addMessage: vi.fn((_space: string, id: string, message: Record<string, unknown>) => {
     const messages = m.conversations.get(id)!.messages as Array<Record<string, any>>
     const stored = { ...message, id: `message-${messages.length}`, timestamp: 'fixture' }
@@ -137,6 +159,18 @@ vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   resolveExecutionEnvironment: vi.fn(), validateExecutionEnvironment: vi.fn(), legacySessionEnvironmentKey: vi.fn(),
 }))
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
+  loadChatEngineState: (_space: string, _app: string, key: string) => {
+    const value = m.appBindings.get(key)
+    return !value ? {} : value.sessionId ? { sessionId: value.sessionId, binding: value } : { routingEngine: value.engineId }
+  },
+  saveChatEngineRouting: (_space: string, _app: string, key: string, engineId: string, state: any = {}) => {
+    if (state.sessionId || state.binding || state.routingEngine) return state
+    m.appBindings.set(key, { version: 1, engineId })
+    return { routingEngine: engineId }
+  },
+  saveChatEngineBinding: vi.fn((_space: string, _app: string, key: string, binding: any) => { m.appBindings.set(key, binding); return true }),
+  resolveTranscriptPath: () => m.handoffHistory.length ? join(m.workDir, 'chat.jsonl') : undefined,
+  readChatHandoffHistory: () => ({ messages: m.handoffHistory, truncated: false, transcriptPath: join(m.workDir, 'chat.jsonl') }),
   openSessionWriter: () => ({ writeTrigger: m.writeTrigger, writeEvent: m.writeEvent }),
   loadChatSessionId: () => undefined, saveChatSessionId: vi.fn(), deleteChatSessionId: vi.fn(),
   copySessionJsonl: vi.fn(), readSessionMessages: () => [], readSessionTranscript: vi.fn(), readSessionMessageThoughts: vi.fn(),
@@ -147,7 +181,7 @@ vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: () => null }))
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({ getImSessionRegistry: () => null }))
 vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({ getActiveImChannelManager: () => null }))
 vi.mock('../../../../src/main/apps/runtime/im-channels/file-send-mcp', () => ({ createFileSendMcpServer: vi.fn() }))
-vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({ clearSupplementBuffer: vi.fn() }))
+vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({ clearSupplementBuffer: vi.fn(), getPendingSupplementInputIds: () => [] }))
 vi.mock('../../../../src/main/apps/runtime/conversation-collab', () => ({ resolveConversationCollab: () => null, createConversationCollabMcpServer: vi.fn() }))
 vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({ createNotifyToolServer: () => ({}) }))
 vi.mock('../../../../src/main/apps/runtime/reminders/tool', () => ({ createRemindersMcpServer: () => ({}) }))
@@ -351,6 +385,9 @@ beforeEach(async () => {
   m.memoryEnabled = false
   m.sourceRequests.length = 0
   created.length = 0
+  m.appBindings.clear()
+  m.defaultEngine = 'anthropic'
+  m.handoffHistory = []
   m.conversations.clear()
   m.conversations.set('conv-handoff', { id: 'conv-handoff', modelSourceId: 'account-a', messages: [] })
   m.app = {
@@ -387,6 +424,26 @@ afterEach(async () => {
 })
 
 describe('session handoff through real chat entries', () => {
+  it('retries a failed first digital-human start on its chosen engine after the default changes', async () => {
+    const entry = entries[1]
+    m.createSession.mockRejectedValueOnce(new Error('SDK creation failed before init'))
+    await expect(entry.send('FIRST_FAILED_INPUT')).rejects.toThrow('SDK creation failed before init')
+    expect(m.appBindings.get('chat')).toEqual({ version: 1, engineId: 'anthropic' })
+    expect(m.writeTrigger.mock.calls.some(call => call[0] === 'FIRST_FAILED_INPUT')).toBe(true)
+    m.handoffHistory = [{ id: 'failed-input', role: 'user', content: 'FIRST_FAILED_INPUT', timestamp: 'fixture' }]
+    m.defaultEngine = 'halo'
+    closeV2Session(entry.id)
+    disposeAppChatSink(entry.id)
+    const retry = fakeSession('retry-pinned-engine')
+    queueSession(retry)
+    await completeSend(entry, retry, entry.send('RETRY_CURRENT_INPUT'), 'RETRY_CURRENT_INPUT')
+    expect(retry.options.engineId).toBe('anthropic')
+    const input = retry.send.mock.calls[0][0] as string
+    expect(input.match(/FIRST_FAILED_INPUT/g)).toHaveLength(1)
+    expect(input.match(/RETRY_CURRENT_INPUT/g)).toHaveLength(1)
+    expect(m.appBindings.get('chat')).toEqual({ version: 1, engineId: 'anthropic', sessionId: 'sdk-retry-pinned-engine' })
+  })
+
   describe.each(entries)('$name engine exit before init', entry => {
     it.each(['thinking', 'memory', 'accepting', 'accepted'] as const)('settles a pending message once when the engine exits during %s', async stage => {
       const original = fakeSession('pre-init-exit')
@@ -1031,7 +1088,7 @@ describe('session handoff through real chat entries', () => {
   it.each(['process-exit', 'stream-error'] as const)('stores a partial space reply and separated thoughts on disk after %s', async termination => {
     const store = await vi.importActual<typeof import('../../../../src/main/services/conversation.service')>('../../../../src/main/services/conversation.service')
     const mockedStore = await import('../../../../src/main/services/conversation.service')
-    const patched = ['addMessage', 'updateMessageById', 'updateLastMessage', 'saveSessionId'] as const
+    const patched = ['addMessage', 'updateMessageById', 'updateLastMessage', 'saveSessionId', 'saveConversationEngineBinding'] as const
     const originals = patched.map(name => vi.mocked(mockedStore[name]).getMockImplementation())
     const conversationId = 'conv-handoff'
     const directory = join(m.workDir, '.halo', 'conversations')

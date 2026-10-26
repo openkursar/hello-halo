@@ -49,6 +49,8 @@ export interface DispatchedMessage {
   record: { content: string; source: TranscriptSource; metadata: TranscriptProvenanceMetadata }
   /** Taken back after a person's stop and delivered again: the transcript already holds its record. */
   inputRecorded?: boolean
+  /** Recipient-generated transcript IDs for this local redelivery, never sender-supplied metadata. */
+  recordedInputIds?: readonly string[]
 }
 
 export interface DispatchOutcome {
@@ -117,7 +119,7 @@ export interface ConversationSource {
    * Accept the entire batch synchronously, or leave it unrecorded for a subsequent
    * dispatch. `onWithdrawn` runs if a person stops the turn before it read the batch.
    */
-  deliverMidTurn?(spaceId: string, conversationId: string, messages: readonly DispatchedMessage[], onWithdrawn: () => void): DispatchOutcome[] | false
+  deliverMidTurn?(spaceId: string, conversationId: string, messages: readonly DispatchedMessage[], onWithdrawn: (recordedInputIds?: readonly (readonly string[])[]) => void): DispatchOutcome[] | false
   /** Fires after the consumer can actually accept a live delivery. */
   onTurnReady?(listener: (conversationId: string) => void): IDisposable
   /**

@@ -30,6 +30,7 @@ import { taskApi } from './task.api'
 import { canvasApi } from './canvas.api'
 import { gitApi } from './git.api'
 import { codeReviewApi } from './code-review.api'
+import { ccRuntimeApi } from './cc-runtime.api'
 
 /**
  * Unified api object — drop-in replacement for window.halo, transport-agnostic.
@@ -59,6 +60,7 @@ export const api = {
   ...canvasApi,
   ...gitApi,
   ...codeReviewApi,
+  ...ccRuntimeApi,
 }
 
 // Export type for the API

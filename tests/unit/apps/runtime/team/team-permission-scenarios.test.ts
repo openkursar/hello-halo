@@ -169,6 +169,8 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 
 vi.mock('../../../../../src/main/services/agent/resolved-sdk', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../../src/main/services/agent/resolved-sdk')>()),
+  getDefaultEngine: () => 'anthropic', getStartupEngine: () => 'anthropic',
+  resolveDefaultEngine: async () => 'anthropic', ensureEngineAvailable: async () => {},
   getEngineCapabilities: () => h.engine,
   // The team tools and the report tool keep their handlers, so a turn can call them.
   tool: (name: string, description: string, inputSchema: unknown, handler: unknown) => ({ name, description, inputSchema, handler }),
@@ -176,6 +178,7 @@ vi.mock('../../../../../src/main/services/agent/resolved-sdk', async (importOrig
 }))
 
 vi.mock('../../../../../src/main/services/agent/session-manager', () => ({
+  getSessionEngineId: () => undefined, isSessionBusy: () => false,
   activeSessions: new Map(),
   hasPendingSessionInput: () => false,
   v2Sessions: new Map(),
@@ -206,6 +209,7 @@ vi.mock('../../../../../src/main/services/agent/control', () => ({
 // A round settles as soon as its message reaches the engine: these tests ask
 // what a turn was allowed to do, not how its reply streams back.
 vi.mock('../../../../../src/main/apps/runtime/app-chat-sink', () => ({
+  bindAppChatEngine: vi.fn(),
   onAppChatRoundChange: () => () => {},
   getAppChatSink: (opts: { conversationId: string }) => h.sinkFor(opts.conversationId),
   peekAppChatSink: (conversationId: string) => h.sinkFor(conversationId),
@@ -222,7 +226,7 @@ vi.mock('../../../../../src/main/apps/runtime/team/team-tools', async (importOri
       const server = actual.createTeamMcpServer(context)
       h.teamTools.set(`app-chat:${context.callerAppId}:team:${context.teamId}:${context.epochId}`, {
         context: context as unknown as Record<string, any>,
-        server: server as { tools: ToolDef[] },
+        server: server as unknown as { tools: ToolDef[] },
       })
       return server
     },
@@ -237,7 +241,7 @@ vi.mock('../../../../../src/main/apps/runtime/report-tool', async (importOrigina
       const server = actual.createReportToolServer(...args)
       h.reports.set(args[1].sessionKey ?? '', {
         context: args[1] as unknown as Record<string, any>,
-        server: server as { tools: ToolDef[] },
+        server: server as unknown as { tools: ToolDef[] },
       })
       return server
     },
@@ -364,6 +368,9 @@ vi.mock('../../../../../src/main/apps/runtime/im-session-registry', () => ({
   getImSessionRegistry: () => null,
 }))
 vi.mock('../../../../../src/main/apps/runtime/session-store', () => ({
+  saveChatEngineRouting: (_space: string, _app: string, _run: string, engineId: string, state: any = {}) => state.sessionId || state.binding || state.routingEngine ? state : { routingEngine: engineId },
+  loadChatEngineState: () => ({}), saveChatEngineBinding: vi.fn(() => true),
+  resolveTranscriptPath: () => '', readChatHandoffHistory: () => ({ messages: [], truncated: false }),
   loadChatSessionId: vi.fn(() => undefined),
   saveChatSessionId: vi.fn(),
   deleteChatSessionId: vi.fn(),

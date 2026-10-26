@@ -9,7 +9,7 @@
  *
  * Usage:
  *   node tests/check/binaries.mjs [--platform mac-arm64|mac-x64|win|linux|all]
- *                                 [--require-engines anthropic,halo,codex]
+ *                                 [--require-engines halo,codex]
  *
  * Platforms:
  *   mac-arm64 - Mac Apple Silicon (M1/M2/M3/M4)
@@ -18,11 +18,8 @@
  *   linux     - Linux x64
  *   all       - All platforms (default)
  *
- * --require-engines turns a missing engine into a build failure. It is opt-in
- * because engine packages are optional dependencies: a clean clone legitimately
- * lacks `@hello-halo/agent-sdk` (its source directory is gitignored), and that
- * must not break contributor builds. Release scripts pass the flag so an
- * official artifact can never ship without the engines it advertises.
+ * Halo SDK is required in every build. --require-engines additionally requires
+ * optional engines such as Codex or DeepSeek Harness.
  *
  * Exit codes:
  *   0 - All checks passed
@@ -491,7 +488,7 @@ function runChecks(targetPlatform = 'all', requiredEngines = []) {
 function parseArgs() {
   const args = process.argv.slice(2)
   let platform = 'all'
-  let requiredEngines = []
+  let requiredEngines = VALID_ENGINES.filter(id => ENGINE_RUNTIMES[id].required)
 
   const validPlatforms = ['mac-arm64', 'mac-x64', 'win', 'linux', 'all']
 
@@ -506,7 +503,7 @@ function parseArgs() {
     }
 
     if (args[i] === '--require-engines' && args[i + 1]) {
-      requiredEngines = args[i + 1].split(',').map(e => e.trim()).filter(Boolean)
+      requiredEngines = [...new Set([...requiredEngines, ...args[i + 1].split(',').map(e => e.trim()).filter(Boolean)])]
       const unknown = requiredEngines.filter(e => !VALID_ENGINES.includes(e))
       if (unknown.length > 0) {
         log.error(`Unknown engine(s): ${unknown.join(', ')}`)

@@ -259,12 +259,13 @@ export interface AppChatLiveMessage {
   recordedMessages?: Array<{ content: string; images?: ImageAttachment[]; provenance?: TranscriptProvenance; references?: ContentReference[]; teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'> }>
   /** Taken back after a stop and handed over again: its record already stands where it first arrived. */
   inputRecorded?: boolean
+  recordedInputIds?: readonly string[]
   /** The owner's own words: a stop before they are read voids them, marked where they stand. */
   personal?: boolean
 }
 
-/** A person stopped the turn before it read these messages (indexes into the batch), none of them the person's own. */
-export type AppChatBatchTakenBack = (indexes: readonly number[]) => void
+/** Unread non-personal messages; both indexes and the optional ID arrays address the original full batch. */
+export type AppChatBatchTakenBack = (indexes: readonly number[], recordedInputIds?: readonly (readonly string[])[]) => void
 
 /** A person's own message a stop voided before anything was written for it. */
 export interface UnwrittenStoppedInput {
@@ -320,17 +321,20 @@ export function injectIntoAppChatBatch(
   const images = messages.flatMap(message => message.images ?? [])
   const prepared = prepareLiveInput(conversationId, text, images.length > 0 ? images : undefined)
   const written: TranscriptMessage[][] = messages.map(() => [])
+  const sink = peekAppChatSink(conversationId)
   const onWithdrawn = (): void => {
     const takenBack: number[] = []
     messages.forEach((message, index) => {
       if (message.personal) keepStoppedInputs(conversationId, written[index])
       else takenBack.push(index)
     })
-    if (takenBack.length) onTakenBack(takenBack)
+    if (takenBack.length) onTakenBack(takenBack, messages.map((message, index) => [
+      ...message.recordedInputIds ?? [],
+      ...(sink?.getRecordedInputIds(written[index]) ?? []).filter((id): id is string => Boolean(id)),
+    ]))
   }
   if (!prepared || !sendIntoLiveTurn(conversationId, prepared.text, prepared.images, { onWithdrawn })) return false
   try {
-    const sink = peekAppChatSink(conversationId)
     messages.forEach((message, index) => {
       if (message.inputRecorded) return
       const originals = message.recordedMessages ?? [{

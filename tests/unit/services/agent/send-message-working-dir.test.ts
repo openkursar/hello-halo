@@ -14,6 +14,10 @@ const m = vi.hoisted(() => ({
   acquireV2Session: vi.fn(),
 }))
 
+vi.mock('../../../../src/main/services/agent/engine-routing', () => ({
+  resolveConversationEngine: async () => 'halo',
+  prepareConversationContinuation: (_spaceId: string, _conversationId: string, conversation: { sessionId?: string }, _engine: unknown, options?: { legacySessionId?: string }) => ({ engineId: 'halo', engineState: {}, resumeSessionId: options?.legacySessionId ?? conversation?.sessionId }),
+}))
 vi.mock('../../../../src/main/foundation/config.service', () => ({ getConfig: () => ({ agent: {} }) }))
 vi.mock('../../../../src/main/services/conversation.service', () => ({
   addMessage: m.addMessage,
@@ -40,6 +44,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
+  getSessionEngineId: () => undefined, isSessionBusy: () => false,
   acquireV2Session: m.acquireV2Session,
   closeV2Session: vi.fn(),
   updateConsumerDisplayModel: vi.fn(),

@@ -81,6 +81,7 @@ const { sink } = vi.hoisted(() => ({
   },
 }))
 vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
+  bindAppChatEngine: (sink: unknown) => sink,
   onAppChatRoundChange: () => () => {},
   getAppChatSink: () => sink,
   peekAppChatSink: () => undefined,
@@ -221,7 +222,15 @@ vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
   getImSessionRegistry: () => null,
 }))
+vi.mock('../../../../src/main/apps/runtime/engine-selection', () => ({
+  resolveAppSessionEngine: async (selection: { engineId?: string }) => selection.engineId ?? 'halo',
+  prepareAppEngineSession: (options: { state: { sessionId?: string }; legacySessionId?: string }) => ({ resumeSessionId: options.state.sessionId ?? options.legacySessionId }),
+}))
+
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
+  saveChatEngineRouting: (_space: string, _app: string, _run: string, engineId: string, state: any = {}) => state.sessionId || state.binding || state.routingEngine ? state : { routingEngine: engineId },
+  loadChatEngineState: () => ({}),
+  saveChatEngineBinding: vi.fn(() => true),
   loadChatSessionId: vi.fn(() => undefined),
   saveChatSessionId: vi.fn(),
   deleteChatSessionId: vi.fn(),

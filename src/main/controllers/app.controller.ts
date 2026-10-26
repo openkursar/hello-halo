@@ -11,6 +11,9 @@ import { AppAlreadyInstalledError, McpCommandBlockedError } from '../apps/manage
 import { getAppRuntime } from '../apps/runtime'
 import { parseAndValidateAppSpec, AppSpecValidationError, type AppSpec } from '../apps/spec'
 import { MCP_COMMAND_BLOCKED_MESSAGE } from '../services/security-policy'
+import { assertEngineSourceSelection, resolveDefaultEngine } from '../services/agent'
+import { isEngineId } from '../../shared/types/engine'
+import type { InstalledApp } from '../../shared/apps/app-types'
 
 /**
  * Both install entry points here (a pre-built spec object, or a pasted/dropped
@@ -56,6 +59,39 @@ export interface AppControllerSuccess<T> {
 }
 
 export type AppControllerResponse<T> = AppControllerSuccess<T> | AppControllerError
+
+export async function updateOverrides(appId: string, partial: Record<string, unknown>): Promise<AppControllerResponse<void>> {
+  const manager = getAppManager()
+  if (!manager) return { success: false, error: 'App Manager is not yet initialized. Please try again shortly.', code: 'NOT_INITIALIZED' }
+  const app = manager.getApp(appId)
+  if (!app) return { success: false, error: `App not found: ${appId}`, code: 'NOT_FOUND' }
+  const selectionKeys = ['engineId', 'modelSourceId', 'modelId'] as const
+  const selectionSignature = (overrides: InstalledApp['userOverrides']) => JSON.stringify(selectionKeys.map(key => overrides[key]))
+  try {
+    if (app.spec.type === 'automation' && selectionKeys.some(key => Object.hasOwn(partial, key))) {
+      const before = selectionSignature(app.userOverrides)
+      const merged = { ...app.userOverrides }
+      for (const key of selectionKeys) {
+        if (!Object.hasOwn(partial, key)) continue
+        const value = partial[key]
+        if (value == null) delete merged[key]
+        else if (typeof value !== 'string' || (key === 'engineId' && !isEngineId(value))) throw new Error(`Invalid ${key}`)
+        else Object.assign(merged, { [key]: value })
+      }
+      const engineId = merged.engineId ?? await resolveDefaultEngine()
+      await assertEngineSourceSelection(engineId, merged)
+      const current = manager.getApp(appId)
+      if (!current || selectionSignature(current.userOverrides) !== before || (!merged.engineId && await resolveDefaultEngine() !== engineId)) {
+        throw new Error('The engine or model selection changed while saving. Please try again.')
+      }
+    }
+    manager.updateOverrides(appId, partial as Partial<InstalledApp['userOverrides']>)
+    return { success: true, data: undefined }
+  } catch (error) {
+    console.warn('[AppController] App preferences were rejected', { appId, error: error instanceof Error ? error.message : 'Unknown error' })
+    return { success: false, error: error instanceof Error ? error.message : 'The engine selection could not be saved. Please try again.', code: 'VALIDATION_FAILED' }
+  }
+}
 
 // ============================================================================
 // Export

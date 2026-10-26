@@ -1,3 +1,4 @@
+vi.mock('../../../src/main/services/agent', () => ({ getDefaultEngine: () => 'halo' }))
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ModelFetchError } from '../../../src/shared/model-fetch-error'
 
@@ -8,6 +9,7 @@ const { fetchModelsFromApiMock } = vi.hoisted(() => ({
 vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(),
   saveConfig: vi.fn(),
+  recordAgentEngineChoice: vi.fn(),
   isConfigUnreadable: vi.fn(() => false),
   getConfigReadFailureCount: vi.fn(() => 0),
   getConfigPath: vi.fn(() => '/home/user/.halo/config.json')

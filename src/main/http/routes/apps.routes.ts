@@ -25,6 +25,7 @@ import {
   loadAppChatMessages,
   loadImChatMessages,
   loadChatMessagesForConversation,
+  loadChatEngineMetadata,
   loadChatTranscriptForConversation,
   loadChatMessageThoughts,
   createNativeChatSession,
@@ -50,7 +51,7 @@ import type {
 } from './_shared'
 import { resolveAppChatTarget, resolveUserInjectTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
 import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
-import { resolveHttpImChat } from '../../../shared/apps/im-keys'
+import { resolveHttpImChat, buildImSessionKey } from '../../../shared/apps/im-keys'
 import { parseTurnReferences, toAppChatRequest } from '../../controllers/chat-turn-input'
 import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages, RunProcessClearedError, getDigitalHumanMemoryStatus, consolidateDigitalHumanMemoryNow, listAppReminders, cancelAppReminder, countClearableChats, clearAllChats } from '../../apps/runtime'
 
@@ -802,7 +803,11 @@ export function registerAppsRoutes(app: Express): void {
       const manager = getManagerOrFail(res)
       if (!manager) return
       const patch = req.body as Record<string, unknown>
-      manager.updateOverrides(appId, patch as InstalledApp['userOverrides'])
+      const result = await appController.updateOverrides(appId, patch)
+      if (!result.success) {
+        res.json(result)
+        return
+      }
       console.log('[HTTP] PATCH /api/apps/%s/overrides', appId)
       res.json({ success: true })
     } catch (error) {
@@ -1204,11 +1209,11 @@ export function registerAppsRoutes(app: Express): void {
         const target = resolveTargetOrFail(appId, rawConvId, res)
         if (!target) return
         const messages = loadChatMessagesForConversation(space.path, appId, target.conversationId)
-        res.json({ success: true, data: messages })
+        res.json({ success: true, data: messages, ...loadChatEngineMetadata(space.path, appId, target.conversationId) })
         return
       }
       const messages = loadAppChatMessages(space.path, appId)
-      res.json({ success: true, data: messages })
+      res.json({ success: true, data: messages, ...loadChatEngineMetadata(space.path, appId, getAppChatConversationId(appId)) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -1325,7 +1330,7 @@ export function registerAppsRoutes(app: Express): void {
         return
       }
       const messages = loadImChatMessages(space.path, appId, channel, chatType, chatId)
-      res.json({ success: true, data: messages })
+      res.json({ success: true, data: messages, ...loadChatEngineMetadata(space.path, appId, buildImSessionKey(appId, channel, chatType, chatId)) })
     } catch (error) {
       console.error('[AppsHTTP] IM history failed', { appId: req.params.appId, error })
       res.json({ success: false, error: (error as Error).message })

@@ -7,19 +7,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const query = vi.fn()
-vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
+vi.mock('../../../../src/main/services/agent', () => ({
   query: (...args: unknown[]) => query(...args),
   tool: vi.fn(() => ({})),
   createSdkMcpServer: vi.fn(() => ({})),
-  getEngineCapabilities: vi.fn(() => ({ features: { hooks: true } })),
-}))
-vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
-  buildInternalTaskSdkOptions: vi.fn(async () => ({ includePartialMessages: true })),
-}))
-vi.mock('../../../../src/main/services/agent', () => ({
+  getEngineCapabilities: vi.fn((engineId) => ({ features: { hooks: engineId !== 'codex' } })),
+  buildInternalTaskSdkOptions: vi.fn(async (params) => ({ includePartialMessages: true, engineId: params.engineId ?? 'halo' })),
   addSdkHooks: (o: Record<string, any>, h: Record<string, unknown[]>) => { o.hooks = { ...(o.hooks ?? {}), ...h } },
-}))
-vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getHeadlessElectronPath: () => '/electron',
 }))
 
@@ -56,6 +50,21 @@ describe('consolidation agent rounds', () => {
   beforeEach(() => {
     query.mockReset()
     query.mockImplementation(() => (async function* () { yield* script() })())
+  })
+
+  it('runs concurrent consolidations with each captured engine and its own hook support', async () => {
+    const input = {
+      ws: { dir: '/ws' } as never, spaceId: 's', ownerName: 'Ada',
+      ownerKind: 'space' as const, memoryBytes: 1, nowBytes: 1, topicCount: 0, tag: 't',
+    }
+    const halo = createConsolidationAgent({ ...input, credentials: { engineId: 'halo' } as never })
+    const codex = createConsolidationAgent({ ...input, credentials: { engineId: 'codex' } as never })
+    await Promise.all([halo.start(), codex.start()])
+    const options = query.mock.calls.map(([params]) => params.options)
+    expect(options.find(item => item.engineId === 'halo')).toHaveProperty('hooks.PreToolUse')
+    expect(options.find(item => item.engineId === 'codex')).not.toHaveProperty('hooks')
+    await codex.followUp(['Preserve the remaining facts.'])
+    expect(query.mock.calls[2][0].options.engineId).toBe('codex')
   })
 
   it('a follow-up is a fresh query that carries the task and the feedback', async () => {

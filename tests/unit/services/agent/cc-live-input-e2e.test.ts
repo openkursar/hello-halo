@@ -9,15 +9,19 @@
  */
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { createSdkMcpServer, tool, unstable_v2_createSession } from '@anthropic-ai/claude-agent-sdk'
+import { createSdkMcpServer, tool } from '../../../../src/main/services/agent/mcp/sdk-server'
+import { CcSession } from '../../../../src/main/services/agent/cc/session'
+import type { CcRuntimeLaunch } from '../../../../src/shared/types/cc-runtime'
+import { prepareStoredSession } from '../../../../src/main/services/agent/stored-session'
+import { createSession as createHaloSession } from '@hello-halo/agent-sdk'
 
 const enabled = process.env.CC_E2E === '1'
-const CLI = path.resolve(__dirname, '../../../../node_modules/@anthropic-ai/claude-code/cli.js')
+const CLI = process.env.CC_TEST_CLI ?? path.resolve(__dirname, '../../../../.validation/legacy-cc/cli.js')
 
 type Step = { text?: string; chunks?: string[]; chunkDelayMs?: number; toolUse?: { name: string; input?: Record<string, unknown> } }
 
@@ -66,7 +70,7 @@ afterEach(async () => {
   for (const dispose of harnesses.splice(0)) await dispose()
 })
 
-async function startHarness() {
+async function startHarness(overrides: Record<string, unknown> = {}) {
   const plan: Step[] = []
   const modelRequests: any[] = []
   let seq = 0
@@ -108,7 +112,7 @@ async function startHarness() {
       }),
     ],
   })
-  const session = unstable_v2_createSession({
+  const sessionOptions = {
     model: 'claude-sonnet-4-5',
     cwd,
     pathToClaudeCodeExecutable: CLI,
@@ -131,16 +135,24 @@ async function startHarness() {
     includePartialMessages: true,
     settingSources: [],
     mcpServers: { h: tools },
-  } as any) as any
+    ...overrides,
+  }
+  const launch: CcRuntimeLaunch = { command: CLI.endsWith('.js') ? process.execPath : CLI, argsPrefix: CLI.endsWith('.js') ? [CLI] : [], env: CLI.endsWith('.js') ? { ELECTRON_RUN_AS_NODE: '1' } : {}, path: CLI, kind: CLI.endsWith('.js') ? 'javascript' : 'native', version: 'test' }
+  const session = new CcSession(sessionOptions, launch)
 
   // Halo's consumer shape: re-enter stream() after every result.
   const frames: any[] = []
+  const pendingAtResults: boolean[] = []
   let running = true
   const consumer = (async () => {
     while (running) {
       let count = 0
       try {
-        for await (const frame of session.stream()) { frames.push(frame); count++ }
+        for await (const frame of session.stream()) {
+          frames.push(frame)
+          if (frame.type === 'result') pendingAtResults.push(session.hasPendingInput())
+          count++
+        }
       } catch { break }
       if (count === 0) break
     }
@@ -151,13 +163,13 @@ async function startHarness() {
     await Promise.race([consumer, sleep(3000)])
     server.closeAllConnections()
     await new Promise<void>(resolve => server.close(() => resolve()))
-    if (session.pid) { try { process.kill(session.pid, 'SIGKILL') } catch { /* exited */ } }
+    await session.flush()
     rmSync(root, { recursive: true, force: true })
   })
 
   const results = () => frames.filter(f => f.type === 'result')
   return {
-    session, plan, modelRequests, toolCalls, frames, results,
+    session, sessionOptions, launch, configDir, cwd, plan, modelRequests, toolCalls, frames, results, pendingAtResults,
     modelSaw: (marker: string) => modelRequests.some(r => userText(r).includes(marker)),
     waitForResults: (n: number) => waitFor(() => results().length >= n, `${n} result(s)`),
     waitForTool: () => waitFor(() => toolCalls.length > 0, 'tool call'),
@@ -188,7 +200,7 @@ describe.skipIf(!enabled)('Claude Code live input (real CLI)', () => {
     await h.waitForText()
     h.session.sendIntoLiveTurn('WINDOW-Y')
     await h.waitForResults(1)
-    expect(h.session.hasPendingInput()).toBe(true)
+    expect(h.pendingAtResults[0]).toBe(true)
     await h.waitForResults(2)
     await sleep(300)
     expect(userText(h.modelRequests[1])).toContain('WINDOW-Y')
@@ -254,4 +266,101 @@ describe.skipIf(!enabled)('Claude Code live input (real CLI)', () => {
     expect(parsedResponses.every(text => text.length < 100_000)).toBe(true)
     expect(h.results()[0]).toMatchObject({ subtype: 'success' })
   }, 60000)
+  it('resumes an external CC session after the process is retired', async () => {
+    const h = await startHarness()
+    h.plan.push({ text: 'ORIGINAL-ANSWER' })
+    await h.session.send('ORIGINAL-QUESTION')
+    await h.waitForResults(1)
+    const sessionId = h.session.sessionId
+    expect(sessionId).toBeTruthy()
+    h.session.close()
+    await h.session.flush()
+    const resumed = new CcSession({ ...h.sessionOptions, resume: sessionId }, h.launch)
+    try {
+      h.plan.push({ text: 'resumed' })
+      await resumed.send('continue')
+      const frames = []
+      for await (const frame of resumed.stream()) frames.push(frame)
+      expect(frames.find(frame => frame.type === 'result')).toMatchObject({ type: 'result', is_error: false })
+      expect(JSON.stringify(h.modelRequests.at(-1).messages)).toContain('ORIGINAL-QUESTION')
+      expect(JSON.stringify(h.modelRequests.at(-1).messages)).toContain('ORIGINAL-ANSWER')
+    } finally { resumed.close(); await resumed.flush() }
+  }, 60000)
+
+  it('continues a real CC transcript in Halo with the user, assistant and tool history intact', async () => {
+    const h = await startHarness()
+    h.plan.push({ toolUse: { name: 'mcp__h__slow', input: { ms: 1 } } }, { text: 'PREVIOUS-ANSWER' })
+    await h.session.send('PREVIOUS-QUESTION')
+    await h.waitForResults(1)
+    const sessionId = h.session.sessionId
+    h.session.close()
+    await h.session.flush()
+    const requests: any[] = []
+    const provider = {
+      id: 'test', name: 'Test',
+      capabilities: () => ({ streaming: true, toolCalling: true, thinking: false, imageInput: true, caching: false, systemPromptStyle: 'top_level' }),
+      async createMessage() { throw new Error('Expected streaming') },
+      async *createMessageStream(request: any) {
+        requests.push(request)
+        yield { type: 'message_start', id: 'halo-message', model: 'test', usage: { input_tokens: 10, output_tokens: 1 } }
+        yield { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }
+        yield { type: 'text_delta', index: 0, text: 'continued' }
+        yield { type: 'content_block_stop', index: 0 }
+        yield { type: 'message_delta', stopReason: 'end_turn', usage: { input_tokens: 10, output_tokens: 1 } }
+        yield { type: 'message_stop' }
+      },
+    }
+    expect(await prepareStoredSession({ workDir: h.cwd, sessionId: sessionId!, configDir: h.configDir, engine: 'halo' })).toBe(true)
+    const resumed = await createHaloSession({ provider, model: 'test', resume: sessionId, cwd: h.cwd,
+      env: { CLAUDE_CONFIG_DIR: h.configDir, HOME: h.configDir }, systemPrompt: 'Test', settingSources: [],
+    } as any)
+    try {
+      await resumed.send('CONTINUE-IN-HALO')
+      const frames = []
+      for await (const frame of resumed.stream()) frames.push(frame)
+      expect(frames.find(frame => frame.type === 'result')).toMatchObject({ type: 'result', is_error: false })
+      const history = JSON.stringify(requests[0].messages)
+      expect(history).toContain('PREVIOUS-QUESTION')
+      expect(history).toContain('PREVIOUS-ANSWER')
+      expect(history).toContain('slow done')
+      expect(history).toContain('CONTINUE-IN-HALO')
+    } finally { resumed.close(); await resumed.flush() }
+  }, 60000)
+
+  it('honors a denied native permission callback without writing the file', async () => {
+    const permission = vi.fn(async () => ({ behavior: 'deny', message: 'Denied by owner policy' }))
+    const h = await startHarness({ permissionMode: 'default', extraArgs: {}, canUseTool: permission })
+    const target = path.join(h.cwd, 'permission-refused.txt')
+    h.plan.push({ toolUse: { name: 'Write', input: { file_path: target, content: 'must not be written' } } }, { text: 'refused' })
+    await h.session.send('try the file')
+    await h.waitForResults(1)
+    expect(permission).toHaveBeenCalledWith('Write', expect.objectContaining({ file_path: target }), expect.objectContaining({ toolUseID: expect.any(String) }))
+    expect(existsSync(target)).toBe(false)
+    expect(JSON.stringify(h.modelRequests.at(-1).messages)).toContain('Denied by owner policy')
+  }, 60000)
+
+  it('runs host memory-style hooks before native file tools', async () => {
+    const hook = vi.fn(async () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Protected memory' } }))
+    const h = await startHarness({ hooks: { PreToolUse: [{ matcher: 'Write', hooks: [hook] }] } })
+    const target = path.join(h.cwd, 'hook-refused.txt')
+    h.plan.push({ toolUse: { name: 'Write', input: { file_path: target, content: 'must not be written' } } }, { text: 'guarded' })
+    await h.session.send('try the file')
+    await h.waitForResults(1)
+    expect(hook).toHaveBeenCalledWith(expect.objectContaining({ hook_event_name: 'PreToolUse', tool_name: 'Write' }), expect.any(String), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(existsSync(target)).toBe(false)
+    expect(JSON.stringify(h.modelRequests.at(-1).messages)).toContain('Protected memory')
+  }, 60000)
+
+  it('does not let a permitted shell prefix approve an additional command', async () => {
+    const permission = vi.fn(async () => ({ behavior: 'deny', message: 'Command outside allowed rules' }))
+    const h = await startHarness({ permissionMode: 'default', extraArgs: {}, allowedTools: ['Bash(echo safe)'], canUseTool: permission })
+    const target = path.join(h.cwd, 'compound-refused.txt')
+    h.plan.push({ toolUse: { name: 'Bash', input: { command: `echo safe && printf forbidden > '${target}'` } } }, { text: 'refused' })
+    await h.session.send('run the command')
+    await h.waitForResults(1)
+    expect(permission).toHaveBeenCalledWith('Bash', expect.any(Object), expect.any(Object))
+    expect(existsSync(target)).toBe(false)
+    expect(JSON.stringify(h.modelRequests.at(-1).messages)).toContain('Command outside allowed rules')
+  }, 60000)
+
 })

@@ -174,6 +174,7 @@ vi.mock('../../../../src/main/services/agent/events', () => ({
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSession: vi.fn(),
   getActiveEngine: () => null,
+  getDefaultEngine: () => 'anthropic',
   tool: vi.fn((name: string, description: string, schema: unknown, handler: unknown) => ({
     name,
     description,

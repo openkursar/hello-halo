@@ -285,7 +285,7 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
     return electron.launch({
       executablePath: appEntryPath,
       args: ['--lang=en-US', ...(process.env.HALO_E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : [])],
-      env: { ...cleanEnv, HALO_DATA_DIR: path.join(testConfigDir, '.halo'), HALO_E2E_TEST: '1', ELECTRON_DISABLE_GPU: '1' },
+      env: { ...cleanEnv, HOME: testConfigDir, USERPROFILE: testConfigDir, HALO_DATA_DIR: path.join(testConfigDir, '.halo'), HALO_E2E_TEST: '1', ELECTRON_DISABLE_GPU: '1' },
     })
   }
 

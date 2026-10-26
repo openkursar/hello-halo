@@ -32,10 +32,13 @@ interface FakeConversation {
 const { store, sendMessage, sendIntoLiveTurn, isNativeConversationBusy, hasLiveNativeSession } = vi.hoisted(() => {
   const store = new Map<string, FakeConversation>()
   let nextMessageId = 0
-  const sendMessage = vi.fn(async (params: { spaceId: string; conversationId: string; message: string }) => {
+  const sendMessage = vi.fn(async (params: { spaceId: string; conversationId: string; message: string }, internal?: { onUserMessageRecorded?: (id: string) => void; excludedHistoryMessageIds?: readonly string[] }) => {
+    await Promise.resolve()
     const conv = store.get(params.conversationId)
     if (!conv) throw new Error('conversation not found')
-    conv.messages.push({ id: `msg-${nextMessageId++}`, role: 'user', content: params.message })
+    const id = `msg-${nextMessageId++}`
+    conv.messages.push({ id, role: 'user', content: params.message })
+    internal?.onUserMessageRecorded?.(id)
   })
   const isNativeConversationBusy = vi.fn((_conversationId: string) => false)
   // Defaults to true so existing tests (none of which exercise the
@@ -181,10 +184,11 @@ describe('deliverToConversation', () => {
     // revert it; id-keyed `updateMessageById` must not.
     seed('src-race', 'Source')
     const target = seed('tgt-race', 'Target')
-    sendMessage.mockImplementationOnce(async (params: { conversationId: string; message: string }) => {
+    sendMessage.mockImplementationOnce(async (params: { conversationId: string; message: string }, internal) => {
       const conv = store.get(params.conversationId)!
       conv.messages.push({ id: 'user-msg', role: 'user', content: params.message })
       conv.messages.push({ id: 'assistant-placeholder', role: 'assistant', content: '' })
+      internal?.onUserMessageRecorded?.('user-msg')
     })
 
     const result = await deliverToConversation({
@@ -307,10 +311,11 @@ describe('deliverToConversation', () => {
 
       let resolveSend: () => void = () => {}
       sendMessage.mockImplementationOnce(
-        (params: { conversationId: string; message: string }) =>
+        (params: { conversationId: string; message: string }, internal) =>
           new Promise<void>((resolve) => {
             resolveSend = () => {
               store.get(params.conversationId)!.messages.push({ id: 'inflight-msg', role: 'user', content: params.message })
+              internal?.onUserMessageRecorded?.('inflight-msg')
               resolve()
             }
           })
@@ -680,7 +685,7 @@ describe('deliverToConversation', () => {
       summary: 's',
       timeoutMs: 5000,
     })
-    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'target-q' })))
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'target-q' }), expect.anything()))
 
     // target-q replies along the SAME cooling-down pair (target-q -> waiter-q)
     // — this must go through as a reply, not be caught by the breaker.
@@ -774,7 +779,7 @@ describe('deliverToConversationAndWait', () => {
       summary: 's',
       timeoutMs: 5000,
     })
-    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'a-1' })))
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'a-1' }), expect.anything()))
 
     const aRepliesWithWait = await deliverToConversationAndWait({
       spaceId: 'space-1',
@@ -802,7 +807,7 @@ describe('deliverToConversationAndWait', () => {
       summary: 's',
       timeoutMs: 5000,
     })
-    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'ring-b' })))
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'ring-b' }), expect.anything()))
 
     // B does NOT reply to A — it asks C instead (a different target, so the
     // reply-check does not intercept it), and blocks on C.
@@ -814,7 +819,7 @@ describe('deliverToConversationAndWait', () => {
       summary: 's',
       timeoutMs: 5000,
     })
-    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'ring-c' })))
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'ring-c' }), expect.anything()))
 
     // C, instead of replying to B, tries to wait on A — closing the ring.
     const cWaitsOnA = await deliverToConversationAndWait({
@@ -911,7 +916,7 @@ describe('deliverExternalMessage (team → coordinating conversation)', () => {
     expect(result.status).toBe('delivered')
     // The model read the framed input…
     expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ message: '[Team message from researcher]\n\nBrief ready' })
+      expect.objectContaining({ message: '[Team message from researcher]\n\nBrief ready' }), expect.anything()
     )
     // …but the transcript keeps the raw body as a system team message.
     const persisted = target.messages[0]
@@ -925,10 +930,11 @@ describe('deliverExternalMessage (team → coordinating conversation)', () => {
     const target = seed('ext-tgt-shift', 'Racy Thread')
     // The running turn appends something BEFORE sendMessage persists the
     // delivered turn — a pure index read would patch the wrong message.
-    sendMessage.mockImplementationOnce(async (params: { conversationId: string; message: string }) => {
+    sendMessage.mockImplementationOnce(async (params: { conversationId: string; message: string }, internal) => {
       const conv = store.get(params.conversationId)!
       conv.messages.push({ id: 'assistant-early', role: 'assistant', content: 'streamed first' })
       conv.messages.push({ id: 'ext-user-msg', role: 'user', content: params.message })
+      internal?.onUserMessageRecorded?.('ext-user-msg')
     })
 
     const result = await deliverExternalMessage({

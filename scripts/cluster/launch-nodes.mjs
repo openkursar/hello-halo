@@ -289,7 +289,10 @@ function seedNodeConfig(nodeDir, index, port, model, gatewayUrl) {
     },
     appearance: { theme: 'dark' },
     system: { autoLaunch: false },
-    agent: { maxTurns: 999, promptProfile: 'halo', sdkEngine: model.sdkEngine },
+    agent: {
+      maxTurns: 999, promptProfile: 'halo', sdkEngine: model.sdkEngine,
+      ...(process.env.HALO_TEST_CC_PATH ? { ccRuntime: { selectedPath: path.resolve(process.env.HALO_TEST_CC_PATH), discoveryCompleted: true } } : {}),
+    },
     // Remote access pre-enabled: the extended-init idle task auto-restores the
     // HTTP server on this port using the plaintext PIN below as the token.
     remoteAccess: { enabled: true, port, password: nodePin(index) },

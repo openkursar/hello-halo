@@ -89,8 +89,9 @@ app.whenReady().then(async () => {
 });
 `)
       const archive = join(temp, 'app.asar')
+      const packageRules = require(join(root, 'package.json')).build.asarUnpack as string[]
       await require('@electron/asar').createPackageWithOptions(source, archive, {
-        unpack: '**/{node_modules/@hello-halo/agent-sdk/**,out/main/worker/halo-setup.cjs,fixture-setup.mjs}',
+        unpack: `{${[...packageRules.map(rule => `**/${rule}`), '**/fixture-setup.mjs'].join(',')}}`,
       })
       const filesystem = process.versions.electron ? require('original-fs') : require('node:fs')
       expect(filesystem.existsSync(join(archive + '.unpacked', 'node_modules/@hello-halo/agent-sdk/dist/worker/entry.js'))).toBe(true)

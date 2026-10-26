@@ -3,14 +3,15 @@
  * Developer-level settings: SDK engine, extended capabilities, max turns, CLI integration
  */
 
-import { useEffect, useState } from 'react'
-import { AlertTriangle, ChevronDown, ChevronRight, Cpu, Puzzle, RefreshCw, Terminal } from 'lucide-react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { AlertTriangle, ChevronDown, ChevronRight, Cpu, Puzzle, Terminal } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type { EngineAvailabilityReport, EngineId, HaloConfig } from '../../types'
 import { CLIConfigSection } from './CLIConfigSection'
+import { CcRuntimeSection } from './CcRuntimeSection'
 import { Switch, switchRowHover } from '../ui/Switch'
-import { useConfirmDialog } from '../../hooks/useConfirmDialog'
+import { useEngineStore } from '../../stores/engine.store'
 import { DEFAULT_DISABLED_TOOLS } from '../../../shared/constants/disabled-tools'
 import { DEFAULT_MAX_TURNS } from '../../../shared/constants/agent-limits'
 import {
@@ -32,7 +33,7 @@ import {
  * render site as `t()` literals — i18next-parser only extracts literal keys,
  * so moving the copy into this table would drop the existing translations.
  */
-const ENGINE_IDS: readonly EngineId[] = ['anthropic', 'halo', 'codex', 'dsh']
+const ENGINE_IDS: readonly EngineId[] = ['halo', 'anthropic', 'codex', 'dsh']
 
 // ─── Built-in MCP Extensions ────────────────────────────────────────────────────
 
@@ -118,15 +119,10 @@ interface AdvancedSectionProps {
 
 export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   const { t } = useTranslation()
-  const { showConfirm, DialogComponent: RestartDialogComponent } = useConfirmDialog()
 
   const [maxTurns, setMaxTurnsState] = useState(config?.agent?.maxTurns ?? DEFAULT_MAX_TURNS)
   const [sdkEngine, setSdkEngineState] = useState<EngineId>(
-    config?.agent?.sdkEngine ?? 'anthropic'
-  )
-  // Track whether the SDK engine was changed from the initial value (needs restart)
-  const [sdkEngineInitial] = useState<EngineId>(
-    config?.agent?.sdkEngine ?? 'anthropic'
+    config?.agent?.sdkEngine ?? 'halo'
   )
   const [disabledTools, setDisabledToolsState] = useState<string[]>(
     config?.agent?.disabledTools ?? [...DEFAULT_DISABLED_TOOLS]
@@ -158,8 +154,11 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   )
   const [capsPanelOpen, setCapsPanelOpen] = useState(false)
   const [engineAvailability, setEngineAvailability] = useState<EngineAvailabilityReport | null>(null)
-
-  const sdkEngineChanged = sdkEngine !== sdkEngineInitial
+  const [ccOpen, setCcOpen] = useState(config?.agent?.sdkEngine === 'anthropic')
+  const engineChoice = useRef(0)
+  const ccPanelId = useId()
+  const ccDisclosure = useRef<HTMLButtonElement>(null)
+  const [engineError, setEngineError] = useState<string | null>(null)
 
   // Engines absent from this build must not be selectable — picking one used to
   // leave the app unable to start. Until the probe answers, every option stays
@@ -167,9 +166,10 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   // made in that window still degrades safely at startup rather than failing.
   useEffect(() => {
     let cancelled = false
+    const choice = engineChoice.current
     api.getEngineAvailability()
       .then(result => {
-        if (cancelled || !result?.success || !result.data) return
+        if (cancelled || choice !== engineChoice.current || !result?.success || !result.data) return
         setEngineAvailability(result.data as EngineAvailabilityReport)
       })
       .catch(error => console.warn('[AdvancedSection] Engine availability unavailable:', error))
@@ -188,12 +188,12 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   // and reaches the extractor.
   const ENGINE_COPY: Record<EngineId, { title: string; description: string }> = {
     anthropic: {
-      title: t('Claude Code SDK'),
-      description: t('Powered by the official Anthropic Claude Code engine. Works with a wide range of frontier models. (Default)'),
+      title: t('Claude Code'),
+      description: t('Optional. Connect your own Claude Code installation or download a compatible version.'),
     },
     halo: {
       title: t('Halo SDK'),
-      description: t('The official Halo agent engine. Lightweight on resources, faster startup, optimized for open-source models. Experimental.'),
+      description: t('The default Halo agent engine. Ready to use without installing Claude Code.'),
     },
     codex: {
       title: t('Codex SDK'),
@@ -215,42 +215,70 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   }
 
   const saveAgentConfig = async (patch: Partial<NonNullable<HaloConfig['agent']>>) => {
-    const updatedConfig = {
-      ...config,
-      agent: { ...config?.agent, ...patch }
-    } as HaloConfig
-    await api.setConfig({ agent: updatedConfig.agent })
-    setConfig(updatedConfig)
-    return updatedConfig
+    const result = await api.setConfig({ agent: patch })
+    if (!result.success || !result.data) throw new Error(result.error || 'Settings could not be saved')
+    const updated = result.data as HaloConfig
+    setConfig(updated)
+    return updated
   }
-
-  // ─── Handlers ───────────────────────────────────────────────────────────────
 
   const handleSdkEngineChange = async (engine: EngineId) => {
-    if (engine === sdkEngine) return
+    setEngineError(null)
+    setCcOpen(engine === 'anthropic')
+    const choice = ++engineChoice.current
+    if (engine === 'anthropic') {
+      let availability = engineAvailability
+      if (!availability) {
+        try {
+          const result = await api.getEngineAvailability()
+          if (!result.success || !result.data) throw new Error('Engine availability could not be checked')
+          if (choice !== engineChoice.current) return
+          availability = result.data as EngineAvailabilityReport
+          setEngineAvailability(availability)
+        } catch (error) {
+          console.warn('[AdvancedSection] Claude Code availability could not be checked:', error)
+          if (choice === engineChoice.current) setEngineError(t('Engine availability could not be checked. Please try again.'))
+          return
+        }
+      }
+      if (!availability.engines.find(item => item.engineId === 'anthropic')?.available) return
+    }
     setSdkEngineState(engine)
     try {
-      await saveAgentConfig({ sdkEngine: engine })
+      const result = await api.setConfig({ agent: { sdkEngine: engine } })
+      if (!result.success || !result.data) throw new Error(result.error || 'Settings could not be saved')
+      if (choice === engineChoice.current) setConfig(result.data as HaloConfig)
     } catch (error) {
       console.error('[AdvancedSection] Failed to update sdkEngine:', error)
-      setSdkEngineState(config?.agent?.sdkEngine ?? 'anthropic')
+      if (choice !== engineChoice.current) return
+      setSdkEngineState(config?.agent?.sdkEngine ?? 'halo')
+      setEngineError(t('The engine selection could not be saved. Please try again.'))
+      return
+    }
+    try {
+      const availability = await api.getEngineAvailability()
+      if (!availability.success || !availability.data) throw new Error('Engine availability could not be refreshed')
+      if (choice === engineChoice.current) setEngineAvailability(availability.data as EngineAvailabilityReport)
+      await useEngineStore.getState().reload()
+    } catch (error) {
+      console.warn('[AdvancedSection] Saved engine availability could not be refreshed:', error)
+      if (choice === engineChoice.current) setEngineError(t('The default engine was saved. Reopen settings to refresh its availability.'))
     }
   }
 
-  const handleRelaunch = async () => {
-    const confirmed = await showConfirm({
-      title: t('Restart Halo?'),
-      message: t('All active conversations and background tasks will be interrupted.'),
-      confirmLabel: t('Restart'),
-      cancelLabel: t('Cancel'),
-      variant: 'warning',
-    })
-    if (!confirmed) return
-    try {
-      await api.relaunch()
-    } catch (error) {
-      console.error('[AdvancedSection] Failed to relaunch:', error)
+  const handleCcReady = async () => {
+    const choice = engineChoice.current
+    const availability = await api.getEngineAvailability()
+    const settings = await api.getConfig({ snapshot: true })
+    if (!settings.success || !settings.data) throw new Error(settings.error || 'Settings could not be read')
+    const updated = settings.data as HaloConfig
+    if (choice === engineChoice.current) {
+      setConfig(updated)
+      setSdkEngineState(updated.agent?.sdkEngine ?? 'halo')
     }
+    if (choice === engineChoice.current && availability.success && availability.data) setEngineAvailability(availability.data as EngineAvailabilityReport)
+    await useEngineStore.getState().reload()
+    return choice === engineChoice.current && updated.agent?.sdkEngine === 'anthropic'
   }
 
   const handleMaxTurnsChange = async (value: number) => {
@@ -372,7 +400,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
       <h2 className="text-lg font-medium mb-4">{t('Advanced')}</h2>
 
       {/* Warning banner */}
-      <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 mb-5 text-sm text-amber-600 dark:text-amber-400">
+      <div className="flex items-start gap-2 bg-halo-warning/10 border border-halo-warning/20 rounded-lg p-3 mb-5 text-sm text-halo-warning">
         <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
         <span>{t('Changes here affect all AI agent behavior. New settings take effect on the next conversation.')}</span>
       </div>
@@ -383,19 +411,21 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
           <div className="flex items-center gap-2 mb-1">
             <Cpu className="w-4 h-4 text-muted-foreground shrink-0" />
             <p className="font-medium">{t('AI Agent Engine')}</p>
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 shrink-0">
-              {t('Experimental')}
-            </span>
           </div>
           <p className="text-sm text-muted-foreground mb-3">
             {t('Choose the underlying engine that powers the AI agent')}
           </p>
+          <p className="mb-3 text-xs text-muted-foreground">
+            {t('The default applies to new conversations and tasks. Existing conversations and running work keep their engine.')}
+          </p>
 
-          {engineAvailability?.degradedFrom && (
-            <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 mb-3 text-sm text-amber-600 dark:text-amber-400">
+          {engineAvailability?.degradedFrom && !(engineAvailability.degradedFrom === 'anthropic' && isEngineAvailable('anthropic')) && (
+            <div className="flex items-start gap-2 bg-halo-warning/10 border border-halo-warning/20 rounded-lg p-3 mb-3 text-sm text-halo-warning">
               <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
               <span>
-                {t('The selected engine is not included in this build, so Halo is running on another engine. Your choice has been kept — reinstall a complete package, or pick an available engine below.')}
+                {engineAvailability.degradedFrom === 'anthropic'
+                  ? t('Your selected Claude Code installation is unavailable, so Halo SDK is running. Connect a compatible installation below to use Claude Code again.')
+                  : t('Your selected engine is unavailable. Halo is using an available engine and has kept your preference.')}
               </span>
             </div>
           )}
@@ -405,63 +435,48 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
               const copy = ENGINE_COPY[engineId]
               // The active engine stays selectable even if its runtime went
               // missing, so the user is never locked out of their own setting.
-              const available = isEngineAvailable(engineId) || sdkEngine === engineId
+              const available = engineId === 'anthropic' || isEngineAvailable(engineId) || sdkEngine === engineId
               return (
-                <label
+                <div
                   key={engineId}
-                  className={`flex items-start gap-3 p-3 rounded-lg border border-border transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5 ${
-                    available ? 'cursor-pointer hover:bg-muted/50' : 'cursor-not-allowed opacity-60'
-                  }`}
+                  role="group"
+                  aria-label={copy.title}
+                  className={`min-w-0 overflow-hidden rounded-lg border transition-colors ${sdkEngine === engineId || (engineId === 'anthropic' && ccOpen) ? 'border-primary bg-primary/5' : 'border-border'}`}
                 >
-                  <input
-                    type="radio"
-                    name="sdkEngine"
-                    value={engineId}
-                    checked={sdkEngine === engineId}
-                    disabled={!available}
-                    onChange={() => handleSdkEngineChange(engineId)}
-                    className="mt-0.5 accent-primary"
-                  />
-                  <div className="min-w-0">
-                    <p className="font-medium text-sm">
-                      {copy.title}
-                      {!available && (
-                        <span className="ml-2 text-xs font-normal text-muted-foreground">
-                          {t('Not included in this build')}
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-xs text-muted-foreground">{copy.description}</p>
-                    {!available && engineUnavailableReason(engineId) && (
-                      <p className="mt-1 text-xs text-muted-foreground">{engineUnavailableReason(engineId)}</p>
-                    )}
+                  <div className="flex items-start">
+                    <label className={`flex min-w-0 flex-1 items-start gap-3 p-3 ${available ? 'cursor-pointer hover:bg-muted/50' : 'cursor-not-allowed opacity-60'}`}>
+                      <input
+                        type="radio"
+                        name="sdkEngine"
+                        value={engineId}
+                        checked={sdkEngine === engineId}
+                        disabled={!available}
+                        onChange={() => void handleSdkEngineChange(engineId)}
+                        onClick={() => { if (sdkEngine === engineId) void handleSdkEngineChange(engineId) }}
+                        className="mt-0.5 accent-primary"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-sm">
+                          {copy.title}
+                          {engineId === 'halo' && <span className="ml-2 text-xs font-normal text-primary">{t('Default')}</span>}
+                          {!available && <span className="ml-2 text-xs font-normal text-muted-foreground">{t('Not included in this build')}</span>}
+                        </p>
+                        <p className="text-xs text-muted-foreground">{copy.description}</p>
+                        {!available && engineUnavailableReason(engineId) && <p className="mt-1 text-xs text-muted-foreground">{engineUnavailableReason(engineId)}</p>}
+                      </div>
+                    </label>
+                    {engineId === 'anthropic' && <button ref={ccDisclosure} type="button" aria-label={t('Set up Claude Code')} aria-expanded={ccOpen} aria-controls={ccPanelId} onClick={() => setCcOpen(open => !open)} className="m-2 shrink-0 rounded p-2 text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+                      {ccOpen ? <ChevronDown aria-hidden="true" className="h-4 w-4" /> : <ChevronRight aria-hidden="true" className="h-4 w-4" />}
+                    </button>}
                   </div>
-                </label>
+                  {engineId === 'anthropic' && ccOpen && <CcRuntimeSection id={ccPanelId} onUse={handleCcReady} onClose={() => { setCcOpen(false); ccDisclosure.current?.focus() }} configured={isEngineAvailable('anthropic')} />}
+                </div>
               )
             })}
           </div>
 
-          {/* Restart required notice */}
-          {sdkEngineChanged && (
-            <div className="mt-3 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
-                  <RefreshCw className="w-4 h-4 shrink-0" />
-                  <span>{t('Restart required for the engine change to take effect.')}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleRelaunch}
-                  className="ml-3 shrink-0 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-                >
-                  {t('Restart Now')}
-                </button>
-              </div>
-              <p className="text-xs text-blue-600/80 dark:text-blue-400/80">
-                {t('The selected engine only applies to new conversations and new tasks. Existing conversations cannot switch engines.')}
-              </p>
-            </div>
-          )}
+          {engineError && <p role="alert" className="mt-2 text-sm text-destructive">{engineError}</p>}
+
         </div>
 
         {/* Extended Capabilities */}
@@ -486,7 +501,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
               <div className="border-t border-border">
                 {/* Hint */}
                 <p className="px-4 pt-3 pb-2 text-xs text-muted-foreground">
-                  {t('Extra tools consume additional tokens per message. Enable only what you need. Please start a new session or restart Halo for changes to take effect.')}
+                  {t('Extra tools consume additional tokens per message. Enable only what you need. Changes apply to new sessions; running work is not interrupted.')}
                 </p>
 
                 {/* Capability toggles */}
@@ -721,14 +736,14 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
               <div className="flex items-center gap-2 mb-1">
                 <Terminal className="w-4 h-4 text-muted-foreground shrink-0" />
                 <p className="font-medium">{t('Developer Mode')}</p>
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 shrink-0">
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-500/10 text-halo-warning border border-amber-500/20 shrink-0">
                   {t('Dev')}
                 </span>
               </div>
               <p className="text-sm text-muted-foreground">
                 {t('Enable verbose logging for troubleshooting: HTTP request payloads, session lifecycle, stream events, and scheduler diagnostics.')}
               </p>
-              <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+              <p className="text-xs text-halo-warning mt-1">
                 {t('Generates large log files and may affect performance. Disable after troubleshooting.')}
               </p>
             </div>
@@ -745,8 +760,6 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
         <CLIConfigSection />
       </div>
 
-      {/* Confirm dialog portal */}
-      {RestartDialogComponent}
     </section>
   )
 }

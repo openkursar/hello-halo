@@ -10,12 +10,12 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() }
 }))
 vi.mock('electron', () => ({
-  app: { getPath: vi.fn(() => '/tmp'), getVersion: vi.fn(() => '0.0.0'), isPackaged: false }
+  app: { getPath: vi.fn(() => '/tmp'), getAppPath: vi.fn(() => '/tmp/halo-test-app'), getVersion: vi.fn(() => '0.0.0'), isPackaged: false }
 }))
 const { createSession } = vi.hoisted(() => ({ createSession: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSession,
-  getActiveEngine: vi.fn(() => 'claude'),
+  getActiveEngine: vi.fn(() => 'anthropic'),
 }))
 const { startConsumer } = vi.hoisted(() => ({ startConsumer: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/session-consumer', () => ({ startConsumer }))
@@ -46,6 +46,8 @@ vi.mock('../../../../src/main/services/health', () => ({
 
 import {
   getOrCreateV2Session,
+  acquireV2Session,
+  getSessionEngineId,
   closeAllV2Sessions,
   stopSessionCleanup,
   activeSessions,
@@ -122,5 +124,66 @@ describe('isSessionBusy', () => {
   it('is not busy when the consumer has stopped', async () => {
     await withConsumer('conv-stopped', { isRunning: false, turn: { thoughts: [] }, teamThoughts: [] })
     expect(isSessionBusy('conv-stopped')).toBe(false)
+  })
+})
+
+describe('session engine isolation', () => {
+  it('keeps independent engines resident and preserves the other session when one closes', async () => {
+    const halo = fakeSession()
+    const cc = fakeSession()
+    createSession.mockResolvedValueOnce(halo).mockResolvedValueOnce(cc)
+    const first = await getOrCreateV2Session('space', 'parallel-halo', { engineId: 'halo', model: 'm' })
+    const second = await getOrCreateV2Session('space', 'parallel-cc', { engineId: 'anthropic', model: 'm' })
+    expect(getSessionEngineId('parallel-halo')).toBe('halo')
+    expect(getSessionEngineId('parallel-cc')).toBe('anthropic')
+    expect(await getOrCreateV2Session('space', 'parallel-halo', { engineId: 'halo', model: 'm' })).toBe(first)
+    expect(second).not.toBe(first)
+    expect(cc.close).not.toHaveBeenCalled()
+  })
+
+  it('rebuilds only the idle conversation whose engine changed', async () => {
+    const original = fakeSession()
+    const replacement = fakeSession()
+    createSession.mockResolvedValueOnce(original).mockResolvedValueOnce(replacement)
+    await getOrCreateV2Session('space', 'switch-idle', { engineId: 'halo', model: 'm' })
+    expect(await getOrCreateV2Session('space', 'switch-idle', { engineId: 'codex', model: 'm' })).toBe(replacement)
+    expect(original.close).toHaveBeenCalledOnce()
+    expect(getSessionEngineId('switch-idle')).toBe('codex')
+  })
+
+  it('refuses an engine mismatch while retaining a leased session', async () => {
+    const original = fakeSession()
+    createSession.mockResolvedValueOnce(original)
+    const lease = await acquireV2Session('space', 'switch-busy', { engineId: 'halo', model: 'm' })
+    await expect(getOrCreateV2Session('space', 'switch-busy', { engineId: 'codex', model: 'm' })).rejects.toThrow('previous engine')
+    expect(original.close).not.toHaveBeenCalled()
+    expect(getSessionEngineId('switch-busy')).toBe('halo')
+    lease.release()
+  })
+
+  it('pins late completion identity to the engine that created the consumer', async () => {
+    const completed = vi.fn()
+    const stopped = vi.fn()
+    createSession.mockResolvedValueOnce(fakeSession())
+    startConsumer.mockReturnValueOnce({ isRunning: true, stop: vi.fn(), getActiveSessionState: () => null, getTeamLifecycleThoughts: () => [] })
+    await getOrCreateV2Session('space', 'bound-consumer', { engineId: 'codex', model: 'm' }, undefined, undefined, {
+      displayModel: 'm', sink: { onTurnComplete: completed, onConsumerStopped: stopped },
+    })
+    const sink = startConsumer.mock.calls[0][1].sink
+    sink.onTurnComplete({ finalContent: 'done', engineId: 'halo' })
+    sink.onConsumerStopped({ finalContent: 'partial' })
+    expect(completed).toHaveBeenCalledWith({ finalContent: 'done', engineId: 'codex' })
+    expect(stopped).toHaveBeenCalledWith({ finalContent: 'partial', engineId: 'codex' })
+  })
+
+  it('hands history to the engine once without changing later user messages', async () => {
+    const send = vi.fn(async () => {})
+    createSession.mockResolvedValueOnce({ ...fakeSession(), send })
+    const first = await acquireV2Session('space', 'handoff-once', { engineId: 'codex', model: 'm', engineHandoffContent: 'Previous completed work' })
+    await first.send('Continue')
+    markTurnInitReceived('handoff-once')
+    const second = await acquireV2Session('space', 'handoff-once', { engineId: 'codex', model: 'm' })
+    await second.send('Next task')
+    expect(send.mock.calls).toEqual([['Previous completed work\n\nCurrent message:\nContinue'], ['Next task']])
   })
 })

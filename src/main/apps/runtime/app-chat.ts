@@ -33,7 +33,7 @@ import { randomUUID } from 'crypto'
 import { getAppManager } from '../manager'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
-import { resolvePermission } from '../../../shared/apps/app-types'
+import { resolvePermission, type AppChatEngineMetadata, type AppChatTranscriptPage } from '../../../shared/apps/app-types'
 import { getTaskStateService } from '../../platform/task-state'
 import { resolveMemoryLayout, type MemoryCallerScope, type TopicsTree } from '../../platform/memory'
 import { getConfig } from '../../foundation/config.service'
@@ -44,9 +44,7 @@ import {
   getDbMcpServers
 } from '../../services/agent/helpers'
 import { emitAgentEvent } from '../../services/agent/events'
-import { resolveCredentialsForSdk, buildUserSessionSdkOptions, addSdkHooks } from '../../services/agent/sdk-config'
-import { toEngineSystemPrompt } from '../../services/agent/system-prompt'
-import { getEngineCapabilities } from '../../services/agent/resolved-sdk'
+import { addSdkHooks } from '../../services/agent/sdk-config'
 import { applyReasoningEffort, pickReasoningEffort } from '../../services/agent/reasoning-effort'
 import type { ReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 import { createCanUseTool } from '../../services/agent/permission-handler'
@@ -56,7 +54,7 @@ import { createAIBrowserMcpServer } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { acquireChatBrowserContext, bindChatBrowserSession, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
-import { acquireV2Session, formatTurnAttachments, workingDirErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, type V2SessionLease } from '../../services/agent'
+import { acquireV2Session, formatTurnAttachments, workingDirErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
@@ -71,6 +69,7 @@ import {
 import { stopGeneration, getSessionState, type StopReason } from '../../services/agent/control'
 import {
   getAppChatSink,
+  bindAppChatEngine,
   peekAppChatSink,
   getConversationsWithActiveRound,
   disposeAppChatSink,
@@ -146,8 +145,9 @@ import { createApiRefMcpServer, HALO_API_TOOLSET_ID } from '../../services/api-r
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { createConversationCollabMcpServer, resolveConversationCollab } from './conversation-collab'
 import { getSpace, getSpaceDir, isSpaceMemoryEnabled } from '../../services/space.service'
-import { readSessionMessages, readSessionTranscript, readSessionMessageThoughts, saveChatSessionId, loadChatSessionId, deleteChatSessionId, copySessionJsonl } from './session-store'
-import type { Thought, TranscriptMessage, TranscriptPage, TranscriptPageRequest, TranscriptProvenance } from '../../../shared/types/transcript'
+import { readSessionMessages, readSessionTranscript, readSessionMessageThoughts, loadChatEngineState, saveChatEngineBinding, saveChatEngineRouting, deleteChatSessionId, copySessionJsonl } from './session-store'
+import { prepareAppEngineSession, resolveAppSessionEngine } from './engine-selection'
+import type { Thought, TranscriptMessage, TranscriptPageRequest, TranscriptProvenance } from '../../../shared/types/transcript'
 import { getAppMemoryService, getActivityStore } from './index'
 import { resolveExecutionEnvironment, validateExecutionEnvironment, legacySessionEnvironmentKey, resolveChatEnvironment, appChatRunId, validateEnvironmentConnections } from './execution-environment'
 import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
@@ -176,7 +176,8 @@ import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import { ProgressEventParser } from './progress-formatter'
 import { ReplyTextAccumulator } from './reply-accumulator'
-import { holdSupplementsAfterStop } from './dispatch-inbound'
+import { holdSupplementsAfterStop, getPendingSupplementInputIds } from './dispatch-inbound'
+import { getPendingConversationInputIds } from '../../services/conversation-interop'
 import { holdConversationAfterStop } from '../../services/conversation-interop'
 import { getImStreamHandle, clearImStreamHandle } from './im-stream-registry'
 import { createAppChatDelivery, isPersonRequest } from './app-chat-delivery'
@@ -349,14 +350,17 @@ export interface AppChatRequest {
   }>
   /** Taken back after a person's stop and delivered again: its record already stands where it first arrived. */
   inputRecorded?: boolean
+  /** Stable transcript identities already written for the input being delivered now. */
+  recordedInputIds?: readonly string[]
   /**
    * A person's stop held this message back before the engine got it; its sender
    * decides what becomes of it. `records` are the transcript records written for
    * it so far (none when it was stopped before they were written), in the order
-   * `recordedMessages` lists them. Without it, a person's own words stay in the
+   * `recordedMessages` lists them. The optional IDs retain that order, including
+   * undefined for a record whose write failed. Without it, a person's own words stay in the
    * record marked as never handled.
    */
-  onHeldBack?: (records: readonly TranscriptMessage[]) => void
+  onHeldBack?: (records: readonly TranscriptMessage[], recordedInputIds?: readonly (string | undefined)[]) => void
   /** Repeating runtime notices replace older pending notices with the same key. */
   coalescingKey?: string
   /** Revalidate runtime-authored work immediately before delivery. */
@@ -618,6 +622,13 @@ async function runAppChatTurn(
   if (!activityStore) throw new Error('Session environment storage is unavailable')
   const environment = resolveChatEnvironment(app, manager, activityStore, conversationId, teamContext?.teamId)
   const spaceId = environment.spaceId!
+  const spacePath = environment.spacePath
+  const chatRunId = deriveRunId(conversationId, appId)
+  let engineState = loadChatEngineState(spacePath, appId, chatRunId)
+  const forkParsedKey = parseAppChatKey(conversationId)
+  const forkResumeSessionId = forkParsedKey?.channel === LOCAL_SESSION_CHANNEL
+    ? getImSessionRegistry()?.getPendingResume(appId, forkParsedKey.channel, forkParsedKey.chatId)
+    : undefined
 
   // Counted here, not at the IPC/HTTP handlers, so every entry point into
   // digital-human chat (desktop IPC, remote HTTP, IM inbound) is covered by
@@ -646,6 +657,14 @@ async function runAppChatTurn(
   const memory = getAppMemoryService()
   if (!memory) throw new Error('Memory service not initialized')
 
+  const engineId = await resolveAppSessionEngine({
+    engineId: app.userOverrides?.engineId,
+    conversationId,
+    binding: engineState.binding,
+    routingEngine: engineState.routingEngine,
+    legacySessionId: engineState.sessionId ?? forkResumeSessionId,
+  })
+  engineState = saveChatEngineRouting(spacePath, appId, chatRunId, engineId, engineState)
   const config = getConfig()
   // Its own account and model, or the global selection when it has none or
   // its account was removed.
@@ -653,7 +672,7 @@ async function runAppChatTurn(
   // The digital human's own level, on every entry (its Halo chat, IM, HTTP,
   // team turns, reminders), wins over one the send carries.
   const pickedEffort = pickReasoningEffort(app.userOverrides?.chatReasoningEffort, reasoningEffort)
-  const resolvedCreds = await resolveCredentialsForSdk(credentials, pickedEffort)
+  const resolvedCreds = await resolveCredentialsForSdk(credentials, pickedEffort, engineId)
   const electronPath = getHeadlessElectronPath()
   const workDir = environment.workDir
 
@@ -758,6 +777,7 @@ async function runAppChatTurn(
   // IM (group/direct) or native UI. See src/main/apps/runtime/prompt/
   // and src/main/apps/runtime/im-channels/im-prompt.ts.
   const identity = buildIdentityFragments({
+    engineId,
     appId: app.id,
     appSpec: app.spec,
     memoryInstructions,
@@ -1036,6 +1056,7 @@ async function runAppChatTurn(
 
   // ── 5. Build SDK options ─────────────────────────────
   const sdkOptions = await buildUserSessionSdkOptions({
+    engineId,
     selfApiAccess: usesHaloApi,
     credentials: resolvedCreds,
     workDir,
@@ -1054,7 +1075,7 @@ async function runAppChatTurn(
   )
 
   // Override for app chat context
-  sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt)
+  sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt, engineId)
 
   // Non-native sessions (IM channels, etc.) are non-interactive — the user
   // cannot respond to interactive tool prompts, so deny them preemptively.
@@ -1106,12 +1127,12 @@ async function runAppChatTurn(
       // owner is told they cannot have: it reads as protection while the
       // request runs with everything. An engine that cannot be asked is read
       // the same way as one that says no.
-      const engine = getEngineCapabilities()
+      const engine = getEngineCapabilities(engineId)
       if (!engine?.features.permissionRules) {
         throw new Error(
           `"${app.spec.name}" is running on ${engine?.displayName ?? 'an engine'}, which cannot hold ` +
           `someone else's request to what you allowed, so the request was not started. ` +
-          `Switch Halo's agent engine to Claude Code to let teammates put your digital humans to work.`
+          `Choose Halo SDK or Claude Code for this digital human to preserve the requested permissions.`
         )
       }
       addSdkHooks(sdkOptions, createDelegationAuditHooks(conversationId))
@@ -1139,12 +1160,12 @@ async function runAppChatTurn(
     // Nothing withheld, but the owner's record still says what ran — and the
     // record is the engine's hooks, so an engine without them is refused the
     // way one without permission rules is above.
-    const engine = getEngineCapabilities()
+    const engine = getEngineCapabilities(engineId)
     if (!engine?.features.hooks) {
       throw new Error(
         `"${app.spec.name}" is running on ${engine?.displayName ?? 'an engine'}, which cannot keep a record ` +
         `of what someone else's request has it do, so the request was not started. ` +
-        `Switch Halo's agent engine to Claude Code to let teammates put your digital humans to work.`
+        `Choose Halo SDK or Claude Code for this digital human to preserve the required audit record.`
       )
     }
     addSdkHooks(sdkOptions, createDelegationAuditHooks(conversationId))
@@ -1172,20 +1193,6 @@ async function runAppChatTurn(
         })
       )
     : ''
-
-  // ── Resolve space path and run ID early (needed for both session resume and JSONL) ──
-  const spacePath = environment.spacePath
-  const chatRunId = deriveRunId(conversationId, appId)
-
-  // Peek a pending resume-and-fork marker for native local sessions (set when
-  // this session was forked from an IM/other session via "continue in client").
-  // Peek, not consume: the marker is cleared only after the first message
-  // captures the new forked session id, so a failed first attempt can retry.
-  const forkParsedKey = parseAppChatKey(conversationId)
-  const forkResumeSessionId =
-    forkParsedKey?.channel === LOCAL_SESSION_CHANNEL
-      ? getImSessionRegistry()?.getPendingResume(appId, forkParsedKey.channel, forkParsedKey.chatId)
-      : undefined
 
   // The sink outlives individual V2 sessions: it owns the transcript writer and
   // the queue of messages awaiting an answer, so a session rebuild underneath it
@@ -1328,7 +1335,7 @@ async function runAppChatTurn(
     stoppedHandled = true
     if (request.onHeldBack) {
       turnContext.heldBack = true
-      handBackHeldMessage(request, conversationId, userRecords)
+      handBackHeldMessage(request, conversationId, userRecords, sink.getRecordedInputIds(userRecords))
       return
     }
     if (!isPersonRequest(request)) {
@@ -1364,9 +1371,19 @@ async function runAppChatTurn(
     // ── 6. Get or create V2 session (reused across messages) ──
     // Load saved sessionId for resume when V2 session is rebuilt after idle
     // timeout, process crash, or config change (same pattern as send-message.ts)
-    const savedSessionId = spacePath
-      ? loadChatSessionId(spacePath, appId, chatRunId)
-      : undefined
+    const sessionPlan = prepareAppEngineSession({
+      engineId, state: engineState, spacePath, appId, runId: chatRunId, conversationId,
+      legacySessionId: forkResumeSessionId, excludeInputIds: request.recordedInputIds,
+      readPendingInputIds: () => [
+        ...chatDelivery?.pendingRecordedInputIds(conversationId) ?? [],
+        ...getPendingSupplementInputIds(conversationId),
+        ...getActiveTeamRuntime()?.getPendingRecordedInputIds(conversationId) ?? [],
+        ...getPendingConversationInputIds(conversationId),
+      ],
+    })
+    const savedSessionId = sessionPlan.resumeSessionId
+    if (sessionPlan.engineHandoffContent) sdkOptions.engineHandoffContent = sessionPlan.engineHandoffContent
+    if (sessionPlan.strictNativeResume) sdkOptions.strictNativeResume = true
 
     // Fork-on-first-message: a local session created via "continue in client"
     // carries a pending source SDK session id. With no session of its own yet,
@@ -1376,7 +1393,7 @@ async function runAppChatTurn(
     // normal resume path. Only reachable when the engine advertises sessionFork
     // (the fork UI is gated on it), so no engine guard is needed here.
     let resumeSessionId = savedSessionId
-    if (!resumeSessionId && forkResumeSessionId) {
+    if (forkResumeSessionId && !sessionPlan.engineHandoffContent && (!resumeSessionId || resumeSessionId === forkResumeSessionId)) {
       resumeSessionId = forkResumeSessionId
       sdkOptions.forkSession = true
       console.log(`[AppChat][${appId}] Forking new local session from source SDK session ${forkResumeSessionId}`)
@@ -1388,15 +1405,20 @@ async function runAppChatTurn(
       sdkOptions,
       resumeSessionId,
       workDir,
-      { displayModel: resolvedCreds.displayModel, contextWindow: resolvedCreds.capabilities?.contextWindow, sink },
+      { displayModel: resolvedCreds.displayModel, contextWindow: resolvedCreds.capabilities?.contextWindow,
+        sink: bindAppChatEngine(sink, { spacePath, appId, runId: chatRunId, engineId, expected: engineState }) },
       undefined,
       undefined,
       undefined,
       // Busy reuse must not hand this turn another caller's permissions or
       // memory author tag; require the current inputs instead of a deferred rebuild.
       // A session records calls only if it was built to.
-      applied?.enforced || memoryActive || borrowedTeamTurn
-        ? { requireFreshInputs: true, ...(recordsCalls ? { creationContext: RECORDED_SESSION } : {}) }
+      applied?.enforced || memoryActive || borrowedTeamTurn || sessionPlan.recoverNativeSession
+        ? {
+            ...(applied?.enforced || memoryActive || borrowedTeamTurn ? { requireFreshInputs: true } : {}),
+            ...(recordsCalls ? { creationContext: RECORDED_SESSION } : {}),
+            ...(sessionPlan.recoverNativeSession ? { recoverNativeSession: sessionPlan.recoverNativeSession } : {}),
+          }
         : undefined,
       reportPreInitFailure
     )
@@ -1642,10 +1664,10 @@ async function runAppChatTurn(
 }
 
 /** Tell a held-back message's sender; it decides what becomes of the message. */
-function handBackHeldMessage(request: AppChatRequest, conversationId: string, records: readonly TranscriptMessage[]): void {
+function handBackHeldMessage(request: AppChatRequest, conversationId: string, records: readonly TranscriptMessage[], recordedInputIds?: readonly (string | undefined)[]): void {
   if (!request.onHeldBack) return
   try {
-    request.onHeldBack(records)
+    request.onHeldBack(records, recordedInputIds)
   } catch (error) {
     console.error(`[AppChat][${request.appId}] A held-back message could not be returned to its sender: conversation=${conversationId}`, error)
   }
@@ -1855,6 +1877,14 @@ export function loadChatMessagesForConversation(
   return readSessionMessages(path, appId, deriveRunId(conversationId, appId))
 }
 
+/** Current engine identity accompanies a cold history read without starting an engine. */
+export function loadChatEngineMetadata(spacePath: string, appId: string, conversationId: string): AppChatEngineMetadata {
+  const path = chatRecordPath(appId, conversationId, spacePath)
+  const state = loadChatEngineState(path, appId, deriveRunId(conversationId, appId))
+  const engineId = getSessionEngineId(conversationId) ?? state.binding?.engineId ?? state.routingEngine ?? (state.sessionId ? getLegacyEngine() : undefined)
+  return { ...(engineId ? { engineId } : {}), ...(state.binding ? { engineBinding: state.binding } : {}) }
+}
+
 /**
  * One page of an app-chat conversation's transcript, newest first. Messages
  * carry `thoughts: null` + `thoughtsSummary`; see loadChatMessageThoughts.
@@ -1864,9 +1894,9 @@ export function loadChatTranscriptForConversation(
   appId: string,
   conversationId: string,
   request?: TranscriptPageRequest
-): TranscriptPage {
+): AppChatTranscriptPage {
   const path = chatRecordPath(appId, conversationId, spacePath)
-  return readSessionTranscript(path, appId, deriveRunId(conversationId, appId), request)
+  return { ...readSessionTranscript(path, appId, deriveRunId(conversationId, appId), request), ...loadChatEngineMetadata(spacePath, appId, conversationId) }
 }
 
 /** The thought process of one message of an app-chat conversation. */
@@ -2300,6 +2330,14 @@ export function forkNativeChatSession(
 
   const sourceRunId = deriveRunId(sourceConversationId, appId)
   const newRunId = deriveRunId(conversationId, appId)
+  const sourceState = spacePath ? loadChatEngineState(spacePath, appId, sourceRunId) : {}
+  if (sourceState.sessionId) {
+    const sourceEngine = sourceState.binding?.engineId ?? getLegacyEngine()
+    if (!getEngineCapabilities(sourceEngine)?.features.sessionFork) {
+      console.warn('[AppChat] Native session fork refused by its engine capability', { appId, sourceEngine })
+      throw new Error('This conversation’s engine does not support branching its running context. Start a new conversation instead.')
+    }
+  }
   store.pinSessionEnvironment(conversationId, appId, sourceEnvironment)
 
   // Copy the source transcript for immediate display, and read the source SDK
@@ -2309,7 +2347,8 @@ export function forkNativeChatSession(
   let sourceSdkSessionId: string | undefined
   if (spacePath) {
     copied = copySessionJsonl(spacePath, appId, sourceRunId, newRunId)
-    sourceSdkSessionId = loadChatSessionId(spacePath, appId, sourceRunId)
+    sourceSdkSessionId = sourceState.sessionId
+    if (sourceState.binding) saveChatEngineBinding(spacePath, appId, newRunId, sourceState.binding, {})
   }
 
   const record = registry.createLocalSession(appId, sessionUuid, {

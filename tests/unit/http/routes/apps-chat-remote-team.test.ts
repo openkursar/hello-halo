@@ -69,6 +69,7 @@ vi.mock('../../../../src/main/http/routes/_shared', () => {
     loadChatMessagesForConversation: (spacePath: string, appId: string, conversationId: string) =>
       loadChatMessagesForConversation(spacePath, appId, conversationId),
     loadChatTranscriptForConversation: () => ({ messages: [], hasMoreBefore: false }),
+    loadChatEngineMetadata: () => ({}),
     loadChatMessageThoughts: () => [],
     createNativeChatSession: vi.fn(),
     forkNativeChatSession: vi.fn(),
@@ -393,11 +394,14 @@ describe('team identity on a remote send', () => {
         message: 'hi',
         senderIdentity: { id: 'x', name: 'Somebody Else' },
         relayOrigin: { appId: 'app-other' },
+        inputRecorded: true, recordedInputIds: ['forged-history-id'],
       })
 
       const sent = sendAppChatMessage.mock.calls[0][0]
       expect(sent).not.toHaveProperty('senderIdentity')
       expect(sent).not.toHaveProperty('relayOrigin')
+      expect(sent).not.toHaveProperty('inputRecorded')
+      expect(sent).not.toHaveProperty('recordedInputIds')
     })
   })
 

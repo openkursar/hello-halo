@@ -19,7 +19,8 @@
 import os from 'os'
 import { getDataFolderName } from '../../foundation/product-config'
 import type { KBReference } from '../../../shared/types/tlon'
-import { getActiveEngine } from './resolved-sdk'
+import { getDefaultEngine } from './resolved-sdk'
+import type { EngineId } from '../../../shared/types/engine'
 import { defaultCapabilitiesFor } from './capabilities'
 import { readUserAgentSettings } from './user-agent-settings'
 
@@ -54,6 +55,7 @@ export type PromptProfile = 'official' | 'halo'
  * Context for building the dynamic parts of the system prompt
  */
 export interface SystemPromptContext {
+  engineId?: EngineId
   /** Current working directory */
   workDir: string
   /** Model name/identifier being used */
@@ -605,25 +607,22 @@ const HALO_IDENTITY_LINE = /^You are Halo, .*$/m
 const RUNS_ON_HALO_LINE = 'You run on Halo, which gives you remote access, file management, and built-in AI browser capabilities. ' +
   'Your identity and role are defined by the App Instructions below.'
 
-/** A system prompt in the shape the active engine accepts. */
 export type EngineSystemPrompt = string | { type: 'preset'; preset: 'default'; append: string }
 
-function usesEngineDefaultPrompt(): boolean {
-  return getActiveEngine() === 'halo'
+function usesEngineDefaultPrompt(engineId: EngineId): boolean {
+  return engineId === 'halo'
 }
 
-/** Whether the active engine's runtime writes its own tool guidance (dsh). */
-function usesNativeAgentGuidance(): boolean {
-  const engine = getActiveEngine()
-  return engine ? defaultCapabilitiesFor(engine).prompt.nativeAgentGuidance : false
+function usesNativeAgentGuidance(engineId: EngineId): boolean {
+  return defaultCapabilitiesFor(engineId).prompt.nativeAgentGuidance
 }
 
 /**
- * Hand a host-built prompt to the active engine: the full prompt for engines
+ * Hand a host-built prompt to the session's engine: the full prompt for engines
  * that take Halo's template, the append to its own default for the halo engine.
  */
-export function toEngineSystemPrompt(hostPrompt: string): EngineSystemPrompt {
-  return usesEngineDefaultPrompt()
+export function toEngineSystemPrompt(hostPrompt: string, engineId: EngineId = getDefaultEngine()): EngineSystemPrompt {
+  return usesEngineDefaultPrompt(engineId)
     ? { type: 'preset', preset: 'default', append: hostPrompt }
     : hostPrompt
 }
@@ -717,15 +716,16 @@ function applyTemplateVariables(template: string, ctx: SystemPromptContext): str
  * @returns Host system prompt string; pass it to the engine via toEngineSystemPrompt
  */
 export function buildSystemPrompt(ctx: SystemPromptContext): string {
+  const engineId = ctx.engineId ?? getDefaultEngine()
   // Read the user's settings only for what the context leaves open: the SDK
   // options builder states both, and reading config means reading the file.
   const settings = ctx.promptProfile === undefined || ctx.digitalHumansEnabled === undefined
     ? readUserAgentSettings()
     : null
   const promptProfile = ctx.promptProfile ?? settings?.promptProfile
-  const template = usesEngineDefaultPrompt()
+  const template = usesEngineDefaultPrompt(engineId)
     ? SYSTEM_PROMPT_HALO_CONTEXT
-    : usesNativeAgentGuidance()
+    : usesNativeAgentGuidance(engineId)
       ? buildEngineNeutralTemplate(promptProfile)
       : promptProfile === 'official'
         ? SYSTEM_PROMPT_OFFICIAL

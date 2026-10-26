@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const engine = vi.hoisted(() => ({ id: 'anthropic' as string | null }))
 
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
-  getActiveEngine: () => engine.id,
+  getDefaultEngine: () => engine.id, resolveDefaultEngine: async () => engine.id,
 }))
 
 import {
@@ -24,12 +24,21 @@ import { generatePromptInstructions } from '../../../../src/main/platform/memory
 const ctx = { workDir: '/tmp/w', modelInfo: 'test-model', today: '2026-01-02' }
 
 describe('system prompt per engine', () => {
+  it('honors the session engine when the default points elsewhere', () => {
+    engine.id = 'anthropic'
+    const halo = buildSystemPrompt({ ...ctx, engineId: 'halo' })
+    expect(toEngineSystemPrompt(halo, 'halo')).toMatchObject({ type: 'preset', preset: 'default' })
+    engine.id = 'halo'
+    const cc = buildSystemPrompt({ ...ctx, engineId: 'anthropic' })
+    expect(cc).toContain('Claude Code')
+    expect(toEngineSystemPrompt(cc, 'anthropic')).toBe(cc)
+  })
   beforeEach(() => {
     engine.id = 'anthropic'
   })
 
   it('keeps the full Halo template as a plain string on other engines', () => {
-    for (const id of ['anthropic', 'codex', null]) {
+    for (const id of ['anthropic', 'codex']) {
       engine.id = id
       const prompt = buildSystemPrompt(ctx)
       expect(prompt.startsWith('You are Halo, an AI assistant built with Claude Code.')).toBe(true)

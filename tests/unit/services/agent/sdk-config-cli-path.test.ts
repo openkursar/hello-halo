@@ -1,12 +1,4 @@
-/**
- * A packaged build runs the Claude Code CLI from its real file beside the
- * archive: the CLI starts programs found next to its own file (ripgrep behind
- * Grep and Glob), and no OS can execute a file inside app.asar.
- */
-
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { app } from 'electron'
-import { join } from 'path'
 
 vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: () => ({ agent: {} }),
@@ -19,36 +11,34 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
-  getActiveEngine: () => 'anthropic',
+  getDefaultEngine: () => 'anthropic', resolveDefaultEngine: async () => 'anthropic',
   getEngineCapabilities: () => ({ features: { hooks: true } }),
 }))
 
-import { buildCliLoginCommand, resolveClaudeCodeCliPath } from '../../../../src/main/services/agent/sdk-config'
+const runtime = vi.hoisted(() => ({ launch: null as any }))
+vi.mock('../../../../src/main/services/cc-runtime', () => ({ resolveCcRuntimeLaunch: async () => runtime.launch }))
 
-const CLI = join('node_modules', '@anthropic-ai', 'claude-code', 'cli.js')
-const ARCHIVE = join('/Applications/Halo.app/Contents/Resources', 'app.asar')
+import { buildCliLoginCommand } from '../../../../src/main/services/agent/sdk-config'
 
-afterEach(() => {
-  vi.restoreAllMocks()
-})
+afterEach(() => { runtime.launch = null; vi.restoreAllMocks() })
 
-describe('Claude Code CLI path in a packaged build', () => {
-  it('is the unpacked copy beside the archive, never a path inside it', () => {
-    vi.spyOn(app, 'getAppPath').mockReturnValue(ARCHIVE)
-
-    expect(resolveClaudeCodeCliPath()).toBe(join(`${ARCHIVE}.unpacked`, CLI))
+describe('selected Claude Code login', () => {
+  it('offers no command without a compatible external runtime', async () => {
+    expect(await buildCliLoginCommand()).toBe('')
   })
-
-  it('stays inside the app folder when the build is not archived', () => {
-    const appDir = join('/opt/Halo/resources', 'app')
-    vi.spyOn(app, 'getAppPath').mockReturnValue(appDir)
-
-    expect(resolveClaudeCodeCliPath()).toBe(join(appDir, CLI))
+  it('launches native CC directly in Halo’s credential slot', async () => {
+    runtime.launch = { command: '/Users/me/My CC/claude', argsPrefix: [], env: {}, kind: 'native' }
+    const command = await buildCliLoginCommand()
+    expect(command).toContain("CLAUDE_CONFIG_DIR='/halo-config'")
+    expect(command).toContain("DISABLE_AUTOUPDATER='1'")
+    expect(command).toContain("'/Users/me/My CC/claude' /login")
+    expect(command).not.toContain('ELECTRON_RUN_AS_NODE')
   })
-
-  it('gives the sign-in command the same real file', () => {
-    vi.spyOn(app, 'getAppPath').mockReturnValue(ARCHIVE)
-
-    expect(buildCliLoginCommand()).toContain(`'${join(`${ARCHIVE}.unpacked`, CLI)}' /login`)
+  it('uses the supplied JavaScript interpreter and quotes paths', async () => {
+    runtime.launch = { command: '/Applications/Halo Next', argsPrefix: ["/Users/o'neil/cli.js"], env: { ELECTRON_RUN_AS_NODE: '1' }, kind: 'javascript' }
+    const command = await buildCliLoginCommand()
+    expect(command).toContain("ELECTRON_RUN_AS_NODE='1'")
+    expect(command).toContain("'/Applications/Halo Next'")
+    expect(command).toContain("'" + "/Users/o" + "'\\''" + "neil/cli.js'")
   })
 })

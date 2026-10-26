@@ -11,6 +11,7 @@ const env = vi.hoisted(() => ({
   loadChatTranscriptForConversation: vi.fn(),
   loadChatMessageThoughts: vi.fn(),
   respondToEscalation: vi.fn(),
+  engineMetadata: {} as import('../../../src/shared/apps/app-types').AppChatEngineMetadata,
   space: { id: 'space-a', path: '/spaces/a' } as { id: string; path: string } | null,
 }))
 
@@ -25,6 +26,11 @@ vi.mock('../../../src/main/apps/runtime', async () => ({
   EscalationAnswerValidationError: (await import('../../../src/main/apps/runtime/errors')).EscalationAnswerValidationError,
   getAppRuntime: () => ({ respondToEscalation: env.respondToEscalation }),
   getAppChatConversationId: (appId: string) => `app-chat:${appId}`,
+  buildImSessionKey: (appId: string, channel: string, chatType: string, chatId: string) => `app-chat:${appId}:${channel}:${chatType}:${chatId}`,
+  loadChatEngineMetadata: () => env.engineMetadata,
+  loadAppChatMessages: () => [],
+  loadChatMessagesForConversation: () => [],
+  loadImChatMessages: () => [],
   loadChatTranscriptForConversation: (...args: unknown[]) => env.loadChatTranscriptForConversation(...args),
   loadChatMessageThoughts: (...args: unknown[]) => env.loadChatMessageThoughts(...args),
 }))
@@ -41,6 +47,7 @@ const EMPTY = { messages: [], hasMoreBefore: false, cursor: null, total: 0 }
 
 beforeEach(() => {
   env.space = { id: 'space-a', path: '/spaces/a' }
+  env.engineMetadata = {}
   env.loadChatTranscriptForConversation.mockReset().mockReturnValue({ messages: [{ id: 'session-msg-1' }], hasMoreBefore: false, cursor: 'session-msg-1', total: 1 })
   env.loadChatMessageThoughts.mockReset().mockReturnValue([{ id: 't' }])
   env.respondToEscalation.mockReset()
@@ -58,6 +65,15 @@ it('reads the default session when no conversationId is given, passing the pagin
 it('reads a specific session when addressed', async () => {
   await env.handlers.appChatTranscript({ appId: 'a1', spaceId: 'space-a', conversationId: 'app-chat:a1:local:direct:x' })
   expect(env.loadChatTranscriptForConversation.mock.calls[0][2]).toBe('app-chat:a1:local:direct:x')
+})
+
+it('adds engine identity to native and IM history without changing the message array', async () => {
+  const engineBinding = { version: 1 as const, engineId: 'halo' as const, sessionId: 'native-halo' }
+  env.engineMetadata = { engineId: 'halo', engineBinding }
+  for (const result of [
+    await env.handlers.appChatMessages({ appId: 'a1', spaceId: 'space-a' }),
+    await env.handlers.appImChatMessages({ appId: 'a1', spaceId: 'space-a', channel: 'wecom-bot', chatType: 'direct', chatId: 'person' }),
+  ]) expect(result).toEqual({ success: true, data: [], engineId: 'halo', engineBinding })
 })
 
 it('answers an empty page when the space is unknown', async () => {

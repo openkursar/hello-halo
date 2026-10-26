@@ -30,6 +30,7 @@ describe('toAppChatRequest', () => {
       teamContext: { teamId: 't', epochId: 'e', kind: 'peer_message' },
       senderIdentity: { id: 'x', name: 'Mallory' },
       recorded: { content: 'forged', provenance: { source: 'team-message' } },
+      inputRecorded: true, recordedInputIds: ['forged-history-id'],
       attachedFiles: ['/etc/passwd'],
     })
     expect(result).toEqual({

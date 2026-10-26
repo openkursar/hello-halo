@@ -9,7 +9,6 @@
 import path from 'path'
 import { createHash } from 'crypto'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs'
-import { app } from 'electron'
 import { resolveClaudeConfigDir, getConfig } from '../../foundation/config.service'
 import {
   ensureOpenAICompatRouter,
@@ -19,7 +18,7 @@ import {
 } from '../../openai-compat-router'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
 import type { ReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
-import { inferOpenAIWireApi, credentialsToBackendConfig, getHeadlessElectronPath, getDisabledMcpTools } from './helpers'
+import { inferOpenAIWireApi, credentialsToBackendConfig, getDisabledMcpTools } from './helpers'
 import { mcpToolName } from './mcp/tool-name'
 import { resolveModelId } from '../../../shared/types/ai-sources'
 import { readUserAgentSettings, INTERNAL_TASK_SETTINGS, type UserAgentSettings } from './user-agent-settings'
@@ -34,7 +33,11 @@ import {
   CONTEXT_WINDOW_HARD_MIN,
   CONTEXT_WINDOW_HARD_CAP,
 } from '../../../shared/constants/model-runtime-limits'
-import { getActiveEngine, getEngineCapabilities } from './resolved-sdk'
+import { getEngineCapabilities, resolveDefaultEngine } from './resolved-sdk'
+import type { EngineId } from '../../../shared/types/engine'
+import { assertEngineSourceCompatible } from '../../../shared/engine-source'
+import { assertDelegatedAuthReady } from './cli-auth'
+import { waitForSdkInitialization } from './initialization'
 import { getDeviceIdentity } from '../../foundation/device-identity'
 import { applyOfficeRuntimeEnv } from '../office-runtime'
 import { applyProxyEnv } from '../proxy-policy'
@@ -66,6 +69,7 @@ const PROXY_ANTHROPIC = true
  * This is the output of credential resolution process.
  */
 export interface ResolvedSdkCredentials {
+  engineId?: EngineId
   sourceId?: string
   credentialsGeneration?: number | string
   /** Captured source credentials for adapters; never re-resolve global selection. */
@@ -215,6 +219,7 @@ export function resolveSdkRuntimeLimits(
  * caller cannot forget one.
  */
 export interface SessionSdkOptionsParams {
+  engineId?: EngineId
   /** Resolved SDK credentials */
   credentials: ResolvedSdkCredentials
   /** Working directory for the agent */
@@ -265,14 +270,14 @@ export type UserSessionSdkOptionsParams = SessionSdkOptionsParams
 /** A background task nobody asked for by name. It carries no session-shaped extras. */
 export type InternalTaskSdkOptionsParams = Pick<
   SessionSdkOptionsParams,
-  'credentials' | 'workDir' | 'electronPath' | 'spaceId' | 'conversationId' | 'stderrHandler' | 'mcpServers'
+  'engineId' | 'credentials' | 'workDir' | 'electronPath' | 'spaceId' | 'conversationId' | 'stderrHandler' | 'mcpServers'
 >
 
 // ============================================
 // Hooks
 // ============================================
 
-let guardDegradationLogged = false
+const guardDegradationLogged = new Set<EngineId>()
 
 type SdkHookMatchers = Record<string, unknown[]>
 
@@ -337,24 +342,31 @@ function buildDisallowedTools(userDisabledTools?: string[]): string[] {
  */
 export async function resolveCredentialsForSdk(
   credentials: ApiCredentials,
-  pickedReasoningEffort?: ReasoningEffortLevel
+  pickedReasoningEffort?: ReasoningEffortLevel,
+  selectedEngine?: EngineId
 ): Promise<ResolvedSdkCredentials> {
+  await waitForSdkInitialization()
+  const engineId = selectedEngine ?? await resolveDefaultEngine()
+  assertEngineSourceCompatible(engineId, credentials)
+  if (engineId === 'codex' && !credentials.model) throw new Error('Choose a model before starting Codex.')
   console.debug(`[SDK Config] resolveCredentialsForSdk: provider=${credentials.provider}, model=${credentials.model}, baseUrl=${credentials.baseUrl}`)
 
   if (credentials.delegatedAuth) {
-    return resolveDelegatedAuth(credentials, pickedReasoningEffort)
+    assertDelegatedAuthReady(engineId)
+    return { ...await resolveDelegatedAuth(credentials, pickedReasoningEffort), engineId }
   }
 
   // Experimental: route Anthropic through local router for interceptor coverage
   if (PROXY_ANTHROPIC && credentials.provider === 'anthropic') {
-    return resolveAnthropicPassthrough(credentials, pickedReasoningEffort)
+    return { ...await resolveAnthropicPassthrough(credentials, pickedReasoningEffort), engineId }
   }
 
   // ── Original logic (identical to pre-optimization code) ──
   // Start with direct values
   let anthropicBaseUrl = credentials.baseUrl
   let anthropicApiKey = credentials.apiKey
-  let sdkModel = resolveModelId(credentials.model)
+  const preservesModelId = engineId === 'codex' || credentials.apiType === 'chat_completions' || credentials.apiType === 'responses'
+  let sdkModel = preservesModelId ? credentials.model : resolveModelId(credentials.model)
   const displayModel = credentials.displayModel || credentials.model
 
   // For non-Anthropic providers (openai or OAuth), use the OpenAI compat router
@@ -372,13 +384,14 @@ export async function resolveCredentialsForSdk(
     console.log(`[SDK Config] ${credentials.provider} provider: routing via ${anthropicBaseUrl}, apiType=${apiType}, sdkModel=${sdkModel}${pickedReasoningEffort ? `, effort=${pickedReasoningEffort}` : ''}`)
   }
 
-  const decoratedSdkModel = applyCC1mContextUnlock(sdkModel, credentials.capabilities)
+  const decoratedSdkModel = engineId === 'codex' ? sdkModel : applyCC1mContextUnlock(sdkModel, credentials.capabilities)
   if (decoratedSdkModel !== sdkModel) {
     console.log(`[SDK Config] CC 1M context unlock: sdkModel "${sdkModel}" → "${decoratedSdkModel}" (contextWindow=${credentials.capabilities?.contextWindow})`)
     sdkModel = decoratedSdkModel
   }
 
   return {
+    engineId,
     anthropicBaseUrl,
     anthropicApiKey,
     sdkModel,
@@ -441,6 +454,7 @@ export function computeCredentialsFingerprint(sdkOptions: Record<string, any>): 
     : rawKey  // Direct Anthropic: plain key, stable as-is
 
   const material = [
+    String(sdkOptions.engineId ?? ''),
     String(env.HALO_AI_SOURCE_ID ?? ''),
     String(sdkOptions.model ?? ''),
     String(env.ANTHROPIC_BASE_URL ?? ''),
@@ -887,79 +901,19 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
 }
 
 // ============================================
-// Claude Code CLI Path Resolution
+// Optional Claude Code Login
 // ============================================
 
-const CLI_RELATIVE = 'node_modules/@anthropic-ai/claude-code/cli.js'
-
-/**
- * Resolve the path to the Claude Code CLI executable.
- *
- * Three runtime environments need to be handled:
- *
- * 1. **Packaged** (`app.isPackaged === true`): the real file `asarUnpack` puts in
- *    `app.asar.unpacked`, not its path inside the archive. The CLI runs programs
- *    found next to its own file (ripgrep behind Grep, Glob and its agent/command
- *    discovery), and no OS can execute a file inside an archive; Electron's
- *    redirect for that does not reach the CLI's ES module imports since
- *    Electron 43 (Node 24), so those calls failed with `spawn ENOTDIR`.
- *
- * 2. **Dev** (`npm run dev`): Vite runs the main process from the project root.
- *    `app.getAppPath()` returns the project root, so the CLI is at
- *    `<projectRoot>/node_modules/...`.
- *
- * 3. **Built but unpackaged** (`npm run build` + run `out/main/index.mjs`, i.e. E2E):
- *    Electron resolves `app.getAppPath()` to `out/main/` (the entry file's directory),
- *    which has no `node_modules`. The CLI must be found at the project root instead.
- *
- * Using `app.isPackaged` cleanly separates case 1 from 2/3. For the unpackaged cases,
- * `existsSync` picks whichever candidate path actually exists, covering both dev and E2E
- * without any hardcoded relative-path assumptions.
- */
-export function resolveClaudeCodeCliPath(): string {
-  if (app.isPackaged) {
-    const appPath = app.getAppPath()
-    const diskRoot = appPath.endsWith('.asar') ? `${appPath}.unpacked` : appPath
-    return path.join(diskRoot, CLI_RELATIVE)
-  }
-
-  // Unpackaged (dev or E2E build): search candidate locations
-  const candidates = [
-    // Dev mode: app.getAppPath() === project root
-    path.join(app.getAppPath(), CLI_RELATIVE),
-    // E2E build mode: app.getAppPath() === out/main/, project root is two levels up
-    path.join(app.getAppPath(), '..', '..', CLI_RELATIVE),
-  ]
-
-  const resolved = candidates.find(existsSync)
-  if (!resolved) {
-    throw new Error(
-      `[SDK Config] Claude Code CLI not found. Searched:\n${candidates.join('\n')}`
-    )
-  }
-  return resolved
-}
-
-/**
- * Shell command that runs the bundled CLI's own login flow against Halo's
- * credential slot, for the user to execute in a terminal session.
- *
- * Spawned through the headless Electron binary rather than `node`: a packaged
- * install has no guarantee that a system Node exists. `CLAUDE_CONFIG_DIR` is
- * passed inline because the terminal service inherits the user's shell
- * environment and exposes no per-session env — and it decides which credential
- * slot receives the login, so omitting it would sign the user into their
- * personal `claude` install instead of Halo's.
- *
- * POSIX quoting is sufficient while delegated auth is macOS-only; PowerShell
- * needs its own form when Windows is enabled.
- */
-export function buildCliLoginCommand(): string {
+/** Login uses the selected runtime and Halo's credential slot, without updating it. */
+export async function buildCliLoginCommand(): Promise<string> {
+  const { resolveCcRuntimeLaunch } = await import('../cc-runtime')
+  const launch = await resolveCcRuntimeLaunch()
+  if (!launch) return ''
   return [
-    'ELECTRON_RUN_AS_NODE=1',
-    `CLAUDE_CONFIG_DIR=${shellQuote(resolveClaudeConfigDir())}`,
-    shellQuote(getHeadlessElectronPath()),
-    shellQuote(resolveClaudeCodeCliPath()),
+    ...Object.entries({ ...launch.env, CLAUDE_CONFIG_DIR: resolveClaudeConfigDir(), DISABLE_AUTOUPDATER: '1' })
+      .map(([key, value]) => `${key}=${shellQuote(value)}`),
+    shellQuote(launch.command),
+    ...launch.argsPrefix.map(shellQuote),
     '/login'
   ].join(' ')
 }
@@ -968,11 +922,7 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-// On spawn ENOENT the SDK always blames cliPath ("executable not found"), even
-// when the real culprit is a missing cwd — the classic Node cause (#170). Log the
-// triplet and surface a bad cwd with its true cause.
-function validateSpawnInputs(electronPath: string, cliPath: string, workDir: string, spaceId: string): void {
-  console.log(`[SDK Config] spawn inputs: command="${electronPath}", cli="${cliPath}", cwd="${workDir}"`)
+function validateWorkingDirectory(workDir: string, spaceId: string): void {
   if (!existsSync(workDir)) {
     console.warn(`[SDK Config] Working directory does not exist: "${workDir}" (space ${spaceId}); the engine cannot be spawned there`)
     throw new WorkingDirectoryUnavailableError(workDir, spaceId)
@@ -1020,6 +970,11 @@ async function assembleSdkOptions(
   params: SessionSdkOptionsParams,
   settings: UserAgentSettings
 ): Promise<Record<string, any>> {
+  await waitForSdkInitialization()
+  const engineId = params.engineId ?? params.credentials.engineId ?? await resolveDefaultEngine()
+  if (params.credentials.engineId && params.credentials.engineId !== engineId) {
+    throw new Error('Session credentials were prepared for a different engine')
+  }
   const {
     credentials,
     workDir,
@@ -1059,17 +1014,16 @@ async function assembleSdkOptions(
     spaceId,
   })
 
-  const cliPath = resolveClaudeCodeCliPath()
-  validateSpawnInputs(electronPath, cliPath, workDir, spaceId)
+  validateWorkingDirectory(workDir, spaceId)
 
   // Build base options
   const sdkOptions: Record<string, any> = {
+    engineId,
     model: credentials.sdkModel,
     credentialsGeneration: credentials.credentialsGeneration,
     apiCredentials: credentials.apiCredentials,
     cwd: workDir,
     env,
-    pathToClaudeCodeExecutable: cliPath,
     extraArgs: {
       'dangerously-skip-permissions': null
     },
@@ -1085,13 +1039,14 @@ async function assembleSdkOptions(
     // section is appended at actual session creation (getOrCreateV2Session's
     // resolveKnowledgeBases) so a reused session never pays the index reads.
     systemPrompt: toEngineSystemPrompt(buildSystemPrompt({
+      engineId,
       workDir,
       modelInfo: credentials.displayModel,
       // Stated, never left open: an open value makes the prompt builder read config again.
       promptProfile: settings.promptProfile ?? 'halo',
       digitalHumansEnabled: settings.digitalHumansEnabled,
       toolsetIndex: params.toolsetIndex
-    }) + (params.memoryInstructions ? `\n\n${params.memoryInstructions}` : '')),
+    }) + (params.memoryInstructions ? `\n\n${params.memoryInstructions}` : ''), engineId),
     maxTurns: settings.maxTurns ?? DEFAULT_MAX_TURNS,
     allowedTools: [...DEFAULT_ALLOWED_TOOLS],
     // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/
@@ -1101,7 +1056,6 @@ async function assembleSdkOptions(
       spaceId,
       conversationId
     }),
-    // Requires SDK patch: enable token-level streaming (stream_event)
     includePartialMessages: true,
     executable: electronPath,
     executableArgs: ['--no-warnings'],
@@ -1111,13 +1065,13 @@ async function assembleSdkOptions(
   }
 
   if (params.memoryGuard) {
-    if (getEngineCapabilities()?.features.hooks) {
+    if (getEngineCapabilities(engineId)?.features.hooks) {
       addSdkHooks(sdkOptions, createMemoryWriteHooks(params.memoryGuard))
-    } else if (!guardDegradationLogged) {
+    } else if (!guardDegradationLogged.has(engineId)) {
       // Degraded, not refused: memory still works, only without the lock and
       // the read-only boundary; the prompt asks the agent to edit carefully.
-      guardDegradationLogged = true
-      console.warn(`[SDK Config] Engine ${getActiveEngine()} runs no hooks — memory write guard unavailable for its sessions`)
+      guardDegradationLogged.add(engineId)
+      console.warn(`[SDK Config] Engine ${engineId} runs no hooks — memory write guard unavailable for its sessions`)
     }
   }
 
@@ -1146,7 +1100,7 @@ async function assembleSdkOptions(
 
   // Request identity — host-injected headers, system prefix and metadata
   // (halo engine only).
-  if (getActiveEngine() === 'halo') {
+  if (engineId === 'halo') {
     sdkOptions.workerGroup = spaceId
     try {
       sdkOptions.haloRequestIdentity = {

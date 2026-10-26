@@ -13,7 +13,7 @@ const env = vi.hoisted(() => ({
   headless: '/Applications/Halo.app/Contents/Frameworks/Halo Helper.app/Contents/MacOS/Halo Helper',
   codex: null as { binaryPath: string; isJsShim: boolean; pathDirs: string[] } | null,
 }))
-vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ getActiveEngine: () => env.engine }))
+vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ getDefaultEngine: () => env.engine , resolveDefaultEngine: async () => env.engine }))
 vi.mock('../../../../src/main/services/agent/helpers', () => ({ getHeadlessElectronPath: () => env.headless }))
 vi.mock('../../../../src/main/services/agent/codex/transport/connection', () => ({
   resolveBundledCodexBinary: () => env.codex,

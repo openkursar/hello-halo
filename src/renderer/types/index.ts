@@ -10,6 +10,7 @@ import {
   hasAnyAISource
 } from '../../shared/types/ai-sources';
 import { NotificationChannelsConfig }  from '../../shared/types/notification-channels';
+import type { EngineSessionBinding } from '../../shared/types/engine-session';
 import type { KBSource } from '../../shared/types/tlon';
 import type { MemorySettings } from '../../shared/types/memory';
 // Re-exported below as well, but `export … from` creates no local binding, so the
@@ -17,6 +18,7 @@ import type { MemorySettings } from '../../shared/types/memory';
 import type { ApiProvider } from '../../shared/types/ai-sources';
 import type { FileChangesSummary } from '../../shared/file-changes';
 import type { GoalInput } from '../../shared/types/goal';
+import type { CcRuntimeConfig } from '../../shared/types/cc-runtime';
 import type {
   TranscriptMessage,
   ToolCall,
@@ -156,6 +158,7 @@ export interface AgentConfig {
   maxTurns: number;         // Maximum tool call turns per message
   promptProfile?: 'official' | 'halo';  // System prompt profile
   sdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh';  // Agent SDK engine (requires restart)
+  ccRuntime?: CcRuntimeConfig;
   configDirMode?: 'halo' | 'cc' | 'custom';  // Claude CLI config directory mode
   customConfigDir?: string;  // Custom config dir path (when configDirMode === 'custom')
   enableDigitalHumans?: boolean; // Enable Digital Humans MCP tools (automation app management)
@@ -407,6 +410,11 @@ export interface ConversationMeta {
   starred?: boolean; // Pinned conversation for quick access
   /** Engine recorded at conversation creation. Read with `?? 'anthropic'` fallback. */
   engineId?: EngineId | null;
+  engineRoutingVersion?: 1;
+  engineBinding?: EngineSessionBinding;
+  /** Current engine reported by a digital-human history read; not an engine preference. */
+  resolvedEngineId?: EngineId;
+  engineOverride?: EngineId;
   /** User renamed it; the first message no longer sets the title. */
   titleCustomized?: boolean;
 }
@@ -581,6 +589,7 @@ export interface EngineAvailability {
 
 /** Payload of `agent:get-engine-availability`. */
 export interface EngineAvailabilityReport {
+  defaultEngine?: EngineId | null;
   engines: EngineAvailability[];
   /** Engine actually running; null when no engine could be loaded. */
   activeEngine: EngineId | null;

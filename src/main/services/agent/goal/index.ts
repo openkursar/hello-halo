@@ -1,3 +1,5 @@
+import type { EngineId } from '../../../../shared/types/engine'
+import { resolveConversationEngine } from '../engine-routing'
 /**
  * Conversation goal — read and set the engine session's goal on the user's behalf.
  *
@@ -15,20 +17,22 @@ import type { Goal, GoalInput } from '../../../../shared/types/goal'
 import { getConversation } from '../../conversation.service'
 import { emitAgentEvent } from '../events'
 import { getEngineCapabilities } from '../resolved-sdk'
-import { ensureSessionWarm, v2Sessions } from '../session-manager'
+import { ensureSessionWarm, v2Sessions, getSessionEngineId, isSessionBusy } from '../session-manager'
 import type { V2SDKSession } from '../types'
 import { getGoalDraft, setGoalDraft } from './draft'
 
 type GoalSession = V2SDKSession & Required<Pick<V2SDKSession, 'getGoal' | 'setGoal'>>
 
-export function isGoalSupported(): boolean {
-  return getEngineCapabilities()?.features.goal === true
+export function isGoalSupported(engineId?: EngineId): boolean {
+  return getEngineCapabilities(engineId)?.features.goal === true
 }
 
 /** Current goal of a conversation, or null when it has none or the engine keeps no goals. */
 export async function getConversationGoal(spaceId: string, conversationId: string): Promise<Goal | null> {
-  if (!isGoalSupported()) return null
-  if (!getConversation(spaceId, conversationId)) return null
+  const conversation = getConversation(spaceId, conversationId)
+  if (!conversation) return null
+  const engineId = await resolveConversationEngine(conversation, getSessionEngineId(conversationId), isSessionBusy(conversationId))
+  if (!isGoalSupported(engineId)) return null
   const { session } = await resolveGoalSession(spaceId, conversationId)
   if (session) return session.getGoal()
   return getGoalDraft(conversationId)
@@ -46,8 +50,9 @@ export async function setConversationGoal(
   conversationId: string,
   input: GoalInput | null
 ): Promise<Goal | null> {
-  assertGoalSupported()
-  const normalized = input ? prepareGoalInput(input) : null
+  const engineId = await resolveConversationEngine(getConversation(spaceId, conversationId), getSessionEngineId(conversationId), isSessionBusy(conversationId))
+  assertGoalSupported(engineId)
+  const normalized = input ? prepareGoalInput(input, engineId) : null
   const { session, persisted } = await resolveGoalSession(spaceId, conversationId)
   if (!session && persisted) {
     console.error(`[Agent][${conversationId}] Goal not set: the conversation's session could not be started`)
@@ -62,8 +67,8 @@ export async function setConversationGoal(
  *
  * @throws when the engine keeps no goals or the objective is blank.
  */
-export function prepareGoalInput(input: GoalInput): GoalInput {
-  assertGoalSupported()
+export function prepareGoalInput(input: GoalInput, engineId?: EngineId): GoalInput {
+  assertGoalSupported(engineId)
   const objective = typeof input.objective === 'string' ? input.objective.trim() : ''
   if (!objective) {
     console.warn('[Agent] Goal refused: the objective is blank')
@@ -116,8 +121,8 @@ async function applyUserGoal(
   return goal
 }
 
-function assertGoalSupported(): void {
-  if (!isGoalSupported()) {
+function assertGoalSupported(engineId?: EngineId): void {
+  if (!isGoalSupported(engineId)) {
     console.warn('[Agent] Goal refused: the active engine keeps no goals')
     throw new Error('The active agent engine does not support goals')
   }

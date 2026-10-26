@@ -15,11 +15,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // ── Collaborators the sink reaches for on delivery / persistence ──
-const { pushToChat, findSession, writeEvent, saveChatSessionId } = vi.hoisted(() => ({
+const { pushToChat, findSession, writeEvent, saveChatSessionId, saveChatEngineBinding } = vi.hoisted(() => ({
   pushToChat: vi.fn(() => true),
   findSession: vi.fn(() => ({ instanceId: 'inst-1' })),
   writeEvent: vi.fn(),
   saveChatSessionId: vi.fn(),
+  saveChatEngineBinding: vi.fn(() => true),
 }))
 
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
@@ -33,6 +34,7 @@ vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
   openSessionWriter: () => ({ writeEvent, writeTrigger: vi.fn() }),
   saveChatSessionId,
+  saveChatEngineBinding,
 }))
 
 const { stopGeneration } = vi.hoisted(() => ({ stopGeneration: vi.fn(async () => {}) }))
@@ -47,6 +49,7 @@ import {
   onAppChatRoundChange,
   sweepIdleAppChatSinks,
   SINK_IDLE_RELEASE_MS,
+  bindAppChatEngine,
 } from '../../../../src/main/apps/runtime/app-chat-sink'
 import { AppChatTurnInterrupted } from '../../../../src/main/apps/runtime/turn-ending'
 
@@ -99,6 +102,42 @@ function feedThinkingOnly(sink: ReturnType<typeof makeSink>) {
   })
 }
 
+describe('digital human engine binding writes', () => {
+  beforeEach(() => {
+    saveChatEngineBinding.mockReset().mockReturnValue(true)
+    saveChatSessionId.mockReset()
+  })
+
+  it('captures the preparation state and writes the engine that owns the result', () => {
+    const onTurnComplete = vi.fn()
+    const expected = { sessionId: 'previous' }
+    const sink = bindAppChatEngine({ onTurnComplete }, { spacePath: '/space', appId: 'person', runId: 'chat', engineId: 'halo', expected })
+    sink.onTurnComplete(makeResult({ engineId: 'halo', capturedSessionId: 'new-session' }))
+    expect(saveChatEngineBinding).toHaveBeenCalledWith('/space', 'person', 'chat', { version: 1, engineId: 'halo', sessionId: 'new-session' }, expected)
+    sink.onTurnComplete(makeResult({ engineId: 'halo', capturedSessionId: 'new-session' }))
+    expect(saveChatEngineBinding).toHaveBeenCalledTimes(1)
+    expect(onTurnComplete).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not fall back to the legacy writer after a late binding was refused', () => {
+    saveChatEngineBinding.mockReturnValue(false)
+    const actual = makeSink('app-chat:binding-rejected')
+    const sink = bindAppChatEngine(actual, { spacePath: '/space', appId: 'person', runId: 'chat', engineId: 'anthropic', expected: {} })
+    sink.onTurnComplete(makeResult({ engineId: 'anthropic', capturedSessionId: 'late' }))
+    expect(saveChatEngineBinding).toHaveBeenCalledTimes(1)
+    expect(saveChatSessionId).not.toHaveBeenCalled()
+    disposeAppChatSink('app-chat:binding-rejected')
+  })
+
+  it('rejects a result stamped with another consumer engine', () => {
+    const onTurnComplete = vi.fn()
+    const sink = bindAppChatEngine({ onTurnComplete }, { spacePath: '/space', appId: 'person', runId: 'chat', engineId: 'halo', expected: {} })
+    sink.onTurnComplete(makeResult({ engineId: 'anthropic', capturedSessionId: 'foreign' }))
+    expect(saveChatEngineBinding).not.toHaveBeenCalled()
+    expect(onTurnComplete).toHaveBeenCalledWith(expect.objectContaining({ capturedSessionId: undefined }))
+  })
+})
+
 // ============================================
 // Tests
 // ============================================
@@ -110,6 +149,7 @@ describe('app-chat sink turn ownership', () => {
     findSession.mockClear()
     writeEvent.mockReset()
     saveChatSessionId.mockReset()
+    saveChatEngineBinding.mockReset().mockReturnValue(true)
   })
 
   it('settles the round with the reply of the turn that follows it', async () => {

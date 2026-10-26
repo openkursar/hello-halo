@@ -15,6 +15,7 @@ export interface SdkMcpToolDescriptor {
   description?: string
   inputSchema?: Record<string, unknown>
   annotations?: Record<string, unknown>
+  _meta?: Record<string, unknown>
 }
 
 /** One `tool()` result: what the model is told, plus what actually runs. */
@@ -33,7 +34,7 @@ export interface SdkMcpServerInstance {
   readonly name?: string
   readonly version?: string
   listTools(): SdkMcpToolDescriptor[]
-  callTool(name: string, args: Record<string, unknown>): Promise<unknown>
+  callTool(name: string, args: Record<string, unknown>, extra?: { signal?: AbortSignal }): Promise<unknown>
 }
 
 /** The shape Halo puts in `sdkOptions.mcpServers` for an in-process server. */

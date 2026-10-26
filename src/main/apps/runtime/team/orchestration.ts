@@ -65,6 +65,7 @@ interface TeamInputRecord {
 interface HeldBackWake {
   kind: 'held_back'
   recorded: boolean
+  recordedInputIds?: readonly (string | undefined)[]
 }
 
 /** Injected so the module is testable without Electron / app-chat. */
@@ -76,6 +77,7 @@ export interface OrchestrationSessionDeps {
     message: string
     coalescingKey?: string
     recordedMessages?: TeamInputRecord[]
+    recordedInputIds?: readonly string[]
     conversationId: string
     teamContext: TeamTriggerContext
     /** The hold `holdTurn` gave this turn; the turn takes it over as its own. */
@@ -94,7 +96,7 @@ export interface OrchestrationSessionDeps {
      * ran; `recorded` says its input records were written meanwhile. The local
      * impl has already marked the person's own records as stopped.
      */
-    heldBack?: { recorded: boolean }
+    heldBack?: { recorded: boolean; recordedInputIds?: readonly (string | undefined)[] }
   }>
   deliverRemoteMessage?(request: { appId: string; spaceId: string; message: string; conversationId: string; teamContext: TeamTriggerContext; coalescingKey?: string; recordedMessages?: TeamInputRecord[]; onCompletion: (outcome: TurnCompletion) => void }): boolean | undefined
   getTurnIdentity?(sessionKey: string): string | undefined
@@ -118,10 +120,10 @@ export interface OrchestrationSessionDeps {
   injectIntoSession(
     sessionKey: string,
     message: string,
-    messages?: readonly { text: string; recorded: TeamInputRecord; inputRecorded?: boolean }[],
+    messages?: readonly { text: string; recorded: TeamInputRecord; inputRecorded?: boolean; recordedInputIds?: readonly string[] }[],
     trigger?: TeamTriggerContext,
     /** A person stopped the turn before it read these (indexes); the person's own words are marked, not returned. */
-    onTakenBack?: (indexes: readonly number[]) => void
+    onTakenBack?: (indexes: readonly number[], recordedInputIds?: readonly (readonly string[])[]) => void
   ): boolean
   /** A person's own words their stop voided before anything was written stay in the member's record, marked. */
   recordStoppedInputs?(sessionKey: string, records: readonly TeamInputRecord[]): void
@@ -708,6 +710,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
           spaceId,
           message: inputs.join('\n\n'),
           recordedMessages: deliveries.flatMap((delivery, index) => delivery.inputRecorded ? [] : [recordDelivery(delivery, inputs[index])]),
+          recordedInputIds: deliveries.flatMap(delivery => delivery.recordedInputIds ?? []),
           conversationId: sessionKey,
           teamContext: trigger,
         },
@@ -722,7 +725,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     void turnPromise
       .then(
         (res): TurnCompletion | HeldBackWake =>
-          res.heldBack ? { kind: 'held_back', recorded: res.heldBack.recorded } :
+          res.heldBack ? { kind: 'held_back', recorded: res.heldBack.recorded, recordedInputIds: res.heldBack.recordedInputIds } :
           capturedEscalations.get(trigger.correlationId) ??
           // A wake that never reached the owner (or whose completion never returned)
           // is NOT a result — surface it as 'undelivered' so the sender learns the
@@ -772,7 +775,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       )
       .then((outcome) => {
         if (outcome.kind === 'held_back') {
-          finishHeldBack(outcome.recorded)
+          finishHeldBack(outcome.recorded, outcome.recordedInputIds)
           return
         }
         // `bus.completeTurn` is what hands the session's slot back, and this
@@ -836,12 +839,15 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
      * words are void, and the rest waits for the member's next turn. Nothing is
      * reported or settled for it until it has actually run.
      */
-    function finishHeldBack(recorded: boolean): void {
+    function finishHeldBack(recorded: boolean, recordedInputIds: readonly (string | undefined)[] = []): void {
       busTurns.delete(sessionKey)
       capturedEscalations.delete(trigger.correlationId)
-      const voided = bus.returnHeldBack(sessionKey, deliveries.map((delivery) => (
-        recorded ? { ...delivery, inputRecorded: true } : delivery
-      )))
+      let recordIndex = 0
+      const voided = bus.returnHeldBack(sessionKey, deliveries.map(delivery => {
+        if (delivery.inputRecorded || !recorded) return delivery
+        const inputId = recordedInputIds[recordIndex++]
+        return { ...delivery, inputRecorded: true, recordedInputIds: [...new Set([...delivery.recordedInputIds ?? [], ...(inputId ? [inputId] : [])])] }
+      }))
       const unwritten = voided.filter((delivery) => !recorded && !delivery.inputRecorded)
       if (unwritten.length) {
         session.recordStoppedInputs?.(sessionKey, unwritten.map((delivery) => recordDelivery(delivery, renderEnvelope(delivery.envelope, delivery.trigger))))
@@ -892,14 +898,17 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     const delivered = session.injectIntoSession(
       sessionKey,
       messages.join('\n\n'),
-      messages.map((text, index) => ({ text, recorded: recordDelivery(deliveries[index], text), inputRecorded: deliveries[index].inputRecorded })),
+      messages.map((text, index) => ({ text, recorded: recordDelivery(deliveries[index], text), inputRecorded: deliveries[index].inputRecorded, recordedInputIds: deliveries[index].recordedInputIds })),
       trigger,
-      (indexes) => {
+      (indexes, recordedInputIds) => {
         // Unread: a decision answer among them settles with the turn that reads it, not this one.
         const joined = liveDecisions.get(sessionKey)
         for (const index of indexes) joined?.delete(deliveries[index].trigger.correlationId)
         if (joined?.size === 0) liveDecisions.delete(sessionKey)
-        bus.returnDeliveries(sessionKey, indexes.map((index) => ({ ...deliveries[index], inputRecorded: true })))
+        bus.returnDeliveries(sessionKey, indexes.map(index => ({
+          ...deliveries[index], inputRecorded: true,
+          recordedInputIds: [...new Set([...deliveries[index].recordedInputIds ?? [], ...recordedInputIds?.[index] ?? []])],
+        })))
       },
     )
     if (delivered) {

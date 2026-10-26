@@ -11,6 +11,8 @@ import type { HaloAPI } from '../../../src/preload'
 import { test, expect } from '../fixtures/people'
 import { navigateToApps, navigateToSettings } from '../fixtures/helpers'
 import type { Page } from '@playwright/test'
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 test.setTimeout(60000)
 test.use({ peopleCount: 2 })
@@ -20,6 +22,95 @@ async function openSettings(page: Page) {
   await page.getByRole('button', { name: 'Analyst 000', exact: true }).click()
   await page.getByRole('button', { name: 'Capabilities and settings', exact: true }).click()
 }
+
+async function digitalHumanEngine(page: Page) {
+  const result = await page.evaluate(async () => (globalThis.window as unknown as { halo: HaloAPI }).halo.appGet('person-000'))
+  expect(result.success).toBe(true)
+  return (result.data as { userOverrides: { engineId?: string } }).userOverrides.engineId
+}
+
+test('digital human engine confirmation preserves the choice until approved and fits 375px', async ({ window }, testInfo) => {
+  await window.setViewportSize({ width: 375, height: 900 })
+  await openSettings(window)
+  const advanced = window.locator('#settings-group-advanced')
+  await advanced.getByRole('button', { name: 'Advanced', exact: true }).click()
+  const engine = advanced.getByRole('combobox', { name: 'Digital human engine', exact: true })
+  await expect(engine).toBeEnabled()
+  await expect(engine).toHaveValue('')
+  await engine.selectOption('halo')
+  const confirmation = window.getByRole('alertdialog', { name: 'Change this digital human’s engine?', exact: true })
+  await expect(confirmation).toBeVisible()
+  expect(await digitalHumanEngine(window)).toBeUndefined()
+  await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(engine).toHaveValue('')
+  await engine.selectOption('halo')
+  await expect(confirmation).toBeVisible()
+  expect(await confirmation.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await window.screenshot({ path: testInfo.outputPath('digital-human-engine-confirm-mobile.png') })
+  await confirmation.getByRole('button', { name: 'Change engine', exact: true }).click()
+  await expect.poll(() => digitalHumanEngine(window)).toBe('halo')
+  await expect(engine).toHaveValue('halo')
+  await engine.selectOption('')
+  await expect(confirmation).toContainText('Existing conversations keep their current engine')
+  await confirmation.getByRole('button', { name: 'Change engine', exact: true }).click()
+  await expect.poll(() => digitalHumanEngine(window)).toBeUndefined()
+  expect(await advanced.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await engine.scrollIntoViewIfNeeded()
+  await window.screenshot({ path: testInfo.outputPath('digital-human-engine-mobile.png') })
+})
+
+test('digital human engine can use local CC while the application default stays Halo', async ({ window }, testInfo) => {
+  const nativePath = process.env.HALO_E2E_CC_PATH ? resolve(process.env.HALO_E2E_CC_PATH) : ''
+  test.skip(!nativePath || !existsSync(nativePath), 'Requires a real local Claude Code installation')
+  const configured = await window.evaluate(async path => {
+    const halo = (globalThis.window as unknown as { halo: HaloAPI }).halo
+    const selected = await halo.ccRuntimeSelect(path)
+    if (!selected.success) return selected
+    return halo.setConfig({ agent: { sdkEngine: 'halo' } })
+  }, nativePath)
+  expect(configured.success).toBe(true)
+  await openSettings(window)
+  const advanced = window.locator('#settings-group-advanced')
+  await advanced.getByRole('button', { name: 'Advanced', exact: true }).click()
+  const engine = advanced.getByRole('combobox', { name: 'Digital human engine', exact: true })
+  await expect(engine).toBeEnabled()
+  await engine.selectOption('anthropic')
+  await window.getByRole('alertdialog', { name: 'Change this digital human’s engine?', exact: true }).getByRole('button', { name: 'Change engine', exact: true }).click()
+  await expect.poll(() => digitalHumanEngine(window)).toBe('anthropic')
+  const saved = await window.evaluate(async () => {
+    const result = await (globalThis.window as unknown as { halo: HaloAPI }).halo.getConfig()
+    return (result.data as { agent?: { sdkEngine?: string } }).agent?.sdkEngine
+  })
+  expect(saved).toBe('halo')
+  await expect(window.getByRole('button', { name: 'Restart Now', exact: true })).toHaveCount(0)
+  await engine.scrollIntoViewIfNeeded()
+  await window.screenshot({ path: testInfo.outputPath('digital-human-cc-with-halo-default.png') })
+})
+
+test('digital human engine rejects an incompatible Codex account without changing the saved choice', async ({ window }) => {
+  const configured = await window.evaluate(async () => {
+    const halo = (globalThis.window as unknown as { halo: HaloAPI }).halo
+    return halo.setConfig({ aiSources: {
+      version: 2, currentId: 'engine-compat-account', sources: [{
+        id: 'engine-compat-account', name: 'Fixture Claude API', provider: 'anthropic', authType: 'api-key',
+        apiUrl: 'https://example.invalid', apiKey: 'fixture-not-a-real-key', model: 'claude-test', availableModels: [], createdAt: '', updatedAt: '',
+      }],
+    } })
+  })
+  expect(configured.success).toBe(true)
+  await window.reload()
+  await openSettings(window)
+  const advanced = window.locator('#settings-group-advanced')
+  await advanced.getByRole('button', { name: 'Advanced', exact: true }).click()
+  const engine = advanced.getByRole('combobox', { name: 'Digital human engine', exact: true })
+  await expect(engine).toBeEnabled()
+  await expect(engine.locator('option[value="codex"]')).toBeDisabled()
+  const result = await window.evaluate(async () => (globalThis.window as unknown as { halo: HaloAPI }).halo.appUpdateOverrides({ appId: 'person-000', overrides: { engineId: 'codex' } }))
+  expect(result.success).toBe(false)
+  expect(result.error).toContain('Codex supports OpenAI-compatible')
+  expect(await digitalHumanEngine(window)).toBeUndefined()
+  await expect(engine).toHaveValue('')
+})
 
 test('nav entries address the groups they render, and a jump brings its group into view', async ({ window }) => {
   await openSettings(window)

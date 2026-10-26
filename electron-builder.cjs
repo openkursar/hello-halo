@@ -21,6 +21,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { runtimeAsarUnpackGlob } = require('./runtimes/dsh/manifest.cjs')
 const { createStagedArtifactsHook } = require('./scripts/release/staged-artifacts.cjs')
+const { validateExperimentalProduct } = require('./scripts/lib/experimental-product.cjs')
 
 const ROOT = __dirname
 const PRODUCT_FILE = path.join(ROOT, 'product.json')
@@ -45,6 +46,8 @@ function loadProduct() {
 }
 
 const product = loadProduct()
+const experimental = product.content.appId === 'com.halo.experimental'
+if (experimental) validateExperimentalProduct(product.content)
 
 function field(key) {
   const value = product.content[key]
@@ -70,6 +73,7 @@ function field(key) {
  */
 function resolvePublish() {
   const update = field('updateConfig')
+  if (update.provider === 'disabled') return null
 
   if (update.provider === 'generic') {
     if (!update.url) {
@@ -95,7 +99,7 @@ function resolvePublish() {
 
   throw new Error(
     `[electron-builder] ${product.name} has unknown updateConfig.provider ` +
-      `"${update.provider}" — expected "github" or "generic".`
+      `"${update.provider}" — expected "github", "generic", or "disabled".`
   )
 }
 
@@ -137,6 +141,8 @@ module.exports = {
   ...base,
   asarUnpack: resolveAsarUnpack(base),
   productName: field('name'),
+  protocols: [{ name: field('name'), schemes: [product.content.deepLinkScheme || 'halo'] }],
+  ...(experimental ? { extraMetadata: { version: field('version') } } : {}),
   appId: field('appId'),
   publish: resolvePublish(),
   files: [...(base.files ?? []), ...resolveProviderFiles()],

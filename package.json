@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "3.0.5-rc.15",
+  "version": "3.0.5-rc.17",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.cjs",
@@ -10,7 +10,7 @@
     "node": ">=22.14.0"
   },
   "scripts": {
-    "dev": "npm run bundle:builtin && node scripts/gen-api-ref.mjs && cross-env HALO_DATA_DIR=~/.halo-dev electron-vite dev",
+    "dev": "npm run bundle:builtin && node scripts/gen-api-ref.mjs && electron-vite dev",
     "build": "electron-vite build",
     "prebuild": "node scripts/sync-builtin-apps.mjs && node scripts/gen-api-ref.mjs && npm run runtime:office && npm run runtime:dsh -- --optional",
     "runtime:dsh": "node runtimes/dsh/build.mjs",
@@ -75,11 +75,13 @@
     "release:android": "npm run cap:sync && ANDROID_HOME=$HOME/Library/Android/sdk ./android/gradlew -p android assembleRelease && node -e \"const v=require('./package.json').version; const fs=require('fs'); fs.mkdirSync('dist',{recursive:true}); fs.copyFileSync('android/app/build/outputs/apk/release/app-release.apk','dist/Halo-'+v+'.apk'); console.log('Output: dist/Halo-'+v+'.apk')\"",
     "cap:open:ios": "npx cap open ios",
     "cap:run:ios": "npm run cap:sync && npx cap run ios",
-    "build:update-helper": "node scripts/build-update-helper.mjs"
+    "build:update-helper": "node scripts/build-update-helper.mjs",
+    "product:experimental": "node scripts/prepare-experimental-product.mjs",
+    "build:experimental": "node scripts/build-experimental.cjs",
+    "test:check:experimental": "node --test tests/check/experimental-product.test.cjs",
+    "install:experimental": "node scripts/install-mac-local.cjs --experimental"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.2.89",
-    "@anthropic-ai/claude-code": "2.1.89",
     "@anthropic-ai/sdk": "latest",
     "@anthropic-ai/tokenizer": "^0.0.4",
     "@capacitor/android": "^8.2.0",
@@ -120,6 +122,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@electron-toolkit/preload": "^3.0.0",
     "@electron-toolkit/utils": "^3.0.0",
+    "@hello-halo/agent-sdk": "file:src/sdk/halo-sdk",
     "@larksuiteoapi/node-sdk": "^1.74.0",
     "@lezer/highlight": "^1.2.3",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -221,7 +224,6 @@
     "vitest": "^1.6.1"
   },
   "optionalDependencies": {
-    "@hello-halo/agent-sdk": "file:src/sdk/halo-sdk",
     "@parcel/watcher-darwin-arm64": "^2.5.6",
     "@parcel/watcher-darwin-x64": "^2.5.6",
     "@parcel/watcher-linux-x64-glibc": "^2.5.6",
@@ -251,8 +253,13 @@
       "!node_modules/@hello-halo/agent-sdk/scripts/**",
       "!node_modules/@hello-halo/agent-sdk/.github/**",
       "!node_modules/@hello-halo/agent-sdk/**/*.ts",
+      "!node_modules/@hello-halo/agent-sdk/**/*.map",
+      "!node_modules/@hello-halo/agent-sdk/**/DESIGN.md",
+      "!node_modules/@hello-halo/agent-sdk/**/VALIDATION.md",
       "!node_modules/@hello-halo/agent-sdk/**/*.test.*",
-      "!node_modules/@hello-halo/agent-sdk/**/*.spec.*"
+      "!node_modules/@hello-halo/agent-sdk/**/*.spec.*",
+      "!node_modules/@anthropic-ai/claude-code{,/**/*}",
+      "!node_modules/@anthropic-ai/claude-agent-sdk{,/**/*}"
     ],
     "extraResources": [
       {
@@ -273,7 +280,8 @@
       }
     ],
     "asarUnpack": [
-      "node_modules/@anthropic-ai/claude-code/**/*",
+      "node_modules/@hello-halo/agent-sdk/**/*",
+      "out/main/worker/halo-setup.cjs",
       "node_modules/@openai/codex/bin/**/*",
       "node_modules/@openai/codex/vendor/**/*",
       "node_modules/@openai/codex-*/vendor/**/*",
@@ -282,7 +290,6 @@
       "node_modules/@parcel/watcher-*/**/*",
       "node_modules/better-sqlite3/prebuilds/*.node",
       "node_modules/node-pty/prebuilds/**",
-      "node_modules/@img/**/*",
       "node_modules/tesseract.js/**",
       "node_modules/tesseract.js-core/**"
     ],

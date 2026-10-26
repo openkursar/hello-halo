@@ -13,7 +13,7 @@ import type { EngineAvailability } from '../../../../src/main/services/agent/eng
 
 let configuredEngine: unknown = 'anthropic'
 let availability: EngineAvailability[] = []
-let probedEngines: readonly string[] | undefined
+let probedEngines: string[] = []
 
 function engines(overrides: Partial<Record<'anthropic' | 'halo' | 'codex', boolean>>): EngineAvailability[] {
   return (['anthropic', 'halo', 'codex'] as const).map(engineId => ({
@@ -31,17 +31,18 @@ vi.mock('../../../../src/main/foundation/config.service', async (importOriginal)
 
 vi.mock('../../../../src/main/services/agent/engine-availability', () => ({
   getEngineAvailability: async (engineIds?: readonly string[]) => {
-    probedEngines = engineIds
+    probedEngines.push(...(engineIds ?? []))
     return availability
   },
 }))
 
-// The CC SDK is the fallback target in every degraded case; a stub keeps the
-// test off the real 600KB module.
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
-  tool: () => undefined,
-  createSdkMcpServer: () => undefined,
-  query: () => undefined,
+vi.mock('../../../../src/main/services/agent/engine-migration', () => ({ migrateCcRuntimeSelection: async () => {} }))
+vi.mock('../../../../src/main/services/agent/cc', () => ({
+  createCcSdkModule: () => ({ tool: () => undefined, createSdkMcpServer: () => undefined, query: () => undefined }),
+}))
+vi.mock('@hello-halo/agent-sdk/worker', () => ({ setLogger: () => undefined }))
+vi.mock('../../../../src/main/services/agent/halo', () => ({
+  createHaloSdkModule: () => ({ tool: () => undefined, createSdkMcpServer: () => undefined, query: () => undefined }),
 }))
 
 async function initFresh() {
@@ -53,6 +54,7 @@ async function initFresh() {
 
 describe('startup engine resolution', () => {
   beforeEach(() => {
+    probedEngines = []
     configuredEngine = 'anthropic'
     availability = engines({ anthropic: true })
   })
@@ -105,13 +107,13 @@ describe('startup engine resolution', () => {
     expect(sdk.getActiveEngine()).toBeNull()
   })
 
-  it('falls back to anthropic for an unrecognised configured engine', async () => {
+  it('defaults to Halo for an unrecognised configured engine', async () => {
     configuredEngine = 'not-an-engine'
-    availability = engines({ anthropic: true })
+    availability = engines({ halo: true })
 
     const sdk = await initFresh()
 
-    expect(sdk.getActiveEngine()).toBe('anthropic')
+    expect(sdk.getActiveEngine()).toBe('halo')
     // The stored value never named a real engine, so there is nothing to report
     // as degraded — it was normalised, not downgraded.
     expect(sdk.getDegradedFromEngine()).toBeNull()
@@ -126,4 +128,21 @@ describe('startup engine resolution', () => {
     expect(sdk.getActiveEngine()).toBe('anthropic')
     expect(configuredEngine).toBe('halo')
   })
+  it('loads Halo without probing CC for a fresh configuration', async () => {
+    configuredEngine = undefined
+    availability = engines({ halo: true, anthropic: true })
+    const sdk = await initFresh()
+    expect(sdk.getActiveEngine()).toBe('halo')
+    expect(probedEngines).toEqual(['halo'])
+  })
+
+  it('keeps a missing CC preference while running Halo', async () => {
+    configuredEngine = 'anthropic'
+    availability = engines({ halo: true })
+    const sdk = await initFresh()
+    expect(sdk.getActiveEngine()).toBe('halo')
+    expect(sdk.getDegradedFromEngine()).toBe('anthropic')
+    expect(probedEngines).toEqual(['anthropic', 'halo'])
+  })
+
 })

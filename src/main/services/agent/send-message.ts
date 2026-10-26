@@ -1,3 +1,4 @@
+import { prepareConversationContinuation, resolveConversationEngine } from './engine-routing'
 /**
  * Agent Module - Send Message
  *
@@ -17,7 +18,7 @@
  */
 
 import { getConfig } from '../../foundation/config.service'
-import { addMessage, updateMessageById } from '../conversation.service'
+import { addMessage, getConversation, updateMessageById } from '../conversation.service'
 import { buildCreationTimeServers, openToolset } from './toolsets/broker'
 import { buildToolsetSection } from './toolsets/capability-index'
 import { getOpenToolsets } from './toolsets/state'
@@ -38,6 +39,8 @@ import {
 import { emitAgentEvent } from './events'
 import {
   acquireV2Session,
+  getSessionEngineId,
+  isSessionBusy,
   updateConsumerDisplayModel,
   type V2SessionLease,
 } from './session-manager'
@@ -62,6 +65,11 @@ import { AnalyticsEvents } from '../analytics/types'
 // Send Message
 // ============================================
 
+export interface InternalSendOptions {
+  onUserMessageRecorded?: (messageId: string) => void
+  excludedHistoryMessageIds?: readonly string[]
+}
+
 /**
  * Send a user message to the CC subprocess's REPL.
  *
@@ -69,8 +77,10 @@ import { AnalyticsEvents } from '../analytics/types'
  * consumer), persists the user message, and calls v2Session.send().
  * Returns immediately — the session consumer handles the response.
  */
+
 export async function sendMessage(
-  request: AgentRequest
+  request: AgentRequest,
+  internal?: InternalSendOptions,
 ): Promise<void> {
 
   const {
@@ -85,7 +95,9 @@ export async function sendMessage(
     task
   } = request
   // Validated before the message is recorded, so a refused goal leaves no trace.
-  const turnGoal = request.goal ? prepareGoalInput(request.goal) : null
+  const originalConversation = getConversation(spaceId, conversationId)
+  const engineId = await resolveConversationEngine(originalConversation, getSessionEngineId(conversationId), isSessionBusy(conversationId))
+  const turnGoal = request.goal ? prepareGoalInput(request.goal, engineId) : null
 
   console.log(`[Agent] sendMessage: conv=${conversationId}${images && images.length > 0 ? `, images=${images.length}` : ''}${thinkingEnabled ? ', thinking=ON' : ''}${canvasContext?.isOpen ? `, canvas tabs=${canvasContext.tabCount}` : ''}${references?.length ? `, references=${references.length}` : ''}${task ? `, task=${task.type}/${task.variant}` : ''}`)
 
@@ -201,11 +213,16 @@ export async function sendMessage(
   }
 
   try {
+    internal?.onUserMessageRecorded?.(userMessage.id)
     // Load the conversation first: it carries both the resume sessionId and the
     // per-conversation model pin used to resolve credentials.
-    const { getConversation } = await import('../conversation.service')
     const conversation = getConversation(spaceId, conversationId)
-    const sessionId = resumeSessionId || conversation?.sessionId
+    if (!conversation) throw new Error('Conversation not found')
+    const continuation = await prepareConversationContinuation(spaceId, conversationId, conversation, engineId, {
+      beforeMessageId: userMessage.id, legacySessionId: resumeSessionId,
+      excludedHistoryMessageIds: internal?.excludedHistoryMessageIds,
+    })
+    const sessionId = continuation.resumeSessionId
 
     // The conversation's pinned account, or the global selection when it has
     // no pin or the pinned account was removed.
@@ -215,7 +232,7 @@ export async function sendMessage(
 
     // The conversation's own level wins over one the send carries (API callers).
     const pickedEffort = pickReasoningEffort(conversation?.reasoningEffort, request.reasoningEffort)
-    const resolvedCredentials = await resolveCredentialsForSdk(credentials, pickedEffort)
+    const resolvedCredentials = await resolveCredentialsForSdk(credentials, pickedEffort, engineId)
     const electronPath = getHeadlessElectronPath()
 
     // Non-vision models can't receive image blocks: persist images to files and
@@ -274,6 +291,7 @@ export async function sendMessage(
 
     // Build base SDK options
     const sdkOptions = await buildUserSessionSdkOptions({
+      engineId,
       // Same switch that loads the halo_api_ref tool: a session without the
       // manual has no way to discover the API, so the credentials would only
       // widen what an injected instruction can reach.
@@ -292,6 +310,9 @@ export async function sendMessage(
       memoryGuard: spaceMemory?.guard,
     })
 
+    sdkOptions.strictNativeResume = continuation.strictNativeResume
+    if (continuation.engineHandoffContent) sdkOptions.engineHandoffContent = continuation.engineHandoffContent
+
     const thinkingBudget = applyReasoningEffort(
       sdkOptions, thinkingEnabled, resolvedCredentials.capabilities, pickedEffort
     )
@@ -305,12 +326,20 @@ export async function sendMessage(
       {
         displayModel: resolvedCredentials.displayModel,
         contextWindow: resolvedCredentials.capabilities?.contextWindow,
-        sink: createConversationSink(spaceId, conversationId),
+        sink: createConversationSink(spaceId, conversationId, continuation.engineState),
       },
       resolvedKbIds,
       buildMcpServers,
       resolveKnowledgeBases,
-      { creationContext: spaceMemory?.contextKey },
+      {
+        creationContext: spaceMemory?.contextKey,
+        recoverNativeSession: continuation.strictNativeResume ? async () => (await prepareConversationContinuation(
+          spaceId, conversationId, conversation, engineId, {
+            beforeMessageId: userMessage.id, forceHandoff: true,
+            excludedHistoryMessageIds: internal?.excludedHistoryMessageIds,
+          }
+        )).engineHandoffContent ?? '' : undefined,
+      },
       reportFailure
     )
 

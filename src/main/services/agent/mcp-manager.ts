@@ -5,7 +5,7 @@
  * caching, broadcasting, and connection testing.
  */
 
-import { query as claudeQuery } from './resolved-sdk'
+import { query as claudeQuery, resolveDefaultEngine } from './resolved-sdk'
 import { getTempSpacePath } from '../../foundation/config.service'
 import type { McpProbeStatus, McpServerStatusInfo } from './types'
 import {
@@ -14,7 +14,7 @@ import {
   getDbMcpServers,
 } from './helpers'
 import { emitAgentBroadcast } from './events'
-import { buildSdkEnv, resolveClaudeCodeCliPath, resolveCredentialsForSdk } from './sdk-config'
+import { buildSdkEnv, resolveCredentialsForSdk } from './sdk-config'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 
@@ -269,6 +269,7 @@ async function runMcpConnectionTest(): Promise<McpConnectionTestResult> {
 
   try {
     // Get API credentials based on current aiSources configuration
+    const engineId = await resolveDefaultEngine()
     const credentials = await getApiCredentials()
     if (!credentials.apiKey && credentials.provider !== 'oauth') {
       return { success: false, servers: [], error: 'API key not configured' }
@@ -292,7 +293,7 @@ async function runMcpConnectionTest(): Promise<McpConnectionTestResult> {
     // Resolved and given an environment exactly as a conversation's engine
     // process is: Halo's Claude config directory (which holds a Claude Code
     // CLI login), the proxy policy, the routing a delegated source needs.
-    const resolved = await resolveCredentialsForSdk(credentials)
+    const resolved = await resolveCredentialsForSdk(credentials, undefined, engineId)
     const env = buildSdkEnv({
       anthropicApiKey: resolved.anthropicApiKey,
       anthropicBaseUrl: resolved.anthropicBaseUrl,
@@ -309,6 +310,7 @@ async function runMcpConnectionTest(): Promise<McpConnectionTestResult> {
     const queryIterator = claudeQuery({
       prompt: 'hi', // Simple prompt to trigger MCP connection
       options: {
+        engineId,
         // A delegated run must reach the CLI with no key at all: any value here
         // makes it authenticate as an API-key user and ignore its own credential.
         ...(resolved.delegatedRoutingHeader ? {} : { apiKey: resolved.anthropicApiKey }),
@@ -317,7 +319,6 @@ async function runMcpConnectionTest(): Promise<McpConnectionTestResult> {
         credentialsGeneration: credentials.credentialsGeneration,
         anthropicBaseUrl: resolved.anthropicBaseUrl,
         cwd,
-        pathToClaudeCodeExecutable: resolveClaudeCodeCliPath(),
         executable: electronPath,
         executableArgs: ['--no-warnings'],
         env,

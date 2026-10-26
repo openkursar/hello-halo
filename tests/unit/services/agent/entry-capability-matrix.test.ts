@@ -70,6 +70,8 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
 
 vi.mock('../../../../src/main/services/agent/resolved-sdk', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../src/main/services/agent/resolved-sdk')>()),
+  getDefaultEngine: () => 'anthropic', getStartupEngine: () => 'anthropic',
+  resolveDefaultEngine: async () => 'anthropic', ensureEngineAvailable: async () => {},
   getActiveEngine: () => null,
   getEngineCapabilities: () => state.engine,
   createSession: vi.fn(async () => {
@@ -101,6 +103,7 @@ vi.mock('../../../../src/main/services/agent/sdk-config', async (importOriginal)
 // ============================================
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
+  getSessionEngineId: () => undefined, isSessionBusy: () => false,
   v2Sessions: new Map(),
   closeV2Session: vi.fn(),
   getConsumerHandle: () => null,
@@ -237,7 +240,8 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 vi.mock('../../../../src/main/services/conversation.service', () => ({
   addMessage: vi.fn((_s: string, _c: string, msg: Record<string, unknown>) => ({ id: 'msg-1', timestamp: 't', ...msg })),
   updateMessageById: vi.fn(),
-  getConversation: vi.fn(() => ({ id: 'conv-1', sessionId: undefined })),
+  getConversation: vi.fn(() => ({ id: 'conv-1', sessionId: undefined, messages: [] })),
+  getConversationEngineState: () => ({}),
 }))
 vi.mock('../../../../src/main/services/space.service', async () => {
   const { resolveMemoryLayout } = await import('../../../../src/main/platform/memory/paths')
@@ -279,6 +283,9 @@ vi.mock('../../../../src/main/apps/runtime/active-runs', () => ({
   registerActiveRun: vi.fn(), unregisterActiveRun: vi.fn(), notifyActiveRunReady: vi.fn(), listActiveRuns: vi.fn(() => []),
 }))
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
+  saveChatEngineRouting: (_space: string, _app: string, _run: string, engineId: string, state: any = {}) => state.sessionId || state.binding || state.routingEngine ? state : { routingEngine: engineId },
+  loadChatEngineState: () => ({}), saveChatEngineBinding: vi.fn(() => true),
+  resolveTranscriptPath: () => '', readChatHandoffHistory: () => ({ messages: [], truncated: false }),
   openSessionWriter: vi.fn(() => ({ writeTrigger: vi.fn(), writeEvent: vi.fn() })),
   loadChatSessionId: () => undefined,
   saveChatSessionId: vi.fn(),
@@ -316,6 +323,7 @@ const sink = vi.hoisted(() => ({
   dispose: vi.fn(),
 }))
 vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
+  bindAppChatEngine: vi.fn(),
   getAppChatSink: () => sink,
   peekAppChatSink: () => undefined,
   hasActiveAppChatRound: () => false,

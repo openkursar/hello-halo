@@ -2,18 +2,17 @@
  * Config IPC Handlers (v2)
  */
 
-import { getConfig, saveConfig, getCredentialDecodeFailures } from '../foundation/config.service'
+import { getConfig, getCredentialDecodeFailures } from '../foundation/config.service'
 import { getAISourceManager } from '../services/ai-sources'
 import { decryptString } from '../foundation/secure-storage.service'
-import { unmaskSentinels, maskOAuthFields } from '../foundation/config-encryption'
+import { maskOAuthFields } from '../foundation/config-encryption'
 import { validateApiConnection } from '../services/api-validator.service'
 import {
   getConfigReadMetadata,
   fetchModels as controllerFetchModels,
   getConfigReadFailure as controllerGetConfigReadFailure,
   notSavedWhileConfigUnreadable,
-  preserveManagedSources,
-  reloadRequiredBeforeSave,
+  updateConfig,
 } from '../controllers/config.controller'
 import { runConfigProbe, emitConfigChange } from '../services/health'
 import type { AISourcesConfig, AISource } from '../../shared/types'
@@ -94,23 +93,12 @@ export function registerConfigHandlers(): void {
       }
 
       try {
-        const processedUpdates = { ...updates }
-
-        const existing = { ...getConfig() }
-        const reloadRequired = reloadRequiredBeforeSave(snapshotEpoch)
-        if (reloadRequired) {
-          console.warn('[Settings] config:set - Not saved: built on settings loaded before a failed config read')
-          return reloadRequired
+        const saved = updateConfig({ ...updates }, snapshotEpoch)
+        if (!saved.success) {
+          console.warn('[Settings] config:set - Not saved:', saved.code || 'CONFIG_WRITE_FAILED')
+          return saved
         }
-        unmaskSentinels(processedUpdates, existing)
-        preserveManagedSources(processedUpdates, existing)
-
-        const config = saveConfig(processedUpdates)
-        const notSaved = notSavedWhileConfigUnreadable()
-        if (notSaved) {
-          console.warn('[Settings] config:set - Not saved: config.json is unreadable')
-          return notSaved
-        }
+        const config = saved.data
         console.log('[Settings] config:set - Saved successfully')
 
         // Check if aiSources changed - run config validation

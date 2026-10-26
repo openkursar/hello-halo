@@ -10,6 +10,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { AISource, BackendRequestConfig } from '../../../../src/shared/types/ai-sources'
 
 const { sourceState, manager } = vi.hoisted(() => {
@@ -62,7 +64,7 @@ import {
   getDisabledMcpTools,
 } from '../../../../src/main/services/agent/helpers'
 import { getAppManager } from '../../../../src/main/services/app-bridge'
-import { getConfig } from '../../../../src/main/foundation/config.service'
+import { getConfig, resolveClaudeConfigDir } from '../../../../src/main/foundation/config.service'
 
 const ENV_KEYS = ['HALO_OPENAI_API_TYPE', 'HALO_OPENAI_WIRE_API'] as const
 
@@ -191,6 +193,15 @@ describe('account-specific credential resolution', () => {
     expect(first.capabilities?.contextWindow).toBe(100_000)
     expect(second.capabilities?.contextWindow).toBe(150_000)
     expect(manager.ensureValidToken.mock.calls).toEqual([['account-a', 'gpt-test'], ['account-b', 'gpt-test']])
+  })
+
+  it('prepares a delegated source before a target engine is chosen', async () => {
+    const directory = resolveClaudeConfigDir()
+    mkdirSync(directory, { recursive: true })
+    writeFileSync(join(directory, '.claude.json'), JSON.stringify({ oauthAccount: { displayName: 'test' } }))
+    sourceState.backends.set('account-a', { ...sourceState.backends.get('account-a')!, delegatedAuth: true })
+    await expect(getApiCredentialsForSelection({ modelSourceId: 'account-a' }))
+      .resolves.toMatchObject({ sourceId: 'account-a', delegatedAuth: true })
   })
 
   it('prepares a conversation-pinned alternate model without changing the account default', async () => {

@@ -1,3 +1,5 @@
+import { getDefaultEngine } from '../services/agent'
+import { isEngineId } from '../../shared/types/engine'
 /**		      	    				  	  	  	 		 		       	 	 	         	 	    					 
  * Config Controller - Unified business logic for configuration
  * Used by both IPC handlers and HTTP routes
@@ -10,7 +12,8 @@ import {
   getConfigPath as serviceGetConfigPath,
   getConfigReadFailure as serviceGetConfigReadFailure,
   getConfigReadFailureCount as serviceGetConfigReadFailureCount,
-  isConfigUnreadable as serviceIsConfigUnreadable
+  isConfigUnreadable as serviceIsConfigUnreadable,
+  recordAgentEngineChoice,
 } from '../foundation/config.service'
 import { maskConfigFields, unmaskSentinels } from '../foundation/config-encryption'
 import { getProductFederationGatewayUrl } from '../foundation/product-config'
@@ -147,21 +150,47 @@ export function preserveManagedSources(updates: Record<string, unknown>, existin
  * replaced with the current value so unchanged secrets are preserved.
  * `snapshotEpoch` is the stamp of the settings the client built this save on.
  */
-export function setConfig(updates: Record<string, unknown>, snapshotEpoch?: number): ControllerResponse {
+export function updateConfig(updates: Record<string, unknown>, snapshotEpoch?: number): ControllerResponse {
   try {
     const existing = serviceGetConfig() as unknown as Record<string, unknown>
     const reloadRequired = reloadRequiredBeforeSave(snapshotEpoch)
     if (reloadRequired) return reloadRequired
+    const agent = updates.agent
+    if (agent && typeof agent === 'object' && 'ccRuntime' in agent) {
+      const stored = (existing.agent as Record<string, unknown> | undefined)?.ccRuntime
+      if (JSON.stringify(agent.ccRuntime) !== JSON.stringify(stored)) {
+        console.warn('[Config] Ignored externally supplied CC runtime settings; preserving the runtime manager selection')
+      }
+      const { ccRuntime: _runtime, ...preferences } = agent
+      updates.agent = preferences
+    }
+    if (updates.agent && typeof updates.agent === 'object') {
+      const { legacySdkEngine: _legacyEngine, ...preferences } = updates.agent as Record<string, unknown>
+      const storedAgent = existing.agent as Record<string, unknown> | undefined
+      if ('sdkEngine' in preferences && !isEngineId(preferences.sdkEngine)) throw new Error('Unknown agent engine')
+      if (isEngineId(preferences.sdkEngine) && preferences.sdkEngine !== (storedAgent?.sdkEngine ?? 'halo') && !isEngineId(storedAgent?.legacySdkEngine)) {
+        preferences.legacySdkEngine = getDefaultEngine()
+      }
+      updates.agent = preferences
+    }
     unmaskSentinels(updates, existing)
     preserveManagedSources(updates, existing)
     const config = serviceSaveConfig(updates as any)
     const notSaved = notSavedWhileConfigUnreadable()
     if (notSaved) return notSaved
-    return { success: true, data: maskConfigFields(config as unknown as Record<string, unknown>) }
+    if (agent && typeof agent === 'object' && 'sdkEngine' in agent) recordAgentEngineChoice()
+    return { success: true, data: config }
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }
   }
+}
+
+/** Remote callers receive masked secrets; desktop IPC applies its own response masking. */
+export function setConfig(updates: Record<string, unknown>, snapshotEpoch?: number): ControllerResponse {
+  const result = updateConfig(updates, snapshotEpoch)
+  if (result.success) return { ...result, data: maskConfigFields(result.data as Record<string, unknown>) }
+  return result
 }
 
 /**

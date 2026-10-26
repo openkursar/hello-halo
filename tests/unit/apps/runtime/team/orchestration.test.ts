@@ -1568,7 +1568,7 @@ describe('TeamOrchestration', () => {
       const { deps } = makeSession()
       const orch = build(deps)
       const testerKey = buildTeamSessionKey(TESTER_APP, TEAM_ID, epoch.id)
-      vi.mocked(deps.sendAppChatMessage).mockImplementationOnce(async () => ({ finalMessage: null, heldBack: { recorded: true } }))
+      vi.mocked(deps.sendAppChatMessage).mockImplementationOnce(async () => ({ finalMessage: null, heldBack: { recorded: true, recordedInputIds: ['receiver-initial-input'] } }))
 
       bus.holdSession(testerKey)
       await wakeMember(orch, epoch.id, TESTER_APP, 'c2')
@@ -1580,6 +1580,34 @@ describe('TeamOrchestration', () => {
       const woken = vi.mocked(deps.sendAppChatMessage).mock.calls[1][0]
       expect(woken.message).toMatch(/go[\s\S]*after the stop/)
       expect(woken.recordedMessages?.map((record) => record.content)).toEqual([expect.stringContaining('after the stop')])
+      expect(woken.recordedInputIds).toEqual(['receiver-initial-input'])
+    })
+
+    it('preserves earlier input identities when a mixed batch is held a second time', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps } = makeSession()
+      const orch = build(deps)
+      const testerKey = buildTeamSessionKey(TESTER_APP, TEAM_ID, epoch.id)
+      vi.mocked(deps.sendAppChatMessage)
+        .mockImplementationOnce(async () => ({ finalMessage: null, heldBack: { recorded: true, recordedInputIds: ['first-record'] } }))
+        .mockImplementationOnce(async () => {
+          bus.holdSession(testerKey)
+          return { finalMessage: null, heldBack: { recorded: true, recordedInputIds: ['second-record'] } }
+        })
+      bus.holdSession(testerKey)
+      await wakeMember(orch, epoch.id, TESTER_APP, 'held-first')
+      await flush()
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'tester', message: 'second input', wait: false })
+      await flush()
+      expect(vi.mocked(deps.sendAppChatMessage).mock.calls[1][0].recordedInputIds).toEqual(['first-record'])
+      expect(bus.getPendingRecordedInputIds(testerKey)).toEqual(['first-record', 'second-record'])
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'tester', message: 'third input', wait: false })
+      await flush()
+      const replay = vi.mocked(deps.sendAppChatMessage).mock.calls[2][0]
+      expect(replay.recordedInputIds).toEqual(['first-record', 'second-record'])
+      expect(replay.recordedMessages?.map(record => record.content)).toEqual([expect.stringContaining('third input')])
+      expect(bus.getPendingRecordedInputIds(testerKey)).toEqual([])
     })
 
     it("voids the person's own 1:1 a stop caught waiting for a slot, keeping it in the record", async () => {

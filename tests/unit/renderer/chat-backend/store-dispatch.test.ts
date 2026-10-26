@@ -155,6 +155,15 @@ describe('the conversation on screen', () => {
 })
 
 describe('opening a digital-human conversation', () => {
+  it('keeps the engine identity returned with a cold transcript read', async () => {
+    const store = makeStore()
+    const engineBinding = { version: 1, engineId: 'anthropic', sessionId: 'cc-session' }
+    apiMock.appChatTranscript.mockResolvedValue({ success: true, data: { ...page([m('session-msg-1', 'user', 'hi')]).data, engineId: 'anthropic', engineBinding } })
+    selectDigitalHuman(store)
+    await vi.waitFor(() => expect(store.getState().conversationCache.get(DH)?.resolvedEngineId).toBe('anthropic'))
+    expect(store.getState().conversationCache.get(DH)?.engineBinding).toEqual(engineBinding)
+  })
+
   it('reads the newest page into the cache', async () => {
     const store = makeStore()
     apiMock.appChatTranscript.mockResolvedValue(page([m('session-msg-1', 'user', 'hi'), m('session-msg-2', 'assistant', 'hello')], { total: 2 }))

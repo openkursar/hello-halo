@@ -47,7 +47,7 @@ declaration files. The public repo never references any variant by name.
   "variant": "myvariant",              // free label, goes into the record
   "product": "product.myvariant.json",// path relative to the manifest file
   "requiredEnv": ["GH_TOKEN"],         // must exist AND be non-empty
-  "requiredEngines": ["anthropic", "halo", "codex"],
+  "requiredEngines": ["halo", "codex"],
   "requiredProductFields": [           // dot-paths into product.json, must be non-empty
     "updateConfig.provider",
     "analytics.ga.measurementId"

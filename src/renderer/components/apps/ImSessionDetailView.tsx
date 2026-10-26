@@ -10,15 +10,19 @@
  * conversation on the main board; we navigate there so the user can continue.
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { ArrowRightToLine, Loader2 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useEngineCapabilities } from '../../stores/engine.store'
+import { useAppsStore } from '../../stores/apps.store'
+import { useConversationEngineId } from '../../hooks/useConversationEngine'
 import { api } from '../../api'
 import { ImChatView } from './ImChatView'
 import { navigateToAppChat } from '../../utils/conversation-navigation'
 import { buildImSessionKey } from '../../../shared/apps/im-keys'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import type { AppChatEngineMetadata } from '../../../shared/apps/app-types'
+import type { EngineId } from '../../../shared/types/engine'
 
 interface ImSessionDetailViewProps {
   appId: string
@@ -28,7 +32,19 @@ interface ImSessionDetailViewProps {
 
 export function ImSessionDetailView({ appId, spaceId, session }: ImSessionDetailViewProps) {
   const { t } = useTranslation()
-  const capabilities = useEngineCapabilities()
+  const conversationId = buildImSessionKey(appId, session.channel, session.chatType, session.chatId)
+  const activeConversation = useRef(conversationId)
+  activeConversation.current = conversationId
+  const [reportedEngine, setReportedEngine] = useState<{ conversationId: string; engineId?: EngineId } | null>(null)
+  const acceptEngineMetadata = useCallback((sourceConversationId: string, metadata: AppChatEngineMetadata) => {
+    if (sourceConversationId !== activeConversation.current) return
+    const engineId = metadata.engineId ?? metadata.engineBinding?.engineId
+    setReportedEngine(previous => previous?.conversationId === sourceConversationId && previous.engineId === engineId
+      ? previous : { conversationId: sourceConversationId, engineId })
+  }, [])
+  const preferredEngine = useAppsStore(state => state.apps.find(app => app.id === appId)?.userOverrides.engineId)
+  const engineId = useConversationEngineId(conversationId, spaceId, reportedEngine?.conversationId === conversationId ? reportedEngine.engineId ?? preferredEngine : preferredEngine)
+  const capabilities = useEngineCapabilities(engineId)
   const canFork = !!capabilities?.features.sessionFork
   const [forking, setForking] = useState(false)
 
@@ -54,6 +70,7 @@ export function ImSessionDetailView({ appId, spaceId, session }: ImSessionDetail
       appId={appId}
       spaceId={spaceId}
       session={session}
+      onEngineMetadata={acceptEngineMetadata}
       footerAction={canFork && (
         <button
           onClick={handleFork}

@@ -37,7 +37,7 @@ describe('transcripts are never read whole', () => {
   const ALLOWED_LINES: Array<{ file: string; text: string; reason: string }> = [
     {
       file: 'src/main/apps/runtime/session-store.ts',
-      text: "const raw = readFileSync(filePath, 'utf8')",
+      text: "const parsed: unknown = JSON.parse(readFileSync(filePath, 'utf8'))",
       reason: 'the per-app session-id map (_session-ids.json), a small JSON object, not a transcript',
     },
   ]

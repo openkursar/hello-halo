@@ -28,7 +28,10 @@ import { api } from '../../api'
 import { useSpaceStore } from '../../stores/space.store'
 import { useAppStore } from '../../stores/app.store'
 import { resolveModelSelection } from '../../types'
+import { getEngineSourceCompatibility } from '../../../shared/engine-source'
+import { useEngineId } from '../../stores/engine.store'
 import { AppModelSelector } from './AppModelSelector'
+import { AppEngineSelector } from './AppEngineSelector'
 import { AppNotifyChannelsSection } from './AppNotifyChannelsSection'
 import { AppCapabilitiesSection } from './AppCapabilitiesSection'
 import { AppMcpDepsSection } from './AppMcpDepsSection'
@@ -406,6 +409,8 @@ function SettingsTab({ app, appId, showWorkdayCalendar, spaceName, t, onRequireR
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [showClearMemoryConfirm, setShowClearMemoryConfirm] = useState(false)
   const [clearingMemory, setClearingMemory] = useState(false)
+  const [modelSaving, setModelSaving] = useState(false)
+  const [modelError, setModelError] = useState<string | null>(null)
 
   // Type-narrowed helpers for automation-specific fields
   const isAutomation = app.spec.type === 'automation'
@@ -611,8 +616,18 @@ function SettingsTab({ app, appId, showWorkdayCalendar, spaceName, t, onRequireR
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
 
   const aiSources = useAppStore(state => state.config?.aiSources)
+  const defaultEngine = useEngineId() ?? 'halo'
+  const modelSelection = aiSources?.version === 2 ? resolveModelSelection(aiSources, app.userOverrides) : undefined
+  const sourceCompatibility = getEngineSourceCompatibility(app.userOverrides.engineId ?? defaultEngine, modelSelection?.source)
+  useEffect(() => { setModelError(null) }, [appId, app.userOverrides.engineId, modelSelection?.source?.id, modelSelection?.modelId])
+  const saveEngineModelOverrides = async (patch: Record<string, unknown>): Promise<boolean> => {
+    const result = await api.appUpdateOverrides(appId, patch)
+    if (!result.success) throw new Error(result.error ?? 'The engine selection could not be saved. Please try again.')
+    await useAppsStore.getState().refreshApp(appId)
+    return true
+  }
   // An override naming a removed account follows the global selection.
-  const ownModel = aiSources?.version === 2 && resolveModelSelection(aiSources, app.userOverrides).own
+  const ownModel = modelSelection?.own
     ? app.userOverrides.modelId
     : undefined
   const consumedCapabilities = ['ai-browser', 'ai-terminal', 'email', 'im-push'].filter(p => resolvePermission(app, p)).length
@@ -901,16 +916,25 @@ function SettingsTab({ app, appId, showWorkdayCalendar, spaceName, t, onRequireR
             {t('Model')}
           </h3>
           <AppModelSelector
+            disabled={modelSaving}
             modelSourceId={app.userOverrides.modelSourceId}
             modelId={app.userOverrides.modelId}
             recommendedModel={specRecommendedModel}
             onChange={async (sourceId, modelId) => {
-              await updateAppOverrides(appId, {
-                modelSourceId: sourceId,
-                modelId: modelId,
-              })
+              setModelError(null)
+              setModelSaving(true)
+              try {
+                await saveEngineModelOverrides({ modelSourceId: sourceId, modelId })
+              } catch (error) {
+                setModelError(error instanceof Error ? t(error.message) : t('Failed to save. Please try again.'))
+              } finally { setModelSaving(false) }
             }}
           />
+          {modelSaving && <p role="status" className="text-xs text-muted-foreground">{t('Saving…')}</p>}
+          {modelError && <p role="alert" className="text-xs text-destructive">{modelError}</p>}
+          {!sourceCompatibility.compatible && (
+            <p role="alert" className="text-xs text-destructive">{t(sourceCompatibility.message)}</p>
+          )}
         </div>
 
         {/* Built-in capabilities the runtime grants (automation only) */}
@@ -1043,6 +1067,7 @@ function SettingsTab({ app, appId, showWorkdayCalendar, spaceName, t, onRequireR
       {/* ── Group 7: Advanced (collapsed by default) ── */}
       <div id="settings-group-advanced" className="scroll-mt-4 bg-card border border-border-soft rounded-xl px-4 py-4 sm:px-5">
         <Disclosure title={t('Advanced')} persistKey={ADVANCED_EXPANDED_KEY}>
+          {isAutomation && <AppEngineSelector key={appId} app={app} onChange={engineId => saveEngineModelOverrides({ engineId })} />}
           <UpgradeSection app={app} appId={appId} t={t} />
 
           {/* ── Spec Info (read-only summary + data directory) ── */}

@@ -1,3 +1,4 @@
+import type { EngineId } from '../../shared/types/engine'
 /**
  * agentApi — agent domain slice of the unified api object.
  * Split from the monolithic api/index.ts; transport branch (IPC vs HTTP) preserved.
@@ -113,11 +114,11 @@ export const agentApi = {
 
   // Get the active engine's capability descriptor. Renderer caches this in
   // a Zustand store and uses the flags to drive engine-aware UI affordances.
-  getEngineCapabilities: async (): Promise<ApiResponse> => {
+  getEngineCapabilities: async (engineId?: EngineId): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.getEngineCapabilities()
+      return window.halo.getEngineCapabilities(engineId)
     }
-    return httpRequest('GET', '/api/agent/engine-capabilities')
+    return httpRequest('GET', `/api/agent/engine-capabilities${engineId ? `?engineId=${encodeURIComponent(engineId)}` : ''}`)
   },
 
   // Engines this build can run, the active one, and the configured engine when

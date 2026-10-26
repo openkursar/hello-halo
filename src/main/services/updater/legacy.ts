@@ -69,8 +69,13 @@ function isMandatory(info: UpdateInfo): boolean {
  */
 export function configureLegacyFeed(updateConfig: UpdateConfig | undefined): boolean {
   autoUpdater.logger = console
-  autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoDownload = updateConfig?.provider !== 'disabled'
+  autoUpdater.autoInstallOnAppQuit = updateConfig?.provider !== 'disabled'
+
+  if (updateConfig?.provider === 'disabled') {
+    console.log('[Updater] Updates disabled by product configuration')
+    return false
+  }
 
   if (!updateConfig) {
     console.log('[Updater] No updateConfig in product.json, using default GitHub provider')

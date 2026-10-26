@@ -1,6 +1,6 @@
 # services/agent — Agent Engine
 
-> The largest single subsystem in the main process. Wraps a Claude Code-compatible SDK protocol into a session-oriented, stream-driven, MCP-aware engine that drives every conversation in Halo. Claude Code remains the canonical/default protocol; alternate engines must adapt to that protocol instead of changing the main flow.
+> The largest single subsystem in the main process. Wraps a Claude Code-compatible SDK protocol into a session-oriented, stream-driven, MCP-aware engine that drives every conversation in Halo. Halo SDK is the default engine. The shared session/event contract retains Claude Code-compatible shapes; optional engines adapt at their own boundary instead of changing the main flow.
 >
 > Read this file before touching anything under `src/main/services/agent/`.
 
@@ -10,10 +10,10 @@
 |---|---|---|
 | Session lifecycle (create / reuse / destroy / batch-invalidate on config change) | `session-manager.ts` | Largest file. V2 Session model. Registers callback on `config.service.ts` to auto-clean when API config changes. |
 | SDK stream → Thought[] translation | `stream-processor.ts`, `delta-coalescer.ts` | Second largest. Incremental push, partial tool calls, interruption recovery. Token deltas are published through the coalescer (see §3). |
-| SDK invocation & configuration | `sdk-config.ts`, `resolved-sdk.ts`, `codex/`, `dsh/`, `halo/` | Provider selection, model resolution, SDK option assembly through two named entries (`buildUserSessionSdkOptions`, `buildInternalTaskSdkOptions`; see §11). Alternate SDK engines are loaded only through `resolved-sdk.ts`; engine-specific translation is isolated under `codex/`, `dsh/` and `halo/`. |
+| SDK invocation & configuration | `sdk-config.ts`, `resolved-sdk.ts`, `cc/`, `codex/`, `dsh/`, `halo/` | Provider selection, model resolution, SDK option assembly through two named entries (`buildUserSessionSdkOptions`, `buildInternalTaskSdkOptions`; see §11). Alternate SDK engines are loaded only through `resolved-sdk.ts`; engine-specific translation is isolated under `cc/`, `codex/`, `dsh/` and `halo/`. |
 | User AI settings | `user-agent-settings.ts` | The one reader of the user's global AI settings for a session (`maxTurns`, `disabledTools`, `promptProfile`, digital-humans switch). Entries never pass them. See §11. |
 | Thinking depth → engine options | `reasoning-effort.ts` | Combines a picked level (conversation / digital human / API send), the per-request thinking flag and the per-model effort level into `effort` / `maxThinkingTokens` / Codex `model_reasoning_effort` / the router's picked level. Every SDK call site goes through `applyReasoningEffort`. See §9. |
-| Engine availability probe | `engine-availability.ts` | Detects which engine runtimes shipped in this build (manifest + entry file, platform binary for Codex, interpreter version for dsh) so `resolved-sdk.ts` can fall back instead of crashing at startup. Probed per engine on first demand and cached per process: startup asks only for the configured engine plus `FALLBACK_ORDER`, Settings asks for all of them (`agent:get-engine-availability`). |
+| Engine availability probe | `engine-availability.ts` | Detects runnable engines (Halo manifest + entry file, a selected external CC installation, platform binary for Codex, interpreter version for dsh) so `resolved-sdk.ts` can fall back instead of crashing at startup. Probed per engine on demand; bundled packages are cached per process and external CC uses a file-stamped cache: startup stops probing as soon as an engine loads, Settings asks for all of them (`agent:get-engine-availability`). |
 | System prompt composition | `system-prompt.ts` | Space context, conversation context, tool availability injection. `buildKnowledgeSection` is exported separately for creation-time append. On the `halo` engine the Claude Code-derived template is not used: `buildSystemPrompt` yields only Halo's product context, and every site that sets `sdkOptions.systemPrompt` wraps it with `toEngineSystemPrompt` into the engine's `{ preset: 'default', append }`. Code that later extends or reads the prompt goes through `appendToSystemPrompt` / `hostSystemPromptText`, never assumes a string. A digital human with its own instructions passes `ownIdentity`: the one identity line ("You are Halo, …") becomes "You run on Halo, …", so asked who it is it answers as its instructions say; everything else stays Halo's. |
 | Knowledge context resolution | `knowledge-context.ts` | Conversation `knowledgeBaseIds` → injectable `KBReference[]` (agent→tlon dependency collector). Cheap id-only variant feeds the session knowledge fingerprint. |
 | Space memory | `space-memory.ts` | Space chat's shared memory (platform/memory, scope `space`, per-space settings): the shared compact format, recording policy, file paths and conversation author tag appended to the Halo system prompt, plus the write guard at session setup, the bounded memory block on a new conversation's first message. Whether memory was on is passed as `SessionGates.creationContext`, so a session warmed before the setting flipped is rebuilt. Every concern that watches tool calls adds its hooks with `addSdkHooks` (sdk-config) — never by assigning `hooks`. Consolidation is not here — `services/memory-consolidation` listens for turn ends. |
@@ -56,6 +56,79 @@ built-in tool names stay plain. Native Responses rewriting changes only known
 tool identities in streamed items and the completed response's output, preserving
 reasoning, encrypted content and other event fields.
 
+Conversation `engineId` remains its origin label. New records carry
+`engineRoutingVersion: 1`, making that initial engine a reliable route even if
+the first creation fails before a native ID exists. Old origin labels alone are
+not reliable native ownership: prior releases overwrote a single session ID when
+the global engine changed. Existing unbound sessions use the legacy default
+baseline; the first live default change records it without scanning or rewriting
+old conversations. `engineOverride` is an explicit future choice, while the
+versioned `engineBinding` identifies the current native session. The generic
+conversation update API cannot overwrite native ownership fields.
+
+`engine-routing.ts` resolves and freezes each space conversation's engine before
+credentials and prompts are prepared. A busy session keeps its engine through
+its existing lease/input/team-task boundaries. `apps/runtime/engine-selection.ts`
+applies the same rule to digital humans, IM and automation followups. Source,
+engine and effective session-input fingerprints prevent unrelated in-flight
+creations from sharing a session.
+
+`shared/engine-source.ts` is the pure engine/account compatibility rule used by
+settings and execution. Delegated CLI accounts require Claude Code. Codex accepts
+only the OpenAI Chat Completions and Responses protocols supported by Halo's
+Responses router; Anthropic and other protocols are refused before MCP setup or
+process creation. Model identifiers are preserved, including Claude-named models
+behind an OpenAI-compatible gateway. Every Codex request uses the selected
+router descriptor; inherited vendor credentials and endpoint overrides are
+removed. `source-compatibility.ts` reads source/provider descriptors for save-time
+checks without refreshing credentials. API-key connection validation explicitly
+uses Halo, independently of the default conversation engine.
+For an explicitly declared Chat Completions or Responses backend, source capture
+preserves its model identifier even if Anthropic has retired a model by that
+name. Anthropic-protocol sources retain their existing retirement migration.
+
+`engine-handoff.ts` plans native resume versus a fresh session with bounded,
+engine-neutral history. The latter carries visible user/assistant text, completed
+tool results, goals and file references as quoted user-level data. It never
+replays tool actions or promotes a transcript to system instructions. Truncation
+is explicit and names readable complete records. There is only one current
+native binding, not a reusable old ID per engine; returning from B to A therefore
+uses the latest Halo record. Binding commits compare the preparation snapshot
+and are idempotent, so a late old consumer cannot replace its successor.
+
+The session manager holds pending handoff text weakly by session. The first
+actual input uses its own latest prepared snapshot, not an earlier warm-up
+snapshot, and consumes it once. Strict native restore failure prepares history
+lazily and retries one fresh session; a warm recovery refreshes that history
+under the first send's lease. Strict CC/Halo bindings require the current native
+file and never recover an obsolete legacy copy. Failed preparation leaves the
+previous binding and visible history intact. Consumer result identity is bound
+at creation and propagated to persistence and session-info events.
+
+`initialization.ts` preserves the first default-engine readiness barrier. Desktop
+creates its window and essential handlers before resolving that default, and
+extended services retain their existing startup order. `resolved-sdk.ts` maintains
+at most four lazily loaded engine entries. `resolveDefaultEngine()` returns the
+currently usable default, including fallback; an explicitly supplied `engineId`
+is checked and never silently changed. Sessions and one-shot queries capture that
+id before asynchronous preparation. Configuration changes affect future routing,
+not resources already borrowed by another conversation.
+
+Each session/query borrows its engine runtime. A session releases its borrow only
+after close and persistence flush; a query releases in its generator's finally.
+The default runtime keeps its existing prewarm behavior. A non-default shared
+runtime closes after the last borrow, while its registry entry remains reusable;
+creation arriving during close waits and creates a fresh runtime. Switching the
+default cannot close a borrowed engine. Application shutdown aborts outstanding
+borrows and closes all loaded shared runtimes. Public MCP tool/server descriptions
+are engine-neutral executable objects, preserving schemas, handlers, annotations,
+metadata and handler cancellation signals.
+
+A historical explicit CC preference without a selected
+installation receives one bounded eight-second discovery attempt (`engine-migration.ts`),
+recorded as `ccRuntime.discoveryCompleted`; ordinary Halo startup never scans CC.
+Missing or incompatible CC leaves the preference intact and loads Halo.
+
 ## 2) Single Source of Truth Contract
 
 - **Session state (thoughts, tool calls, token usage) is authoritative in the main process.** The renderer consumes events and must not persist agent state independently.
@@ -68,16 +141,18 @@ reasoning, encrypted content and other event fields.
 
 - **Engine credentials are a captured snapshot.** `resolveCredentialsForSdk` retains the selected `ApiCredentials` with its source generation; both SDK option builders pass that snapshot as `apiCredentials`. Codex and dsh read it through `getSdkApiCredentials`, never resolve the global source again. API validation and MCP connection tests construct options directly and attach their own captured credentials too; both take the engine environment from `buildSdkEnv` (the MCP test resolves its credentials through `resolveCredentialsForSdk` first), so a test runs with the config directory, delegated login and proxy policy a conversation gets. Standalone options can supply an encoded backend or direct Anthropic env without a stored source. Missing or delegated credentials are refused by these adapters, not replaced with another account.
 
-- **A packaged build runs the Claude Code CLI from its real file, never through app.asar.** Every launch — sessions, the API key check, the MCP connection test, the sign-in command — takes the path from `resolveClaudeCodeCliPath` (`sdk-config.ts`), which in a packaged build is the copy the `asarUnpack` rule puts in `app.asar.unpacked`. The CLI starts programs found next to its own file (ripgrep behind Grep, Glob, the shell's `rg` and its discovery of project agents, commands and output styles), and no OS can execute a file inside an archive; Electron's redirect for that stopped reaching the CLI's ES module imports with Electron 43 (Node 24), so every such call failed with `spawn ENOTDIR` while dev and E2E builds kept working. `scripts/afterPack.cjs` fails packaging when that copy or the target's ripgrep is missing; `tests/e2e/specs/cli-tools-packaged.spec.ts` exercises the tools against a packaged app.
+- **CC and Halo history remains resumable.** Both consume the same user/assistant/tool JSONL records. `stored-session.prepareStoredSession` resolves canonical, NFC and legacy project directories, then atomically carries the transcript and its sidecar into the active engine's directory convention. A newer alias within the same config store wins so switching back retains subsequent turns; a legacy config store never replaces an existing destination. This matters for symlinks: CC stores the resolved cwd while Halo uses the given cwd. A real external CC → Halo test verifies user, assistant and tool-result context reaches the next model request. This restores recorded context, not a terminated process's running tools.
 
-- **Windows background consoles stay hidden at every process boundary.** Halo-owned launches set `windowsHide: true`. The bundled Claude Code CLI imports `windows-hide.cjs` before initialization through a version-pinned patch: Windows child launches inside that CLI (including synchronous Git Bash probes, tools and MCP servers) hide their consoles too. The patch changes Node built-ins only inside the CLI process, never the Electron host; parent spawn flags are not inherited by nested launches. Revalidate the patch and console guards when upgrading Claude Code.
+- **CC is an optional external runtime.** `services/cc-runtime` owns discovery, compatibility checks, selection and managed installation; `agent/cc` consumes only its public launch descriptor. No Claude Agent SDK or CC CLI is bundled. Native CC executes directly; legacy JavaScript entries use the supplied interpreter. Halo options never resolve a CC file. Missing CC falls back to Halo without erasing the user’s preference. The CC adapter owns stream-json control requests, hooks, permissions and per-turn streams, and reuses `mcp/sdk-server` plus `mcp/sdk-bridge` for in-process tools. A selected local CC is never updated or patched by Halo; its child disables automatic updating.
 
-- **SDK protocol boundary.** `@anthropic-ai/claude-agent-sdk` is the default engine and defines Halo's internal stream/session protocol. `@hello-halo/agent-sdk`, `@openai/codex-sdk`, `@deepseek-ai/dsh`, and future engines must expose the same `tool` / `createSdkMcpServer` / `createSession` / `query` surface through `resolved-sdk.ts`. Native engine events must be normalized before they reach `session-consumer.ts` or `stream-processor.ts`.
+- **Windows process visibility.** Halo-owned launches set `windowsHide: true`. CC is external and never patched; visibility of programs that it launches internally belongs to that CC version. Compatibility validation must not assume a host spawn flag propagates into nested launches.
+
+- **SDK protocol boundary.** Halo SDK is the default engine; the host owns its internal stream/session contract. `@hello-halo/agent-sdk`, `@openai/codex-sdk`, `@deepseek-ai/dsh`, and future engines must expose the same `tool` / `createSdkMcpServer` / `createSession` / `query` surface through `resolved-sdk.ts`. Native engine events must be normalized before they reach `session-consumer.ts` or `stream-processor.ts`.
 
   | Engine (`config.agent.sdkEngine`) | Runtime | Adapter |
   |---|---|---|
-  | `anthropic` (default) | `@anthropic-ai/claude-agent-sdk` in-process | — (canonical protocol) |
-  | `halo` | `@hello-halo/agent-sdk/worker`, bounded grouped Node workers | `halo/` (host lifecycle, grouping and identity) |
+  | `anthropic` | selected native or JavaScript CC, stream-json child process | `cc/` |
+  | `halo` (default) | `@hello-halo/agent-sdk/worker`, bounded grouped Node workers | `halo/` (host lifecycle, grouping and identity) |
   | `codex` | `codex app-server` child process (binary from `@openai/codex`) | `codex/` |
   | `dsh` | prebuilt single-file runtime, child process, stdio JSON-RPC | `dsh/` |
 
@@ -279,29 +354,18 @@ own their SDK session directly and keep reading `stream()` until its pending
 input is consumed. `agent:turn-start` follows the consumer's active-state update,
 so delivery mailboxes can flush messages that arrived during session startup.
 
-- **Claude Code:** the SDK patch provides synchronous enqueue and adds UUIDs to
-  live inputs. `--replay-user-messages` acknowledges consumption; matching native
-  replay frames clear pending input, including messages consumed in a continuation.
-  The CLI runs some input as a turn of its own without acknowledging it (a local
-  slash command, text carrying a tag CC reserves): input still pending at the
-  previous result stops counting at the next one. Withdrawal drops input still in
-  the SDK's own queue (never written), and cancels written input in the CLI's
-  command queue (`cancel_async_message`; `cancelled:false` = the CLI dequeued it,
-  i.e. read). User messages reach stdin through the SDK's input stream while
-  control requests are written directly, so the cancel waits one macrotask, by
-  which time everything the stream dequeued is written and the cancel cannot
-  overtake its message. A cancel the CLI leaves unanswered for 2 s is reported
-  like a failed one ("may still run") so the stop goes on to interrupt or close;
-  if the CLI confirms it later, or its process is gone by then, the input is
-  still withdrawn and its `onWithdrawn` runs late. The CLI echoes every control
-  response the SDK writes; echoes answering none of the SDK's own requests are
-  skipped before parsing. It also echoes every user input: an echo the stream
-  drops anyway (no `<local-command-stdout>`, no `tool_result`) is recognized from
-  its line shape (the CLI's key order and `JSON.stringify` output) and replaced
-  by a minimal stand-in carrying its uuid, in the same stream position, so an
-  input's size is not parsed twice. Any other shape is parsed as before.
-  `tests/unit/services/agent/cc-live-input-e2e.test.ts` (`CC_E2E=1`) checks all
-  of this against the bundled CLI; rerun it when bumping either package.
+- **Claude Code:** `cc/session` implements synchronous live-input ownership with
+  UUIDs and `--replay-user-messages` consumption acknowledgments. A pending input
+  consumed as a local command without replay stops counting at the second result.
+  Withdrawal removes unsent messages and sends `cancel_async_message` for written
+  ones; `cancelled:false` means native code already read it. A two-second timeout
+  reports uncertainty without blocking stop; a later confirmation still invokes
+  the withdrawal callback once. Echoed control responses not belonging to a host
+  request and ordinary replayed user bodies are skipped before JSON parsing.
+  The same adapter drives both native executables and JavaScript CLI entries.
+  `tests/unit/services/agent/cc-live-input.test.ts` covers the transport and ownership
+  protocol, while `cc-live-input-e2e.test.ts` (`CC_E2E=1`, `CC_TEST_CLI=<path>`)
+  verifies tool-boundary delivery and cancellation against an external CLI.
 - **Halo SDK:** accepted messages remain ordered in the session inbox. The query
   loop drains one combined user message before each model step and checks again
   before its final result. `UserPromptSubmit` hooks execute in input order when
@@ -399,7 +463,7 @@ that may be safely rebuilt.
 2. **Never re-implement injection paths.** All external triggers go through `inject-message.ts`.
 3. **Never bypass `stream-processor`** when translating SDK events — subagent-handler and permission-handler compose with it, not around it.
 4. **Do not weaken the config-change invalidation contract.** Partial in-place session updates are forbidden; batch destroy + recreate is the only supported path.
-5. **Mirrors of CC-internal formats stay in one module and fail closed.** `mcp-auth-state.ts` reproduces CC's entry-key derivation and keychain naming; a CC upgrade that changes either must make the lookup miss, never make it match the wrong record. Revalidate when bumping `@anthropic-ai/claude-agent-sdk`.
+5. **Mirrors of CC-internal formats stay in one module and fail closed.** `mcp-auth-state.ts` reproduces CC's entry-key derivation and keychain naming; a CC upgrade that changes either must make the lookup miss, never make it match the wrong record. Revalidate when updating the recommended CC range.
 6. **Guard every `mainWindow` access** in async callbacks with `!mainWindow.isDestroyed()`.
 7. **Every engine clamps the effort ladder to its own enum.** See §9.
 8. **An option a caller relies on as a restriction must be honoured or refused, never ignored.**
@@ -429,9 +493,9 @@ that may be safely rebuilt.
     entirely inside the Claude Code engine, which splits a compound command
     (`&&`, `;`, `|`, `$()`, backticks, newlines, wrappers like `bash -c`) on
     every shell separator and requires each part to match a rule on its own.
-    This is an EXTERNAL assumption: the matcher lives in the bundled CLI
-    (currently `@anthropic-ai/claude-agent-sdk` 0.2.89) and cannot be unit
-    tested offline from this repo. Halo deliberately runs no pattern test of
+    This is an EXTERNAL assumption: the matcher lives in the selected CC
+    installation, not in Halo. Real-CLI regression tests must recheck it when
+    changing the verified version list. Halo deliberately runs no pattern test of
     its own — a second matcher would drift from the engine's and clear what it
     refused. The dependence is fail-closed by construction: any call the
     engine's rules do not auto-allow reaches the per-call gate
@@ -439,7 +503,7 @@ that may be safely rebuilt.
     unconditionally. An engine build that stopped splitting compound commands
     would therefore degrade the whitelist to whole-string matching — narrower
     than intended, never wider, never full access. Revalidate the splitting
-    behavior when bumping the SDK (same ritual as hard rule 5).
+    behavior when updating the verified CC versions (same as hard rule 5).
 
 ## 9) Reasoning Effort
 
@@ -578,9 +642,8 @@ as a whole; it is also why the field is listed here rather than left implicit �
 it changes existing long sessions, so it does not belong in a commit that
 claims to be identity-only.
 
-**Gated on the engine.** The block only runs when `getActiveEngine() === 'halo'`;
-the default engine is `anthropic`, so a user who never switches engines is
-unaffected.
+**Gated on the captured engine.** The block runs only for a session whose
+explicit engine is `halo`; another concurrent engine never inherits it.
 
 **Session id comes from the conversation.** `sdk-config.ts` passes
 `conversationId` (a uuid) as `sessionId`, which is what populates both the
@@ -664,3 +727,35 @@ collaboration and everything granted per conversation or per permission.
 runs the real entries and records which servers and which settings each one gets.
 Adding a capability or an entry means updating that table; a server that shows up
 in a row unlisted fails it.
+
+## Engine bindings and history handoff
+
+`shared/types/engine-session` records the one current `{ version: 1, engineId,
+sessionId }` binding. Legacy `sessionId` values remain readable and unchanged until
+an entry opts into engine-aware selection. An explicit `engineOverride` is distinct
+from the origin badge and from the app-wide default. A completed replacement is
+published with compare-and-swap against the state captured before preparation, so
+a retired consumer cannot overwrite a newer engine's binding.
+
+`engine-handoff.ts` is the shared, storage-independent boundary. Its pure planner
+only resumes the current engine's native session. A changed engine receives the
+latest Halo transcript as bounded JSON historical data in the first **user** input;
+no prior tool call is dispatched and no history is made into a system instruction.
+Reasoning is excluded; visible messages, tool results, goals and file references
+are retained. Any omission is explicit and names the absolute complete transcript
+path. CC/Halo native-format similarities do not authorize resuming an outdated A
+session after another engine B has produced newer records.
+
+Conversation and app session stores own their persistence and bounded history
+readers. App `_session-ids.json` entries remain strings for legacy runs; an opted-in
+run's entry becomes the versioned binding, atomically in the same file. The legacy
+read API still returns a session-id string. Preparation/serialization does not
+write a binding; the session owner commits only after preparation succeeds.
+
+Opted-in Codex bindings pass `strictNativeResume: true`. A rejected `thread/resume` raises `NativeSessionResumeError` without starting a fresh thread; the session owner decides how to rebuild from neutral records. Startup failures close the app-server, RPC handlers and MCP bridge before returning. Legacy unbound resume retains its earlier fallback contract.
+
+New space conversations carry `engineRoutingVersion: 1`, which makes their existing
+`engineId` the initial routing identity even before the first native session is
+ready. Legacy records are not backfilled: their old origin badge cannot identify
+the current session owner. Generic conversation updates cannot rewrite this
+version or initial identity; an explicit change uses `engineOverride` instead.
