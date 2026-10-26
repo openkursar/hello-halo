@@ -10,6 +10,7 @@
  */
 
 import type { Message } from '../../../types'
+import { isTeamTranscriptMessage } from '../../../../shared/transcript'
 import { messageRowKey, messageRowKeys } from '../../../utils/message-row-key'
 import { arrivedDuring } from './arrivals'
 
@@ -33,9 +34,13 @@ export interface TranscriptRows {
   readonly injections: ReadonlyMap<string, Message[]>
   /** Records received while a reply was written, by its id; drawn in its process (see `arrivals`). */
   readonly arrivals: ReadonlyMap<string, Message[]>
+  /** Teammates' deliveries that opened a reply's turn, by its id; drawn as the reply's cause. */
+  readonly openers: ReadonlyMap<string, Message[]>
+  /** The running turn's openers: its reply is drawn from the stream, not from these rows. */
+  readonly liveOpeners: readonly Message[]
   /** Index in `source` of each row. */
   readonly sourceIndexes: readonly number[]
-  /** Source index of each reply owning injected messages or arrivals. */
+  /** Source index of each reply owning injected messages, arrivals or openers. */
   readonly attachmentOwners: ReadonlyMap<string, number>
   /** Row index of each key at the last full build, covering the first `indexedRows` rows. */
   readonly keyRows: ReadonlyMap<string, number>
@@ -97,6 +102,38 @@ export function inputsByReply(messages: readonly Message[]): Map<string, ReplyIn
   return byReply
 }
 
+/** A teammate's delivery that opened a turn; the writer states it with `inputMode: 'turn'`. */
+function isTurnOpener(message: Message): boolean {
+  return isTeamTranscriptMessage(message) && message.metadata?.inputMode === 'turn'
+}
+
+function isOwnReply(message: Message | undefined): boolean {
+  return message?.role === 'assistant' && message.source !== 'push'
+}
+
+/** The openers right before the reply at `index`: the turn that reply answers. */
+function openersFor(source: readonly Message[], index: number): Message[] {
+  let at = index
+  while (at > 0 && isTurnOpener(source[at - 1])) at--
+  return at === index ? [] : source.slice(at, index)
+}
+
+/**
+ * Whether the opener at `index` is drawn on a reply instead of as its own card:
+ * its run of openers is followed by the reply it opened, or, while a turn runs,
+ * ends the transcript (that reply is still the stream).
+ */
+function isAttachedOpener(source: readonly Message[], index: number, isGenerating: boolean): boolean {
+  if (!isTurnOpener(source[index])) return false
+  let at = index + 1
+  while (at < source.length && isTurnOpener(source[at])) at++
+  return at === source.length ? isGenerating : isOwnReply(source[at])
+}
+
+function trailingOpeners(source: readonly Message[], isGenerating: boolean): Message[] {
+  return isGenerating ? openersFor(source, source.length) : []
+}
+
 function attachedArrivals(source: readonly Message[], from = 0): Set<Message> {
   const attached = new Set<Message>()
   let at = from
@@ -116,20 +153,27 @@ function buildRows(source: readonly Message[], isGenerating: boolean): Transcrip
   const previousCosts: number[] = []
   const injections = new Map<string, Message[]>()
   const arrivals = new Map<string, Message[]>()
+  const openers = new Map<string, Message[]>()
   const attachmentOwners = new Map<string, number>()
   const lastPlain = lastPlainIndex(source)
+  let liveOpeners = trailingOpeners(source, isGenerating)
   let lastCost = 0
   const attached = attachedArrivals(source)
   for (let i = 0; i < source.length; i++) {
     const message = source[i]
-    if (message.source === 'injection' || attached.has(message)) continue
+    if (message.source === 'injection' || attached.has(message) || isAttachedOpener(source, i, isGenerating)) continue
     if (message.role === 'assistant') {
       const inputs = inputsFor(source, i)
+      const opened = isOwnReply(message) ? openersFor(source, i) : []
       if (inputs.injections.length) injections.set(message.id, inputs.injections)
       if (inputs.arrivals.length) arrivals.set(message.id, inputs.arrivals)
-      if (inputs.injections.length || inputs.arrivals.length) attachmentOwners.set(message.id, i)
+      if (opened.length) openers.set(message.id, opened)
+      if (inputs.injections.length || inputs.arrivals.length || opened.length) attachmentOwners.set(message.id, i)
     }
-    if (isHiddenPlaceholder(message, i, lastPlain, isGenerating)) continue
+    if (isHiddenPlaceholder(message, i, lastPlain, isGenerating)) {
+      liveOpeners = openers.get(message.id) ?? liveOpeners
+      continue
+    }
     messages.push(message)
     sourceIndexes.push(i)
     previousCosts.push(lastCost)
@@ -137,7 +181,7 @@ function buildRows(source: readonly Message[], isGenerating: boolean): Transcrip
   }
   const keys = messageRowKeys(messages)
   return {
-    source, isGenerating, messages, keys, previousCosts, injections, arrivals, sourceIndexes, attachmentOwners,
+    source, isGenerating, messages, keys, previousCosts, injections, arrivals, openers, liveOpeners, sourceIndexes, attachmentOwners,
     keyRows: new Map(keys.map((key, row) => [key, row])),
     indexedRows: keys.length,
   }
@@ -179,38 +223,46 @@ export function nextTranscriptRows(prev: TranscriptRows | null, source: readonly
   const keys = prev.keys.slice(0, keepRows)
   let injections = prev.injections as Map<string, Message[]>
   let arrivals = prev.arrivals as Map<string, Message[]>
+  let openers = prev.openers as Map<string, Message[]>
   let attachmentOwners = prev.attachmentOwners as Map<string, number>
+  const own = () => {
+    if (attachmentOwners !== prev.attachmentOwners) return
+    injections = new Map(prev.injections)
+    arrivals = new Map(prev.arrivals)
+    openers = new Map(prev.openers)
+    attachmentOwners = new Map(prev.attachmentOwners)
+  }
   for (const [id, owner] of prev.attachmentOwners) {
     if (owner < from) continue
-    if (attachmentOwners === prev.attachmentOwners) {
-      injections = new Map(prev.injections)
-      arrivals = new Map(prev.arrivals)
-      attachmentOwners = new Map(prev.attachmentOwners)
-    }
+    own()
     injections.delete(id)
     arrivals.delete(id)
+    openers.delete(id)
     attachmentOwners.delete(id)
   }
   let lastCost = keepRows > 0 ? costAfter(messages[keepRows - 1], previousCosts[keepRows - 1]) : 0
+  // Both places a running turn's openers can sit, the end or its placeholder, are at or after `from`.
+  let liveOpeners = trailingOpeners(source, isGenerating)
 
   const attached = attachedArrivals(source, from)
   for (let i = from; i < source.length; i++) {
     const message = source[i]
-    if (message.source === 'injection' || attached.has(message)) continue
+    if (message.source === 'injection' || attached.has(message) || isAttachedOpener(source, i, isGenerating)) continue
     if (message.role === 'assistant') {
       const inputs = inputsFor(source, i)
-      if (inputs.injections.length || inputs.arrivals.length) {
-        if (attachmentOwners === prev.attachmentOwners) {
-          injections = new Map(prev.injections)
-          arrivals = new Map(prev.arrivals)
-          attachmentOwners = new Map(prev.attachmentOwners)
-        }
+      const opened = isOwnReply(message) ? openersFor(source, i) : []
+      if (inputs.injections.length || inputs.arrivals.length || opened.length) {
+        own()
         if (inputs.injections.length) injections.set(message.id, inputs.injections)
         if (inputs.arrivals.length) arrivals.set(message.id, inputs.arrivals)
+        if (opened.length) openers.set(message.id, opened)
         attachmentOwners.set(message.id, i)
       }
     }
-    if (isHiddenPlaceholder(message, i, lastPlain, isGenerating)) continue
+    if (isHiddenPlaceholder(message, i, lastPlain, isGenerating)) {
+      liveOpeners = openers.get(message.id) ?? liveOpeners
+      continue
+    }
     const key = messageRowKey(message)
     const indexedAt = prev.keyRows.get(key)
     // A repeated key needs the suffixes only a full build assigns.
@@ -226,7 +278,7 @@ export function nextTranscriptRows(prev: TranscriptRows | null, source: readonly
   if (keys.length - indexedRows > MAX_UNINDEXED_KEYS) return buildRows(source, isGenerating)
 
   return {
-    source, isGenerating, messages, keys, previousCosts, injections, arrivals, sourceIndexes, attachmentOwners,
+    source, isGenerating, messages, keys, previousCosts, injections, arrivals, openers, liveOpeners, sourceIndexes, attachmentOwners,
     keyRows: prev.keyRows,
     indexedRows,
   }

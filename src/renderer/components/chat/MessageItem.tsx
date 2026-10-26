@@ -56,6 +56,8 @@ interface MessageItemProps {
   hideBrowserLiveView?: boolean  // Hide the "View live feed" button in BrowserTaskCard (no live browser view for this conversation)
   allowViewChanges?: boolean
   hideTerminalOpen?: boolean  // Hide the "Open" button in TerminalTaskCard (no canvas to open a terminal in)
+  /** Show copy and token usage only while the reply (a `group/reply` ancestor) is hovered or focused. */
+  actionsOnHover?: boolean
 }
 
 // Collapsible thought history component
@@ -250,7 +252,7 @@ function ThoughtItem({ thought }: { thought: Thought }) {
   )
 }
 
-export const MessageItem = memo(function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false, hideBrowserLiveView = false, hideTerminalOpen = false, allowViewChanges = false }: MessageItemProps) {
+export const MessageItem = memo(function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false, hideBrowserLiveView = false, hideTerminalOpen = false, allowViewChanges = false, actionsOnHover = false }: MessageItemProps) {
   const isUser = message.role === 'user'
   const isStreaming = (message as any).isStreaming
   const [copied, setCopied] = useState(false)
@@ -359,7 +361,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
   ) : (
     <div
       className={`rounded-lg ${
-        isUser ? 'message-user px-3.5 py-2.5' : 'message-assistant px-4 py-3'
+        isUser ? 'message-user px-3.5 py-2.5' : 'message-assistant pb-3'
       } ${isStreaming ? 'streaming-message' : ''} ${isWorking ? 'message-working' : ''} ${
         // Assistant bubbles hold the column width so the layout does not shift when
         // the streaming bubble is replaced; user bubbles shrink to their content
@@ -479,17 +481,17 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
         />
       )}
 
-      {/* Token usage indicator + copy button - only for completed assistant messages with tokenUsage */}
+      {/* Copy button + token usage - only for completed assistant messages with tokenUsage.
+          The icon sits on the reply's left edge, so the button is pulled left by its own
+          padding; a hover fill would then hang outside that edge, hence colour only.
+          Revealed on hover only where a pointer can hover: touch keeps it in view, and the
+          hidden state takes no pointer so a tap on empty space cannot copy. */}
       {!isUser && !isWorking && message.tokenUsage && (
-        <div className="flex justify-end items-center gap-2 mt-2 pt-1">
-          {/* Token usage indicator */}
-          <TokenUsageIndicator tokenUsage={message.tokenUsage} previousCost={previousCost} />
-
-          {/* Copy button */}
+        <div className={`flex items-center mt-1 ${actionsOnHover ? 'opacity-0 pointer-events-none transition-opacity group-hover/reply:opacity-100 group-hover/reply:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto' : ''}`}>
           <button
             onClick={handleCopyMessage}
-            className="flex items-center gap-1.5 px-2 py-1 text-xs text-faint-foreground
-              hover:text-foreground hover:bg-secondary rounded-md transition-all"
+            className="flex items-center gap-1.5 -ml-1.5 h-6 px-2 text-xs text-faint-foreground
+              hover:text-foreground transition-colors"
             title={t('Copy message')}
           >
             {copied ? (
@@ -501,6 +503,8 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
               <Copy size={14} />
             )}
           </button>
+
+          <TokenUsageIndicator tokenUsage={message.tokenUsage} previousCost={previousCost} />
         </div>
       )}
     </div>

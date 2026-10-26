@@ -102,12 +102,20 @@ bubble's tool-transition detection. A reply that did no work has no process to
 join: its arrivals are drawn after it as their own cards, never as a process of
 their own. Live, the same holds for the part of a reply after its last split:
 arrivals with no work of its own beside them are cards after it until work
-joins them. Thought durations count only native steps. A delivery that opened a
-turn (`inputMode: 'turn'`), and any record no drawn reply claims (older history,
-remote records), is its kind's own card with its usual fresh-arrival behaviour.
+joins them. Thought durations count only native steps. A teammate's delivery
+that opened a turn (`inputMode: 'turn'`) is that turn's cause, as a person's
+message is: consecutive ones right before the reply they opened are drawn on
+its sender line ("Halo · Received a report from X"), not as rows; while the
+turn runs, those at the transcript's end or before its placeholder are drawn on
+the streaming reply the same way. One with no reply after it (none yet and no
+turn running, or a person's message in between), and any record no drawn reply
+claims (older history, remote records), is its kind's own card with its usual
+fresh-arrival behaviour.
 
 `transcript-rows` attaches an arrival only when the writer's `inputReplyId` names
-the reply right before it across system/injection records, and never a push.
+the reply right before it across system/injection records, and never a push;
+an opener only to the non-push reply directly after its run, where the writer's
+`inputMode: 'turn'` already says it opened the next turn.
 These are receipt positions, not claims about model consumption; adjacency or
 timestamps alone establish nothing. Views that draw their own selection of a
 transcript (the team task room) take the same attachment from `inputsByReply`.

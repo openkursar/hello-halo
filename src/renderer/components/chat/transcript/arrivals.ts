@@ -5,8 +5,8 @@
  *
  * Ownership is stated by the writer: such a record names the reply open at
  * receipt (`inputMode: 'live'`, `inputReplyId`). Adjacency or timestamps never
- * attach a record; one that opened a turn, or names no drawn reply, stays a
- * card of its own.
+ * attach a record; one that opened a turn is drawn on the reply it opened
+ * (see transcript-rows), and one that names no drawn reply stays a card of its own.
  */
 
 import type { LiveInput, Message, Thought } from '../../../types'
