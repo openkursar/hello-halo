@@ -9,11 +9,11 @@ import { useState, useMemo, memo, type RefObject } from 'react'
 import {
   AlertTriangle,
   Braces,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   ChevronUp,
   Lightbulb,
+  ListTodo,
   Loader2,
   XCircle,
 } from 'lucide-react'
@@ -26,7 +26,6 @@ import { isArrivalThought, workSeconds } from './transcript'
 import { ErrorContent } from './ErrorContent'
 import {
   getThoughtIcon,
-  getThoughtColor,
   getThoughtLabelKey,
   getToolFriendlyFormat,
   NO_CHILD_THOUGHTS,
@@ -52,20 +51,17 @@ const ThoughtStep = memo(function ThoughtStep({ thought, isLast, live, allThough
   const [showResult, setShowResult] = useState(true)
   const [isContentExpanded, setIsContentExpanded] = useState(false)
   const { t } = useTranslation()
-  const color = getThoughtColor(thought.type, thought.isError)
   const Icon = getThoughtIcon(thought.type, thought.toolName)
 
   if (isArrivalThought(thought)) {
     const ArrivalIcon = arrivalIcon(thought.arrival)
     return (
-      <div className="flex gap-3 group animate-fade-in">
+      <div className="flex gap-2.5 group animate-fade-in">
         <div className="flex flex-col items-center">
-          <div className="w-7 h-7 rounded-full flex items-center justify-center bg-primary/10 text-primary">
-            <ArrivalIcon size={14} />
-          </div>
-          {!isLast && <div className="w-0.5 flex-1 bg-border/30 mt-1" />}
+          <ArrivalIcon size={14} className="mt-[3px] shrink-0 text-primary" />
+          {!isLast && <div className={STEP_RAIL} />}
         </div>
-        <div className="flex-1 pb-4 min-w-0">
+        <div className="flex-1 pb-3 min-w-0">
           <div className="rounded-lg border border-border-soft bg-muted/15 overflow-hidden">
             <ArrivalCard message={thought.arrival} inProcess />
           </div>
@@ -94,51 +90,43 @@ const ThoughtStep = memo(function ThoughtStep({ thought, isLast, live, allThough
 
   // Tool errors use the warning style, not red: they are the AI's own feedback
   // (e.g. "read file first") that it recovers from, not errors for the user.
+  // A finished step says nothing: only what is still pending or went wrong is called out.
   const getToolStatus = () => {
     if (thought.type !== 'tool_use') return null
     // Tokens by default; `theme-dark:` sets the dark hues.
     if (!isToolReady) return { label: t('Generating'), color: 'text-halo-warning theme-dark:text-amber-400' }
-    if (hasToolResult) {
-      return thought.toolResult!.isError
-        ? { label: t('Hint'), color: 'text-halo-warning' }
-        : { label: t('Done'), color: 'text-halo-success theme-dark:text-green-400' }
-    }
+    if (hasToolResult) return thought.toolResult!.isError ? { label: t('Hint'), color: 'text-halo-warning' } : null
     return live ? { label: t('Running'), color: 'text-primary theme-dark:text-blue-400' } : null
   }
   const toolStatus = getToolStatus()
+  const warned = thought.isError || thought.toolResult?.isError
 
   return (
-    <div className="flex gap-3 group animate-fade-in">
+    <div className="flex gap-2.5 group animate-fade-in">
+      {/* Gray glyphs and labels: color is kept for what is running or went wrong. */}
       <div className="flex flex-col items-center">
-        <div className={`w-7 h-7 rounded-full flex items-center justify-center ${
-          thought.isError || thought.toolResult?.isError ? 'bg-halo-warning/20' : isStreaming ? 'bg-primary/20' : 'bg-primary/10'
-        } ${thought.toolResult?.isError ? 'text-amber-500' : color}`}>
-          {hasToolResult ? (
-            thought.toolResult!.isError ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />
-          ) : (
-            <Icon size={14} />
-          )}
-        </div>
-        {!isLast && (
-          <div className="w-0.5 flex-1 bg-border/30 mt-1" />
-        )}
+        {thought.toolResult?.isError
+          ? <AlertTriangle size={14} className="mt-[3px] shrink-0 text-amber-500" />
+          : <Icon size={14} className={`mt-[3px] shrink-0 ${warned ? 'text-amber-500' : isStreaming ? 'text-primary' : 'text-faint-foreground'}`} />}
+        {!isLast && <div className={STEP_RAIL} />}
       </div>
 
-      <div className="flex-1 pb-4 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <span className={`min-w-0 truncate text-xs font-medium ${thought.toolResult?.isError ? 'text-amber-500' : color}`}>
-            {(() => {
-              const label = getThoughtLabelKey(thought.type)
-              return label === 'AI' ? label : t(label)
-            })()}
-            {thought.toolName && ` - ${thought.toolName}`}
+      <div className="flex-1 pb-3 min-w-0">
+        <div className="flex items-center gap-2 mb-0.5">
+          <span className={`min-w-0 truncate text-xs font-medium ${warned ? 'text-amber-500' : 'text-muted-foreground'}`}>
+            {thought.type === 'tool_use' && thought.toolName
+              ? thought.toolName
+              : (() => {
+                  const label = getThoughtLabelKey(thought.type)
+                  return label === 'AI' ? label : t(label)
+                })()}
           </span>
           {toolStatus && (
             <span className={`shrink-0 text-xs ${toolStatus.color}`}>
               {toolStatus.label}
             </span>
           )}
-          <span className="hidden sm:inline shrink-0 text-xs text-muted-foreground/50">
+          <span className="hidden sm:inline shrink-0 text-xs text-faint-foreground/80">
             {new Date(thought.timestamp).toLocaleTimeString(getCurrentLanguage(), {
               hour: '2-digit',
               minute: '2-digit',
@@ -146,7 +134,7 @@ const ThoughtStep = memo(function ThoughtStep({ thought, isLast, live, allThough
             })}
           </span>
           {thought.duration && (
-            <span className="hidden sm:inline shrink-0 text-xs text-muted-foreground/40">
+            <span className="hidden sm:inline shrink-0 text-xs text-faint-foreground/70">
               ({(thought.duration / 1000).toFixed(1)}s)
             </span>
           )}
@@ -159,8 +147,16 @@ const ThoughtStep = memo(function ThoughtStep({ thought, isLast, live, allThough
             ) : (
               displayContent && (
                 <div
-                  className={`text-sm ${
-                    thought.type === 'thinking' ? 'text-muted-foreground/70 italic' : 'text-foreground/80'
+                  className={`${
+                    thought.type === 'thinking'
+                      ? 'text-[13px] text-muted-foreground italic'
+                      : thought.type === 'tool_use'
+                        // A tool's input is detail under its name, a step smaller than the reply's prose.
+                        ? `text-[13px] text-foreground/75 ${thought.toolName === 'Bash' ? 'font-mono text-xs leading-relaxed' : ''}`
+                        : thought.type === 'system'
+                          // Session housekeeping (connected, model): the least worth reading.
+                          ? 'text-xs text-faint-foreground'
+                          : 'text-sm text-foreground/80'
                   } whitespace-pre-wrap break-words`}
                 >
                   {isContentExpanded || !needsTruncate ? displayContent : displayContent.substring(0, maxPreviewLength) + '...'}
@@ -202,7 +198,7 @@ const ThoughtStep = memo(function ThoughtStep({ thought, isLast, live, allThough
                   title={showResult ? t('Hide tool result') : t('Show tool result')}
                 >
                   {showResult ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-                  {showResult ? 'Hide' : 'Result'}
+                  {showResult ? t('Collapse') : t('Result')}
                 </button>
               )}
             </div>
@@ -236,6 +232,9 @@ const ThoughtStep = memo(function ThoughtStep({ thought, isLast, live, allThough
     </div>
   )
 })
+
+/** The thin line joining a step's glyph to the next step. */
+const STEP_RAIL = 'w-px flex-1 bg-border mt-1.5'
 
 // Placeholder height until a step scrolls near view, so the list does not jump.
 const THOUGHT_STEP_ESTIMATED_HEIGHT = 60
@@ -295,6 +294,8 @@ interface ThoughtPanelHeaderProps {
   isLoading?: boolean
   /** The steps were not saved; the row reads as inert. */
   unavailable?: boolean
+  /** The reply's task list progress, kept in view even while the panel is closed. */
+  tasks?: { done: number; total: number }
 }
 
 export function ThoughtPanelHeader({
@@ -307,19 +308,13 @@ export function ThoughtPanelHeader({
   disabled = false,
   isLoading = false,
   unavailable = false,
+  tasks,
 }: ThoughtPanelHeaderProps) {
+  const { t } = useTranslation()
+  const tasksDone = !!tasks && tasks.done === tasks.total
+  // The status icon leads, on the same left edge as the sender label and the reply;
+  // the disclosure chevron trails the title.
   const content = <>
-    {isLoading ? (
-      <Loader2 size={12} className="shrink-0 text-muted-foreground animate-spin" />
-    ) : (
-      // Kept, though hidden, while there is nothing to open, so the title does not shift when there is.
-      <ChevronRight
-        size={12}
-        className={`shrink-0 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''} ${
-          unavailable ? 'text-muted-foreground/40' : 'text-muted-foreground'
-        } ${onToggle ? '' : 'invisible'}`}
-      />
-    )}
     {isThinking ? (
       <Loader2 size={14} className="shrink-0 text-primary animate-spin" />
     ) : hasError ? (
@@ -329,11 +324,28 @@ export function ThoughtPanelHeader({
     )}
     <span className={`min-w-0 truncate ${isThinking ? 'text-primary' : 'text-muted-foreground'}`}>{label}</span>
     {seconds !== undefined && <span className="shrink-0 text-muted-foreground/60">{seconds}s</span>}
+    {tasks && tasks.total > 0 && (
+      <span className={`shrink-0 inline-flex items-center gap-1 ${tasksDone ? 'text-halo-success' : 'text-muted-foreground'}`}>
+        <ListTodo size={12} />
+        {t('Tasks {{done}}/{{total}}', { done: tasks.done, total: tasks.total })}
+      </span>
+    )}
+    {isLoading ? (
+      <Loader2 size={12} className="shrink-0 text-muted-foreground animate-spin" />
+    ) : (
+      // Kept, though hidden, while there is nothing to open, so the row does not shift when there is.
+      <ChevronRight
+        size={12}
+        className={`shrink-0 -ml-0.5 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''} ${
+          unavailable ? 'text-muted-foreground/40' : 'text-muted-foreground'
+        } ${onToggle ? '' : 'invisible'}`}
+      />
+    )}
   </>
 
-  // A plain disclosure across the full width. -mx-2 offsets px-2 so the
-  // chevron lines up with the text above.
-  const row = '-mx-2 flex w-[calc(100%+1rem)] items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs'
+  // Content on the column's left edge; the hover fill bleeds into the gutter
+  // on both sides, the same bleed as the filled body below.
+  const row = '-mx-3 flex w-[calc(100%+1.5rem)] items-center gap-2 rounded-lg px-3 py-1.5 text-left text-xs'
   if (!onToggle) return <div className={row}>{content}</div>
   return (
     <button
@@ -347,9 +359,6 @@ export function ThoughtPanelHeader({
     </button>
   )
 }
-
-// Dark: no card, like the replies around it; the timeline's own rail leads the eye.
-const BODY_DARK = 'theme-dark:py-1 theme-dark:bg-transparent theme-dark:rounded-none theme-dark:border-0'
 
 interface ThoughtPanelProps {
   model: ThoughtPanelModel
@@ -387,22 +396,31 @@ export function ThoughtPanel({
   const steps = model.display
   const hasTodos = (todos?.length ?? 0) > 0
   const hasBody = steps.length > 0 || hasTodos
+  const tasks = hasTodos ? { done: todos!.filter(item => item.status === 'completed').length, total: todos!.length } : undefined
+  // While running, the task in progress names what the reply is doing better than its latest tool.
+  const currentTask = isThinking ? todos?.find(item => item.status === 'in_progress') : undefined
   // A running reply shows its header before its first step; some turns never emit one.
   if (!hasBody && !isThinking) return null
 
   return (
     <div className={className}>
       <ThoughtPanelHeader
-        label={isThinking && activity ? activity : t('Already thought')}
+        label={isThinking ? (currentTask ? currentTask.activeForm || currentTask.content : activity) ?? t('Already thought') : t('Already thought')}
         isThinking={isThinking}
         hasError={model.errorCount > 0}
         seconds={isThinking ? undefined : seconds}
         isExpanded={isExpanded}
         onToggle={hasBody ? onToggleExpanded : undefined}
+        // Progress stands in for the list only while the reply runs and the panel is closed:
+        // open, the list below already shows it; done, the list is the summary.
+        tasks={isThinking && !isExpanded ? tasks : undefined}
       />
 
       {isExpanded && hasBody && (
-        <div className={`mt-1 py-2 bg-card/80 rounded-lg border border-border-faint ${BODY_DARK} animate-slide-down thought-content`}>
+        // A faint fill groups the process as one block; the reply below sits on the bare
+        // canvas, so it reads as the result. The same in both themes. It bleeds into the
+        // gutter so the steps inside keep the column's left edge.
+        <div className="-mx-3 mt-1 py-2 rounded-lg bg-card/50 animate-slide-down thought-content">
           {steps.length > 0 && (
             <div
               ref={scrollRef}
@@ -428,7 +446,7 @@ export function ThoughtPanel({
                 title={isMaximized ? t('Compact view') : t('Full view')}
               >
                 {isMaximized ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                {isMaximized ? 'Compact' : 'Full'}
+                {isMaximized ? t('Compact view') : t('Full view')}
               </button>
             </div>
           )}

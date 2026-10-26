@@ -8,7 +8,7 @@
  * - Real-time updates - status changes animate smoothly
  */
 
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Circle,
   CheckCircle2,
@@ -19,6 +19,9 @@ import { useTranslation } from '../../i18n'
 import type { TodoItem, TodoStatus } from '../../utils/thought-activity'
 
 // Note: Loader2 is used for in_progress task icon animation
+
+/** How long a just-completed item keeps its green tint before fading back. */
+const COMPLETE_FLASH_MS = 600
 
 interface TodoCardProps {
   todos: TodoItem[]
@@ -31,24 +34,26 @@ function getTodoStatusDisplay(status: TodoStatus) {
     case 'pending':
       return {
         Icon: Circle,
-        color: 'text-muted-foreground/50',
+        color: 'text-faint-foreground/70',
         bgColor: 'bg-transparent',
-        textStyle: 'text-muted-foreground',
+        textStyle: 'text-foreground/80',
       }
     case 'in_progress':
       return {
         Icon: Loader2,
         color: 'text-primary',
-        bgColor: 'bg-primary/10',
-        textStyle: 'text-foreground font-medium',
+        bgColor: 'bg-primary/[0.08]',
+        textStyle: 'text-foreground font-semibold',
         spin: true,
       }
     case 'completed':
       return {
         Icon: CheckCircle2,
-        color: 'text-green-500',
-        bgColor: 'bg-green-500/10',
-        textStyle: 'text-muted-foreground line-through',
+        color: 'text-halo-success',
+        bgColor: 'bg-transparent',
+        // The check already says done; a strikethrough would read as cancelled, and the
+        // finished list is the turn's summary, so it stays readable.
+        textStyle: 'text-muted-foreground',
       }
   }
 }
@@ -61,6 +66,18 @@ function TodoItemRow({ item, index, isAgentActive = true }: { item: TodoItem; in
   // Detect interrupted state: agent stopped but todo still in_progress
   const isInterrupted = !isAgentActive && item.status === 'in_progress'
 
+  // Marks the moment an item completes in view; a list that mounts already done stays still.
+  const prevStatus = useRef(item.status)
+  const [justCompleted, setJustCompleted] = useState(false)
+  useEffect(() => {
+    const was = prevStatus.current
+    prevStatus.current = item.status
+    if (was === item.status || item.status !== 'completed') return
+    setJustCompleted(true)
+    const timer = setTimeout(() => setJustCompleted(false), COMPLETE_FLASH_MS)
+    return () => clearTimeout(timer)
+  }, [item.status])
+
   // Show activeForm when in progress, otherwise show content
   const displayText = item.status === 'in_progress' && item.activeForm
     ? item.activeForm
@@ -69,20 +86,23 @@ function TodoItemRow({ item, index, isAgentActive = true }: { item: TodoItem; in
   return (
     <div
       className={`
-        flex items-start gap-3 px-3 py-2 rounded-lg transition-all duration-200
-        ${isInterrupted ? 'bg-amber-500/10' : display.bgColor}
+        flex items-start gap-2 -mx-1.5 px-1.5 py-1 rounded-md transition-colors duration-500
+        ${isInterrupted ? 'bg-amber-500/10' : justCompleted ? 'bg-halo-success/10' : display.bgColor}
         ${item.status === 'in_progress' && !isInterrupted ? 'animate-fade-in' : ''}
       `}
     >
-      <Icon
-        size={16}
-        className={`
-          flex-shrink-0 mt-0.5
-          ${isInterrupted ? 'text-amber-500' : display.color}
-          ${display.spin && !isInterrupted ? 'animate-spin' : ''}
-        `}
-      />
-      <span className={`text-sm leading-relaxed ${isInterrupted ? 'text-amber-600 dark:text-amber-400' : display.textStyle}`}>
+      {/* A box one text line tall centers the icon on the first line, however the title wraps. */}
+      <span className="flex h-[1.625em] flex-shrink-0 items-center text-[13px]">
+        <Icon
+          size={14}
+          className={`
+            ${isInterrupted ? 'text-amber-500' : display.color}
+            ${display.spin && !isInterrupted ? 'animate-spin' : ''}
+            ${justCompleted ? 'todo-check-pop' : ''}
+          `}
+        />
+      </span>
+      <span className={`text-[13px] leading-relaxed ${isInterrupted ? 'text-amber-600 dark:text-amber-400' : display.textStyle}`}>
         {displayText}
       </span>
     </div>
@@ -95,11 +115,9 @@ export function TodoCard({ todos, isAgentActive = true }: TodoCardProps) {
   const stats = useMemo(() => {
     const total = todos.length
     const completed = todos.filter(t => t.status === 'completed').length
-    const inProgress = todos.filter(t => t.status === 'in_progress').length
-    const pending = todos.filter(t => t.status === 'pending').length
     const progress = total > 0 ? Math.round((completed / total) * 100) : 0
 
-    return { total, completed, inProgress, pending, progress }
+    return { total, completed, progress }
   }, [todos])
 
   if (todos.length === 0) {
@@ -108,38 +126,34 @@ export function TodoCard({ todos, isAgentActive = true }: TodoCardProps) {
 
   return (
     <div className="animate-fade-in">
-      <div className="rounded-xl border border-border-faint bg-card/50 overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border/30 bg-secondary/20">
+      {/* A soft fill, not a bordered card: it sits inside the thought panel's own box. */}
+      <div className="rounded-lg bg-secondary/55 px-3 pt-2.5 pb-2">
+        <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <ListTodo size={16} className="text-primary" />
-            <span className="text-sm font-medium text-foreground">{t('Task plan')}</span>
+            <ListTodo size={14} className="text-muted-foreground" />
+            <span className="text-[13px] font-semibold text-foreground">{t('Task plan')}</span>
           </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            {stats.completed > 0 && (
-              <span className="text-green-500">{t('{{count}} completed', { count: stats.completed })}</span>
-            )}
-            {stats.inProgress > 0 && (
-              <span className="text-primary">{t('{{count}} in progress', { count: stats.inProgress })}</span>
-            )}
-            {stats.pending > 0 && (
-              <span>{t('{{count}} pending', { count: stats.pending })}</span>
-            )}
-          </div>
+          {/* One progress figure; which item is running, and which wait, the list itself shows. */}
+          <span className="text-xs tabular-nums text-muted-foreground">
+            <span className={stats.completed > 0 ? 'text-halo-success' : ''}>{stats.completed}</span>/{stats.total}
+          </span>
         </div>
 
-        {/* Progress bar */}
-        {stats.total > 0 && (
-          <div className="h-1 bg-secondary/30">
+        {/* Progress bar — only once something is done; an empty track reads as a divider. */}
+        {stats.completed > 0 ? (
+          <div className="h-0.5 rounded-full bg-border mt-2 mb-1.5 overflow-hidden">
             <div
-              className="h-full bg-green-500 transition-all duration-500 ease-out"
+              className="h-full bg-halo-success transition-all duration-500 ease-out"
               style={{ width: `${stats.progress}%` }}
             />
           </div>
+        ) : (
+          // The bar's own height and margins, so the list does not move when it appears.
+          <div className="h-0.5 mt-2 mb-1.5" />
         )}
 
         {/* Todo items */}
-        <div className="p-2 space-y-1">
+        <div className="space-y-0.5">
           {todos.map((item, index) => (
             <TodoItemRow key={index} item={item} index={index} isAgentActive={isAgentActive} />
           ))}

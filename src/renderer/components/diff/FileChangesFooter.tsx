@@ -57,7 +57,7 @@ export function FileChangesFooter({ fileChangesSummary, thoughts, reply }: FileC
       type="button"
       onClick={open}
       disabled={!reply}
-      className="group mt-3 flex w-fit max-w-full items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground disabled:cursor-default disabled:hover:border-border disabled:hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+      className="group -ml-1.5 mt-3 flex h-6 w-fit max-w-full items-center gap-2 rounded-md px-2 text-left text-xs text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
     >
       <FileDiff size={14} className="shrink-0 text-faint-foreground" aria-hidden />
       <span className="truncate">{t('Changed {{count}} files', { count: changes.totalFiles })}</span>
@@ -66,7 +66,7 @@ export function FileChangesFooter({ fileChangesSummary, thoughts, reply }: FileC
         <span className="text-diff-del">−{format(changes.totalRemoved)}</span>
       </span>
       {reply && (
-        <span className="flex shrink-0 items-center gap-0.5 text-primary">
+        <span className="flex shrink-0 items-center gap-0.5">
           {t('View changes')}
           <ChevronRight size={13} className="transition-transform group-hover:translate-x-0.5" aria-hidden />
         </span>

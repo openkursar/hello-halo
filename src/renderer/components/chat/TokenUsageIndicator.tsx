@@ -2,7 +2,7 @@
  * TokenUsageIndicator - Displays token usage in a subtle, non-intrusive way
  *
  * Design principles:
- * - Minimal by default: shows only "12K" in muted color
+ * - Minimal by default: a small fill ring and "12K" in muted color
  * - Hover reveals details: full usage breakdown in tooltip
  * - Independent component: can be placed anywhere
  * - Mobile-friendly: tap to see details on touch devices
@@ -32,19 +32,24 @@ function formatCost(cost: number): string {
   return `$${cost.toFixed(2)}`
 }
 
-/** Fixed-position offsets that put the tooltip above `anchor`, right-aligned. */
-function placeAbove(anchor: HTMLElement | null): { bottom: number; right: number } | null {
+/** Fixed-position offsets that put the tooltip above `anchor`, left-aligned (it sits under the reply's first column). */
+function placeAbove(anchor: HTMLElement | null): { bottom: number; left: number } | null {
   if (!anchor?.isConnected) return null
   const rect = anchor.getBoundingClientRect()
-  return { bottom: window.innerHeight - rect.top + 8, right: window.innerWidth - rect.right }
+  return { bottom: window.innerHeight - rect.top + 8, left: rect.left }
 }
+
+// r=5 in a 14-unit box; the arc starts at 12 o'clock and runs clockwise.
+const RING_CIRCUMFERENCE = 2 * Math.PI * 5
+/** Below this, a sliver of arc still shows that some context is in use. */
+const RING_MIN_FRACTION = 0.04
 
 export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = '' }: TokenUsageIndicatorProps) {
   const { t } = useTranslation()
   const anchorRef = useRef<HTMLDivElement>(null)
   // Viewport position of the tooltip; null while hidden. Portaled and fixed
   // because transcript rows clip their own paint.
-  const [tooltipAt, setTooltipAt] = useState<{ bottom: number; right: number } | null>(null)
+  const [tooltipAt, setTooltipAt] = useState<{ bottom: number; left: number } | null>(null)
   const showTooltip = tooltipAt !== null
   const setShowTooltip = (show: boolean) => setTooltipAt(show ? placeAbove(anchorRef.current) : null)
 
@@ -84,6 +89,11 @@ export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = 
   // Calculate current message cost
   const currentCost = tokenUsage.totalCostUsd - previousCost
 
+  // The ring shows how full the context is without reading the number; it turns
+  // amber, then red, at the same points as the tooltip's warning.
+  const ringFraction = Math.min(1, Math.max(RING_MIN_FRACTION, contextUsed / contextWindow))
+  const ringColor = usagePercent >= 95 ? 'stroke-red-500' : usagePercent >= 80 ? 'stroke-amber-500' : 'stroke-current'
+
   return (
     <div
       ref={anchorRef}
@@ -93,7 +103,17 @@ export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = 
       onClick={() => setShowTooltip(!showTooltip)}
     >
       {/* Minimal display - cumulative context, subtle color to avoid anxiety */}
-      <span className="text-xs text-muted-foreground/50 cursor-default select-none">
+      {/* Hover answers like the copy button beside it: it is a control, not a caption. */}
+      <span className="flex items-center gap-1 h-6 px-2 rounded-md text-xs text-faint-foreground cursor-default select-none transition-colors hover:bg-secondary hover:text-foreground">
+
+        <svg viewBox="0 0 14 14" className="h-3.5 w-3.5 -rotate-90" aria-hidden="true">
+          <circle cx="7" cy="7" r="5" fill="none" strokeWidth="2" className="stroke-border" />
+          <circle
+            cx="7" cy="7" r="5" fill="none" strokeWidth="2" strokeLinecap="round"
+            className={ringColor}
+            strokeDasharray={`${ringFraction * RING_CIRCUMFERENCE} ${RING_CIRCUMFERENCE}`}
+          />
+        </svg>
         {formatTokens(contextUsed)}
       </span>
 
@@ -101,7 +121,7 @@ export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = 
       {tooltipAt && createPortal(
         <div
           className="fixed z-50 pointer-events-none animate-fade-in"
-          style={{ bottom: tooltipAt.bottom, right: tooltipAt.right }}
+          style={{ bottom: tooltipAt.bottom, left: tooltipAt.left }}
         >
           <div className="bg-popover border border-border rounded-lg shadow-lg p-3 min-w-[180px]">
             {/* Header */}

@@ -1,9 +1,8 @@
 /**
  * DigitalHumansTab - digital-human content for the space resource rail
  *
- * Read-only list of automation apps usable in this space: installed in the
- * space itself or globally; each carries a badge naming its scope — the
- * dual-scope convention shared with the Skill and MCP tabs.
+ * Read-only list of the digital humans installed in this space. They all
+ * belong to it, so rows carry no scope badge, unlike the Skill and MCP tabs.
  * Management (pause/uninstall/move) stays on the digital-humans page.
  *
  * Row interaction:
@@ -82,7 +81,6 @@ export function DigitalHumansTab({ onItemsChange }: DigitalHumansTabProps) {
             bareIcon
             name={name || app.id}
             description={automationStatusLabel(effectiveStatus, t)}
-            scope="space"
             onClick={() => handleOpenOverview(app.id)}
             onUse={() => { if (app.spaceId) void handleOpenChat(app.id, app.spaceId) }}
             useLabel={t('Chat')}

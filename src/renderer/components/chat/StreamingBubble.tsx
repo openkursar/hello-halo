@@ -216,13 +216,13 @@ export function StreamingBubble({
 
   const containerHeight = currentHeight > 0 ? currentHeight : 'auto'
 
-  // Typography and radius must match the settled bubble in MessageItem — this
-  // bubble is swapped out for that one the instant the run ends.
+  // Typography, radius and padding must match the settled bubble in MessageItem —
+  // this bubble is swapped out for that one the instant the run ends.
   return (
-    <div className="rounded-lg px-4 py-3 message-assistant message-working w-full overflow-hidden">
+    <div className="rounded-lg pb-3 message-assistant message-working w-full overflow-hidden">
       {/* Working indicator */}
-      <div className="flex items-center gap-1.5 mb-2 pb-2 border-b border-border/30 working-indicator-fade">
-        <span className="text-xs text-muted-foreground/70">{t('Halo is working')}</span>
+      <div className="flex items-center gap-1.5 mb-1 working-indicator-fade">
+        <span className="text-xs text-faint-foreground">{t('Halo is working')}</span>
       </div>
 
       {/* Viewport - height matches current content only

@@ -84,14 +84,19 @@ function isTimelineStep(thought: Thought): boolean {
   return thought.type !== 'result' && !thought.parentToolUseId && thought.toolName !== 'TodoWrite'
 }
 
+/**
+ * A TodoWrite call whose list has arrived. A call still streaming carries `{}`
+ * until its input is complete; counting it would replace the shown list with an
+ * empty one for that moment, so the card would vanish and come back.
+ */
 function isTodoCall(thought: Thought): boolean {
-  return thought.type === 'tool_use' && thought.toolName === 'TodoWrite' && !!thought.toolInput
+  return thought.type === 'tool_use' && thought.toolName === 'TodoWrite' && Array.isArray(thought.toolInput?.todos)
 }
 
 /** Whether `next` can replace `prev` without entering or leaving any derived list. */
 function samePlace(prev: Thought, next: Thought): boolean {
   return prev.id === next.id && prev.type === next.type && prev.toolName === next.toolName
-    && prev.parentToolUseId === next.parentToolUseId && isTodoCall(prev) === isTodoCall(next)
+    && prev.parentToolUseId === next.parentToolUseId
 }
 
 function buildThoughtPanelModel(thoughts: readonly Thought[], previousGroups?: ReadonlyMap<string, Thought[]>): ThoughtPanelModel {
@@ -125,6 +130,8 @@ export function nextThoughtPanelModel(prev: ThoughtPanelModel | null, thoughts: 
   let groups: Map<string, Thought[]> | null = null
   let latestTodo = prev.latestTodo
   let errorCount = prev.errorCount
+  // A TodoWrite whose input just landed may now be the latest list.
+  let todoBecameReady = false
   const editDisplay = (): Thought[] => (display ??= [...prev.display])
   const editGroup = (parentId: string): Thought[] => {
     groups ??= new Map(prev.childGroups)
@@ -148,6 +155,14 @@ export function nextThoughtPanelModel(prev: ThoughtPanelModel | null, thoughts: 
       group[group.lastIndexOf(before)] = after
     }
     if (latestTodo === before) latestTodo = after
+    else if (isTodoCall(after) && !isTodoCall(before)) todoBecameReady = true
+  }
+
+  if (todoBecameReady) {
+    latestTodo = null
+    for (let i = prev.thoughts.length - 1; i >= 0; i--) {
+      if (isTodoCall(thoughts[i])) { latestTodo = thoughts[i]; break }
+    }
   }
 
   for (let i = prev.thoughts.length; i < thoughts.length; i++) {
@@ -205,38 +220,6 @@ export function getThoughtIcon(type: Thought['type'], toolName?: string): Lucide
   }
 }
 
-/**
- * Get Tailwind color class for thought type
- *
- * @param type - Thought type
- * @param isError - Override to show error color
- * @returns Tailwind color class string
- */
-export function getThoughtColor(type: Thought['type'], isError?: boolean): string {
-  // Tool errors use amber (warning) instead of red (destructive) because
-  // they are internal AI feedback, not user-facing errors. Tool icons and names
-  // stay bright amber in both themes. Elsewhere: tokens, with the dark hues set by `theme-dark:`.
-  if (isError) return 'text-amber-500'
-
-  switch (type) {
-    case 'thinking':
-      return 'text-primary theme-dark:text-blue-400'
-    case 'tool_use':
-      return 'text-amber-400'
-    case 'tool_result':
-      return 'text-halo-success theme-dark:text-green-400'
-    case 'text':
-      return 'text-foreground'
-    case 'system':
-      return 'text-muted-foreground'
-    case 'error':
-      return 'text-destructive'
-    case 'result':
-      return 'text-primary'
-    default:
-      return 'text-muted-foreground'
-  }
-}
 
 /**
  * Get display label for thought type

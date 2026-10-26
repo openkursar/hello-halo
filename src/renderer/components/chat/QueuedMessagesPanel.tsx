@@ -20,13 +20,14 @@ export function QueuedMessagesPanel({ messages }: QueuedMessagesPanelProps) {
   if (messages.length === 0) return null
 
   return (
-    <div className="mt-2 rounded-lg border border-border/20 bg-muted/15 px-3 py-2">
-      <div className="flex items-center gap-1.5 mb-1 text-[10px] text-muted-foreground/50 select-none uppercase tracking-wide">
+    // The same quiet surface as the reply boxes above it.
+    <div className="mt-2 rounded-lg border border-border-soft bg-card px-3.5 py-2">
+      <div className="flex items-center gap-1.5 mb-1 text-xs text-faint-foreground select-none">
         <span>{t('Queued')}</span>
       </div>
       <div className="space-y-0.5">
         {messages.map((msg, i) => (
-          <div key={i} className="flex items-start gap-1.5 text-xs text-muted-foreground/60">
+          <div key={i} className="flex items-start gap-1.5 text-xs text-subtle-foreground">
             <span className="mt-px shrink-0 select-none">↳</span>
             {/* A message of cards that name nothing (an untitled conversation's passage) */}
             <span className="break-words min-w-0">{msg || t('References')}</span>

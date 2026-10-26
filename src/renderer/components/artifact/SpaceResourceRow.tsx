@@ -2,9 +2,8 @@
  * SpaceResourceRow - read-only row shared by the Skill and MCP tabs
  *
  * Pure display: icon, name, optional description, and a scope badge
- * ("This workspace" / "Global") — both space- and global-scoped items are
- * listed side by side with a badge on each, so both variants are shown,
- * not just the global one.
+ * ("This workspace" / "Global") when the list mixes space- and global-scoped
+ * items. A list whose items share one scope omits it.
  * No management actions live here (enable, disable, edit, uninstall) —
  * that's the digital-humans page's job. A row is only clickable when it
  * maps to something to jump to.
@@ -26,7 +25,8 @@ interface SpaceResourceRowProps {
   bareIcon?: boolean
   name: string
   description?: string
-  scope: 'global' | 'space'
+  /** Omitted when every item in the list has the same scope. */
+  scope?: 'global' | 'space'
   onClick?: () => void
   onUse?: () => void
   /** Label for the `onUse` pill. Defaults to "Use". */
@@ -82,13 +82,15 @@ export function SpaceResourceRow({ icon, bareIcon, name, description, scope, onC
       )}
       {/* Prototype `.scope`: font-size 9px→10px(normalized), padding 1px 6px,
           pill, plain text — no icon, no bold. */}
-      <span className={`self-center text-[10px] px-1.5 py-px rounded-full flex-shrink-0 ${
-        onUse ? 'group-hover:hidden' : ''
-      } ${
-        isGlobal ? 'bg-halo-success/[0.14] text-halo-success' : 'bg-primary/[0.12] text-accent-on-dark'
-      }`}>
-        {isGlobal ? t('Global') : t('This workspace')}
-      </span>
+      {scope && (
+        <span className={`self-center text-[10px] px-1.5 py-px rounded-full flex-shrink-0 ${
+          onUse ? 'group-hover:hidden' : ''
+        } ${
+          isGlobal ? 'bg-halo-success/[0.14] text-halo-success' : 'bg-primary/[0.12] text-accent-on-dark'
+        }`}>
+          {isGlobal ? t('Global') : t('This workspace')}
+        </span>
+      )}
     </div>
   )
 }

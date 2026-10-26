@@ -1,5 +1,5 @@
 /**
- * "View live feed" on the browser card: enabled only when the conversation on
+ * "Open browser view" on the browser card: enabled only when the conversation on
  * screen has an AI page of its own, and it attaches exactly that view.
  *
  * This is what turns on live view for a digital-human chat: its conversation id
@@ -61,7 +61,7 @@ function nodes(tree: any): any[] {
   return [tree, ...[tree.props?.children].flat(Infinity).flatMap(nodes)]
 }
 const viewButton = (tree: any) =>
-  nodes(tree).find(n => n.type === 'button' && nodes(n).some(c => c.props?.children === 'View live feed'))
+  nodes(tree).find(n => n.type === 'button' && [n.props?.children].flat(Infinity).includes('Open browser view'))
 
 const call = { id: 't1', name: 'mcp__ai-browser__browser_navigate', input: { url: 'https://example.com/a' }, status: 'success' } as any
 const render = (props: Partial<Parameters<typeof BrowserTaskCard>[0]> = {}) =>

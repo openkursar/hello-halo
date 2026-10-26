@@ -54,7 +54,7 @@ export function PlainTextViewer({
         mt-1.5 rounded-lg overflow-hidden border
         ${isError
           ? 'border-amber-500/30 bg-amber-500/5'
-          : 'border-border/30 bg-muted/20'
+          : 'border-transparent bg-secondary/35'
         }
       `}
     >
@@ -91,7 +91,7 @@ export function PlainTextViewer({
           border-t text-[10px]
           ${isError
             ? 'border-amber-500/20 bg-amber-500/10 text-amber-600/60'
-            : 'border-border/20 bg-muted/30 text-muted-foreground/60'
+            : 'border-transparent text-muted-foreground/60'
           }
         `}
       >
@@ -112,7 +112,7 @@ export function PlainTextViewer({
             onClick={handleCopy}
             className={`
               flex items-center gap-1 px-2 py-0.5 rounded
-              hover:bg-white/10 hover:text-foreground
+              hover:bg-foreground/5 hover:text-foreground
               transition-colors
             `}
           >
@@ -137,7 +137,7 @@ export function PlainTextViewer({
               onClick={handleToggle}
               className={`
                 flex items-center gap-1 px-2 py-0.5 rounded
-                hover:bg-white/10 hover:text-foreground
+                hover:bg-foreground/5 hover:text-foreground
                 transition-colors
               `}
             >

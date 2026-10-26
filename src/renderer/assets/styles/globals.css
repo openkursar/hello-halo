@@ -454,46 +454,27 @@ html.platform-desktop body::after {
    Shared Keyframes & Animations
    ============================================ */
 
-/* Halo glow animation */
-@keyframes halo-pulse {
-  0%, 100% {
-    box-shadow: 0 0 20px hsl(var(--halo-glow) / 0.3);
+/* A task-plan item's check as the item completes: one brief pop. */
+@keyframes todo-check-pop {
+  0% {
+    transform: scale(0.6);
   }
-  50% {
-    box-shadow: 0 0 40px hsl(var(--halo-glow) / 0.5);
+  60% {
+    transform: scale(1.25);
   }
-}
-
-@keyframes halo-breathe {
-  0%, 100% {
-    opacity: 0.6;
+  100% {
     transform: scale(1);
   }
-  50% {
-    opacity: 1;
-    transform: scale(1.05);
+}
+
+.todo-check-pop {
+  animation: todo-check-pop 0.35s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .todo-check-pop {
+    animation: none;
   }
-}
-
-@keyframes halo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.halo-glow {
-  animation: halo-pulse 3s ease-in-out infinite;
-}
-
-.halo-breathe {
-  animation: halo-breathe 3s ease-in-out infinite;
-}
-
-.halo-spin {
-  animation: halo-spin 2s linear infinite;
 }
 
 /* Fade in animation */
@@ -974,8 +955,7 @@ html.platform-desktop body::after {
     scroll-behavior: auto !important;
   }
 
-  .animate-spin,
-  .halo-spin {
+  .animate-spin {
     animation-duration: 2.5s !important;
     animation-iteration-count: infinite !important;
   }
@@ -1054,23 +1034,14 @@ html.platform-desktop body::after {
   background: hsl(var(--secondary));
 }
 
+/* Replies sit on the canvas in both themes: a card per reply washes the
+   transcript gray and boxes in the reply's own tables and code. The bubble
+   carries no padding of its own — side and top padding would indent the text
+   past the sender label above it — and keeps only the bottom padding that
+   separates it from its footers. */
 .message-assistant {
-  background: hsl(var(--card));
-  border: 1px solid hsl(var(--border) / 0.5);
-}
-
-/* Dark: replies sit on the canvas; a filled card per reply washes the whole
-   transcript gray. With no box, side padding would indent the text past the
-   sender label above it. */
-.theme-dark .message-assistant {
   background: transparent;
-  border-color: transparent;
-  padding-left: 0;
-  padding-right: 0;
-}
-
-.theme-dark .message-working::before {
-  display: none;
+  border: 1px solid transparent;
 }
 
 /* Streaming message style */
@@ -1090,34 +1061,10 @@ html.platform-desktop body::after {
   /* Static gradient line — no animation (GPU perf) */
 }
 
-/* Working message style */
+/* Working message: the same surface as a finished reply, so nothing restyles when it settles. */
 .message-working {
   position: relative;
-  border-color: hsl(var(--primary) / 0.25);
   overflow: hidden;
-  transition: border-color 0.5s ease-out, opacity 0.5s ease-out;
-}
-
-.message-working::before {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  background: linear-gradient(
-    135deg,
-    hsl(var(--primary) / 0.08),
-    hsl(var(--primary) / 0.03),
-    hsl(var(--primary) / 0.08)
-  );
-  opacity: 1;
-  /* Static background — no animation (GPU perf) */
-  pointer-events: none;
-  z-index: -1;
-  transition: opacity 0.5s ease-out;
-}
-
-.message-assistant:not(.message-working)::before {
-  opacity: 0 !important;
 }
 
 /* Working indicator fade */
