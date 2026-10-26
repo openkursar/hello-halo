@@ -48,6 +48,7 @@ import {
   createConversationInteropMcpServer,
   deliverExternalMessage,
   registerConversationSource,
+  isNativeConversationBusy,
 } from '../services/conversation-interop'
 import { setConversationInteropFactory } from '../services/agent/toolsets/broker'
 import { getAISourceManager, watchCatalogSignals } from '../services/ai-sources'
@@ -56,7 +57,7 @@ import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '.
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
-import { closeAllV2Sessions } from '../services/agent'
+import { closeAllV2Sessions, initializeSdkRuntime, closeSdkRuntime } from '../services/agent'
 import { registerHealthHandlers } from '../ipc/health'
 import { initBackground, shutdownBackground, getBackgroundService, setDaemonStealthInjector } from '../platform/background'
 import { injectStealthScripts } from '../services/stealth'
@@ -856,6 +857,11 @@ async function initPlatformAndApps(): Promise<void> {
             })
           }
         },
+        // Joiner-side: members back in an office with the duty kept when they
+        // left, which the office does not have; the owner's profile write tells it.
+        onDutiesRestored: (officeId, appIds) => {
+          for (const appId of appIds) publishMemberProfile(officeId, appId)
+        },
       })
       setFederationManager(federationManager)
       // Joined offices receive only the live member streams a local viewer shows.
@@ -1193,6 +1199,7 @@ async function initPlatformAndApps(): Promise<void> {
     )
     initTeamService({
       store: teamStore,
+      isConversationBusy: isNativeConversationBusy,
       getViewerIdentity: () => getLocalIdentity().id,
       getConversationMember: (teamId, chatKey) => {
         const parsed = parseTeamChatKey(chatKey)
@@ -1445,6 +1452,7 @@ async function initPlatformAndApps(): Promise<void> {
  * when their features are first accessed.
  */
 export function initializeExtendedServices(): void {
+  void initializeSdkRuntime().catch(error => console.error('[Bootstrap] SDK worker prewarm failed:', error))
   const start = performance.now()
   console.log('[Bootstrap] Extended services starting...')
 
@@ -1734,13 +1742,15 @@ export async function cleanupExtendedServices(): Promise<void> {
     // `RunFinishedEvent`s fired during deactivation are still delivered to the
     // analytics pipeline and buffered by the telemetry provider.
     const runtimeShutdown = shutdownAppRuntime().catch(err => console.error('[Bootstrap] AppRuntime shutdown error:', err))
+    let sdkShutdown: Promise<void>
     try {
       closeAllV2Sessions()
     } finally {
+      sdkShutdown = closeSdkRuntime().catch(error => console.error('[Bootstrap] SDK runtime shutdown failed:', error))
       cacheShutdown = cleanupAllCaches()
       void cacheShutdown.catch(error => console.error('[Bootstrap] Artifact cache shutdown failed:', error))
     }
-    await runtimeShutdown
+    await Promise.all([runtimeShutdown, sdkShutdown])
     await shutdownAppManager().catch(err => console.error('[Bootstrap] AppManager shutdown error:', err))
 
     // Analytics: Flush pending events (including anything buffered from the

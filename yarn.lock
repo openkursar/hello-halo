@@ -2199,7 +2199,7 @@ boolean@^3.0.1:
   resolved "https://registry.npmmirror.com/boolean/-/boolean-3.2.0.tgz"
   integrity sha512-d0II/GO9uf9lfUHH2BQsjxzRJZBdsjgsBiW4BvhWk/3qoKwQFjIDVN19PfX8F2D/r9PCMTtLWjYVCFrpeYUzsw==
 
-boring-avatars@^2.0.4:
+boring-avatars@2.0.4:
   version "2.0.4"
   resolved "https://registry.npmmirror.com/boring-avatars/-/boring-avatars-2.0.4.tgz"
   integrity sha512-xhZO/w/6aFmRfkaWohcl2NfyIy87gK5SBbys8kctZeTGF1Apjpv/10pfUuv+YEfVPkESU/h2Y6tt/Dwp+bIZPw==

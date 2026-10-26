@@ -32,6 +32,7 @@ import {
 
 interface SeedPayload {
   directory: string
+  legacySaved?: boolean
   teamName: string
   memberName: string
   conversationTitle: string
@@ -44,7 +45,7 @@ export interface SeededCollaboration {
   memberAppId: string
 }
 
-const { directory, teamName, memberName, conversationTitle } = JSON.parse(process.argv[2]) as SeedPayload
+const { directory, teamName, memberName, conversationTitle, legacySaved } = JSON.parse(process.argv[2]) as SeedPayload
 
 const conversation = createConversation('halo-temp')
 addMessage('halo-temp', conversation.id, { role: 'user', content: 'Compare the two pricing tiers.' })
@@ -85,7 +86,7 @@ teams.insertTeam({
   leadAppId: spaceCoordinatorAppId(conversation.id),
   memberSourcing: 'ai', collabMode: 'free', escalationRouting: 'user',
   status: 'idle', currentEpochId: null, createdAt: now, updatedAt: now,
-  ephemeral: true, coordinatorConversationId: conversation.id,
+  ephemeral: !legacySaved, coordinatorConversationId: conversation.id,
 })
 teams.addMember({
   teamId, appId: spaceCoordinatorAppId(conversation.id), memberName: SPACE_COORDINATOR_MEMBER_NAME,

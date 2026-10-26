@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ArrowRight, CheckCircle2, ChevronDown, ChevronRight, Clock3 } from 'lucide-react'
 import type { TeamActivity, TeamDetail } from '../../../../shared/apps/team-types'
+import { parseSpaceCoordinatorAppId } from '../../../../shared/apps/team-types'
 import type { Message } from '../../../types'
 import type { ActivityEntry } from '../../../../shared/apps/app-types'
 import { EscalationCard } from '../../apps/EscalationCard'
@@ -46,7 +47,7 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
     })
     return () => cancelAnimationFrame(frame)
   }, [focusDecision, rows, attached, olderPage, onDecisionFocused])
-  const name = (id: string | null) => detail.roster.find(member => member.appId === id)?.memberName ?? t('Former member')
+  const name = (id: string | null) => id && parseSpaceCoordinatorAppId(id) ? t('Main chat') : detail.roster.find(member => member.appId === id)?.memberName ?? t('Former member')
   const time = (timestamp: number) => {
     const at = taskTime(timestamp)
     if (at === null) return t('Time unknown')

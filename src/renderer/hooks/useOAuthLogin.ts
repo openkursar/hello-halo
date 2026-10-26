@@ -108,15 +108,18 @@ export function useOAuthLogin({ onSignedIn, onError }: UseOAuthLoginOptions) {
     setLogin(prev => prev?.redirect ? { ...prev, redirect: { ...prev.redirect, ...patch } } : prev)
   }
 
-  /** Adds an account, or reauthenticates `sourceId`. Ignored while another login runs. */
-  const start = async (provider: string, sourceId?: string) => {
+  /**
+   * Adds an account. Signing in again to an account already listed refreshes
+   * that entry in place. Ignored while another login runs.
+   */
+  const start = async (provider: string) => {
     if (ownerRef.current) return
     const owner: LoginOwner = { provider }
     ownerRef.current = owner
     callbacksRef.current.onError(null)
     setLogin({ provider, phase: 'starting' })
     try {
-      const result = await api.authStartLogin(provider, sourceId)
+      const result = await api.authStartLogin(provider)
       if (result.data?.loginId) owner.loginId = result.data.loginId
       if (!isCurrent(owner)) {
         await cancelOwned(owner)

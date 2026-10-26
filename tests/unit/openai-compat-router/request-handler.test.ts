@@ -209,6 +209,59 @@ beforeEach(() => {
 })
 
 describe('handleMessagesRequest dispatch', () => {
+  it('strips images from an Anthropic text-only request without reusing its original raw body', async () => {
+    const actual = await vi.importActual<typeof import('../../../src/main/openai-compat-router/interceptors')>('../../../src/main/openai-compat-router/interceptors')
+    runInterceptors.mockImplementation(actual.runInterceptors)
+    proxyFetch.mockResolvedValue(fakeResponse({ ok: true, text: '{"ok":true}' }))
+    const req = anthReq({ messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'screenshot', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'original-image' } }] }] }] })
+    const rawBody = Buffer.from(JSON.stringify(req))
+    await handleMessagesRequest(req, baseConfig({ apiType: 'anthropic_passthrough', visionOverride: false }), makeRes() as unknown as ExpressResponse, { rawBody })
+    const sent = String(proxyFetch.mock.calls[0][1].body)
+    expect(sent).not.toContain('original-image')
+    expect(sent).toContain('current model cannot view images')
+    expect(JSON.stringify(req)).toBe(rawBody.toString())
+  })
+
+  it.each([undefined, true])('keeps Anthropic raw-body forwarding when vision capability is %s', async visionOverride => {
+    const actual = await vi.importActual<typeof import('../../../src/main/openai-compat-router/interceptors')>('../../../src/main/openai-compat-router/interceptors')
+    runInterceptors.mockImplementation(actual.runInterceptors)
+    proxyFetch.mockResolvedValue(fakeResponse({ ok: true, text: '{"ok":true}' }))
+    const req = anthReq({ messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'url', url: 'https://example.test/image.png' } }] }] })
+    const rawBody = Buffer.from(JSON.stringify(req))
+    await handleMessagesRequest(req, baseConfig({ apiType: 'anthropic_passthrough', visionOverride }), makeRes() as unknown as ExpressResponse, { rawBody })
+    expect(proxyFetch.mock.calls[0][1].body).toBe(rawBody)
+  })
+
+  it('keeps raw-body forwarding for an Anthropic text-only request with no images', async () => {
+    const actual = await vi.importActual<typeof import('../../../src/main/openai-compat-router/interceptors')>('../../../src/main/openai-compat-router/interceptors')
+    runInterceptors.mockImplementation(actual.runInterceptors)
+    proxyFetch.mockResolvedValue(fakeResponse({ ok: true, text: '{"ok":true}' }))
+    const req = anthReq()
+    const rawBody = Buffer.from(JSON.stringify(req))
+    await handleMessagesRequest(req, baseConfig({ apiType: 'anthropic_passthrough', visionOverride: false }), makeRes() as unknown as ExpressResponse, { rawBody })
+    expect(proxyFetch.mock.calls[0][1].body).toBe(rawBody)
+  })
+
+  it.each(['chat_completions', 'responses'])('leaves non-vision image handling to the existing %s converter', async apiType => {
+    const actual = await vi.importActual<typeof import('../../../src/main/openai-compat-router/interceptors')>('../../../src/main/openai-compat-router/interceptors')
+    runInterceptors.mockImplementation(actual.runInterceptors)
+    convertAnthropicToOpenAIResponses.mockReturnValue({ request: { model: 'x', input: [] } })
+    convertOpenAIResponsesToAnthropic.mockReturnValue({ type: 'message', content: [] })
+    proxyFetch.mockResolvedValue(fakeResponse({ ok: true }))
+    const req = anthReq({ messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'original-image' } }] }] })
+    await handleMessagesRequest(req, baseConfig({ apiType, visionOverride: false }), makeRes() as unknown as ExpressResponse)
+    expect(runInterceptors.mock.calls[0][1]).toMatchObject({ stripImages: false })
+    const convert = apiType === 'responses' ? convertAnthropicToOpenAIResponses : convertAnthropicToOpenAIChat
+    expect(convert.mock.calls[0][0].messages).toBe((req as { messages: unknown }).messages)
+    expect(convert.mock.calls[0][1]).toMatchObject({ visionOverride: false })
+  })
+
+  it('leaves Kiro requests outside the passthrough image policy', async () => {
+    runInterceptors.mockResolvedValue({ intercepted: true, responded: true })
+    await handleMessagesRequest(anthReq(), baseConfig({ apiType: 'kiro', visionOverride: false }), makeRes() as unknown as ExpressResponse)
+    expect(runInterceptors.mock.calls[0][1]).toMatchObject({ stripImages: false })
+  })
+
   it('routes anthropic_passthrough to the passthrough handler (proxyFetch, no conversion)', async () => {
     const req = anthReq()
     runInterceptors.mockResolvedValue({ intercepted: false, request: req })

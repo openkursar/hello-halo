@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react'
 import { MessageSquare } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
-import type { ImChannelInstanceConfig } from '../../../shared/types/im-channel'
+import type { ImChannelInstanceConfig, ImChannelInstancePatch } from '../../../shared/types/im-channel'
 import type { AvailableSkill } from '../../../shared/apps/app-types'
 import { CapabilityPolicyFields } from '../capability/CapabilityPolicyFields'
 import { Switch, switchRowHover } from '../ui/Switch'
@@ -33,9 +33,9 @@ export interface ImPermissionDefaults {
 export interface ImInstancePermissionSectionProps {
   instance: ImChannelInstanceConfig
   /** Immediate save (for toggles) */
-  onChange: (instance: ImChannelInstanceConfig) => void
+  onChange: (patch: ImChannelInstancePatch) => void
   /** Debounced save (for text fields — 500ms delay, same as config fields) */
-  onDebouncedChange: (instance: ImChannelInstanceConfig) => void
+  onDebouncedChange: (patch: ImChannelInstancePatch) => void
   /** Product-level permission defaults (for owner ID hint, etc.) */
   permissionDefaults?: ImPermissionDefaults | null
 }
@@ -74,7 +74,7 @@ export function ImInstancePermissionSection({
   // ── Handlers ──
 
   const handlePermissionToggle = () => {
-    onChange({ ...instance, permissionEnabled: !permissionEnabled })
+    onChange({ permissionEnabled: !permissionEnabled })
   }
 
   const handleOwnersChange = (value: string) => {
@@ -83,10 +83,7 @@ export function ImInstancePermissionSection({
       .split(/[,\n]/)
       .map(s => s.trim())
       .filter(Boolean)
-    onDebouncedChange({
-      ...instance,
-      owners: parsed.length > 0 ? parsed : undefined,
-    })
+    onDebouncedChange({ owners: parsed.length > 0 ? parsed : null })
   }
 
   const handleOwnersBlur = () => {
@@ -94,7 +91,8 @@ export function ImInstancePermissionSection({
   }
 
   const handleGuestAccessToggle = () => {
-    onChange(withGuestAccess(instance, !guestAccessEnabled, permissionDefaults?.defaultGuestPolicy))
+    const next = withGuestAccess(instance, !guestAccessEnabled, permissionDefaults?.defaultGuestPolicy)
+    onChange({ guestPolicy: next.guestPolicy ?? null, savedGuestPolicy: next.savedGuestPolicy ?? null })
   }
 
   // ── Render ──
@@ -209,7 +207,7 @@ export function ImInstancePermissionSection({
                     mode="strict"
                     audience="guest"
                     skills={skills?.map(s => ({ dirName: s.dirName, name: s.name, description: s.description }))}
-                    onChange={(next) => onChange({ ...instance, guestPolicy: next })}
+                    onChange={(next) => onChange({ guestPolicy: next })}
                   />
                 </div>
               )}

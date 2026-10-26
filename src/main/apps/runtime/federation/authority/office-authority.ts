@@ -289,6 +289,13 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     onReplicaApplied: deps.onReplicaApplied
       ? (applied) => deps.onReplicaApplied!(officeId, applied)
       : undefined,
+    onCatchupComplete: (from, term) => handover.confirmAuthority(from, term),
+    onCatchupTimeout: (from) => {
+      if (handover.isPaused() && from === termState.getAuthorityNodeId()
+        && federationStore.getNode(officeId, from)?.status === 'online') {
+        replication.requestCatchupFrom(from)
+      }
+    },
     // Positive-ack a member's own shadow write once the authority replicates it
     // back, so the unconfirmed-rollback backstop only fires for genuinely lost writes.
     onReplicatedFid: (fid) => confirmShadowWrite(fid),
@@ -496,13 +503,8 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
         break
       case 'catchup-request':
       case 'catchup-response':
-        // Gap-fill replay (both directions owned by replication). A response
-        // carries its sender's tenure, but only the believed authority's response
-        // says who holds it: a voter a vetoed candidate pulls from may already know
-        // a newer term won by someone else, and must not be taken for its winner.
-        if (frame.kind === 'catchup-response' && from === termState.getAuthorityNodeId()) {
-          handover.observeFrameTerm(from, frame.term)
-        }
+        // Only the requested peer's accepted catch-up can confirm recovery;
+        // a voter we pull from is not necessarily the authority it knows.
         replication.handleM2Frame(from, frame)
         break
       case 'artifact-fetch':
@@ -550,6 +552,7 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     getTerm: () => termState.getTerm(),
     getCommittedSeq: () => termState.getCommittedSeq(),
     stop: () => {
+      replication.cancelCatchup()
       handover.stop()
     },
   }

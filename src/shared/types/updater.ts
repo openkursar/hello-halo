@@ -11,7 +11,10 @@ export type UpdaterStatusPhase =
   | 'available'
   | 'not-available'
   | 'downloading'
-  /** Unpacking the update beside the running version (Windows staged path only). */
+  /**
+   * Downloaded but not yet installable: the Windows staged path is unpacking
+   * it, or macOS is verifying its signature.
+   */
   | 'staging'
   | 'downloaded'
   | 'manual-download'

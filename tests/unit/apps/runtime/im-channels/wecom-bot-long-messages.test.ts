@@ -17,6 +17,7 @@ import { EventEmitter } from 'events'
 
 vi.mock('../../../../../src/main/services/proxy-fetch', () => ({
   resolveProxyAgent: async () => undefined,
+  resolveProxyDialAgent: async () => undefined,
 }))
 vi.mock('../../../../../src/main/services/notification.service', () => ({
   notifyAppEvent: vi.fn(),

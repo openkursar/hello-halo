@@ -523,6 +523,26 @@ export async function resolveProxyAgent(url: string): Promise<ProxyAgent | undef
 }
 
 /**
+ * Like `resolveProxyAgent`, but a private agent for one long-lived connection
+ * that its owner may abandon mid-handshake. Aborting `signal` destroys every
+ * socket the agent opened — including one to a proxy that accepted the TCP
+ * connection and never answered CONNECT, which a pooled agent can never reach
+ * and so keeps open for as long as the proxy does.
+ *
+ * SOCKS proxies ignore the signal; their sockets close the ordinary way.
+ */
+export async function resolveProxyDialAgent(url: string, signal: AbortSignal): Promise<ProxyAgent | undefined> {
+  const proxyUrl = await resolveProxyUrl(url)
+  if (!proxyUrl) return undefined
+  return new ProxyAgent({
+    getProxyForUrl: () => proxyUrl,
+    keepAlive: true,
+    maxFreeSockets: 2,
+    signal,
+  })
+}
+
+/**
  * Clear proxy resolution cache.
  * Call when network conditions may have changed (e.g., system wake from sleep).
  */

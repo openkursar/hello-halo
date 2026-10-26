@@ -83,3 +83,21 @@ events through `watcher-host.addFsEventsHandler` (automation file triggers).
 8. **The tree holds what is open.** Collapsing a folder drops its loaded
    subtree (`components/artifact/tree-index.ts` `unloadSubtree`); updates for
    a collapsed folder are ignored and it is fetched again on expand.
+9. **A directory that cannot be read is not an empty one.** Clients replace a
+   folder's children with the listing they get, so a failed scan rejects with
+   the OS code and never answers `[]`; listing APIs then report a failure and
+   the tree keeps what it shows. Reconcile keeps the cached listing of a
+   directory it could not read (timeout, permission, busy disk, worker
+   restart), logging one line per run, and drops only one that is gone
+   (`ENOENT` / `ENOTDIR`); a gone space folder lists as empty and stays
+   checked. A listing that failed is not cached but stays on the reconcile
+   list, so the next refresh or window focus reads it again. A folder the
+   tree shows open without children (its listing failed) takes the listing
+   main sends, and a resync re-lists it with the loaded ones.
+10. **Watching never opens a console window.** Every `@parcel/watcher`
+    subscription names its backend (`shared/watcher-backend.ts`, also used by
+    the knowledge-base watcher in main). On Windows the default backend probes
+    for Watchman with `_popen` (cmd.exe), which no `windowsHide` reaches, so a
+    process without a console flashes a window at each first subscription —
+    every return to a space, since holds are released on leave. Guarded by
+    `tests/unit/architecture/windows-console.guard.test.ts`.

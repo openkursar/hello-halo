@@ -37,7 +37,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 
 // Mock agent helpers (used by execute.ts)
 vi.mock('../../../../src/main/services/agent/helpers', () => ({
-  getApiCredentials: vi.fn().mockResolvedValue({
+  getApiCredentialsForSelection: vi.fn().mockResolvedValue({
     baseUrl: 'https://api.test.com',
     apiKey: 'test-key',
     model: 'test-model',

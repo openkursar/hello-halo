@@ -9,8 +9,9 @@
  *     gate can be asserted without a running server.
  *   - join-office: the shared joinTeamOffice controller. The federation manager
  *     + app manager are mocked so we can assert the resolved bringMembers,
- *     selfContext, member skipping, the empty → NO_MEMBERS guard, and reason
- *     propagation.
+ *     selfContext, member skipping, the empty → NO_MEMBERS guard, reason
+ *     propagation, and that a team this computer hosts is never joined
+ *     (OWN_TEAM) — joins go to teams hosted elsewhere.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -77,9 +78,14 @@ vi.mock('../../../../../src/main/http/identity/index', async () => {
 })
 
 // team store is consumed by the controller (getTeamById) — mock to a simple map.
+// `teams` are this computer's own; `joinedTeams` were joined from elsewhere (id → host node).
 const teams = new Set<string>()
+const joinedTeams = new Map<string, string>()
 vi.mock('../../../../../src/main/apps/team', () => ({
-  getTeamStore: () => ({ getTeamById: (id: string) => (teams.has(id) ? { id } : null) }),
+  getTeamStore: () => ({
+    getTeamById: (id: string) =>
+      teams.has(id) ? { id } : joinedTeams.has(id) ? { id, hostNodeId: joinedTeams.get(id) } : null,
+  }),
   getTeamService: () => null,
 }))
 
@@ -101,6 +107,8 @@ import {
 import { getProductFederationGatewayUrl } from '../../../../../src/main/foundation/product-config'
 
 const TEAM_ID = 'team-abc'
+/** A team hosted on another computer that this one has not joined yet. */
+const ELSEWHERE = 'office-hosted-elsewhere'
 
 describe('team invite generation + join (P2)', () => {
   let dbManager: DatabaseManager
@@ -113,6 +121,7 @@ describe('team invite generation + join (P2)', () => {
 
     teams.clear()
     teams.add(TEAM_ID)
+    joinedTeams.clear()
     appMap.clear()
     remoteStatus.value = { server: { running: true, lanUrl: 'http://192.168.1.50:3017' } }
     fedManagerRef.value = fedManager
@@ -245,7 +254,7 @@ describe('team invite generation + join (P2)', () => {
     fedManager.joinOffice.mockResolvedValue({ ok: true })
 
     const res = await joinTeamOffice({
-      officeId: TEAM_ID,
+      officeId: ELSEWHERE,
       serverUrl: 'http://host:3017',
       inviteToken: 'tok',
       bringAppIds: ['app-1', 'unknown-app', 'app-2'],
@@ -254,10 +263,10 @@ describe('team invite generation + join (P2)', () => {
     expect(res).toEqual({ success: true })
     expect(fedManager.joinOffice).toHaveBeenCalledTimes(1)
     const arg = fedManager.joinOffice.mock.calls[0][0]
-    expect(arg.officeId).toBe(TEAM_ID)
+    expect(arg.officeId).toBe(ELSEWHERE)
     expect(arg.serverUrl).toBe('http://host:3017')
     expect(arg.credentialToken).toBe('tok')
-    expect(arg.selfContext).toEqual({ officeId: TEAM_ID, selfNodeId: 'self-node-id' })
+    expect(arg.selfContext).toEqual({ officeId: ELSEWHERE, selfNodeId: 'self-node-id' })
     // unknown-app skipped; spaceId carried (and undefined for the null one).
     expect(arg.bringMembers).toEqual([
       { appId: 'app-1', memberName: 'Analyst', role: '', spaceId: 'space-1' },
@@ -265,10 +274,42 @@ describe('team invite generation + join (P2)', () => {
     ])
   })
 
+  it('drives joinOffice again for a team joined from elsewhere before (a re-join)', async () => {
+    joinedTeams.set(ELSEWHERE, 'node-elsewhere')
+    appMap.set('app-1', { id: 'app-1', spaceId: 'space-1', spec: { name: 'Analyst' } })
+    fedManager.joinOffice.mockResolvedValue({ ok: true })
+
+    const res = await joinTeamOffice({
+      officeId: ELSEWHERE,
+      serverUrl: 'http://host:3017',
+      inviteToken: 'tok',
+      bringAppIds: ['app-1'],
+    })
+
+    expect(res).toEqual({ success: true })
+    expect(fedManager.joinOffice).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses this computer’s own team before touching the federation (OWN_TEAM)', async () => {
+    appMap.set('app-1', { id: 'app-1', spaceId: 'space-1', spec: { name: 'Analyst' } })
+    fedManager.joinOffice.mockResolvedValue({ ok: true })
+
+    const res = await joinTeamOffice({
+      officeId: TEAM_ID,
+      serverUrl: 'http://192.168.1.50:3017',
+      inviteToken: 'tok',
+      bringAppIds: ['app-1'],
+    })
+
+    expect(res).toEqual({ success: false, error: 'OWN_TEAM' })
+    expect(fedManager.joinOffice).not.toHaveBeenCalled()
+    expect(fedManager.hostOffice).not.toHaveBeenCalled()
+  })
+
   it('returns NO_MEMBERS when no appIds resolve', async () => {
     fedManager.joinOffice.mockResolvedValue({ ok: true })
     const res = await joinTeamOffice({
-      officeId: TEAM_ID,
+      officeId: ELSEWHERE,
       serverUrl: 'http://host:3017',
       inviteToken: 'tok',
       bringAppIds: ['ghost'],
@@ -281,7 +322,7 @@ describe('team invite generation + join (P2)', () => {
     appMap.set('app-1', { id: 'app-1', spaceId: 'space-1', spec: { name: 'Analyst' } })
     fedManager.joinOffice.mockResolvedValue({ ok: false, reason: 'AUTH_REJECTED' })
     const res = await joinTeamOffice({
-      officeId: TEAM_ID,
+      officeId: ELSEWHERE,
       serverUrl: 'http://host:3017',
       inviteToken: 'tok',
       bringAppIds: ['app-1'],
@@ -297,7 +338,7 @@ describe('team invite generation + join (P2)', () => {
       detail: { direction: 'peer', peerName: 'Alice' },
     })
     const res = await joinTeamOffice({
-      officeId: TEAM_ID,
+      officeId: ELSEWHERE,
       serverUrl: 'http://host:3017',
       inviteToken: 'tok',
       bringAppIds: ['app-1'],

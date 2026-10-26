@@ -110,12 +110,13 @@ function probePackageEngine(engineId: Exclude<EngineId, 'codex' | 'dsh'>): Engin
   // caller degrades instead of failing at import time.
   const entry = resolveEntryFile(pkgDir, manifest)
   if (!entry) return absent
+  if (engineId === 'halo' && !['dist/worker/index.js', 'dist/worker/entry.js'].every(file => existsSync(path.join(pkgDir, file)))) return absent
 
   return {
     engineId,
     available: true,
     version: typeof manifest.version === 'string' ? manifest.version : '',
-    fingerprint: fingerprintFile(entry),
+    fingerprint: fingerprintFile(engineId === 'halo' ? path.join(pkgDir, 'dist/worker/entry.js') : entry),
   }
 }
 

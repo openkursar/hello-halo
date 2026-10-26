@@ -64,7 +64,46 @@ function unhiddenLaunches(file: string): string[] {
   return offenders
 }
 
+/**
+ * @parcel/watcher's default backend on Windows probes for Watchman through
+ * `_popen`, a native cmd.exe launch that no windowsHide flag reaches.
+ */
+function watcherSubscriptionsWithoutBackend(file: string): string[] {
+  const source = ts.createSourceFile(file, readSource(file), ts.ScriptTarget.Latest, true)
+  const watchers = new Set<string>()
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue
+    if (statement.moduleSpecifier.text !== '@parcel/watcher' || statement.importClause?.isTypeOnly) continue
+    const clause = statement.importClause
+    if (clause?.name) watchers.add(clause.name.text)
+    if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) watchers.add(clause.namedBindings.name.text)
+  }
+
+  const offenders: string[] = []
+  const inspect = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) && watchers.has(node.expression.expression.text) &&
+        node.expression.name.text === 'subscribe') {
+      const options = node.arguments[2]
+      const named = options && ts.isObjectLiteralExpression(options) && options.properties.some((property) =>
+        ts.isPropertyAssignment(property) && property.name.getText(source) === 'backend')
+      if (!named) {
+        const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1
+        offenders.push(`${file}:${line} ${node.expression.getText(source)}`)
+      }
+    }
+    ts.forEachChild(node, inspect)
+  }
+  inspect(source)
+  return offenders
+}
+
 describe('background Windows console guard', () => {
+  it('every @parcel/watcher subscription names its backend', () => {
+    const files = [...listSourceFiles('src/main'), ...listSourceFiles('src/worker')].filter((file) => !file.endsWith('.test.ts'))
+    expect(files.flatMap(watcherSubscriptionsWithoutBackend)).toEqual([])
+  })
+
   it('every Halo-owned child launch hides its console, including probes and workers', () => {
     // The in-process SDK is an optional, separate repository, absent in core CI.
     const sdkFiles = existsSync(join(REPO_ROOT, 'src/sdk/halo-sdk/package.json')) ? listSourceFiles('src/sdk/halo-sdk') : []

@@ -17,6 +17,7 @@ import { existsSync } from 'fs'
 import path from 'path'
 import type { Readable, Writable } from 'stream'
 import { getHeadlessElectronPath } from '../../helpers'
+import { updateEnvPath } from '../../../child-env'
 
 export interface CodexConnectionOptions {
   /** Absolute path to the `codex` binary. */
@@ -185,8 +186,9 @@ class ChildProcessConnection implements CodexConnection {
     const finalArgs = isJsShim ? [binaryPath, ...args] : args
 
     const childEnv: NodeJS.ProcessEnv = { ...env }
-    if (this.options.pathDirs?.length) {
-      childEnv.PATH = prependPathDirs(this.options.pathDirs, childEnv.PATH)
+    const { pathDirs } = this.options
+    if (pathDirs?.length) {
+      updateEnvPath(childEnv, current => prependPathDirs(pathDirs, current))
     }
     if (isJsShim) {
       // Required so the Electron binary behaves like vanilla Node and runs

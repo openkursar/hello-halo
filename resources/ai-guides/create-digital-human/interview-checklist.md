@@ -35,7 +35,10 @@ in opposite directions.
    collapsing several preferences into one free-text field.
 6. **Stakes and reversibility.** Does the task take actions that are hard to undo (approve or
    reject requests, book or cancel, send externally, delete data)? If so:
-   - Keep `escalation.enabled: true` unless the user explicitly wants full autonomy.
+   - Don't rely on `escalation.enabled`: it is schema-only and nothing reads it, so `false` does
+     not grant autonomy and `true` adds no safety — asking the user (a `report_to_user`
+     escalation) stays available either way. How far it may act alone comes from
+     `system_prompt` and its config.
    - Consider a report-only toggle in `config_schema` (see `auto_approve` in
      `create-digital-human/examples.md`) so autonomous action is opt-in.
    - Add an explicit "forbidden actions" section to `system_prompt` requiring confirmation for

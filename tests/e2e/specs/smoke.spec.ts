@@ -71,7 +71,9 @@ test.describe('Smoke Tests', () => {
 
     const config = await window.evaluate(() => (window as unknown as { halo: HaloAPI }).halo.getConfig())
     expect(config.success).toBe(true)
-    expect((config.data as { appStore: { registries: Array<{ id: string; enabled: boolean }> } }).appStore.registries.find(registry => registry.id === 'claude-skills')).toMatchObject({ enabled: false })
+    const claudeSkills = (config.data as { appStore: { registries: Array<{ id: string; enabled: boolean }> } }).appStore.registries.find(registry => registry.id === 'claude-skills')
+    // Absent when product.json hides the registry; either way it must not be fetched.
+    expect(claudeSkills?.enabled ?? false).toBe(false)
 
     // Filter out known acceptable errors
     const criticalErrors = errors.filter(error =>
@@ -174,8 +176,14 @@ test.describe('Core Features', () => {
     await window.screenshot({ path: 'tests/e2e/results/smoke-chat-response.png' })
   })
 
-  test('can enable tunnel and get public URL', async ({ window }) => {
+  test('can enable tunnel and get public URL', async ({ window }, testInfo) => {
     await navigateToRemoteSettings(window)
+
+    const policy = await window.evaluate(() => (window as unknown as { halo: HaloAPI }).halo.getSecurityPolicy())
+    if ((policy.data as { tunnelSafe?: boolean } | undefined)?.tunnelSafe === true) {
+      testInfo.skip(true, 'Skipping: this product build disables the public tunnel (security.tunnelSafe)')
+      return
+    }
 
     // Enable remote access
     await clickRemoteToggle(window)

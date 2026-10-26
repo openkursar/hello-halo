@@ -50,18 +50,18 @@ describe('remote OAuth lifecycle', () => {
     expect(routes.has('POST /api/auth/open-login-window')).toBe(false)
   })
 
-  it('starts a targeted reauthentication and allow-lists the public start fields', async () => {
+  it('starts a login and allow-lists the public start fields', async () => {
     env.manager.startOAuthLogin.mockResolvedValue({ success: true, data: {
       loginId: 'own-flow', loginUrl: 'https://issuer.example/login', state: 'csrf', redirectUri: 'https://callback.example/login',
       accessToken: 'must-not-return', _tokenData: { refreshToken: 'must-not-return' },
     } })
-    const result = await request('POST', '/api/auth/start-login', { providerType: 'external', sourceId: 'account-2' })
-    expect(env.manager.startOAuthLogin).toHaveBeenCalledWith('external', 'account-2')
+    const result = await request('POST', '/api/auth/start-login', { providerType: 'external' })
+    expect(env.manager.startOAuthLogin).toHaveBeenCalledWith('external')
     expect(result.body).toEqual({ success: true, data: { loginId: 'own-flow', loginUrl: 'https://issuer.example/login', state: 'csrf', redirectUri: 'https://callback.example/login' } })
   })
 
   it('answers malformed identifiers with 400 before reaching the account manager', async () => {
-    expect((await request('POST', '/api/auth/start-login', { providerType: 'external', sourceId: ' padded ' })).status).toBe(400)
+    expect((await request('POST', '/api/auth/start-login', { providerType: ' padded ' })).status).toBe(400)
     expect((await request('POST', '/api/auth/start-login', { providerType: '' })).status).toBe(400)
     expect(env.manager.startOAuthLogin).not.toHaveBeenCalled()
     expect(console.warn).toHaveBeenCalledWith('[Auth] Rejected start-login: invalid request fields')

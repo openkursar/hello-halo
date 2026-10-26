@@ -21,7 +21,7 @@
  * The Feishu SDK is fully mocked: no network, no credentials.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import type {
   ImChannelInstance,
   ImChannelProvider,
@@ -31,6 +31,7 @@ import type { InboundMessage, ReplyHandle } from '../../../../../src/shared/type
 const resolveProxyAgentMock = vi.fn(async (): Promise<unknown> => undefined)
 vi.mock('../../../../../src/main/services/proxy-fetch', () => ({
   resolveProxyAgent: () => resolveProxyAgentMock(),
+  resolveProxyDialAgent: () => resolveProxyAgentMock(),
 }))
 
 const notifyAppEventMock = vi.fn()
@@ -63,6 +64,12 @@ interface FakeChannel {
   failQuoted: number
   failAllSends: boolean
   connectRejects: boolean
+  /** What a refused connect() throws; a generic failure when unset. */
+  connectError: unknown
+  /** When set, connect() waits on it before building its WebSocket client. */
+  held?: Promise<'up' | 'ws-timeout'>
+  /** Built by connect() once the bot identity is known, like LarkChannel.rawWsClient. */
+  rawWsClient?: { close: ReturnType<typeof vi.fn> }
   on(name: string, handler: (payload?: unknown) => unknown): () => void
   connect(): Promise<void>
   disconnect(): Promise<void>
@@ -108,8 +115,16 @@ vi.mock('@larksuiteoapi/node-sdk', () => {
   // Set by a test before the provider builds its next channel, so a connect
   // failure can be staged for a channel object the test does not hold yet.
   const failNextConnect = { value: false }
+  const nextConnectError = { value: undefined as unknown }
+  // Per new channel, in order: undefined connects, anything else is thrown.
+  // Takes precedence over failNextConnect while it has entries.
+  const connectScript: unknown[] = []
+  const holdNextConnect = { value: undefined as Promise<'up' | 'ws-timeout'> | undefined }
 
   function createLarkChannel(opts?: Record<string, unknown>): FakeChannel {
+    const scripted = connectScript.length > 0 ? { outcome: connectScript.shift() } : undefined
+    const held = holdNextConnect.value
+    holdNextConnect.value = undefined
     const channel: FakeChannel = {
       createOptions: opts,
       handlers: {},
@@ -122,16 +137,27 @@ vi.mock('@larksuiteoapi/node-sdk', () => {
       chatInfoCalls: [],
       failQuoted: 0,
       failAllSends: false,
-      connectRejects: failNextConnect.value,
+      connectRejects: scripted ? scripted.outcome !== undefined : failNextConnect.value,
+      connectError: scripted ? scripted.outcome : nextConnectError.value,
+      held,
       on(name, handler) {
         channel.handlers[name] = handler
         return () => { delete channel.handlers[name] }
       },
       async connect() {
         channel.connectCount++
+        if (channel.held) {
+          // Like LarkChannel: the bot identity (tenant token) comes first, and
+          // only then is the WebSocket client built and started.
+          const outcome = await channel.held
+          channel.rawWsClient = { close: vi.fn() }
+          if (outcome === 'ws-timeout') throw new Error('WebSocket handshake did not complete within 15000ms')
+          channel.state = 'connected'
+          return
+        }
         if (channel.connectRejects) {
           channel.state = 'failed'
-          throw new Error('invalid app secret')
+          throw channel.connectError ?? new Error('invalid app secret')
         }
         channel.state = 'connected'
       },
@@ -238,6 +264,9 @@ vi.mock('@larksuiteoapi/node-sdk', () => {
     LoggerLevel: { fatal: 0, error: 1, warn: 2, info: 3, debug: 4, trace: 5 },
     __channels: registry,
     __failNextConnect: failNextConnect,
+    __nextConnectError: nextConnectError,
+    __connectScript: connectScript,
+    __holdNextConnect: holdNextConnect,
   }
 })
 
@@ -245,6 +274,7 @@ const sdk = await import('@larksuiteoapi/node-sdk')
 const { FeishuBotProvider } = await import(
   '../../../../../src/main/apps/runtime/im-channels/feishu-bot.provider'
 )
+const { ImChannelManager } = await import('../../../../../src/main/apps/runtime/im-channels/manager')
 
 const VALID_APP_ID = 'cli_a1b2c3d4e5f60718'
 
@@ -252,8 +282,42 @@ function registry(): FakeChannel[] {
   return (sdk as unknown as { __channels: FakeChannel[] }).__channels
 }
 
-function failNextConnect(value: boolean): void {
+/** Outcomes for the next channels' connect(), in order: undefined connects, an error is thrown. */
+function scriptConnects(...outcomes: unknown[]): void {
+  ;(sdk as unknown as { __connectScript: unknown[] }).__connectScript.splice(0, Infinity, ...outcomes)
+}
+
+/** Hold the next channel's connect() in its bot-identity step until released. */
+function holdNextConnect(): (outcome: 'up' | 'ws-timeout') => void {
+  let release!: (outcome: 'up' | 'ws-timeout') => void
+  ;(sdk as unknown as { __holdNextConnect: { value: Promise<'up' | 'ws-timeout'> } }).__holdNextConnect.value =
+    new Promise((resolve) => { release = resolve })
+  return release
+}
+
+function failNextConnect(value: boolean, error?: unknown): void {
   ;(sdk as unknown as { __failNextConnect: { value: boolean } }).__failNextConnect.value = value
+  ;(sdk as unknown as { __nextConnectError: { value: unknown } }).__nextConnectError.value = value ? error : undefined
+}
+
+/**
+ * The error chain the real SDK produces when the first connect cannot get a
+ * tenant token (recorded against open.feishu.cn: HTTP 200, code 10014 for both
+ * an unknown App ID and a wrong App Secret).
+ */
+function botIdentityError(cause: Error): Error {
+  return Object.assign(
+    new Error('could not resolve bot identity via /open-apis/bot/v3/info — required for channel to function'),
+    { name: 'LarkChannelError', code: 'not_connected', cause },
+  )
+}
+
+/** The WebSocket endpoint's answer, as LarkChannel.connect() rejects with it. */
+function wsEndpointError(code: number, msg: string): Error {
+  return Object.assign(
+    new Error(`WebSocket connect failed: pullConnectConfig failed: code=${code}, msg=${msg}`),
+    { name: 'LarkChannelError', code: 'not_connected' },
+  )
 }
 
 function latestChannel(): FakeChannel {
@@ -313,6 +377,20 @@ async function emitMessage(started: Started, msg: Record<string, unknown>): Prom
   await started.channel.handlers.message?.(msg)
 }
 
+// The provider loads the SDK with its first channel. Opening one here puts
+// every test on the steady state, where a channel opens within the microtasks
+// startInstance() flushes.
+beforeAll(async () => {
+  const instance = new FeishuBotProvider().createInstance('sdk-warm-up', {
+    appId: VALID_APP_ID,
+    appSecret: 'secret',
+    domain: 'feishu',
+  })
+  instance.start()
+  await vi.waitFor(() => expect(registry().length).toBeGreaterThan(0))
+  instance.stop()
+})
+
 beforeEach(() => {
   registry().length = 0
   staged.length = 0
@@ -367,12 +445,12 @@ describe('FeishuBotProvider — lifecycle', () => {
     expect(instance.isConnected()).toBe(false)
   })
 
-  it('maps SDK states onto the shared vocabulary', async () => {
+  it('reports a link that was up and is being brought back as reconnecting, never offline', async () => {
     const started = await startInstance()
     started.channel.state = 'reconnecting'
-    expect(started.instance.getConnectionState?.()).toBe('connecting')
+    expect(started.instance.getConnectionState?.()).toBe('reconnecting')
     started.channel.state = 'failed'
-    expect(started.instance.getConnectionState?.()).toBe('offline')
+    expect(started.instance.getConnectionState?.()).toBe('reconnecting')
     started.instance.stop()
     expect(started.instance.getConnectionState?.()).toBe('offline')
   })
@@ -389,7 +467,9 @@ describe('FeishuBotProvider — lifecycle', () => {
     await new Promise((r) => setTimeout(r, 0))
 
     expect(notifyAppEventMock).toHaveBeenCalledTimes(1)
-    expect(instance.getConnectionState?.()).toBe('offline')
+    // Still being retried, so it reads as connecting with the reason attached.
+    expect(instance.getConnectionState?.()).toBe('connecting')
+    expect(instance.getLinkStatus?.()?.lastError).toContain('invalid app secret')
     instance.stop()
     failNextConnect(false)
   })
@@ -458,6 +538,297 @@ describe('FeishuBotProvider — lifecycle', () => {
       failNextConnect(false)
       vi.useRealTimers()
     }
+  })
+
+  it('closes the WebSocket client of a channel that never finished connecting', async () => {
+    // LarkChannel.disconnect() does nothing before the first handshake, while
+    // its WebSocket client keeps redialling on its own and, once through, takes
+    // a share of the app's event deliveries with no handler left.
+    vi.useFakeTimers()
+    try {
+      failNextConnect(true)
+      const provider = new FeishuBotProvider()
+      const instance = provider.createInstance('inst-zombie', {
+        appId: VALID_APP_ID,
+        appSecret: 'secret',
+      })
+      instance.start()
+      await vi.advanceTimersByTimeAsync(0)
+      const failed = latestChannel() as FakeChannel & { rawWsClient?: { close: ReturnType<typeof vi.fn> } }
+      failed.rawWsClient = { close: vi.fn() }
+
+      failNextConnect(false)
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(latestChannel()).not.toBe(failed)
+      expect(failed.rawWsClient.close).toHaveBeenCalledWith({ force: true })
+      instance.stop()
+    } finally {
+      failNextConnect(false)
+      vi.useRealTimers()
+    }
+  })
+
+  describe('a channel replaced while still fetching its bot identity', () => {
+    // LarkChannel builds its WebSocket client only after the tenant token
+    // arrives, so a teardown in that step has nothing to close yet; the client
+    // that opens afterwards has no handlers and would take a share of the
+    // app's events and drop them.
+    it('closes the WebSocket that opens after the replacement', async () => {
+      vi.useFakeTimers()
+      try {
+        const release = holdNextConnect()
+        const started = await startInstance()
+        const stale = started.channel
+        started.instance.reconnect()
+        await vi.advanceTimersByTimeAsync(0)
+        expect(latestChannel()).not.toBe(stale)
+        expect(started.instance.getConnectionState?.()).toBe('online')
+        const disconnectsBefore = stale.disconnectCount
+
+        release('up')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(stale.rawWsClient?.close).toHaveBeenCalledWith({ force: true })
+        expect(stale.disconnectCount).toBe(disconnectsBefore + 1)
+        expect(started.instance.getConnectionState?.()).toBe('online')
+        started.instance.stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('closes the WebSocket client of a replaced channel whose handshake then times out', async () => {
+      // The SDK rejects connect() after 15 s but its client keeps redialling.
+      vi.useFakeTimers()
+      try {
+        const release = holdNextConnect()
+        const started = await startInstance()
+        const stale = started.channel
+        started.instance.stop()
+
+        release('ws-timeout')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(stale.rawWsClient?.close).toHaveBeenCalledWith({ force: true })
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
+  it('rebuilds a link the SDK has not brought back within 45 s, without cutting a quick reconnect short', async () => {
+    vi.useFakeTimers()
+    try {
+      const started = await startInstance()
+      const before = registry().length
+
+      started.channel.state = 'reconnecting'
+      started.channel.handlers.reconnecting?.()
+      expect(started.instance.getConnectionState?.()).toBe('reconnecting')
+      await vi.advanceTimersByTimeAsync(30_000)
+      started.channel.state = 'connected'
+      started.channel.handlers.reconnected?.()
+      expect(started.instance.getConnectionState?.()).toBe('online')
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(registry().length).toBe(before)
+
+      started.channel.state = 'reconnecting'
+      started.channel.handlers.reconnecting?.()
+      await vi.advanceTimersByTimeAsync(45_000 + 1_500)
+      expect(registry().length).toBe(before + 1)
+      expect(started.instance.getLinkStatus?.()?.drops).toBe(2)
+      started.instance.stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  describe('rejected credentials', () => {
+    it.each([
+      ['wrong App Secret', botIdentityError(new Error('failed to get tenant_access_token, code: 10014, msg: app secret invalid'))],
+      ['unknown App ID', botIdentityError(new Error('failed to get tenant_access_token, code: 10014, msg: app id not exists'))],
+      ['WebSocket endpoint refusing them', wsEndpointError(1000040345, 'app_id or app_secret is invalid')],
+    ])('stops retrying on a %s and says why', async (_label, error) => {
+      vi.useFakeTimers()
+      try {
+        failNextConnect(true, error)
+        const instance = new FeishuBotProvider().createInstance('inst-cred', {
+          appId: VALID_APP_ID,
+          appSecret: 'wrong',
+        })
+        instance.start()
+        await vi.advanceTimersByTimeAsync(2 * 60_000)
+        expect(instance.getConnectionState?.()).toBe('offline')
+        expect(instance.getLinkStatus?.()?.lastError).toContain('App ID or App Secret')
+
+        const attempts = registry().length
+        await vi.advanceTimersByTimeAsync(30 * 60_000)
+        expect(registry().length).toBe(attempts)
+        instance.stop()
+      } finally {
+        failNextConnect(false)
+        vi.useRealTimers()
+      }
+    })
+
+    it.each([
+      ['refused connection', botIdentityError(new Error('connect ECONNREFUSED 203.0.113.10:443'))],
+      ['timeout', botIdentityError(new Error('timeout of 15000ms exceeded'))],
+      ['busy WebSocket endpoint', wsEndpointError(1000040343, 'internal error')],
+    ])('keeps retrying a network failure (%s)', async (_label, error) => {
+      vi.useFakeTimers()
+      try {
+        failNextConnect(true, error)
+        const instance = new FeishuBotProvider().createInstance('inst-net', {
+          appId: VALID_APP_ID,
+          appSecret: 'secret',
+        })
+        instance.start()
+        await vi.advanceTimersByTimeAsync(10 * 60_000)
+        expect(instance.getConnectionState?.()).toBe('connecting')
+        const attempts = registry().length
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(registry().length).toBeGreaterThan(attempts)
+        instance.stop()
+      } finally {
+        failNextConnect(false)
+        vi.useRealTimers()
+      }
+    })
+
+    it('connects again after Reconnect, or once the credentials are corrected', async () => {
+      vi.useFakeTimers()
+      const manager = new ImChannelManager()
+      try {
+        manager.registerProvider(new FeishuBotProvider())
+        const cfg = {
+          id: 'inst-fix',
+          type: 'feishu-bot' as const,
+          enabled: true,
+          appId: 'dh-1',
+          config: { appId: VALID_APP_ID, appSecret: 'wrong' },
+        }
+        failNextConnect(true, botIdentityError(new Error('failed to get tenant_access_token, code: 10014, msg: app secret invalid')))
+        manager.applyConfig([cfg as never], () => {})
+        await vi.advanceTimersByTimeAsync(2 * 60_000)
+        expect(manager.getInstance('inst-fix')?.getConnectionState?.()).toBe('offline')
+
+        // Reconnect retries at once; the platform still refuses, the card says so.
+        manager.reconnectInstance('inst-fix')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(manager.getInstance('inst-fix')?.getConnectionState?.()).toBe('connecting')
+        await vi.advanceTimersByTimeAsync(2 * 60_000)
+        expect(manager.getInstance('inst-fix')?.getConnectionState?.()).toBe('offline')
+
+        // Reconnect after the secret was fixed on the platform side.
+        failNextConnect(false)
+        manager.reconnectInstance('inst-fix')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(manager.getInstance('inst-fix')?.getConnectionState?.()).toBe('online')
+
+        // A corrected secret in Settings: the manager rebuilds the instance.
+        failNextConnect(true, botIdentityError(new Error('failed to get tenant_access_token, code: 10014, msg: app secret invalid')))
+        manager.applyConfig([{ ...cfg, config: { appId: VALID_APP_ID, appSecret: 'stale' } } as never], () => {})
+        await vi.advanceTimersByTimeAsync(2 * 60_000)
+        expect(manager.getInstance('inst-fix')?.getConnectionState?.()).toBe('offline')
+        failNextConnect(false)
+        manager.applyConfig([{ ...cfg, config: { appId: VALID_APP_ID, appSecret: 'right' } } as never], () => {})
+        await vi.advanceTimersByTimeAsync(0)
+        expect(manager.getInstance('inst-fix')?.getConnectionState?.()).toBe('online')
+      } finally {
+        manager.stopAll()
+        failNextConnect(false)
+        vi.useRealTimers()
+      }
+    })
+  })
+
+  describe('the rejection budget', () => {
+    const secretRejected = (): Error =>
+      botIdentityError(new Error('failed to get tenant_access_token, code: 10014, msg: app secret invalid'))
+    const unreachable = (): Error => botIdentityError(new Error('connect ECONNREFUSED 203.0.113.10:443'))
+
+    beforeEach(() => {
+      vi.useFakeTimers()
+      // No jitter: redials 1, 2, 4, 8, 16, 30, 30 … s apart.
+      vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    })
+
+    afterEach(() => {
+      scriptConnects()
+      failNextConnect(false)
+      vi.restoreAllMocks()
+      vi.useRealTimers()
+    })
+
+    function startBot(): { instance: ImChannelInstance; dials: () => number } {
+      const before = registry().length
+      const instance = new FeishuBotProvider().createInstance('inst-budget', {
+        appId: VALID_APP_ID,
+        appSecret: 'secret',
+      })
+      instance.start()
+      return { instance, dials: () => registry().length - before }
+    }
+
+    it('does not stop on five rejections within the first minute, only on one a minute after the first', async () => {
+      // A just-created app may be refused for a while before the platform knows it.
+      failNextConnect(true, secretRejected())
+      const { instance, dials } = startBot()
+
+      await vi.advanceTimersByTimeAsync(30_000) // rejected at 0, 1, 3, 7, 15 s
+      expect(dials()).toBe(5)
+      expect(instance.getConnectionState?.()).toBe('connecting')
+
+      await vi.advanceTimersByTimeAsync(40_000) // rejected at 31 s, then at 61 s → stop
+      expect(instance.getConnectionState?.()).toBe('offline')
+      expect(dials()).toBe(7)
+
+      await vi.advanceTimersByTimeAsync(30 * 60_000)
+      expect(dials()).toBe(7)
+      instance.stop()
+    })
+
+    it('keeps counting rejections across network failures in between', async () => {
+      scriptConnects(
+        secretRejected(), secretRejected(), secretRejected(), secretRejected(), // 0, 1, 3, 7 s
+        unreachable(), unreachable(), unreachable(), // 15, 31, 61 s
+        secretRejected(), // 91 s: the fifth rejection, a minute after the first
+      )
+      const { instance, dials } = startBot()
+
+      await vi.advanceTimersByTimeAsync(90_000)
+      expect(dials()).toBe(7)
+      expect(instance.getConnectionState?.()).toBe('connecting')
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(dials()).toBe(8)
+      expect(instance.getConnectionState?.()).toBe('offline')
+      instance.stop()
+    })
+
+    it('starts counting again once the bot was connected in between', async () => {
+      scriptConnects(
+        secretRejected(), secretRejected(), secretRejected(), secretRejected(), // 0, 1, 3, 7 s
+        undefined, // 15 s: connected
+        ...Array.from({ length: 10 }, secretRejected), // after the drop: 62, 64, 68, 76, 92, 122 s …
+      )
+      const { instance, dials } = startBot()
+      await vi.advanceTimersByTimeAsync(16_000)
+      expect(instance.getConnectionState?.()).toBe('online')
+
+      // At 16 s the link drops and the SDK does not bring it back within 45 s.
+      const connected = latestChannel()
+      connected.state = 'reconnecting'
+      connected.handlers.reconnecting?.()
+
+      await vi.advanceTimersByTimeAsync(84_000) // 100 s: five rejections since, at 62 … 92 s
+      expect(dials()).toBe(10)
+      expect(instance.getConnectionState?.()).toBe('reconnecting')
+
+      await vi.advanceTimersByTimeAsync(26_000) // 126 s: rejected at 122 s, a minute after 62 s → stop
+      expect(instance.getConnectionState?.()).toBe('offline')
+      expect(dials()).toBe(11)
+      instance.stop()
+    })
   })
 
   it('stop() is idempotent and disconnects once', async () => {

@@ -28,6 +28,7 @@ import { useSpaceStore } from '../../stores/space.store'
 import { useAppStore } from '../../stores/app.store'
 import { openDigitalHumanChat } from '../../utils/conversation-navigation'
 import { useAppImInstances } from '../../hooks/useAppImInstances'
+import { useAppHttpSessions } from '../../hooks/useAppHttpSessions'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { ShareCurrentAppDialog } from '../store/ShareCurrentAppDialog'
 import { WorkspaceMigrationDialog } from './WorkspaceMigrationDialog'
@@ -47,8 +48,9 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
   const { apps, appStates, pauseApp, resumeApp, triggerApp, exportApp, uninstallApp, restartAppAgent } = useAppsStore()
   const { openAppConfig, openActivityThread, openAppTeams, openAppSessions, selectApp, detailView } = useAppsPageStore()
   const { showConfirm, DialogComponent } = useConfirmDialog()
-  // Presence of bound IM bots decides whether the IM sessions tab exists.
+  // Bound IM bots or remote calls decide whether the IM / Remote tab exists.
   const { instances: imInstances, loading: imInstancesLoading } = useAppImInstances(appId)
+  const { sessions: httpSessions, loading: httpSessionsLoading } = useAppHttpSessions(appId)
   const app = apps.find(a => a.id === appId)
   const runtimeState = appStates[appId]
 
@@ -111,13 +113,14 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
   }, [detailView])
 
   // `lastAutomationTab` (apps-page.store.ts selectApp) restores the sessions
-  // tab blind to whether this particular app has a bot bound. Once this app's
-  // own bindings are known, bounce a stale sessions tab back to activity
-  // instead of leaving the tab bar with nothing selected.
-  const hasSessionsTab = imInstances.length > 0 && !!app?.spaceId
+  // tab blind to whether this particular app has a bot bound or remote calls.
+  // Once both are known, bounce a stale sessions tab back to activity instead
+  // of leaving the tab bar with nothing selected.
+  const hasSessionsTab = (imInstances.length > 0 || httpSessions.length > 0) && !!app?.spaceId
+  const sessionsKnown = !imInstancesLoading && !httpSessionsLoading
   useEffect(() => {
-    if (currentTab === 'sessions' && !imInstancesLoading && !hasSessionsTab) openActivityThread(appId)
-  }, [currentTab, imInstancesLoading, hasSessionsTab, appId, openActivityThread])
+    if (currentTab === 'sessions' && sessionsKnown && !hasSessionsTab) openActivityThread(appId)
+  }, [currentTab, sessionsKnown, hasSessionsTab, appId, openActivityThread])
 
   if (!app) return null
 
@@ -212,9 +215,9 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
 
   const tabs: { key: AutomationTab; label: string; icon: typeof MessageSquare; onClick: () => void }[] = [
     { key: 'activity', label: t('Work activity'), icon: Activity, onClick: handleTabActivity },
-    // Only a digital human with a bound bot carries external traffic worth a tab.
+    // Only a digital human with a bound bot or remote calls carries external traffic worth a tab.
     ...(hasSessionsTab
-      ? [{ key: 'sessions' as const, label: t('IM sessions'), icon: MessagesSquare, onClick: () => openAppSessions(appId) }]
+      ? [{ key: 'sessions' as const, label: t('IM / Remote'), icon: MessagesSquare, onClick: () => openAppSessions(appId) }]
       : []),
     { key: 'teams', label: t('Participating teams'), icon: Users, onClick: () => openAppTeams(appId) },
     { key: 'config', label: t('Capabilities and settings'), icon: Cog, onClick: handleTabConfig },

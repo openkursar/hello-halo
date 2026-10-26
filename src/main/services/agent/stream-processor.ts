@@ -33,6 +33,7 @@ import {
   extractStreamDeltaUsage,
   buildTokenUsage,
   hasPromptAccounting,
+  mergeCallUsage,
   isSyntheticAssistantMessage
 } from './context-usage'
 import { broadcastMcpStatus } from './mcp-manager'
@@ -383,19 +384,15 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
   // more successful invocations.
   let invocationOkEmitted = false
   // Telemetry: invocation pending its boundary flush. Engines split one API
-  // response into several assistant frames sharing one message id; only one
-  // frame (if any) carries real usage. Emission is therefore deferred to the
+  // response into several assistant frames sharing one message id; their
+  // initial usage may be updated by message_delta. Emission is deferred to the
   // call boundary — the next assistant frame with a different id, or stream
   // end — so providers that never return usage still produce exactly one
   // `llm.invocation` per call (count must never be lost), with token fields
   // attached only when usage was observed.
   let pendingInvocation: { messageId: string | undefined; usage: SingleCallUsage | null } | null = null
-  // Telemetry: message_delta usage, keyed by the message_start id it follows —
-  // this is the only frame carrying token counts for providers that omit usage
-  // elsewhere (see extractStreamDeltaUsage), and it arrives after the
-  // assistant frames of the same call, so it is read at flush time. Keyed
-  // rather than a single variable so attribution holds even if a turn's calls
-  // interleave.
+  // Stream-end counts override assistant snapshots for the same call. Keep
+  // them by message_start id until flush, including across interleaved calls.
   const streamUsageByMessageId = new Map<string, SingleCallUsage>()
   // Telemetry: message id of the call currently streaming, taken from
   // `message_start` — `message_delta` carries no id of its own.
@@ -413,7 +410,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
   const flushPendingInvocation = (): void => {
     if (!pendingInvocation) return
     const now = Date.now()
-    const usage = pendingInvocation.usage ?? takeStreamUsage(pendingInvocation.messageId)
+    const usage = mergeCallUsage(pendingInvocation.usage, takeStreamUsage(pendingInvocation.messageId))
     void analytics.track(AnalyticsEvents.LLM_INVOCATION, {
       ...deriveAnalyticsSource(conversationId),
       conversationId,
@@ -745,11 +742,19 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
       } else if (event.type === 'message_delta') {
         const deltaUsage = extractStreamDeltaUsage(event)
         if (deltaUsage) {
+          const streamUsage = mergeCallUsage(
+            streamingMessageId ? streamUsageByMessageId.get(streamingMessageId) ?? null : null,
+            deltaUsage
+          )!
           if (streamingMessageId) {
-            streamUsageByMessageId.set(streamingMessageId, deltaUsage)
+            streamUsageByMessageId.set(streamingMessageId, streamUsage)
           }
-          if (hasPromptAccounting(deltaUsage)) {
-            lastSingleUsage = deltaUsage
+          const usage = mergeCallUsage(
+            streamingMessageId && pendingInvocation?.messageId === streamingMessageId ? pendingInvocation.usage : null,
+            streamUsage
+          )!
+          if (hasPromptAccounting(usage)) {
+            lastSingleUsage = usage
           }
         }
       }
@@ -1031,12 +1036,16 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
       }
       const usage = extractRealAssistantUsage(sdkMessage)
       if (usage) {
+        pendingInvocation.usage = mergeCallUsage(pendingInvocation.usage, usage)
+        const callUsage = mergeCallUsage(
+          pendingInvocation.usage,
+          messageId ? streamUsageByMessageId.get(messageId) ?? null : null
+        )!
         // Telemetry counts every call; the context gauge only accepts prompt
         // accounting, so an output-only frame cannot blank it.
-        if (hasPromptAccounting(usage)) {
-          lastSingleUsage = usage
+        if (hasPromptAccounting(callUsage)) {
+          lastSingleUsage = callUsage
         }
-        pendingInvocation.usage = usage
       }
     }
 

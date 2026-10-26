@@ -67,7 +67,7 @@ export async function bootServerMode(): Promise<void> {
     initializeEssentialServices()
     console.log('[ServerMode] essential services ready')
 
-    initializeExtendedServices()
+    await initializeExtendedServices()
     console.log('[ServerMode] extended services dispatched')
 
     const status = await enableRemoteAccess(port)

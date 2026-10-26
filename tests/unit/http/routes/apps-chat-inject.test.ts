@@ -23,6 +23,7 @@ vi.mock('../../../../src/main/http/routes/_shared', () => ({
   sendAppChatMessage: (...args: unknown[]) => sendAppChatMessage(...args),
 }))
 vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: () => team.ready ? {
+  getTeamById: () => ({ leadAppId: 'lead', ephemeral: false }),
   getEpochById: (id: string) => id === 'e1' ? { id, teamId: 't1' } : null,
   getMember: (_teamId: string, appId: string) => appId === 'app-1' ? { origin: team.remote ? 'remote' : 'local', ownerNodeId: team.remote ? 'other-node' : undefined } : null,
 } : null }))

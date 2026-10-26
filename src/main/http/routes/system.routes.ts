@@ -43,8 +43,7 @@ export function registerSystemRoutes(app: Express): void {
   })
 
   app.post('/api/auth/start-login', async (req: Request, res: Response) => {
-    const { providerType, sourceId } = req.body ?? {}
-    sendAuthResult(res, await authController.startLogin(providerType, sourceId))
+    sendAuthResult(res, await authController.startLogin(req.body?.providerType))
   })
 
   app.post('/api/auth/complete-login', async (req: Request, res: Response) => {

@@ -1395,7 +1395,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
                       <span className="truncate">{mentionGroupLabel(group.kind, t)}</span>
                       {group.truncated && (
                         <span className="shrink-0 normal-case font-normal tracking-normal text-muted-foreground/40">
-                          {t('Type to see more')}
+                          {t('Keep typing to filter')}
                         </span>
                       )}
                     </div>

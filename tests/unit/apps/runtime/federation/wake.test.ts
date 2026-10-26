@@ -372,7 +372,7 @@ describe('federation remote wake (position transparency)', () => {
   })
 
   it('holds only a session this machine runs; a remote member is held by its owner when the wake lands', () => {
-    const hold = { cancelled: false, stoppedBy: undefined, bindSession: vi.fn(), releaseSession: vi.fn(), end: vi.fn() }
+    const hold = { cancelled: false, stoppedBy: undefined, reset: false, bindSession: vi.fn(), releaseSession: vi.fn(), end: vi.fn() }
     const local: OrchestrationSessionDeps = {
       sendAppChatMessage: async () => ({ finalMessage: null }),
       isSessionActive: () => false,

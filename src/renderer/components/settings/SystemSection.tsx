@@ -70,6 +70,11 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
   // Proxy settings state
   const [proxyInput, setProxyInput] = useState(config?.network?.proxy || '')
   const [browserUseProxy, setBrowserUseProxy] = useState(config?.network?.browserUseProxy ?? false)
+  const [imUseProxy, setImUseProxy] = useState(config?.network?.imUseProxy !== false)
+  // Message Channels can also turn this off ("Connect directly").
+  useEffect(() => {
+    setImUseProxy(config?.network?.imUseProxy !== false)
+  }, [config?.network?.imUseProxy])
   const [proxyError, setProxyError] = useState<string | null>(null)
   const [proxySaved, setProxySaved] = useState(false)
 
@@ -261,6 +266,20 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
     } catch (error) {
       console.error('[SystemSection] Failed to update browserUseProxy:', error)
       setBrowserUseProxy(!enabled) // Revert on error
+    }
+  }
+
+  // Message channels' route; every bot redials on the new route once saved
+  const handleImUseProxyChange = async (enabled: boolean) => {
+    setImUseProxy(enabled)
+    try {
+      const updatedNetwork = { ...config?.network, imUseProxy: enabled }
+      const updatedConfig = { ...config, network: updatedNetwork } as HaloConfig
+      await api.setConfig({ network: updatedNetwork })
+      setConfig(updatedConfig)
+    } catch (error) {
+      console.error('[SystemSection] Failed to update imUseProxy:', error)
+      setImUseProxy(!enabled) // Revert on error
     }
   }
 
@@ -473,6 +492,23 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
                 </div>
               </div>
             )}
+
+            {/* Message channels follow the proxy above, or the system's when it is empty */}
+            <div className="mt-3 pt-3 border-t border-border-faint">
+              <div className={`flex items-center justify-between py-1.5 ${switchRowHover}`}>
+                <div className="flex-1 min-w-0 mr-3">
+                  <p className="text-sm font-medium">{t('Message channels use the proxy')}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {t('WeCom, Feishu and WeChat bots connect through this proxy (or the system proxy when it is empty). Turn off if the proxy is only meant for AI requests.')}
+                  </p>
+                </div>
+                <Switch
+                  checked={imUseProxy}
+                  onCheckedChange={handleImUseProxyChange}
+                  size="sm"
+                />
+              </div>
+            </div>
           </div>
 
           {/* Custom User-Agent — issue #124 */}

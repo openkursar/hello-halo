@@ -47,6 +47,9 @@ under the isolated migration namespace `app_team`.
 | `team_checks` | one row per periodic check | per-epoch; deleted when its epoch ends |
 | `team_tool_audit` | append-only | local-only; pruned by age, never replicated |
 
+Not a table: `team-retained-duties.json` beside `halo.db` (see "A duty outlives
+leaving a joined team").
+
 Epoch-scoped rows are never auto-deleted on seal — they remain as the durable,
 observable record of a run (技术 §8.2 persistence layering).
 
@@ -82,7 +85,7 @@ else:
   and that save lends nothing; a member added to a team that already crosses
   machines carries the answer chosen while adding
   (`TeamMemberInput.delegatedPolicy`), or read-only when none was given — the
-  lead a saved collaboration provisions on its first run included
+  lead prepared while saving or repairing a collaboration included
   (`startingDelegatedPolicy`).
 
   Rows written before these writes existed keep what they hold, NULL included:
@@ -110,6 +113,42 @@ else:
 `materializeJoinedOffice` replaces the roster wholesale (the authority is the
 single writer) but exempts these for members owned by THIS node: a snapshot
 taken before the owner's latest edit reached the authority must not undo it.
+
+### A duty outlives leaving a joined team
+
+Leaving a team hosted elsewhere deletes this node's rows for it, and the host
+removes the members' rows on its side; the duty lived only there, and a member
+without one is mute. So whenever members of this node leave — all of them
+(leaving the team) or one (taken out while the rest stay) — the controller
+keeps each one's duty (`retainMemberDuties`): before a leave, and once a
+withdraw was sent (a refused one keeps nothing). Entries are keyed by (team id,
+app id): the team id is the office id, which every invite to the same team
+carries again, so a different team with the same name never inherits one. An
+empty duty keeps nothing and forgets an entry kept before.
+
+Invariant: while a member still has a row, its entry (if any) follows the row —
+`updateMemberFields` rewrites it on every duty write that changed a row, and an
+empty duty forgets it. An entry and a row coexist only while a removal is on
+its way or after one never arrived; nothing new is kept by an edit.
+
+`materializeJoinedOffice` gives a kept duty back to a member of this node that
+enters the office with no row here, consumes it, and returns those members
+(`dutiesRestored`) so the owner publishes the profile (`member_profile`) — a
+rejoin brings no duty, the join request carries none. Only the owner writes a
+duty and the entry followed the row until it left, so the kept copy is never
+older than one the office may still hold, and it wins. A member in the
+caller's `departed` (it left during this joining; federation DESIGN) has not
+re-entered: a roster still listing it is behind, so its entry is neither given
+back nor used up. Kept only for exits this node starts: a host's removal keeps
+nothing, as before. A team never rejoined keeps its entries — one per member
+that left with a duty.
+
+They live in `team-retained-duties.json` beside `halo.db` (`retained-duties.ts`;
+an in-memory database keeps them in memory), not in a table: a migration copies
+the whole database on every machine's first start and stops older builds that
+share the data folder from opening it, which a few entries written on leaving
+do not justify. Read on first use (entries of the wrong shape are skipped and
+logged), written through on every change.
 
 ### Schema notes / deviations from 技术 §8.2
 
@@ -144,9 +183,30 @@ taken before the owner's latest edit reached the authority must not undo it.
     flag (directory exclusion), `listTeamItems` carries it (Teams page and
     picker filtering), and one collaboration exists per conversation
     (`getCollabTeamByConversation`).
-  - `runTeam` refuses an ephemeral team; "save as team" (`saveCollab`) only
-    clears the flag — the real lead is provisioned lazily on the saved team's
-    first standalone run, so saving never disturbs the live collaboration.
+  - Saving snapshots configuration into a separate ordinary team with a real
+    lead. It reuses member apps and copies their team duties, never epochs,
+    messages, checks, findings or current work. The original collaboration stays
+    ephemeral and keeps its original coordinator. A local `saved_team_id` link
+    makes repeated saves idempotent; deleting the saved team clears the link.
+    Temporary and persistent team names have separate uniqueness namespaces.
+  - Source coordinator identities never enter the saved team's roster or the
+    federation contract. All peers continue using the existing single-lead
+    protocol. No per-task coordinator selection or protocol upgrade is needed.
+  - Legacy persistent teams still pointing to a source coordinator are repaired
+    once when their owner opens or explicitly uses them: prepare a real lead,
+    remove the sentinel membership and unbind the old conversation atomically.
+    Existing history and invitations stay. Live legacy migration is out of scope;
+    repair checks live source-conversation and member occupancy before preparing
+    the lead and again before committing. Busy work defers repair without changing
+    the source; an idle, unclosed task record does not prevent recovery.
+    Source-task history is read-only even if never sealed. The conversation
+    projection, app send/inject and member-direct send share this rule;
+    history reads and stopping remain available. Repair failure preserves
+    the existing team. Joined copies never repair somebody else's team; their
+    detail names the responsible owner so the UI does not ask the reader to update.
+  - Published outputs are projected from findings and task results, independently
+    of the current roster. Removing a publisher cannot hide its earlier files;
+    opening still requires a known local producer or the existing owner fetch.
   - collaboration creation requires the coordinator session's captured source and
     model, passed through the toolset scope (never read again from global selection
     or a conversation whose picker may have changed mid-turn). Before any member
@@ -195,6 +255,10 @@ taken before the owner's latest edit reached the authority must not undo it.
   `listMembersByAppId` (cross-team membership lookup), `updateMemberFields`
   (partial: duty / delegated policy / accepts-checks), `setMemberLead`,
   `setMemberScope`.
+- **joined offices**: `materializeJoinedOffice` (wholesale roster mirror;
+  returns the members whose kept duty it gave back; optional `departed`),
+  `purgeJoinedOffice`, `retainMemberDuties` (see "A duty outlives leaving a
+  joined team").
 - **team_edges**: `replaceEdgesForTeam` (transactional clear + re-insert),
   `listEdgesByTeam`, `isEdgeAllowed(from, to)` (structured-mode permission).
 - **blackboard_tasks**: `insertTask`, `getTaskById`, `updateTask` (partial

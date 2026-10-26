@@ -251,6 +251,24 @@ describe('a message on its way to the engine', () => {
     expect(isAppChatConversationGenerating(CONVO)).toBe(false)
     expect(cancelAppChatTurnStarts(CONVO, 'user')).toBe(false)
   })
+
+  it('knows its conversation was reset under it, whoever stopped it first', () => {
+    const stoppedByPerson = beginAppChatTurnStart(CONVO)
+    cancelAppChatTurnStarts(CONVO, 'user')
+    expect(stoppedByPerson.reset).toBe(false)
+    // A clear follows the person's stop: the message stays the person's to void,
+    // and the turn still learns that the chat's session and state were replaced.
+    cancelAppChatTurnStarts(CONVO, 'internal')
+    expect(stoppedByPerson.stoppedBy).toBe('user')
+    expect(stoppedByPerson.reset).toBe(true)
+    stoppedByPerson.end()
+
+    const stoppedBySystem = beginAppChatTurnStart(CONVO)
+    cancelAppChatTurnStarts(CONVO, 'internal')
+    expect(stoppedBySystem.stoppedBy).toBe('internal')
+    expect(stoppedBySystem.reset).toBe(true)
+    stoppedBySystem.end()
+  })
 })
 
 describe('injectIntoAppChatWhenLive — a person adding to a turn that may not have begun', () => {

@@ -23,7 +23,6 @@ import { getSpaceMemoryStatus as serviceGetSpaceMemoryStatus, consolidateSpaceMe
 import { closeSpaceSessions, copyStoredSessions, countSessionAcquisitions, invalidateSessionsForSpace, isSpaceBusy, retireWorkingDirs } from '../services/agent'
 import { rerootSpaceWatcher } from '../services/watcher-host.service'
 import { destroySpaceCache, rerootSpaceCache } from '../services/artifact-cache.service'
-import { listPinnedWorkDirs, repointSpaceEnvironments } from '../apps/runtime'
 import { resolve } from 'path'
 import type { MemorySettings } from '../../shared/types/memory'
 
@@ -185,6 +184,9 @@ export async function changeSpaceWorkingDir(spaceId: string, workingDir: unknown
   const target = resolve(workingDir.trim())
   changingWorkingDir.add(spaceId)
   try {
+    // The app runtime is imported here rather than at the top so it stays out
+    // of what the main process loads before its window opens.
+    const { listPinnedWorkDirs, repointSpaceEnvironments } = await import('../apps/runtime')
     const previous = new Set([getSpaceDir(spaceId), ...listPinnedWorkDirs(spaceId)])
     previous.delete(target)
     let carried = 0

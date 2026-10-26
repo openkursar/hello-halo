@@ -268,6 +268,8 @@ export type V2SDKSession = {
   withdrawUnreadInput?: () => Promise<number>
   stream: () => AsyncIterable<any>
   close: () => void
+  /** Waits for execution-side cleanup and persistence after close, when the engine supports it. */
+  flush?: () => Promise<void>
   interrupt?: () => Promise<void> | void
   // Dynamic runtime methods forwarded from the SDK Query object to the v2
   // session by patches/@anthropic-ai+claude-agent-sdk (anthropic engine).
@@ -275,9 +277,9 @@ export type V2SDKSession = {
   setMaxThinkingTokens?: (maxThinkingTokens: number | null) => Promise<void>
   setPermissionMode?: (mode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan') => Promise<void>
   // Session goal — present on engines advertising `features.goal`.
-  getGoal?: () => Goal | null
+  getGoal?: () => Goal | null | Promise<Goal | null>
   /** Throws TypeError on a blank objective. */
-  setGoal?: (goal: GoalInput | null) => Goal | null
+  setGoal?: (goal: GoalInput | null) => Goal | null | Promise<Goal | null>
   /** The engine's child process, while it runs; lets a caller wait for it to exit after close(). */
   readonly pid?: number | null
 }

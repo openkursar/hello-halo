@@ -18,6 +18,7 @@ import { join, relative, sep } from 'path'
 import type { Ignore } from 'ignore'
 import { CPP_LEVEL_IGNORE_DIRS } from '../../shared/constants/ignore-patterns'
 import { isDiskRoot } from '../../shared/disk-paths'
+import { watcherBackend } from '../../shared/watcher-backend'
 import type { ProcessedFsEvent } from '../../shared/protocol/file-watcher.protocol'
 import {
   loadIgnoreRules,
@@ -378,6 +379,7 @@ async function subscribeSpace(spaceId: string, rootPath: string): Promise<void> 
         }
       },
       {
+        backend: watcherBackend(process.platform),
         ignore: CPP_LEVEL_IGNORE_DIRS.map(dir => join(realRoot, dir))
       }
     )

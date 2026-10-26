@@ -17,23 +17,23 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('auth API transport parity', () => {
-  it('uses owned login IDs and target source IDs remotely', async () => {
-    await authApi.authStartLogin('external', 'account-2')
+  it('uses owned login IDs remotely', async () => {
+    await authApi.authStartLogin('external')
     await authApi.authCompleteLogin('external', 'code#state', 'own-flow')
     await authApi.authCancelLogin('external', 'own-flow')
     expect(env.httpRequest.mock.calls).toEqual([
-      ['POST', '/api/auth/start-login', { providerType: 'external', sourceId: 'account-2' }],
+      ['POST', '/api/auth/start-login', { providerType: 'external' }],
       ['POST', '/api/auth/complete-login', { providerType: 'external', state: 'code#state', loginId: 'own-flow' }],
       ['POST', '/api/auth/cancel-login', { providerType: 'external', loginId: 'own-flow' }],
     ])
   })
 
   it('keeps no client-side login state: every start is a plain request', async () => {
-    await authApi.authStartLogin('external', 'a')
-    await authApi.authStartLogin('external', 'a')
+    await authApi.authStartLogin('external')
+    await authApi.authStartLogin('external')
     expect(env.httpRequest.mock.calls).toEqual([
-      ['POST', '/api/auth/start-login', { providerType: 'external', sourceId: 'a' }],
-      ['POST', '/api/auth/start-login', { providerType: 'external', sourceId: 'a' }],
+      ['POST', '/api/auth/start-login', { providerType: 'external' }],
+      ['POST', '/api/auth/start-login', { providerType: 'external' }],
     ])
   })
 
@@ -50,11 +50,11 @@ describe('auth API transport parity', () => {
 
   it('forwards all ownership arguments through the preload RPC client', async () => {
     env.electron = true
-    await authApi.authStartLogin('external', 'account-2')
+    await authApi.authStartLogin('external')
     await authApi.authCompleteLogin('external', 'code#state', 'own-flow')
     await authApi.authCancelLogin('external', 'own-flow')
     await authApi.authOpenLoginWindow('external', 'own-flow')
-    expect(env.halo.authStartLogin).toHaveBeenCalledWith('external', 'account-2')
+    expect(env.halo.authStartLogin).toHaveBeenCalledWith('external')
     expect(env.halo.authCompleteLogin).toHaveBeenCalledWith('external', 'code#state', 'own-flow')
     expect(env.halo.authCancelLogin).toHaveBeenCalledWith('external', 'own-flow')
     expect(env.halo.authOpenLoginWindow).toHaveBeenCalledWith('external', 'own-flow')

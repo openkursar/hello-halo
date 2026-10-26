@@ -85,7 +85,7 @@ vi.mock('../../../../src/main/services/agent/control', () => ({
 // referenced at the top of app-chat.ts.
 vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getApiCredentials: vi.fn(),
-  getApiCredentialsForSource: vi.fn(),
+  getApiCredentialsForSelection: vi.fn(),
   getWorkingDir: vi.fn(),
   getHeadlessElectronPath: vi.fn(),
   getDbMcpServers: vi.fn(),

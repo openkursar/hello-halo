@@ -38,7 +38,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { ImIdentityAuthExpiredError } from '../../../../shared/types/im-channel'
-import { proxyFetch } from '../../../services/proxy-fetch'
+import { linkFetch } from './link-route'
 
 // ============================================
 // Constants
@@ -85,9 +85,9 @@ export async function fetchWecomIdentityDirectory(apiKeyUrl: string): Promise<Ma
   try {
     let transport: StreamableHTTPClientTransport
     try {
-      // proxyFetch: honor the app/system proxy — the SDK's default is the
-      // global fetch, which bypasses it.
-      transport = new StreamableHTTPClientTransport(new URL(apiKeyUrl), { fetch: proxyFetch })
+      // The channel's route — the SDK's default is the global fetch, which
+      // bypasses the app/system proxy.
+      transport = new StreamableHTTPClientTransport(new URL(apiKeyUrl), { fetch: linkFetch })
     } catch (err) {
       // new URL() on a malformed value throws with the invalid input
       // embedded in the message — sanitize before it can propagate.

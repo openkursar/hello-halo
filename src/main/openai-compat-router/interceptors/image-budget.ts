@@ -5,7 +5,7 @@
  * conversations accumulate multiple screenshots (e.g. AI Browser sessions).
  *
  * Strategy:
- *   - Scan all messages for base64 image content blocks
+ *   - Collect image locations once; routes without a capability filter can remove all images
  *   - If total image payload exceeds the budget, replace the oldest images
  *     with a lightweight text placeholder until the total fits
  *   - Only modifies the outgoing request; stored conversation data is untouched
@@ -40,13 +40,14 @@ const IMAGE_BUDGET_BASE64 = 3.5 * 1024 * 1024  // 3.5MB in characters
 
 /** Placeholder text that replaces evicted images. */
 const IMAGE_PLACEHOLDER = '[Screenshot removed — exceeded image budget for API request]'
+const UNSUPPORTED_IMAGE_PLACEHOLDER = '[Image omitted: the current model cannot view images. Do not infer its contents; use a text description or OCR to inspect it.]'
 
 // ============================================================================
 // Types
 // ============================================================================
 
 /**
- * Tracks the location and size of a single base64 image within the message array.
+ * Tracks the location and size of an image within the message array.
  * Used to sort images by age (position) for oldest-first eviction.
  */
 interface ImageLocation {
@@ -56,7 +57,7 @@ interface ImageLocation {
   contentIndex: number
   /** For images nested inside tool_result blocks */
   toolResultContentIndex?: number
-  /** Length of the base64 data string */
+  /** Length of the base64 data string; URL images contribute no payload. */
   base64Length: number
 }
 
@@ -65,13 +66,13 @@ interface ImageLocation {
 // ============================================================================
 
 /**
- * Collect all base64 image locations and their sizes from the messages array.
+ * Collect base64 images for budgeting, or all images for a non-vision route.
  *
  * Images can appear in two places in Anthropic format:
  *   1. Top-level content blocks: { type: 'image', source: { type: 'base64', data: '...' } }
  *   2. Inside tool_result content: tool_result.content[n] where n is an image block
  */
-function collectImageLocations(messages: AnthropicMessage[]): ImageLocation[] {
+function collectImageLocations(messages: AnthropicMessage[], stripImages: boolean): ImageLocation[] {
   const locations: ImageLocation[] = []
 
   for (let mi = 0; mi < messages.length; mi++) {
@@ -83,11 +84,11 @@ function collectImageLocations(messages: AnthropicMessage[]): ImageLocation[] {
       const block = content[ci]
 
       // Direct image block
-      if (block.type === 'image' && block.source?.type === 'base64') {
+      if (block.type === 'image' && (stripImages || block.source?.type === 'base64')) {
         locations.push({
           messageIndex: mi,
           contentIndex: ci,
-          base64Length: block.source.data.length
+          base64Length: block.source?.type === 'base64' ? block.source.data.length : 0
         })
         continue
       }
@@ -96,12 +97,12 @@ function collectImageLocations(messages: AnthropicMessage[]): ImageLocation[] {
       if (block.type === 'tool_result' && Array.isArray(block.content)) {
         for (let ti = 0; ti < block.content.length; ti++) {
           const inner = block.content[ti]
-          if (inner.type === 'image' && (inner as AnthropicImageBlock).source?.type === 'base64') {
+          if (inner.type === 'image' && (stripImages || inner.source?.type === 'base64')) {
             locations.push({
               messageIndex: mi,
               contentIndex: ci,
               toolResultContentIndex: ti,
-              base64Length: (inner as AnthropicImageBlock).source.data.length
+              base64Length: inner.source?.type === 'base64' ? inner.source.data.length : 0
             })
           }
         }
@@ -120,61 +121,40 @@ function totalBase64Size(locations: ImageLocation[]): number {
 }
 
 /**
- * Deep-clone messages and replace specified image blocks with text placeholders.
- *
- * We clone to avoid mutating the original request data (which may be
- * referenced by conversation persistence).
+ * Replace collected locations, copying only affected paths to preserve history.
  */
 function evictImages(
   messages: AnthropicMessage[],
-  toEvict: ImageLocation[]
+  toEvict: ImageLocation[],
+  text = IMAGE_PLACEHOLDER
 ): AnthropicMessage[] {
   if (toEvict.length === 0) return messages
 
-  // Build a fast lookup set: "mi:ci" or "mi:ci:ti"
-  const evictSet = new Set<string>()
+  const replaced = messages.slice()
   for (const loc of toEvict) {
-    const key = loc.toolResultContentIndex !== undefined
-      ? `${loc.messageIndex}:${loc.contentIndex}:${loc.toolResultContentIndex}`
-      : `${loc.messageIndex}:${loc.contentIndex}`
-    evictSet.add(key)
+    const original = messages[loc.messageIndex]
+    let message = replaced[loc.messageIndex]
+    if (message === original) {
+      message = { ...original, content: (original.content as AnthropicContentBlock[]).slice() }
+      replaced[loc.messageIndex] = message
+    }
+    const content = message.content as AnthropicContentBlock[]
+    let target = content
+    let index = loc.contentIndex
+    if (loc.toolResultContentIndex !== undefined) {
+      const originalTool = (original.content as AnthropicContentBlock[])[loc.contentIndex] as AnthropicToolResultBlock
+      let tool = content[loc.contentIndex] as AnthropicToolResultBlock
+      if (tool === originalTool) {
+        tool = { ...originalTool, content: (originalTool.content as AnthropicContentBlock[]).slice() }
+        content[loc.contentIndex] = tool
+      }
+      target = tool.content as AnthropicContentBlock[]
+      index = loc.toolResultContentIndex
+    }
+    const image = target[index] as AnthropicImageBlock
+    target[index] = { type: 'text', text, ...(image.cache_control ? { cache_control: image.cache_control } : {}) }
   }
-
-  const placeholder: AnthropicContentBlock = { type: 'text', text: IMAGE_PLACEHOLDER }
-
-  return messages.map((msg, mi) => {
-    if (typeof msg.content === 'string') return msg
-
-    let contentModified = false
-    const newContent = msg.content.map((block, ci) => {
-      // Direct image block
-      if (evictSet.has(`${mi}:${ci}`)) {
-        contentModified = true
-        return placeholder
-      }
-
-      // Tool result with nested images
-      if (block.type === 'tool_result' && Array.isArray(block.content)) {
-        let trModified = false
-        const newTrContent = (block as AnthropicToolResultBlock).content as AnthropicContentBlock[]
-        const mapped = newTrContent.map((inner, ti) => {
-          if (evictSet.has(`${mi}:${ci}:${ti}`)) {
-            trModified = true
-            return placeholder
-          }
-          return inner
-        })
-        if (trModified) {
-          contentModified = true
-          return { ...block, content: mapped }
-        }
-      }
-
-      return block
-    })
-
-    return contentModified ? { ...msg, content: newContent } : msg
-  })
+  return replaced
 }
 
 // ============================================================================
@@ -183,12 +163,7 @@ function evictImages(
 
 /**
  * Image budget interceptor — evicts oldest images when total base64 payload
- * exceeds IMAGE_BUDGET_BASE64.
- *
- * Performance overhead on non-matching requests:
- *   - Messages with no images: ~0.05ms (single scan, no allocations)
- *   - Messages under budget: ~0.1ms (scan + sum)
- *   - Over budget: proportional to eviction count (deep clone of affected messages)
+ * exceeds IMAGE_BUDGET_BASE64, or removes unsupported images in the same scan.
  */
 export const imageBudgetInterceptor: RequestInterceptor = {
   name: 'image-budget',
@@ -210,11 +185,19 @@ export const imageBudgetInterceptor: RequestInterceptor = {
     })
   },
 
-  intercept(request: AnthropicRequest, _context: InterceptorContext): InterceptorResult {
-    const locations = collectImageLocations(request.messages)
+  intercept(request: AnthropicRequest, context: InterceptorContext): InterceptorResult {
+    const stripImages = context.stripImages === true
+    const locations = collectImageLocations(request.messages, stripImages)
 
     if (locations.length === 0) {
       return { handled: false }
+    }
+
+    if (stripImages) {
+      return {
+        handled: true,
+        modified: { ...request, messages: evictImages(request.messages, locations, UNSUPPORTED_IMAGE_PLACEHOLDER) }
+      }
     }
 
     const total = totalBase64Size(locations)

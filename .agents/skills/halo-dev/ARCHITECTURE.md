@@ -138,7 +138,7 @@ src/
 │   │                                  #   substrate log/, ctrl-feed, session-feed, authority/),
 │   │                                  #   runtime/im-channels (IM providers)
 │   ├── platform/                      # Platform Layer (store, scheduler, event, memory, background)
-│   ├── openai-compat-router/          # Anthropic <-> OpenAI bridge
+│   ├── openai-compat-router/          # Anthropic <-> OpenAI bridge; identity.ts is its pure Node identity surface
 │   └── services/                      # Domain services — grouped by role:
 │       ├── agent/                     # Agent engine — largest subsystem. See agent/DESIGN.md
 │       │   │                          #   One persistent consumer per session; per-surface
@@ -194,7 +194,9 @@ src/
 │                                      #   watcher-host
 │                                      #   (+ utilities: browser-login-pages, proxy-fetch,
 │                                      #    proxy-policy — the one place proxy and NO_PROXY
-│                                      #    decisions are made, for fetch, browser and child envs)
+│                                      #    decisions are made, for fetch, browser and child envs;
+│                                      #    child-env — edit a child env's PATH only through
+│                                      #    updateEnvPath: a Windows copy of process.env keeps `Path`)
 │
 ├── worker/                            # Utility processes (file-watcher)
 ├── shared/                            # Cross-process types, constants, protocols
@@ -224,7 +226,6 @@ src/
     │   ├── AppsPage.tsx              #   Digital humans management
     │   ├── StorePage.tsx              #   Marketplace browse/detail
     │   ├── TlonPage.tsx               #   Knowledge base management
-    │   ├── SplashPage.tsx             #   Startup splash screen
     │   ├── SetupPage.tsx              #   First-time login flow
     │   ├── GitBashSetupPage.tsx       #   Windows Git Bash installer
     │   ├── ServerConnectPage.tsx      #   Capacitor: add/connect to server
@@ -277,8 +278,9 @@ src/
     │                                  # useAutoResize, useDataContent, useLazyVisible,
     │                                  # useSearchShortcuts
     ├── types/index.ts                 # All shared renderer types
-    ├── lib/                           # utils (cn()), codemirror, highlight, perf
-    ├── i18n/                          # Internationalization
+    ├── lib/                           # utils (cn()), codemirror, highlight, perf, boot-splash
+    ├── boot/                          # Inline boot scripts (run before the app bundle; see §16)
+    ├── i18n/                          # Internationalization (locale.ts: language choice, i18next-free)
     └── assets/styles/                 # globals.css, syntax-theme.css, canvas-tabs.css, browser-task-card.css
 ```
 
@@ -322,8 +324,10 @@ Key types:
 
 **Managed OAuth accounts** are independent `AISource` records, not one record per
 provider. Login without a target adds an account (a verified stable account id may
-match an existing record); targeted reauthentication preserves the source id and
-rejects a known account mismatch. An optional provider `getAccountId` verifies a
+match an existing record, which is how Settings re-signs an account); targeted
+reauthentication — main process only, used by the store identity sign-in — preserves
+the source id and rejects a known account mismatch. Settings edits an OAuth account's
+name and `modelOverrides` only (`OAuthAccountEditor`). An optional provider `getAccountId` verifies a
 legacy identity from that source's credential before an id migration; labels never
 prove identity. ChatGPT separates user/workspace identity from the provider-owned
 `accountId` used by inference and catalog routing; workspace membership alone is
@@ -334,8 +338,10 @@ writes are single-flight per source and discard obsolete results. Model-bound
 credentials are prepared for the same captured effective model used to resolve the
 backend descriptor. Every engine receives the same captured account snapshot;
 alternate engines never re-read global selection during creation. Source changes
-rebuild only sessions using that source, at the existing safe boundaries; an unavailable explicit source must fail rather than
-silently use another account. CLI-delegated credentials remain a single external
+rebuild only sessions using that source, at the existing safe boundaries. A stored
+selection (a conversation's pin, a digital human's override) whose account was removed
+follows the global selection — the same as no selection; an account that still exists
+but cannot be used must fail rather than silently use another account. CLI-delegated credentials remain a single external
 slot. Generic client config snapshots preserve live managed source metadata,
 credentials and selection; account edits and lifecycle operations use targeted
 source APIs, so stale snapshots cannot delete/revive accounts or roll back edits. OAuth tokens are masked at IPC/HTTP
@@ -393,6 +399,16 @@ renderer: startup, window focus, wake from sleep and a model picker opening
 and `services/ai-sources/catalog-schedule.ts` decides which sources are due. A
 refresh that changed a stored list emits `ai-sources:catalog-changed` (IPC + WS)
 and every client re-reads its AI sources. Do not add renderer-driven refresh loops.
+
+A catalog entry may also carry the vendor's presentation (`ModelPresentation`
+in `shared/types/ai-sources.ts`: group, badge, current and usual credit
+multiplier). Providers report it per model (`_modelPresentation` at login,
+`modelPresentation` on refresh); `services/ai-sources/catalog-models.ts`
+validates it before the manager stores it. A catalog write that came from the
+vendor (never a fallback list) also records `withdrawnModels` and
+`modelReplacement` on the source; nothing else writes them, and setting the
+account's model clears the replacement. Every picker renders these through
+`renderer/components/ai-config/model-list-parts.tsx`.
 
 Two types:
 - **Request/Response** (renderer → main): registered via `ipcMain.handle()`
@@ -674,7 +690,11 @@ hsl(var(--primary)), hsl(var(--muted-foreground))
 ```
 
 Theme switch: `<html>` class toggle in `App.tsx`
-Anti-flash: `index.html` inline script reads `localStorage('halo-theme')`
+Anti-flash: `index.html` inline script reads the theme saved in config, which the
+desktop main process passes through the preload (`window.haloBootTheme`), else
+`localStorage('halo-theme')` (remote/mobile). Literal copies of the tokens used
+before globals.css loads (native window colors, anti-flash, boot splash fallbacks)
+are held to globals.css by `tests/unit/architecture/startup-colors.guard.test.ts`.
 
 ## 12) CSS Architecture: Tailwind First
 
@@ -841,28 +861,96 @@ Notes:
    - Failures are logged as warnings and never interrupt the queue or the process.
    - Implemented in `src/main/bootstrap/idle-queue.ts` (`registerIdleTask`, `startIdleDrain`).
 
-### The first-screen cue (do not gate deferred work on first paint alone)
+### The first-screen cue (do not gate deferred work on `ready-to-show` alone)
 
-`ready-to-show` fires on first paint, and the window is created hidden, so it
-doubles as "reveal the window" and "start the deferred tier". Both uses assume
-Windows will give the process a paint — which is false for a launch that has no
-foreground context: the installer's "run when finished" checkbox, or the
-updater relaunching after a swap. That process then runs with no window, no
-tray, no database and no automation while its processes sit in Task Manager,
-and the user's only recourse is launching it again, which merely reveals the
-window that was there all along.
+The window is maximized and shown immediately after creation, before loading
+the page. `ready-to-show` fires once the page has laid out content to show (see
+"The first frame" below); it starts the deferred tier, not window visibility.
+Showing the native window must never announce this cue: deferred services would
+compete with the renderer before its first frame.
 
-`createWindow` therefore drives a single `firstScreen` cue off three signals —
-first paint, page loaded (after a short grace period so a normal start is not
-revealed unpainted), and an absolute deadline — and `registerFirstScreenListener`
-is what the deferred tier subscribes to. Keep the two on the same cue: a launch
-that reaches one and not the other is worse than one that reaches neither.
+`createWindow` drives a single `firstScreen` cue off three signals — first
+paint, page loaded plus a 1.5 s grace period, and an 8 s deadline — and
+`registerFirstScreenListener` is what the deferred tier subscribes to. The
+fallbacks keep services reachable when a non-interactive Windows launch (the
+installer or updater) does not receive the normal paint signal. Startup logs
+record both window display and this cue with elapsed process time and cue reason.
+
+### Code loads with its tier
+
+Deferring when a service starts does not defer its code: everything statically
+imported from `src/main/index.ts` is loaded and run before the window is created.
+So the tiers are also split in the bundle:
+
+- `bootstrap/index.ts` reaches `extended.ts` only through a dynamic import, which
+  makes Extended and every module only it imports a chunk loaded after the first
+  screen. `cleanupExtendedServices()` loads it too, because it also cleans up
+  first-tier services.
+- A first-tier module (the essential IPC handlers, their controllers and services,
+  `index.ts`) never statically imports a Tier 2 module such as `apps/runtime` or
+  `http/routes`. One such import puts that module and all it imports back in front
+  of the window. Import it where it is used, as `ipc/agent.ts` (stop),
+  `controllers/space.controller.ts` and `http/server.ts` (routes) do. Still loaded
+  before the window, through `http/server.ts` and `http/websocket.ts`: `apps/team`
+  and `apps/federation`.
+- A package that only a rare path needs loads on first use
+  (`openai-compat-router/utils/token-counter.ts`, the Feishu provider's SDK).
+- The renderer loads one language at startup: `i18n/index.ts` bundles English (the
+  fallback) and loads each other language as its own chunk, and `main.tsx` renders
+  once `i18nReady` has resolved. That wait is bounded: when the chunk fails, or has
+  not arrived 3 s after the app's modules have run, the app starts in English and
+  switches over if the chunk still arrives, unless the user has picked a language
+  meanwhile. A language picked later that cannot be loaded leaves the language in
+  use and the saved choice as they were; `services/language-switch.ts` tells the
+  user. A language picker shows what `hooks/useLanguagePicker.ts` returns, never a
+  copy of its own, so it follows a switch the app makes by itself too.
+- Nothing calls `t()` while a module loads (a module-scope constant, a store
+  initializer): that runs before the language has loaded and stays English.
+  Translate where the text is used.
+- `tests/unit/architecture/startup-phases.guard.test.ts` and
+  `module-scope-translation.guard.test.ts` hold these rules.
+
+### The first frame (boot splash)
+
+The native window is visible before the page loads. Its first layout that counts
+as having content supplies the boot splash before the app bundle runs, so whatever
+the page draws then stays on screen until the bundle finishes. Three rules keep
+it a finished picture:
+
+- **The page draws the splash itself.** `index.html` holds the boot splash, a
+  centered logo, as plain markup and CSS; its only script is
+  `src/renderer/boot/splash.ts`, inlined at build time by `vite.boot-script.ts`
+  (desktop and mobile configs) with just the strings it passes to `t`, taken from
+  the locale files. React has no splash view: `App.tsx` renders nothing for
+  `'splash'` and takes the splash down once the first real page has rendered inside
+  its Suspense boundary; the root ErrorBoundary and the pre-React fatal handler take
+  it down too.
+- **The splash counts as content.** Electron's `ready-to-show` fires when Blink
+  first counts the page as visually non-empty: more than 200 characters of text
+  laid out, an image larger than 32×32, any laid-out `<canvas>`, or the document
+  fully parsed, which waits for the deferred app bundle to run. The image rule
+  holds only at layout zoom 1 (screen scale × display size): at any other zoom Blink
+  counts the image as 0×0 before it has loaded, and only once. So `#boot-splash`
+  ends with a 0×0 `<canvas>`, which counts at every zoom; under `display:none` it
+  is not laid out and does not count. `boot-splash-reveal.guard.test.ts` keeps it in
+  place. Without it the first-screen cue waits for the bundle at 125%, 150% or Retina.
+- **The first frame is drawn maximized.** The window is maximized and shown
+  immediately after creation, before loading the page. Its native background
+  matches the boot splash, so the page's first frame fills the window.
+  Electron retains the original 1200×800 bounds for native restore behavior;
+  `foundation/window-startup.ts` supplies only theme colors.
 
 ### Shutdown behavior
 
 - `before-quit` calls `cleanupExtendedServices()` via bootstrap shutdown flow.
 - `window-all-closed` keeps process alive when `background.shouldKeepAlive()` is true.
 - Cleanup order includes runtime/manager, platform modules, background, and cache cleanup.
+
+### SDK execution isolation
+
+Halo's SDK adapter uses the independent package's public Worker API. Host
+integration is defined in `src/main/services/agent/DESIGN.md`; execution internals
+and defaults are owned by the SDK.
 
 ## 17) Integration Surfaces
 
@@ -1050,6 +1138,7 @@ ImChannelProvider  — type-level driver (one per IM brand)
 
 ImChannelInstance  — running connection (N per provider type)
   ├── start() / stop() / reconnect() / isConnected()
+  ├── getConnectionState?() / getLinkStatus?()   # online / connecting / reconnecting / standby / offline + why
   ├── pushToChat(chatId, text, chatType)
   ├── onInbound(handler)
   └── fileCapability?                    # opt-in file send
@@ -1081,7 +1170,8 @@ InboundMessage / ReplyHandle  — normalized upward protocol
 4. If the brand has unique setup/auth flow (QR, OAuth, token refresh): add `ipc/<brand>.ts` + preload + renderer API + a setup UI component. Keep this file minimal — only brand-unique flows belong here.
 5. If the provider writes temp files: add a cleanup call in `cleanupImChannelTempFiles()`.
 6. If the platform caps one message: state the cap once in the provider and send text (replies, pushes, a stream's final answer) through `im-channels/message-parts.ts`. Callers hand over text of any length.
-7. Do NOT change `manager.ts`, `dispatch-inbound.ts`, or any other existing provider.
+7. If the brand holds a long-lived link (WebSocket, long-poll): keep it up with `im-channels/link-supervisor.ts` and dial through `im-channels/link-route.ts` — one fresh attempt per redial, never the SDK's own reconnect on a route resolved once. See `apps/runtime/DESIGN.md` §4.5.
+8. Do NOT change `manager.ts`, `dispatch-inbound.ts`, or any other existing provider.
 
 ### 22.5 Inter-Module Access
 

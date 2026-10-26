@@ -339,6 +339,7 @@ export class ImChannelManager {
       enabled: cfg.enabled,
       connected,
       state,
+      link: instance?.getLinkStatus?.(),
       appId: cfg.appId,
       appName,
       // Only meaningful while disconnected; a live instance has no failure.

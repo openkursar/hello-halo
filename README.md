@@ -2,162 +2,164 @@
 
 <img src="./resources/icon.png" alt="Halo Logo" width="120" height="120">
 
-# Halo
+# Halo AI Workstation
 
-### Your AI Workstation — For Teams and Individuals
-
-Deploy locally. Automate everything, around the clock. AI Digital Humans work while you make the calls.
+**Open-source desktop AI workstation · Digital Human teams · Hand off work from anywhere**
 
 [![GitHub Stars](https://img.shields.io/github/stars/openkursar/hello-halo?style=social)](https://github.com/openkursar/hello-halo/stargazers)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20Web-lightgrey.svg)](#installation)
 [![Downloads](https://img.shields.io/github/downloads/openkursar/hello-halo/total.svg)](https://github.com/openkursar/hello-halo/releases)
 
-[**Download**](#installation) · [**Documentation**](#documentation) · [**Contributing**](#contributing)
+[**Download**](#installation) · [**Website & Docs**](https://hello-halo.cc/) · [**Contributing**](#contributing)
 
 **[简体中文](./docs/README.zh-CN.md)** | **[繁體中文](./docs/README.zh-TW.md)** | **[Español](./docs/README.es.md)** | **[Deutsch](./docs/README.de.md)** | **[Français](./docs/README.fr.md)** | **[日本語](./docs/README.ja.md)**
 
 </div>
-<!-- TODO: Replace with a 30-second GIF showing: user types a sentence -> Agent automatically writes code -> files appear in Artifact Rail -> preview the result -->
-<div align="center">
-
-![AI Digital Human Store](./docs/assets/shop_dh.png)
-
-</div>
 
 ---
 
-## Why Halo?
+Halo is an open-source desktop AI workstation. Day to day it works like the desktop AI workbenches you already know: chat, write code, make documents, research. Beyond that, you get **Digital Humans** — AI members that stay on duty — and you can put them in teams that split the work. When you are away from your computer, hand off and follow up from your phone, Feishu, WeChat or WeCom.
 
-Halo is an AI workstation powered by frontier Agent with a pluggable engine architecture — supporting [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), and more. With a complete product layer totaling over 300,000 lines of code, validated by tens of thousands of users, and running stably in enterprise environments, Halo delivers:
+<p align="center">
+  <img src="./docs/assets/cards/team-poster.jpg" width="440" alt="Digital Human team: your Lead coordinates the team while colleagues' Digital Humans work on their own computers and exchange messages, tasks and results through the team">
+</p>
 
-| What Halo delivers |
-|:---:|
-| **Your Daily AI Partner** — coding, product design, operations, writing, research — your everyday work companion |
-| **100% Local, Zero Cloud Dependency** — data never leaves your machine, meets enterprise compliance requirements |
-| **AI Digital Humans** — AI workers running autonomously 7x24, handling monitoring, reports, and routine operations |
-| **AI Browser** — embedded browser directly controlled by AI, automate any web-based system |
-| **Knowledge Base** — drop in your files, AI references them automatically when answering or working |
-| **AI Terminal** — built-in terminal the AI can operate directly, SSH, bastion hosts, any CLI tool |
-| **AI Operates Halo Itself** — hundreds of features, driven by natural language, loaded on demand with zero idle context cost |
-| **WeCom / WeChat Native Control** — manage AI agents from enterprise IM, zero training cost |
-| **Remote Access** — control from phone / H5 / WeChat / Android, managers review progress on the go |
-| **Download and Go** — zero configuration, no backend required, IT deploys in minutes |
+## Why Halo
 
-> 100% compatible with Claude Code's Agent capabilities, MCP, and Skills.
+Everyone uses AI now, and each person's own output has gone up. But the hand-offs between pieces of work still run through people: copy one AI's conclusion into another AI, send the files and findings to a colleague, and the colleague explains it all again to their own AI. People have become the bottleneck — individuals got faster, but the team did not.
+
+Halo lets AIs divide the work, hand it over, build up memory and stay on duty by themselves; people set the direction and make the calls. Personal productivity adds up; collaboration multiplies.
+
+- **Who it's for**: heavy AI users, developers, researchers and operators, and small teams bringing AI into their daily workflow.
+- **Three things**: [Your everyday AI workbench](#1-your-everyday-ai-workbench) · [Digital Humans and Digital Human teams](#2-digital-humans-and-digital-human-teams) · [Hand off work from anywhere](#3-hand-off-work-from-anywhere)
+- **Written by Halo**: a large AI workstation that keeps improving itself with AI — over 500,000 lines of code, running stably in enterprise financial environments.
 
 ---
 
-## AI Digital Humans — Your Autonomous AI Workforce
+## 1. Your everyday AI workbench
 
-Give it a goal and a schedule, and an AI Digital Human runs like an employee — not a bot executing a fixed script, but a digital coworker with memory, judgment, and hands.
+- **Chat + canvas**: reports, code, web pages, terminals, Word / Excel / PDF open right beside the conversation; select a passage and add a note, and the AI knows exactly what you mean.
+- **Capabilities on demand**: the "+" in the input box turns on web control, team collaboration, the AI terminal, OCR and operating Halo; attach local files and folders directly, nothing is uploaded.
+- **Coding**: choose Claude Code, Codex, Halo SDK and other engines; see exactly what the AI changed in the changes view, then start a quick review or a multi-role team review with one click.
+- **AI browser and terminal**: the AI drives a real browser and terminal while you watch, and you can take over or stop it at any time.
+- **Office documents**: built-in document skills and runtime create and edit Word, Excel, PowerPoint and PDF files without installing a pile of dependencies first.
+- **Knowledge base and memory**: files, folders, PDFs and Office documents in a knowledge base are cited with sources while you chat; chats in the same space share memory, organized into current state, history and topics, so a new chat does not start from scratch.
+- **Connected conversations, AI that operates Halo**: open a new chat and ask "how are the other conversations going?" — it checks each one and sums them up; the AI can also manage spaces, Digital Humans and settings for you.
+- **Bring your tools**: connect MCP servers and Skills in one click, compatible with the Claude Code MCP and Skills ecosystem.
+- **Multiple models, multiple accounts**: any Anthropic / OpenAI-compatible API, or sign in to several ChatGPT, Claude and GitHub Copilot accounts at once; switch model and thinking effort per conversation.
 
-**Fully equipped:** Digital Humans share the exact same Agent capabilities as conversation mode — AI Browser for the web, AI Terminal for the OS and CLI tools, WeCom/WeChat for messaging, even operating Halo itself to change settings. Not a one-trick browser bot.
+<p align="center">
+  <img src="./docs/assets/composer-capabilities.png" alt="The + menu in a chat turns on web control, team collaboration, the AI terminal and more"><br>
+  <sub>Fig. 1　The "+" menu turns on web control, team collaboration, the AI terminal and more, only when needed</sub>
+</p>
 
-**Long-term memory:** Every run doesn't start from zero — a Digital Human remembers where it left off, what it's seen, what it concluded — compounding over time instead of repeating the same work.
+<p align="center">
+  <img src="./docs/assets/task-plan.png" alt="The AI breaks a task into a plan, searches the web and works through it step by step"><br>
+  <sub>Fig. 2　The AI breaks a task into a plan, searches the web and works through it step by step</sub>
+</p>
 
-### Autonomous Agents Running 7x24
-
-Create an AI Digital Human, give it a task and an execution frequency, and it runs autonomously on schedule. No screen to watch, no scripts to babysit.
-
-**Social & Content Platform Automation:**
-
-- Auto-reply to comments and DMs on Xiaohongshu, Bilibili, Zhihu
-- Publish scheduled content across Twitter / X, WeChat Official Accounts
-- Monitor brand mentions and competitor activity, generate daily digests
-- Track trending topics and automatically draft content suggestions
-
-**Enterprise Internal Automation:**
-
-- Patrol internal OA / CRM / ERP systems, flag overdue tickets and anomalies
-- Generate daily standup reports from Jira / GitLab / GitHub activity
-- Monitor CI/CD pipelines, notify on build failures, auto-create incident tickets
-- Run scheduled compliance checks on internal dashboards
-- Collect cross-department data and assemble weekly executive summaries
-
-Install with one click from the **AI Digital Human Store**, deploy a **private store** for your organization, or create your own using natural language.
-
-> Think of it as cron + RPA + AI Agent in one — except you just describe what you want in plain language.
-
-**WeChat / WeCom is your control panel.** AI Digital Humans support two-way conversational control via personal WeChat / WeCom (Enterprise WeChat) — not just receiving notifications, you can give instructions, check progress, and request reports directly in your enterprise IM.
-
-![AI Digital Human](./docs/assets/ai-digital-human.png)
-
-*See it in action — Digital Humans operating Zhihu, Bilibili, Xiaohongshu & X 7x24 (ready-made Browser Actions available in the store):*
-
-[![中文 点击播放](https://img.shields.io/badge/▶_点击播放-FB7299?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1yfNuzaEtv/) &nbsp; [![Watch the Video](https://img.shields.io/badge/▶_Watch_the_Video-FB7299?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1yfNuzaEtv/)
-
-### Halo Browser Action — AI Decides, Scripts Execute
-
-Traditional RPA follows a fixed script and breaks the moment something changes; Halo flips that: **AI makes the decision, Browser Action executes it precisely.**
-
-A Browser Action is a special kind of Skill: a reusable `.js` script for one concrete operation on one platform. The AI only decides *what* to do and *when* — the script already knows *how*. This is what separates Halo from "AI browser agents" that fumble around clicking randomly.
-
-Scripts run directly in a real browser, with full access to the page DOM, cookies, and internal APIs. Works for public platforms and private enterprise systems alike.
-
-Ready-made Browser Actions are available for Xiaohongshu, Bilibili, Zhihu, Twitter / X, WeChat, and more. Enterprise teams can write private Actions for internal systems, and the community can contribute and share their own. **AI decides. Actions execute. Stable, repeatable, auditable.**
-
-Want to build one yourself? A full walkthrough — building an **OA Approval Assistant** that patrols a login-required internal system on a schedule — is in the docs: [**Build a Browser Action Digital Human →**](https://hello-halo.cc/docs/digital-humans/guide-02-build.html)
-
-### Remote Access — Manage Your AI Fleet From Anywhere
-
-Once Remote Access is enabled, your phone / H5 / WeChat / Android client can control Halo on your desktop. During meetings, commuting, or on the road — check Digital Human outputs, approve decisions, and issue new instructions without being at your desk.
+<p align="center">
+  <img src="./docs/assets/mcp-connections.png" alt="Connect MCP services such as WeCom to-dos and docs in one click"><br>
+  <sub>Fig. 3　Connect the tools you use: WeCom to-dos, documents and other MCP services in one click</sub>
+</p>
 
 ---
 
-## Knowledge Base
+## 2. Digital Humans and Digital Human teams
 
-Drop in your everyday files, and AI references them automatically when answering questions or getting work done.
+One AI doing everything has limited attention; an AI that only knows you cannot help the whole team. Division of labor works for AI too.
 
-Supports PDF, PPT, Markdown and other common office files, plus image OCR. Create a knowledge base, bind it to a space, then just ask AI "what's in my knowledge base" to use it.
+| | One AI does it all | A Digital Human team |
+|---|---|---|
+| Division of work | Instructions and tools crammed together | Each Digital Human owns one step |
+| When something fails | Hard to tell which step went wrong | The failing step is obvious |
+| Hand-offs | People forward things and re-explain the background | Digital Humans ask and deliver to each other directly |
+| Who it can reach | Only you | Your colleagues' Digital Humans too |
+
+- **Digital Humans**: AI members that stay on duty. They run on a schedule or on events (optionally on mainland China working days only, holidays and make-up workdays included), take a reminder you mention in chat, install from the store in one click, or are created from one sentence.
+- **Build a team in one sentence**: in any space, tell the AI "put together a team to research these three products", and research, fact-checking and writing are split up; to keep using it, say "keep this team", and you can even give the whole team a schedule.
+- **Teams across computers**: colleagues join your team with their own Digital Humans, each running on its owner's computer. Data stays on each computer; only the results published to the team move through it, and each Digital Human's permissions are set by its owner. On the same LAN, turn on Remote Access to invite; across networks, configure a relay gateway in Settings.
+- **See the work happen**: the team workspace shows tasks, progress, hand-offs between teammates and results. Digital Humans sort things out among themselves and only bring you what the team cannot decide.
+
+> Try saying: "Research these products — gather sources separately, cross-check the conclusions, and put it all into one report."
+
+<p align="center">
+  <img src="./docs/assets/team-workspace.png" alt="Digital Human team: the lead assigns tasks, members deliver results and review each other"><br>
+  <sub>Fig. 4　A Digital Human team: the lead assigns tasks, members deliver results and review each other</sub>
+</p>
+
+<p align="center">
+  <img src="./docs/assets/daily-digest.png" alt="A daily news digest Digital Human runs at 08:00 every day and pushes results to WeCom"><br>
+  <sub>Fig. 5　A daily news digest Digital Human: runs at 08:00 every day and pushes the result to WeCom</sub>
+</p>
+
+### Store, Browser Actions and ecosystem
+
+- **Digital Human Store**: pick one, fill in a few settings, and it starts running — no prompts to write. Organizations can host a private store and add it in Settings.
+- **Browser Action — AI decides, scripts execute**: write one concrete operation on one platform as a reusable `.js` script; the AI only decides what to do and when, and the script carries it out precisely. Ready-made Actions exist for Xiaohongshu, Bilibili, Zhihu, X and more, and you can write private Actions for internal systems. [Build one →](https://hello-halo.cc/docs/en/developers/digital-humans/build.html)
+- **Publish your Digital Human**: write a `spec.yaml` and open a PR against the [Digital Human Protocol (DHP)](https://github.com/openkursar/digital-human-protocol); once merged, every Halo user can install it.
+
+<p align="center">
+  <img src="./docs/assets/shop_dh.png" alt="Digital Human Store: ready-made Digital Humans for social media, news digests, monitoring and more"><br>
+  <sub>Fig. 6　Digital Human Store: social media, news digests, monitoring and more — install and go</sub>
+</p>
 
 ---
 
-## AI Terminal
+## 3. Hand off work from anywhere
 
-Halo has a built-in terminal the AI can operate directly — SSH, bastion hosts, ping+token logins, or driving native CLI tools like Claude Code / Codex.
+Work keeps moving when you are away from your computer.
 
-The terminal is persistent and visible: close it yourself when done, or open it anytime to take over manually — human and AI can hand off control without conflict.
+- **Phone and remote web**: reach the Halo running on your home or office computer remotely — hand off tasks, upload material, download results.
+- **IM**: Feishu, WeChat and WeCom. Hand work to a Digital Human from the chat window you already use; behind it can be a whole team.
+- **Decide in IM**: results arrive in the chat; when something needs your call, reply once and the work moves on.
+
+<p align="center">
+  <img src="./docs/assets/mobile-remote.png" width="640" alt="Halo on a phone: left, the home screen; right, a result the computer finished"><br>
+  <sub>Fig. 7　Halo on your phone: the full feature set in your pocket, one sentence to get your computer working</sub>
+</p>
+
+---
+
+## Use cases
+
+| Scenario | What you do | What you get |
+|---|---|---|
+| Competitor / market research | Build a team in one sentence: research, fact-check, write | Follow progress in the team workspace, receive a finished report |
+| Daily briefing | A Digital Human compiles industry or engineering news on working days | Pushed to Feishu / WeCom before you start work |
+| On the road | Say "revise this proposal" in WeChat on your phone | Open the result back at your computer, or download it on your phone |
+| Coding | Review the AI's edits in the changes view, then start a team review | Know exactly what changed, commit with confidence |
+| Office documents | Ask for a weekly report, a spreadsheet, a deck | Get real Word / Excel / PowerPoint files |
+| Internal system patrol | A Digital Human logs in to OA, approval and ticket systems on a schedule | Overdue items and anomalies pushed to IM for you to handle |
+| Social media operations | Install a ready-made Browser Action Digital Human from the store | Scheduled comment replies, posts and mention tracking |
+
+**Watch**: [Product demo](https://www.bilibili.com/video/BV1jEZYBaEcy/) · [Digital Humans running 7x24](https://www.bilibili.com/video/BV1yfNuzaEtv/) · [AI browser](https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003)
 
 ---
 
-## AI Operates Halo Itself
+## Quick start
 
-Hundreds of operations — settings, session management, WeCom bot configuration — done directly through natural language, no digging through menus.
-
-These operations cost zero context by default: only the one you ask about gets loaded on demand, so hundreds of capabilities never slow down the conversation.
-
----
-
-## Quick Start
-
-**Get started in 30 seconds:**
-
-1. [Download and install](#installation), launch Halo
-2. Enter your API Key (Anthropic recommended)
-3. Start chatting — try `Build a todo app with React` or `Help me analyze the code structure of this project`
-4. Watch files appear in the Artifact Rail, click to preview, request changes
-
-> Recommended models: Claude Sonnet / Opus series
-
----
+1. [Download and install](#installation), then open Halo.
+2. Sign in with a Claude or ChatGPT account, or enter an API key from any Anthropic / OpenAI-compatible provider.
+3. Create a space: one project per space, so files and memory stay separate.
+4. Hand off work in chat, or install Digital Humans from the store and build a team in one sentence.
+5. When you need it, turn on Remote Access or connect Feishu / WeChat / WeCom and carry on from anywhere.
 
 ## Installation
 
-### Download (Recommended)
-
 | Platform | Download | Requirements |
-|----------|----------|--------------|
-| **macOS** (Apple Silicon) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
-| **macOS** (Intel) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
-| **Windows** | [.exe](https://github.com/openkursar/hello-halo/releases/latest) | Windows 10+ |
-| **Linux** | [.AppImage](https://github.com/openkursar/hello-halo/releases/latest) | Ubuntu 22.04+ |
-| **Android** | [.apk](https://github.com/openkursar/hello-halo/releases/latest) | Android 8+ |
-| **iOS** | Build from source | iOS 15+ |
+|---|---|---|
+| macOS (Apple silicon) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
+| macOS (Intel) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
+| Windows | [.exe](https://github.com/openkursar/hello-halo/releases/latest) | Windows 10+ (x64) |
+| Linux | [.AppImage](https://github.com/openkursar/hello-halo/releases/latest) | glibc 2.34+ (Ubuntu 22.04+, Debian 12+) |
+| Android (remote client) | [.apk](https://github.com/openkursar/hello-halo/releases/latest) | Android 7.0+ |
+| iOS (remote client) | Build from source | iOS 15+ |
 
-**Download, install, run.** No Node.js, no npm, no terminal needed. IT can distribute across the organization with zero server-side dependencies.
+Download, install, run — no Node.js, npm or command line, and no server to deploy, so IT can hand it straight out. Updates install themselves: on Windows, from 3.0 on, a new version is prepared in the background and a restart finishes it. The Linux build does not include the AI terminal yet.
 
-### Build from Source
+### Build from source
 
 ```bash
 git clone https://github.com/openkursar/hello-halo.git
@@ -169,123 +171,23 @@ npm run dev
 
 ---
 
-## AI Digital Human Store
+## Under the hood
 
-<table>
-<tr>
-<td width="50%" valign="top">
-
-### For Users — Install and Use Instantly
-
-Open the AI Digital Human Store, pick one, fill in a few configuration fields, and it starts running automatically. No coding required, no prompts to write.
-
-![Digital Human Install](./docs/assets/app_detail_install.png)
-
-</td>
-<td width="50%" valign="top">
-
-### For Developers — Build and Publish
-
-Write a `spec.yaml` and submit a PR to the [AI Digital Human Protocol (DHP)](https://github.com/openkursar/digital-human-protocol). Once merged, it becomes immediately available to all Halo users.
-
-You can also write Halo Browser Actions (`.js` scripts) for AI Digital Humans to precisely execute operations on specific platforms.
-
-</td>
-</tr>
-</table>
-
----
-
-## Screenshots
-
-![Chat Intro](./docs/assets/chat_intro.jpg)
-
-![Chat Todo](./docs/assets/chat_todo.jpg)
-
-*Skill Store: one-click install for content generation, dev tools, data analysis, and more*
-
-![Skill Store](./docs/assets/shop_skill.png)
-
-*Remote Access: Control Halo from anywhere*
-
-![Remote Settings](./docs/assets/remote_setting.jpg)
-
-<p align="center">
-  <img src="./docs/assets/mobile_remote_access.jpg" width="45%" alt="Mobile Remote Access">
-  &nbsp;&nbsp;
-  <img src="./docs/assets/mobile_chat.jpg" width="45%" alt="Mobile Chat">
-</p>
-
-*AI Browser*
-
-https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
-
-*Product Walkthrough*
-
-[![中文 点击播放](https://img.shields.io/badge/▶_点击播放-FB7299?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1jEZYBaEcy/) &nbsp; [![Watch the Demo](https://img.shields.io/badge/▶_Watch_the_Demo-FB7299?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1jEZYBaEcy/)
-
----
-
-## Architecture
-
-Pluggable engine: the same product experience, with Claude Code, Codex, and other Agent engines swappable underneath.
-
----
-
-## More Features
-
-- **100% Local** — Your data never leaves your machine, meets enterprise compliance requirements
-- **No Backend Required** — Pure desktop client, deploy to every workstation with zero server infrastructure
-- **Agent Loop** — Not just generating text, AI actually executes tools to get things done
-- **Space System** — Isolated workspaces, projects don't interfere with each other
-- **Skills** — Install skill packs to extend Agent capabilities
-- **AI Browser** — Embedded CDP browser, AI directly controls web pages
-- **Digital Human Capability Management** — Visually manage each Digital Human's MCP and Skill permissions
-- **Window Zoom** — 50%-150% freely, adapts to any screen or presentation
-- **Multi-Model Support** — Anthropic, OpenAI, DeepSeek, and any OpenAI-compatible API (connect to your enterprise LLM gateway)
-- **Dark/Light Themes** — Follows system preference
-- **Multi-Language** — Chinese, English, Spanish, and more
-
-[**Explore all features →**](https://hello-halo.cc/docs/features/spaces.html)
-
----
-
-## Roadmap
-
-- [x] Agent Loop — tool execution, not just text generation
-- [x] Space and Conversation Management
-- [x] Artifact Preview (Code, HTML, Images, Markdown)
-- [x] Remote Access
-- [x] AI Browser (CDP)
-- [x] MCP Server Support
-- [x] Skills System
-- [x] AI Digital Humans and AI Digital Human Store
-- [ ] Third-party Ecosystem Plugin Compatibility
-- [ ] Enhanced Code Editing Experience
-- [ ] Visual Git + AI-Assisted Code Review
-- [ ] AI-Powered File Search
-- [ ] Low-Cost Digital Human Recording — auto-record and replay AI workflows as reusable Digital Humans
+- **Open source, runs on your own computer**: you control your files and working environment; Halo has no backend service of its own.
+- **Pluggable agent engines**: Claude Code, Codex, our own Halo SDK (lighter, faster to start, tuned for open-weight models) and DeepSeek dsh — pick what fits.
+- **Decentralized, distributed Digital Human teams**: members collaborate from different computers with no central server. Team state follows the Raft consensus approach — a majority elects the leading node, the log is replicated by term, and when the leader's computer goes offline a new one is elected automatically, never two at once, so the team keeps running. [How it works](https://hello-halo.cc/docs/en/advanced/team-consensus.html)
+- **Details**: isolated spaces, light and dark themes, 50%–150% interface zoom, and an interface in 7 languages.
 
 ---
 
 ## Contributing
 
-```bash
-git clone https://github.com/openkursar/hello-halo.git
-cd hello-halo
-npm install
-npm run prepare
-npm run dev
-```
-
-- **Translations** — `src/renderer/i18n/`
-- **Bug Reports** — [Issues](https://github.com/openkursar/hello-halo/issues)
-- **Feature Suggestions** — [Discussions](https://github.com/openkursar/hello-halo/discussions)
-- **Code Contributions** — PRs welcome
+- **Translations**: `src/renderer/i18n/`
+- **Bug reports**: [Issues](https://github.com/openkursar/hello-halo/issues)
+- **Feature ideas**: [Discussions](https://github.com/openkursar/hello-halo/discussions)
+- **Code**: PRs welcome — see [Build from source](#build-from-source)
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
----
 
 ## Community
 
@@ -301,19 +203,19 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ---
 
-## The Story of Halo
+## The story of Halo
 
-In October 2025, a simple frustration: **I wanted to use Claude Code, but I was stuck in meetings all day.**
+October 2025, a simple frustration: **I wanted to use Claude Code, but I was stuck in meetings all day.**
 
-During a boring meeting, I thought: *What if I could control Claude Code on my home computer from my phone?*
+During a boring meeting, I thought: *what if I could control Claude Code on my home computer from my phone?*
 
 Then came the second problem — non-technical colleagues wanted to use it too, but got stuck at installation. *"What's npm?"*
 
-So I built Halo: a visual interface, one-click install, remote access. The first version took a few hours. Everything after that? **100% built by Halo itself.**
+So I built Halo: a visual interface, one-click install, remote access. The first version took a few hours. Everything after that? **Almost all of it built by Halo itself.** In early 2026, Halo went open source.
 
-Now, we believe the next step is the **AI Workstation**: AI no longer needs someone watching to get work done. You set the goals, AI Digital Humans push forward autonomously 7x24. Writing code, running tests, monitoring deployments, generating reports — running continuously, with you only making decisions at key checkpoints.
+We believe the next step is the **AI workstation**: AI that no longer needs someone watching to get work done. You set the goals, Digital Humans push forward 7x24, and you only make the calls at key checkpoints. 3.0 puts Digital Humans into teams that work across computers — one step closer.
 
-That's what Halo is building.
+— [@openkursar-flynn](https://github.com/openkursar-flynn), creator of Halo
 
 ---
 
@@ -343,8 +245,6 @@ If Halo inspired your project or you built something on top of it, a mention wou
 
 ### Enterprise Partners
 
-<!-- Add your company logo here — submit a PR or contact us at the link below -->
-
 | Your company uses Halo? | [Let us know](https://github.com/openkursar/hello-halo/issues/new?title=Add+our+company+as+partner) — we'd love to feature you here. |
 |:---:|:---:|
 
@@ -362,6 +262,6 @@ If Halo inspired your project or you built something on top of it, a mention wou
 
 <div align="center">
 
-[Back to Top](#halo)
+[Back to Top](#halo-ai-workstation)
 
 </div>

@@ -10,6 +10,7 @@
 
 import { Component, ReactNode } from 'react'
 import { HaloLogo } from './brand/HaloLogo'
+import { dismissBootSplash } from '../lib/boot-splash'
 
 interface Props {
   children: ReactNode
@@ -45,6 +46,9 @@ export class ErrorBoundary extends Component<Props, State> {
     this.setState({
       errorInfo: info.componentStack || null
     })
+
+    // The full-window error screen must not sit behind the boot splash.
+    if (!this.props.fallback) dismissBootSplash()
   }
 
   private handleReload = () => {

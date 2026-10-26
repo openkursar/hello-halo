@@ -86,10 +86,10 @@ describe('auth IPC', () => {
     expect([...env.handlers.keys()].sort()).toEqual(Object.values(authRpc).map(method => method.channel).sort())
   })
 
-  it('forwards the target source and login ownership without broadcasting progress', async () => {
+  it('forwards login ownership without broadcasting progress', async () => {
     env.manager.startOAuthLogin.mockResolvedValue({ success: true, data: { ...context, accessToken: 'never-return' } })
-    const start = await invoke('auth:start-login', 'external-pkce', 'account-2')
-    expect(env.manager.startOAuthLogin).toHaveBeenCalledWith('external-pkce', 'account-2')
+    const start = await invoke('auth:start-login', 'external-pkce')
+    expect(env.manager.startOAuthLogin).toHaveBeenCalledWith('external-pkce')
     expect(start.data.loginId).toBe('owned-login')
     expect(start.data).not.toHaveProperty('accessToken')
     expect(await invoke('auth:complete-login', 'external-pkce', 'code#csrf', 'owned-login')).toMatchObject({ data: { sourceId: 'account-2' } })

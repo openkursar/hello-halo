@@ -7,12 +7,14 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, memo } from 'react'
 import { createPortal } from 'react-dom'
 import { Virtuoso, type Components } from 'react-virtuoso'
+import { useShallow } from 'zustand/react/shallow'
 import { Plus } from '../icons/ToolIcons'
 import { EllipsisVertical, Pin, Pencil, Trash2, ChevronRight } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useChatStore, useAllConversationStatuses } from '../../stores/chat.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useAppStore } from '../../stores/app.store'
+import { useAppsStore } from '../../stores/apps.store'
 import { useAppChatPinsStore } from '../../stores/app-chat-pins.store'
 import {
   useConversationListPrefs, isSectionOpen, type ConversationSection,
@@ -25,7 +27,7 @@ import { EngineBadge } from './EngineBadge'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { useAppChatConversationRows, type AppChatConversationRow } from '../../hooks/useAppChatConversationRows'
 import { appChatSessionLabel, formatRowTime } from './conversation-row-format'
-import { parseAppChatKey } from '../../../shared/apps/im-keys'
+import { appChatAppId, parseAppChatKey } from '../../../shared/apps/im-keys'
 import { NATIVE_SESSION_CHANNEL, NATIVE_DEFAULT_CHAT_ID } from '../../../shared/types/im-channel'
 import type { ConversationMeta, TaskStatus } from '../../types'
 import { markEntry, trackHome, trackNavigate } from '../../services/home-telemetry'
@@ -252,6 +254,23 @@ function buildDigitalHumanRows(
   return out
 }
 
+/**
+ * Digital humans with work in flight: a running task, or a turn in any of their
+ * conversations, including the IM and team chats this list never shows.
+ */
+function digitalHumansAtWork(
+  conversationStatuses: ReadonlyMap<string, TaskStatus>,
+  appsRunningTasks: readonly string[],
+): ReadonlySet<string> {
+  const working = new Set(appsRunningTasks)
+  for (const [conversationId, status] of conversationStatuses) {
+    if (status !== 'generating' && status !== 'waiting') continue
+    const appId = appChatAppId(conversationId)
+    if (appId) working.add(appId)
+  }
+  return working
+}
+
 export const ConversationList = memo(function ConversationList({
   collapsed = false,
 }: ConversationListProps) {
@@ -283,6 +302,8 @@ export const ConversationList = memo(function ConversationList({
   const setSectionOpen = useConversationListPrefs(s => s.setSectionOpen)
   // Single batch subscription for all conversation statuses (replaces N individual hooks)
   const conversationStatuses = useAllConversationStatuses()
+  const appsRunningTasks = useAppsStore(useShallow(s => Object.keys(s.appStates).filter(appId => s.appStates[appId].status === 'running')))
+  const workingApps = useMemo(() => digitalHumansAtWork(conversationStatuses, appsRunningTasks), [conversationStatuses, appsRunningTasks])
 
   // What the list opens on its own, kept in memory only: the stored prefs hold
   // nothing but the user's own clicks. `section` and `apps` override a stored
@@ -423,11 +444,14 @@ export const ConversationList = memo(function ConversationList({
     return buildDigitalHumanRows(allAppChatRows, () => true)
       .filter(row => row.type === 'dh-item' && (listed.has(row.key) || conversationStatuses.has(row.key)))
   }, [allAppChatRows, digitalHumanRows, digitalHumansOpen, conversationStatuses])
-  // Its most urgent session status, for the folded digital-humans header.
+  // Its most urgent session status, for the folded digital-humans header; one of
+  // its digital humans working anywhere counts as generating.
   const digitalHumanAttention = useMemo(() => {
-    const statuses = new Set(allAppChatRows.filter(row => !row.starred).map(row => conversationStatuses.get(row.id)))
+    const sectionRows = allAppChatRows.filter(row => !row.starred)
+    const statuses = new Set(sectionRows.map(row => conversationStatuses.get(row.id)))
+    if (sectionRows.some(row => workingApps.has(row.appId))) statuses.add('generating')
     return ATTENTION_ORDER.find(status => statuses.has(status))
-  }, [allAppChatRows, conversationStatuses])
+  }, [allAppChatRows, conversationStatuses, workingApps])
 
   // ── Panes: pinned and digital humans have their own height; conversations take the rest ──
   const listColumnRef = useRef<HTMLDivElement>(null)
@@ -907,7 +931,8 @@ export const ConversationList = memo(function ConversationList({
             row.uninstalled ? 'cursor-not-allowed' : 'text-foreground theme-dark:text-muted-foreground'
           )}
         >
-          <span className="flex-1 min-w-0 truncate text-left">{row.name}</span>
+          <span className="min-w-0 truncate">{row.name}</span>
+          {workingApps.has(row.appId) && <TaskStatusDot status="generating" size="sm" className="ml-1.5" />}
         </button>
         {!row.uninstalled && (
           <button

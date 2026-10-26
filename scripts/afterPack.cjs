@@ -849,6 +849,8 @@ function validateEngineRuntimes(pkg) {
       const entry = candidates.find(candidate => pkg.exists(candidate));
       if (!entry) {
         reason = 'present but its entry file was excluded';
+      } else if ((engine.requiredFiles ?? []).some(file => !pkg.exists(path.join(pkgDir, file)))) {
+        reason = 'present but execution runtime files were excluded';
       } else {
         console.log(`[afterPack] Engine bundled: ${name} v${manifest.version ?? 'unknown'}`);
       }

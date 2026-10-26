@@ -41,6 +41,11 @@ export type {
   ProviderId,
   BuiltinProviderId,
   ModelOption,
+  ModelGroup,
+  ModelBadge,
+  ModelPresentation,
+  WithdrawnModel,
+  ModelReplacement,
   ApiProvider,
   BackendRequestConfig,
   LoginStatus,
@@ -49,6 +54,8 @@ export type {
   OAuthCompleteResult,
   PresetApiConfig,
   AuthProviderConfig,
+  StoredModelSelection,
+  ResolvedModelSelection,
   // Legacy types for backward compatibility
   LegacyAISourcesConfig,
   OAuthSourceConfig,
@@ -61,6 +68,9 @@ export {
   createEmptyAISourcesConfig,
   getCurrentSource,
   getModelDisplayName,
+  resolveModelSelection,
+  findWithdrawnModel,
+  activeModelReplacement,
   getSourceById,
   getSourceAccountName,
   isSourceConfigured,
@@ -295,6 +305,7 @@ export interface LayoutConfig {
 export interface NetworkConfig {
   proxy?: string;  // Manual proxy URL (e.g. http://host:port, socks5://host:port). Empty = use system proxy.
   browserUseProxy?: boolean;  // When true, AI Browser also uses the Settings proxy. Default false = system proxy.
+  imUseProxy?: boolean;  // When false, IM channels (WeCom, Feishu, WeChat) connect directly. Default true.
   noProxy?: string;  // Hosts reached directly, NO_PROXY style ("a.com, .b.com"); local addresses always are.
 }
 

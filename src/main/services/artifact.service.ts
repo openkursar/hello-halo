@@ -280,7 +280,9 @@ export async function loadTreeChildren(
     return result
   } catch (error) {
     console.error(`[Artifact] loadTreeChildren error:`, error)
-    return []
+    // A folder that cannot be read is not an empty one: the tree would replace
+    // what it shows with no children.
+    throw error
   }
 }
 

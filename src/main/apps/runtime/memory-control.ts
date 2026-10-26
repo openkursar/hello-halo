@@ -5,7 +5,7 @@
  */
 
 import { getAppManager, type InstalledApp } from '../manager'
-import { getApiCredentials, getApiCredentialsForSource } from '../../services/agent/helpers'
+import { getApiCredentialsForSelection } from '../../services/agent/helpers'
 import { resolveCredentialsForSdk } from '../../services/agent/sdk-config'
 import { getSpace } from '../../services/space.service'
 import { resolveMemoryLayout, type MemoryCallerScope } from '../../platform/memory'
@@ -26,12 +26,7 @@ export function appConsolidationInputs(app: InstalledApp, selfId?: string): AppC
   return {
     appName: app.spec.name,
     settings: appMemorySettings(app),
-    resolveCredentials: async () => {
-      const credentials = app.userOverrides?.modelSourceId
-        ? await getApiCredentialsForSource(app.userOverrides.modelSourceId, app.userOverrides.modelId)
-        : await getApiCredentials()
-      return resolveCredentialsForSdk(credentials)
-    },
+    resolveCredentials: async () => resolveCredentialsForSdk(await getApiCredentialsForSelection(app.userOverrides)),
     isBusy: () => hasOtherAppExecution(app.id, selfId),
   }
 }

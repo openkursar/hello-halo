@@ -28,12 +28,14 @@ import { TeamStore } from '../../../../../src/main/apps/team/store'
 import { MIGRATION_NAMESPACE, migrations } from '../../../../../src/main/apps/team/migrations'
 import {
   createLocalArtifactPathResolver,
+  createMemberWorkDirResolver,
   createTeamArtifactOpener,
   pruneSharedFileCopies,
   MAX_OPEN_COPY_BYTES,
   RemoteArtifactError,
 } from '../../../../../src/main/apps/runtime/team/artifact-read'
 import { teamFolderDir } from '../../../../../src/main/apps/runtime/team/team-folder'
+import { spaceCoordinatorAppId } from '../../../../../src/shared/apps/team-types'
 
 const TEAM_ID = 'team-1'
 const EPOCH_A = 'epoch-a'
@@ -120,6 +122,47 @@ describe('team artifact opener', () => {
     const res = await makeOpener()({ teamId: TEAM_ID, epochId: EPOCH_A, ref: 'team:local/review.md' })
     expect(res).toMatchObject({ ok: true, copied: false, owner: null })
     expect(res.path).toBe(realpathSync(join(dir, 'review.md')))
+  })
+
+  it('keeps a former local member’s published team file openable', async () => {
+    const dir = join(teamFolderDir(folderRoot, TEAM_ID, EPOCH_A), 'local')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'review.md'), 'review')
+    publish('team:local/review.md', LOCAL_APP)
+    store.removeMember(TEAM_ID, LOCAL_APP)
+    expect(await makeOpener()({ teamId: TEAM_ID, epochId: EPOCH_A, ref: 'team:local/review.md' }))
+      .toMatchObject({ ok: true, path: realpathSync(join(dir, 'review.md')), copied: false })
+  })
+
+  it('keeps original-conversation publications openable after its roster identity is removed', async () => {
+    const coordinator = spaceCoordinatorAppId('source-chat')
+    store.addMember({ teamId: TEAM_ID, appId: coordinator, memberName: 'coordinator', role: 'Coordinator',
+      isLead: false, aiProvisioned: false, addedAt: Date.now() })
+    const dir = join(teamFolderDir(folderRoot, TEAM_ID, EPOCH_A), 'coordinator')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'brief.md'), 'brief')
+    writeFileSync(join(workDir, 'plan.md'), 'plan')
+    publish('team:coordinator/brief.md', coordinator)
+    publish('plan.md', coordinator)
+    store.removeMember(TEAM_ID, coordinator)
+    const opener = createTeamArtifactOpener({ store, resolveLocalPath: createLocalArtifactPathResolver({
+      store,
+      getWorkDirForApp: createMemberWorkDirResolver({ store, getAppSpaceId: () => null, getSpaceWorkDir: id => id === 'space-a' ? workDir : null }),
+      getTeamFolderDir: (teamId, epochId) => teamFolderDir(folderRoot, teamId, epochId),
+    }) })
+    for (const [ref, path] of [['team:coordinator/brief.md', join(dir, 'brief.md')], ['plan.md', join(workDir, 'plan.md')]]) {
+      expect(await opener({ teamId: TEAM_ID, epochId: EPOCH_A, ref })).toMatchObject({ ok: true, path: realpathSync(path) })
+    }
+  })
+
+  it('does not serve a former remote producer’s file from a coincidentally matching local folder', async () => {
+    const dir = join(teamFolderDir(folderRoot, TEAM_ID, EPOCH_A), 'remote')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'review.md'), 'unrelated local content')
+    publish('team:remote/review.md', REMOTE_APP)
+    store.removeMember(TEAM_ID, REMOTE_APP)
+    expect(await makeOpener()({ teamId: TEAM_ID, epochId: EPOCH_A, ref: 'team:remote/review.md' }))
+      .toMatchObject({ ok: false, reason: 'not-found' })
   })
 
   it('opens a same-machine file in place', async () => {

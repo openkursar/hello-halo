@@ -1,6 +1,6 @@
 # Configuring AI Models — What Actually Happens in Settings → AI Model
 
-Last updated: 2026-09-03
+Last updated: 2026-10-18
 
 Read this whenever the user asks how to add/switch/fix an AI provider, reports a chat error
 ("invalid key", "no response", "model not found"), or asks what a model's context window /
@@ -55,13 +55,13 @@ tool anywhere under `src/main/services/agent` or `src/main/apps`).
 
 | Auth method | `authType` | How it's added | Where the token lives |
 |---|---|---|---|
-| API key (BYOK) | `api-key` | "Add AI Provider" → pick a builtin gateway or "Custom API" → paste key | Encrypted in Halo's own config (`secure-storage.service`) |
-| OAuth | `oauth` | Click a provider card in the "OAuth Login" row, or a closed-source module card | Encrypted in Halo's own config; refreshed automatically (`ensureValidToken`, `manager.ts:891-927`) |
+| API key (BYOK) | `api-key` | "Add AI Provider" → pick a builtin gateway or "Custom API" → paste key | `config.json` (`aiSources`). **Plain text** on the open-source build; encrypted at rest only when the build sets `security.credentialAtRestSafe: true` (`src/main/foundation/config-encryption.ts:1-13`, `credential-safety.ts`). Either way it is shown masked (`***`) in the app, the API and to you |
+| OAuth | `oauth` | Click a provider card in the "OAuth Login" row, or a closed-source module card | Same file and same rule as an API key; refreshed automatically (`ensureValidToken`, `manager.ts:1173-1231`) |
 | Delegated (CLI) | `delegated` | "Claude Code CLI" card → `DelegatedLoginDialog` → run a shell command → auto-detected | **Nowhere in Halo.** The bundled Claude Code CLI keeps its own credential; Halo only records that the slot is signed in (`cli-delegated.provider.ts:1-19`, `CliDelegatedProvider.getBackendConfig` sends `key: ''`) |
 | External OAuth module | `oauth` | Same UI as OAuth, but the login/token logic is a separate module loaded from a `path` in `product.json`, not builtin code | Same as OAuth |
 
-Delegated is **macOS-only** (`manager.ts:100-104`, gated on `process.platform === 'darwin'`,
-`authDelegatedStatus` also checks this at `src/main/ipc/auth.ts:315-334`). On any other OS the
+Delegated is **macOS-only** (`manager.ts:193-198`, gated on `process.platform === 'darwin'`,
+`authDelegatedStatus` also checks this at `src/main/ipc/auth.ts:260-279`). On any other OS the
 "Claude Code CLI" card must not be offered — it is never registered as a provider.
 
 ## 2. Which providers actually exist in this build — mechanism, not a list

@@ -463,5 +463,15 @@ export const migrations: Migration[] = [
           WHERE coordinator_conversation_id IS NOT NULL
       `)
     }
+  },
+  {
+    version: 21,
+    description: 'Link saved team configurations without promoting temporary collaborations',
+    up(db) {
+      db.exec(`ALTER TABLE teams ADD COLUMN saved_team_id TEXT REFERENCES teams(id) ON DELETE SET NULL`)
+      db.exec(`CREATE INDEX idx_teams_saved_team ON teams(saved_team_id) WHERE saved_team_id IS NOT NULL`)
+      db.exec(`DROP INDEX idx_teams_name_space`)
+      db.exec(`CREATE UNIQUE INDEX idx_teams_name_space ON teams(owning_space_id, name, ephemeral)`)
+    }
   }
 ]

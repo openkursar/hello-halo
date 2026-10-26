@@ -31,13 +31,10 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }))
 
 vi.mock('../../../../src/main/services/agent/helpers', () => ({
-  getApiCredentials: vi.fn().mockResolvedValue({
+  getApiCredentialsForSelection: vi.fn().mockResolvedValue({
     baseUrl: 'https://api.test.com',
     apiKey: 'test-key',
     model: 'test-model',
-    provider: 'anthropic',
-  }),
-  getApiCredentialsForSource: vi.fn().mockResolvedValue({
     provider: 'anthropic',
   }),
   getHeadlessElectronPath: vi.fn().mockReturnValue('/usr/bin/electron'),
@@ -251,7 +248,7 @@ import { generatePromptInstructions } from '../../../../src/main/platform/memory
 import { buildAppSystemPrompt, buildInitialMessage } from '../../../../src/main/apps/runtime/prompt'
 import { RunExecutionError } from '../../../../src/main/apps/runtime/errors'
 import { query as agentSdkQuery, createSession } from '../../../../src/main/services/agent/resolved-sdk'
-import { getApiCredentials, getApiCredentialsForSource, getMcpServersForRequires } from '../../../../src/main/services/agent/helpers'
+import { getApiCredentialsForSelection, getMcpServersForRequires } from '../../../../src/main/services/agent/helpers'
 import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from '../../../../src/main/services/agent/sdk-config'
 import {
   acquireV2Session,
@@ -385,19 +382,18 @@ describe('executeRun — guards', () => {
     nextSession = new FakeSession()
   })
 
-  it('records an unavailable pinned account as a run failure without resolving global credentials', async () => {
-    vi.mocked(getApiCredentials).mockClear()
+  it('records an unusable pinned account as a run failure before any model call', async () => {
     vi.mocked(createSession).mockClear()
-    vi.mocked(getApiCredentialsForSource).mockRejectedValueOnce(new Error('AI source is unavailable. Please select an available source.'))
+    vi.mocked(getApiCredentialsForSelection).mockRejectedValueOnce(new Error('OAuth token expired or invalid. Please login again.'))
     const store = makeStore()
+    const overrides = { modelSourceId: 'signed-out', modelId: 'old-model' }
     const result = await executeRun({
-      app: makeApp({ userOverrides: { modelSourceId: 'removed', modelId: 'old-model' } }),
+      app: makeApp({ userOverrides: overrides }),
       trigger: baseTrigger, store, memory: makeMemory(),
     })
     expect(result.outcome).toBe('error')
-    expect(result.errorMessage).toContain('unavailable')
-    expect(getApiCredentialsForSource).toHaveBeenCalledWith('removed', 'old-model')
-    expect(getApiCredentials).not.toHaveBeenCalled()
+    expect(result.errorMessage).toContain('login again')
+    expect(getApiCredentialsForSelection).toHaveBeenCalledWith(expect.objectContaining(overrides))
     expect(createSession).not.toHaveBeenCalled()
     expect(store.completeRun).toHaveBeenCalledWith(result.runId, expect.objectContaining({ status: 'error' }))
   })
@@ -798,14 +794,14 @@ describe('executeRun — a declared connection is unusable', () => {
     const missing = [{ id: 'docs', name: 'Team Docs', state: 'not_installed' as const }]
     vi.mocked(missingConnections).mockReturnValueOnce(missing)
     vi.mocked(createSession).mockClear()
-    vi.mocked(getApiCredentials).mockClear()
+    vi.mocked(getApiCredentialsForSelection).mockClear()
     nextSession = new FakeSession({ script: [assistantReport()] })
     const store = makeStore()
     const emitEntry = vi.fn()
 
     const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store, memory: makeMemory(), emitEntry })
 
-    expect(getApiCredentials).not.toHaveBeenCalled()
+    expect(getApiCredentialsForSelection).not.toHaveBeenCalled()
     expect(createSession).not.toHaveBeenCalled()
     expect(nextSession.send).not.toHaveBeenCalled()
     expect(result.outcome).toBe('error')

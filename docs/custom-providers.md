@@ -295,6 +295,51 @@ export function getMyOAuthProvider(): MyOAuthProvider {
 }
 ```
 
+### Model list details (optional)
+
+Besides `_availableModels` and `_modelNames`, a login result and a
+`refreshConfig()` result can describe each model further. Every map is keyed by
+model id and every field is optional; a provider that reports none looks as
+before.
+
+| Login field | Refresh field | Value per model |
+|---|---|---|
+| `_modelCapabilities` | `modelCapabilities` | `{ contextWindow?, maxOutputTokens? }` |
+| `_modelVision` | `modelVision` | `true` / `false` (image input) |
+| `_modelPresentation` | `modelPresentation` | `{ group?, badge?, costMultiplier?, regularCostMultiplier? }` |
+
+Presentation is what the model pickers show beside a name:
+
+- `group: 'enterprise'` lists the model after the vendor's own, under
+  "Enterprise models" — for models the user's organization added itself.
+- `badge: { label, detail? }` is a short vendor label (an offer, a priority
+  tier), shown as written; `detail` appears on hover, on the current-model
+  card and at the top of the phone picker. A label over 24 characters, or a
+  detail over 200, is dropped.
+- `costMultiplier` is what one use costs relative to the vendor's base rate
+  right now (`0.5` shows as `0.5x`); while an offer lowers it, put the usual
+  rate in `regularCostMultiplier` and it is shown struck through.
+
+Report what the vendor's own catalog says rather than a list kept in your code,
+so a vendor change needs no release. When the catalog cannot be read:
+
+- From `refreshConfig()`, return `degraded: true`; Halo keeps the stored list
+  and model.
+- From a login, set `_catalogDegraded: true`. For an account Halo already has,
+  it then takes the list from your `getOfflineConfig()` if you implement it;
+  otherwise the stored list is kept only when the login sends no
+  `_availableModels` — a list you send replaces it.
+
+The account's model moves only through the `model` field of a
+`refreshConfig()` result. A login keeps an existing account's model;
+`_defaultModel` applies to a new account.
+
+Halo compares each list the vendor sent (not a degraded one) with the stored
+one: a conversation or digital human still set to a model the vendor dropped is
+told it is no longer offered, and when a refresh moves the account to a model
+with another name, the picker says so for up to a week, until the user picks a
+model on that account.
+
 ## Registering Your Provider
 
 ### 1. Create provider in `auth/`

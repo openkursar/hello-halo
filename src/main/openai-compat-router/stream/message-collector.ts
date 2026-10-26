@@ -45,8 +45,6 @@ class MessageCollector {
   private stopSequence: string | null = null
   private usage: AnthropicUsage = { input_tokens: 0, output_tokens: 0 }
   private blocks: CollectedBlock[] = []
-  // Handlers reuse an index once its block has stopped (thinking, then text
-  // at the same index), so an index names the latest block started there.
   private blockAt = new Map<number, CollectedBlock>()
   private error: { type: string; message: string } | null = null
 
@@ -118,8 +116,8 @@ class MessageCollector {
       }
 
       case 'content_block_delta': {
-        // A delta may follow its block's stop: the Responses handler appends
-        // repaired tool JSON after closing the call.
+        // A tool call another block interrupted can keep receiving arguments
+        // after its stop.
         const collected = this.blockAt.get(event.index)
         if (collected) applyDelta(collected, event.delta)
         break
@@ -132,8 +130,7 @@ class MessageCollector {
         break
 
       case 'error': {
-        // SSEWriter.writeError nests the detail under `message`.
-        const detail = event.error ?? event.message
+        const detail = event.error
         this.error = {
           type: detail?.type || 'api_error',
           message: detail?.message || 'Upstream stream failed'

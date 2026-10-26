@@ -15,9 +15,9 @@ export function buildPeopleDirectory(
   // are not standalone digital humans. A dedicated coordinator IS one: the
   // directory is the only place its model and capabilities can be set, so
   // hiding it left a digital human the person owns with no way to configure it.
-  const excluded = new Set(
-    memberships.filter(member => member.ephemeral).map(member => member.appId)
-  )
+  const persistent = memberships.filter(member => !member.ephemeral)
+  const retained = new Set(persistent.map(member => member.appId))
+  const excluded = new Set(memberships.filter(member => member.ephemeral && !retained.has(member.appId)).map(member => member.appId))
   const counts = store.getDirectoryDecisionCounts()
   // A stop needs the owner exactly as much as an unanswered question does, so
   // it counts towards the badge and survives the attention filter.
@@ -43,7 +43,7 @@ export function buildPeopleDirectory(
   const live = runtime.getDirectoryRuntimeSnapshot()
   const recent = store.getDirectoryRecentRuns(page.items.map(person => person.id))
   const teamsByPerson = new Map<string, Array<{ id: string; name: string }>>()
-  for (const membership of memberships) {
+  for (const membership of persistent) {
     const teams = teamsByPerson.get(membership.appId) ?? []
     teams.push({ id: membership.teamId, name: membership.teamName })
     teamsByPerson.set(membership.appId, teams)

@@ -90,6 +90,7 @@ export interface TeamRow {
   ephemeral: number
   /** Coordinating space conversation of an ephemeral team; migration v18. */
   coordinator_conversation_id: string | null
+  saved_team_id: string | null
 }
 
 /** Row shape from the `team_members` table. */
@@ -290,8 +291,13 @@ export interface TeamStore {
   updateTeamStatus(teamId: string, status: TeamStatus): void
   updateTeamLeadAppId(teamId: string, leadAppId: string | null): void
   updateTeamCurrentEpoch(teamId: string, epochId: string | null): void
-  /** Promote an ephemeral collaboration to a persistent team ("save as team"). */
+  /** Legacy in-place promotion; new saves create a separate team. */
   clearEphemeral(teamId: string): void
+  /** Normalize an old saved collaboration without changing its history. */
+  repairCollabLead(teamId: string, expectedLeadAppId: string, member: TeamMember, edges?: TeamEdge[]): void
+  /** Commit the source's saved-configuration link after the new team is ready. */
+  attachSavedTeam(sourceTeamId: string, savedTeamId: string): void
+  listSavedTeamSources(savedTeamId: string): Team[]
   /** Bind/unbind the space conversation that coordinates a collaboration. */
   setCoordinatorConversation(teamId: string, conversationId: string | null): void
   /** The ephemeral collaboration coordinated by a space conversation, or null. */
@@ -319,13 +325,18 @@ export interface TeamStore {
    * Idempotently mirror a host-driven roster into the local store as a joined
    * ("shadow") office (teams.host_node_id = the host's node id). Owner node ids
    * arrive ABSOLUTE and are remapped SELF-relative for this node. A re-apply
-   * upserts in place — no duplicate members, no constraint error.
+   * upserts in place — no duplicate members, no constraint error. Returns the
+   * members of this node that rejoined and took back a duty retained when they
+   * left, which the office does not have yet. `departed`: members of this node
+   * that left the office since it was joined; a roster still listing one is
+   * behind, so it neither takes that duty back nor uses it up.
    */
   materializeJoinedOffice(input: {
     hostNodeId: string
     selfNodeId: string
     snapshot: JoinedOfficeSnapshot
-  }): void
+    departed?: ReadonlySet<string>
+  }): { dutiesRestored: string[] }
   /**
    * The transient per-member runtime status (appId → working/idle/...) captured
    * from the last materialized roster snapshot of a joined office. Run-state is a

@@ -24,10 +24,15 @@ function writePackage(
   packageId: string,
   manifest: Record<string, unknown>,
   entries: Record<string, string> = {},
+  includeWorker = true,
 ): void {
   const pkgDir = path.join(appNodeModules(), ...packageId.split('/'))
   fs.mkdirSync(pkgDir, { recursive: true })
   fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify(manifest))
+  if (packageId === HALO_PACKAGE && includeWorker && Object.keys(entries).length) {
+    entries = { ...entries, 'dist/worker/index.js': 'export const createWorkerRuntime = () => {}',
+      'dist/worker/entry.js': Object.values(entries).join('\n') }
+  }
   for (const [relPath, content] of Object.entries(entries)) {
     const target = path.join(pkgDir, relPath)
     fs.mkdirSync(path.dirname(target), { recursive: true })
@@ -87,6 +92,11 @@ describe('engine availability', () => {
 
     expect(result.available).toBe(false)
     expect(result.version).toBe('')
+  })
+
+  it('rejects a package whose execution worker was omitted', async () => {
+    writePackage(HALO_PACKAGE, { main: 'dist/index.js' }, { 'dist/index.js': 'export const query = () => {}' }, false)
+    expect((await probe('halo')).available).toBe(false)
   })
 
   it('resolves the entry through the exports map', async () => {

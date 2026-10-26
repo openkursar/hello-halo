@@ -96,6 +96,7 @@ PUT    /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>   Update a conv
           -d '{"title":"Renamed conversation"}'
      # body: {"title":"Renamed conversation"}
      # out: {"success":true,"data":{...updated conversation}}
+     # note: modelSourceId + modelId (always both; sourceId is a uuid from GET /api/config) pin the account and model the conversation runs on. A pin naming an account that no longer exists is not rejected: the conversation runs on the current global account until it is pinned again.
 
 DELETE /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>   Delete a conversation
      !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.

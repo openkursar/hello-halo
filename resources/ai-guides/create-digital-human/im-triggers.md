@@ -1,7 +1,5 @@
 # IM / WeCom Triggering — How It Actually Works
 
-Last updated: 2026-10-09
-
 Read this whenever the digital human should be reachable via WeCom (or another IM channel), or
 should proactively push messages to IM contacts. This is where guessing produces the most
 visibly wrong questions, because the mechanism is genuinely not part of the App Spec.
@@ -62,14 +60,10 @@ The opposite direction, and this one *is* spec-controlled:
   message this digital human once" — or, on 3.0 and later, add a chat another bot already
   knows as above — not a spec change (`src/main/apps/runtime/prompt/capabilities.ts`).
 - **Delivered pushes are recorded** (Halo 3.0 and later): a message or file sent with
-  `notify_bot`, an automatically pushed run result and a private question for the owner are
-  written into that chat's human-readable history in Halo under a **Sent proactively**
-  (主动发送) label, and become the chat's latest message. Before 3.0 they were not, so a reply
-  to a push showed up there without the message it answered.
-- **A chat record is not AI context.** `notify_bot` messages and private owner questions also
-  queue relay context for the receiving chat's next inbound turn. Automatic run-result pushes
-  are human-record only: they do not enter that relay or the receiving AI's context. Do not
-  promise the AI already knows a result merely because it appears in the chat history.
+  `notify_bot`, a pushed run result and a question for the owner are written into that chat's
+  history in Halo under a **Sent proactively** (主动发送) label, and become the chat's latest
+  message. Before 3.0 they were not, so a reply to a push showed up there without the message
+  it answered.
 
 A and B are independent: an app can be conversational without pushing, or push from scheduled
 runs without ever being bound to a chat.
@@ -107,20 +101,13 @@ These behaviors are real but live on the IM channel *instance*, not the App Spec
   `@Halo AI 团队 /stop`, `@Halo @助手 /clear` — because group messages carry the bot's mention
   and a bot name may contain spaces (Halo 3.0 and later; `message-channels/wecom-bot.md` §5).
   Text after the command, no `@` at the start, or no slash makes it an ordinary message.
-- When the app asks for a decision (an escalation, `report_to_user`), its bound bot or team bot
-  sends the question only to known direct chats for that instance and its currently bound digital
-  human: listed owners with permission control on, or chats with **Auto-sync run result** on with
-  permission control off. This qualification also gates the answer action and a group-only bot's
-  private-question exception; it does not change ordinary chat's owner-level access when permission
-  control is off. Only the originating team group gets a waiting line; groups merely receiving run
-  results get no question notice. The recipient replies naturally, without a question ID or command.
-  The AI matches the actual answer using the supplied relay context, clarifies if needed, and uses
-  only the bounded action Halo supplies. Choices must match an option exactly; free-form answers
-  remain allowed. **Operate Halo** need not be on; there is no standing answer tool. If submission
-  is unavailable or the authorization is no longer valid, direct the owner to Halo — never ask them
-  to enable another capability or claim submission succeeded. No eligible chat or a failed delivery
-  also leaves the full question in Halo. Nothing in the spec configures this routing; keep
-  `escalation.enabled` on as usual. See `message-channels/index.md` §2 for current-access checks,
-  answer validation, rebinding and fallback details.
+- When the app asks for a decision (an escalation, `report_to_user`), the bound bot sends the
+  question to its owner's direct chat (Halo 3.0 and later), and the owner just replies there in
+  their own words: the AI receives the open question with a one-time grant and submits only what
+  the owner said — the same as answering in Halo. There is **no `/answer` command and no question
+  number** in 3.0.4. Groups get no question; only the group a team's work came from hears that
+  one is waiting. Nothing in the spec configures this; who receives the question follows the
+  instance's permission control (`message-channels/index.md` §2). The owner no longer has to open
+  Halo to unblock it.
 - A message arriving while the app is still answering is buffered and merged into the next
   round — never dropped, never run concurrently.

@@ -26,6 +26,7 @@
     "src/shared/**/*",
     "src/worker/**/*",
     "runtimes/*/plugins/**/*",
-    "electron.vite.config.ts"
+    "electron.vite.config.ts",
+    "vite.boot-script.ts"
   ]
 }

@@ -38,8 +38,7 @@ import { getTaskStateService } from '../../platform/task-state'
 import { resolveMemoryLayout, type MemoryCallerScope, type TopicsTree } from '../../platform/memory'
 import { getConfig } from '../../foundation/config.service'
 import {
-  getApiCredentials,
-  getApiCredentialsForSource,
+  getApiCredentialsForSelection,
   getWorkingDir,
   getHeadlessElectronPath,
   getDbMcpServers
@@ -55,7 +54,7 @@ import { getImPermissionContext, type ImPermissionContext } from './im-permissio
 import { currentGuestPolicy } from './im-sender-standing'
 import { createAIBrowserMcpServer } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
-import { acquireChatBrowserContext, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
+import { acquireChatBrowserContext, bindChatBrowserSession, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
 import { acquireV2Session, formatTurnAttachments, workingDirErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, type V2SessionLease } from '../../services/agent'
 import type { CanvasContext } from '../../services/agent/types'
@@ -648,9 +647,9 @@ async function runAppChatTurn(
   if (!memory) throw new Error('Memory service not initialized')
 
   const config = getConfig()
-  const credentials = app.userOverrides?.modelSourceId
-    ? await getApiCredentialsForSource(app.userOverrides.modelSourceId, app.userOverrides.modelId)
-    : await getApiCredentials()
+  // Its own account and model, or the global selection when it has none or
+  // its account was removed.
+  const credentials = await getApiCredentialsForSelection(app.userOverrides)
   // The digital human's own level, on every entry (its Halo chat, IM, HTTP,
   // team turns, reminders), wins over one the send carries.
   const pickedEffort = pickReasoningEffort(app.userOverrides?.chatReasoningEffort, reasoningEffort)
@@ -1289,6 +1288,15 @@ async function runAppChatTurn(
     stoppedOnTheWay = true
     imStreamHandle?.dispose?.()
     emitAgentEvent('agent:complete', spaceId, conversationId, { type: 'complete', duration: 0 })
+    // A reset that stopped this message replaced the chat's session, browser
+    // context and sink under it. A session acquired after that rests on what
+    // the reset removed and, left registered, would serve the next message
+    // with a destroyed browser context and a dropped sink until it idled out.
+    // One the reset itself closed is no longer current here.
+    if (turnContext.start.reset && sessionLease?.isCurrent) {
+      console.warn(`[AppChat][${appId}] Closing a session built while the chat was being reset: ${conversationId}`)
+      sessionLease.close()
+    }
   }
   let dispatchAttempted = false
   let dispatchAccepted = false
@@ -1393,6 +1401,10 @@ async function runAppChatTurn(
       reportPreInitFailure
     )
     const v2Session = sessionLease.session
+    // The session's browser tools hold this chat's context from here on,
+    // whether the session was just built around it or is reused from an
+    // earlier turn (see app-chat-browser).
+    if (turnContext.browserHeld) bindChatBrowserSession(conversationId, sessionLease)
     stopObservingRetirement = sessionLease.onRetired(retireSession)
     turnContext.start.bindSession(sessionLease, retireSession)
     if (!sessionLease.isUsable) throw new Error('The acquired session is no longer available')
@@ -1534,8 +1546,9 @@ async function runAppChatTurn(
     stopObservingRetirement?.()
     turnContext.start.releaseSession()
     sessionLease?.release()
-    // Native chats keep their browser context (and its pages) for the next
-    // message, failed turn or not; every other session's ends with the turn.
+    // Native chats keep their pages for the next message, failed turn or not;
+    // every other session's pages close with the turn. The context itself
+    // stays with the engine session whose tools hold it (app-chat-browser).
     if (turnContext.browserHeld) {
       turnContext.browserHeld = false
       endChatBrowserTurn(conversationId)

@@ -27,6 +27,7 @@ import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { api } from '../../api'
 import { useSpaceStore } from '../../stores/space.store'
 import { useAppStore } from '../../stores/app.store'
+import { resolveModelSelection } from '../../types'
 import { AppModelSelector } from './AppModelSelector'
 import { AppNotifyChannelsSection } from './AppNotifyChannelsSection'
 import { AppCapabilitiesSection } from './AppCapabilitiesSection'
@@ -610,12 +611,12 @@ function SettingsTab({ app, appId, showWorkdayCalendar, spaceName, t, onRequireR
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
 
   const aiSources = useAppStore(state => state.config?.aiSources)
-  const hasMissingModelSource = !!app.userOverrides.modelSourceId && !!aiSources &&
-    !aiSources.sources.some(source => source.id === app.userOverrides.modelSourceId)
+  // An override naming a removed account follows the global selection.
+  const ownModel = aiSources?.version === 2 && resolveModelSelection(aiSources, app.userOverrides).own
+    ? app.userOverrides.modelId
+    : undefined
   const consumedCapabilities = ['ai-browser', 'ai-terminal', 'email', 'im-push'].filter(p => resolvePermission(app, p)).length
-  const modelSummary = hasMissingModelSource
-    ? t('Account removed. Choose another account.')
-    : app.userOverrides.modelId ?? specRecommendedModel ?? t('Default')
+  const modelSummary = ownModel ?? specRecommendedModel ?? t('Default')
   const missingRequiredConfig = findMissingRequiredConfig(configSchema, app.userConfig)
   const scheduleBadge = currentScheduleValue
     ? (currentScheduleValue.type === 'every' ? currentScheduleValue.every : currentScheduleValue.cron)

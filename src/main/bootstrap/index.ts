@@ -18,7 +18,11 @@
  *
  * Extended (Second Phase)
  *   - All other services
- *   - Loaded after window is visible
+ *   - Loaded after window is visible: extended.ts is reached only through
+ *     the dynamic import below, so its code and every module only it
+ *     imports stay out of what the main process loads before the window
+ *     opens. Never import it, or a module only it needs, statically from
+ *     the first phase.
  *   - Uses lazy initialization pattern
  *   - DEFAULT for new features
  *
@@ -51,7 +55,17 @@
  */
 
 export { initializeEssentialServices } from './essential'
-export { initializeExtendedServices, cleanupExtendedServices } from './extended'
 export { getBootstrapStatus } from './state'
 export type { BootstrapStatus } from './state'
 export { applyServerModeSwitches, installServerSignalHandlers, bootServerMode } from './server-mode'
+
+export async function initializeExtendedServices(): Promise<void> {
+  const extended = await import('./extended')
+  extended.initializeExtendedServices()
+}
+
+/** Also cleans up first-phase services, so it runs even when the extended phase never started. */
+export async function cleanupExtendedServices(): Promise<void> {
+  const extended = await import('./extended')
+  await extended.cleanupExtendedServices()
+}

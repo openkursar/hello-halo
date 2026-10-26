@@ -31,7 +31,7 @@ import { downloadArtifact } from '../../services/artifact-download'
 import { useSpaceStore } from '../../stores/space.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { ONBOARDING_ARTIFACT_NAME } from '../onboarding/onboardingData'
-import { fillFolder, indexNodes, loadedFolderPaths, mergeChildren, unloadSubtree } from './tree-index'
+import { fillFolder, indexNodes, loadedOrOpenFolderPaths, mergeChildren, unloadSubtree } from './tree-index'
 
 // Context to pass openFile function to tree nodes without each node subscribing to store
 type OpenFileFn = (path: string, title?: string) => Promise<void>
@@ -502,9 +502,11 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
       const parent = nodeIndex.current.get(dirPath)
 
       if (parent) {
-        // Collapsed directories hold no children; they are fetched again on expand
-        if (!parent.childrenLoaded) continue
+        // Collapsed directories hold no children; they are fetched again on expand.
+        // An open one takes the listing even with none loaded, as after a failed listing.
+        if (!parent.childrenLoaded && !treeRef.current?.isOpen(parent.id)) continue
         parent.children = mergeChildren(incomingChildren, parent.children || [], nodeIndex.current, recentlyCreatedPaths.current)
+        parent.childrenLoaded = true
       } else {
         // Root-level update or initial load
         const isRoot = treeDataRef.current.length > 0 &&
@@ -532,10 +534,11 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
 
   // Changes were lost (the watcher overflowed, or this client's hold lapsed and
   // main rebuilt the space's cache without the folders open here): re-list the
-  // root and every loaded folder and merge, keeping ids and open state.
+  // root and every loaded or open folder and merge, keeping ids and open state.
   const reloadLoadedDirs = useCallback(async () => {
     if (!spaceId) return
-    const dirs = [workspaceRootRef.current, ...loadedFolderPaths(nodeIndex.current)].filter(Boolean)
+    const isOpen = (id: string) => treeRef.current?.isOpen(id) ?? false
+    const dirs = [workspaceRootRef.current, ...loadedOrOpenFolderPaths(nodeIndex.current, isOpen)].filter(Boolean)
     const listed = await Promise.all(dirs.map(async dirPath => {
       try {
         const response = await api.loadArtifactChildren(spaceId, dirPath)

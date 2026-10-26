@@ -71,7 +71,8 @@ export function validateEnvironmentConnections(
   const effective = manager.listEffectiveMcpApps(environment.spaceId)
   for (const [specId, instanceId] of Object.entries(environment.mcpBindings)) {
     if (mode === 'chat' ? denied.has(specId) : !authorized.has(specId)) continue
-    const current = effective.find(resource => resource.specId === specId && resource.status === 'active')
+    // Tool assembly handles availability; this check preserves connection identity.
+    const current = effective.find(resource => resource.specId === specId)
     if (current?.id !== instanceId) {
       console.warn('[Runtime] Original connection unavailable; continuation blocked', { appId: app.id, specId, instanceId })
       throw new Error('An original connection is unavailable or was replaced. Restore it or start new work; Halo will not switch accounts automatically.')

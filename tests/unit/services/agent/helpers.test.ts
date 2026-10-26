@@ -57,8 +57,7 @@ vi.mock('../../../../src/main/services/app-bridge', () => ({
 import {
   inferOpenAIWireApi,
   getApiCredentials,
-  getApiCredentialsForSource,
-  getApiCredentialsForConversation,
+  getApiCredentialsForSelection,
   credentialsToBackendConfig,
   getDisabledMcpTools,
 } from '../../../../src/main/services/agent/helpers'
@@ -175,8 +174,8 @@ describe('account-specific credential resolution', () => {
   })
 
   it('keeps two accounts and their request capabilities independent', async () => {
-    const first = await getApiCredentialsForSource('account-a', 'gpt-test')
-    const second = await getApiCredentialsForSource('account-b', 'gpt-test')
+    const first = await getApiCredentialsForSelection({ modelSourceId: 'account-a', modelId: 'gpt-test' })
+    const second = await getApiCredentialsForSelection({ modelSourceId: 'account-b', modelId: 'gpt-test' })
     const firstBackend = credentialsToBackendConfig(first)
     const secondBackend = credentialsToBackendConfig(second)
     expect(firstBackend).toMatchObject({
@@ -197,13 +196,18 @@ describe('account-specific credential resolution', () => {
   it('prepares a conversation-pinned alternate model without changing the account default', async () => {
     const source = sourceState.sources.get('account-a')!
     source.availableModels.push({ id: 'alternate-model', name: 'Alternate', capabilities: { contextWindow: 200_000 } })
-    const credentials = await getApiCredentialsForConversation({
+    const credentials = await getApiCredentialsForSelection({
       modelSourceId: 'account-a', modelId: 'alternate-model',
     })
     expect(manager.ensureValidToken).toHaveBeenCalledWith('account-a', 'alternate-model')
     expect(manager.getBackendConfigForSource).toHaveBeenCalledWith('account-a', 'alternate-model')
     expect(credentials).toMatchObject({ sourceId: 'account-a', model: 'alternate-model', capabilities: { contextWindow: 200_000 } })
     expect(source.model).toBe('gpt-test')
+  })
+
+  it('resolves a selection without a source to the selected account', async () => {
+    await expect(getApiCredentialsForSelection(null)).resolves.toMatchObject({ sourceId: 'account-a', model: 'gpt-test' })
+    await expect(getApiCredentialsForSelection({})).resolves.toMatchObject({ sourceId: 'account-a', model: 'gpt-test' })
   })
 
   it('uses the same captured model for preparation and backend resolution if the default changes', async () => {
@@ -217,24 +221,33 @@ describe('account-specific credential resolution', () => {
     expect(manager.getBackendConfigForSource).toHaveBeenCalledWith('account-a', 'gpt-test')
   })
 
-  it('fails a missing conversation pin rather than using the selected account', async () => {
-    await expect(getApiCredentialsForConversation({
-      modelSourceId: 'removed-account', modelId: 'gpt-test',
-    })).rejects.toThrow('unavailable')
-    expect(manager.getCurrentSourceConfig).not.toHaveBeenCalled()
+  it('runs a selection whose account was removed on the selected account, with that account\'s own model', async () => {
+    sourceState.currentId = 'account-b'
+    const credentials = await getApiCredentialsForSelection({ modelSourceId: 'removed-account', modelId: 'old-model' })
+    expect(credentials).toMatchObject({ sourceId: 'account-b', model: 'gpt-test', capabilities: { contextWindow: 150_000 } })
+    expect(manager.ensureValidToken).toHaveBeenCalledWith('account-b', 'gpt-test')
+    expect(manager.getBackendConfigForSource).toHaveBeenCalledWith('account-b', 'gpt-test')
+    expect(manager.getBackendConfigForSource).not.toHaveBeenCalledWith('removed-account', expect.anything())
+  })
+
+  it('fails a selection whose account was removed when no account is selected either', async () => {
+    sourceState.currentId = ''
+    await expect(getApiCredentialsForSelection({ modelSourceId: 'removed-account', modelId: 'old-model' }))
+      .rejects.toThrow('No AI source configured')
     expect(manager.getBackendConfigForSource).not.toHaveBeenCalled()
   })
 
-  it('fails an unconfigured explicit source rather than using the selected account', async () => {
+  it('fails an unconfigured selected account rather than using the current account', async () => {
     sourceState.backends.delete('account-b')
-    await expect(getApiCredentialsForSource('account-b')).rejects.toThrow('not configured')
+    await expect(getApiCredentialsForSelection({ modelSourceId: 'account-b' })).rejects.toThrow('not configured')
     expect(manager.getCurrentSourceConfig).not.toHaveBeenCalled()
   })
 
-  it('fails a logged-out account without preventing the other account from resolving', async () => {
+  it('fails a signed-out selected account without preventing the other account from resolving', async () => {
     manager.ensureValidToken.mockResolvedValueOnce({ success: false })
-    await expect(getApiCredentialsForSource('account-a')).rejects.toThrow('login again')
-    await expect(getApiCredentialsForSource('account-b')).resolves.toMatchObject({ sourceId: 'account-b' })
+    await expect(getApiCredentialsForSelection({ modelSourceId: 'account-a' })).rejects.toThrow('login again')
+    expect(manager.getCurrentSourceConfig).not.toHaveBeenCalled()
+    await expect(getApiCredentialsForSelection({ modelSourceId: 'account-b' })).resolves.toMatchObject({ sourceId: 'account-b' })
   })
 
   it('fails if the captured account is removed while refreshing', async () => {

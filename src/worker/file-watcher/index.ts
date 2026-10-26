@@ -15,6 +15,7 @@ import type {
   MainToWorkerMessage,
   WorkerToMainMessage
 } from '../../shared/protocol/file-watcher.protocol'
+import type { CachedTreeNode } from '../../shared/types/artifact'
 import {
   startWatcher,
   stopWatcher,
@@ -86,9 +87,20 @@ async function handleMessage(msg: MainToWorkerMessage): Promise<void> {
       }
 
       case 'scan-dir': {
-        const nodes = await scanDirectoryTreeShallow(
-          msg.dirPath, msg.rootPath, msg.depth, treeIgnoreRules
-        )
+        let nodes: CachedTreeNode[]
+        try {
+          nodes = await scanDirectoryTreeShallow(msg.dirPath, msg.rootPath, msg.depth, treeIgnoreRules)
+        } catch (error) {
+          // Not logged here: the requester decides what an unreadable directory means.
+          send({
+            type: 'scan-error',
+            requestId: msg.requestId,
+            spaceId: msg.spaceId,
+            error: error instanceof Error ? error.message : String(error),
+            code: (error as NodeJS.ErrnoException | undefined)?.code,
+          })
+          break
+        }
         send({
           type: 'scan-result',
           requestId: msg.requestId,

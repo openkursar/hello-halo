@@ -142,7 +142,7 @@
 
 ## 6. Runtime, processes, and resources
 
-- One engine session = one child process. Every session entry is bounded by
+- Resident agent sessions retain engine resources. Their count is bounded by
   `apps/runtime/session-budget` through the engine's resident limit (default 20, 10 under system
   memory pressure, user-adjustable). Eviction never touches a busy session and never refuses a turn;
   an evicted session resumes on its next turn.

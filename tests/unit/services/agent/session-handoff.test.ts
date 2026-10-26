@@ -495,15 +495,24 @@ describe('session handoff through real chat entries', () => {
     })
   })
 
-  it.each(entries)('$name refuses a removed pinned account and recovers only after explicit reselection', async entry => {
+  it.each(entries)('$name runs on the selected account once its pinned account was removed', async entry => {
     const config = getConfig().aiSources!
     saveConfig({ aiSources: { ...config, sources: config.sources.filter(source => source.id !== 'account-a') } })
     await flush()
+    const session = fakeSession('fallback-b')
+    queueSession(session)
+    await completeSend(entry, session, entry.send('After removal'), 'After removal')
+    expectRoute(session, 'account-b')
+    expect(m.sourceRequests).not.toContain('account-a')
+  })
+
+  it.each(entries)('$name refuses a signed-out pinned account and recovers only after explicit reselection', async entry => {
+    await updateAccountA({ accessToken: '' })
     const failure = await entry.send('Must not use B').then(() => null, error => error as Error)
     expect(m.createSession).not.toHaveBeenCalled()
     expect(m.sourceRequests).not.toContain('account-b')
-    if (entry.name === 'space chat') expect(entry.error()).toContain('unavailable')
-    else expect(failure?.message).toContain('unavailable')
+    if (entry.name === 'space chat') expect(entry.error()).toContain('login again')
+    else expect(failure?.message).toContain('login again')
     entry.pin('account-b')
     const replacement = fakeSession('selected-b')
     queueSession(replacement)

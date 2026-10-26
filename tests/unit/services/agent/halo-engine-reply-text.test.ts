@@ -1,18 +1,13 @@
-/**
- * With partial messages on, the halo engine leaves the answer out of its
- * aggregate `assistant` message (the text already went out as stream events)
- * and repeats it only in `result.result`. A digital human's chat shows the
- * answer both while the turn streams and when the conversation is reopened
- * from its stored events. Frames are those the bundled engine produced for a
- * thinking model's reply.
- */
+/** Completed assistant blocks must survive streaming and stored-event replay. */
 
 import { describe, expect, it, vi } from 'vitest'
 
-const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }))
+const { emitAgentEvent, track } = vi.hoisted(() => ({
+  emitAgentEvent: vi.fn(), track: vi.fn().mockResolvedValue(undefined),
+}))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
-  analytics: { track: vi.fn().mockResolvedValue(undefined) },
+  analytics: { track },
 }))
 vi.mock('../../../../src/main/services/agent/mcp-manager', () => ({ broadcastMcpStatus: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/mcp-probe', () => ({ probeUnhealthyServers: vi.fn() }))
@@ -33,24 +28,29 @@ const frames = [
   streamEvent({ type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', model: 'glm-5.1', content: [], usage: { input_tokens: 12, output_tokens: 1 }, stop_reason: null, stop_sequence: null } }),
   streamEvent({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }),
   streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Thinking about turn 1.' } }),
+  {
+    type: 'assistant',
+    message: { id: 'msg_1', type: 'message', role: 'assistant', model: 'glm-5.1', content: [{ type: 'thinking', thinking: 'Thinking about turn 1.' }], stop_reason: null, stop_sequence: null, usage: { input_tokens: 12, output_tokens: 1 } },
+    parent_tool_use_id: null, session_id: 's',
+  },
   streamEvent({ type: 'content_block_stop', index: 0 }),
   streamEvent({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }),
   streamEvent({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Answer 1: ' } }),
   streamEvent({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'the body text.' } }),
-  streamEvent({ type: 'content_block_stop', index: 1 }),
-  streamEvent({ type: 'message_delta', delta: { type: 'message_delta', stop_reason: 'end_turn', stop_sequence: null }, usage: { input_tokens: 0, output_tokens: 20 } }),
-  streamEvent({ type: 'message_stop' }),
   {
     type: 'assistant',
-    message: { id: 'msg_1', type: 'message', role: 'assistant', model: 'glm-5.1', content: [{ type: 'thinking', thinking: 'Thinking about turn 1.' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 12, output_tokens: 20 } },
-    parent_tool_use_id: null,
-    session_id: 's',
+    message: { id: 'msg_1', type: 'message', role: 'assistant', model: 'glm-5.1', content: [{ type: 'text', text: ANSWER }], stop_reason: null, stop_sequence: null, usage: { input_tokens: 12, output_tokens: 1 } },
+    parent_tool_use_id: null, session_id: 's',
   },
+  streamEvent({ type: 'content_block_stop', index: 1 }),
+  streamEvent({ type: 'message_delta', delta: { type: 'message_delta', stop_reason: 'end_turn', stop_sequence: null }, usage: { input_tokens: 12, output_tokens: 20 } }),
+  streamEvent({ type: 'message_stop' }),
   { type: 'result', subtype: 'success', result: ANSWER, is_error: false, stop_reason: 'end_turn', session_id: 's' },
 ]
 
-describe('a halo engine reply whose aggregate message carries no text', () => {
+describe('a halo engine reply with completed assistant blocks', () => {
   it('shows the answer while the turn streams', async () => {
+    vi.clearAllMocks()
     const sessionState: SessionState = { spaceId: 'space-1', conversationId: 'conv-1', thoughts: [], abortController: new AbortController() }
 
     const result = await processStream({
@@ -67,10 +67,15 @@ describe('a halo engine reply whose aggregate message carries no text', () => {
 
     expect(result.finalContent).toBe(ANSWER)
     expect(result.hasMeaningfulContent).toBe(true)
+    expect(result.tokenUsage).toMatchObject({ inputTokens: 12, outputTokens: 20 })
+    expect(track.mock.calls.filter(([event]) => event === 'llm.invocation')).toEqual([
+      ['llm.invocation', expect.objectContaining({ inputTokens: 12, outputTokens: 20 })],
+    ])
     const completed = emitAgentEvent.mock.calls
       .filter(([channel, , , data]) => channel === 'agent:message' && (data as { isComplete?: boolean }).isComplete)
       .map(([, , , data]) => (data as { content: string }).content)
     expect(completed.at(-1)).toBe(ANSWER)
+    expect(sessionState.thoughts.filter(thought => thought.type === 'text').map(thought => thought.content)).toEqual([ANSWER])
   })
 
   it('shows the answer when the chat is reopened from its stored events', () => {
@@ -86,4 +91,46 @@ describe('a halo engine reply whose aggregate message carries no text', () => {
     expect(replies[0].content).toBe(ANSWER)
     expect(replies[0].thoughts?.some(thought => thought.type === 'thinking')).toBe(true)
   })
+})
+
+
+it('places text before Goal during streaming and after reopening, without repeating the answer', async () => {
+  vi.clearAllMocks()
+  const tool = { type: 'tool_use', id: 'goal-1', name: 'Goal', input: { action: 'complete' } }
+  const stopAt = frames.findIndex(frame => frame.type === 'stream_event' && 'event' in frame && frame.event.type === 'message_delta')
+  const intermediate = '1+3 = 4'
+  const firstResponse = JSON.parse(JSON.stringify(frames).replaceAll(ANSWER, intermediate)
+    .replaceAll('Answer 1: ', intermediate).replaceAll('the body text.', '')) as typeof frames
+  const finalResponse = JSON.parse(JSON.stringify(frames.slice(2)).replaceAll('msg_1', 'msg_2')) as typeof frames
+  const goalFrames = [
+    ...firstResponse.slice(0, stopAt),
+    streamEvent({ type: 'content_block_start', index: 2, content_block: { ...tool, input: {} } }),
+    streamEvent({ type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: JSON.stringify(tool.input) } }),
+    { type: 'assistant', message: { id: 'msg_1', type: 'message', role: 'assistant', model: 'glm-5.1', content: [tool], stop_reason: null, stop_sequence: null, usage: { input_tokens: 12, output_tokens: 1 } }, parent_tool_use_id: null, session_id: 's' },
+    streamEvent({ type: 'content_block_stop', index: 2 }),
+    ...frames.slice(stopAt, -1),
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: tool.id, content: 'Goal completed' }] }, parent_tool_use_id: null, session_id: 's' },
+    ...finalResponse,
+  ]
+  const sessionState: SessionState = { spaceId: 'space-1', conversationId: 'conv-1', thoughts: [], abortController: new AbortController() }
+  const result = await processStream({
+    v2Session: { send: vi.fn(), stream: () => (async function* () { yield* goalFrames })() },
+    sessionState, spaceId: 'space-1', conversationId: 'conv-1', messageContent: '1+3', displayModel: 'm',
+    abortController: sessionState.abortController, t0: Date.now(), callbacks: {},
+  } as unknown as Parameters<typeof processStream>[0])
+  expect(result.finalContent).toBe(ANSWER)
+  expect(track.mock.calls.filter(([event]) => event === 'llm.invocation')).toEqual([
+    ['llm.invocation', expect.objectContaining({ inputTokens: 12, outputTokens: 20 })],
+    ['llm.invocation', expect.objectContaining({ inputTokens: 12, outputTokens: 20 })],
+  ])
+  expect(sessionState.thoughts.filter(thought => ['text', 'tool_use'].includes(thought.type))
+    .map(thought => thought.type)).toEqual(['text', 'tool_use', 'text'])
+  expect(sessionState.thoughts.filter(thought => thought.type === 'text').map(thought => thought.content)).toEqual([intermediate, ANSWER])
+  const stored = goalFrames.filter(frame => frame.type !== 'stream_event')
+    .map((frame, index) => ({ ...frame, _ts: new Date(1_700_000_000_000 + index).toISOString() }) as StoredEvent)
+  const replies = convertEventsToMessages(stored).filter(message => message.role === 'assistant')
+  expect(replies).toHaveLength(1)
+  expect(replies[0].content).toBe(ANSWER)
+  expect(replies[0].thoughts?.filter(thought => ['text', 'tool_use'].includes(thought.type))
+    .map(thought => thought.type)).toEqual(['text', 'tool_use'])
 })

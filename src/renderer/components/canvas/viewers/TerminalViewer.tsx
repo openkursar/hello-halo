@@ -9,7 +9,8 @@
  *  - keeps the pty size in sync via the fit addon + ResizeObserver.
  *
  * A soft border highlight indicates when the AI is actively writing, so the two
- * parties never surprise each other (Ctrl+C always reaches the pty).
+ * parties never surprise each other (Ctrl+C reaches the pty unless, off macOS,
+ * a selection turns it into a copy — see lib/terminal-keys.ts).
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -22,7 +23,9 @@ import { useTerminalStore } from '../../../stores/terminal.store'
 import { useTranslation } from '../../../i18n'
 import type { TabState } from '../../../services/canvas-lifecycle'
 import { noteTerminalInput } from '../../../services/tool-session-telemetry'
-import { buildTheme, getMinimumContrastRatio } from '../../../lib/terminal-theme'
+import { getTerminalThemeOptions, isLightTheme } from '../../../lib/terminal-theme'
+import { copiesSelection } from '../../../lib/terminal-keys'
+import { copyToClipboard } from '../../../utils/clipboard'
 import { latchTerminalEnd, type TerminalEndState } from '../../../lib/terminal-liveness'
 import { useCanvasActions } from '../../../hooks/useCanvasLifecycle'
 import {
@@ -44,6 +47,9 @@ interface TerminalViewerProps {
  * main-side low watermark or a paused pty could never resume.
  */
 const CHAR_COUNT_ACK_SIZE = 5000
+
+/** The keyboard in front of the user: a remote browser can run on another OS than the host. */
+const IS_MAC = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().includes('MAC')
 
 export function TerminalViewer({ tab }: TerminalViewerProps) {
   const { t } = useTranslation()
@@ -89,8 +95,7 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
       cursorBlink: true,
       convertEol: false,
       scrollback: 10000,
-      theme: buildTheme(),
-      minimumContrastRatio: getMinimumContrastRatio(),
+      ...getTerminalThemeOptions(),
       allowProposedApi: true,
     }))
     const fit = new FitAddon()
@@ -98,6 +103,22 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
     term.open(containerRef.current)
     termRef.current = term
     fitRef.current = fit
+
+    term.attachCustomKeyEventHandler((e) => {
+      if (!copiesSelection(e, IS_MAC, term.getSelection())) return true
+      if (e.type === 'keydown') {
+        const text = term.getSelection()
+        term.clearSelection()
+        // Consumed here, so the Copy menu item does not run a second copy.
+        e.preventDefault()
+        // Over HTTP remote access the copy goes through a temporary text field,
+        // which takes the keyboard focus with it when it is removed.
+        void copyToClipboard(text)
+          .then(() => { if (document.activeElement === document.body) term.focus() })
+          .catch(error => console.warn('[TerminalViewer] Copying the selection failed', { sessionId, error }))
+      }
+      return false
+    })
 
     let disposed = false
 
@@ -204,10 +225,15 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
     ro.observe(containerRef.current)
 
     // xterm.js caches theme colors; toggling the class alone does not repaint.
+    // Unrelated <html> class mutations must not trigger a repaint.
+    let lastIsLight = isLightTheme()
     const themeObserver = scope.add(new MutationObserver(() => {
       if (disposed || !termRef.current) return
-      termRef.current.options.theme = buildTheme()
-      termRef.current.options.minimumContrastRatio = getMinimumContrastRatio()
+      if (isLightTheme() === lastIsLight) return
+      lastIsLight = !lastIsLight
+      const { theme, minimumContrastRatio } = getTerminalThemeOptions()
+      termRef.current.options.theme = theme
+      termRef.current.options.minimumContrastRatio = minimumContrastRatio
     }))
     themeObserver.observe(document.documentElement, {
       attributes: true,

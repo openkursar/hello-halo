@@ -1,6 +1,6 @@
 # Email Setup — Mailbox Tools vs. Notification Alerts
 
-Last updated: 2026-09-03
+Last updated: 2026-10-18
 
 Read this whenever the user wants Halo to read/send email, wants a digital human to send a
 one-off alert email, or asks "why isn't email working". This topic has no companion documents —
@@ -21,7 +21,7 @@ mechanisms that read the same fields:
 | Purpose | A digital human that manages an inbox as part of its work | A digital human tells someone something happened |
 | Source | `src/main/services/email-mcp/` | `src/main/services/notify-channels/email.ts` |
 | Agent tool surface | `email_list`, `email_read`, `email_search`, `email_send`, `email_reply`, `email_forward`, `email_move`, `email_mark`, `email_delete`, `email_folders`, `email_attachment_download`, plus `calendar_list`/`calendar_create`/`calendar_delete` if CalDAV is configured — all registered by `createEmailMcpServer()`, `src/main/services/email-mcp/index.ts` | `notify_channel` tool (one shared tool across all notify-channel types, not email-specific) |
-| App Spec field | `permissions: ["email"]` (alias for MCP server id `halo-email`, `src/shared/apps/builtin-mcp.ts`) | `output.notify.channels` |
+| App Spec field | `permissions: ["email"]` (alias for MCP server id `halo-email`, `src/shared/apps/builtin-mcp.ts`) | None. `output.notify` is schema-only and never read at runtime. The model calls `notify_channel` with `channel: "email"`, which is offered once the Email channel is enabled (`src/main/apps/runtime/notify-tool.ts:118-148`) — so ask for the alert in `system_prompt`. Desktop toasts are separate: the digital human's **Messages & Notifications** › **System Notifications** level (Important by default) |
 | Gating | Requires the `email` permission **and** the channel to be enabled globally (see §4) | Requires *any* notify-channel enabled, or IM contacts for `notify_bot`; independent of the `email` app permission — `src/main/apps/runtime/notify-availability.ts` |
 
 There is no separate "IMAP settings" or "per-app email account" anywhere in Halo. If a user wants

@@ -16,11 +16,11 @@ const httpState = {
   requests: [] as { url: string; params: URLSearchParams }[],
 }
 
-// The module talks to Feishu through Halo's proxy-aware fetch, so that is what
-// the test replaces — a machine whose route to Feishu is a proxy is the normal
-// case this indirection exists for.
-vi.mock('../../../../../src/main/services/proxy-fetch', () => ({
-  proxyFetch: async (url: string, init?: RequestInit) => {
+// The module talks to Feishu on the message channels' route (proxy-aware), so
+// that is what the test replaces — a machine whose route to Feishu is a proxy
+// is the normal case this indirection exists for.
+vi.mock('../../../../../src/main/apps/runtime/im-channels/link-route', () => ({
+  linkFetch: async (url: string, init?: RequestInit) => {
     httpState.requests.push({
       url,
       params: new URLSearchParams(String(init?.body ?? '')),

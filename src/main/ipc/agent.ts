@@ -35,7 +35,6 @@ import { broadcastToWebSocket, broadcastToAll } from '../http/websocket'
 import { analytics } from '../services/analytics/analytics.service'
 import { agentRpc } from '../../shared/rpc/contracts/agent.contract'
 import { registerRawRpcHandlers } from './rpc'
-import { markIntentionalStop } from '../apps/runtime'
 import { ipcMain } from 'electron'
 import { shouldDeliverAgentEvent } from '../../shared/agent-event-visibility'
 import { clearDetailConversations, setDetailConversations } from '../services/conversation-detail'
@@ -159,7 +158,9 @@ export function registerAgentHandlers(): void {
         // Marked BEFORE stopping: a team member's stop kills its CC subprocess
         // outright (see control.ts), which surfaces the same way a crash does —
         // this is the only thing that tells turn-report.ts the difference.
-        if (conversationId) markIntentionalStop(conversationId)
+        // The app runtime is imported here rather than at the top so it stays
+        // out of what the main process loads before its window opens.
+        if (conversationId) (await import('../apps/runtime')).markIntentionalStop(conversationId)
         stopGeneration(conversationId, { reason: 'user' })
         return { success: true }
       } catch (error: unknown) {

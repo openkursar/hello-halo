@@ -65,3 +65,40 @@ describe('app chat session feed', () => {
     release()
   })
 })
+
+// A list deciding whether it has anything to show must tell "none" from "not
+// read yet"; the first read answers, even when it finds nothing or fails.
+describe('before the first read', () => {
+  async function freshFeed() {
+    vi.resetModules()
+    return import('../../../src/renderer/stores/app-chat-sessions')
+  }
+
+  it('is loading until a read finishes, and tells listeners when one finds nothing', async () => {
+    const feed = await freshFeed()
+    apiMock.imSessionsList.mockResolvedValue({ success: true, data: [] })
+    const listener = vi.fn()
+    const stop = feed.subscribeAppChatSessions(listener)
+    expect(feed.isAppChatSessionsLoading()).toBe(true)
+
+    const release = feed.acquireAppChatSessions()
+    await vi.waitFor(() => expect(feed.isAppChatSessionsLoading()).toBe(false))
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(feed.getAppChatSessions()).toEqual([])
+
+    stop()
+    release()
+  })
+
+  it('stops loading after a failed read too, so no list waits for ever', async () => {
+    const feed = await freshFeed()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    apiMock.imSessionsList.mockResolvedValue({ success: false, error: 'registry unavailable' })
+
+    const release = feed.acquireAppChatSessions()
+    await vi.waitFor(() => expect(feed.isAppChatSessionsLoading()).toBe(false))
+
+    release()
+    warn.mockRestore()
+  })
+})

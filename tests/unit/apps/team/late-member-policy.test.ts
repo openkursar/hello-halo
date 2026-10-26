@@ -241,12 +241,13 @@ describe('what a member added later holds for other computers', () => {
       members: [{ memberName: 'researcher', role: 'Researcher', responsibility: 'Collect sources' }],
     })
     await ctx.service.completeCollab(before.team.id, 'done')
-    ctx.service.saveCollab(before.team.id)
+    ctx.store.clearEphemeral(before.team.id)
     invite(before.team.id)
 
     await ctx.service.runTeam(before.team.id)
 
     const leadAppId = ctx.service.getTeam(before.team.id)!.leadAppId!
     expect(policyOf(before.team.id, leadAppId)).toEqual(READ_ONLY)
+    expect(ctx.store.getMember(before.team.id, leadAppId)?.acceptsChecks).toBe(true)
   })
 })

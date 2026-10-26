@@ -225,6 +225,10 @@ export interface ReplicationDeps {
    * Default: no-op.
    */
   onReplicaApplied?: (applied: ReplicaAppliedBatch) => void
+  /** A requested peer's current-tenure catch-up reached its reported head. */
+  onCatchupComplete?: (from: NodeId, term: number) => void
+  /** The request expired; the owner decides whether recovery still needs it. */
+  onCatchupTimeout?: (from: NodeId) => void
   /**
    * Fired for every committed replicate frame this standby receives (a post-commit
    * fan-out proves the authority accepted that fid). Used as the POSITIVE ack for a
@@ -264,6 +268,8 @@ export interface Replication {
    * catch-up from its durable log (not only the authority).
    */
   requestCatchupFrom(peer: NodeId): void
+  /** Cancel an outstanding catch-up when the office stops. */
+  cancelCatchup(): void
 
   /** Dispatch any M2 frame this layer owns, by frame.kind (Lead routes onM2Frame here). */
   handleM2Frame(from: NodeId, frame: M2Frame): void
@@ -328,6 +334,7 @@ export function createReplication(deps: ReplicationDeps): Replication {
   let catchupInFlight = false
   // The request a catch-up response must answer; any other response is dropped.
   let outstandingCatchupFid: Fid | null = null
+  let outstandingCatchupPeer: NodeId | null = null
   let catchupTimer: ReturnType<typeof setTimeout> | null = null
   // Pages applied in the current self-driven catch-up run (logged once at the end).
   let catchupPagesInRun = 0
@@ -820,7 +827,10 @@ export function createReplication(deps: ReplicationDeps): Replication {
 
   /** STANDBY: ask the authority to replay the run above our applied water mark. */
   function requestCatchup(authority: NodeId): void {
-    if (catchupInFlight) return
+    if (catchupInFlight && outstandingCatchupPeer === authority) return
+    if (catchupInFlight) {
+      console.log(`${LOG_TAG} replacing catch-up peer office=${officeId} from=${outstandingCatchupPeer} to=${authority}`)
+    }
     catchupInFlight = true
     const frame: CatchupRequestFrame = {
       kind: 'catchup-request',
@@ -830,17 +840,22 @@ export function createReplication(deps: ReplicationDeps): Replication {
       fid: randomUUID(),
     }
     outstandingCatchupFid = frame.fid
+    outstandingCatchupPeer = authority
     if (catchupPagesInRun === 0) {
       console.log(`${LOG_TAG} requesting catch-up office=${officeId} from=${replicaAppliedSeq}`)
     }
-    send(authority, frame)
     // Clear the in-flight latch after a bounded window so a lost response re-asks.
     if (catchupTimer) clearTimeout(catchupTimer)
     catchupTimer = setTimeout(() => {
       catchupInFlight = false
+      outstandingCatchupFid = null
+      outstandingCatchupPeer = null
       catchupTimer = null
+      console.warn(`${LOG_TAG} catch-up timed out office=${officeId} peer=${authority}`)
+      deps.onCatchupTimeout?.(authority)
     }, REPLICATION_ACK_TIMEOUT_MS * 2)
     if (typeof catchupTimer.unref === 'function') catchupTimer.unref()
+    send(authority, frame)
   }
 
   /** AUTHORITY: serve a standby's catch-up request from the durable log/snapshot. */
@@ -887,9 +902,12 @@ export function createReplication(deps: ReplicationDeps): Replication {
   /** STANDBY: apply a catch-up reply — replay entries in order, or a snapshot. */
   function handleCatchupResponse(from: NodeId, frame: CatchupResponseFrame): void {
     if (frame.officeId !== officeId) return
-    if (frame.term < getTerm()) return // from a sealed tenure
-    if (frame.reFid !== outstandingCatchupFid) return // not an answer to our request
+    if (frame.term < getTerm() || frame.reFid !== outstandingCatchupFid || from !== outstandingCatchupPeer) {
+      console.warn(`${LOG_TAG} catch-up response ignored office=${officeId} peer=${from} term=${frame.term} reason=${frame.term < getTerm() ? 'stale-term' : 'not-requested'}`)
+      return
+    }
     outstandingCatchupFid = null
+    outstandingCatchupPeer = null
     catchupInFlight = false
     if (catchupTimer) {
       clearTimeout(catchupTimer)
@@ -913,9 +931,15 @@ export function createReplication(deps: ReplicationDeps): Replication {
     // remaining gap. A page that advanced nothing must not re-ask the same range.
     if (entries.length >= REPLICATION_CATCHUP_BATCH && replicaAppliedSeq > appliedBefore) {
       requestCatchup(from)
-    } else if (catchupPagesInRun > 0) {
-      console.log(`${LOG_TAG} catch-up done office=${officeId} appliedSeq=${replicaAppliedSeq} pages=${catchupPagesInRun}`)
-      catchupPagesInRun = 0
+    } else {
+      if (catchupPagesInRun > 0) {
+        console.log(`${LOG_TAG} catch-up done office=${officeId} appliedSeq=${replicaAppliedSeq} pages=${catchupPagesInRun}`)
+        catchupPagesInRun = 0
+      }
+      const lastSeq = entries.at(-1)?.seq ?? 0
+      if (!catchupInFlight && getAppliedSeq() >= Math.max(frame.committedSeq, lastSeq)) {
+        deps.onCatchupComplete?.(from, frame.term)
+      }
     }
   }
 
@@ -1083,6 +1107,13 @@ export function createReplication(deps: ReplicationDeps): Replication {
     handleBlackboardWrite,
     buildCatchup,
     requestCatchupFrom: (peer) => requestCatchup(peer),
+    cancelCatchup: () => {
+      if (catchupTimer) clearTimeout(catchupTimer)
+      catchupTimer = null
+      catchupInFlight = false
+      outstandingCatchupFid = null
+      outstandingCatchupPeer = null
+    },
     handleM2Frame,
     getAppliedSeq,
   }

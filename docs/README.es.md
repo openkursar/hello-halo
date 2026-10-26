@@ -2,163 +2,164 @@
 
 <img src="../resources/icon.png" alt="Halo Logo" width="120" height="120">
 
-# Halo
+# Halo: estación de trabajo de IA
 
-### Tu Estación de Trabajo con IA — Para Equipos e Individuos
-
-Despliegue local. Automatízalo todo, las 24 horas. Los Humanos Digitales con IA trabajan mientras tú tomas las decisiones.
+**Estación de trabajo de IA de escritorio y de código abierto · Equipos de Humanos Digitales · Delega trabajo desde cualquier lugar**
 
 [![GitHub Stars](https://img.shields.io/github/stars/openkursar/hello-halo?style=social)](https://github.com/openkursar/hello-halo/stargazers)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20Web-lightgrey.svg)](#instalación)
 [![Downloads](https://img.shields.io/github/downloads/openkursar/hello-halo/total.svg)](https://github.com/openkursar/hello-halo/releases)
 
-[**Descargar**](#instalación) · [**Documentación**](#documentación) · [**Contribuir**](#contribuir)
+[**Descargar**](#instalación) · [**Web y documentación**](https://hello-halo.cc/) · [**Contribuir**](#contribuir)
 
-**[English](../README.md)** | **[简体中文](./README.zh-CN.md)** | **[繁體中文](./README.zh-TW.md)** | **Español** | **[Deutsch](./README.de.md)** | **[Français](./README.fr.md)** | **[日本語](./README.ja.md)**
-
-</div>
-
-<!-- TODO: Replace with a 30-second GIF showing: user types a sentence -> Agent automatically writes code -> files appear in Artifact Rail -> preview the result -->
-<div align="center">
-
-![Tienda de Humanos Digitales con IA](./assets/shop_dh.png)
+**[English](../README.md)** | **[简体中文](./README.zh-CN.md)** | **[繁體中文](./README.zh-TW.md)** | **[Deutsch](./README.de.md)** | **[Français](./README.fr.md)** | **[日本語](./README.ja.md)**
 
 </div>
 
 ---
+
+Halo es una estación de trabajo de IA de escritorio y de código abierto. En el día a día funciona como las mesas de trabajo de IA de escritorio que ya conoces: conversar, escribir código, crear documentos, investigar. Además, cuentas con **Humanos Digitales** —miembros de IA que permanecen de guardia— y puedes organizarlos en equipos que se reparten el trabajo. Cuando estás lejos del ordenador, delega y haz seguimiento desde el teléfono, Feishu, WeChat o WeCom.
+
+<p align="center">
+  <img src="./assets/cards/team-poster.jpg" width="440" alt="Equipo de Humanos Digitales: tu Lead coordina al equipo mientras los Humanos Digitales de tus compañeros trabajan en sus propios ordenadores e intercambian mensajes, tareas y resultados a través del equipo">
+</p>
 
 ## ¿Por qué Halo?
 
-Halo es una estación de trabajo con IA impulsada por un Agent de vanguardia con una arquitectura de motor conectable — compatible con [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex) y más. Con una capa de producto completa de más de 300,000 líneas de código, validada por decenas de miles de usuarios y funcionando de forma estable en entornos empresariales, Halo ofrece:
+Hoy todo el mundo usa IA, y el rendimiento de cada persona ha subido. Pero los relevos entre tareas siguen pasando por personas: copiar la conclusión de una IA en otra IA, enviar archivos y hallazgos a un compañero, y que ese compañero vuelva a explicárselo todo a su propia IA. Las personas se han convertido en el cuello de botella: cada uno va más rápido, pero el equipo no.
 
-| Lo que Halo ofrece |
-|:---:|
-| **Tu Compañero Diario de IA** — programación, diseño de producto, operaciones, redacción, investigación — tu compañero de trabajo diario |
-| **100% Local, Cero Dependencia de la Nube** — los datos nunca salen de tu máquina, cumple los requisitos de conformidad empresarial |
-| **Humanos Digitales con IA** — trabajadores de IA que operan de forma autónoma 7x24, gestionando monitoreo, informes y operaciones rutinarias |
-| **AI Browser** — navegador integrado controlado directamente por la IA, automatiza cualquier sistema basado en web |
-| **Base de Conocimientos** — añade tus archivos, la IA los consulta automáticamente al responder o trabajar |
-| **AI Terminal** — terminal integrada que la IA puede operar directamente, SSH, bastion hosts, cualquier herramienta CLI |
-| **La IA Opera el Propio Halo** — cientos de funcionalidades, controladas por lenguaje natural, cargadas bajo demanda sin coste de contexto en reposo |
-| **Control Nativo de WeCom / WeChat** — gestiona agentes de IA desde el IM empresarial, sin coste de formación |
-| **Acceso Remoto** — controla desde teléfono / H5 / WeChat / Android, los gerentes revisan el progreso en movimiento |
-| **Descargar y Listo** — sin configuración, sin backend necesario, TI lo despliega en minutos |
+Halo permite que las IA se repartan el trabajo, se lo pasen, acumulen memoria y permanezcan de guardia por sí mismas; las personas marcan la dirección y toman las decisiones. La productividad personal suma; la colaboración multiplica.
 
-> 100% compatible con las capacidades de Agent de Claude Code, MCP y Skills.
+- **Para quién**: usuarios intensivos de IA, desarrolladores, investigadores y equipos de operaciones, y pequeños equipos que integran la IA en su flujo de trabajo diario.
+- **Tres cosas**: [Tu mesa de trabajo de IA para el día a día](#1-tu-mesa-de-trabajo-de-ia-para-el-día-a-día) · [Humanos Digitales y equipos de Humanos Digitales](#2-humanos-digitales-y-equipos-de-humanos-digitales) · [Delega trabajo desde cualquier lugar](#3-delega-trabajo-desde-cualquier-lugar)
+- **Escrito por Halo**: una gran estación de trabajo de IA que se mejora a sí misma con IA — más de 500.000 líneas de código, funcionando de forma estable en entornos empresariales financieros.
 
 ---
 
-## Humanos Digitales con IA — Tu Fuerza de Trabajo Autónoma
+## 1. Tu mesa de trabajo de IA para el día a día
 
-Dale un objetivo y una frecuencia, y un Humano Digital con IA funciona como un empleado — no un bot que ejecuta un script fijo, sino un compañero de trabajo digital con memoria, criterio y manos.
+- **Chat + lienzo**: informes, código, páginas web, terminales y Word / Excel / PDF se abren justo al lado de la conversación; selecciona un fragmento y añade una nota, y la IA sabe exactamente a qué te refieres.
+- **Capacidades bajo demanda**: el "+" del cuadro de entrada activa el control web, la colaboración en equipo, el terminal de IA, el OCR y el manejo de Halo; adjunta archivos y carpetas locales directamente, sin subir nada.
+- **Programación**: elige Claude Code, Codex, Halo SDK u otros motores; mira exactamente qué ha cambiado la IA en la vista de cambios y lanza con un clic una revisión rápida o una revisión en equipo con varios roles.
+- **Navegador y terminal de IA**: la IA maneja un navegador y un terminal reales mientras tú miras, y puedes tomar el control o detenerla en cualquier momento.
+- **Documentos de oficina**: las Skills de documentos y el entorno de ejecución integrados crean y editan archivos Word, Excel, PowerPoint y PDF sin tener que instalar antes un montón de dependencias.
+- **Base de Conocimientos y memoria**: los archivos, carpetas, PDF y documentos de Office de una base de conocimientos se citan con su fuente mientras conversas; los chats de un mismo Space comparten memoria, organizada en estado actual, historial y temas, para que un chat nuevo no empiece de cero.
+- **Conversaciones conectadas, IA que maneja Halo**: abre un chat nuevo y pregunta "¿cómo van las otras conversaciones?": las revisa una por una y te hace un resumen; la IA también puede gestionar por ti los Spaces, los Humanos Digitales y la configuración.
+- **Trae tus herramientas**: conecta servidores MCP y Skills con un clic, compatible con el ecosistema de MCP y Skills de Claude Code.
+- **Varios modelos, varias cuentas**: cualquier API compatible con Anthropic / OpenAI, o inicia sesión en varias cuentas de ChatGPT, Claude y GitHub Copilot a la vez; cambia de modelo y de nivel de razonamiento en cada conversación.
 
-**Totalmente equipado:** los Humanos Digitales con IA comparten exactamente las mismas capacidades de Agent que el modo de conversación — AI Browser para la web, AI Terminal para el sistema operativo y herramientas CLI, WeCom/WeChat para mensajería, e incluso operan el propio Halo para cambiar la configuración. No es un bot de navegador de un solo truco.
+<p align="center">
+  <img src="./assets/composer-capabilities.png" alt="El menú + del chat activa el control web, la colaboración en equipo, el terminal de IA y más"><br>
+  <sub>Fig. 1　El menú "+" activa el control web, la colaboración en equipo, el terminal de IA y más, solo cuando hace falta</sub>
+</p>
 
-**Memoria a largo plazo:** cada ejecución no empieza de cero — un Humano Digital recuerda dónde se quedó, qué ha visto, qué concluyó — acumulando resultados con el tiempo en lugar de repetir el mismo trabajo.
+<p align="center">
+  <img src="./assets/task-plan.png" alt="La IA divide una tarea en un plan, busca en la web y la resuelve paso a paso"><br>
+  <sub>Fig. 2　La IA divide una tarea en un plan, busca en la web y la resuelve paso a paso</sub>
+</p>
 
-### Agentes Autónomos Funcionando 7x24
-
-Crea un Humano Digital con IA, asígnale una tarea y una frecuencia de ejecución, y funciona de forma autónoma según el horario. Sin pantalla que vigilar, sin scripts que supervisar.
-
-**Automatización de Redes Sociales y Plataformas de Contenido:**
-
-- Respuesta automática a comentarios y mensajes directos en Xiaohongshu, Bilibili, Zhihu
-- Publicación programada de contenido en Twitter / X, cuentas oficiales de WeChat
-- Monitoreo de menciones de marca y actividad de la competencia, generación de resúmenes diarios
-- Seguimiento de tendencias y redacción automática de sugerencias de contenido
-
-**Automatización Empresarial Interna:**
-
-- Patrullaje de sistemas internos OA / CRM / ERP, señalización de tickets vencidos y anomalías
-- Generación de informes diarios de standup a partir de la actividad en Jira / GitLab / GitHub
-- Monitoreo de pipelines CI/CD, notificación de fallos de compilación, creación automática de tickets de incidentes
-- Ejecución de verificaciones de conformidad programadas en dashboards internos
-- Recopilación de datos interdepartamentales y elaboración de resúmenes ejecutivos semanales
-
-Instala con un clic desde la **Tienda de Humanos Digitales con IA**, despliega una **tienda privada** para tu organización, o crea los tuyos propios usando lenguaje natural.
-
-> Piensa en ello como cron + RPA + AI Agent en uno — excepto que simplemente describes lo que quieres en lenguaje natural.
-
-**WeChat / WeCom es tu panel de control.** Los Humanos Digitales con IA soportan control conversacional bidireccional a través de WeChat personal / WeCom (WeChat Empresarial) — no solo recibes notificaciones, puedes dar instrucciones, verificar el progreso y solicitar informes directamente en tu IM empresarial.
-
-![AI Digital Human](./assets/ai-digital-human.png)
-
-*Míralo en acción — Humanos Digitales operando Zhihu, Bilibili, Xiaohongshu y X las 24 horas (Browser Actions listas para usar en la tienda):*
-
-[![中文 点击播放](https://img.shields.io/badge/▶_点击播放-FB7299?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1yfNuzaEtv/) &nbsp; [![Watch the Video](https://img.shields.io/badge/▶_Watch_the_Video-FB7299?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1yfNuzaEtv/)
-
-### Halo Browser Action — La IA Decide, los Scripts Ejecutan
-
-El RPA tradicional sigue un script fijo y se rompe en cuanto algo cambia; Halo invierte esa lógica: **la IA toma la decisión, la Browser Action la ejecuta con precisión.**
-
-Una Browser Action es un tipo especial de Skill: un script `.js` reutilizable para una operación concreta en una plataforma. La IA solo decide *qué* hacer y *cuándo* — el script ya sabe *cómo*. Esto es lo que diferencia a Halo de los "agentes de navegador con IA" que navegan sin rumbo haciendo clics aleatorios.
-
-Los scripts se ejecutan directamente en un navegador real, con acceso completo al DOM de la página, cookies y APIs internas. Funciona tanto para plataformas públicas como para sistemas empresariales privados.
-
-Las Browser Actions listas para usar están disponibles para Xiaohongshu, Bilibili, Zhihu, Twitter / X, WeChat y más. Los equipos empresariales pueden escribir Actions privadas para sistemas internos, y la comunidad puede contribuir y compartir las suyas propias. **La IA decide. Las Actions ejecutan. Estable, repetible, auditable.**
-
-¿Quieres crear una tú mismo? En la documentación hay un tutorial completo — crear un **Asistente de Aprobación OA** que revisa según un horario un sistema interno que requiere inicio de sesión: [**Crea un Humano Digital con Browser Action →**](https://hello-halo.cc/docs/digital-humans/guide-02-build.html)
-
-### Acceso Remoto — Gestiona tu Flota de IA Desde Cualquier Lugar
-
-Una vez habilitado el Acceso Remoto, tu teléfono / H5 / WeChat / cliente Android puede controlar Halo en tu escritorio. Durante reuniones, desplazamientos o en ruta — revisa los resultados de los Humanos Digitales, aprueba decisiones y emite nuevas instrucciones sin estar en tu escritorio.
+<p align="center">
+  <img src="./assets/mcp-connections.png" alt="Conecta con un clic servicios MCP como las tareas pendientes y los documentos de WeCom"><br>
+  <sub>Fig. 3　Conecta las herramientas que usas: tareas pendientes y documentos de WeCom y otros servicios MCP, con un clic</sub>
+</p>
 
 ---
 
-## Base de Conocimientos
+## 2. Humanos Digitales y equipos de Humanos Digitales
 
-Añade tus archivos habituales y la IA los consulta automáticamente al responder preguntas o realizar trabajo.
+Una sola IA que lo hace todo tiene la atención limitada; una IA que solo te conoce a ti no puede ayudar a todo el equipo. La división del trabajo también funciona con la IA.
 
-Compatible con PDF, PPT, Markdown y otros archivos de oficina comunes, además de OCR de imágenes. Crea una base de conocimientos, vincúlala a un Space y simplemente pregúntale a la IA "qué hay en mi base de conocimientos" para usarla.
+| | Una IA lo hace todo | Un equipo de Humanos Digitales |
+|---|---|---|
+| Reparto del trabajo | Instrucciones y herramientas amontonadas | Cada Humano Digital se encarga de un paso |
+| Cuando algo falla | Difícil saber qué paso falló | El paso que falla salta a la vista |
+| Relevos | Las personas reenvían y vuelven a explicar el contexto | Los Humanos Digitales se preguntan y se entregan el trabajo directamente |
+| A quién puede llegar | Solo a ti | También a los Humanos Digitales de tus compañeros |
+
+- **Humanos Digitales**: miembros de IA que permanecen de guardia. Se ejecutan según un horario o por eventos (opcionalmente solo en días laborables de China continental, teniendo en cuenta festivos y días laborables de recuperación), aceptan un recordatorio que menciones en el chat, se instalan desde la tienda con un clic o se crean con una sola frase.
+- **Forma un equipo con una frase**: en cualquier Space, dile a la IA "forma un equipo para investigar estos tres productos", y la investigación, la verificación y la redacción se reparten; para seguir usándolo, di "conserva este equipo", e incluso puedes asignar un horario a todo el equipo.
+- **Equipos entre ordenadores**: tus compañeros se unen a tu equipo con sus propios Humanos Digitales, cada uno ejecutándose en el ordenador de su propietario. Los datos se quedan en cada ordenador; solo los resultados publicados en el equipo circulan por él, y los permisos de cada Humano Digital los fija su propietario. En la misma LAN, activa el Acceso Remoto para invitar; entre redes distintas, configura una pasarela de retransmisión en Ajustes.
+- **Ve cómo avanza el trabajo**: el panel del equipo muestra tareas, progreso, relevos entre compañeros y resultados. Los Humanos Digitales se organizan entre ellos y solo te traen lo que el equipo no puede decidir.
+
+> Prueba a decir: "Investiga estos productos: reúne fuentes por separado, contrasta las conclusiones y júntalo todo en un informe."
+
+<p align="center">
+  <img src="./assets/team-workspace.png" alt="Equipo de Humanos Digitales: el líder asigna tareas, los miembros entregan resultados y se revisan entre sí"><br>
+  <sub>Fig. 4　Un equipo de Humanos Digitales: el líder asigna tareas, los miembros entregan resultados y se revisan entre sí</sub>
+</p>
+
+<p align="center">
+  <img src="./assets/daily-digest.png" alt="Un Humano Digital de resumen diario de noticias se ejecuta cada día a las 08:00 y envía los resultados a WeCom"><br>
+  <sub>Fig. 5　Un Humano Digital de resumen diario de noticias: se ejecuta cada día a las 08:00 y envía el resultado a WeCom</sub>
+</p>
+
+### Tienda, Browser Actions y ecosistema
+
+- **Tienda de Humanos Digitales**: elige uno, rellena algunos ajustes y empieza a funcionar, sin escribir prompts. Las organizaciones pueden alojar una tienda privada y añadirla en Ajustes.
+- **Browser Action: la IA decide, los scripts ejecutan**: escribe una operación concreta en una plataforma como un script `.js` reutilizable; la IA solo decide qué hacer y cuándo, y el script lo ejecuta con precisión. Hay Actions listas para usar en Xiaohongshu, Bilibili, Zhihu, X y más, y puedes escribir Actions privadas para sistemas internos. [Crea una →](https://hello-halo.cc/docs/en/developers/digital-humans/build.html)
+- **Publica tu Humano Digital**: escribe un `spec.yaml` y abre un PR en el [Digital Human Protocol (DHP)](https://github.com/openkursar/digital-human-protocol); una vez fusionado, todos los usuarios de Halo podrán instalarlo.
+
+<p align="center">
+  <img src="./assets/shop_dh.png" alt="Tienda de Humanos Digitales: Humanos Digitales listos para redes sociales, resúmenes de noticias, monitorización y más"><br>
+  <sub>Fig. 6　Tienda de Humanos Digitales: redes sociales, resúmenes de noticias, monitorización y más; instalar y listo</sub>
+</p>
 
 ---
 
-## AI Terminal
+## 3. Delega trabajo desde cualquier lugar
 
-Halo incluye una terminal integrada que la IA puede operar directamente — SSH, bastion hosts, inicios de sesión con ping+token, o controlando herramientas CLI nativas como Claude Code / Codex.
+El trabajo sigue avanzando cuando estás lejos del ordenador.
 
-La terminal es persistente y visible: ciérrala tú mismo cuando termines, o ábrela en cualquier momento para tomar el control manualmente — humano e IA pueden traspasarse el control sin conflictos.
+- **Teléfono y web remota**: accede de forma remota al Halo que se ejecuta en el ordenador de casa o de la oficina: delega tareas, sube material, descarga resultados.
+- **IM**: Feishu, WeChat y WeCom. Delega trabajo a un Humano Digital desde la ventana de chat que ya usas; detrás puede haber un equipo entero.
+- **Decide desde el IM**: los resultados llegan al chat; cuando algo requiere tu decisión, responde una vez y el trabajo sigue adelante.
+
+<p align="center">
+  <img src="./assets/mobile-remote.png" width="640" alt="Halo en el teléfono: a la izquierda, la pantalla de inicio; a la derecha, un resultado que terminó el ordenador"><br>
+  <sub>Fig. 7　Halo en tu teléfono: todas las funciones en el bolsillo y una frase para poner a trabajar a tu ordenador</sub>
+</p>
+
+---
+
+## Casos de uso
+
+| Escenario | Qué haces | Qué obtienes |
+|---|---|---|
+| Investigación de competidores / mercado | Forma un equipo con una frase: investigar, verificar, redactar | Sigues el progreso en el panel del equipo y recibes un informe terminado |
+| Resumen diario | Un Humano Digital recopila noticias del sector o de ingeniería en días laborables | Enviado a Feishu / WeCom antes de empezar a trabajar |
+| De viaje | Di "revisa esta propuesta" en WeChat desde el teléfono | Abres el resultado al volver al ordenador o lo descargas en el teléfono |
+| Programación | Revisa las ediciones de la IA en la vista de cambios y lanza una revisión en equipo | Sabes exactamente qué cambió y haces commit con confianza |
+| Documentos de oficina | Pide un informe semanal, una hoja de cálculo, una presentación | Obtienes archivos reales de Word / Excel / PowerPoint |
+| Patrulla de sistemas internos | Un Humano Digital inicia sesión en sistemas de OA, aprobaciones y tickets según un horario | Elementos vencidos y anomalías enviados al IM para que los gestiones |
+| Gestión de redes sociales | Instala desde la tienda un Humano Digital con Browser Action listo para usar | Respuestas programadas a comentarios, publicaciones y seguimiento de menciones |
+
+**Ver**: [Demo del producto](https://www.bilibili.com/video/BV1jEZYBaEcy/) · [Humanos Digitales funcionando 7x24](https://www.bilibili.com/video/BV1yfNuzaEtv/) · [Navegador de IA](https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003)
 
 ---
 
-## La IA Opera el Propio Halo
+## Inicio rápido
 
-Cientos de operaciones — configuración, gestión de sesiones, configuración del bot de WeCom — realizadas directamente mediante lenguaje natural, sin bucear entre menús.
-
-Estas operaciones no consumen contexto por defecto: solo se carga bajo demanda aquella sobre la que preguntas, así que cientos de funcionalidades nunca ralentizan la conversación.
-
----
-
-## Inicio Rápido
-
-**Empieza en 30 segundos:**
-
-1. [Descarga e instala](#instalación), inicia Halo
-2. Introduce tu API Key (Anthropic recomendado)
-3. Comienza a chatear — prueba `Build a todo app with React` o `Help me analyze the code structure of this project`
-4. Observa cómo aparecen los archivos en el Artifact Rail, haz clic para previsualizar, solicita cambios
-
-> Modelos recomendados: Series Claude Sonnet / Opus
-
----
+1. [Descarga e instala](#instalación) y abre Halo.
+2. Inicia sesión con una cuenta de Claude o ChatGPT, o introduce una API key de cualquier proveedor compatible con Anthropic / OpenAI.
+3. Crea un Space: un proyecto por Space, para que los archivos y la memoria queden separados.
+4. Delega trabajo en el chat, o instala Humanos Digitales desde la tienda y forma un equipo con una frase.
+5. Cuando lo necesites, activa el Acceso Remoto o conecta Feishu / WeChat / WeCom y continúa desde cualquier lugar.
 
 ## Instalación
 
-### Descarga (Recomendado)
-
 | Plataforma | Descarga | Requisitos |
-|----------|----------|--------------|
-| **macOS** (Apple Silicon) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
-| **macOS** (Intel) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
-| **Windows** | [.exe](https://github.com/openkursar/hello-halo/releases/latest) | Windows 10+ |
-| **Linux** | [.AppImage](https://github.com/openkursar/hello-halo/releases/latest) | Ubuntu 22.04+ |
-| **Android** | [.apk](https://github.com/openkursar/hello-halo/releases/latest) | Android 8+ |
-| **iOS** | Compilar desde el código fuente | iOS 15+ |
+|---|---|---|
+| macOS (Apple silicon) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
+| macOS (Intel) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
+| Windows | [.exe](https://github.com/openkursar/hello-halo/releases/latest) | Windows 10+ (x64) |
+| Linux | [.AppImage](https://github.com/openkursar/hello-halo/releases/latest) | glibc 2.34+ (Ubuntu 22.04+, Debian 12+) |
+| Android (cliente remoto) | [.apk](https://github.com/openkursar/hello-halo/releases/latest) | Android 7.0+ |
+| iOS (cliente remoto) | Compilar desde el código fuente | iOS 15+ |
 
-**Descarga, instala, ejecuta.** No necesitas Node.js, npm, ni terminal. TI puede distribuirlo en toda la organización sin dependencias del lado del servidor.
+Descarga, instala y ejecuta: sin Node.js, npm ni línea de comandos, y sin servidor que desplegar, así que el departamento de TI puede distribuirlo directamente. Las actualizaciones se instalan solas: en Windows, a partir de la 3.0, la nueva versión se prepara en segundo plano y un reinicio la completa. La versión para Linux aún no incluye el terminal de IA.
 
-### Compilar desde el Código Fuente
+### Compilar desde el código fuente
 
 ```bash
 git clone https://github.com/openkursar/hello-halo.git
@@ -170,123 +171,23 @@ npm run dev
 
 ---
 
-## Tienda de Humanos Digitales con IA
+## Bajo el capó
 
-<table>
-<tr>
-<td width="50%" valign="top">
-
-### Para Usuarios — Instala y Usa al Instante
-
-Abre la Tienda de Humanos Digitales con IA, elige uno, completa algunos campos de configuración y comienza a funcionar automáticamente. Sin necesidad de programar, sin prompts que escribir.
-
-![Instalación de Humano Digital](./assets/app_detail_install.png)
-
-</td>
-<td width="50%" valign="top">
-
-### Para Desarrolladores — Crea y Publica
-
-Escribe un `spec.yaml` y envía un PR al [AI Digital Human Protocol (DHP)](https://github.com/openkursar/digital-human-protocol). Una vez fusionado, estará disponible inmediatamente para todos los usuarios de Halo.
-
-También puedes escribir Halo Browser Actions (scripts `.js`) para que los Humanos Digitales con IA ejecuten operaciones con precisión en plataformas específicas.
-
-</td>
-</tr>
-</table>
-
----
-
-## Capturas de Pantalla
-
-![Chat Intro](./assets/chat_intro.jpg)
-
-![Chat Todo](./assets/chat_todo.jpg)
-
-*Tienda de Skills: instalación con un clic para generación de contenido, herramientas de desarrollo, análisis de datos y más*
-
-![Tienda de Skills](./assets/shop_skill.png)
-
-*Acceso Remoto: Controla Halo desde cualquier lugar*
-
-![Remote Settings](./assets/remote_setting.jpg)
-
-<p align="center">
-  <img src="./assets/mobile_remote_access.jpg" width="45%" alt="Acceso Remoto Móvil">
-  &nbsp;&nbsp;
-  <img src="./assets/mobile_chat.jpg" width="45%" alt="Chat Móvil">
-</p>
-
-*AI Browser*
-
-https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
-
-*Recorrido del producto*
-
-[![中文 点击播放](https://img.shields.io/badge/▶_点击播放-FB7299?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1jEZYBaEcy/) &nbsp; [![Watch the Demo](https://img.shields.io/badge/▶_Watch_the_Demo-FB7299?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1jEZYBaEcy/)
-
----
-
-## Arquitectura
-
-Motor conectable: la misma experiencia de producto, con Claude Code, Codex y otros motores de Agent intercambiables por debajo.
-
----
-
-## Más Funcionalidades
-
-- **100% Local** — Tus datos nunca salen de tu máquina, cumple los requisitos de conformidad empresarial
-- **Sin Backend Necesario** — Cliente de escritorio puro, despliega en cada estación de trabajo sin infraestructura de servidor
-- **Agent Loop** — No solo genera texto, la IA realmente ejecuta herramientas para hacer el trabajo
-- **Sistema de Spaces** — Espacios de trabajo aislados, los proyectos no interfieren entre sí
-- **Skills** — Instala paquetes de habilidades para ampliar las capacidades del Agent
-- **AI Browser** — Navegador CDP integrado, la IA controla directamente las páginas web
-- **Gestión de Capacidades de Humanos Digitales** — Gestiona visualmente los permisos de MCP y Skills de cada Humano Digital
-- **Zoom de Ventana** — 50%-150% libremente, se adapta a cualquier pantalla o presentación
-- **Soporte Multi-Modelo** — Anthropic, OpenAI, DeepSeek y cualquier API compatible con OpenAI (conéctate a tu gateway LLM empresarial)
-- **Temas Oscuro/Claro** — Sigue la preferencia del sistema
-- **Multi-Idioma** — Chino, inglés, español y más
-
-[**Explorar todas las funcionalidades →**](https://hello-halo.cc/docs/features/spaces.html)
-
----
-
-## Hoja de Ruta
-
-- [x] Agent Loop — ejecución de herramientas, no solo generación de texto
-- [x] Gestión de Spaces y Conversaciones
-- [x] Vista Previa de Artifacts (Código, HTML, Imágenes, Markdown)
-- [x] Acceso Remoto
-- [x] AI Browser (CDP)
-- [x] Soporte de MCP Server
-- [x] Sistema de Skills
-- [x] Humanos Digitales con IA y Tienda de Humanos Digitales con IA
-- [ ] Compatibilidad con Plugins de Ecosistema de Terceros
-- [ ] Experiencia de Edición de Código Mejorada
-- [ ] Git Visual + Revisión de Código Asistida por IA
-- [ ] Búsqueda de Archivos con IA
-- [ ] Grabación de Humanos Digitales de Bajo Coste — graba y reproduce automáticamente flujos de trabajo de IA como Humanos Digitales reutilizables
+- **Código abierto, se ejecuta en tu propio ordenador**: tú controlas tus archivos y tu entorno de trabajo; Halo no tiene ningún servicio backend propio.
+- **Motores de agente intercambiables**: Claude Code, Codex, nuestro propio Halo SDK (más ligero, arranca más rápido y está optimizado para modelos de pesos abiertos) y DeepSeek dsh; elige el que mejor encaje.
+- **Equipos de Humanos Digitales descentralizados y distribuidos**: los miembros colaboran desde distintos ordenadores sin servidor central. El estado del equipo sigue el enfoque del consenso Raft: una mayoría elige el nodo líder, el registro se replica por mandatos y, cuando el ordenador del líder se desconecta, se elige uno nuevo automáticamente, nunca dos a la vez, así que el equipo sigue funcionando. [Cómo funciona](https://hello-halo.cc/docs/en/advanced/team-consensus.html) (en inglés)
+- **Detalles**: Spaces aislados, temas claro y oscuro, zoom de la interfaz del 50 % al 150 % e interfaz en 7 idiomas.
 
 ---
 
 ## Contribuir
 
-```bash
-git clone https://github.com/openkursar/hello-halo.git
-cd hello-halo
-npm install
-npm run prepare
-npm run dev
-```
-
-- **Traducciones** — `src/renderer/i18n/`
-- **Reportar Errores** — [Issues](https://github.com/openkursar/hello-halo/issues)
-- **Sugerencias de Funcionalidades** — [Discussions](https://github.com/openkursar/hello-halo/discussions)
-- **Contribuciones de Código** — Los PRs son bienvenidos
+- **Traducciones**: `src/renderer/i18n/`
+- **Informes de errores**: [Issues](https://github.com/openkursar/hello-halo/issues)
+- **Ideas de funciones**: [Discussions](https://github.com/openkursar/hello-halo/discussions)
+- **Código**: los PR son bienvenidos; consulta [Compilar desde el código fuente](#compilar-desde-el-código-fuente)
 
 Consulta [CONTRIBUTING.md](../CONTRIBUTING.md) para más detalles.
-
----
 
 ## Comunidad
 
@@ -294,27 +195,27 @@ Consulta [CONTRIBUTING.md](../CONTRIBUTING.md) para más detalles.
 - [GitHub Issues](https://github.com/openkursar/hello-halo/issues)
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/500aa749-50d9-4587-986d-338b1ed899f1" width="200" alt="Código QR de WeChat Personal">
+  <img src="https://github.com/user-attachments/assets/500aa749-50d9-4587-986d-338b1ed899f1" width="200" alt="Código QR de WeChat personal">
 </p>
 <p align="center">
-  <em>Para cualquier comentario o discusión, agrega WeChat: go2halo con la nota "Halo"</em>
+  <em>Para cualquier comentario o conversación, agrega en WeChat: go2halo con la nota "Halo"</em>
 </p>
 
 ---
 
-## La Historia de Halo
+## La historia de Halo
 
-En octubre de 2025, una simple frustración: **Quería usar Claude Code, pero estaba atrapado en reuniones todo el día.**
+Octubre de 2025, una frustración sencilla: **quería usar Claude Code, pero me pasaba el día atrapado en reuniones.**
 
-Durante una reunión aburrida, pensé: *¿Y si pudiera controlar Claude Code en mi ordenador de casa desde mi teléfono?*
+Durante una reunión aburrida, pensé: *¿y si pudiera controlar desde el teléfono el Claude Code de mi ordenador de casa?*
 
-Luego vino el segundo problema — los compañeros no técnicos también querían usarlo, pero se quedaban atascados en la instalación. *"¿Qué es npm?"*
+Luego llegó el segundo problema: los compañeros no técnicos también querían usarlo, pero se atascaban en la instalación. *"¿Qué es npm?"*
 
-Así que construí Halo: una interfaz visual, instalación con un clic, acceso remoto. La primera versión tomó unas pocas horas. ¿Todo lo demás? **100% construido por el propio Halo.**
+Así que construí Halo: una interfaz visual, instalación con un clic, acceso remoto. La primera versión llevó unas pocas horas. ¿Todo lo demás? **Casi todo lo construyó el propio Halo.** A principios de 2026, Halo pasó a ser de código abierto.
 
-Ahora, creemos que el siguiente paso es la **Estación de Trabajo con IA**: la IA ya no necesita a alguien observando para hacer su trabajo. Tú estableces los objetivos, los Humanos Digitales con IA avanzan de forma autónoma 7x24. Escribiendo código, ejecutando pruebas, monitoreando despliegues, generando informes — funcionando continuamente, contigo solo tomando decisiones en los puntos de control clave.
+Creemos que el siguiente paso es la **estación de trabajo de IA**: una IA que ya no necesita que alguien la vigile para hacer el trabajo. Tú fijas los objetivos, los Humanos Digitales avanzan 7x24 y tú solo tomas las decisiones en los puntos clave. La 3.0 organiza a los Humanos Digitales en equipos que trabajan entre ordenadores: un paso más cerca.
 
-Eso es lo que Halo está construyendo.
+— [@openkursar-flynn](https://github.com/openkursar-flynn), creador de Halo
 
 ---
 
@@ -338,15 +239,13 @@ MIT — [LICENSE](../LICENSE)
 
 ---
 
-## Socios y Patrocinadores
+## Socios y patrocinadores
 
 Si Halo inspiró tu proyecto o construiste algo basado en él, una mención significaría mucho.
 
-### Socios Empresariales
+### Socios empresariales
 
-<!-- Add your company logo here — submit a PR or contact us at the link below -->
-
-| ¿Tu empresa usa Halo? | [Cuéntanos](https://github.com/openkursar/hello-halo/issues/new?title=Add+our+company+as+partner) — nos encantaría destacarte aquí. |
+| ¿Tu empresa usa Halo? | [Cuéntanos](https://github.com/openkursar/hello-halo/issues/new?title=Add+our+company+as+partner): nos encantaría destacarte aquí. |
 |:---:|:---:|
 
 ### Patrocinadores
@@ -356,13 +255,13 @@ Si Halo inspiró tu proyecto o construiste algo basado en él, una mención sign
 </a>
 
 <p align="center">
-  <a href="https://buy.polar.sh/polar_cl_x7bTGvMvt3rbUt6oE98z0zb2zFz1sT7dG37BA3foNsZ">Polar (International)</a> · <a href="https://ifdian.net/a/hello-halo">爱发电 (Alipay / WeChat)</a>
+  <a href="https://buy.polar.sh/polar_cl_x7bTGvMvt3rbUt6oE98z0zb2zFz1sT7dG37BA3foNsZ">Polar (internacional)</a> · <a href="https://ifdian.net/a/hello-halo">爱发电 (Alipay / WeChat)</a>
 </p>
 
 ---
 
 <div align="center">
 
-[Volver arriba](#halo)
+[Volver arriba](#halo-estación-de-trabajo-de-ia)
 
 </div>

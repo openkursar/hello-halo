@@ -147,8 +147,7 @@ vi.mock('../../../../src/main/services/agent/image-attachments', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getApiCredentials: vi.fn(async () => ({ provider: 'anthropic', model: 'm' })),
-  getApiCredentialsForSource: vi.fn(),
-  getApiCredentialsForConversation: vi.fn(async () => ({ provider: 'anthropic', model: 'm' })),
+  getApiCredentialsForSelection: vi.fn(async () => ({ provider: 'anthropic', model: 'm' })),
   getWorkingDir: vi.fn(() => state.workDir),
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getDbMcpServers: vi.fn(() => null),

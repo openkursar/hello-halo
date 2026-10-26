@@ -12,12 +12,107 @@
       /* Anti-flash: set background before CSS loads */
       html, body, #root { background-color: #181b20; }
       html.light, html.light body, html.light #root { background-color: #ffffff; }
+
+      /* Boot splash: part of the page itself, so the window's first frame
+         already shows it while the app's code loads; lib/boot-splash.ts takes
+         it down once the first screen has rendered. Colors are the theme
+         tokens; the fallbacks are those tokens' values, for dev, where
+         globals.css arrives only with the app's code. */
+      #boot-splash {
+        --boot-background: var(--background, 220 14% 11%);
+        --boot-foreground: var(--foreground, 223 17% 92%);
+        --boot-muted-foreground: var(--muted-foreground, 217 12% 75%);
+        --boot-primary: var(--primary, 217 91% 60%);
+        --boot-glow: var(--halo-glow, 217 91% 60%);
+        position: fixed;
+        inset: 0;
+        z-index: 2147483646;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background-color: hsl(var(--boot-background));
+        color: hsl(var(--boot-foreground));
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-app-region: drag;
+      }
+      html.light #boot-splash {
+        --boot-background: var(--background, 0 0% 100%);
+        --boot-foreground: var(--foreground, 222 16% 11%);
+        --boot-muted-foreground: var(--muted-foreground, 218 9% 39%);
+        --boot-primary: var(--primary, 217 91% 55%);
+        --boot-glow: var(--halo-glow, 217 91% 55%);
+      }
+      #boot-splash *, #boot-splash *::before, #boot-splash *::after { box-sizing: border-box; }
+      .boot-splash-logo { position: relative; width: 96px; height: 96px; }
+      .boot-splash-glow {
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        background-color: hsl(var(--boot-primary) / 0.2);
+        filter: blur(24px);
+        animation: boot-splash-breathe 3s ease-in-out infinite;
+      }
+      .boot-splash-ring {
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        border: 4px solid hsl(var(--boot-primary) / 0.6);
+        box-shadow: 0 0 30px hsl(var(--boot-glow) / 0.4);
+      }
+      .boot-splash-ring-inner {
+        position: absolute;
+        inset: 8px;
+        border-radius: 50%;
+        background-image: linear-gradient(to bottom right, hsl(var(--boot-primary) / 0.3), transparent);
+      }
+      /* Transform/opacity animations only: they keep running while the page's
+         main thread is busy loading the app. */
+      .boot-splash-arc { position: absolute; inset: 0; animation: boot-splash-spin 2s linear infinite; }
+      .boot-splash-arc img { display: block; width: 100%; height: 100%; transform: rotate(-90deg); }
+      html:not(.light) .boot-splash-arc-light, html.light .boot-splash-arc-dark { display: none; }
+      .boot-splash-name {
+        margin-top: 32px;
+        font-size: 36px;
+        line-height: 40px;
+        font-weight: 300;
+        letter-spacing: 0.05em;
+      }
+      .boot-splash-tagline {
+        margin-top: 12px;
+        min-height: 20px;
+        font-size: 14px;
+        line-height: 20px;
+        color: hsl(var(--boot-muted-foreground));
+      }
+      @keyframes boot-splash-breathe {
+        0%, 100% { opacity: 0.6; transform: scale(1); }
+        50% { opacity: 1; transform: scale(1.05); }
+      }
+      @keyframes boot-splash-spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-splash-glow, .boot-splash-arc { animation: none; }
+      }
     </style>
     <script>
       // Anti-flash: apply theme before render (default: follow OS)
       (function() {
         try {
-          var theme = localStorage.getItem('halo-theme') || 'system';
+          // The desktop app passes the theme saved in config (preload); it
+          // wins over the localStorage copy, which is brought in line so the
+          // app keeps it until config loads (App.tsx). A reload of the same
+          // window still gets the theme from when the window was created,
+          // while the app has kept localStorage on the live one.
+          var navigation = performance.getEntriesByType('navigation')[0];
+          var bootTheme = navigation && navigation.type === 'reload' ? null : window.haloBootTheme;
+          var theme = bootTheme || localStorage.getItem('halo-theme') || window.haloBootTheme || 'system';
+          if (bootTheme) localStorage.setItem('halo-theme', theme);
           var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
           if (theme === 'light' || (theme === 'system' && !prefersDark)) {
             document.documentElement.classList.add('light');
@@ -59,6 +154,29 @@
   </head>
   <body>
     <div id="root"></div>
+
+    <div id="boot-splash" aria-hidden="true">
+      <div class="boot-splash-logo">
+        <div class="boot-splash-glow"></div>
+        <div class="boot-splash-ring">
+          <div class="boot-splash-ring-inner"></div>
+          <!-- The arc in both themes' primary colors; the theme picks one. -->
+          <div class="boot-splash-arc">
+            <img class="boot-splash-arc-dark" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='45' fill='none' stroke='%233c83f6' stroke-width='3' stroke-linecap='round' stroke-dasharray='70 200'/%3E%3C/svg%3E">
+            <img class="boot-splash-arc-light" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='45' fill='none' stroke='%232474f5' stroke-width='3' stroke-linecap='round' stroke-dasharray='70 200'/%3E%3C/svg%3E">
+          </div>
+        </div>
+      </div>
+      <div class="boot-splash-name">Halo</div>
+      <div class="boot-splash-tagline" id="boot-splash-tagline"></div>
+      <!-- Shows the window with this splash in its first frame: Electron reveals
+           it once Chromium counts the page as having content, and any laid-out
+           canvas counts at every zoom (the arc image counts only at 100%).
+           Without it the window waits for the app's script. Never put it under
+           display:none. -->
+      <canvas width="0" height="0"></canvas>
+    </div>
+    <!-- boot-splash-script -->
 
     <!-- Global Error Fallback: catches fatal errors before React mounts -->
     <div id="global-error-fallback" style="
@@ -122,6 +240,8 @@
 
           if (fallback && errorMsg) {
             root.style.display = 'none';
+            var splash = document.getElementById('boot-splash');
+            if (splash) splash.remove();
             fallback.style.display = 'block';
             errorMsg.textContent = message;
           }

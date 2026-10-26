@@ -14,7 +14,12 @@ import { getAISourceManager } from '../ai-sources'
 import { getAppManager } from '../app-bridge'
 import type { McpSpec } from '../../apps/spec/schema'
 import type { InstalledApp } from '../../../shared/apps/app-types'
-import { resolveModelId, type BackendRequestConfig, type AISource } from '../../../shared/types/ai-sources'
+import {
+  resolveModelId,
+  type BackendRequestConfig,
+  type AISource,
+  type StoredModelSelection,
+} from '../../../shared/types/ai-sources'
 import { modelCapabilitiesService } from '../model-capabilities.service'
 import { sanitizeCatalogModelCapability } from '../../../shared/model-catalog'
 import { validateModelCapabilityOverride } from '../../../shared/model-capability-overrides'
@@ -169,7 +174,7 @@ export function getWorkingDir(spaceId: string): string {
  * Resolve effective model capabilities for a source + model combination.
  *
  * Centralizes the merge of (built-in preset → per-source modelOverrides) so
- * every credential surface — getApiCredentials, getApiCredentialsForSource,
+ * every credential surface — getApiCredentials, getApiCredentialsForSelection,
  * and any future per-call overrides — produces identical numbers for the
  * same (source, modelId) pair.
  *
@@ -231,14 +236,27 @@ export async function getApiCredentials(): Promise<ApiCredentials> {
   return resolveSourceCredentials(manager, source.id)
 }
 
-/** An unavailable explicit source is an error, never an account substitution. */
-export async function getApiCredentialsForSource(
-  sourceId: string,
-  modelId?: string
+/**
+ * Credentials for a stored selection — a conversation's pin or a digital
+ * human's override. A selection naming an account that no longer exists is
+ * the same as no selection and runs on the current global account: signing
+ * out removes the account and signing in again creates a new one, so
+ * everything pinned to the old account would otherwise be stuck forever. An
+ * account that still exists but cannot be used (signed out, unconfigured)
+ * fails — the user chose it, and running on another account without telling
+ * them is what an explicit selection exists to prevent.
+ */
+export async function getApiCredentialsForSelection(
+  selection: StoredModelSelection | null | undefined
 ): Promise<ApiCredentials> {
   const manager = getAISourceManager()
   await manager.ensureInitialized()
-  return resolveSourceCredentials(manager, sourceId, modelId)
+  const sourceId = selection?.modelSourceId
+  if (sourceId) {
+    if (manager.getSourceConfig(sourceId)) return resolveSourceCredentials(manager, sourceId, selection.modelId)
+    console.warn(`[AgentService] Selected source ${sourceId} no longer exists; using the current source`)
+  }
+  return getApiCredentials()
 }
 
 async function resolveSourceCredentials(
@@ -300,16 +318,6 @@ async function resolveSourceCredentials(
     capabilities: resolveCapabilitiesFromSource(source, effectiveModelId),
     supportsVision: modelOption?.supportsVision,
   }
-}
-
-/** Only legacy conversations without a source pin use the current global selection. */
-export async function getApiCredentialsForConversation(
-  conversation: { modelSourceId?: string; modelId?: string } | null | undefined
-): Promise<ApiCredentials> {
-  const sourceId = conversation?.modelSourceId
-  return sourceId !== undefined
-    ? getApiCredentialsForSource(sourceId, conversation?.modelId)
-    : getApiCredentials()
 }
 
 /**

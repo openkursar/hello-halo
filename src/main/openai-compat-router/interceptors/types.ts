@@ -18,6 +18,8 @@ import type { AnthropicRequest } from '../types'
 export interface InterceptorContext {
   /** Original Anthropic model name */
   originalModel: string
+  /** Strip images when the selected route has no later capability filter. */
+  stripImages?: boolean
   /** Express response object for sending responses */
   res: ExpressResponse
 }

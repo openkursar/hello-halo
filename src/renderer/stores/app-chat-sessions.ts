@@ -3,9 +3,9 @@
  * every list that shows digital-human conversations.
  *
  * One poll and one `im-session:updated` subscription for the whole renderer,
- * running while at least one consumer needs fresh data. Listeners are told only
- * when the records actually changed, so a poll that finds nothing new re-renders
- * nothing.
+ * running while at least one consumer needs fresh data. Listeners are told when
+ * the records actually changed, and once when the first read finishes, so a
+ * poll that finds nothing new re-renders nothing.
  */
 
 import { api } from '../api'
@@ -16,6 +16,7 @@ const POLL_INTERVAL_MS = 15_000
 
 let records: ImSessionRecord[] = []
 let recordsKey = '[]'
+let loading = true
 const listeners = new Set<() => void>()
 let consumers = 0
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -25,6 +26,7 @@ let inFlight: Promise<void> | null = null
 function refresh(): Promise<void> {
   if (inFlight) return inFlight
   inFlight = (async () => {
+    let changed = false
     try {
       const res = await api.imSessionsList()
       if (!res.success || !Array.isArray(res.data)) {
@@ -35,11 +37,16 @@ function refresh(): Promise<void> {
       if (nextKey === recordsKey) return
       records = res.data as ImSessionRecord[]
       recordsKey = nextKey
-      listeners.forEach(listener => listener())
+      changed = true
     } catch (err) {
       console.error('[AppChatSessions] Failed to list sessions:', err)
     } finally {
       inFlight = null
+      if (loading) {
+        loading = false
+        changed = true
+      }
+      if (changed) listeners.forEach(listener => listener())
     }
   })()
   return inFlight
@@ -73,6 +80,14 @@ export function subscribeAppChatSessions(listener: () => void): () => void {
 
 export function getAppChatSessions(): ImSessionRecord[] {
   return records
+}
+
+/**
+ * True until the first read finishes, whether it succeeded or not: until then
+ * no records means "not known yet" rather than "none".
+ */
+export function isAppChatSessionsLoading(): boolean {
+  return loading
 }
 
 /** Fetch the records now, for a one-off lookup that cannot wait for the next poll. */

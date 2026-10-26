@@ -87,9 +87,10 @@ viewport resize, direct `fetch()` calls, DOM queries). `browser_run` (see
 ### Declaring and triggering a login
 
 - A digital human declares required sites via the App Spec's `browser_login: [{ url, label }]`
-  array (`src/main/apps/spec/schema.ts:339-344`, `488`). The Settings tab and the conversational
-  chat header both render a **dismissible amber notice** per entry
-  (`src/renderer/components/apps/LoginNoticeBar.tsx`) with an "Open to log in" button that opens
+  array (`src/main/apps/spec/schema.ts:339-344`, `488`). The digital human's **Work activity**
+  (工作动态) view shows a **dismissible notice** above it (`LoginNoticeBar`,
+  `src/renderer/pages/AppsPage.tsx:351`), and its settings list the sites under **Required Logins**
+  (所需登录, `AppConfigPanel.tsx:940-963`). The notice's "Open to log in" (打开并登录) button opens
   the standalone login window at that URL — into the same shared `persist:browser` partition, so
   anything logged into there is immediately usable by the app's own automated runs.
 - **Halo never verifies the user actually logged in.** `LoginNoticeBar` is "pure presentational"

@@ -124,7 +124,7 @@ first; it exercises the exact same `getBackendConfig` path plus a real network r
 - `maxOutputTokens` warning about Claude Code auto-compact truncation
   (`ModelConfigPanel.tsx:366-374`): appears for any value `0 < value <
   RECOMMENDED_MIN_MAX_OUTPUT_TOKENS`. Recommend raising the value, not disabling the warning.
-- "Invalid JSON — changes not saved" / "Unsupported field(s) ignored: {{fields}}" in the JSON
+- "Invalid JSON — changes not saved" / `Unsupported field(s) ignored: {{fields}}` in the JSON
   tab (`ModelConfigPanel.tsx:211, 226-234`): only `contextWindow`, `maxOutputTokens`, `vision`,
   `thinking`, `reasoningEffort` are recognized; any other key is dropped silently but reported in
   this message — it is not an error in the sense of losing the whole edit, only that one field.

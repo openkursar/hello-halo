@@ -130,6 +130,7 @@ interface InitTeamServiceDeps {
   describeChatKey?: TeamServiceDeps['describeChatKey']
   getViewerIdentity?: TeamServiceDeps['getViewerIdentity']
   getConversationMember?: TeamServiceDeps['getConversationMember']
+  isConversationBusy?: TeamServiceDeps['isConversationBusy']
 }
 
 export function initTeamService(deps: InitTeamServiceDeps): TeamService {
@@ -156,6 +157,7 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
     describeChatKey: deps.describeChatKey,
     getViewerIdentity: deps.getViewerIdentity,
     getConversationMember: deps.getConversationMember,
+    isConversationBusy: deps.isConversationBusy,
   })
   serviceInstance = service
   reconcileCoordinatorIdentity(deps.store, deps.appManager)

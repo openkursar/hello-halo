@@ -292,6 +292,8 @@ export interface HealthStatusChange {
  * Diagnostic report for debugging
  */
 export interface DiagnosticReport {
+  /** Engine lifecycle and bounded runtime counters; contains no account or conversation content. */
+  sdk?: { engine: string | null; initialized: boolean; functions: string[]; runtime?: unknown }
   /** Report generation timestamp */
   timestamp: string
   /** App version */
@@ -329,6 +331,18 @@ export interface DiagnosticReport {
     time: string
     source: string
     message: string
+  }>
+
+  /** Every configured IM channel and how its link is doing (errors sanitized) */
+  imChannels: Array<{
+    type: string
+    ordinal?: number
+    enabled: boolean
+    state: string
+    failures?: number
+    drops?: number
+    viaProxy?: boolean
+    lastError?: string
   }>
 
   /** System info */

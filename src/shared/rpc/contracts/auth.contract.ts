@@ -11,7 +11,7 @@ export type OAuthLoginStart = OAuthStartResult & { loginId: string }
 export const authRpc = {
   authGetProviders: rawRpcMethod('auth:get-providers'),
   authGetBuiltinProviders: rawRpcMethod('auth:get-builtin-providers'),
-  authStartLogin: rawRpcMethod<[providerType: ProviderId, sourceId?: string], RpcResponse<OAuthLoginStart>>('auth:start-login'),
+  authStartLogin: rawRpcMethod<[providerType: ProviderId], RpcResponse<OAuthLoginStart>>('auth:start-login'),
   authOpenLoginWindow: rawRpcMethod<[providerType: ProviderId, loginId: string], RpcResponse<OAuthCompleteResult>>('auth:open-login-window'),
   authCompleteLogin: rawRpcMethod<[providerType: ProviderId, stateOrCode: string, loginId: string], RpcResponse<OAuthCompleteResult>>('auth:complete-login'),
   authCancelLogin: rawRpcMethod<[providerType: ProviderId, loginId: string], RpcResponse<void>>('auth:cancel-login'),

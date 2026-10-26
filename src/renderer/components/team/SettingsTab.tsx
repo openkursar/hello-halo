@@ -6,7 +6,7 @@ import {
   Trash2, Plus, Info, Crown, Star, LogOut, Users, Network,
 } from 'lucide-react'
 import type { TeamDetail, TeamTrigger, TeamScheduleConfig, TeamTriggerInput } from '../../../shared/apps/team-types'
-import { leadAppIdSet } from '../../../shared/apps/team-types'
+import { isRemoteMember, leadAppIdSet } from '../../../shared/apps/team-types'
 import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
 import type { CapabilityPresetId } from '../../../shared/apps/capability-policy'
 import { useTeamStore } from '../../stores/team.store'
@@ -25,6 +25,7 @@ import { HttpTriggerCard } from '../common/HttpTriggerCard'
 import { AppInstallDialog } from '../apps/AppInstallDialog'
 import { DelegationPresetPicker } from '../capability/DelegationPresetPicker'
 import { TeamMemberSettings } from './TeamMemberSettings'
+import { leaveTeamConfirm, leaveTeamHint, withdrawMemberConfirm } from './leave-team'
 
 interface SettingsTabProps {
   detail: TeamDetail
@@ -91,7 +92,7 @@ export function SettingsTab({ detail, openMemberId, onOpenMemberChange }: Settin
               </div>
             )}
             {readOnly
-              ? <LeaveSection teamId={detail.team.id} teamName={detail.team.name} />
+              ? <LeaveSection detail={detail} />
               : <DangerSection detail={detail} />}
           </Disclosure>
         </div>
@@ -324,6 +325,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   const { t } = useTranslation()
   const addMember = useTeamStore(s => s.addMember)
   const removeMember = useTeamStore(s => s.removeMember)
+  const withdrawMember = useTeamStore(s => s.withdrawMember)
   const updateTeam = useTeamStore(s => s.updateTeam)
   const teams = useTeamStore(s => s.teams)
   const allApps = useAppsStore(s => s.apps)
@@ -359,6 +361,23 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
      */
     inOwningSpace: boolean
   } | null>(null)
+  // In a team joined from elsewhere, each digital human of this computer can be
+  // taken out on its own. The last one going is this computer leaving the team.
+  // The roster can change under an open dialog (an earlier removal lands, the
+  // host takes one out), so the dialog speaks of the members as they are now,
+  // closes once its member is gone, and what the press does is decided when it
+  // runs.
+  const [withdraw, setWithdraw] = useState<{ appId: string; name: string } | null>(null)
+  const ownMembers = detail.members.filter(m => !isRemoteMember(m))
+  const withdrawTarget = withdraw && ownMembers.some(m => m.appId === withdraw.appId) ? withdraw : null
+  useEffect(() => {
+    if (withdraw && !withdrawTarget) setWithdraw(null)
+  }, [withdraw, withdrawTarget])
+  const withdrawCopy = withdrawTarget
+    ? ownMembers.length === 1
+      ? leaveTeamConfirm(detail.team.name, [withdrawTarget.name], t)
+      : withdrawMemberConfirm(detail.team.name, withdrawTarget.name, t)
+    : null
 
   // Apps not already in this team (candidates for adding). Excludes uninstalled
   // apps and every team's lead — both would otherwise slip through despite
@@ -396,10 +415,28 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
                 // falls out of optional chaining somewhere else.
                 inOwningSpace: app !== undefined && app.spaceId === detail.team.owningSpaceId,
               })}
+              onWithdraw={readOnly && !isRemoteMember(member)
+                ? () => setWithdraw({ appId: member.appId, name: member.memberName })
+                : undefined}
             />
           )
         })}
       </div>
+
+      {withdrawTarget && withdrawCopy && (
+        <ConfirmDialog
+          title={withdrawCopy.title}
+          message={withdrawCopy.message}
+          confirmLabel={withdrawCopy.confirmLabel}
+          cancelLabel={t('Cancel')}
+          variant={withdrawCopy.variant}
+          onConfirm={() => {
+            setWithdraw(null)
+            void withdrawMember(detail.team.id, withdrawTarget.appId)
+          }}
+          onCancel={() => setWithdraw(null)}
+        />
+      )}
 
       {promote && (
         <ConfirmDialog
@@ -529,7 +566,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   )
 }
 
-function MemberCard({ memberName, duty, description, isLead, aiProvisioned, onOpen, onMakeLead, onRemove }: {
+function MemberCard({ memberName, duty, description, isLead, aiProvisioned, onOpen, onMakeLead, onRemove, onWithdraw }: {
   memberName: string
   duty: string
   description: string
@@ -539,6 +576,8 @@ function MemberCard({ memberName, duty, description, isLead, aiProvisioned, onOp
   onOpen: () => void
   onMakeLead?: () => void
   onRemove?: () => void
+  /** Take this computer's digital human out of a team joined from elsewhere. */
+  onWithdraw?: () => void
 }) {
   const { t } = useTranslation()
   return (
@@ -573,6 +612,16 @@ function MemberCard({ memberName, duty, description, isLead, aiProvisioned, onOp
               aria-label={aiProvisioned ? t('Delete member') : t('Remove member')}
             >
               <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {onWithdraw && (
+            <button
+              onClick={onWithdraw}
+              className="rounded p-1 text-muted-foreground/50 transition-colors hover:text-destructive"
+              title={t('Remove from team')}
+              aria-label={t('Remove from team')}
+            >
+              <LogOut className="h-3.5 w-3.5" />
             </button>
           )}
         </div>
@@ -673,10 +722,12 @@ function DangerSection({ detail }: { detail: TeamDetail }) {
 
 // ── 5b. Leave (joined office) ──
 
-function LeaveSection({ teamId, teamName }: { teamId: string; teamName: string }) {
+function LeaveSection({ detail }: { detail: TeamDetail }) {
   const leaveOffice = useTeamStore(s => s.leaveOffice)
   const { t } = useTranslation()
   const [confirm, setConfirm] = useState(false)
+  const names = detail.members.filter(m => !isRemoteMember(m)).map(m => m.memberName)
+  const copy = leaveTeamConfirm(detail.team.name, names, t)
   return (
     <>
       <div className="rounded-lg border border-border p-3">
@@ -688,21 +739,18 @@ function LeaveSection({ teamId, teamName }: { teamId: string; teamName: string }
           {t('Leave team')}
         </button>
         <p className="mt-1 text-xs text-muted-foreground/60">
-          {t('Stop taking part. Your digital humans stay yours.')}
+          {leaveTeamHint(names.length, t)}
         </p>
       </div>
 
       {confirm && (
         <ConfirmDialog
-          title={t('Leave {{name}}?', { name: teamName })}
-          message={t('Your digital humans stop working in this team and go back to being just yours — they, their spaces, and everything in them are untouched. What is deleted is this team\u2019s record on your computer: what it did, and any periodic checks teammates set on your digital humans. To take part again you will need an invite link.')}
-          confirmLabel={t('Leave')}
+          title={copy.title}
+          message={copy.message}
+          confirmLabel={copy.confirmLabel}
           cancelLabel={t('Cancel')}
-          // Not danger: leaving takes nothing of the user's away. The record it
-          // does delete is the team's, and losing it is what someone already
-          // expects when they leave — that is worth a sentence, not a colour.
-          variant="default"
-          onConfirm={() => { setConfirm(false); void leaveOffice(teamId) }}
+          variant={copy.variant}
+          onConfirm={() => { setConfirm(false); void leaveOffice(detail.team.id) }}
           onCancel={() => setConfirm(false)}
         />
       )}

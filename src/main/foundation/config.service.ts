@@ -615,6 +615,7 @@ export function onApiConfigChange(handler: ApiConfigChangeHandler): () => void {
 export interface NetworkConfigPayload {
   proxy: string | undefined
   browserUseProxy: boolean
+  imUseProxy: boolean
   noProxy: string | undefined
 }
 
@@ -872,6 +873,7 @@ interface HaloConfig {
   network?: {
     proxy?: string  // Manual proxy URL. Empty string or undefined = use system proxy.
     browserUseProxy?: boolean  // When true, AI Browser also uses the Settings proxy. Default false = system proxy.
+    imUseProxy?: boolean  // When false, IM channels (WeCom, Feishu, WeChat) connect directly. Default true = same route as other requests.
     noProxy?: string  // Hosts reached directly, NO_PROXY style ("a.com, .b.com"); local addresses always are.
   }
   // Browser configuration
@@ -1505,6 +1507,7 @@ export function saveConfig(config: HaloConfigPatch): HaloConfig {
       const payload: NetworkConfigPayload = {
         proxy: newConfig.network?.proxy,
         browserUseProxy: newConfig.network?.browserUseProxy === true,
+        imUseProxy: newConfig.network?.imUseProxy !== false,
         noProxy: newConfig.network?.noProxy,
       }
       networkConfigChangeHandlers.forEach(handler => {

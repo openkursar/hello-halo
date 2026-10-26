@@ -114,7 +114,7 @@ describe('two surfaces on two teams', () => {
     expect(useTeamStore.getState().selectedConversationId).toBe('a1')
   })
 
-  it('keeping a collaboration shown in a canvas tab reselects its room there', async () => {
+  it('keeping a collaboration retains its source room without changing task selection', async () => {
     env.teamListConversations.mockImplementation(async (id: string) => ({
       success: true,
       data: id === 'C' ? [{ epochId: 'room', kind: 'collab' }] : [],
@@ -129,7 +129,8 @@ describe('two surfaces on two teams', () => {
 
     expect(await useTeamStore.getState().saveCollab('C')).toBe(true)
     expect(env.teamGetDetail).toHaveBeenCalledWith('C')
-    expect(useTeamStore.getState().views.C.selectedConversationId).toBe('room')
+    expect(useTeamStore.getState().views.C.selectedConversationId).toBeNull()
+    expect(useTeamStore.getState().views.C.conversations).toEqual([{ epochId: 'room', kind: 'collab' }])
     expect(useTeamStore.getState().selectedConversationId).not.toBe('room')
     release()
   })

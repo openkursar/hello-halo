@@ -64,13 +64,14 @@ export async function fillFolder(
 }
 
 /**
- * Folders whose children the tree holds, parents before children, so their
- * listings can be re-fetched and merged top-down.
+ * Folders whose children the tree holds or shows open (an open folder whose
+ * listing failed holds none), parents before children, so their listings can
+ * be re-fetched and merged top-down.
  */
-export function loadedFolderPaths(index: Map<string, ArtifactTreeNode>): string[] {
+export function loadedOrOpenFolderPaths(index: Map<string, ArtifactTreeNode>, isOpen: (id: string) => boolean): string[] {
   const paths: string[] = []
   for (const node of index.values()) {
-    if (node.type === 'folder' && node.childrenLoaded) paths.push(node.path)
+    if (node.type === 'folder' && (node.childrenLoaded || isOpen(node.id))) paths.push(node.path)
   }
   return paths.sort((a, b) => a.length - b.length)
 }

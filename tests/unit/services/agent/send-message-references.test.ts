@@ -36,7 +36,7 @@ vi.mock('../../../../src/main/services/agent/knowledge-context', () => ({
 vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getWorkingDir: vi.fn(() => '/work'),
-  getApiCredentialsForConversation: vi.fn(async () => ({ provider: 'anthropic', model: 'm' })),
+  getApiCredentialsForSelection: vi.fn(async () => ({ provider: 'anthropic', model: 'm' })),
   getDbMcpServers: vi.fn(() => null),
 }))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))

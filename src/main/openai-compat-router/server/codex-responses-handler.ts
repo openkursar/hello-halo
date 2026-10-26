@@ -911,7 +911,7 @@ function createCodexAnthropicStreamBridge(
   let tool: { index: number; id: string; name: string; args: string } | null = null
   let textItem: { index: number; id: string; text: string } | null = null
   let reasoning: { index: number; id: string; text: string } | null = null
-  let completed = false
+  let finished = false
 
   const bridge = Object.create(res)
   bridge.write = (chunk: unknown) => {
@@ -919,6 +919,7 @@ function createCodexAnthropicStreamBridge(
     const parts = buffer.split('\n\n')
     buffer = parts.pop() || ''
     for (const part of parts) {
+      if (finished) break
       const dataLine = part.split('\n').find((line) => line.startsWith('data:'))
       const data = dataLine?.slice(5).trim()
       if (!data || data === '[DONE]') continue
@@ -928,7 +929,7 @@ function createCodexAnthropicStreamBridge(
         tool = state.tool
         textItem = state.textItem
         reasoning = state.reasoning
-        if (event.type === 'message_stop') completed = true
+        if (event.type === 'message_stop' || event.type === 'error') finished = true
       } catch {
         // Ignore malformed generated SSE chunks.
       }
@@ -936,11 +937,13 @@ function createCodexAnthropicStreamBridge(
     return true
   }
   bridge.end = () => {
-    if (!completed) {
-      writeCodexSse(res, 'response.completed', {
-        type: 'response.completed',
-        response: { id: `resp_${Date.now()}`, model, status: 'completed' },
+    if (!finished) {
+      console.warn(`[CodexResponsesHandler] Converted stream ended without a terminal event (model=${model})`)
+      writeCodexSse(res, 'response.failed', {
+        type: 'response.failed',
+        response: { error: { message: 'The model response ended before completion. Please retry.' } },
       })
+      finished = true
     }
     res.end()
     return bridge
@@ -994,6 +997,15 @@ function streamAnthropicEventToCodex(
   state: CodexStreamBridgeState,
   toolNamespaceMap: CodexToolNamespaceMap,
 ): CodexStreamBridgeState {
+  if (event.type === 'error') {
+    const error = event.error
+    writeCodexSse(res, 'response.failed', {
+      type: 'response.failed',
+      response: { error: { message: error?.message || 'The model response failed. Please retry.' } },
+    })
+    return { tool: null, textItem: null, reasoning: null }
+  }
+
   if (event.type === 'message_start') {
     writeCodexSse(res, 'response.created', { type: 'response.created', response: { id: event.message?.id || `resp_${Date.now()}`, model } })
     return state

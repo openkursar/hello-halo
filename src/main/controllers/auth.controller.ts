@@ -33,12 +33,10 @@ function rejectInvalid<T>(operation: string): RpcResponse<T> {
   return { success: false, error: INVALID_AUTH_REQUEST }
 }
 
-export async function startLogin(providerType: unknown, sourceId?: unknown): Promise<RpcResponse<OAuthLoginStart>> {
-  if (!isAuthRequestString(providerType) || (sourceId !== undefined && !isAuthRequestString(sourceId))) {
-    return rejectInvalid('start-login')
-  }
+export async function startLogin(providerType: unknown): Promise<RpcResponse<OAuthLoginStart>> {
+  if (!isAuthRequestString(providerType)) return rejectInvalid('start-login')
   try {
-    const result = await getAISourceManager().startOAuthLogin(providerType as ProviderId, sourceId)
+    const result = await getAISourceManager().startOAuthLogin(providerType as ProviderId)
     const loginId = result.data?.loginId
     if (!result.success || !result.data) return { success: false, error: result.error || 'Failed to start login' }
     if (!loginId) {

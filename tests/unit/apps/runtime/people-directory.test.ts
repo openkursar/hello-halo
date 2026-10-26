@@ -53,6 +53,13 @@ describe('bounded people directory', () => {
     expect(JSON.stringify(page)).not.toMatch(/secret-token|private prompt|system_prompt|userConfig/)
   })
 
+  it('keeps a saved member visible while its original temporary collaboration still exists', () => {
+    const retained = [...memberships, { appId: 'p000', teamId: 'saved', teamName: 'Saved Research', isSystemCoordinator: false, ephemeral: false }]
+    const page = buildPeopleDirectory(manager, activity, runtime, retained, { q: 'p000' })
+    expect(page.items.map(person => person.id)).toEqual(['p000'])
+    expect(page.items[0].teams).toEqual([{ id: 'saved', name: 'Saved Research' }])
+  })
+
   it('bounds home previews to three per type while preserving counts and display names', () => {
     const db = database.getAppDatabase()
     for (const type of ['skill', 'mcp']) for (let index = 0; index < 7; index++) {

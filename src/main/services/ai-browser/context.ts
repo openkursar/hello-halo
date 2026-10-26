@@ -399,6 +399,7 @@ export class BrowserContext implements BrowserContextInterface {
    * Resolves `fellBack` when a page that could have been watched cannot be.
    */
   async openPage(url: string, deviceMode: DeviceMode): Promise<{ viewId: string; fellBack: boolean }> {
+    if (this.released) throw new Error('Browser context was released')
     const viewId = `ai-browser-${randomUUID()}`
     let fellBack = this._hasUi && browserHostManager.isMainHostStalled()
     if (fellBack) console.log('[BrowserContext] Main host stalled; opening a watchable page in the hidden host', { viewId, conversationId: this.conversationId })
@@ -1142,11 +1143,10 @@ export class BrowserContext implements BrowserContextInterface {
   // ============================================
 
   private cancelPageOperations(): void {
-    this.released = true
     this.operationVersion++
     for (const controller of this.operationCancellations.keys()) controller.abort(new Error('Browser context was released during operation'))
     this.operationCancellations.clear()
-    if (!this.pageOperations) this.pageTarget.disable()
+    if (!this.pageOperations && this.released) this.pageTarget.disable()
   }
 
   private async withPageFrames<T>(operation: () => Promise<T>, timeoutMs = CDP_TIMEOUT): Promise<T> {
@@ -2181,6 +2181,7 @@ export class BrowserContext implements BrowserContextInterface {
    * silent and destroys the user's work.
    */
   release(): void {
+    this.released = true
     this.cancelPageOperations()
     this.disableMonitoring()
 
@@ -2226,13 +2227,26 @@ export class BrowserContext implements BrowserContextInterface {
   }
 
   /**
-   * Cleanup when context is destroyed.
-   * Also destroys pages owned by this context.
+   * Close every page this context opened and forget where it was, and stay
+   * usable: the next page opens fresh.
+   *
+   * This is the end of a turn, not of the context. The tools an engine session
+   * holds were built around this very object and serve every later turn of
+   * that session, so the pages can go while the context cannot — a context
+   * ended for good (`destroy`) under a live session leaves that session's
+   * browser refusing every call until the session itself is gone.
    */
-  destroy(): void {
+  closePages(): void {
     this.cancelPageOperations()
     this.disableMonitoring()
+    this.forgetOwnedPages('Browser pages closed')
+  }
 
+  /**
+   * Unregister, close and drop the pages this context opened. Download waiters
+   * are rejected with `reason`.
+   */
+  private forgetOwnedPages(reason: string): void {
     // Unregister webContents from download routing before destroying views
     for (const viewId of this.ownedViewIds) {
       const wc = browserViewManager.getWebContents(viewId)
@@ -2244,7 +2258,7 @@ export class BrowserContext implements BrowserContextInterface {
     // Reject any pending download waiters
     for (const waiter of this.pendingDownloadResolvers) {
       clearTimeout(waiter.timer)
-      waiter.reject(new Error('Context destroyed'))
+      waiter.reject(new Error(reason))
     }
     this.pendingDownloadResolvers = []
     this.downloads.clear()
@@ -2263,6 +2277,18 @@ export class BrowserContext implements BrowserContextInterface {
     this.activeViewId = null
     this.lastSnapshot = null
     this.snapshotContents = null
+  }
+
+  /**
+   * End this context for good: close the pages it opened and refuse every
+   * later call. Only for a context no engine session can still reach through
+   * its tools; see `closePages` for the end of a turn.
+   */
+  destroy(): void {
+    this.released = true
+    this.cancelPageOperations()
+    this.disableMonitoring()
+    this.forgetOwnedPages('Context destroyed')
     this.workDir = undefined
     liveContexts.delete(this)
     this.announceReleased()

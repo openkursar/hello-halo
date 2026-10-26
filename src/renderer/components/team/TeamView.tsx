@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Info, Settings, Users, PanelLeft, UserPlus, Play, Pause, BookmarkPlus } from 'lucide-react'
-import { isRemoteMember, type RosterMember, type TeamDetail } from '../../../shared/apps/team-types'
+import { type RosterMember, type TeamDetail } from '../../../shared/apps/team-types'
 import { useTeamStore, useTeamView, useSelectTeamTask } from '../../stores/team.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { usePeopleViewStore } from '../../stores/people-view.store'
@@ -17,8 +17,14 @@ import { TeamActivityDrawer } from './workbench/TeamActivityDrawer'
 import { WorkbenchDrawer } from './workbench/WorkbenchDrawer'
 import { useTaskBoard } from './workbench/useTaskBoard'
 import { taskGroup, visibleTasks } from './workbench/model'
+import { detailForTask, ownedTaskMembers } from './workbench/members'
+import { LegacyTeamNotice } from './workbench/LegacyTeamNotice'
+import { canvasLifecycle } from '../../services/canvas-lifecycle'
+import { navigateToConversation } from '../../utils/conversation-navigation'
 
-export function TeamView({ detail, onBack, spaceEntry = false }: { detail: TeamDetail; onBack?: () => void; spaceEntry?: boolean }) {
+const TeamCreateDialog = lazy(() => import('./TeamCreateDialog').then(module => ({ default: module.TeamCreateDialog })))
+
+export function TeamView({ detail: teamDetail, onBack, spaceEntry = false }: { detail: TeamDetail; onBack?: () => void; spaceEntry?: boolean }) {
   const { t } = useTranslation()
   const navigationTarget = usePeopleViewStore(state => state.teamTarget)
   const [width, setWidth] = useState(() => window.innerWidth)
@@ -32,6 +38,7 @@ export function TeamView({ detail, onBack, spaceEntry = false }: { detail: TeamD
   const conversations = useTeamView(v => v.conversations)
   const tasksError = useTeamView(v => v.conversationsError)
   const loadingTasks = useTeamView(v => v.isLoadingConversations)
+  const loadingDetail = useTeamView(v => v.isLoadingDetail)
   const selectedId = useTeamView(v => v.selectedConversationId)
   const select = useSelectTeamTask()
   const tasks = useMemo(() => visibleTasks(conversations), [conversations])
@@ -40,10 +47,11 @@ export function TeamView({ detail, onBack, spaceEntry = false }: { detail: TeamD
   // other task to pick, create or link to, and no persistent-team chrome
   // (settings, invite, run/pause). Keeping it as a team changes none of that
   // from the space; its full workbench lives on the Teams page.
-  const isEphemeral = detail.team.ephemeral === true
-  const roomOnly = isEphemeral || (spaceEntry && !!detail.team.coordinatorConversationId)
+  const isEphemeral = teamDetail.team.ephemeral === true
+  const roomOnly = isEphemeral || (spaceEntry && !!teamDetail.team.coordinatorConversationId)
   const collabRoom = conversations.find(item => item.kind === 'collab') ?? null
   const task = roomOnly ? collabRoom : conversations.find(item => item.epochId === selectedId) ?? null
+  const detail = useMemo(() => detailForTask(teamDetail, task), [teamDetail, task])
   const taskBoard = useTaskBoard(detail, task?.epochId ?? null)
   const [executionTarget, setExecutionTarget] = useState<string | undefined>()
   const [activityTarget, setActivityTarget] = useState<string | undefined>()
@@ -54,6 +62,7 @@ export function TeamView({ detail, onBack, spaceEntry = false }: { detail: TeamD
   const [invite, setInvite] = useState(false)
   const [runningAction, setRunningAction] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [creatingTeam, setCreatingTeam] = useState(false)
   const saveTeam = async () => {
     if (saving) return
     setSaving(true)
@@ -65,7 +74,7 @@ export function TeamView({ detail, onBack, spaceEntry = false }: { detail: TeamD
   }
   const setGroup = useTeamViewPrefsStore(s => s.setTaskGroup)
   const apps = useAppsStore(state => state.apps)
-  const ownedMemberIds = useMemo(() => detail.members.filter(member => !isRemoteMember(member) && apps.some(app => app.id === member.appId)).map(member => member.appId), [detail.members, apps])
+  const ownedMemberIds = useMemo(() => ownedTaskMembers(detail, apps).map(member => member.appId), [detail, apps])
   const defaultOwnedMemberId = useDefaultChatTarget(detail.team.id, ownedMemberIds)
   const rosterMemberIds = useMemo(() => detail.roster.map(member => member.appId), [detail.roster])
   const leadMemberId = detail.team.leadAppId && rosterMemberIds.includes(detail.team.leadAppId) ? detail.team.leadAppId : null
@@ -80,7 +89,10 @@ export function TeamView({ detail, onBack, spaceEntry = false }: { detail: TeamD
     const prefs = useTeamViewPrefsStore.getState()
     if (selectedId && selectedMemberId) prefs.rememberTaskMember(detail.team.id, selectedId, selectedMemberId)
     const item = conversations.find(c => c.epochId === id)
-    let nextMember: string | null = memberId ?? prefs.memberByTask[detail.team.id]?.[id] ?? item?.memberAppId ?? defaultOwnedMemberId ?? leadMemberId
+    const targetDetail = detailForTask(teamDetail, item ?? null)
+    const targetIds = targetDetail.roster.map(member => member.appId)
+    const targetOwned = ownedTaskMembers(targetDetail, apps).map(member => member.appId)
+    let nextMember: string | null = memberId ?? prefs.memberByTask[detail.team.id]?.[id] ?? item?.memberAppId ?? targetOwned[0] ?? targetIds[0] ?? null
     if (item) setGroup(detail.team.id, taskGroup(item), true)
     setDecisionTarget(undefined)
     if (decisionEntry) {
@@ -92,12 +104,12 @@ export function TeamView({ detail, onBack, spaceEntry = false }: { detail: TeamD
         setDecisionTarget(decision.entryId)
       }
     }
-    if (!rosterMemberIds.includes(nextMember)) nextMember = rosterMemberIds[0] ?? null
+    if (!nextMember || !targetIds.includes(nextMember)) nextMember = targetOwned[0] ?? targetIds[0] ?? null
     setSelectedMemberId(nextMember)
     if (nextMember) prefs.rememberTaskMember(detail.team.id, id, nextMember)
-    if (nextMember && ownedMemberIds.includes(nextMember)) setDefaultMember(detail.team.id, nextMember)
+    if (nextMember && targetOwned.includes(nextMember)) setDefaultMember(detail.team.id, nextMember)
     select(id); setRoomKey(key => key + 1); setDrawer(null)
-  }, [conversations, defaultOwnedMemberId, detail, leadMemberId, select, setGroup, selectedMemberId, ownedMemberIds, rosterMemberIds, setDefaultMember, selectedId])
+  }, [conversations, detail, teamDetail, apps, select, setGroup, selectedMemberId, setDefaultMember, selectedId])
   useEffect(() => {
     if (!navigationTarget || navigationTarget.teamId !== detail.team.id || loadingTasks) return
     if (navigationTarget.epochId) {
@@ -117,14 +129,14 @@ export function TeamView({ detail, onBack, spaceEntry = false }: { detail: TeamD
     if (ownedMemberIds.includes(member.appId)) setDefaultMember(detail.team.id, member.appId)
     setDrawer(null)
   }
-  const newTask = () => { setSelectedMemberId(defaultOwnedMemberId ?? initialMemberId); setRoomKey(key => key + 1); select(null); setDrawer(null) }
+  const newTask = () => { setSelectedMemberId(ownedTaskMembers(detailForTask(teamDetail, null), apps)[0]?.appId ?? null); setRoomKey(key => key + 1); select(null); setDrawer(null) }
   // A collaboration's room cannot be archived or superseded — it is the team's
   // one conversation for as long as the team exists.
   const roomMissing = roomOnly ? !collabRoom : !!selectedId && !task
   const roomMissingLabel = loadingTasks ? t('Loading task…') : roomOnly ? t('This collaboration’s conversation is unavailable.') : t('This task is unavailable. Refresh the task list to try again.')
   // One room means nothing to list, search, filter or add — and its absence is
   // also what removes the way into a second conversation.
-  const taskSidebar = roomOnly ? null : <TaskSidebar query={taskQuery} onQuery={setTaskQuery} status={taskStatus} onStatus={setTaskStatus} teamId={detail.team.id} roster={detail.roster} tasks={tasks} selectedId={selectedId} isOwner={!detail.team.hostNodeId} onSelect={id => onTask(id, conversations.some(item => item.epochId === id && item.waitingForMe))} onNew={newTask} />
+  const taskSidebar = roomOnly ? null : <TaskSidebar canCreate={!detail.legacyCoordinator} query={taskQuery} onQuery={setTaskQuery} status={taskStatus} onStatus={setTaskStatus} teamId={detail.team.id} roster={detail.roster} tasks={tasks} selectedId={selectedId} isOwner={!detail.team.hostNodeId} onSelect={id => onTask(id, conversations.some(item => item.epochId === id && item.waitingForMe))} onNew={newTask} />
   const members = <MemberRail detail={detail} selectedAppId={selectedMemberId ?? undefined} writableAppIds={ownedMemberIds} onMember={onMember} onDetails={member => { setSettingsMember(member.appId); setDrawer('settings') }} onTask={(id, memberId, decisionId) => { onTask(id, false, memberId); if (decisionId) setDecisionTarget(decisionId) }} />
   return <div className="flex h-full min-h-0 flex-col">
     <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
@@ -142,16 +154,18 @@ export function TeamView({ detail, onBack, spaceEntry = false }: { detail: TeamD
         </Popover>
       </div>
       {isEphemeral && <span className="hidden shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground sm:inline">{t('Temporary collaboration')}</span>}
-      {isEphemeral && <button disabled={saving} onClick={() => void saveTeam()} className="flex shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs text-primary hover:bg-secondary disabled:opacity-50"><BookmarkPlus size={13} aria-hidden="true" />{t('Keep this team')}</button>}
+      {isEphemeral && !detail.team.savedTeamId && <button disabled={saving} onClick={() => void saveTeam()} className="flex shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs text-primary hover:bg-secondary disabled:opacity-50"><BookmarkPlus size={13} aria-hidden="true" />{t('Keep this team')}</button>}
+      {isEphemeral && detail.team.savedTeamId && <button onClick={() => void canvasLifecycle.openTeam(detail.team.savedTeamId!)} className="flex min-h-9 shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 text-xs text-primary hover:bg-secondary"><BookmarkPlus size={13} aria-hidden="true" />{t('Open saved team')}</button>}
       {taskSidebar && <button onClick={() => setDrawer('tasks')} aria-label={t('Tasks')} className="rounded-lg p-2 hover:bg-secondary lg:hidden"><PanelLeft size={17} /></button>}
       <button onClick={() => setDrawer('members')} aria-label={t('Members')} className="rounded-lg p-2 hover:bg-secondary xl:hidden"><Users size={17} /></button>
       {!roomOnly && <button onClick={() => { setSettingsMember(null); setDrawer('settings') }} aria-label={t('Team settings')} className="rounded-lg p-2 hover:bg-secondary"><Settings size={17} /></button>}
     </header>
+    {detail.legacyCoordinator && <LegacyTeamNotice recovery={detail.legacyCoordinator} repairing={!!loadingDetail} onRetry={() => void useTeamStore.getState().loadDetail(detail.team.id)} onCreate={() => setCreatingTeam(true)} onReturn={detail.team.coordinatorConversationId ? () => navigateToConversation(detail.team.owningSpaceId, detail.team.coordinatorConversationId!) : undefined} />}
     {tasksError && <div role="alert" className="px-4 py-2 text-xs text-destructive">{tasksError} <button onClick={() => void useTeamStore.getState().loadConversations(detail.team.id)} className="underline">{t('Retry')}</button></div>}
     <div className="flex min-h-0 flex-1">
       {taskSidebar && width >= 1024 && <div className="w-64 shrink-0 border-r border-border">{taskSidebar}</div>}
       <main className="flex min-w-0 flex-1 flex-col">
-        {roomMissing ? <p role="status" className="p-6 text-sm text-muted-foreground">{roomMissingLabel}</p> : <TaskRoom key={roomKey} detail={detail} selectedAppId={selectedMemberId} onSelectMember={onMember} decisionTarget={decisionTarget}
+        {roomMissing ? <p role="status" className="p-6 text-sm text-muted-foreground">{roomMissingLabel}</p> : detail.legacyCoordinator && !task ? null : <TaskRoom blocked={!!detail.legacyCoordinator} key={roomKey} detail={detail} selectedAppId={selectedMemberId} onSelectMember={onMember} decisionTarget={decisionTarget}
           onExecution={appId => { setExecutionTarget(appId); setActivityTarget(undefined); setDrawer('activity') }} task={task} tasks={tasks} onTask={onTask} onCreated={select} boardState={taskBoard} onActivity={id => { setExecutionTarget(undefined); setDecisionTarget(undefined); setActivityTarget(id); setDrawer('activity') }} />}
 
       </main>
@@ -168,7 +182,7 @@ export function TeamView({ detail, onBack, spaceEntry = false }: { detail: TeamD
     {drawer === 'settings' && <WorkbenchDrawer title={settingsMember ? t('Member details') : t('Team settings')} onClose={() => setDrawer(null)}>
       {!detail.team.hostNodeId && !roomOnly && <div className="flex gap-2 border-b border-border p-3">
         <button onClick={() => { setDrawer(null); setInvite(true) }} className="flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs"><UserPlus size={14} />{t('Invite')}</button>
-        <button disabled={runningAction} onClick={async () => {
+        <button disabled={runningAction || !!detail.legacyCoordinator} onClick={async () => {
           setRunningAction(true)
           try { if (detail.team.currentEpochId) await useTeamStore.getState().pauseTeam(detail.team.id); else await useTeamStore.getState().runTeam(detail.team.id) }
           finally { setRunningAction(false) }
@@ -179,8 +193,9 @@ export function TeamView({ detail, onBack, spaceEntry = false }: { detail: TeamD
         useAppsPageStore.getState().openActivityThread(settingsMember)
         useAppsPageStore.getState().setCurrentTab('my-digital-humans')
       }} className="m-3 min-h-10 rounded-lg border border-border px-3 text-sm text-primary">{t('Open digital human profile')}</button>}
-      <SettingsTab detail={detail} openMemberId={settingsMember} onOpenMemberChange={setSettingsMember} />
+      <SettingsTab detail={detailForTask(teamDetail, null)} openMemberId={settingsMember} onOpenMemberChange={setSettingsMember} />
     </WorkbenchDrawer>}
     {invite && <TeamInviteDialog teamId={detail.team.id} onClose={() => setInvite(false)} />}
+    {creatingTeam && <Suspense fallback={null}><TeamCreateDialog onClose={() => setCreatingTeam(false)} onCreated={id => { setCreatingTeam(false); void canvasLifecycle.openTeam(id) }} /></Suspense>}
   </div>
 }

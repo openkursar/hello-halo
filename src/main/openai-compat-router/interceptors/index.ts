@@ -23,7 +23,7 @@ import { imageBudgetInterceptor } from './image-budget'
  * Chain order rationale:
  *   1. warmup — exact string match ("Warmup"), cheapest check; terminal (responds)
  *   2. preflight — tools.length check + system prompt match; terminal (responds)
- *   3. image-budget — scans message images, evicts oldest if over 3.5MB; modifies request
+ *   3. image-budget — filters unsupported images or evicts oldest images over 3.5MB
  *
  * warmup and preflight are terminal (send their own response) and never reach
  * image-budget. For normal agent-loop requests, only image-budget runs.

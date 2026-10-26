@@ -17,7 +17,7 @@
 import { randomUUID } from 'crypto'
 import { getTeamStore } from '../apps/team'
 import { nativeChatAppId, parseTeamSessionKey, resolveHttpConversationId } from '../../shared/apps/im-keys'
-import { isRemoteMember } from '../../shared/apps/team-types'
+import { isRemoteMember, parseSpaceCoordinatorAppId, isLegacyCoordinatorTeam, isReadonlyCollaboration } from '../../shared/apps/team-types'
 import type { TeamTriggerContext } from '../../shared/apps/team-types'
 
 /** An accepted target: the session to address, plus the team identity it implies. */
@@ -50,6 +50,9 @@ export type AppChatTargetResult = AppChatTarget | AppChatTargetRejected
  * transport stays a pass-through.
  */
 export function resolveAppChatTarget(appId: string, conversationId: unknown): AppChatTargetResult {
+  if (typeof appId === 'string' && parseSpaceCoordinatorAppId(appId)) {
+    return { ok: false, status: 400, error: 'Continue this collaboration in its original conversation.' }
+  }
   const shape = resolveHttpConversationId(appId, conversationId)
   if (!shape.ok) return { ok: false, status: 400, error: shape.error }
   if (!shape.team) return { ok: true, conversationId: shape.conversationId }
@@ -102,13 +105,32 @@ export function resolveAppChatTarget(appId: string, conversationId: unknown): Ap
   }
 }
 
+/** Starting work is stricter than viewing history or stopping an existing turn. */
+export function resolveAppChatSendTarget(appId: string, conversationId: unknown): AppChatTargetResult {
+  const target = resolveAppChatTarget(appId, conversationId)
+  if (!target.ok || !target.teamContext) return target
+  const store = getTeamStore()!
+  const { teamId, epochId } = target.teamContext
+  const team = store.getTeamById(teamId)
+  if (team && isLegacyCoordinatorTeam(team)) {
+    console.warn(`[AppChatTarget] send refused: team=${teamId} epoch=${epochId} reason=legacy-team-needs-owner-repair`)
+    return { ok: false, status: 409, error: 'This legacy team must be reopened by its creator in the updated client before starting new work.' }
+  }
+  const epoch = store.getEpochById(epochId)
+  if (team && epoch && isReadonlyCollaboration(team, epoch)) {
+    console.warn(`[AppChatTarget] send refused: team=${teamId} epoch=${epochId} reason=source-task-readonly`)
+    return { ok: false, status: 400, error: 'This task is read-only.' }
+  }
+  return target
+}
+
 /**
  * Native and locally owned team chats admit the owner's messages. Permission
  * equality is checked when delivering, after target authorization here.
  */
 export function resolveUserInjectTarget(appId: string, conversationId: unknown): AppChatTargetResult {
   if (typeof conversationId === 'string' && parseTeamSessionKey(conversationId)) {
-    return resolveAppChatTarget(appId, conversationId)
+    return resolveAppChatSendTarget(appId, conversationId)
   }
   if (typeof conversationId !== 'string' || nativeChatAppId(conversationId) !== appId) {
     return { ok: false, status: 400, error: 'Not a chat of this digital human' }

@@ -167,6 +167,18 @@ visibility is not.
 conversation's are the **user's** and stay open. Separate calls rather than one
 flag — getting it wrong is silent and destroys the user's work.
 
+Both end the context for good: every later call fails with "Browser context was
+released". `closePages()` is the third ending, the end of a **turn**: it closes
+the pages the context opened and forgets its pointer, and the context stays
+usable. The tools of an engine session (`createAIBrowserMcpServer` →
+`buildAllTools(ctx)`) close over the context object they were built with, and
+that session serves every later turn of its conversation with those same
+tools; so a context may only be destroyed once no session can reach it any
+more, while pages can go whenever their owner decides. A digital-human chat's
+context is destroyed with its session (`apps/runtime/app-chat-browser.ts`); a
+context destroyed under a live session left the chat's browser refusing every
+call until the session idled out.
+
 The context holds **no BrowserWindow reference**. UI notifications go through a
 process-global event bus (see "View Lifecycle Events"), so delivery is owned by
 the transport layer, not the context. A context emits iff it has a UI
@@ -235,9 +247,10 @@ the AI drives (shared `persist:browser` session across all views).
 - **Creation (interactive)**: `getInteractiveBrowserContext(conversationId)`, on demand
 - **Cleanup (scoped)**: Caller calls `ctx.destroy()` when the agent session ends — closes its tabs.
   Digital-human chat contexts are owned by `apps/runtime/app-chat-browser.ts`,
-  which keeps native chats' contexts resident between turns (idle/cap reaping)
-  and ends IM, team and HTTP chats' contexts with the turn — silently, since
-  nothing about their pages was ever announced
+  which keeps every chat's context for as long as its engine session holds the
+  tools built around it, keeps native chats' pages between turns (idle/cap
+  reaping closes pages, `ctx.closePages()`) and closes IM, team and HTTP chats'
+  pages with the turn — silently, since nothing about them was ever announced
 - **Cleanup (interactive)**: `releaseInteractiveBrowserContext(conversationId)` from the
   toolset broker's per-conversation teardown — leaves the user's tabs open, except
   a background-only page, which nothing could show

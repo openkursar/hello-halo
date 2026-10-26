@@ -24,6 +24,7 @@ vi.mock('electron', () => ({
 }))
 
 import { streamOpenAIResponsesToAnthropic } from '../../../src/main/openai-compat-router/stream/openai-responses-stream'
+import { blockLifecycleViolations, blockStarts, toolCallsAtStop } from './messages-stream-contract'
 
 function createMockRes() {
   const chunks: string[] = []
@@ -124,5 +125,52 @@ describe('OpenAIResponsesStreamHandler tool-call argument recovery', () => {
     )
 
     expect(toolInputJson(parseSSEEvents(chunks))).toBe('{"city":"SF"}')
+  })
+})
+
+describe('OpenAIResponsesStreamHandler block lifecycle', () => {
+  it('gives the answer and the tool call their own blocks after the reasoning summary', async () => {
+    const { res, chunks } = createMockRes()
+
+    await streamOpenAIResponsesToAnthropic(
+      responsesSSE([
+        { type: 'response.reasoning_summary_text.delta', delta: 'Check the weather.' },
+        { type: 'response.output_text.delta', delta: 'Looking it up.' },
+        { type: 'response.output_text.done' },
+        ...functionCallEvents('{"city":"SF"}')
+      ]),
+      res,
+      'gpt-5.5'
+    )
+
+    const events = parseSSEEvents(chunks)
+    expect(blockStarts(events)).toEqual(['thinking@0', 'text@1', 'tool_use@2'])
+    expect(blockLifecycleViolations(events)).toEqual([])
+  })
+
+  it('closes a call that lacks only its closing brace when its item is done, before the next call', async () => {
+    const { res, chunks } = createMockRes()
+    const args = '{"file_path":"a.ts","options":{"replace_all":true}'
+
+    await streamOpenAIResponsesToAnthropic(
+      responsesSSE([
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'call_1', name: 'Edit' } },
+        { type: 'response.function_call_arguments.delta', output_index: 0, delta: args },
+        { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', call_id: 'call_1', name: 'Edit', arguments: args } },
+        { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', call_id: 'call_2', name: 'Read' } },
+        { type: 'response.function_call_arguments.delta', output_index: 1, delta: '{"file_path":"b.ts"}' },
+        { type: 'response.output_item.done', output_index: 1, item: { type: 'function_call', call_id: 'call_2', name: 'Read', arguments: '{"file_path":"b.ts"}' } },
+        { type: 'response.completed', response: { id: 'resp_3', status: 'completed' } }
+      ]),
+      res,
+      'gpt-5.5'
+    )
+
+    const events = parseSSEEvents(chunks)
+    expect(toolCallsAtStop(events)).toEqual([
+      { name: 'Edit', input: { file_path: 'a.ts', options: { replace_all: true } } },
+      { name: 'Read', input: { file_path: 'b.ts' } }
+    ])
+    expect(blockLifecycleViolations(events)).toEqual([])
   })
 })

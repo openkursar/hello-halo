@@ -3,21 +3,26 @@
  *
  * `appId` is captured when the connection is created (see manager.applyConfig),
  * so rebinding is a lifecycle change, not a hot update — every write here goes
- * through persist + applyConfig together. Two UI surfaces bind today (global
- * message-channel settings and the digital human's own settings page), so the
- * read-modify-write and its invariants live here rather than in either caller.
+ * through persistInstances (store + applyConfig). Two UI surfaces bind today
+ * (global message-channel settings and the digital human's own settings page),
+ * so the read-modify-write and its invariants live here rather than in either
+ * caller.
  */
 
-import { getConfig, saveConfig } from '../../../foundation/config.service'
 import { getAppManager } from '../../manager'
 import { getImChannelManager } from '../index'
-import { dispatchInboundMessage, invalidateImSessions } from '../index'
+import { NOT_SAVED_UNREADABLE, persistInstances, readInstances } from './instance-settings'
 import type { ImChannelInstanceConfig } from '../../../../shared/types/im-channel'
 
 export interface BindResult {
   success: boolean
   error?: string
   code?: 'BINDING_CHANGED'
+}
+
+function notSaved(action: string, instanceId: string): BindResult {
+  console.warn(`[ImChannelBinding] ${action} refused: config.json cannot be read`, { instanceId })
+  return { success: false, error: NOT_SAVED_UNREADABLE }
 }
 
 /**
@@ -68,27 +73,13 @@ function findDuplicateBot(
   )
 }
 
-function persist(instances: ImChannelInstanceConfig[]): void {
-  const config = getConfig()
-  saveConfig({ imChannels: { ...config.imChannels, instances } })
-  const manager = getImChannelManager()
-  if (!manager) return
-  manager.applyConfig(instances, (instanceId, appId, msg, reply) => {
-    dispatchInboundMessage(msg, reply, appId, instanceId)
-  })
-  invalidateImSessions()
-}
-
-function readInstances(): ImChannelInstanceConfig[] {
-  return getConfig().imChannels?.instances ?? []
-}
-
 /** Point an existing instance at another digital human. */
 export function setInstanceApp(instanceId: string, appId: string, expectedAppId?: string): BindResult {
   const invalid = validateTarget(appId)
   if (invalid) return { success: false, error: invalid }
 
   const instances = readInstances()
+  if (!instances) return notSaved('Rebinding', instanceId)
   const target = instances.find(i => i.id === instanceId)
   if (!target) return { success: false, error: `Instance "${instanceId}" not found` }
   if (expectedAppId !== undefined && target.appId !== expectedAppId) {
@@ -104,7 +95,7 @@ export function setInstanceApp(instanceId: string, appId: string, expectedAppId?
     return { success: false, error: 'This bot is already bound to another digital human' }
   }
 
-  persist(instances.map(i => {
+  persistInstances(instances.map(i => {
     if (i.id !== instanceId) return i
     const rebound = { ...i, appId }
     delete rebound.teamId
@@ -123,11 +114,12 @@ export function setInstanceApp(instanceId: string, appId: string, expectedAppId?
  */
 export function unbindInstance(instanceId: string): BindResult {
   const instances = readInstances()
+  if (!instances) return notSaved('Unbinding', instanceId)
   const target = instances.find(i => i.id === instanceId)
   if (!target) return { success: false, error: `Instance "${instanceId}" not found` }
   if (!target.appId) return { success: true }
 
-  persist(instances.map(i => i.id === instanceId ? { ...i, appId: '' } : i))
+  persistInstances(instances.map(i => i.id === instanceId ? { ...i, appId: '' } : i))
   console.log(`[ImChannelBinding] instance ${instanceId} unbound`)
   return { success: true }
 }
@@ -138,6 +130,7 @@ export function createInstance(instance: ImChannelInstanceConfig): BindResult {
   if (invalid) return { success: false, error: invalid }
 
   const instances = readInstances()
+  if (!instances) return notSaved('Creating', instance.id)
   if (instances.some(i => i.id === instance.id)) {
     return { success: false, error: `Instance "${instance.id}" already exists` }
   }
@@ -145,7 +138,7 @@ export function createInstance(instance: ImChannelInstanceConfig): BindResult {
     return { success: false, error: 'This bot is already bound to another digital human' }
   }
 
-  persist([...instances, instance])
+  persistInstances([...instances, instance])
   console.log(`[ImChannelBinding] instance ${instance.id} (${instance.type}) created for app ${instance.appId}`)
   return { success: true }
 }

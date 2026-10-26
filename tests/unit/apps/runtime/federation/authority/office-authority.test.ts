@@ -60,14 +60,20 @@ function task(id: string, assignee: string | null = null, status: BlackboardTask
 
 describe('office-authority (3-node resilience integration)', () => {
   const created: DatabaseManager[] = []
+  const offices: OfficeAuthority[] = []
   afterEach(() => {
+    for (const office of offices) office.stop()
+    offices.length = 0
     for (const d of created) d.closeAll()
     created.length = 0
+    vi.clearAllTimers()
+    vi.useRealTimers()
   })
 
-  function build(): {
+  function build(timedElection = false, shouldDrop?: (to: string, frame: FederationMessage) => boolean): {
     nodes: Record<string, Node>
     kill: (id: string) => void
+    revive: (id: string) => void
     sent: { to: string; frame: FederationMessage }[]
   } {
     const ids = ['A', 'B', 'C']
@@ -78,6 +84,7 @@ describe('office-authority (3-node resilience integration)', () => {
 
     const route = (to: string, frame: FederationMessage) => {
       sent.push({ to, frame })
+      if (shouldDrop?.(to, frame)) return
       if (dead.has(to)) return
       const from = (frame as { fromNode?: string }).fromNode ?? 'unknown'
       if (dead.has(from)) return
@@ -102,7 +109,7 @@ describe('office-authority (3-node resilience integration)', () => {
       const auth = new AuthorityStore(db)
       const team = new TeamStore(db)
       for (const peer of ids) {
-        fed.upsertNode({ nodeId: peer, officeId: OFFICE, identity: peer, displayName: peer, joinedAt: joinedAt[peer], lastSeen: 0, status: 'online' })
+        fed.upsertNode({ nodeId: peer, officeId: OFFICE, identity: peer, displayName: peer, joinedAt: joinedAt[peer], lastSeen: 0, status: 'online', advertisedUrl: null })
       }
       auth.patchAuthorityState(OFFICE, { term: 1, authorityNodeId: 'A', rosterEpoch: 1 }, 0)
       const onBecomeAuthority = vi.fn()
@@ -125,9 +132,10 @@ describe('office-authority (3-node resilience integration)', () => {
         resolveArtifactBytes: async () => null,
         // Synchronous election: confirms arrive during broadcast, so the timer
         // never needs to fire — a no-op scheduler keeps the test deterministic.
-        schedule: () => () => {},
+        schedule: timedElection ? undefined : () => () => {},
         jitter: () => 0,
       })
+      offices.push(office)
       registry.set(id, { id, dbm, fed, auth, team, office, onBecomeAuthority, applied })
     }
 
@@ -139,7 +147,14 @@ describe('office-authority (3-node resilience integration)', () => {
         nodes[peerId].fed.setNodeStatus(OFFICE, id, 'offline', 0)
       }
     }
-    return { nodes, kill, sent }
+    const revive = (id: string) => {
+      dead.delete(id)
+      for (const peerId of ids) {
+        if (peerId === id) continue
+        nodes[peerId].fed.setNodeStatus(OFFICE, id, 'online', 0)
+      }
+    }
+    return { nodes, kill, revive, sent }
   }
 
   it('replicates the authority writes and commits with heir-inclusion', () => {
@@ -273,5 +288,120 @@ describe('office-authority (3-node resilience integration)', () => {
     nodes.B.office.onNodePresence('C', 'offline')
     expect(nodes.B.office.isAuthoritySelf()).toBe(false)
     expect(nodes.B.office.getTerm()).toBe(1) // tenure unchanged (no election won)
+  })
+
+  it('automatically resumes after the original authority returns, with writes still using that authority', () => {
+    vi.useFakeTimers()
+    const { nodes, kill, revive, sent } = build(true)
+    kill('A')
+    kill('C')
+    nodes.B.office.onNodePresence('A', 'offline')
+    vi.advanceTimersByTime(60_000)
+    expect(nodes.B.office.isPaused()).toBe(true)
+
+    nodes.B.office.handle('A', {
+      kind: 'catchup-response', officeId: OFFICE, fromNode: 'A', term: 10,
+      reFid: 'unrequested', mode: 'incremental', entries: [], committedSeq: 0, fid: 'replayed',
+    })
+    expect(nodes.B.office.getTerm()).toBe(1)
+    expect(nodes.B.office.isPaused()).toBe(true)
+
+    revive('A')
+    nodes.B.office.onNodePresence('A', 'online')
+    expect(sent.some(({ to, frame }) => to === 'A' && frame.kind === 'catchup-request')).toBe(true)
+    expect(nodes.B.office.isPaused()).toBe(false)
+    expect(nodes.B.office.handover.election.isElecting()).toBe(false)
+    expect(nodes.B.office.isAuthoritySelf()).toBe(false)
+    expect(nodes.B.onBecomeAuthority).not.toHaveBeenCalled()
+
+    nodes.A.office.captureLocalWrite({
+      teamId: OFFICE, epochId: EPOCH, op: 'post_task',
+      payload: task('after-recovery') as unknown as Record<string, unknown>, taskId: 'after-recovery',
+    })
+    expect(nodes.B.team.getTaskById('after-recovery')).not.toBeNull()
+    vi.advanceTimersByTime(60_000)
+    expect(nodes.B.office.isPaused()).toBe(false)
+  })
+
+  it('does not resume a paused node from a catch-up served by another voter', () => {
+    vi.useFakeTimers()
+    const { nodes, kill, revive } = build(true)
+    kill('A')
+    kill('C')
+    nodes.B.office.onNodePresence('A', 'offline')
+    vi.advanceTimersByTime(60_000)
+    expect(nodes.B.office.isPaused()).toBe(true)
+
+    revive('C')
+    nodes.B.office.replication.requestCatchupFrom('C')
+    expect(nodes.B.office.isPaused()).toBe(true)
+    expect(nodes.B.office.termState.getAuthorityNodeId()).toBe('A')
+  })
+
+  it('does not treat a returning former authority as the winner of a newer term', () => {
+    vi.useFakeTimers()
+    const { nodes, kill, revive } = build(true)
+    kill('A')
+    kill('C')
+    nodes.B.office.onNodePresence('A', 'offline')
+    vi.advanceTimersByTime(60_000)
+
+    nodes.A.office.termState.setAuthority('C', 2)
+    nodes.C.office.termState.setAuthority('C', 2)
+    revive('A')
+    nodes.B.office.onNodePresence('A', 'online')
+    expect(nodes.B.office.isPaused()).toBe(true)
+    expect(nodes.B.office.getTerm()).toBe(1)
+    expect(nodes.B.office.termState.getAuthorityNodeId()).toBe('A')
+
+    revive('C')
+    nodes.B.office.handle('C', {
+      kind: 'authority-announce', officeId: OFFICE, fromNode: 'C', term: 2, fid: 'winner',
+    })
+    expect(nodes.B.office.isPaused()).toBe(false)
+    expect(nodes.B.office.getTerm()).toBe(2)
+    expect(nodes.B.office.termState.getAuthorityNodeId()).toBe('C')
+    expect(nodes.B.onBecomeAuthority).not.toHaveBeenCalled()
+  })
+
+  it('retries a lost recovery response only until the paused office catches up', () => {
+    vi.useFakeTimers()
+    let dropped = false
+    const { nodes, kill, revive, sent } = build(true, (to, frame) => {
+      if (to !== 'B' || frame.kind !== 'catchup-response' || dropped) return false
+      dropped = true
+      return true
+    })
+    kill('A')
+    kill('C')
+    nodes.B.office.onNodePresence('A', 'offline')
+    vi.advanceTimersByTime(60_000)
+    revive('A')
+    nodes.B.office.onNodePresence('A', 'online')
+    expect(nodes.B.office.isPaused()).toBe(true)
+
+    vi.advanceTimersByTime(4_000)
+    expect(nodes.B.office.isPaused()).toBe(false)
+    const requests = () => sent.filter(({ frame }) => frame.kind === 'catchup-request').length
+    expect(requests()).toBe(2)
+    vi.advanceTimersByTime(60_000)
+    expect(requests()).toBe(2)
+  })
+
+  it.each(['stopped', 'offline'] as const)('does not retry recovery after the office is %s', reason => {
+    vi.useFakeTimers()
+    const { nodes, kill, revive, sent } = build(true, (to, frame) => to === 'B' && frame.kind === 'catchup-response')
+    kill('A')
+    kill('C')
+    nodes.B.office.onNodePresence('A', 'offline')
+    vi.advanceTimersByTime(60_000)
+    revive('A')
+    nodes.B.office.onNodePresence('A', 'online')
+    if (reason === 'stopped') nodes.B.office.stop()
+    else kill('A')
+    const requests = sent.filter(({ frame }) => frame.kind === 'catchup-request').length
+    vi.advanceTimersByTime(60_000)
+    expect(sent.filter(({ frame }) => frame.kind === 'catchup-request')).toHaveLength(requests)
+    expect(nodes.B.office.isPaused()).toBe(true)
   })
 })

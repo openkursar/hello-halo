@@ -15,7 +15,6 @@ import {
   resolveQuestion
 } from '../services/agent'
 import type { AgentRequest } from '../services/agent'
-import { markIntentionalStop } from '../apps/runtime'
 import { analytics } from '../services/analytics/analytics.service'
 import { isReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 import type { AgentInjectRequest, AgentSendRequest } from '../../shared/types/agent-send'
@@ -111,12 +110,14 @@ export function injectMessage(body: unknown): ControllerResponse {
 /**
  * Stop generation for a specific conversation or all
  */
-export function stopGeneration(conversationId?: string): ControllerResponse {
+export async function stopGeneration(conversationId?: string): Promise<ControllerResponse> {
   try {
     // Marked BEFORE stopping — see intentional-stop.ts: a team member's stop
     // kills its CC subprocess outright, surfacing the same way a crash does,
     // and this is the only thing that tells turn-report.ts the difference.
-    if (conversationId) markIntentionalStop(conversationId)
+    // The app runtime is imported here rather than at the top so it stays out
+    // of what the main process loads before its window opens.
+    if (conversationId) (await import('../apps/runtime')).markIntentionalStop(conversationId)
     agentStopGeneration(conversationId, { reason: 'user' })
     return { success: true }
   } catch (error: unknown) {

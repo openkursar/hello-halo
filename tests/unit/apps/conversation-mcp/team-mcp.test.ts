@@ -182,7 +182,7 @@ describe('Space Team MCP', () => {
     const result = await tools.get('collab_save')!({})
 
     expect(saveCollab).toHaveBeenCalledWith('team-1', undefined)
-    expect(result.content[0].text).toContain('Saved as team')
+    expect(result.content[0].text).toContain('Saved configuration as team')
   })
 
   it('team_list lists only persistent teams of this space', async () => {

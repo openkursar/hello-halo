@@ -119,9 +119,35 @@ export type ApiProvider = 'anthropic' | 'openai'
 // ============================================================================
 
 /**
+ * A section of a source's model list, listed after the vendor's own models.
+ * `enterprise`: models the user's organization added to the account itself.
+ */
+export type ModelGroup = 'enterprise'
+
+/** A short vendor label on one model (an offer, a priority tier), shown as the vendor wrote it. */
+export interface ModelBadge {
+  label: string
+  /** The vendor's longer explanation, shown on hover. */
+  detail?: string
+}
+
+/**
+ * How a picker presents a model beyond its name. Every field is optional and
+ * comes from the vendor's catalog; a source that reports none looks as before.
+ */
+export interface ModelPresentation {
+  group?: ModelGroup
+  badge?: ModelBadge
+  /** Credits one use costs relative to the vendor's base rate, as it applies now (1 = base). */
+  costMultiplier?: number
+  /** The usual multiplier while an offer lowers `costMultiplier`; shown struck through. */
+  regularCostMultiplier?: number
+}
+
+/**
  * Model option for UI display
  */
-export interface ModelOption {
+export interface ModelOption extends ModelPresentation {
   id: string
   name: string
   description?: string
@@ -129,6 +155,23 @@ export interface ModelOption {
   supportsVision?: boolean
   /** Numeric limits reported by the provider's model catalog. */
   capabilities?: CatalogModelCapability
+}
+
+/** A model the account's catalog stopped listing, kept so a selection still naming it can say so. */
+export interface WithdrawnModel {
+  id: string
+  name: string
+  /** When a refresh first found it missing (ISO 8601). */
+  at: string
+}
+
+/** A refresh moved the account's own model because the vendor stopped offering it. */
+export interface ModelReplacement {
+  from: string
+  fromName: string
+  to: string
+  /** ISO 8601 */
+  at: string
 }
 
 /**
@@ -282,6 +325,13 @@ export interface AISource {
   availableModels: ModelOption[]
   /** Last successful remote overlay, including explicitly hidden models. */
   modelCatalogCache?: ModelCatalogCache
+  /**
+   * Models a fresh catalog dropped, newest first and bounded. Written only by
+   * catalog refreshes and logins; an id the vendor lists again is removed.
+   */
+  withdrawnModels?: WithdrawnModel[]
+  /** Set when a refresh replaced `model`; cleared when the user next sets this account's model. */
+  modelReplacement?: ModelReplacement
 
   // ===== Metadata (Required) =====
   /** Creation timestamp (ISO 8601) */
@@ -346,6 +396,7 @@ export interface OAuthSourceConfig {
   modelNames?: Record<string, string>
   modelCapabilities?: Record<string, CatalogModelCapability>
   modelVision?: Record<string, boolean>
+  modelPresentation?: Record<string, ModelPresentation>
   modelCatalogCache?: ModelCatalogCache
   accessToken?: string
   refreshToken?: string
@@ -576,24 +627,61 @@ export function getCurrentModelName(config: AISourcesConfig): string {
   return modelOption?.name || source.model
 }
 
+/** A stored model selection: a conversation's pin or a digital human's override. */
+export interface StoredModelSelection {
+  modelSourceId?: string
+  modelId?: string
+}
+
+/** The account and model a stored selection runs on; `own` when they are the selection's. */
+export type ResolvedModelSelection =
+  | { source: AISource; modelId: string; own: boolean }
+  | { source: null; modelId: undefined; own: false }
+
 /**
- * Only an absent source pin follows global selection. A pin whose account was
- * removed has no name — never another account's; callers show their own
- * translated missing-account notice.
+ * What a stored selection runs on. A selection naming an account that no
+ * longer exists is the same as no selection: the current global account and
+ * its model — the rule the main process resolves credentials by
+ * (services/agent helpers `getApiCredentialsForSelection`).
  */
+export function resolveModelSelection(
+  config: AISourcesConfig,
+  selection: StoredModelSelection | null | undefined
+): ResolvedModelSelection {
+  const pinned = selection?.modelSourceId ? getSourceById(config, selection.modelSourceId) : null
+  if (pinned) return { source: pinned, modelId: selection?.modelId || pinned.model, own: true }
+  const source = getCurrentSource(config)
+  return source ? { source, modelId: source.model, own: false } : { source: null, modelId: undefined, own: false }
+}
+
+/** The name of the model a stored selection runs on (see resolveModelSelection). */
 export function getModelDisplayName(
   config: AISourcesConfig,
   sourceId?: string,
   modelId?: string
 ): string {
-  if (!sourceId) return getCurrentModelName(config)
+  const selected = resolveModelSelection(config, { modelSourceId: sourceId, modelId })
+  if (!selected.source) return 'No model'
 
-  const source = getSourceById(config, sourceId)
-  if (!source) return ''
+  const modelOption = selected.source.availableModels.find(m => m.id === selected.modelId)
+  return modelOption?.name || findWithdrawnModel(selected.source, selected.modelId)?.name || selected.modelId
+}
 
-  const effectiveModelId = modelId || source.model
-  const modelOption = source.availableModels.find(m => m.id === effectiveModelId)
-  return modelOption?.name || effectiveModelId
+/** The withdrawn entry for a model the account's catalog no longer lists, if it was ever listed. */
+export function findWithdrawnModel(source: AISource, modelId: string | undefined): WithdrawnModel | undefined {
+  if (!modelId || source.availableModels?.some(model => model.id === modelId)) return undefined
+  return source.withdrawnModels?.find(model => model.id === modelId)
+}
+
+/** How long the picker mentions that the account's model was replaced. */
+export const MODEL_REPLACEMENT_NOTICE_MS = 7 * 24 * 60 * 60 * 1000
+
+/** A replacement still worth mentioning: recent, and the account still uses the model it moved to. */
+export function activeModelReplacement(source: AISource, now: number = Date.now()): ModelReplacement | undefined {
+  const replacement = source.modelReplacement
+  if (!replacement || replacement.to !== source.model) return undefined
+  const at = Date.parse(replacement.at)
+  return Number.isFinite(at) && now - at < MODEL_REPLACEMENT_NOTICE_MS ? replacement : undefined
 }
 
 /**

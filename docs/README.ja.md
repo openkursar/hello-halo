@@ -2,161 +2,162 @@
 
 <img src="../resources/icon.png" alt="Halo Logo" width="120" height="120">
 
-# Halo
+# Halo AI ワークステーション
 
-### あなたのAIワークステーション — チームと個人のために
-
-ローカルにデプロイ。すべてを24時間自動化。AIデジタルヒューマンがあなたの代わりに働き、あなたは意思決定に集中。
+**オープンソースのデスクトップ AI ワークステーション · デジタルヒューマンチーム · どこからでも仕事を任せる**
 
 [![GitHub Stars](https://img.shields.io/github/stars/openkursar/hello-halo?style=social)](https://github.com/openkursar/hello-halo/stargazers)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20Web-lightgrey.svg)](#インストール)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20Web-lightgrey.svg)](#ダウンロードとインストール)
 [![Downloads](https://img.shields.io/github/downloads/openkursar/hello-halo/total.svg)](https://github.com/openkursar/hello-halo/releases)
 
-[**ダウンロード**](#インストール) · [**ドキュメント**](#ドキュメント) · [**コントリビュート**](#コントリビュート)
+[**ダウンロード**](#ダウンロードとインストール) · [**公式サイトとドキュメント**](https://hello-halo.cc/) · [**コントリビュート**](#コントリビュート)
 
-**[English](../README.md)** | **[简体中文](./README.zh-CN.md)** | **[繁體中文](./README.zh-TW.md)** | **[Español](./README.es.md)** | **[Deutsch](./README.de.md)** | **[Français](./README.fr.md)** | **日本語**
-
-</div>
-
-<!-- TODO: Replace with a 30-second GIF showing: user types a sentence -> Agent automatically writes code -> files appear in Artifact Rail -> preview the result -->
-<div align="center">
-
-![AI Digital Human Store](./assets/shop_dh.png)
+**[English](../README.md)** | **[简体中文](./README.zh-CN.md)** | **[繁體中文](./README.zh-TW.md)** | **[Español](./README.es.md)** | **[Deutsch](./README.de.md)** | **[Français](./README.fr.md)**
 
 </div>
 
 ---
 
-## なぜHaloなのか？
+Halo はオープンソースのデスクトップ AI ワークステーションです。普段の使い方は、おなじみのデスクトップ AI ワークベンチと同じです：チャット、コーディング、ドキュメント作成、調べもの。さらに、常駐して働く**デジタルヒューマン**を持ち、チームを組ませて分担させることができます。パソコンから離れているときも、スマートフォン、Feishu、WeChat、WeCom からいつでも仕事を任せ、進捗を追えます。
 
-Haloは最先端のAgentを搭載したAIワークステーションで、プラグイン可能なエンジンアーキテクチャを採用しています — [Claude Code](https://github.com/anthropics/claude-code)、[Codex](https://github.com/openai/codex)などに対応。30万行以上のコードからなる完全なプロダクト層を持ち、数万人のユーザーに検証され、エンタープライズ環境で安定稼働しているHaloが提供するもの：
+<p align="center">
+  <img src="./assets/cards/team-poster.jpg" width="440" alt="デジタルヒューマンチーム：あなたの Lead がチーム全体を調整し、同僚のデジタルヒューマンはそれぞれ自分のパソコンで働きながら、チーム内でメッセージ、タスク、成果をやり取りする">
+</p>
 
-| Haloが提供するもの |
-|:---:|
-| **あなたの日常AIパートナー** — コーディング、プロダクトデザイン、運用、ライティング、リサーチ — 毎日の仕事のパートナー |
-| **100%ローカル、クラウド依存ゼロ** — データはマシンから出ることなく、エンタープライズコンプライアンス要件を満たします |
-| **AIデジタルヒューマン** — 7x24で自律的に稼働するAIワーカー、モニタリング、レポート、定型業務を処理 |
-| **AI Browser** — AIが直接制御する組み込みブラウザ、あらゆるWebベースシステムを自動化 |
-| **ナレッジベース** — ファイルを入れておくだけで、AIが回答や作業の際に自動的に参照 |
-| **AI Terminal** — AIが直接操作できる組み込みターミナル、SSH、踏み台サーバー、あらゆるCLIツールに対応 |
-| **AIがHalo自身を操作** — 数百の機能を自然言語で駆動、オンデマンドで読み込むためアイドル時のコンテキストコストはゼロ |
-| **WeCom / WeChatネイティブコントロール** — エンタープライズIMからAIエージェントを管理、トレーニングコストゼロ |
-| **リモートアクセス** — スマートフォン / H5 / WeChat / Androidから制御、マネージャーは外出先で進捗確認 |
-| **ダウンロードしてすぐ使える** — 設定不要、バックエンド不要、ITは数分でデプロイ |
+## なぜ Halo なのか
 
-> Claude CodeのAgent機能、MCP、Skillsと100%互換。
+誰もが AI を使い、一人ひとりの効率は確かに上がりました。けれども仕事と仕事のつなぎ目は、いまも人頼みです：ある AI の結論を別の AI にコピーし、ファイルと結論を同僚に転送し、同僚はそれを自分の AI にもう一度説明し直す。人が最大のボトルネックになり、個人は速くなっても、チームの効率は追いついていません。
+
+Halo では、AI 同士が直接分担し、引き継ぎ、記憶を積み重ね、常駐して見張ります。人は方向を決め、判断を下すだけです。個人の効率化は足し算、協働の効率化は掛け算です。
+
+- **こんな人に**：AI のヘビーユーザー、開発者、リサーチャーや運用担当者、そして AI を日々の業務フローに取り入れたい小さなチーム。
+- **3 つのこと**：[日常の AI ワークベンチ](#1-日常の-ai-ワークベンチ) · [デジタルヒューマンとデジタルヒューマンチーム](#2-デジタルヒューマンとデジタルヒューマンチーム) · [どこからでも仕事を任せる](#3-どこからでも仕事を任せる)
+- **Halo が書いた**：AI が自らを改良し続ける大規模 AI ワークステーション。50 万行を超えるコードで、金融機関のエンタープライズ環境でも安定稼働しています。
 
 ---
 
-## AIデジタルヒューマン — あなたの自律型AIワークフォース
+## 1. 日常の AI ワークベンチ
 
-目標とスケジュールを与えれば、AIデジタルヒューマンは従業員のように働きます — 固定スクリプトを実行するボットではなく、記憶と判断力と手を持つデジタルな同僚です。
+- **チャット + キャンバス**：レポート、コード、Web ページ、ターミナル、Word / Excel / PDF を会話のすぐ横で開けます。一部分を選択してコメントを一言添えれば、AI はどこの話かを正確に理解します。
+- **必要なときだけ機能をオン**：入力欄の「＋」から、Web 操作、チーム協働、AI Terminal、文字認識（OCR）、Halo の操作をワンクリックでオンにできます。ローカルのファイルやフォルダはそのまま添付でき、アップロードは不要です。
+- **コーディング**：Claude Code、Codex、Halo SDK などのエンジンを選べます。変更ビューで AI が実際に何を変えたかを確認し、ワンクリックでクイックレビュー、または複数ロールによるチームレビューを開始できます。
+- **AI Browser と AI Terminal**：AI が本物のブラウザとターミナルを操作し、あなたはその様子を横で見ながら、いつでも引き継いだり止めたりできます。
+- **オフィス文書**：文書処理スキルと実行環境を内蔵しており、大量の依存関係を先に入れることなく、Word、Excel、PowerPoint、PDF を直接作成・編集できます。
+- **ナレッジベースと記憶**：ファイル、フォルダ、PDF、Office 文書をナレッジベースに取り込むと、チャット中に自動で引用され、出典も示されます。同じ Space の複数のチャットは記憶を共有し、「現在の状態 / 履歴 / テーマ別の知識」に階層化して整理されるため、チャットを変えても一から説明し直す必要はありません。
+- **会話同士の連携、Halo の操作**：新しい会話を開いて「ほかの会話はどうなってる？」と聞けば、一つずつ確認してまとめてくれます。AI が Space、デジタルヒューマン、設定の管理を代わりに行うこともできます。
+- **手持ちのツールとつなぐ**：MCP サーバーとスキル（Skills）をワンクリックで接続。Claude Code の MCP と Skills のエコシステムと互換性があります。
+- **マルチモデル、マルチアカウント**：任意の Anthropic / OpenAI 互換 API に対応し、複数の ChatGPT、Claude、GitHub Copilot アカウントに同時にサインインすることもできます。会話ごとにモデルと思考の強度を切り替えられます。
 
-**フル装備：**デジタルヒューマンは会話モードとまったく同じAgent機能を持っています — Webを操作するAI Browser、OSやCLIツールを操作するAI Terminal、メッセージングのWeCom/WeChat、さらには設定を変更するためのHalo自身の操作まで。単なるブラウザ専用ボットではありません。
+<p align="center">
+  <img src="./assets/composer-capabilities.png" alt="チャット内の「＋」から、Web 操作、チーム協働、AI Terminal などの機能を必要に応じてオンにする"><br>
+  <sub>図 1　チャット内の「＋」から、Web 操作、チーム協働、AI Terminal などの機能を必要に応じてオンにする</sub>
+</p>
 
-**長期記憶：**実行のたびにゼロから始まるわけではありません — デジタルヒューマンはどこまで進めたか、何を見たか、何を結論づけたかを覚えており、同じ作業を繰り返すのではなく、時間とともに積み重なっていきます。
+<p align="center">
+  <img src="./assets/task-plan.png" alt="AI がタスクを計画に分解し、Web を検索しながら一項目ずつ進める"><br>
+  <sub>図 2　AI がタスクを計画に分解し、Web を検索しながら一項目ずつ進める</sub>
+</p>
 
-### 7x24稼働する自律エージェント
-
-AIデジタルヒューマンを作成し、タスクと実行頻度を設定すれば、スケジュールに従って自律的に稼働します。画面を監視する必要も、スクリプトを管理する必要もありません。
-
-**ソーシャル＆コンテンツプラットフォーム自動化：**
-
-- Xiaohongshu、Bilibili、Zhihuのコメントやダイレクトメッセージへの自動返信
-- Twitter / X、WeChat公式アカウントへのスケジュール投稿
-- ブランド言及と競合活動の監視、デイリーダイジェストの生成
-- トレンドトピックの追跡とコンテンツ提案の自動作成
-
-**エンタープライズ内部自動化：**
-
-- 内部OA / CRM / ERPシステムのパトロール、期限切れチケットや異常のフラグ付け
-- Jira / GitLab / GitHubの活動からデイリースタンドアップレポートを生成
-- CI/CDパイプラインの監視、ビルド失敗の通知、インシデントチケットの自動作成
-- 内部ダッシュボードでのスケジュール化されたコンプライアンスチェックの実行
-- 部門横断データの収集と週次エグゼクティブサマリーの作成
-
-**AIデジタルヒューマンストア**からワンクリックでインストール、組織向けの**プライベートストア**をデプロイ、または自然言語で独自のものを作成できます。
-
-> cron + RPA + AI Agentを一つにしたものと考えてください — ただし、やりたいことを自然言語で説明するだけです。
-
-**WeChat / WeComがあなたのコントロールパネルです。**AIデジタルヒューマンは個人WeChat / WeCom（企業WeChat）を通じた双方向の会話制御をサポートしています — 通知を受け取るだけでなく、指示を出し、進捗を確認し、レポートを直接エンタープライズIMで要求できます。
-
-![AI Digital Human](./assets/ai-digital-human.png)
-
-*実際の動作 — デジタルヒューマンが知乎・Bilibili・小紅書・X を24時間操作（ストアに既製の Browser Action あり）：*
-
-[![中文 点击播放](https://img.shields.io/badge/▶_点击播放-FB7299?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1yfNuzaEtv/) &nbsp; [![Watch the Video](https://img.shields.io/badge/▶_Watch_the_Video-FB7299?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1yfNuzaEtv/)
-
-### Halo Browser Action — AIが判断し、スクリプトが実行
-
-従来のRPAは固定スクリプトに従い、何かが変わると壊れます。Haloはそれを逆転させます：**AIが判断し、Browser Actionが正確に実行。**
-
-Browser Action は特殊な Skill です：特定プラットフォームでの1つの具体的な操作のための、再利用可能な `.js` スクリプトです。AIは*何を*するか、*いつ*するかだけを判断し — スクリプトはすでに*どのように*するかを知っています。これが、やみくもにクリックする「AIブラウザエージェント」とHaloを差別化するポイントです。
-
-スクリプトは実際のブラウザで直接実行されます — ページのDOM、Cookie、内部APIへのフルアクセスがあります。パブリックプラットフォームでもプライベートなエンタープライズシステムでも動作します。
-
-Xiaohongshu、Bilibili、Zhihu、Twitter / X、WeChat用のすぐに使えるBrowser Actionsが利用可能です。エンタープライズチームは内部システム用のプライベートActionsを作成できます。コミュニティは独自のものを貢献・共有できます。**AIが判断。Actionsが実行。安定、再現可能、監査可能。**
-
-自分で作りたい？ ログインが必要な社内システムを定期的に巡回する **OA 承認アシスタント** を作る完全ガイドがドキュメントにあります：[**Browser Action デジタルヒューマンを作る →**](https://hello-halo.cc/docs/digital-humans/guide-02-build.html)
-
-### リモートアクセス — どこからでもAIフリートを管理
-
-リモートアクセスを有効にすると、スマートフォン / H5 / WeChat / Androidクライアントからデスクトップ上のHaloを制御できます。会議中、通勤中、外出先で — デジタルヒューマンの出力を確認し、判断を承認し、デスクにいなくても新しい指示を出せます。
+<p align="center">
+  <img src="./assets/mcp-connections.png" alt="WeCom の ToDo やドキュメントなどの MCP サービスをワンクリックで接続"><br>
+  <sub>図 3　主要なツールとつなぐ：WeCom の ToDo やドキュメントなどの MCP サービスをワンクリックで接続</sub>
+</p>
 
 ---
 
-## ナレッジベース
+## 2. デジタルヒューマンとデジタルヒューマンチーム
 
-日常的に使うファイルを入れておくだけで、AIが質問に答えたり作業を進めたりする際に自動的に参照します。
+一つの AI にすべてを任せると、注意力には限りがあります。あなたしか知らない AI では、チーム全体の役には立てません。分業が効くのは人だけでなく、AI も同じです。
 
-PDF、PPT、Markdownなどの一般的なオフィスファイルに加え、画像OCRにも対応しています。ナレッジベースを作成してSpaceに紐づければ、あとはAIに「ナレッジベースに何が入っている？」と聞くだけで使えます。
+| | 一つの AI にすべて任せる | デジタルヒューマンチーム |
+|---|---|---|
+| 分担 | 指示とツールが一か所に詰め込まれる | 各デジタルヒューマンが一つの工程だけを担当 |
+| 失敗したとき | どのステップで間違えたのか分からない | どの工程で失敗したか一目で分かる |
+| 引き継ぎ | 人が転送し、経緯を説明し直す | デジタルヒューマン同士が直接質問し、成果を渡す |
+| 頼れる相手 | あなただけ | 同僚のデジタルヒューマンも |
+
+- **デジタルヒューマン**：常駐して働く AI メンバー。スケジュールやイベントに応じて自動で動き（中国本土の営業日だけ動かすことも可能で、祝日や振替出勤日も考慮されます）、チャットで気軽にリマインダーを頼むこともできます。ストアからワンクリックでインストールするか、一言で作成できます。
+- **一言でチーム結成**：どの Space でも AI に「この 3 つの製品を調べるチームを組んで」と言えば、調査、検証、執筆がそれぞれ分担されます。今後も使いたければ「このチームを残して」と一言。チーム全体に実行スケジュールを設定することもできます。
+- **パソコンをまたいだチーム**：同僚が自分のデジタルヒューマンを連れてあなたのチームに加わり、それぞれ自分のパソコン上で動きます。データは各自のパソコンに残り、チームに公開された成果だけがチーム内を流れます。各デジタルヒューマンに何ができるかは、その持ち主が決めます。同じ LAN 内ならリモートアクセスをオンにするだけで招待でき、ネットワークをまたぐ場合は設定で中継ゲートウェイを構成します。
+- **過程が見える**：チームワークスペースに、タスク、進捗、メンバー間のやり取り、成果がまとめて表示されます。デジタルヒューマン同士で調整し、チームで決められないことだけをあなたに聞きに来ます。
+
+> こう言ってみてください：「これらの製品を調べて。資料集めと結論の検証は分担して、最後に一本のレポートにまとめて。」
+
+<p align="center">
+  <img src="./assets/team-workspace.png" alt="デジタルヒューマンチーム：リーダーがタスクを割り振り、メンバーが成果を納品し、互いに検収する"><br>
+  <sub>図 4　デジタルヒューマンチーム：リーダーがタスクを割り振り、メンバーが成果を納品し、互いに検収する</sub>
+</p>
+
+<p align="center">
+  <img src="./assets/daily-digest.png" alt="毎日のニュースダイジェストのデジタルヒューマン：毎日 08:00 に自動実行し、結果を WeCom にプッシュ"><br>
+  <sub>図 5　毎日のニュースダイジェストのデジタルヒューマン：毎日 08:00 に自動実行し、結果を WeCom にプッシュ</sub>
+</p>
+
+### ストア、Browser Action とエコシステム
+
+- **デジタルヒューマンストア**：一つ選んで設定をいくつか入力すれば、すぐに動き始めます。プロンプトを書く必要はありません。企業はプライベートストアをデプロイし、設定から追加するだけで使えます。
+- **Browser Action：AI が判断し、スクリプトが実行**：あるプラットフォーム上の一つの具体的な操作を再利用可能な `.js` スクリプトとして書いておけば、AI は何をいつやるかだけを判断し、スクリプトが正確に実行します。Xiaohongshu、Bilibili、Zhihu、X などのプラットフォーム向けには既製の Action があり、社内システム向けにプライベートな Action を書くこともできます。[作ってみる →](https://hello-halo.cc/docs/en/developers/digital-humans/build.html)
+- **デジタルヒューマンを公開**：`spec.yaml` を書いて [Digital Human Protocol（DHP）](https://github.com/openkursar/digital-human-protocol)に PR を提出すれば、マージ後すべての Halo ユーザーがインストールできるようになります。
+
+<p align="center">
+  <img src="./assets/shop_dh.png" alt="デジタルヒューマンストア：SNS 運用、ニュースブリーフィング、監視・巡回などの既製のデジタルヒューマン"><br>
+  <sub>図 6　デジタルヒューマンストア：SNS 運用、ニュースブリーフィング、監視・巡回……入れればすぐ使える</sub>
+</p>
 
 ---
 
-## AI Terminal
+## 3. どこからでも仕事を任せる
 
-HaloにはAIが直接操作できる組み込みターミナルがあります — SSH、踏み台サーバー、ping+トークン認証のログイン、あるいはClaude Code / Codexのようなネイティブ CLI ツールの操作にも対応。
+パソコンの前にいなくても、仕事は進み続けます。
 
-ターミナルは常時表示され、状態も保持されます：作業が終わったら自分で閉じることも、いつでも開いて手動で操作を引き継ぐこともできます — 人間とAIは競合せずに制御をやり取りできます。
+- **スマートフォンとリモート Web**：自宅やオフィスのパソコンで動いている Halo にリモートアクセスし、タスクを任せ、資料をアップロードし、成果をダウンロードできます。
+- **IM 連携**：Feishu、WeChat、WeCom に対応。使い慣れたチャット画面からデジタルヒューマンに仕事を任せられ、その裏で動くのはチーム丸ごとでも構いません。
+- **IM で判断する**：結果はそのままチャットに届きます。あなたの判断が必要なことには一言返すだけで、仕事は先へ進みます。
+
+<p align="center">
+  <img src="./assets/mobile-remote.png" width="640" alt="スマートフォンからのリモート利用：左はスマートフォン上の Halo、右はパソコンが完成させた結果をスマートフォンで確認しているところ"><br>
+  <sub>図 7　スマートフォンからのリモート利用：すべての機能を持ち歩き、一言でパソコンにタスクを完了させる</sub>
+</p>
 
 ---
 
-## AIがHalo自身を操作
+## 代表的なシナリオ
 
-設定変更、セッション管理、WeComボットの設定など、数百に及ぶ操作を自然言語で直接実行できます。メニューを掘り下げる必要はありません。
+| シナリオ | やること | 結果 |
+|---|---|---|
+| 競合 / 業界リサーチ | 一言でチーム結成：調査、検証、執筆を分担 | チームワークスペースで進捗を確認し、完成したレポートを受け取る |
+| 毎日の情報ブリーフィング | デジタルヒューマンが営業日ごとに業界や開発の動向を定時にまとめる | 毎朝始業前に Feishu / WeCom へプッシュ |
+| 外出先から依頼 | スマートフォンの WeChat で「この提案書を直しておいて」と言う | パソコンに戻って完成品を開くか、スマートフォンで直接ダウンロード |
+| コーディング | AI の修正を変更ビューでレビューし、さらにチームレビューを開始 | 何が変わったかを把握し、安心してコミット |
+| オフィス文書 | AI に週報、表、プレゼン資料を作らせる | Word / Excel / PowerPoint ファイルがそのまま手に入る |
+| 社内システムの巡回 | デジタルヒューマンが定時に OA、承認、チケットシステムにログインして巡回 | 期限切れや異常を IM にプッシュし、あなたの対応を待つ |
+| SNS 運用 | ストアにある既製の Browser Action デジタルヒューマンをインストール | コメントへの定時返信、コンテンツ投稿、評判の追跡 |
 
-これらの操作はデフォルトでコストがゼロです：尋ねたものだけがオンデマンドで読み込まれるため、数百の機能があっても会話が重くなることはありません。
+**デモを見る**：[製品デモ](https://www.bilibili.com/video/BV1jEZYBaEcy/) · [デジタルヒューマンによる 7x24 運用](https://www.bilibili.com/video/BV1yfNuzaEtv/) · [AI Browser](https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003)
 
 ---
 
 ## クイックスタート
 
-**30秒で始められます：**
+1. [ダウンロードしてインストール](#ダウンロードとインストール)し、Halo を開きます。
+2. Claude または ChatGPT のアカウントでサインインするか、任意の Anthropic / OpenAI 互換サービスの API Key を入力します。
+3. Space を作成します：1 プロジェクトにつき 1 つの Space で、ファイルと記憶が互いに干渉しません。
+4. そのままチャットで仕事を任せるか、ストアからデジタルヒューマンをインストールし、一言でチームを結成します。
+5. 必要に応じてリモートアクセスをオンにするか、Feishu / WeChat / WeCom と連携して、どこからでも続けられます。
 
-1. [ダウンロードしてインストール](#インストール)、Haloを起動
-2. API Keyを入力（Anthropic推奨）
-3. チャットを開始 — `Build a todo app with React`や`Help me analyze the code structure of this project`を試してみてください
-4. Artifact Railにファイルが表示されるのを確認、クリックでプレビュー、変更をリクエスト
+## ダウンロードとインストール
 
-> 推奨モデル：Claude Sonnet / Opusシリーズ
+| プラットフォーム | ダウンロード | 動作要件 |
+|---|---|---|
+| macOS（Apple シリコン） | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
+| macOS（Intel） | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
+| Windows | [.exe](https://github.com/openkursar/hello-halo/releases/latest) | Windows 10+（x64） |
+| Linux | [.AppImage](https://github.com/openkursar/hello-halo/releases/latest) | glibc 2.34+（Ubuntu 22.04+、Debian 12+） |
+| Android（リモートクライアント） | [.apk](https://github.com/openkursar/hello-halo/releases/latest) | Android 7.0+ |
+| iOS（リモートクライアント） | ソースからビルド | iOS 15+ |
 
----
-
-## インストール
-
-### ダウンロード（推奨）
-
-| プラットフォーム | ダウンロード | 要件 |
-|----------|----------|--------------|
-| **macOS** (Apple Silicon) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
-| **macOS** (Intel) | [.dmg](https://github.com/openkursar/hello-halo/releases/latest) | macOS 12+ |
-| **Windows** | [.exe](https://github.com/openkursar/hello-halo/releases/latest) | Windows 10+ |
-| **Linux** | [.AppImage](https://github.com/openkursar/hello-halo/releases/latest) | Ubuntu 22.04+ |
-| **Android** | [.apk](https://github.com/openkursar/hello-halo/releases/latest) | Android 8+ |
-| **iOS** | ソースからビルド | iOS 15+ |
-
-**ダウンロード、インストール、実行。**Node.js、npm、ターミナルは不要です。ITはサーバー側の依存関係なしに組織全体に配布できます。
+ダウンロードしてインストールし、起動するだけ。Node.js、npm、コマンドラインは不要で、サーバー側の依存関係もないため、IT 部門はそのまま配布できます。その後は自動で更新されます：Windows では 3.0 以降、新しいバージョンがバックグラウンドで準備され、再起動をクリックするだけで完了します。Linux 版には現時点で AI Terminal が含まれていません。
 
 ### ソースからビルド
 
@@ -170,123 +171,23 @@ npm run dev
 
 ---
 
-## AIデジタルヒューマンストア
+## 技術的な特長
 
-<table>
-<tr>
-<td width="50%" valign="top">
-
-### ユーザー向け — すぐにインストールして使用
-
-AIデジタルヒューマンストアを開き、一つ選び、いくつかの設定項目を入力すれば、自動的に稼働を開始します。コーディング不要、プロンプトを書く必要もありません。
-
-![Digital Human Install](./assets/app_detail_install.png)
-
-</td>
-<td width="50%" valign="top">
-
-### 開発者向け — 作成して公開
-
-`spec.yaml`を書いて[AI Digital Human Protocol (DHP)](https://github.com/openkursar/digital-human-protocol)にPRを提出してください。マージされると、すべてのHaloユーザーにすぐに利用可能になります。
-
-Halo Browser Actions（`.js`スクリプト）を作成して、AIデジタルヒューマンが特定のプラットフォームで正確に操作を実行できるようにすることもできます。
-
-</td>
-</tr>
-</table>
-
----
-
-## スクリーンショット
-
-![Chat Intro](./assets/chat_intro.jpg)
-
-![Chat Todo](./assets/chat_todo.jpg)
-
-*Skillストア：コンテンツ生成、開発ツール、データ分析などをワンクリックでインストール*
-
-![Skill Store](./assets/shop_skill.png)
-
-*リモートアクセス：どこからでもHaloを制御*
-
-![Remote Settings](./assets/remote_setting.jpg)
-
-<p align="center">
-  <img src="./assets/mobile_remote_access.jpg" width="45%" alt="モバイルリモートアクセス">
-  &nbsp;&nbsp;
-  <img src="./assets/mobile_chat.jpg" width="45%" alt="モバイルチャット">
-</p>
-
-*AI Browser*
-
-https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
-
-*製品ウォークスルー*
-
-[![中文 点击播放](https://img.shields.io/badge/▶_点击播放-FB7299?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1jEZYBaEcy/) &nbsp; [![Watch the Demo](https://img.shields.io/badge/▶_Watch_the_Demo-FB7299?style=for-the-badge&logo=bilibili&logoColor=white)](https://www.bilibili.com/video/BV1jEZYBaEcy/)
-
----
-
-## アーキテクチャ
-
-プラグイン可能なエンジン：同じプロダクト体験を、Claude Code、Codexなど、内部で差し替え可能な各種Agentエンジン上で実現します。
-
----
-
-## その他の機能
-
-- **100%ローカル** — データはマシンから出ることなく、エンタープライズコンプライアンス要件を満たします
-- **バックエンド不要** — 純粋なデスクトップクライアント、サーバーインフラなしで各ワークステーションにデプロイ
-- **Agent Loop** — テキストを生成するだけでなく、AIが実際にツールを実行して物事を完了させる
-- **Spaceシステム** — 隔離されたワークスペース、プロジェクト同士が干渉しない
-- **Skills** — SkillパックをインストールしてAgent機能を拡張
-- **AI Browser** — 組み込みCDPブラウザ、AIがWebページを直接制御
-- **デジタルヒューマン権限管理** — 各デジタルヒューマンのMCPおよびSkill権限をビジュアルに管理
-- **ウィンドウズーム** — 50%〜150%で自由に調整、どんな画面やプレゼンにも対応
-- **マルチモデル対応** — Anthropic、OpenAI、DeepSeek、およびすべてのOpenAI互換API（エンタープライズLLMゲートウェイに接続）
-- **ダーク/ライトテーマ** — システム設定に追従
-- **多言語対応** — 中国語、英語、スペイン語など
-
-[**すべての機能を探索 →**](https://hello-halo.cc/docs/features/spaces.html)
-
----
-
-## ロードマップ
-
-- [x] Agent Loop — テキスト生成だけでなく、ツール実行
-- [x] Spaceと会話の管理
-- [x] Artifactプレビュー（コード、HTML、画像、Markdown）
-- [x] リモートアクセス
-- [x] AI Browser (CDP)
-- [x] MCP Serverサポート
-- [x] Skillsシステム
-- [x] AIデジタルヒューマンとAIデジタルヒューマンストア
-- [ ] サードパーティエコシステムプラグイン互換性
-- [ ] コード編集体験の強化
-- [ ] ビジュアルGit + AI支援コードレビュー
-- [ ] AI搭載ファイル検索
-- [ ] 低コストデジタルヒューマンレコーディング — AIワークフローを自動記録し、再利用可能なデジタルヒューマンとしてリプレイ
+- **オープンソース、あなた自身のパソコンで動く**：ファイルと作業環境はあなたの管理下にあります。Halo は独自のバックエンドサービスを持ちません。
+- **差し替え可能な Agent エンジン**：Claude Code、Codex、そして自社開発の Halo SDK（リソース消費が少なく、起動が速く、オープンソースモデル向けに最適化）、DeepSeek dsh から、必要に応じて選べます。
+- **非中央集権・分散型のデジタルヒューマンチーム**：メンバーは異なるパソコンに分散して協働し、中央サーバーはありません。チームの状態管理は Raft 合意アルゴリズムを参考にしており、多数決でリーダーノードを選出し、任期ごとにログを複製します。リーダーノードのあるパソコンがオフラインになると自動で再選出され、リーダーノードが 2 つ存在することはなく、チームはそのまま動き続けます。 [仕組み](https://hello-halo.cc/docs/en/advanced/team-consensus.html)（英語）
+- **細部**：Space の分離、ライト / ダークテーマ、50%–150% の画面ズーム、7 言語に対応したインターフェース。
 
 ---
 
 ## コントリビュート
 
-```bash
-git clone https://github.com/openkursar/hello-halo.git
-cd hello-halo
-npm install
-npm run prepare
-npm run dev
-```
+- **翻訳**：`src/renderer/i18n/`
+- **バグ報告**：[Issues](https://github.com/openkursar/hello-halo/issues)
+- **機能提案**：[Discussions](https://github.com/openkursar/hello-halo/discussions)
+- **コード貢献**：PR を歓迎します。ソースからのビルドは[上記](#ソースからビルド)を参照
 
-- **翻訳** — `src/renderer/i18n/`
-- **バグ報告** — [Issues](https://github.com/openkursar/hello-halo/issues)
-- **機能提案** — [Discussions](https://github.com/openkursar/hello-halo/discussions)
-- **コード貢献** — PRを歓迎します
-
-詳細は[CONTRIBUTING.md](../CONTRIBUTING.md)をご覧ください。
-
----
+詳細は [CONTRIBUTING.md](../CONTRIBUTING.md) をご覧ください。
 
 ## コミュニティ
 
@@ -294,27 +195,27 @@ npm run dev
 - [GitHub Issues](https://github.com/openkursar/hello-halo/issues)
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/500aa749-50d9-4587-986d-338b1ed899f1" width="200" alt="個人WeChat QRコード">
+  <img src="https://github.com/user-attachments/assets/500aa749-50d9-4587-986d-338b1ed899f1" width="200" alt="個人 WeChat QR コード">
 </p>
 <p align="center">
-  <em>フィードバックや議論については、WeChat: go2haloを「Halo」というメモ付きで追加してください</em>
+  <em>フィードバックや交流は、WeChat: go2halo を「Halo」というメモ付きで追加してください</em>
 </p>
 
 ---
 
-## Haloの物語
+## Halo の物語
 
-2025年10月、シンプルな不満から始まりました：**Claude Codeを使いたかったけど、一日中会議に追われていた。**
+2025 年 10 月、シンプルな不満から始まりました：**Claude Code を使いたかったのに、一日中会議に追われていた。**
 
-退屈な会議中に思いました：*自宅のパソコンのClaude Codeをスマートフォンから制御できたらどうだろう？*
+退屈な会議中に思いました：*自宅のパソコンの Claude Code をスマートフォンから操作できたらどうだろう？*
 
-次に2つ目の問題が来ました — 非技術系の同僚も使いたがっていましたが、インストールで行き詰まりました。*「npmって何？」*
+次に 2 つ目の問題が来ました — 非技術系の同僚も使いたがっていましたが、インストールでつまずきました。*「npm って何？」*
 
-そこでHaloを作りました：ビジュアルインターフェース、ワンクリックインストール、リモートアクセス。最初のバージョンは数時間で完成。その後のすべては？**100% Halo自身が構築しました。**
+そこで Halo を作りました：ビジュアルなインターフェース、ワンクリックインストール、リモートアクセス。最初のバージョンは数時間で完成。その後のすべては？**ほぼすべて Halo 自身が構築しました。** 2026 年初頭、Halo はオープンソースになりました。
 
-今、私たちは次のステップが**AIワークステーション**だと信じています：AIはもう誰かが見ていなくても仕事ができます。あなたが目標を設定し、AIデジタルヒューマンが7x24で自律的に前進します。コードを書き、テストを実行し、デプロイを監視し、レポートを生成 — 継続的に稼働し、あなたは重要なチェックポイントでのみ意思決定を行います。
+私たちは、次のステップは **AI ワークステーション**だと信じています：AI はもう、誰かが見張っていなくても仕事ができる。あなたが目標を設定し、デジタルヒューマンが 7x24 で自律的に前進させ、あなたは重要な節目でだけ判断を下す。3.0 ではデジタルヒューマンがチームを組み、パソコンをまたいで協働するようになり、この目標にまた一歩近づきました。
 
-それがHaloが構築しているものです。
+— [@openkursar-flynn](https://github.com/openkursar-flynn)、Halo 発起人
 
 ---
 
@@ -332,7 +233,7 @@ MIT — [LICENSE](../LICENSE)
   <img src="https://contrib.rocks/image?repo=openkursar/hello-halo" />
 </a>
 
-**このリポジトリにスターを付けて**、より多くの人がHaloを発見できるようにしてください。
+**このリポジトリにスターを付けて**、より多くの人が Halo を見つけられるようにしてください。
 
 </div>
 
@@ -344,9 +245,7 @@ Halo があなたのプロジェクトにインスピレーションを与えた
 
 ### エンタープライズパートナー
 
-<!-- Add your company logo here — submit a PR or contact us at the link below -->
-
-| あなたの会社でHaloを使っていますか？ | [お知らせください](https://github.com/openkursar/hello-halo/issues/new?title=Add+our+company+as+partner) — ここでご紹介させていただきます。 |
+| あなたの会社で Halo を使っていますか？ | [お知らせください](https://github.com/openkursar/hello-halo/issues/new?title=Add+our+company+as+partner) — ここでご紹介させていただきます。 |
 |:---:|:---:|
 
 ### スポンサー
@@ -356,13 +255,13 @@ Halo があなたのプロジェクトにインスピレーションを与えた
 </a>
 
 <p align="center">
-  <a href="https://buy.polar.sh/polar_cl_x7bTGvMvt3rbUt6oE98z0zb2zFz1sT7dG37BA3foNsZ">Polar (International)</a> · <a href="https://ifdian.net/a/hello-halo">爱发电 (Alipay / WeChat)</a>
+  <a href="https://ifdian.net/a/hello-halo">爱发电（Alipay / WeChat）</a> · <a href="https://buy.polar.sh/polar_cl_x7bTGvMvt3rbUt6oE98z0zb2zFz1sT7dG37BA3foNsZ">Polar（国際クレジットカード）</a>
 </p>
 
 ---
 
 <div align="center">
 
-[トップに戻る](#halo)
+[トップに戻る](#halo-ai-ワークステーション)
 
 </div>

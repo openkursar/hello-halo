@@ -27,6 +27,7 @@ import {
   retainSpaceWatcher,
   releaseSpaceWatcher,
   getWatchedSpaces,
+  scanTreeViaWorker,
 } from '../../../src/main/services/watcher-host.service'
 
 function emit(msg: WorkerToMainMessage): void {
@@ -85,5 +86,18 @@ describe('space watcher reference counting', () => {
     releaseSpaceWatcher('s2', 'automation:app-1')
     expect(child.send).toHaveBeenLastCalledWith({ type: 'destroy-space', spaceId: 's2' })
     expect(getWatchedSpaces().some(s => s.spaceId === 's2')).toBe(false)
+  })
+})
+
+describe('scan replies', () => {
+  it('rejects a listing the worker could not read with its OS code, so a missing folder can be told from an unreadable one', async () => {
+    const child = children[children.length - 1]
+    child.send.mockClear()
+    const scan = scanTreeViaWorker('s1', '/root/gone', '/root', 1)
+    const request = child.send.mock.calls.map(([m]) => m).find(m => m.type === 'scan-dir')
+
+    emit({ type: 'scan-error', requestId: request.requestId, spaceId: 's1', error: "ENOENT: no such file or directory, scandir '/root/gone'", code: 'ENOENT' })
+
+    await expect(scan).rejects.toMatchObject({ code: 'ENOENT', message: expect.stringContaining('/root/gone') })
   })
 })

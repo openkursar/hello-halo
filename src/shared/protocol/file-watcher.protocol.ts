@@ -82,6 +82,8 @@ export type WorkerToMainMessage =
       requestId: string
       spaceId: string
       error: string
+      /** OS error code of a failed read ('ENOENT': the directory is not there). */
+      code?: string
     }
   | {
       type: 'fs-events'

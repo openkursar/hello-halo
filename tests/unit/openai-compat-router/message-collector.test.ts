@@ -59,8 +59,6 @@ describe('collectAnthropicMessage', () => {
   })
 
   it('starts a new block when an index is reused after its stop', async () => {
-    // BaseStreamHandler opens text at the index of a thinking block that
-    // closed without a signature.
     const collected = await collectAnthropicMessage(async (sink) => {
       const w = new SSEWriter(sink)
       w.writeMessageStart('msg_1', 'model-x')

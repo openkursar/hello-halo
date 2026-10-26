@@ -34,6 +34,34 @@ async function navigateToTeams(window: Page) {
 test.describe('Team render — §2 automatable subset', () => {
   test.setTimeout(60000)
 
+  test('deferred legacy repair preserves a clear way back to the original conversation', async ({ electronApp, window }) => {
+    await openTeamWorkbench(electronApp, window, { legacyRecovery: { ownedHere: true, ownerName: null, repairDeferred: true } })
+    const notice = window.getByRole('status').filter({ hasText: 'This team is still working in its original conversation.' })
+    await expect(notice).toBeVisible()
+    await expect(notice.getByRole('button', { name: 'Retry', exact: true })).toBeEnabled()
+    await expect(notice.getByRole('button', { name: 'Return to conversation', exact: true })).toBeEnabled()
+    await expect(window.getByRole('button', { name: 'New task', exact: true })).toHaveCount(0)
+    await window.setViewportSize({ width: 375, height: 812 })
+    await expect(notice).toBeInViewport()
+    expect(await window.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+    await window.screenshot({ path: 'tests/e2e/results/team-repair-deferred-mobile.png' })
+  })
+
+  test('legacy recovery identifies the teammate and does not ask the current user to update', async ({ electronApp, window }) => {
+    await openTeamWorkbench(electronApp, window, { legacyRecovery: { ownedHere: false, ownerName: '张三' } })
+    await window.evaluate(() => localStorage.setItem('halo-locale', 'zh-CN'))
+    await window.reload()
+    await window.getByRole('button', { name: '数字人', exact: true }).first().click()
+    await window.getByRole('button', { name: /^Teams\b|^团队/ }).click()
+    await window.getByRole('button', { name: /Workbench review/ }).click()
+    await expect(window.getByText(/请张三将客户端更新到新版/)).toBeVisible()
+    await expect(window.getByText(/你这边无需升级/)).toBeVisible()
+    await expect(window.getByRole('button', { name: /^(New task|新建任务)$/ })).toHaveCount(0)
+    await window.setViewportSize({ width: 375, height: 812 })
+    expect(await window.evaluate(() => document.documentElement.scrollWidth <= globalThis.innerWidth + 1)).toBe(true)
+    await window.screenshot({ path: 'tests/e2e/results/team-legacy-owner-notice-mobile.png' })
+  })
+
   test('2.1 (proxy): Teams view renders with zero console/page errors over an observation window', async ({ window }) => {
     const consoleErrors: string[] = []
     const pageErrors: string[] = []

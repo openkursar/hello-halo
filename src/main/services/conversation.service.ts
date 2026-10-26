@@ -106,9 +106,9 @@ export interface Conversation extends ConversationMeta {
    * Stamped on `createConversation` from the active global selection
    * (`aiSources.currentId` + that source's `model`) so a new conversation
    * inherits the last-used model. Resolved at send time by
-   * `getApiCredentialsForConversation` with a fallback to the global selection,
+   * `getApiCredentialsForSelection` with a fallback to the global selection,
    * so legacy conversations (created before these fields existed) and pins
-   * whose source/model became unavailable keep working without migration.
+   * whose account was removed keep working without migration.
    *
    * `modelSourceId` is the `AISource.id`; `modelId` is the wire model id within
    * that source. Always written together (both set or both absent).

@@ -171,6 +171,7 @@ export const MODULE: RouteModuleMeta = {
       summary: 'Update a conversation title or metadata',
       body: '{"title":"Renamed conversation"}',
       returns: '{"success":true,"data":{...updated conversation}}',
+      notes: 'modelSourceId + modelId (always both; sourceId is a uuid from GET /api/config) pin the account and model the conversation runs on. A pin naming an account that no longer exists is not rejected: the conversation runs on the current global account until it is pinned again.',
       impact: 'reversible',
     },
 

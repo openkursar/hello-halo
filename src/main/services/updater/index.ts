@@ -31,7 +31,7 @@ import {
   checkLegacy,
   configureLegacyFeed,
   installLegacyHandlers,
-  isLegacyDownloading,
+  isLegacyPreparing,
   setLegacyInstallOnQuit,
 } from './legacy'
 import {
@@ -304,8 +304,9 @@ export async function manualCheckForUpdates(): Promise<void> {
 async function performCheck(): Promise<void> {
   // Taking over mid-download would mute the handlers that announce the
   // finished download, leaving the user without a prompt until a later check.
-  if (legacyDriving && isLegacyDownloading()) {
-    console.log('[Updater] Installer download still in progress — leaving this check to it')
+  // On macOS a second check would also break the verification in progress.
+  if (legacyDriving && isLegacyPreparing()) {
+    console.log('[Updater] Update still downloading or being verified — leaving this check to it')
     return
   }
 
@@ -349,6 +350,11 @@ async function performCheck(): Promise<void> {
  * falls back rather than leaving the user on a dead button.
  */
 export function quitAndInstall(): void {
+  const announced = getAnnounced()
+  console.log(
+    `[Updater] User chose to install ${announced?.version ?? 'unknown version'} ` +
+      `(phase=${announced?.phase ?? 'none'}, path=${stagedPathActive && stagedReady ? 'staged' : 'legacy'})`
+  )
   setAnnouncedPhase('applying')
 
   if (stagedPathActive && stagedReady) {

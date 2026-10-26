@@ -401,3 +401,29 @@ describe('conversation collaboration switched off', () => {
     expect(source.getMeta(SPACE, local)?.unavailable).toBeUndefined()
   })
 })
+
+// The desktop shows a digital human's remote calls on its own page (#454);
+// that makes them visible to the user, not to other conversations' AI.
+describe('remote calls (HTTP API sessions)', () => {
+  const key = buildImSessionKey('app-1', 'http', 'direct', 'order-42')
+
+  beforeEach(() => {
+    h.state.records = [{ ...record('app-1', 'http', 'order-42', { messageCount: 4, lastMessage: 'Where is my parcel?' }), channel: 'http' }]
+  })
+
+  it('are neither listed nor resolvable, even while collaboration is on', () => {
+    expect(source.list(SPACE)).toEqual([])
+    expect(source.getMeta(SPACE, key)).toBeNull()
+  })
+
+  it('cannot be read or delivered to', async () => {
+    expect(source.readTranscript(SPACE, key)).toBeNull()
+    await expect(source.dispatch(SPACE, key, {
+      turnInput: 'hello',
+      record: { content: 'hello', source: 'cross-conversation' as const, metadata: { fromConversationId: 'c-1', fromConversationTitle: 'Notes', summary: 's', forwardDepth: 1 } },
+    })).rejects.toThrow('not a digital-human session')
+
+    expect(h.loadChatMessagesForConversation).not.toHaveBeenCalled()
+    expect(h.sendAppChatMessage).not.toHaveBeenCalled()
+  })
+})

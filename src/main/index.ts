@@ -118,7 +118,7 @@ net.setDefaultAutoSelectFamily(false)
 // Executed after page load to avoid blocking startup
 // Note: fix-path is ESM-only, loaded dynamically to support both CJS and ESM builds
 
-import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, Menu, crashReporter, nativeImage, shell } from 'electron'
+import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, Menu, crashReporter, nativeImage, nativeTheme, shell } from 'electron'
 
 // GPU compatibility: Disable hardware acceleration on Windows to prevent blank window issues
 // Some Windows GPU configurations cause the GPU process to crash, resulting in a white/blank screen
@@ -247,7 +247,8 @@ import {
   bootServerMode
 } from './bootstrap'
 import { isServerMode } from './foundation/runtime-mode'
-import { initializeApp } from './foundation/config.service'
+import { getConfig, initializeApp } from './foundation/config.service'
+import { startupWindowColors } from './foundation/window-startup'
 import { applyDisplayScale, currentDisplayScale, nudgeDisplayScale, setDisplayScale, DISPLAY_STEP, registerDisplayHandlers } from './services/display.service'
 import { MAC_TRAFFIC_LIGHT_POSITION } from '../shared/constants/mac-traffic-lights'
 import { TITLE_BAR_OVERLAY_HEIGHT } from '../shared/constants/app-header'
@@ -291,7 +292,7 @@ let isAppQuitting = false
  * "The first screen is up" — the cue the deferred startup tier waits on.
  *
  * Kept separate from Electron's first-paint event because a launch that never
- * paints still has to reach this point; see the reveal logic in createWindow.
+ * paints still has to reach this point; see the fallback cues in createWindow.
  */
 let firstScreenReached = false
 const firstScreenListeners: Array<() => void> = []
@@ -475,6 +476,10 @@ function createAppMenu(): void {
 function createWindow(): void {
   // Platform-specific window options
   const isMac = process.platform === 'darwin'
+  // The saved theme, so neither the native window nor the page's first frame
+  // starts out in the other theme before the app applies it.
+  const theme = getConfig().appearance?.theme ?? 'system'
+  const colors = startupWindowColors(theme, nativeTheme.shouldUseDarkColors)
 
   // Create the browser window
   mainWindow = new BrowserWindow({
@@ -493,17 +498,14 @@ function createWindow(): void {
     // Sits in NavRail's column above the brand mark; the renderer derives its
     // clearance from the same shared geometry.
     trafficLightPosition: isMac ? MAC_TRAFFIC_LIGHT_POSITION : undefined,
-    // Windows/Linux: native window controls overlay in content area.
-    // Matches globals.css's dark-theme `--background`/`--foreground` (the
-    // default theme) and index.html's anti-flash color exactly, for the brief
-    // window before the renderer loads and calls setTitleBarOverlay with the
-    // live (possibly light) theme's actual tokens — see App.tsx's applyTheme.
+    // Windows/Linux: native window controls overlay in content area. App.tsx's
+    // applyTheme keeps it on the live theme's tokens once the page runs.
     titleBarOverlay: !isMac ? {
-      color: '#181b20',
-      symbolColor: '#e7e9ee',
+      color: colors.background,
+      symbolColor: colors.symbol,
       height: TITLE_BAR_OVERLAY_HEIGHT
     } : undefined,
-    backgroundColor: '#181b20',
+    backgroundColor: colors.background,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       sandbox: true,
@@ -514,52 +516,45 @@ function createWindow(): void {
       // the zoom natively, and the CLI arg lets the preload set --display-scale
       // synchronously, so chrome-inset compensation is correct on frame one.
       zoomFactor: currentDisplayScale(),
-      additionalArguments: [`--halo-display-scale=${currentDisplayScale()}`]
+      additionalArguments: [`--halo-display-scale=${currentDisplayScale()}`, `--halo-boot-theme=${theme}`]
     }
   })
+
+  mainWindow.once('show', () => {
+    console.log(`[Main] Main window shown (elapsed=${Math.round(process.uptime() * 1000)}ms)`)
+  })
+  mainWindow.maximize()
+  mainWindow.show()
 
   // The page's own <title> is the same for every product, so it must not replace the product name.
   mainWindow.on('page-title-updated', (event) => event.preventDefault())
 
   registerBrowserHostHandlers(mainWindow)
 
-  // The window is created hidden and revealed on first paint. When the process
-  // was started by something non-interactive — the installer's "run when
-  // finished" box, or the updater relaunching after a swap — Windows may never
-  // give it a foreground paint, so that event never arrives and the app runs
-  // with no window and no tray while its processes sit in Task Manager. The
-  // user's only recourse is launching it again, which merely reveals the
-  // window that was there all along.
-  //
-  // So first paint is the preferred cue, not the only one: a loaded page will
-  // do, and failing that a deadline. Whichever fires first wins.
-  // First paint normally arrives about a second in. The page-loaded cue fires
-  // earlier than that, so it waits a moment rather than revealing an unpainted
-  // window; the outer deadline covers a launch where neither ever arrives.
-  const REVEAL_AFTER_LOAD_MS = 1500
-  const REVEAL_DEADLINE_MS = 8000
-  let revealed = false
-  let revealTimer: NodeJS.Timeout | undefined
-  let loadRevealTimer: NodeJS.Timeout | undefined
-  const reveal = (cue: string) => {
-    if (revealed || !mainWindow || mainWindow.isDestroyed()) return
-    revealed = true
-    clearTimeout(revealTimer)
-    clearTimeout(loadRevealTimer)
-    console.log(`[Main] Showing main window (${cue})`)
-    mainWindow.maximize()
-    mainWindow.show()
+  // Showing the native background is not first paint: deferred services must
+  // wait for the page. Load/deadline fallbacks cover launches without a paint cue.
+  const FIRST_SCREEN_AFTER_LOAD_MS = 1500
+  const FIRST_SCREEN_DEADLINE_MS = 8000
+  let firstScreenAnnounced = false
+  let firstScreenTimer: NodeJS.Timeout | undefined
+  let loadFirstScreenTimer: NodeJS.Timeout | undefined
+  const onFirstScreen = (cue: string) => {
+    if (firstScreenAnnounced || !mainWindow || mainWindow.isDestroyed()) return
+    firstScreenAnnounced = true
+    clearTimeout(firstScreenTimer)
+    clearTimeout(loadFirstScreenTimer)
+    console.log(`[Main] First screen reached (cue=${cue}, elapsed=${Math.round(process.uptime() * 1000)}ms)`)
     announceFirstScreen()
   }
-  revealTimer = setTimeout(() => reveal('deadline'), REVEAL_DEADLINE_MS)
+  firstScreenTimer = setTimeout(() => onFirstScreen('deadline'), FIRST_SCREEN_DEADLINE_MS)
 
-  mainWindow.on('ready-to-show', () => reveal('ready-to-show'))
+  mainWindow.on('ready-to-show', () => onFirstScreen('ready-to-show'))
   mainWindow.webContents.on('did-finish-load', () => {
-    loadRevealTimer ??= setTimeout(() => reveal('page loaded'), REVEAL_AFTER_LOAD_MS)
+    if (!firstScreenAnnounced) loadFirstScreenTimer ??= setTimeout(() => onFirstScreen('page loaded'), FIRST_SCREEN_AFTER_LOAD_MS)
   })
   mainWindow.on('closed', () => {
-    clearTimeout(revealTimer)
-    clearTimeout(loadRevealTimer)
+    clearTimeout(firstScreenTimer)
+    clearTimeout(loadFirstScreenTimer)
   })
 
   // Fix PATH after page loads (avoid blocking startup)
@@ -741,24 +736,26 @@ app.whenReady().then(async () => {
   // Window reference is managed by window.service.ts
   initializeEssentialServices()
 
-  // Phase 2: Extended Services (deferred until the first screen is up)
-  // This ensures Extended initialization NEVER affects startup speed.
-  //
-  // Tied to the same cue that reveals the window rather than to first paint
-  // alone: a launch that never paints — the installer's "run when finished"
-  // box, the updater relaunching after a swap — would otherwise leave the app
-  // running with no tray, no database and no automation, which is far worse
-  // than merely having no window.
+  // Deferred services wait for the first-screen cue, not native window display.
+  // Its load/deadline fallbacks prevent a missing paint signal from stranding them.
   registerFirstScreenListener(() => {
     // Yield first so the paint (when there was one) is not competing with it.
     setImmediate(() => {
-      initializeExtendedServices()
-
-      // Initialize analytics (after IPC handlers registered and window created),
-      // then performance telemetry, whose next-launch report needs analytics up.
-      initAnalytics()
-        .catch(err => console.warn('[Analytics] Init failed:', err))
-        .finally(() => startPerfTelemetry())
+      // Quitting before the first screen: the shutdown cleanup has run or is
+      // running, and must not be followed by the tray, database and scheduler.
+      if (isAppQuitting) return
+      void initializeExtendedServices()
+        .then(() => {
+          // Initialize analytics (after IPC handlers registered and window created),
+          // then performance telemetry, whose next-launch report needs analytics up.
+          initAnalytics()
+            .catch(err => console.warn('[Analytics] Init failed:', err))
+            .finally(() => startPerfTelemetry())
+        })
+        .catch(err => {
+          console.error('[Main] Extended services failed to start:', err)
+          showUncaughtErrorNotice(err instanceof Error ? err : new Error(String(err)))
+        })
     })
   })
 

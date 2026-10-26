@@ -1,7 +1,8 @@
 /**
  * A temporary space collaboration, seeded exactly as the product produces one:
- * a conversation in the temp space, an ephemeral team bound to it, and the one
+ * a conversation in the temp space, a team bound to it, and the one
  * room the collaboration works in (see team-collab-seed-worker.ts).
+ * The legacySaved option reproduces the old in-place save before recovery.
  *
  * The workbench is then reached through the UI — the conversation's
  * collaboration card, which opens the team view in the Canvas — rather than by
@@ -33,6 +34,7 @@ interface Launched {
 }
 
 interface Fixtures {
+  legacySaved: boolean
   /** One fixture owns the profile: seeded before the app opens it, closed once. */
   launched: Launched
   collaboration: SeededCollaboration
@@ -40,7 +42,7 @@ interface Fixtures {
   window: Page
 }
 
-function seedCollaboration(directory: string): SeededCollaboration {
+function seedCollaboration(directory: string, legacySaved: boolean): SeededCollaboration {
   const output = join(folder, '.e2e-seed-tmp', 'team-collab-worker.cjs')
   mkdirSync(dirname(output), { recursive: true })
   buildSync({
@@ -51,6 +53,7 @@ function seedCollaboration(directory: string): SeededCollaboration {
   })
   const payload = JSON.stringify({
     directory,
+    legacySaved,
     teamName: COLLAB_TEAM_NAME,
     memberName: COLLAB_MEMBER_NAME,
     conversationTitle: COLLAB_CONVERSATION_TITLE,
@@ -64,10 +67,11 @@ function seedCollaboration(directory: string): SeededCollaboration {
 }
 
 export const test = base.extend<Fixtures>({
-  launched: async ({}, use) => {
+  legacySaved: [false, { option: true }],
+  launched: async ({ legacySaved }, use) => {
     const entry = getAppEntryPath()
     const directory = createTestConfigDir(entry)
-    const seeded = seedCollaboration(directory)
+    const seeded = seedCollaboration(directory, legacySaved)
     console.log(`[E2E] Seeded collaboration ${seeded.teamId} in conversation ${seeded.conversationId}`)
     const app = await launchElectronApp(entry, directory)
     try {

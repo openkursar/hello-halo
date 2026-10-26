@@ -8,14 +8,14 @@
  * - List of configured sources with status indicators
  * - Quick switch between sources
  * - Add new source via ProviderSelector
- * - Edit existing source configuration
+ * - Edit existing source configuration (OAuth accounts via OAuthAccountEditor)
  * - Delete source with confirmation
  * - Dynamic OAuth provider support (configured via product.json)
  */
 
 import { useState, useEffect, useRef } from 'react'
 import {
-  Plus, Check, ChevronRight, Edit2, Trash2, LogOut, Loader2, Key, Globe, RefreshCw
+  Plus, Check, ChevronRight, Edit2, Trash2, LogOut, Loader2, Key, Globe
 } from 'lucide-react'
 import type {
   AISource,
@@ -26,6 +26,7 @@ import { getBuiltinProvider } from '../../types'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
 import { ProviderSelector } from './ProviderSelector'
+import { OAuthAccountEditor } from './OAuthAccountEditor'
 import { DelegatedLoginDialog } from './DelegatedLoginDialog'
 import { getBrandIcon } from '../icons/BrandIcons'
 import { ProviderIconTile } from '../icons/ProviderIconTile'
@@ -70,8 +71,6 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
 
   const [loggingOutSourceId, setLoggingOutSourceId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [renameSource, setRenameSource] = useState<{ sourceId: string; name: string } | null>(null)
-  const [renaming, setRenaming] = useState(false)
   const mountedRef = useRef(false)
 
   useEffect(() => {
@@ -170,22 +169,6 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
       if (mountedRef.current) setError(err instanceof Error ? err.message : t('Unable to sign out'))
     } finally {
       if (mountedRef.current) setLoggingOutSourceId(null)
-    }
-  }
-
-  const handleRenameSource = async () => {
-    if (!renameSource?.name.trim() || renaming) return
-    setRenaming(true)
-    setError(null)
-    try {
-      const result = await api.aiSourcesUpdateSource(renameSource.sourceId, { name: renameSource.name.trim() })
-      if (!result.success) throw new Error(result.error || t('Failed to rename account'))
-      await reloadConfig()
-      if (mountedRef.current) setRenameSource(null)
-    } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : t('Failed to rename account'))
-    } finally {
-      if (mountedRef.current) setRenaming(false)
     }
   }
 
@@ -295,51 +278,17 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                 </div>
               )}
 
-              {renameSource?.sourceId === source.id && (
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <input
-                    aria-label={t('Account name')}
-                    value={renameSource.name}
-                    onChange={event => setRenameSource({ sourceId: source.id, name: event.target.value })}
-                    disabled={renaming}
-                    className="w-full min-w-0 flex-1 px-3 py-2 bg-background border border-border rounded-md text-sm"
-                    onKeyDown={event => {
-                      if (event.key === 'Enter') void handleRenameSource()
-                    }}
-                  />
-                  <div className="flex gap-2">
-                    <button onClick={handleRenameSource} disabled={renaming || !renameSource.name.trim()} className="px-3 py-2 bg-primary text-primary-foreground rounded-md text-sm disabled:opacity-50">
-                      {t('Save')}
-                    </button>
-                    <button onClick={() => setRenameSource(null)} disabled={renaming} className="px-3 py-2 bg-secondary rounded-md text-sm">
-                      {t('Cancel')}
-                    </button>
-                  </div>
-                </div>
-              )}
-
               {/* Actions */}
               <div className="flex flex-wrap gap-2 pt-2">
-                {isOAuth && (
-                  <>
-                    <button
-                      onClick={() => oauth.start(source.provider, source.id)}
-                      disabled={!!oauth.login}
-                      className="flex items-center gap-1 px-3 py-1.5 text-sm text-muted-foreground
-                               bg-secondary hover:bg-surface-hover rounded-md transition-colors disabled:opacity-50"
-                    >
-                      <RefreshCw size={14} />
-                      {t('Reauthenticate')}
-                    </button>
-                    <button
-                      onClick={() => setRenameSource({ sourceId: source.id, name: source.name })}
-                      className="flex items-center gap-1 px-3 py-1.5 text-sm text-muted-foreground
-                               bg-secondary hover:bg-surface-hover rounded-md transition-colors"
-                    >
-                      <Edit2 size={14} />
-                      {t('Rename')}
-                    </button>
-                  </>
+                {!isDelegated && (
+                  <button
+                    onClick={() => setEditingSourceId(source.id)}
+                    className="flex items-center gap-1 px-3 py-1.5 text-sm text-muted-foreground
+                             bg-secondary hover:bg-surface-hover rounded-md transition-colors"
+                  >
+                    <Edit2 size={14} />
+                    {t('Edit')}
+                  </button>
                 )}
                 {isCredentialless ? (
                   // No key to edit. For delegated sources this only removes the
@@ -358,30 +307,38 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                     {isDelegated ? t('Remove') : t('Logout')}
                   </button>
                 ) : (
-                  // API Key: edit and delete
-                  <>
-                    <button
-                      onClick={() => setEditingSourceId(source.id)}
-                      className="flex items-center gap-1 px-3 py-1.5 text-sm text-muted-foreground
-                               bg-secondary hover:bg-surface-hover rounded-md transition-colors"
-                    >
-                      <Edit2 size={14} />
-                      {t('Edit')}
-                    </button>
-                    <button
-                      onClick={() => setDeletingSourceId(source.id)}
-                      className="flex items-center gap-1 px-3 py-1.5 text-sm text-red-500
-                               bg-red-500/10 hover:bg-red-500/20 rounded-md transition-colors"
-                    >
-                      <Trash2 size={14} />
-                      {t('Delete')}
-                    </button>
-                  </>
+                  <button
+                    onClick={() => setDeletingSourceId(source.id)}
+                    className="flex items-center gap-1 px-3 py-1.5 text-sm text-red-500
+                             bg-red-500/10 hover:bg-red-500/20 rounded-md transition-colors"
+                  >
+                    <Trash2 size={14} />
+                    {t('Delete')}
+                  </button>
                 )}
               </div>
             </div>
           </div>
         )}
+      </div>
+    )
+  }
+
+  const editingSource = editingSourceId
+    ? aiSources.sources.find(s => s.id === editingSourceId)
+    : undefined
+  if (editingSource?.authType === 'oauth') {
+    return (
+      <div className="space-y-4">
+        <h3 className="font-medium text-foreground">{t('Edit Account')}</h3>
+        <OAuthAccountEditor
+          source={editingSource}
+          onSaved={async () => {
+            await reloadConfig()
+            if (mountedRef.current) setEditingSourceId(null)
+          }}
+          onCancel={() => setEditingSourceId(null)}
+        />
       </div>
     )
   }

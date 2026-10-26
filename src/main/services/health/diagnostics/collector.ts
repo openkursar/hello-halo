@@ -12,6 +12,7 @@ import { getConfig, getHaloDir } from '../../../foundation/config.service'
 import { getHealthState } from '../orchestrator'
 import { getRegistryStats } from '../process-guardian'
 import { getRecentEvents } from '../health-checker'
+import { getImChannelStatuses } from '../../app-bridge'
 import { sanitizeReport } from './sanitizer'
 
 /**
@@ -22,6 +23,9 @@ export async function collectDiagnosticReport(): Promise<DiagnosticReport> {
   const healthState = getHealthState()
   const registryStats = getRegistryStats()
   const recentEvents = getRecentEvents()
+  let sdk: DiagnosticReport['sdk']
+  try { sdk = (await import('../../agent')).getSdkDiagnostics() }
+  catch (error) { console.warn('[Diagnostics] SDK runtime snapshot unavailable:', error) }
 
   // Get AI source info (sanitized)
   const aiSources = config.aiSources
@@ -50,6 +54,7 @@ export async function collectDiagnosticReport(): Promise<DiagnosticReport> {
 
   // Build raw report
   const rawReport: DiagnosticReport = {
+    sdk,
     timestamp: new Date().toISOString(),
     version: app.getVersion(),
     platform: process.platform,
@@ -91,6 +96,17 @@ export async function collectDiagnosticReport(): Promise<DiagnosticReport> {
         source: e.source,
         message: e.message
       })),
+
+    imChannels: getImChannelStatuses().map(s => ({
+      type: s.type,
+      ordinal: s.ordinal,
+      enabled: s.enabled,
+      state: s.state ?? (s.connected ? 'online' : 'offline'),
+      failures: s.link?.attempt,
+      drops: s.link?.drops,
+      viaProxy: s.link?.viaProxy,
+      lastError: s.link?.lastError ?? s.reason,
+    })),
 
     system: {
       memory: {

@@ -8,6 +8,8 @@
  * server, and notification when MCP apps change. Importing `apps/*` from
  * `services/*` would invert the layer direction.
  *
+ * The diagnostic report likewise needs the IM channels' link state.
+ *
  * Instead, services depend on this bridge (same tier), and the Apps layer
  * registers its concrete implementations at startup via `registerAppBridge`
  * (a downward call). This mirrors the IM-channel manager accessor pattern
@@ -18,6 +20,7 @@
  */
 
 import type { AppManagerService } from '../apps/manager'
+import type { ImChannelInstanceStatus } from '../../shared/types/im-channel'
 
 /**
  * Details of a single MCP app lifecycle change. Lets subscribers react
@@ -48,6 +51,8 @@ interface AppBridgeImpl {
   getAppManager: () => AppManagerService | null
   createHaloAppsMcpServer: (spaceId: string, guideConsulted: () => boolean, options?: HaloAppsServerOptions) => unknown
   onMcpAppsChange: (handler: McpAppsChangeHandler) => () => void
+  /** Status of every configured IM channel instance; absent where no channels run. */
+  getImChannelStatuses?: () => ImChannelInstanceStatus[]
 }
 
 let impl: AppBridgeImpl | null = null
@@ -93,4 +98,12 @@ export function createHaloAppsMcpServer(
 export function onMcpAppsChange(handler: McpAppsChangeHandler): () => void {
   if (!impl) return () => {}
   return impl.onMcpAppsChange(handler)
+}
+
+/**
+ * Status of every configured IM channel instance, for the diagnostic report.
+ * Empty when the Apps layer has not been wired.
+ */
+export function getImChannelStatuses(): ImChannelInstanceStatus[] {
+  return impl?.getImChannelStatuses?.() ?? []
 }

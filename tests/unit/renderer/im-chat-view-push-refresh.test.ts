@@ -27,6 +27,8 @@ const env = vi.hoisted(() => ({
     getSessionState: vi.fn(),
     appImChatStop: vi.fn(),
     appImChatClear: vi.fn(),
+    appChatMessages: vi.fn(async () => ({ success: true, data: [{ id: 'session-msg-1', role: 'assistant', content: 'Shipped', timestamp: '' }] })),
+    appChatStop: vi.fn(async () => ({ success: true })),
   },
 }))
 
@@ -135,6 +137,10 @@ beforeEach(() => {
     return () => { env.updateListeners = env.updateListeners.filter(l => l !== listener) }
   })
   env.api.appImChatMessages.mockClear()
+  env.api.appImChatStop.mockClear()
+  env.api.appImChatClear.mockClear()
+  env.api.appChatMessages.mockClear()
+  env.api.appChatStop.mockClear()
   chatState.recoverRunningTurn.mockClear()
 })
 
@@ -193,5 +199,65 @@ describe('an IM chat open in Halo', () => {
     runner.unmount()
 
     expect(env.updateListeners).toHaveLength(0)
+  })
+})
+
+type Element = { type: unknown; props: Record<string, unknown> & { children?: unknown } }
+
+/** The elements of a returned tree that match, without rendering child components. */
+function findAll(tree: unknown, match: (node: Element) => boolean): Element[] {
+  if (!tree || typeof tree !== 'object') return []
+  const node = tree as Element
+  return [...(match(node) ? [node] : []), ...[node.props?.children].flat(Infinity).flatMap(child => findAll(child, match))]
+}
+
+/** The read-only bar of a chat opened in Halo, once its record is read. */
+async function openBar(chat: ImSessionRecord): Promise<Element> {
+  const runner = new Runner()
+  const view = () => ImChatView({ appId: 'dh', spaceId: 'space-1', session: chat })
+  runner.render(view)
+  await settle()
+  const [bar] = findAll(runner.render(view), node => typeof node.type === 'function' && (node.type as { name: string }).name === 'ImChatInfoBar')
+  return bar
+}
+
+/** The buttons the bar draws with this title. */
+const barButtons = (bar: Element, title: string) =>
+  findAll((bar.type as (props: unknown) => unknown)(bar.props), node => node.type === 'button' && node.props.title === title)
+
+// The remote transport reaches a remote call (HTTP API session) by its key on
+// the chat routes; its im-chat routes take IM channels only (#454).
+describe('a remote call open in Halo', () => {
+  const remoteCall: ImSessionRecord = {
+    appId: 'dh', channel: 'http', source: 'http', instanceId: '',
+    chatId: 'order-42', chatType: 'direct', displayName: 'order-42', proactive: false, lastActiveAt: 1,
+  }
+  const key = 'app-chat:dh:http:direct:order-42'
+
+  it('reads its record by its key, and picks up its running turn', async () => {
+    new Runner().render(() => ImChatView({ appId: 'dh', spaceId: 'space-1', session: remoteCall }))
+    await settle()
+
+    expect(env.api.appChatMessages).toHaveBeenCalledWith('dh', 'space-1', key)
+    expect(env.api.appImChatMessages).not.toHaveBeenCalled()
+    expect(chatState.recoverRunningTurn).toHaveBeenCalledWith(key)
+  })
+
+  it('can be stopped while it runs, by its key', async () => {
+    env.generating = true
+    const bar = await openBar(remoteCall)
+    expect(barButtons(bar, 'Stop generation')).toHaveLength(1)
+
+    await (bar.props.onStopConfirm as () => Promise<void>)()
+
+    expect(env.api.appChatStop).toHaveBeenCalledWith('dh', key)
+    expect(env.api.appImChatStop).not.toHaveBeenCalled()
+  })
+
+  // Its context belongs to the backend that calls it, which would not know it
+  // had been wiped.
+  it('offers no clear, unlike an IM chat', async () => {
+    expect(barButtons(await openBar(remoteCall), 'Clear session')).toHaveLength(0)
+    expect(barButtons(await openBar(session), 'Clear session')).toHaveLength(1)
   })
 })

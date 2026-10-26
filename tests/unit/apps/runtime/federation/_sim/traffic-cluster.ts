@@ -125,7 +125,11 @@ export function planeGrowth(before: Received, after: Received, plane: string): T
   return { frames: a.frames - b.frames, bytes: a.bytes - b.bytes }
 }
 
-export function buildTrafficCluster(joinerCount: number): TrafficCluster {
+/**
+ * `secondMemberOf`: the joiner (1-based) that brings a second member,
+ * `${appId}b`, besides its own.
+ */
+export function buildTrafficCluster(joinerCount: number, opts: { secondMemberOf?: number } = {}): TrafficCluster {
   vi.spyOn(WsFederationClient.prototype as unknown as { connect: () => void }, 'connect').mockImplementation(() => {})
   // Presence silence is measured on the monotonic clock, which fake timers leave running in real time.
   vi.spyOn(performance, 'now').mockImplementation(() => Date.now())
@@ -201,6 +205,15 @@ export function buildTrafficCluster(joinerCount: number): TrafficCluster {
         transcripts.get(buildTeamSessionKey(member, SIM_OFFICE, epochId)) ?? null,
       isSessionActive: () => false,
       runLocalTurn: async () => ({ finalMessage: null }),
+      // What bootstrap does: the team service removes each member, which
+      // projects the removal and re-broadcasts the roster.
+      onMemberLeft: (officeId, appIds) => {
+        for (const member of appIds) {
+          team.removeMember(officeId, member)
+          node.manager.projectMemberRemoved(officeId, member)
+        }
+        node.manager.broadcastRosterFor(officeId)
+      },
     })
     nodes.set(id, node)
     return node
@@ -232,7 +245,12 @@ export function buildTrafficCluster(joinerCount: number): TrafficCluster {
       serverUrl: 'ws://127.0.0.1:9/ws',
       credentialToken: TOKEN,
       selfContext: { officeId: SIM_OFFICE, selfNodeId: j.id },
-      bringMembers: [{ appId: j.appId, memberName: `member ${i}`, role: 'r', spaceId: `space-j${i}` }],
+      bringMembers: [
+        { appId: j.appId, memberName: `member ${i}`, role: 'r', spaceId: `space-j${i}` },
+        ...(opts.secondMemberOf === i
+          ? [{ appId: `${j.appId}b`, memberName: `member ${i}b`, role: 'r', spaceId: `space-j${i}b` }]
+          : []),
+      ],
     })
     j.manager.repointLink(SIM_OFFICE, (_to, frame) => route(host.id, j.id, frame))
     j.manager.reenrollWithAuthority(SIM_OFFICE)

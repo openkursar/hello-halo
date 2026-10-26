@@ -23,6 +23,11 @@
  *                                             placeholders, for annotators.
  *                                             Any remaining 'unlabeled' entry
  *                                             fails the default/--check build.
+ *   --export-json <file>                      with the default mode or --check:
+ *                                             also write the reconciled routes
+ *                                             as JSON for the public developer
+ *                                             reference on the docs site. Never
+ *                                             changes resources/api-ref/.
  *
  * Meta files are TypeScript with a single type-only import; they are
  * transformed to ESM with esbuild (already a dependency) and imported from a
@@ -35,7 +40,7 @@
 
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { transform } from 'esbuild'
 
@@ -1025,6 +1030,84 @@ function renderAll(allRoutes, groups) {
 }
 
 // ---------------------------------------------------------------------------
+// --export-json — the reconciled routes as data for the public developer
+// reference, which the docs repository renders from a committed copy so its
+// build never needs this repository.
+// ---------------------------------------------------------------------------
+
+/** Bumped when a field is renamed or removed, so the docs renderer can refuse a file it does not understand. */
+const EXPORT_SCHEMA_VERSION = 1
+
+/**
+ * The query and body fields a handler's own source reads. Mechanical: a field
+ * read through an alias or inside a controller is invisible here, so `body` is
+ * null whenever `req.body` leaves the handler whole. A floor, not the contract —
+ * the docs side lists what meta forgot and flags it, it never claims completeness.
+ */
+function handlerReads(source) {
+  const captured = (re) => [...source.matchAll(re)].map((m) => m[1])
+  const destructured = (from) =>
+    captured(new RegExp(`\\{([^{}]*)\\}\\s*=\\s*req\\.${from}\\b`, 'g'))
+      .flatMap((list) => list.split(',').map((part) => part.trim().split(/[\s:=]/)[0]))
+      .filter((name) => /^\w+$/.test(name))
+  const unique = (names) => [...new Set(names)].sort()
+  const bodyEscapes = /[(,]\s*req\.body\s*[,)]|\.\.\.req\.body|(?:const|let)\s+\w+\s*=\s*req\.body\b/.test(source)
+  return {
+    query: unique([...captured(/\breq\.query\??\.(\w+)/g), ...captured(/\breq\.query\[['"](\w+)['"]\]/g), ...destructured('query')]),
+    body: bodyEscapes ? null : unique([...captured(/\breq\.body\??\.(\w+)/g), ...destructured('body')]),
+  }
+}
+
+/**
+ * Only routes with a manual entry ('ai', 'wrapped') are published; 'internal'
+ * ones serve Halo's own clients and are counted, never listed. No timestamp,
+ * as in SNAPSHOT.json: an unchanged surface exports byte-identical JSON, so a
+ * diff on the docs side always means the API changed.
+ */
+function buildExport(allRoutes, groups) {
+  const { version } = JSON.parse(readFileSync(join(PROJECT_ROOT, 'package.json'), 'utf-8'))
+  const exposeCounts = { ai: 0, wrapped: 0, internal: 0 }
+  for (const r of allRoutes) exposeCounts[r.meta.expose]++
+
+  const operations = allRoutes
+    .filter((r) => r.meta.expose === 'ai' || r.meta.expose === 'wrapped')
+    .map(({ method, path, meta, body: handlerSource }) => ({
+      method,
+      path,
+      expose: meta.expose,
+      reads: handlerReads(handlerSource),
+      groups: groupsOf(meta.group),
+      summary: meta.summary,
+      body: meta.body,
+      bodyExample: meta.__derivedBody,
+      query: meta.query,
+      returns: meta.returns,
+      // The manual's `# err:` split, so both readers agree on which lines describe a failure.
+      notes: meta.notes?.split('\n').map((text) => ({ kind: isErrorNote(text) ? 'error' : 'note', text })),
+      impact: meta.impact,
+      narrowerAlternative: meta.narrowerAlternative,
+      useInstead: meta.useInstead,
+      bypassCost: meta.bypassCost,
+      unavailable: meta.unavailable,
+    }))
+
+  return {
+    schemaVersion: EXPORT_SCHEMA_VERSION,
+    appVersion: version,
+    counts: { totalRoutes: allRoutes.length, expose: exposeCounts },
+    groups: Object.entries(groups).map(([id, group]) => ({ id, ...group })),
+    operations,
+  }
+}
+
+function writeExport(file, data) {
+  const target = resolve(file)
+  mkdirSync(dirname(target), { recursive: true })
+  writeFileSync(target, JSON.stringify(data, null, 2) + '\n')
+  log.info(`exported ${data.operations.length} documented routes to ${target}`)
+}
+
+// ---------------------------------------------------------------------------
 // Output — staging directory + atomic replace, same convention as sync-ai-guides.mjs.
 // ---------------------------------------------------------------------------
 
@@ -1068,6 +1151,16 @@ async function main() {
     log.err('--check and --scaffold are mutually exclusive')
     process.exit(1)
   }
+  const exportAt = args.indexOf('--export-json')
+  const exportFile = exportAt === -1 ? null : args[exportAt + 1]
+  if (exportAt !== -1 && (!exportFile || exportFile.startsWith('--'))) {
+    log.err('--export-json needs a file path')
+    process.exit(1)
+  }
+  if (exportFile && scaffold) {
+    log.err('--export-json and --scaffold are mutually exclusive')
+    process.exit(1)
+  }
 
   assertRouteFilesCoverDirectory()
   assertRouteFilesMatchRegistrationOrder()
@@ -1096,11 +1189,13 @@ async function main() {
       process.exit(1)
     }
     log.info('resources/api-ref/ is up to date')
+    if (exportFile) writeExport(exportFile, buildExport(allRoutes, groups))
     return
   }
 
   writeOutputs(files)
   log.info(`wrote ${files.size} file(s) to resources/api-ref/ (${allRoutes.length} routes reconciled)`)
+  if (exportFile) writeExport(exportFile, buildExport(allRoutes, groups))
 }
 
 main().catch((e) => {

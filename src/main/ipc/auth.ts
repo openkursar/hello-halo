@@ -5,7 +5,7 @@
  * Provider types are configured in product.json and loaded dynamically.
  *
  * Channels:
- * - auth:start-login (providerType, sourceId?) - Add or reauthenticate an OAuth account
+ * - auth:start-login (providerType) - Add an OAuth account (a known account is refreshed in place)
  * - auth:open-login-window (providerType, loginId) - Open the manager-owned redirect flow
  * - auth:complete-login (providerType, stateOrCode, loginId) - Complete OAuth login
  * - auth:cancel-login (providerType, loginId) - Cancel only the owned pending login
@@ -72,8 +72,7 @@ export function registerAuthHandlers(): void {
       }
     },
 
-    authStartLogin: (providerType: ProviderId, sourceId?: string) =>
-      authController.startLogin(providerType, sourceId),
+    authStartLogin: (providerType: ProviderId) => authController.startLogin(providerType),
 
     authOpenLoginWindow: async (providerType: ProviderId, loginId: string) => {
       try {

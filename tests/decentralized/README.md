@@ -63,6 +63,7 @@ npm run test:team                    # print the suite catalog + prerequisites
 npm run test:team -- workbench       # task conversation, collaboration, archive/resume and decisions
 npm run test:team -- people          # independent decisions, workspace retention and self-awareness
 npm run test:team -- single          # §1 single-machine fundamentals
+npm run test:team -- saved-team --legacy-root /path/to/built/older/checkout
 npm run test:team -- federation      # §3 federation, all 62 scenarios (writes RESULTS.md)
 npm run test:team -- upgrade         # §4 upgrade/migration
 npm run test:team -- perf            # §5 performance (add --long-run-minutes / --soak-minutes for full length)
@@ -142,3 +143,17 @@ existing default engine and Chat Completions source. Run model cases sequentiall
 The result records observed cost; it does not assert a dollar threshold, since
 provider pricing and independent review work vary. See
 [LIVE-TURN-COVERAGE.md](./LIVE-TURN-COVERAGE.md) for the deterministic coverage.
+
+### Saved configuration and older-client compatibility
+
+`saved-team --legacy-root <checkout>` boots the current build and a separately
+built older checkout in disposable profiles. Both must have `out/main` and their
+normal dependencies available. It checks configuration-only saving, idempotency,
+old-to-new and new-to-old joins, task creation and lead updates, the attribution
+of a legacy team's recovery notice, and one-time repair without changing its
+invitation, members or history. Repaired source tasks keep their publications
+and remain readable and stoppable, while send, inject and member-direct send
+are refused even before archival. It makes no model calls; the fixtures represent
+past work, not a claim that an AI completed it. The processes and their
+credential-bearing profiles are removed on exit. Run it alone, like other
+cluster suites.

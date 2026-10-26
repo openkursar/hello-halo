@@ -31,7 +31,7 @@
  */
 
 import { gzipSync } from 'zlib'
-import { proxyFetch } from '../../../services/proxy-fetch'
+import { linkFetch } from './link-route'
 import { loadProductConfig } from '../../../foundation/product-config'
 
 // ============================================
@@ -252,12 +252,13 @@ interface RegistrationRawResponse {
  * POST form-encoded params to the registration endpoint and return the parsed
  * body.
  *
- * Goes through `proxyFetch`, not a raw request: on a machine whose route to
- * Feishu is a proxy (common in corporate networks, and the default for many
- * mainland setups), a direct socket simply hangs until the read timeout, and
- * the user sees "setup failed" with nothing to act on. proxyFetch applies the
- * same precedence as every other outbound call in Halo — app-level proxy,
- * then Chromium's system resolution, then direct.
+ * Goes through the channels' route (`linkFetch`), not a raw request: on a
+ * machine whose route to Feishu is a proxy (common in corporate networks, and
+ * the default for many mainland setups), a direct socket simply hangs until
+ * the read timeout, and the user sees "setup failed" with nothing to act on.
+ * The route has the same precedence as every other outbound call in Halo —
+ * app-level proxy, then Chromium's system resolution, then direct — unless the
+ * user took message channels off the proxy.
  *
  * - Respects the supplied AbortSignal, plus its own per-request deadline so one
  *   unresponsive request cannot stall the polling loop.
@@ -286,7 +287,7 @@ async function postRegistration(
 
   let response: Response
   try {
-    response = await proxyFetch(`https://${host}${REGISTRATION_PATH}`, {
+    response = await linkFetch(`https://${host}${REGISTRATION_PATH}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',

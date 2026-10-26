@@ -70,6 +70,7 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [updateRequired, setUpdateRequired] = useState(false)
+  const [ownTeam, setOwnTeam] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
 
   useEffect(() => { void loadApps() }, [loadApps])
@@ -99,6 +100,7 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
     setSubmitted(true)
     setError(null)
     setUpdateRequired(false)
+    setOwnTeam(false)
     if (!parsed) {
       setError(t('That invite link is not valid.'))
       return
@@ -137,6 +139,7 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
       }
       setError(joinErrorText(res.error, t))
       setUpdateRequired(res.error === 'VERSION_INCOMPATIBLE')
+      setOwnTeam(res.error === 'OWN_TEAM')
     } catch {
       setError(joinErrorText(undefined, t))
     } finally {
@@ -270,19 +273,23 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
                   {t('Check for updates')}
                 </button>
               )}
-              <button
-                onClick={() => setShowHelp(v => !v)}
-                className="mt-1.5 text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
-              >
-                {showHelp ? t('Hide tips') : t('Having trouble joining?')}
-              </button>
-              {showHelp && (
-                <ul className="mt-2 space-y-1.5 pl-5 text-xs text-muted-foreground">
-                  <li className="list-disc">{t('Double-check the invite link was copied in full.')}</li>
-                  <li className="list-disc">{t('Ask the person who invited you to keep their app open.')}</li>
-                  <li className="list-disc">{t('Make sure your own internet connection is working.')}</li>
-                  <li className="list-disc">{t('Invite links expire — if it\u2019s old, ask for a fresh one.')}</li>
-                </ul>
+              {!ownTeam && (
+                <>
+                  <button
+                    onClick={() => setShowHelp(v => !v)}
+                    className="mt-1.5 text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
+                  >
+                    {showHelp ? t('Hide tips') : t('Having trouble joining?')}
+                  </button>
+                  {showHelp && (
+                    <ul className="mt-2 space-y-1.5 pl-5 text-xs text-muted-foreground">
+                      <li className="list-disc">{t('Double-check the invite link was copied in full.')}</li>
+                      <li className="list-disc">{t('Ask the person who invited you to keep their app open.')}</li>
+                      <li className="list-disc">{t('Make sure your own internet connection is working.')}</li>
+                      <li className="list-disc">{t('Invite links expire — if it\u2019s old, ask for a fresh one.')}</li>
+                    </ul>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -311,10 +318,12 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
 }
 
 /** Map a join failure to neutral, people-centric guidance. */
-function joinErrorText(code: string | undefined, t: (k: string) => string): string {
+export function joinErrorText(code: string | undefined, t: (k: string) => string): string {
   switch (code) {
     case 'DESKTOP_ONLY':
       return t('Joining a team is only available in the desktop app.')
+    case 'OWN_TEAM':
+      return t('This is your own team — it’s already on this computer.')
     case 'NO_MEMBERS':
       return t('Select at least one digital human to bring.')
     case 'VERSION_INCOMPATIBLE':

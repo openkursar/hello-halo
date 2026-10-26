@@ -171,14 +171,13 @@ vi.mock('../../../../src/main/services/agent/message-utils', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/image-attachments', () => ({ prepareNonVisionImageFallback: () => undefined }))
 vi.mock('../../../../src/main/services/agent/helpers', () => ({
-  getApiCredentials: vi.fn(async () => {
+  getApiCredentialsForSelection: vi.fn(async () => {
     const failing = engine.state.failNextCredentials
     engine.state.failNextCredentials = false
     if (engine.state.credentials) await engine.state.credentials
     if (failing) throw new Error('No usable credentials')
     return { provider: 'anthropic' }
   }),
-  getApiCredentialsForSource: vi.fn(),
   getWorkingDir: vi.fn(),
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getDbMcpServers: vi.fn(() => null),

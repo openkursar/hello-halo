@@ -16,7 +16,8 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { Globe, ChevronDown, ChevronRight } from 'lucide-react'
-import { useTranslation, setLanguage, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
+import { useTranslation, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
+import { useLanguagePicker } from '../../hooks/useLanguagePicker'
 import { api } from '../../api'
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
 import { getApiKeyProviders, type BuiltinProvider } from '../../types'
@@ -72,7 +73,7 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom
 
   // Language selector state
   const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false)
-  const [currentLang, setCurrentLang] = useState<LocaleCode>(getCurrentLanguage())
+  const [currentLang, pickLanguage] = useLanguagePicker()
 
   // Providers state
   const [providers, setProviders] = useState<AuthProviderConfig[]>([])
@@ -116,10 +117,9 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom
   const customExtra = Math.max(0, catalog.length - CUSTOM_CHIP_COUNT)
 
   // Handle language change
-  const handleLanguageChange = (lang: LocaleCode) => {
-    setLanguage(lang)
-    setCurrentLang(lang)
+  const handleLanguageChange = async (lang: LocaleCode) => {
     setIsLangDropdownOpen(false)
+    await pickLanguage(lang)
   }
 
   // Preset entries open the locked preset form; everything else is an OAuth provider.
@@ -265,7 +265,7 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom
                 {Object.entries(SUPPORTED_LOCALES).map(([code, name]) => (
                   <button
                     key={code}
-                    onClick={() => handleLanguageChange(code as LocaleCode)}
+                    onClick={() => void handleLanguageChange(code as LocaleCode)}
                     className={`w-full px-4 py-2 text-left text-sm hover:bg-secondary/80 transition-colors ${
                       currentLang === code ? 'text-primary font-medium' : 'text-foreground'
                     }`}

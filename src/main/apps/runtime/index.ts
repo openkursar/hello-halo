@@ -52,7 +52,7 @@ import { MIGRATION_NAMESPACE, migrations } from './migrations'
 import { createEventRouter, type EventRouter } from './event-router'
 import { FileWatcherSource } from './sources/file-watcher.source'
 import { WebhookSource, type WebhookSecretResolver } from './sources/webhook.source'
-import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, FeishuBotProvider, setActiveImChannelManager } from './im-channels'
+import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, FeishuBotProvider, setActiveImChannelManager, getActiveImChannelManager } from './im-channels'
 import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
 import { PendingRelayStore, setPendingRelayStore, getPendingRelayStore } from './pending-relays'
 import { setRelayActionAccess, type RelayActionAccess } from './relay-actions'
@@ -268,7 +268,12 @@ export async function initAppRuntime(
   // layer registers the concrete implementations here, before any session is
   // created. The agent's session-invalidation handler is likewise wired to
   // the MCP-apps-change event from this side.
-  registerAppBridge({ getAppManager, createHaloAppsMcpServer, onMcpAppsChange })
+  registerAppBridge({
+    getAppManager,
+    createHaloAppsMcpServer,
+    onMcpAppsChange,
+    getImChannelStatuses: () => getActiveImChannelManager()?.getAllStatuses() ?? [],
+  })
   onMcpAppsChange(handleMcpAppsChange)
 
   // Resident engine sessions are budgeted from here for every chat entry.

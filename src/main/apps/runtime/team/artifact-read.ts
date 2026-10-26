@@ -179,7 +179,10 @@ export function createLocalArtifactPathResolver(
     // name could reach a local member's unpublished file.
     if (teamRef) {
       const producer = deps.store.getMember(teamId, resolution.authorAppId)
-      if (!producer || isRemoteMember(producer)) return null
+      if (producer ? isRemoteMember(producer) : !deps.getWorkDirForApp(resolution.authorAppId, teamId)) {
+        console.warn(`${LOG_TAG} local team artifact refused: team=${teamId} epoch=${epochId} producer=${resolution.authorAppId} reason=local-ownership-unavailable`)
+        return null
+      }
     }
     const roots = {
       workDir: teamRef ? null : deps.getWorkDirForApp(resolution.authorAppId, teamId),

@@ -90,7 +90,7 @@ vi.mock('../../../../src/main/services/agent/control', () => ({
 
 vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getApiCredentials: vi.fn(),
-  getApiCredentialsForSource: vi.fn(),
+  getApiCredentialsForSelection: vi.fn(),
   getWorkingDir: vi.fn(),
   getHeadlessElectronPath: vi.fn(),
   getDbMcpServers: vi.fn(),

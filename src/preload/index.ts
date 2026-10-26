@@ -21,6 +21,7 @@ import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLiveP
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
 import type { ModelCatalogChangedEvent } from '../shared/types/ai-sources'
 import type { PickedLocalEntry } from '../shared/attached-paths'
+import type { ImChannelInstanceConfig, ImChannelInstancePatch } from '../shared/types/im-channel'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
 import { onboardingRpc } from '../shared/rpc/contracts/onboarding.contract'
 import { securityRpc } from '../shared/rpc/contracts/security.contract'
@@ -94,6 +95,17 @@ type AuthRpcClient = RpcClient<typeof authRpc>
     } else {
       seed()
     }
+  }
+}
+
+// The theme saved in config, passed by the main process at window creation.
+// index.html's anti-flash script boots the first frame in it; its own copy in
+// localStorage can lag behind config, e.g. after a reinstall.
+{
+  const arg = process.argv.find((a) => a.startsWith('--halo-boot-theme='))
+  const theme = arg?.slice(arg.indexOf('=') + 1)
+  if (theme === 'light' || theme === 'dark' || theme === 'system') {
+    contextBridge.exposeInMainWorld('haloBootTheme', theme)
   }
 }
 
@@ -515,6 +527,9 @@ export interface HaloAPI extends BrowserHostBridge {
   imChannelsSetInstanceApp: (instanceId: string, appId: string, expectedAppId?: string) => Promise<IpcResponse>
   imChannelsCreateInstance: (instance: unknown) => Promise<IpcResponse>
   imChannelsUnbindInstance: (instanceId: string) => Promise<IpcResponse>
+  imChannelsUpdateInstance: (instanceId: string, patch: ImChannelInstancePatch) => Promise<IpcResponse<ImChannelInstanceConfig[]>>
+  imChannelsAddInstance: (instance: ImChannelInstanceConfig) => Promise<IpcResponse<ImChannelInstanceConfig[]>>
+  imChannelsRemoveInstance: (instanceId: string) => Promise<IpcResponse<ImChannelInstanceConfig[]>>
 
   // IM Sessions
   imSessionsList: (appId?: string) => Promise<IpcResponse>
@@ -683,8 +698,8 @@ export interface HaloAPI extends BrowserHostBridge {
   teamRevokeInvite: (input: { jti: string }) => Promise<IpcResponse>
   /** Remote office: join an office hosted elsewhere, bringing local members (joiner). */
   teamJoinOffice: (input: { officeId: string; serverUrl: string; inviteToken: string; bringAppIds: string[] }) => Promise<IpcResponse>
-  /** Remote office: leave a joined office, removing the local shadow (joiner). */
-  teamLeaveOffice: (input: { officeId: string }) => Promise<IpcResponse>
+  /** Remote office: leave a joined office, removing the local shadow (joiner); with `appIds`, take only those members out. */
+  teamLeaveOffice: (input: { officeId: string; appIds?: string[] }) => Promise<IpcResponse>
   /** Send a message to a remote member via the office owner (team wake). */
   teamSendToMember: (input: { teamId: string; appId: string; epochId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; spaceId?: string; references?: ContentReference[] }) => Promise<IpcResponse>
   /** Stop a member's running turn, wherever that member runs. */

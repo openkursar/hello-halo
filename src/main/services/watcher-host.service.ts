@@ -237,7 +237,7 @@ function handleWorkerMessage(msg: WorkerToMainMessage): void {
       const pending = pendingScans.get(msg.requestId)
       if (pending) {
         clearTimeout(pending.timer)
-        pending.reject(new Error(msg.error))
+        pending.reject(Object.assign(new Error(msg.error), { code: msg.code }))
         pendingScans.delete(msg.requestId)
       }
       break
@@ -367,7 +367,9 @@ function requestFromWorker(
 }
 
 /**
- * Scan directory for tree nodes (async request/response via worker)
+ * Scan directory for tree nodes (async request/response via worker).
+ * Rejects when the directory could not be listed: a timeout, the worker
+ * exiting, or a read error, which keeps its OS `code` (ENOENT: not there).
  */
 export async function scanTreeViaWorker(
   spaceId: string,

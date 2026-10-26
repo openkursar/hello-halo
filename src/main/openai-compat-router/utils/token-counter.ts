@@ -11,27 +11,43 @@
  * Falls back to character-based estimation if tokenizer fails.
  */
 
-import { getTokenizer } from '@anthropic-ai/tokenizer'
-import { encode as encodeO200k } from 'gpt-tokenizer'
-import { encode as encodeCl100k } from 'gpt-tokenizer/encoding/cl100k_base'
+import type * as AnthropicTokenizer from '@anthropic-ai/tokenizer'
+import type * as O200kEncoding from 'gpt-tokenizer'
+import type * as Cl100kEncoding from 'gpt-tokenizer/encoding/cl100k_base'
 
 // ============================================================================
-// Claude Tokenizer Singleton
+// Tokenizers, loaded on first use
 // ============================================================================
+
+// Each tokenizer is required on its first count rather than imported: their
+// tables are megabytes of code that the main process would otherwise load
+// before the window opens.
 
 /**
  * Lazy singleton for the Claude WASM tokenizer.
  * Creating a Tiktoken instance is expensive (~20ms). By reusing one instance
  * across all calls, subsequent token counts are <1ms instead of ~23ms each.
  */
-type ClaudeTokenizer = ReturnType<typeof getTokenizer>
+type ClaudeTokenizer = ReturnType<typeof AnthropicTokenizer.getTokenizer>
 let _claudeTokenizer: ClaudeTokenizer | null = null
+let _encodeO200k: typeof O200kEncoding.encode | null = null
+let _encodeCl100k: typeof Cl100kEncoding.encode | null = null
 
 function getClaudeTokenizer(): ClaudeTokenizer {
   if (!_claudeTokenizer) {
-    _claudeTokenizer = getTokenizer()
+    _claudeTokenizer = (require('@anthropic-ai/tokenizer') as typeof AnthropicTokenizer).getTokenizer()
   }
   return _claudeTokenizer
+}
+
+function encodeO200k(text: string): number[] {
+  _encodeO200k ??= (require('gpt-tokenizer') as typeof O200kEncoding).encode
+  return _encodeO200k(text)
+}
+
+function encodeCl100k(text: string): number[] {
+  _encodeCl100k ??= (require('gpt-tokenizer/encoding/cl100k_base') as typeof Cl100kEncoding).encode
+  return _encodeCl100k(text)
 }
 
 // ============================================================================

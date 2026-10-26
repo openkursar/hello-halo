@@ -56,7 +56,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 }))
 
 import { AISourceManager } from '../../../../src/main/services/ai-sources/manager'
-import type { AISource, AISourcesConfig, OAuthSourceConfig } from '../../../../src/shared/types'
+import type { AISource, AISourcesConfig, OAuthSourceConfig, OAuthStartResult } from '../../../../src/shared/types'
 import type { ProviderResult } from '../../../../src/shared/interfaces'
 
 function seed(config: Partial<AISourcesConfig>): void {
@@ -328,6 +328,18 @@ describe('OAuth multi-account _accounts upsert', () => {
     // keepModel: current model still in the new list → preserved.
     expect(saved.sources[0].model).toBe('m1')
   })
+
+  it('selects the newly added account, and signing in again to a listed one keeps the selection', async () => {
+    const listed = oauthSource({ id: 'listed', provider: 'acct-prov' as never, user: { name: '', uid: 'acc-a' } })
+    seed({ currentId: 'deepseek', sources: [apiKeySource({ id: 'deepseek' }), listed] })
+    const mgr = new AISourceManager()
+    await loginWithAccounts(mgr, [{ key: 'k-a2', label: 'Org A', id: 'acc-a' }])
+    expect((store.value.aiSources as AISourcesConfig).currentId).toBe('deepseek')
+
+    await loginWithAccounts(mgr, [{ key: 'k-a3', label: 'Org A', id: 'acc-a' }, { key: 'k-b', label: 'Org B', id: 'acc-b' }])
+    const saved = store.value.aiSources as AISourcesConfig
+    expect(saved.currentId).toBe(saved.sources.find(source => source.user?.uid === 'acc-b')!.id)
+  })
 })
 
 describe('single-source create / update / delete', () => {
@@ -388,7 +400,7 @@ describe('single-source create / update / delete', () => {
     expect(saved.accessToken).toBe('new-token')
   })
 
-  it('adds another account without replacing an unidentified existing account or selection', async () => {
+  it('adds another account without replacing an unidentified existing account, and selects it', async () => {
     seed({ currentId: 'ex', sources: [oauthSource({ id: 'ex', provider: 'single-prov' as never })] })
     const mgr = new AISourceManager()
     await login(mgr, 'u2')
@@ -397,7 +409,7 @@ describe('single-source create / update / delete', () => {
     expect(saved.sources[0].id).toBe('ex')
     expect(saved.sources[0].accessToken).toBe('tok')
     expect(saved.sources[1].accessToken).toBe('at')
-    expect(saved.currentId).toBe('ex')
+    expect(saved.currentId).toBe(saved.sources[1].id)
   })
 
   it('reassigns currentId to the first remaining source when the current one is deleted', () => {
@@ -469,9 +481,40 @@ describe('independent OAuth account lifecycle', () => {
     expect(current.success).toBe(true)
     expect(stub.startLogin).toHaveBeenCalledTimes(2)
     // The superseded start cleaned its own late slot before the new one opened.
+    expect(stub.cancelLogin).toHaveBeenCalledTimes(2)
     expect(stub.cancelLogin.mock.invocationCallOrder.at(-1)).toBeLessThan(stub.startLogin.mock.invocationCallOrder[1])
     expect(mgr.getOAuthLoginContext('test-oauth', current.data!.loginId)).not.toBeNull()
     await mgr.cancelOAuthLogin('test-oauth', current.data!.loginId)
+  })
+
+  it('a start that fails after the drain gave up on it leaves the login that superseded it intact', async () => {
+    vi.useFakeTimers()
+    try {
+      seed({ sources: [] })
+      const mgr = new AISourceManager()
+      const stub = provider(mgr)
+      const stuck = deferred<ProviderResult<OAuthStartResult>>()
+      stub.startLogin.mockReturnValueOnce(stuck.promise as never)
+      const first = mgr.startOAuthLogin('test-oauth')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(stub.startLogin).toHaveBeenCalledTimes(1)
+      const second = mgr.startOAuthLogin('test-oauth')
+      // The drain waits 15 s for the stuck start, then lets the new login go ahead.
+      await vi.advanceTimersByTimeAsync(16_000)
+      const current = await second
+      expect(current.success).toBe(true)
+      expect(stub.startLogin).toHaveBeenCalledTimes(2)
+      expect(stub.cancelLogin).toHaveBeenCalledTimes(1)
+
+      stuck.resolve({ success: false, error: 'request timed out' })
+      expect((await first).success).toBe(false)
+      // Nothing of the failed start exists in the provider, so its late return must not clear the slot the new login holds.
+      expect(stub.cancelLogin).toHaveBeenCalledTimes(1)
+      expect(mgr.getOAuthLoginContext('test-oauth', current.data!.loginId)).not.toBeNull()
+      expect((await mgr.completeOAuthLogin('test-oauth', 'state', current.data!.loginId)).success).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('joins a repeated completion of the same login and returns only public fields', async () => {
@@ -1537,5 +1580,119 @@ describe('syncBuiltinModels (constructor)', () => {
     expect(saved.sources[0].availableModels.map(m => m.id)).toEqual(['gpt-4o', 'my-custom-model'])
     // No dirty write from sync (constructor may still not save at all).
     expect(saveConfig).not.toHaveBeenCalled()
+  })
+})
+
+describe('vendor presentation and withdrawn models', () => {
+  function registerCatalogProvider(mgr: AISourceManager, refreshData: Record<string, unknown>, loginData?: Record<string, unknown>) {
+    const provider = {
+      type: 'catalog-prov',
+      checkTokenWithConfig: vi.fn().mockReturnValue({ valid: true, needsRefresh: false }),
+      refreshTokenWithConfig: vi.fn(),
+      refreshConfig: vi.fn().mockResolvedValue({ success: true, data: { 'catalog-prov': refreshData } }),
+      startLogin: vi.fn(async () => ({ success: true, data: { loginUrl: 'https://example.com/login', state: 'state' } })),
+      completeLogin: vi.fn(async () => ({
+        success: true,
+        data: { _tokenData: { accessToken: 'tok-2', refreshToken: 'ref-2', expiresAt: 1, uid: 'u1' }, user: { name: 'U' }, ...loginData }
+      })),
+      getBackendConfig: vi.fn()
+    }
+    ;(mgr as unknown as { providers: Map<string, unknown> }).providers.set('catalog-prov', provider)
+    return provider
+  }
+
+  const stored = () => (store.value.aiSources as AISourcesConfig).sources[0]
+
+  function seedAccount(over: Partial<AISource> = {}) {
+    seed({
+      currentId: 'o1',
+      sources: [oauthSource({
+        provider: 'catalog-prov' as never,
+        user: { name: 'U', uid: 'u1' },
+        model: 'old',
+        availableModels: [{ id: 'old', name: 'Old model' }, { id: 'kept', name: 'Kept', costMultiplier: 1 }],
+        ...over
+      })]
+    })
+  }
+
+  it('stores the vendor presentation, records what the vendor withdrew and why the account model moved', async () => {
+    seedAccount()
+    const mgr = new AISourceManager()
+    const provider = registerCatalogProvider(mgr, {
+      availableModels: ['kept', 'auto', 'custom:a'],
+      modelNames: { kept: 'Kept', auto: 'Auto', 'custom:a': 'Org model' },
+      modelPresentation: {
+        kept: { badge: { label: 'Night offer' }, costMultiplier: 0.5, regularCostMultiplier: 0.79 },
+        'custom:a': { group: 'enterprise', costMultiplier: 'cheap' }
+      },
+      model: 'auto'
+    })
+
+    await mgr.refreshSourceConfig('o1')
+
+    expect(provider.refreshConfig.mock.calls[0][0]['catalog-prov'].modelPresentation).toEqual({ kept: { costMultiplier: 1 } })
+    expect(stored().availableModels).toEqual([
+      { id: 'kept', name: 'Kept', badge: { label: 'Night offer' }, costMultiplier: 0.5, regularCostMultiplier: 0.79 },
+      { id: 'auto', name: 'Auto' },
+      { id: 'custom:a', name: 'Org model', group: 'enterprise' }
+    ])
+    expect(stored().model).toBe('auto')
+    expect(stored().withdrawnModels).toEqual([{ id: 'old', name: 'Old model', at: expect.any(String) }])
+    expect(stored().modelReplacement).toMatchObject({ from: 'old', fromName: 'Old model', to: 'auto' })
+  })
+
+  it('records nothing from a fallback list served while the vendor was unreachable', async () => {
+    seedAccount()
+    const mgr = new AISourceManager()
+    registerCatalogProvider(mgr, { degraded: true, catalogReconciled: true, availableModels: ['kept'], model: 'kept' })
+
+    await mgr.refreshSourceConfig('o1')
+
+    expect(stored().availableModels.map(model => model.id)).toEqual(['kept'])
+    expect(stored().withdrawnModels).toBeUndefined()
+    expect(stored().modelReplacement).toBeUndefined()
+  })
+
+  it('stores presentation from a login and records withdrawals when an existing account signs in again', async () => {
+    seedAccount()
+    const mgr = new AISourceManager()
+    registerCatalogProvider(mgr, {}, {
+      _availableModels: ['kept', 'new'],
+      _modelNames: { kept: 'Kept', new: 'New' },
+      _modelPresentation: { new: { badge: { label: 'Free' }, costMultiplier: 0 } },
+      _defaultModel: 'new'
+    })
+    const start = await mgr.startOAuthLogin('catalog-prov')
+    await mgr.completeOAuthLogin('catalog-prov', 'state', start.data!.loginId)
+
+    expect(stored().availableModels).toEqual([{ id: 'kept', name: 'Kept' }, { id: 'new', name: 'New', badge: { label: 'Free' }, costMultiplier: 0 }])
+    expect(stored().model).toBe('old')
+    expect(stored().withdrawnModels).toEqual([{ id: 'old', name: 'Old model', at: expect.any(String) }])
+  })
+
+  it('records no withdrawals when a sign-in sends no list and Halo fills in only the default model', async () => {
+    seedAccount()
+    const mgr = new AISourceManager()
+    registerCatalogProvider(mgr, {}, { _availableModels: [], _defaultModel: 'new' })
+    const start = await mgr.startOAuthLogin('catalog-prov')
+    await mgr.completeOAuthLogin('catalog-prov', 'state', start.data!.loginId)
+
+    expect(stored().availableModels.map(model => model.id)).toEqual(['new'])
+    expect(stored().withdrawnModels).toBeUndefined()
+  })
+
+  it('clears the replacement note once the user picks a model, and ignores history sent by a client', () => {
+    const history = [{ id: 'gone', name: 'Gone', at: '2026-10-21T10:00:00.000Z' }]
+    seedAccount({ model: 'kept', withdrawnModels: history, modelReplacement: { from: 'old', fromName: 'Old model', to: 'kept', at: '2026-10-21T10:00:00.000Z' } })
+    const mgr = new AISourceManager()
+
+    mgr.updateSource('o1', { name: 'Renamed', withdrawnModels: [], modelReplacement: undefined })
+    expect(stored().withdrawnModels).toEqual(history)
+    expect(stored().modelReplacement).toBeDefined()
+
+    mgr.setCurrentModel('kept')
+    expect(stored().modelReplacement).toBeUndefined()
+    expect(stored().withdrawnModels).toEqual(history)
   })
 })

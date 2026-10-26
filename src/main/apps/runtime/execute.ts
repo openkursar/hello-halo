@@ -40,7 +40,7 @@ import { createNotifyToolServer } from './notify-tool'
 import { FileExportGate } from './file-export-gate'
 import { getImSessionRegistry } from './im-session-registry'
 import { autoSyncRunResult } from './im-auto-sync'
-import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getMcpServersForRequires } from '../../services/agent/helpers'
+import { getApiCredentialsForSelection, getHeadlessElectronPath, getMcpServersForRequires } from '../../services/agent/helpers'
 import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from '../../services/agent/sdk-config'
 import { toEngineSystemPrompt } from '../../services/agent/system-prompt'
 import {
@@ -325,9 +325,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //    (needed early: workDir feeds into system prompt,
     //     modelInfo feeds into base prompt's model display)
     const config = getConfig()
-    const credentials = app.userOverrides?.modelSourceId
-      ? await getApiCredentialsForSource(app.userOverrides.modelSourceId, app.userOverrides.modelId)
-      : await getApiCredentials()
+    // Its own account and model, or the global selection when it has none or
+    // its account was removed.
+    const credentials = await getApiCredentialsForSelection(app.userOverrides)
     // The digital human's own thinking level, as in its chats; unset, the
     // model's configured effort decides.
     const pickedEffort = pickReasoningEffort(app.userOverrides?.chatReasoningEffort)

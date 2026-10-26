@@ -13,7 +13,7 @@ import { BROWSER_META, TERMINAL_META, CHANGES_META } from '../canvas'
 import { useAppStore } from '../../stores/app.store'
 import { useActiveModelTarget } from '../../hooks/useActiveModelTarget'
 import { openPersonModelSettings } from '../../utils/people-navigation'
-import { getModelDisplayName, getSourceById, type AISourcesConfig } from '../../types'
+import { getModelDisplayName, type AISourcesConfig } from '../../types'
 import { useTranslation } from '../../i18n'
 import { ModelSelectSheet } from '../ai-config/ModelSelector'
 import { useSpaceQuickActions } from '../../hooks/useSpaceQuickActions'
@@ -43,10 +43,7 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
   const modelTarget = useActiveModelTarget()
   const sourceId = modelTarget.kind === 'digital-human' ? modelTarget.modelSourceId : modelTarget.conversation?.modelSourceId
   const modelId = modelTarget.kind === 'digital-human' ? modelTarget.modelId : modelTarget.conversation?.modelId
-  const isMissingSource = !!sourceId && !getSourceById(aiSources, sourceId)
-  const currentModelName = isMissingSource
-    ? t('Account removed. Choose another account.')
-    : getModelDisplayName(aiSources, sourceId, modelId)
+  const currentModelName = getModelDisplayName(aiSources, sourceId, modelId)
 
   const {
     canOpenBrowser,
@@ -143,11 +140,8 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
               >
                 <Sparkles className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-sm text-foreground">{t('Model')}</span>
-                <span className={`ml-auto min-w-0 text-sm text-muted-foreground ${isMissingSource ? 'flex-1 text-right break-words' : 'truncate max-w-[160px]'}`}>
+                <span className="ml-auto min-w-0 truncate max-w-[160px] text-sm text-muted-foreground">
                   {currentModelName}
-                  {isMissingSource && modelTarget.kind === 'digital-human' && (
-                    <span className="mt-1 block text-xs">{t('Change in its settings')}</span>
-                  )}
                 </span>
                 <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
               </button>

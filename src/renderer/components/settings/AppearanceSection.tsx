@@ -5,7 +5,8 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import type { HaloConfig, ThemeMode, SendKeyMode } from '../../types'
-import { useTranslation, setLanguage, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
+import { useTranslation, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
+import { useLanguagePicker } from '../../hooks/useLanguagePicker'
 import { api } from '../../api'
 import { DISPLAY_SCALE_MIN, DISPLAY_SCALE_MAX, DISPLAY_SCALE_STEP } from '../../../shared/constants/display-scale'
 
@@ -51,6 +52,8 @@ export function AppearanceSection({ config, setConfig }: AppearanceSectionProps)
     setSendKeyMode(value)
     await autoSave({ chat: { ...config?.chat, sendKeyMode: value } })
   }
+
+  const [language, pickLanguage] = useLanguagePicker()
 
   // Handle theme change with auto-save
   const handleThemeChange = async (value: ThemeMode) => {
@@ -129,8 +132,8 @@ export function AppearanceSection({ config, setConfig }: AppearanceSectionProps)
         <div>
           <label className="block text-sm text-muted-foreground mb-2">{t('Language')}</label>
           <select
-            value={getCurrentLanguage()}
-            onChange={(e) => setLanguage(e.target.value as LocaleCode)}
+            value={language}
+            onChange={(e) => void pickLanguage(e.target.value as LocaleCode)}
             className="w-full px-4 py-2 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors"
           >
             {Object.entries(SUPPORTED_LOCALES).map(([code, name]) => (

@@ -4,6 +4,9 @@
  */
 import { DEFAULT_SPACE_ID } from '../../../shared/apps/install-scope'
 import type { Express, Request, Response } from 'express'
+import type { ImChannelInstanceConfig } from '../../../shared/types/im-channel'
+import type { InstanceSettingsResult } from '../../apps/runtime/im-channels/instance-settings'
+import { maskConfigFields } from '../../foundation/config-encryption'
 import {
   ILINK_BASE_URL,
   FeishuScanAuthError,
@@ -25,6 +28,15 @@ import {
   wecomGenerateScode,
   wecomPollResult,
 } from './_shared'
+
+/** A remote client sees bot secrets masked, as GET /api/config shows them. */
+function withMaskedSecrets(result: InstanceSettingsResult): InstanceSettingsResult {
+  if (!result.success) return result
+  const masked = maskConfigFields({ imChannels: { instances: result.data } }) as {
+    imChannels: { instances: ImChannelInstanceConfig[] }
+  }
+  return { success: true, data: masked.imChannels.instances }
+}
 
 /**
  * Map a scan-auth failure to the response body. `kind` is what lets the client
@@ -385,6 +397,41 @@ export function registerImRoutes(app: Express): void {
       const { unbindInstance } = await import('../../apps/runtime/im-channels/binding')
       res.json(unbindInstance(String(req.body?.instanceId ?? '')))
     } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/im-channels/update-instance — apply what a person changed on one instance
+  app.post('/api/im-channels/update-instance', async (req: Request, res: Response) => {
+    const instanceId = String(req.body?.instanceId ?? '')
+    try {
+      const { updateInstanceSettings } = await import('../../apps/runtime/im-channels/instance-settings')
+      res.json(withMaskedSecrets(updateInstanceSettings(instanceId, req.body?.patch)))
+    } catch (error) {
+      console.warn('[ImChannels] Instance update failed over HTTP', { instanceId, error })
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/im-channels/add-instance — add an instance from the settings page (may be unbound)
+  app.post('/api/im-channels/add-instance', async (req: Request, res: Response) => {
+    try {
+      const { addInstance } = await import('../../apps/runtime/im-channels/instance-settings')
+      res.json(withMaskedSecrets(addInstance(req.body?.instance)))
+    } catch (error) {
+      console.warn('[ImChannels] Instance add failed over HTTP', { error })
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/im-channels/remove-instance — delete an instance
+  app.post('/api/im-channels/remove-instance', async (req: Request, res: Response) => {
+    const instanceId = String(req.body?.instanceId ?? '')
+    try {
+      const { removeInstance } = await import('../../apps/runtime/im-channels/instance-settings')
+      res.json(withMaskedSecrets(removeInstance(instanceId)))
+    } catch (error) {
+      console.warn('[ImChannels] Instance removal failed over HTTP', { instanceId, error })
       res.json({ success: false, error: (error as Error).message })
     }
   })

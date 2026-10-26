@@ -9,7 +9,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
-import type { ImChannelInstanceConfig } from '../../shared/types/im-channel'
+import type { ImChannelInstanceConfig, ImChannelInstancePatch } from '../../shared/types/im-channel'
 
 export const imApi = {
   // ===== WeCom Bot (legacy compat) =====
@@ -164,6 +164,28 @@ export const imApi = {
       return window.halo.imChannelsUnbindInstance(instanceId)
     }
     return httpRequest('POST', '/api/im-channels/unbind-instance', { instanceId })
+  },
+
+  /** Resolves with the stored instance list (`data`) once the change is applied. */
+  imChannelsUpdateInstance: async (instanceId: string, patch: ImChannelInstancePatch): Promise<ApiResponse<ImChannelInstanceConfig[]>> => {
+    if (isElectron()) {
+      return window.halo.imChannelsUpdateInstance(instanceId, patch)
+    }
+    return httpRequest('POST', '/api/im-channels/update-instance', { instanceId, patch })
+  },
+
+  imChannelsAddInstance: async (instance: ImChannelInstanceConfig): Promise<ApiResponse<ImChannelInstanceConfig[]>> => {
+    if (isElectron()) {
+      return window.halo.imChannelsAddInstance(instance)
+    }
+    return httpRequest('POST', '/api/im-channels/add-instance', { instance })
+  },
+
+  imChannelsRemoveInstance: async (instanceId: string): Promise<ApiResponse<ImChannelInstanceConfig[]>> => {
+    if (isElectron()) {
+      return window.halo.imChannelsRemoveInstance(instanceId)
+    }
+    return httpRequest('POST', '/api/im-channels/remove-instance', { instanceId })
   },
 
   // ===== WeChat Personal Bot via iLink API =====

@@ -43,17 +43,15 @@
  * they remain grep-distinguishable from our own events.
  */
 
-import {
-  createLarkChannel,
-  Domain,
-  LoggerLevel,
-  type HttpInstance,
-  type LarkChannel,
-  type Logger as SdkLogger,
-  type NormalizedMessage,
-  type ResourceDescriptor,
+import type {
+  HttpInstance,
+  LarkChannel,
+  Logger as SdkLogger,
+  NormalizedMessage,
+  ResourceDescriptor,
 } from '@larksuiteoapi/node-sdk'
-import axios from 'axios'
+import type { AxiosStatic } from 'axios'
+import type { Agent } from 'node:http'
 import { tmpdir } from 'os'
 import { extname, join } from 'path'
 import {
@@ -65,6 +63,7 @@ import {
   type ImConnectionState,
   type ImFileCapability,
   type ImIdentityCapability,
+  type ImLinkStatus,
 } from '../../../../shared/types/im-channel'
 import type {
   InboundAttachment,
@@ -83,7 +82,8 @@ import {
   type StreamLogger,
 } from './feishu-stream-session'
 import { notifyAppEvent } from '../../../services/notification.service'
-import { resolveProxyAgent } from '../../../services/proxy-fetch'
+import { DIRECT_ROUTE, openLinkRoute, type LinkRoute } from './link-route'
+import { CredentialRejectionBudget, LinkSupervisor } from './link-supervisor'
 
 // ============================================
 // Constants
@@ -91,10 +91,30 @@ import { resolveProxyAgent } from '../../../services/proxy-fetch'
 
 /** Interval for periodic health-snapshot log lines. */
 const HEALTH_SNAPSHOT_INTERVAL_MS = 5 * 60_000
-/** First delay before rebuilding a channel that could not connect. */
-const CONNECT_RETRY_BASE_MS = 5_000
-/** Ceiling for the connect-retry backoff. */
-const CONNECT_RETRY_MAX_MS = 5 * 60_000
+/**
+ * Building a channel to its first handshake, and the SDK's own reconnect of a
+ * dropped link, before the channel is rebuilt on a fresh route. Covers the
+ * SDK's spread-out first retry (up to 30 s) plus its 15 s handshake limit, so a
+ * reconnect that is merely slow is left alone.
+ */
+const ATTEMPT_TIMEOUT_MS = 45_000
+/**
+ * How long a replaced channel's route stays open for the HTTP calls (a send or
+ * upload) it started before the rebuild. A call still open by then is one a
+ * dead proxy is holding.
+ */
+const RETIRED_ROUTE_MAX_MS = 10 * 60_000
+/**
+ * Platform answers that reject the credentials themselves, as the SDK words
+ * them: the tenant-token endpoint (10014 unknown App ID or wrong App Secret,
+ * 10003 malformed ones) and the WebSocket endpoint (1000040344 missing,
+ * 1000040345 invalid, and 514, which only the SDK's own `auth_failed` names).
+ * Its 1000040343 "internal error" is also what an unknown App ID gets there,
+ * so it is left to the token check. How many of these stop the bot is the
+ * shared `CredentialRejectionBudget`.
+ */
+const TOKEN_REJECTION = /failed to get tenant_access_token, code: (10014|10003), msg: ([^\n]*)/
+const WS_ENDPOINT_REJECTION = /pullConnectConfig failed: code=(514|1000040344|1000040345), msg=([^\n]*)/
 /** How long a resolved chat display name stays cached. */
 const CHAT_NAME_TTL_MS = 30 * 60_000
 /** Cap on resolving a chat name inline, so inbound dispatch is never blocked. */
@@ -167,6 +187,37 @@ function generateTraceId(prefix: string): string {
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+/**
+ * Close a channel this instance no longer owns, through its public surface:
+ * the WebSocket client (which keeps redialling on its own) and, for one that
+ * finished connecting, the channel itself.
+ */
+function closeStaleChannel(channel: LarkChannel, instanceId: string): void {
+  try {
+    channel.rawWsClient?.close({ force: true })
+  } catch (err) {
+    logEvent(instanceId, 'warn', 'ws_disconnect_error', { err: describeError(err) })
+  }
+  void channel.disconnect().catch((err: unknown) => {
+    logEvent(instanceId, 'warn', 'ws_disconnect_error', { err: describeError(err) })
+  })
+}
+
+/**
+ * Why the platform refused the App ID / App Secret, when that is what this
+ * failure is; undefined for anything else (network, timeouts, server errors).
+ * The SDK wraps the platform's answer, so the error's causes are read too.
+ */
+function credentialRejection(err: unknown): string | undefined {
+  let current: unknown = err
+  for (let depth = 0; depth < 4 && current instanceof Error; depth++) {
+    const match = TOKEN_REJECTION.exec(current.message) ?? WS_ENDPOINT_REJECTION.exec(current.message)
+    if (match) return `Feishu rejected the App ID or App Secret (code ${match[1]}: ${match[2].trim()})`
+    current = (current as { cause?: unknown }).cause
+  }
+  return undefined
 }
 
 /** Render one SDK log argument; objects would otherwise print as [object Object]. */
@@ -422,23 +473,29 @@ class FeishuBotInstance implements ImChannelInstance {
   private contactLookupDisabled = false
   /** Whether the "cannot connect" notification has fired for this episode. */
   private connectFailureNotified = false
+  /**
+   * The platform's rejections of the App ID / App Secret since the start, the
+   * last connection or the user's reconnect; network failures in between
+   * neither count nor reset it.
+   */
+  private readonly credentialRejections = new CredentialRejectionBudget()
   /** Last terminal connection error, surfaced in health snapshots. */
   private lastError: string | undefined
   private healthSnapshotTimer: ReturnType<typeof setInterval> | null = null
   /**
-   * Pending channel rebuild. The SDK reconnects a *live* connection on its own,
-   * but it only owns that loop once the handshake has succeeded: a connect that
-   * fails before it (no network yet at login, a token call that times out) or a
-   * link that exhausts the SDK's own retries leaves a channel object that will
-   * never try again. This timer is that missing outer loop.
+   * The outer loop. The SDK reconnects a *live* connection on its own, but only
+   * once the handshake has succeeded, on the agent it was built with, and at
+   * the pace the server sets (minutes apart): a connect that fails before it,
+   * a link that exhausts the SDK's retries, or one that stays down past the
+   * attempt deadline is rebuilt from here, on the current route.
    */
-  private retryTimer: ReturnType<typeof setTimeout> | null = null
-  /** Consecutive failed rebuilds, for the backoff. Reset on a good connect. */
-  private connectAttempts = 0
+  private readonly link: LinkSupervisor
+  /** Route of the current channel, retired with it. */
+  private route: LinkRoute = DIRECT_ROUTE
   /**
-   * Bumped on every open attempt. Opening is async (the proxy lookup), so a
-   * stop() or reconnect() can land mid-flight; the generation tells a late
-   * arrival that it no longer owns the instance.
+   * Bumped on every open attempt and teardown. Opening is async (the route
+   * lookup), so a stop() or a newer dial can land mid-flight; the generation
+   * tells a late arrival that it no longer owns the instance.
    */
   private channelGeneration = 0
   /** Counters surfaced in the periodic health snapshot. */
@@ -462,6 +519,12 @@ class FeishuBotInstance implements ImChannelInstance {
   constructor(instanceId: string, config: FeishuBotProviderConfig) {
     this.instanceId = instanceId
     this.config = config
+    this.link = new LinkSupervisor({
+      log: (level, event, fields) => logEvent(this.instanceId, level, event, fields),
+      dial: () => this.openChannel(),
+      isUp: () => this.channel?.getConnectionStatus()?.state === 'connected',
+      attemptTimeoutMs: ATTEMPT_TIMEOUT_MS,
+    })
   }
 
   // ── ImChannelInstance interface ────────────────────────────────
@@ -499,13 +562,14 @@ class FeishuBotInstance implements ImChannelInstance {
     this.startedAt = Date.now()
     this.connectFailureNotified = false
     this.lastError = undefined
+    this.credentialRejections.reset()
 
     if (!this.config.appId || !this.config.appSecret) {
       logEvent(this.instanceId, 'warn', 'start_skip', { reason: 'missing appId or appSecret' })
       return
     }
 
-    this.openChannel()
+    this.link.start()
     this.healthSnapshotTimer = setInterval(
       () => this.emitHealthSnapshot('periodic'),
       HEALTH_SNAPSHOT_INTERVAL_MS,
@@ -520,7 +584,7 @@ class FeishuBotInstance implements ImChannelInstance {
   /** Idempotent and non-throwing, per the manager's contract. */
   stop(): void {
     this.active = false
-    this.clearRetryTimer()
+    this.link.stop()
     this.emitHealthSnapshot('stop')
     if (this.healthSnapshotTimer) {
       clearInterval(this.healthSnapshotTimer)
@@ -544,14 +608,14 @@ class FeishuBotInstance implements ImChannelInstance {
     if (!this.active) return
     this.connectFailureNotified = false
     this.lastError = undefined
-    // An explicit user action beats a pending backoff: reset the schedule so
-    // "Reconnect" reconnects now rather than whenever the timer was due.
-    this.clearRetryTimer()
-    this.connectAttempts = 0
     this.activeStreamSessions.forEach((s) => s.markStreamBroken('manual reconnect'))
-    this.teardownChannel()
+    this.credentialRejections.reset()
+    // An explicit user action beats a pending backoff (and lifts a stop after
+    // rejected credentials): the supervisor rebuilds now.
     if (this.config.appId && this.config.appSecret) {
-      this.openChannel()
+      this.link.redialNow('manual reconnect')
+    } else {
+      this.teardownChannel()
     }
   }
 
@@ -561,22 +625,26 @@ class FeishuBotInstance implements ImChannelInstance {
 
   /**
    * Fine-grained state for the settings UI. Feishu has no equivalent of WeCom's
-   * slot contention, so there is no 'standby': the SDK is either connected,
-   * working on it, or has given up (which reads as offline plus a logged error,
-   * since the shared state vocabulary has no 'failed').
+   * slot contention, so there is no 'standby'. A link that is not up is being
+   * brought back by the supervisor and reads as connecting (never up since
+   * start) or reconnecting; it reads as offline only once stopped after the
+   * platform kept rejecting the credentials, with the reason in the link status.
    */
   getConnectionState(): ImConnectionState {
-    if (!this.active) return 'offline'
-    const state = this.channel?.getConnectionStatus()?.state
-    if (state === 'connected') return 'online'
-    if (state === 'failed') return 'offline'
-    if (state === 'connecting' || state === 'reconnecting' || state === 'idle') return 'connecting'
-    return this.channel ? 'connecting' : 'offline'
+    if (!this.active || !this.link.isRunning()) return 'offline'
+    if (this.isConnected()) return 'online'
+    if (this.link.isHalted()) return 'offline'
+    return this.link.wasEverOnline() ? 'reconnecting' : 'connecting'
+  }
+
+  getLinkStatus(): ImLinkStatus | undefined {
+    return this.active && this.link.isRunning() ? this.link.status() : undefined
   }
 
   /**
    * Proactive push. Feishu sends are plain API calls, so this works while the
-   * long connection is down — only missing credentials make it impossible. The
+   * long connection is down — only missing or rejected credentials (a bot
+   * stopped for them has no channel) make it impossible. The
    * ImChannelInstance contract is a synchronous boolean, so the ack is awaited
    * out of band: the return value reports that the send was accepted for
    * delivery, and a later failure is logged rather than retro-actively reported.
@@ -668,61 +736,67 @@ class FeishuBotInstance implements ImChannelInstance {
   // ── Channel lifecycle ─────────────────────────────────────────
 
   /**
-   * Open the connection.
+   * Build a fresh channel in place of whatever channel exists. Only the link
+   * supervisor calls this, so every attempt runs under its deadline.
    *
-   * Kicked off without awaiting because `start()` is synchronous by contract;
-   * the proxy lookup it awaits is a local Chromium call, and the generation
-   * guard covers a stop() that lands while it is in flight.
+   * Kicked off without awaiting because the caller is synchronous; the route
+   * lookup it awaits is a local Chromium call, and the generation guard covers
+   * a stop() or a newer dial that lands while it is in flight.
    */
   private openChannel(): void {
-    void this.openChannelWithProxy().catch((err: unknown) => {
+    this.teardownChannel()
+    const generation = this.channelGeneration
+    void this.openChannelOnRoute(generation).catch((err: unknown) => {
+      const message = describeError(err)
       logEvent(this.instanceId, 'error', 'channel_open_threw', {
         cat: 'internal',
-        err: describeError(err),
+        err: message,
       })
+      if (generation === this.channelGeneration) this.link.lost(`could not open the connection: ${message}`)
     })
   }
 
-  private async openChannelWithProxy(): Promise<void> {
-    const generation = ++this.channelGeneration
-
-    // Resolve the route the same way every other outbound call in Halo does.
+  private async openChannelOnRoute(generation: number): Promise<void> {
     // The SDK owns two transports and neither reads Halo's proxy settings on
     // its own: `agent` covers the WebSocket dial, and the axios instance
     // behind every API call needs the agent pushed onto it. Without both, a
     // machine that reaches Feishu through a proxy connects to nothing and the
     // bot looks broken rather than blocked.
+    const { sdk: { createLarkChannel, Domain, LoggerLevel }, axios } = sdkModules ?? (await loadSdkModules())
     const domain = this.config.domain === 'lark' ? Domain.Lark : Domain.Feishu
     const apiOrigin = domain === Domain.Lark ? 'https://open.larksuite.com' : 'https://open.feishu.cn'
-    let agent: Awaited<ReturnType<typeof resolveProxyAgent>>
+    let route: LinkRoute
     try {
-      agent = await resolveProxyAgent(apiOrigin)
+      route = await openLinkRoute(apiOrigin)
     } catch (err) {
-      agent = undefined
+      route = DIRECT_ROUTE
       logEvent(this.instanceId, 'warn', 'proxy_resolve_failed', {
         cat: 'network',
         err: describeError(err),
       })
     }
     if (!this.active || generation !== this.channelGeneration) {
+      route.close()
       logEvent(this.instanceId, 'info', 'channel_open_abandoned', {
         reason: this.active ? 'superseded' : 'stopped',
       })
       return
     }
-    if (agent) {
+    this.route = route
+    this.link.noteRoute(route.viaProxy)
+    if (route.viaProxy) {
       logEvent(this.instanceId, 'info', 'proxy_applied', { apiOrigin })
     }
 
     const channel = createLarkChannel({
-      agent,
+      agent: route.agent,
       // A private transport per channel, never the SDK's module-level
       // defaultHttpInstance: mutating that singleton leaks one instance's
       // proxy route into every other Feishu/Lark instance, and outlives
       // turning the proxy off (API calls then die against a closed proxy
       // while the freshly-dialed WebSocket connects direct — "online but
       // never answers").
-      httpInstance: createChannelHttpInstance(agent),
+      httpInstance: createChannelHttpInstance(axios, route.agent),
       appId: this.config.appId,
       appSecret: this.config.appSecret,
       domain,
@@ -774,11 +848,12 @@ class FeishuBotInstance implements ImChannelInstance {
           cat: err.code === 'not_connected' ? 'network' : 'protocol',
           err: err.message,
         })
-        // The SDK gives up after exhausting its own reconnect budget and parks
-        // the client in 'failed'. Nothing inside it will try again, so the
-        // rebuild has to come from here or the bot stays silent for good.
+        // The SDK reports failures handling inbound events here, never its
+        // connect failures. Should the link be parked 'failed' when one
+        // arrives, it is rebuilt now; otherwise the supervisor's deadline and
+        // tick notice a link that stays down.
         if (this.channel === channel && channel.getConnectionStatus()?.state === 'failed') {
-          this.scheduleChannelRetry('link failed')
+          this.onConnectFailed(err, err.message)
         }
       }),
     )
@@ -792,6 +867,7 @@ class FeishuBotInstance implements ImChannelInstance {
           attempts: channel.getConnectionStatus()?.reconnectAttempts ?? 0,
           cat: 'network',
         })
+        if (this.channel === channel) this.link.dropped('long connection lost')
       }),
     )
     this.unsubscribers.push(
@@ -799,6 +875,10 @@ class FeishuBotInstance implements ImChannelInstance {
         this.connectFailureNotified = false
         this.lastError = undefined
         logEvent(this.instanceId, 'info', 'ws_reconnected', {})
+        if (this.channel === channel) {
+          this.credentialRejections.reset()
+          this.link.connected()
+        }
       }),
     )
     this.unsubscribers.push(
@@ -810,20 +890,33 @@ class FeishuBotInstance implements ImChannelInstance {
       }),
     )
 
-    // connect() resolves after the first successful handshake. Failure is not
-    // fatal to the instance: the SDK keeps retrying, and the UI shows the state.
+    // connect() resolves after the first successful handshake. A failure is
+    // the supervisor's to retry; the UI shows the state meanwhile.
     channel
       .connect()
       .then(() => {
-        if (this.channel !== channel) return
-        this.connectAttempts = 0
+        if (this.channel !== channel) {
+          // Replaced while still fetching its bot identity: its WebSocket
+          // client did not exist at teardown, and now it is up with no
+          // handlers, taking a share of the app's events to drop them.
+          logEvent(this.instanceId, 'warn', 'stale_channel_closed', { stage: 'connected' })
+          closeStaleChannel(channel, this.instanceId)
+          return
+        }
         this.connectedAt = Date.now()
         logEvent(this.instanceId, 'info', 'ws_open', {
           domain: this.config.domain ?? 'feishu',
         })
+        this.credentialRejections.reset()
+        this.link.connected()
       })
       .catch((err: unknown) => {
-        if (this.channel !== channel) return
+        if (this.channel !== channel) {
+          // Same case, but the handshake timed out: the client keeps redialling.
+          logEvent(this.instanceId, 'warn', 'stale_channel_closed', { stage: 'failed', err: describeError(err) })
+          closeStaleChannel(channel, this.instanceId)
+          return
+        }
         this.counters.totalError++
         this.lastError = describeError(err)
         logEvent(this.instanceId, 'error', 'ws_open_failed', {
@@ -831,48 +924,31 @@ class FeishuBotInstance implements ImChannelInstance {
           err: this.lastError,
         })
         this.notifyConnectFailureOnce(this.lastError)
-        // connect() can fail before the SDK ever builds its WebSocket client
-        // (token call, bot-identity lookup), in which case there is no internal
-        // reconnect loop to inherit — so schedule our own.
-        this.scheduleChannelRetry('connect failed')
+        this.onConnectFailed(err, this.lastError)
       })
   }
 
   /**
-   * Rebuild the channel after a backoff. Jittered so several instances (or
-   * several machines resuming from sleep at once) do not retry in lockstep.
+   * A connect failure goes back to the supervisor's backoff, unless the
+   * platform keeps rejecting the credentials: retrying those cannot succeed,
+   * so after the budget the link stops until the user acts.
    */
-  private scheduleChannelRetry(reason: string): void {
-    if (!this.active || this.retryTimer) return
-    const base = Math.min(
-      CONNECT_RETRY_BASE_MS * 2 ** this.connectAttempts,
-      CONNECT_RETRY_MAX_MS,
-    )
-    const delayMs = Math.round(base * (0.5 + Math.random()))
-    this.connectAttempts++
-    logEvent(this.instanceId, 'warn', 'connect_retry_scheduled', {
-      reason,
-      delayMs,
-      attempt: this.connectAttempts,
-      cat: 'network',
-    })
-    this.retryTimer = setTimeout(() => {
-      this.retryTimer = null
-      if (!this.active) return
-      logEvent(this.instanceId, 'info', 'connect_retry_start', { attempt: this.connectAttempts })
-      this.teardownChannel()
-      this.openChannel()
-    }, delayMs)
-  }
-
-  private clearRetryTimer(): void {
-    if (this.retryTimer) {
-      clearTimeout(this.retryTimer)
-      this.retryTimer = null
+  private onConnectFailed(err: unknown, reason: string): void {
+    const rejection = credentialRejection(err)
+    if (!rejection) {
+      this.link.lost(reason)
+      return
     }
+    if (!this.credentialRejections.record()) {
+      this.link.lost(rejection)
+      return
+    }
+    this.teardownChannel()
+    this.link.halt(rejection)
   }
 
   private teardownChannel(): void {
+    this.channelGeneration++
     for (const unsub of this.unsubscribers) {
       try {
         unsub()
@@ -883,10 +959,28 @@ class FeishuBotInstance implements ImChannelInstance {
     this.unsubscribers = []
     const channel = this.channel
     this.channel = null
-    if (!channel) return
-    void channel.disconnect().catch((err: unknown) => {
-      logEvent(this.instanceId, 'warn', 'ws_disconnect_error', { err: describeError(err) })
-    })
+    const route = this.route
+    this.route = DIRECT_ROUTE
+    if (channel) {
+      void channel.disconnect().catch((err: unknown) => {
+        logEvent(this.instanceId, 'warn', 'ws_disconnect_error', { err: describeError(err) })
+      })
+      // disconnect() skips a channel whose first handshake never completed,
+      // yet that channel's WebSocket client keeps redialling on its own — and
+      // once it gets through it takes a share of the app's event deliveries
+      // with no handler left to receive them.
+      try {
+        channel.rawWsClient?.close({ force: true })
+      } catch (err) {
+        logEvent(this.instanceId, 'warn', 'ws_disconnect_error', { err: describeError(err) })
+      }
+    }
+    if (route.viaProxy) {
+      // A send or upload the replaced channel started may still be running on
+      // this route; a call still open after the grace is one a dead proxy holds.
+      const timer = setTimeout(() => route.close(), RETIRED_ROUTE_MAX_MS)
+      timer.unref?.()
+    }
   }
 
   /**
@@ -1548,9 +1642,8 @@ class FeishuBotInstance implements ImChannelInstance {
       activeStreams: this.activeStreamSessions.size,
       chatNameCache: this.chatNames.size,
       lastInboundAgoMs: this.lastInboundAt ? Date.now() - this.lastInboundAt : null,
-      connectAttempts: this.connectAttempts,
-      retryPending: this.retryTimer !== null,
       lastError: this.lastError,
+      ...this.link.snapshotFields(),
       ...this.counters,
     })
   }
@@ -1559,6 +1652,24 @@ class FeishuBotInstance implements ImChannelInstance {
 // ============================================
 // Helpers
 // ============================================
+
+interface SdkModules {
+  sdk: typeof import('@larksuiteoapi/node-sdk')
+  axios: AxiosStatic
+}
+
+let sdkModules: SdkModules | undefined
+
+/**
+ * The SDK and its HTTP client, loaded with the first channel rather than with
+ * the app: the SDK alone is several megabytes of code, and an install with no
+ * Feishu bot never needs it.
+ */
+async function loadSdkModules(): Promise<SdkModules> {
+  const [sdk, { default: axios }] = await Promise.all([import('@larksuiteoapi/node-sdk'), import('axios')])
+  sdkModules = { sdk, axios }
+  return sdkModules
+}
 
 /**
  * Per-channel HTTP transport handed to the SDK, replacing its module-level
@@ -1571,9 +1682,7 @@ class FeishuBotInstance implements ImChannelInstance {
  * which can disagree with what Halo resolved; with no agent this is a plain
  * direct-connection transport.
  */
-function createChannelHttpInstance(
-  agent: Awaited<ReturnType<typeof resolveProxyAgent>>,
-): HttpInstance {
+function createChannelHttpInstance(axios: AxiosStatic, agent: Agent | undefined): HttpInstance {
   const instance = axios.create(
     agent ? { httpsAgent: agent, httpAgent: agent, proxy: false } : { proxy: false },
   )

@@ -4,7 +4,7 @@
  */
 
 import type { CapabilityPolicy } from './capability-policy'
-import { parseTeamChatKey } from './im-keys'
+import { parseTeamChatKey, parseSpaceCollabChatKey } from './im-keys'
 
 // ── Enumerations ──
 
@@ -65,16 +65,17 @@ export interface Team {
   /**
    * True for a temporary space collaboration: a team the space agent assembled
    * for one piece of work. Hidden from the Teams page and the people directory;
-   * its coordinator is the space conversation itself, not a lead app. "Save as
-   * team" clears this flag and the team becomes an ordinary persistent one.
+   * its coordinator is the space conversation itself, not a lead app. Saving
+   * creates a separate ordinary team and leaves this collaboration unchanged.
    */
   ephemeral?: boolean
   /**
-   * For an ephemeral collaboration: the space conversation acting as its
-   * coordinator. Member replies and turn-end notices are delivered into this
-   * conversation. Null for persistent teams.
+   * The source conversation still bound to this collaboration, including after
+   * saving. Source tasks retain their own chat key even after this is unbound.
    */
   coordinatorConversationId?: string | null
+  /** Local link from a temporary collaboration to its separately saved configuration. */
+  savedTeamId?: string | null
 }
 
 export interface TeamMember {
@@ -458,6 +459,8 @@ export interface TeamConversation {
   epochId: string
   teamId: string
   kind: TeamConversationKind
+  /** Present only on the machine owning the original space conversation. */
+  sourceConversation?: { spaceId: string; conversationId: string }
   /** Human label: title, IM chat name, or the member's name. */
   label: string
   /** True when Halo can only watch (IM chats are answered in the IM app). */
@@ -1054,6 +1057,8 @@ export interface TeamListItem {
 
 export interface TeamDetail {
   team: Team
+  /** An old saved collaboration must be normalized by its owner before new work. */
+  legacyCoordinator?: { ownedHere: boolean; ownerName: string | null; repairFailed?: boolean; repairDeferred?: boolean }
   members: TeamMember[]
   edges: TeamEdge[]
   roster: RosterMember[]
@@ -1191,6 +1196,7 @@ export interface CollabSummary {
   active: boolean
   /** True once the user kept this team ("save as team"). */
   saved: boolean
+  savedTeamId?: string
   members: CollabMemberSummary[]
 }
 
@@ -1361,6 +1367,19 @@ export function parseSpaceCoordinatorAppId(appId: string): string | null {
     : null
 }
 
+export function isLegacyCoordinatorTeam(team: Pick<Team, 'ephemeral' | 'leadAppId'>): boolean {
+  return team.ephemeral !== true && !!team.leadAppId && !!parseSpaceCoordinatorAppId(team.leadAppId)
+}
+
+/** A retained source task is history even when its conversation was never sealed. */
+export function isReadonlyCollaboration(
+  team: Pick<Team, 'ephemeral'>,
+  epoch: Pick<TeamEpoch, 'chatKey' | 'endedAt'>,
+): boolean {
+  return !!epoch.chatKey && !!parseSpaceCollabChatKey(epoch.chatKey) &&
+    (team.ephemeral !== true || epoch.endedAt !== null)
+}
+
 /**
  * Prefix of a published artifact ref naming a file in the team folder of its
  * piece of work (`team:<member folder>/<path>`) rather than in the producer's
@@ -1392,7 +1411,7 @@ export function isRemoteMember(member: {
  */
 export function toLocalMembers(members: readonly TeamMember[]): TeamLocalMember[] {
   return members
-    .filter((m) => !isRemoteMember(m))
+    .filter((m) => !isRemoteMember(m) && !parseSpaceCoordinatorAppId(m.appId))
     .sort((a, b) => Number(b.isLead) - Number(a.isLead))
     .map((m) => ({ appId: m.appId, memberName: m.memberName, isLead: m.isLead, isSystemCoordinator: m.isSystemCoordinator === true }))
 }

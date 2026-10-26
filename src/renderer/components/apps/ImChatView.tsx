@@ -1,11 +1,12 @@
 /**
  * ImChatView
  *
- * Read-only viewer for IM session conversations. Displays persisted
- * message history and real-time streaming state (thoughts, browser tasks,
- * streaming text) for the selected IM session.
+ * Read-only viewer for a digital human's external conversations: IM chats and
+ * remote calls (HTTP API sessions). Displays persisted message history and
+ * real-time streaming state (thoughts, browser tasks, streaming text) for the
+ * selected session.
  *
- * No input area — IM interactions happen in the external IM channel.
+ * No input area — they are answered in the IM channel or through the API.
  * Reuses the same atomic chat components as the main chat page for consistency.
  */
 
@@ -42,6 +43,26 @@ interface ImChatViewProps {
 }
 
 type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
+
+/**
+ * How this view reads and stops a session. An IM chat is addressed by its
+ * parts; an HTTP session by its key — the remote transport's im-chat routes
+ * take IM channels only. Only an IM chat can be cleared here.
+ */
+function sessionApi(appId: string, spaceId: string, session: ImSessionRecord) {
+  const { channel, chatType, chatId } = session
+  if (session.source === 'http') {
+    const conversationId = buildImSessionKey(appId, channel, chatType, chatId)
+    return {
+      read: () => api.appChatMessages(appId, spaceId, conversationId),
+      stop: () => api.appChatStop(appId, conversationId),
+    }
+  }
+  return {
+    read: () => api.appImChatMessages(appId, spaceId, channel, chatType, chatId),
+    stop: () => api.appImChatStop(appId, spaceId, channel, chatType, chatId),
+  }
+}
 
 export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: ImChatViewProps) {
   const { t } = useTranslation()
@@ -101,7 +122,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
       if (session.teamContext) { setLoadState('loaded'); return }
       setLoadState('loading')
       try {
-        const res = await api.appImChatMessages(appId, spaceId, session.channel, session.chatType, session.chatId)
+        const res = await sessionApi(appId, spaceId, session).read()
         if (cancelled) return
         if (res.success && res.data) {
           const msgs = (res.data as Message[]) ?? []
@@ -130,7 +151,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
     prevIsGeneratingRef.current = isGenerating
 
     if (wasGenerating !== isGenerating) {
-      api.appImChatMessages(appId, spaceId, session.channel, session.chatType, session.chatId)
+      sessionApi(appId, spaceId, session).read()
         .then(res => {
           if (cancelled) return
           if (res.success && res.data) {
@@ -152,7 +173,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
       const update = data as { appId?: string; channel?: string; chatId?: string }
       if (update.appId !== appId || update.channel !== session.channel || update.chatId !== session.chatId) return
       if (session.teamContext || useChatStore.getState().getSession(conversationId).isGenerating) return
-      api.appImChatMessages(appId, spaceId, session.channel, session.chatType, session.chatId)
+      sessionApi(appId, spaceId, session).read()
         .then(res => {
           if (cancelled) return
           if (res.success && res.data) {
@@ -174,7 +195,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
   // after a WebSocket reconnect to recover any events lost during the gap.
   useWsRecovery(useCallback(() => {
     console.log(`[ImChatView] WS reconnected — reloading messages for ${conversationId}`)
-    api.appImChatMessages(appId, spaceId, session.channel, session.chatType, session.chatId)
+    sessionApi(appId, spaceId, session).read()
       .then(res => {
         if (res.success && res.data) {
           const msgs = (res.data as Message[]) ?? []
@@ -216,7 +237,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
     if (isStopping) return
     setIsStopping(true)
     try {
-      const res = await api.appImChatStop(appId, spaceId, session.channel, session.chatType, session.chatId)
+      const res = await sessionApi(appId, spaceId, session).stop()
       if (res.success) {
         markSessionStopped(conversationId)
       } else {
@@ -357,7 +378,9 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: 
         <div className="flex-shrink-0 px-4 sm:px-10 py-2.5">
           <div className="flex items-center gap-2 rounded-2xl border border-border-soft bg-muted/40 px-3 py-2">
             <span className="flex-1 min-w-0 truncate text-xs text-muted-foreground">
-              {t('Read-only IM session · copy the context to continue in a client chat')}
+              {session.source === 'http'
+                ? t('Read-only remote call · copy the context to continue in a client chat')
+                : t('Read-only IM session · copy the context to continue in a client chat')}
             </span>
             {footerAction}
           </div>
@@ -447,7 +470,9 @@ function ImChatInfoBar({ name, channel, chatType, source, isGenerating, hasMessa
                 <Square className="w-3.5 h-3.5 text-destructive/80 hover:text-destructive" fill="currentColor" />
               </button>
             )}
-            {hasMessages && !isGenerating && (
+            {/* A remote call's context belongs to the backend calling it, which
+                would not know it had been wiped. */}
+            {hasMessages && !isGenerating && source !== 'http' && (
               <button
                 onClick={onClearClick}
                 className="p-1 rounded hover:bg-secondary transition-colors"

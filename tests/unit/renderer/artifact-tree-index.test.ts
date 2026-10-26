@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { fillFolder, indexNodes, loadedFolderPaths, mergeChildren, unloadSubtree } from '../../../src/renderer/components/artifact/tree-index'
+import { fillFolder, indexNodes, loadedOrOpenFolderPaths, mergeChildren, unloadSubtree } from '../../../src/renderer/components/artifact/tree-index'
 import type { ArtifactTreeNode } from '../../../src/renderer/types'
 
 function node(path: string, type: 'file' | 'folder' = 'file', children?: ArtifactTreeNode[]): ArtifactTreeNode {
@@ -107,12 +107,13 @@ describe('fillFolder', () => {
   })
 })
 
-describe('loadedFolderPaths', () => {
-  it('lists loaded folders only, parents before children', () => {
+describe('loadedOrOpenFolderPaths', () => {
+  it('lists loaded folders and open ones whose listing failed, parents before children, never closed ones', () => {
     const inner = node('/r/a/inner', 'folder', [node('/r/a/inner/x')])
-    const a = node('/r/a', 'folder', [inner, node('/r/a/closed', 'folder')])
+    const a = node('/r/a', 'folder', [inner, node('/r/a/closed', 'folder'), node('/r/a/failed', 'folder')])
     const index = new Map<string, ArtifactTreeNode>()
     indexNodes([inner, a, ...a.children!], index)
-    expect(loadedFolderPaths(index)).toEqual(['/r/a', '/r/a/inner'])
+    const isOpen = (id: string) => id === 'id:/r/a/failed'
+    expect(loadedOrOpenFolderPaths(index, isOpen)).toEqual(['/r/a', '/r/a/inner', '/r/a/failed'])
   })
 })

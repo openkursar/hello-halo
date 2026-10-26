@@ -13,12 +13,13 @@ interface WorkbenchFixtureOptions {
   provenanceMessages?: boolean
   collaborationJourney?: boolean
   remoteDecision?: boolean
+  legacyRecovery?: { ownedHere: boolean; ownerName: string | null; repairFailed?: boolean; repairDeferred?: boolean }
 }
 
 /** Deterministic IPC boundary fixture; all rendering and interaction use the built app. */
 export async function openTeamWorkbench(app: ElectronApplication, page: Page, options: WorkbenchFixtureOptions = {}) {
   await waitForHomePage(page)
-  await app.evaluate(({ ipcMain }, { ownCount: count = 2, withDecision: decision, historyFailure, readonlyKind, allowCreate, sendFailure, sendFailureDelay = 500, timestampAnomalies, provenanceMessages, collaborationJourney, remoteDecision }) => {
+  await app.evaluate(({ ipcMain }, { ownCount: count = 2, withDecision: decision, historyFailure, readonlyKind, allowCreate, sendFailure, sendFailureDelay = 500, timestampAnomalies, provenanceMessages, collaborationJourney, remoteDecision, legacyRecovery }) => {
     const now = Date.now() - 60_000
     const roster = [
       { appId: 'lead', memberName: 'Lead', sameMachine: count > 0, isLead: true },
@@ -61,6 +62,8 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
     ]
     const findings = [{ id: 'finding-1', teamId: team.id, epochId: 'epoch-0', appId: 'research', ref: 'research-notes.md', content: 'Evidence and source links', createdAt: now }]
     const detail = { team, members, roster, edges: [], tasks: work, findings, activities, pendingEscalations: decision ? [{ entryId: 'decision-1', epochId: 'epoch-0', appId: 'lead', memberName: 'Lead', question: 'Approve the research scope?', entry: { id: 'decision-1', appId: 'lead', type: 'escalation', ts: now, content: { question: 'Approve the research scope?', choices: ['Approve scope', 'Revise scope'] } } }] : [], checks: [] }
+    if (legacyRecovery) Object.assign(detail, { legacyCoordinator: legacyRecovery })
+    if (legacyRecovery?.repairDeferred) Object.assign(team, { coordinatorConversationId: 'source-conversation' })
     const apps = roster.filter(member => member.sameMachine).map(member => ({ id: member.appId, spaceId: 'halo-temp', status: 'active', permissions: { granted: [], denied: [] }, installedAt: now, userConfig: {}, spec: { name: member.memberName, type: 'automation', version: '1.0.0', description: 'Renderer fixture', system_prompt: 'Fixture', subscription: [], config_schema: [] } }))
     const bind = (channel: string, handler: (...args: any[]) => unknown) => {
       ipcMain.removeHandler(channel)

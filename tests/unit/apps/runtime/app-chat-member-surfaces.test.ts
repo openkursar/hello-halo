@@ -123,6 +123,7 @@ vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({
 vi.mock('../../../../src/main/services/app-bridge', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createHaloAppsMcpServer,
+  getAppManager: () => ({ getApp: () => app, listEffectiveMcpApps }),
 }))
 const { buildUserSessionSdkOptions } = vi.hoisted(() => ({ buildUserSessionSdkOptions: vi.fn((_options: Record<string, unknown>) => ({})) }))
 const { getEngineCapabilities } = vi.hoisted(() => ({ getEngineCapabilities: vi.fn((): unknown => null) }))
@@ -164,7 +165,7 @@ const { prepareNonVisionImageFallback } = vi.hoisted(() => ({ prepareNonVisionIm
 vi.mock('../../../../src/main/services/agent/image-attachments', () => ({ prepareNonVisionImageFallback }))
 vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getApiCredentials: vi.fn(async () => ({ provider: 'anthropic' })),
-  getApiCredentialsForSource: vi.fn(),
+  getApiCredentialsForSelection: vi.fn(async () => ({ provider: 'anthropic' })),
   getWorkingDir: vi.fn(),
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getDbMcpServers: vi.fn(() => null),
@@ -178,7 +179,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 }))
 vi.mock('../../../../src/main/services/ai-browser', () => ({
   createAIBrowserMcpServer: vi.fn(),
-  createScopedBrowserContext: vi.fn(() => ({ destroy: vi.fn(), ownedViewCount: 0, hasRevealedView: () => false })),
+  createScopedBrowserContext: vi.fn(() => ({ destroy: vi.fn(), closePages: vi.fn(), ownedViewCount: 0, hasRevealedView: () => false })),
   AI_BROWSER_SYSTEM_PROMPT: 'AI browser instructions',
 }))
 vi.mock('../../../../src/main/services/ai-terminal', () => ({
@@ -255,7 +256,7 @@ vi.mock('../../../../src/main/services/space.service', () => ({
   getSpaceDir: () => '/tmp/halo-test/space',
 }))
 
-const { app, environment, activityStore } = vi.hoisted(() => {
+const { app, environment, activityStore, listEffectiveMcpApps } = vi.hoisted(() => {
   const app = {
     id: 'app-member',
     spaceId: 'space-1',
@@ -279,16 +280,18 @@ const { app, environment, activityStore } = vi.hoisted(() => {
       spacePath: '/tmp/halo-test/space',
       workDir: '/tmp/halo-test/space',
       memoryDir: '/tmp/halo-test/memory',
+      mcpBindings: {} as Record<string, string>,
     },
+    listEffectiveMcpApps: vi.fn((): unknown[] => []),
     activityStore: { getSessionEnvironment: vi.fn(), deleteSessionEnvironment: vi.fn(), pinSessionEnvironment: vi.fn() },
   }
 })
 vi.mock('../../../../src/main/apps/manager', () => ({
-  getAppManager: () => ({ getApp: () => app }),
+  getAppManager: () => ({ getApp: () => app, listEffectiveMcpApps }),
 }))
-vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
+vi.mock('../../../../src/main/apps/runtime/execution-environment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/apps/runtime/execution-environment')>()),
   resolveChatEnvironment: () => environment,
-  validateEnvironmentConnections: vi.fn(),
   validateExecutionEnvironment: vi.fn(),
   resolveExecutionEnvironment: () => environment,
   legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy:${appId}:${runId}`,
@@ -329,10 +332,10 @@ vi.mock('../../../../src/main/services/memory-consolidation', () => ({
 // ============================================
 
 import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'
-import { hasChatBrowserContext } from '../../../../src/main/apps/runtime/app-chat-browser'
+import { hasChatBrowserContext, destroyAllChatBrowserContexts } from '../../../../src/main/apps/runtime/app-chat-browser'
 import { createScopedBrowserContext } from '../../../../src/main/services/ai-browser'
 import { acquireV2Session, updateConsumerDisplayModel } from '../../../../src/main/services/agent/session-manager'
-import { getApiCredentials } from '../../../../src/main/services/agent/helpers'
+import { getApiCredentialsForSelection, getDbMcpServers } from '../../../../src/main/services/agent/helpers'
 import { resolveCredentialsForSdk } from '../../../../src/main/services/agent/sdk-config'
 import { requestAppMemoryConsolidation, prepareMemoryForTurn, appMemorySettings, loadSpaceTopicsForTurn } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
 import { generatePromptInstructions } from '../../../../src/main/platform/memory'
@@ -346,6 +349,13 @@ beforeEach(() => {
   getPromptInstructions.mockImplementation(generatePromptInstructions)
   send.mockClear()
   loadChatSessionId.mockReset()
+  environment.mcpBindings = {}
+  listEffectiveMcpApps.mockReset().mockReturnValue([])
+  vi.mocked(getDbMcpServers).mockReset().mockReturnValue(null)
+  // A chat's browser context lives with its engine session, and the mocked
+  // session above never retires; without this, a context from an earlier
+  // test would be found held by a live session.
+  destroyAllChatBrowserContexts('test-reset')
   getEngineCapabilities.mockReturnValue({ features: { permissionRules: true, hooks: true } })
   sessionRegistry.current = null
   vi.mocked(prepareMemoryForTurn).mockClear()
@@ -445,6 +455,38 @@ describe('a temporary collaboration member mounts no memory and no digital-human
     const sent = send.mock.calls.at(-1)![0] as string
     expect(sent).not.toContain('## Memory')
     expect(requestAppMemoryConsolidation).not.toHaveBeenCalled()
+  })
+
+  it('accepts the next teammate message without a paused inherited MCP and restores it when enabled again', async () => {
+    const connection = {
+      id: 'original-connection', specId: 'messages', status: 'active',
+      spec: { type: 'mcp', mcp_server: { transport: 'http', url: 'https://example.invalid/mcp' } },
+    }
+    const { getDbMcpServers: assembleServers } = await vi.importActual<typeof import('../../../../src/main/services/agent/helpers')>(
+      '../../../../src/main/services/agent/helpers',
+    )
+    vi.mocked(getDbMcpServers).mockImplementation(assembleServers)
+    listEffectiveMcpApps.mockReturnValue([connection])
+    environment.mcpBindings = { messages: connection.id }
+    loadChatSessionId.mockReturnValue('original-sdk-session')
+
+    await sendAppChatMessage(memberTurn())
+    expect(mountedSurfaces().mcpServers).toHaveProperty('messages')
+
+    connection.status = 'paused'
+    await sendAppChatMessage(memberTurn())
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(mountedSurfaces().mcpServers).not.toHaveProperty('messages')
+    expect(mountedSurfaces().mcpServers).toHaveProperty('halo-team')
+    expect(vi.mocked(acquireV2Session).mock.calls.at(-1)!.slice(0, 4)).toEqual([
+      'space-1', CONVERSATION, expect.any(Object), 'original-sdk-session',
+    ])
+    expect(environment.mcpBindings).toEqual({ messages: connection.id })
+
+    connection.status = 'active'
+    await sendAppChatMessage(memberTurn())
+    expect(send).toHaveBeenCalledTimes(3)
+    expect(mountedSurfaces().mcpServers).toHaveProperty('messages')
   })
 
   it('still gives the member the rest of its turn — the team channel and its work tools', async () => {
@@ -621,7 +663,8 @@ describe('a restricted borrowed turn keeps every tool-call watcher', () => {
 
     await expect(sendAppChatMessage(memberTurn({ origin: 'colleague' }))).rejects.toThrow(/cannot hold/)
 
-    // A team session's context lives for the turn: released, it is gone.
+    // No session took the context (the turn never reached one), so nothing
+    // can hold it: it goes with the turn.
     expect(createScopedBrowserContext).toHaveBeenCalledTimes(1)
     expect(hasChatBrowserContext(CONVERSATION)).toBe(false)
   })
@@ -798,7 +841,7 @@ describe('live messages keep the current turn envelope', () => {
 
   it('prepares live images with the captured model and preserves the original image for recording', async () => {
     const credentials = { provider: 'openai' as const, model: 'captured-nonvision', baseUrl: 'https://example.invalid', apiKey: '' }
-    vi.mocked(getApiCredentials).mockResolvedValueOnce(credentials)
+    vi.mocked(getApiCredentialsForSelection).mockResolvedValueOnce(credentials)
     await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId: 'app-chat:app-member:local:direct:image-snapshot', message: 'start' })
     prepareNonVisionImageFallback.mockReturnValue({ contextBlock: '<halo_attachments>saved image</halo_attachments>\n', filePaths: ['/tmp/image.png'] })
     const prepare = sink.setTurnIdentity.mock.calls.at(-1)![2] as (text: string, images: unknown[]) => unknown

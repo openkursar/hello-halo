@@ -37,8 +37,9 @@ digital-human chat in `app-chat.ts`) rather than routing through the space chat'
 `sendMessage()` — but it builds on the same engine layer, not a copy of it.
 
 **What is shared** (from `services/agent`):
-- Credentials: `getApiCredentials` / `getApiCredentialsForSource` (helpers),
-  `resolveCredentialsForSdk`.
+- Credentials: `getApiCredentialsForSelection` (helpers) over the app's
+  `userOverrides` — its own account, or the global one when it has none or its
+  account was removed — then `resolveCredentialsForSdk`.
 - Options: `buildUserSessionSdkOptions` (sdk-config). It reads the user's global AI
   settings (`maxTurns`, `disabledTools`, `promptProfile`, digital-humans switch) and
   the config directory itself, so a run or a chat turn follows them without passing
@@ -1055,6 +1056,11 @@ JSONL storage is unchanged (append-only, written by `session-store`).
   `shared/rpc/contracts/app.contract.ts`) and
   `GET /api/apps/:appId/chat/transcript`, `GET /api/apps/:appId/chat/messages/:messageId/thoughts`
   (HTTP, same `resolveAppChatTarget` trust boundary as the other chat routes).
+  Address authorization is independent of permission to start more work:
+  `resolveAppChatSendTarget` additionally refuses new sends/injections to legacy
+  teams awaiting repair and read-only source collaborations, including unsealed
+  source tasks retained by a repaired team. History, state and
+  stopping an existing turn remain accessible through the address-only check.
   `app:chat-messages` keeps its full-array contract. Main-side loaders:
   `loadChatTranscriptForConversation`, `loadChatMessageThoughts`.
 - **Jumping to a message.** `through: <messageId>` returns the newest page widened
@@ -1079,10 +1085,50 @@ JSONL storage is unchanged (append-only, written by `session-store`).
 in a map inside `app-chat.ts`, and who is chatting decides both who can watch
 its pages and how long they live:
 
-| Session | Live view | Context lifetime |
+| Session | Live view | Page lifetime |
 |---|---|---|
-| default (`app-chat:{appId}`) and local (`…:local:direct:{uuid}`) | **yes** — pages in the main window, announced under the chat's key | **resident** — survives the turn, so the next message continues on the same page and the user can open the live view between turns |
-| IM, HTTP, team | **no** — pages in the hidden host, nothing announced, like an automation run | **per-turn** — destroyed in `runAppChatTurn`'s `finally`; they can be minted without limit |
+| default (`app-chat:{appId}`) and local (`…:local:direct:{uuid}`) | **yes** — pages in the main window, announced under the chat's key | **resident** — survive the turn, so the next message continues on the same page and the user can open the live view between turns |
+| IM, HTTP, team | **no** — pages in the hidden host, nothing announced, like an automation run | **per-turn** — closed in `runAppChatTurn`'s `finally`; they can be minted without limit |
+
+**The context outlives its pages: it lives with the engine session.** A chat's
+V2 session (one engine process, reused between messages for up to 30 minutes)
+is built with an `ai-browser` tool server that closes over the `BrowserContext`
+of the turn that built it, and every later turn on that session reaches that
+same object — the `mcpServers` a reusing turn assembles are never applied.
+So `runAppChatTurn` binds the context to the session it acquired
+(`bindChatBrowserSession`, right after `acquireV2Session`), the turn's end
+only closes pages (`ctx.closePages()`, which keeps the context usable), and the
+context is disposed (`ctx.destroy()`, after which every call fails with
+"Browser context was released") only when that session is retired — any
+`cleanupSession` reason: idle timeout, rebuild, config change, process death —
+unless a turn is in flight (it re-binds or ends it) or a native chat still
+holds pages (left for the user, as after any session restart; the next session
+is built around the same context). A per-turn context no session took — the
+turn was refused while being set up, or its session was retired under it — is
+disposed when that turn ends, since nothing can reach it; one whose turn never
+reported back is reclaimed by the sweep. Before this, a per-turn context was
+destroyed with its turn: the
+second message within 30 minutes of an IM chat found the session's tools bound
+to a dead context and every browser call failed until the session idled out —
+which a chat answering every few minutes never let happen (IM patrol chat, 2026-10-16).
+
+**A reset under a message on its way closes the session that message acquires.**
+The three resets (clear — the IM clear command included —, manual "Restart
+agent", a team session closed) stop a starting message
+(`abortAppChatTurn(id, 'internal')` marks its start `reset`), close the chat's
+session and destroy its browser context. The message's turn does not stop at
+once: it may be inside `acquireV2Session`, a cold engine start of seconds to a
+minute, and `closeV2Session` cannot reach a session still being created. The
+session it then holds was built on what the reset removed — its browser tools
+close over the destroyed context, its consumer keeps the dropped sink (a reused
+session never takes a new one) — and, left registered, the next message would
+reuse it: the browser failing with "Browser context was released", replies
+published nowhere, until the session idled out. So at the turn's stopped exits
+(`endStoppedOnTheWay`) a turn whose start was `reset` closes the session it
+still holds (`sessionLease.close()`); a session the reset itself closed is no
+longer current there, and a person's stop sets no `reset`, so its warm session
+stays. The one cost falls in the race: the next message pays a cold start —
+what every message after a reset pays.
 
 Only a native chat's context is created with
 `createScopedBrowserContext({ liveView: { conversationId, spaceId } })`, which is
@@ -1098,32 +1144,38 @@ failing the step.
 
 **Resident is bounded**, because every page is a Chromium renderer and local
 sessions are unbounded (`MAX_RESIDENT_BROWSER_CONTEXTS`, `RESIDENT_BROWSER_IDLE_MS`):
-- a context idle for 30 minutes is destroyed; cookies live in the shared
+- pages idle for 30 minutes are closed; cookies live in the shared
   `persist:browser` session, so only tabs and scroll state are lost;
-- at most 6 contexts may hold pages; a new one evicts the least recently used
-  idle one;
+- at most 6 chats may hold pages; a new one closes the pages of the least
+  recently used idle one;
 - never mid-turn (asked of `isAppChatConversationGenerating`) nor while a turn is
   starting — acquired and not yet ended, trusted for `TURN_TRUST_MS` (5 minutes)
   so a slow engine start is covered, after which only the live-turn answer
-  counts, so a turn that died before reporting back cannot pin a context — and
+  counts, so a turn that died before reporting back cannot pin pages — and
   never while the user is watching one of its tabs (`ctx.hasRevealedView()`);
   over the cap rather than kill a live turn.
-- a per-turn context still present after `TURN_TRUST_MS` lost its cleanup and is
-  reclaimed by the same sweep.
+- a per-turn chat idle past `TURN_TRUST_MS` has its pages closed by the same
+  sweep (its turn never reported back); its context stays for its session.
+- the sweep's closes, like a turn's end, close pages only when a session holds
+  the context (`closePagesOrDispose`) and dispose a context no session bound;
+  the cap only ever closes pages (`evictOverCap` → `closePages`) — an unbound
+  context it empties is disposed by the idle sweep.
 
 **Teardown paths** (each one goes through `destroyChatBrowserContext`, which logs
 the reason and closes the pages; a native chat's page destruction announces
 `view-gone`, a per-turn chat's says nothing):
-session cleared/deleted (`clearSessionByConversationId`), team session closed,
-manual "Restart agent" (`restartAppChat` with `interruptActive`; automatic
-config-change restarts deliberately leave the pages), app uninstalled
-(`onAppUninstalled` in `service.ts`), runtime shutdown, the AI-browser permission
-revoked (next turn), and the sweep's `app-removed` check — deleting a space
-hard-deletes its apps without an uninstall event, so a context of an app that no
-longer exists is noticed on the next sweep (≤ 60 s) instead of being leaked.
+its session retired (`bindChatBrowserSession`, above), session cleared/deleted
+(`clearSessionByConversationId`), team session closed, manual "Restart agent"
+(`restartAppChat` with `interruptActive`; automatic config-change restarts
+deliberately leave a native chat's pages), app uninstalled (`onAppUninstalled`
+in `service.ts`), runtime shutdown, the AI-browser permission revoked (next
+turn), and the sweep's `app-removed` check — deleting a space hard-deletes its
+apps without an uninstall event, so a context of an app that no longer exists
+is noticed on the next sweep (≤ 60 s) instead of being leaked.
 
-Logging: one line per create/destroy (`reason`, view count) and a state line
-every 5 minutes while any context exists (`[AppChatBrowser] State: contexts=…`).
+Logging: one line per create/destroy and per page close (`reason`, view
+count) and a state line every 5 minutes while any context exists
+(`[AppChatBrowser] State: contexts=…`).
 
 ### 2.20 Digital-Human Chats as Cross-Conversation Sources
 
@@ -1478,7 +1530,11 @@ member here or from another machine, a run's Stop or Close) stops everything:
   put the rest back, and no turn-end report is made for a turn that never ran.
 The system (`'internal'`: an escalation cut, clear, restart, closing a task,
 shutdown) keeps the earlier behavior: unread input runs after the stop, and a
-clear still keeps waiting reminders and teammates' messages.
+clear still keeps waiting reminders and teammates' messages. A system stop of a
+message still on its way also marks its start `reset` (whoever stopped it
+first): the conversation's session, browser context and sink were replaced
+under it, so the turn closes the session it acquired instead of leaving it for
+the next message (§2.19).
 
 `app-chat-delivery` handles direct API and UI messages. IM supplements, team mail
 and cross-conversation sources use the same gate contract with their own original
@@ -1625,6 +1681,10 @@ src/main/apps/runtime/
   im-channels/
     index.ts                 -- ImChannelManager + provider registration
     manager.ts               -- Generic channel lifecycle (provider-agnostic)
+    instance-settings.ts     -- Settings-page writes (field patch / add / remove)
+                                applied onto the stored instance list
+    binding.ts               -- Bind/unbind/create with target + duplicate-bot checks
+    owner-claim.ts           -- First direct-message sender becomes the owner
     im-prompt.ts             -- IM entry/constraint builders + ImSessionContext
     file-send-mcp.ts         -- send_file_to_chat MCP tool (pre-bound to session)
     file-send-resolve.ts     -- binds that capability to one chat, behind the export
@@ -1637,6 +1697,12 @@ src/main/apps/runtime/
                                 (message_aibot_sessions_list over MCP Streamable HTTP)
     message-parts.ts         -- A text longer than one platform message as ordered
                                 `(i/n)` parts; the limit is each provider's (§4.2)
+    link-supervisor.ts       -- Keeps one instance's long-lived link up: attempt
+                                deadline, backoff, wake/route redials, halt (§4.5)
+    link-route.ts            -- Where IM traffic goes (proxy chain or direct per
+                                `network.imUseProxy`), per-dial abortable routes
+    link-signals.ts          -- Process-wide resume / address-change / route-change
+                                signals and the 30 s tick, held while links run
     *.provider.ts            -- Brand-specific provider implementations
                                 (wecom-bot.provider.ts, weixin-ilink.provider.ts, ...)
 ```
@@ -1649,6 +1715,15 @@ both consume these status reads. `setInstanceApp` accepts an optional
 `expectedAppId`; a mismatched current binding returns `BINDING_CHANGED` without
 writing or reconnecting, so a stale UI confirmation cannot transfer another
 person's newly rebound bot.
+
+Clients never write the instance list back whole. Main writes instance fields of
+its own (owner-claim, the WeChat token), so a settings page's copy goes stale and
+writing it back undoes them — the owner of a claimed bot vanished on the next
+settings save. The settings page sends `ImChannelInstancePatch` (only the changed
+fields, `null` removes; `config` per key, a masked `***` value ignored) or an
+add/remove, `instance-settings.ts` applies it onto the stored list, and the
+answer is that list, which the page shows in place of its copy (HTTP masks its
+secrets). The page also re-reads the list when it opens.
 
 ### 4.1 identityCapability pattern
 
@@ -1747,6 +1822,54 @@ after "Generation stopped." reads as the work starting again. Owners can turn th
 instance (`ImChannelInstanceConfig.processingNotice`, on unless `false`; the
 settings card greys it out while streaming is on).
 
+### 4.5 Keeping a link up
+
+A bot's long-lived link (WeCom WebSocket, Feishu long connection, WeChat
+long-poll) is kept up by `im-channels/link-supervisor.ts`, one per instance. The
+provider owns the protocol — how to dial, what "up" means, what a platform
+error says — and reports `connected()` / `lost(reason)` / `dropped(reason)`
+(the transport is reconnecting by itself) / `halt(reason)`. The supervisor owns
+that a link which is not up is always either being dialled under the
+provider's attempt deadline or waiting for a redial (1 s doubling to 30 s,
+jittered), never stuck: before it, a proxy that accepted the TCP connection and
+then said nothing held four WeCom bots "connecting" for an hour, and Feishu
+waited out the server's 120 s reconnect pace on the agent it was built with.
+Only a halt stops retrying until the user reconnects, changes the credentials
+or restarts Halo: an expired WeChat session, or WeCom / Feishu credentials the
+platform rejected five times, the first a minute or more before (Feishu by the
+platform's own codes, never a network error). The rejections are counted by
+`CredentialRejectionBudget` since the start, the last connection or the user's
+reconnect; network failures in between neither count nor reset them, and the
+minute lets a bot created moments ago come up before the platform knows it.
+Pacing a caller owns (WeCom slot arbitration, `connection-arbiter.ts`) goes
+through `redialIn`, so the supervisor stays the one timer; wake signals leave
+such a redial alone.
+
+Each redial is a fresh `dial()`: a new SDK client (WeCom, with the SDK's own
+reconnect at 0 so it never redials behind the supervisor), a rebuilt channel
+(Feishu, whose `disconnect()` skips a channel that never finished its handshake
+— so teardown also closes its raw WebSocket client, which would otherwise keep
+redialling and take a share of the app's event deliveries with no handler), or
+a new poll session (WeChat). The dial resolves its route through
+`im-channels/link-route.ts`: the app's proxy chain unless the user turned
+"Message channels use the proxy" (`network.imUseProxy`) off — a failing proxy is
+never bypassed on the channel's own initiative; the settings card offers a
+one-click switch instead. A dial's route has a private agent whose sockets die
+with it (`resolveProxyDialAgent`), including one to a proxy that never answered
+CONNECT; a pooled agent cannot reach those. Feishu keeps a replaced channel's
+route open for its in-flight API calls (10 min at most). One-off requests (media,
+lookups, the WeChat QR flow) use `linkFetch` / `resolveLinkAgent` on the same
+route.
+
+`im-channels/link-signals.ts` holds, for the whole process and only while a link
+is supervised, the moments that redial everything at once: system resume (+5 s),
+a change of the machine's external IPv4 addresses (checked on a 30 s tick, which
+also catches a link reported up whose transport is down), and a route change
+(debounced 1 s). State goes out as `getConnectionState()` (`reconnecting` = was
+up since start) and `getLinkStatus()` (failed attempts, next retry, last error,
+via proxy, drops); the manager forwards it, the settings cards show it, and the
+diagnostic report lists it through the app bridge.
+
 Tests live in `tests/unit/apps/runtime/` mirroring the source layout.
 
 ---
@@ -1763,7 +1886,7 @@ apps/runtime depends on:
 ├── services/memory-consolidation  requestConsolidation() after runs and chat turns; consolidateNow()/status for settings (memory-control.ts)
 ├── platform/background   registerKeepAliveReason()
 ├── platform/store        DatabaseManager (for migrations + activity store)
-├── services/agent        getApiCredentials (helpers), resolveCredentialsForSdk,
+├── services/agent        getApiCredentialsForSelection (helpers), resolveCredentialsForSdk,
 │                         buildUserSessionSdkOptions, getHeadlessElectronPath (sdk-config),
 │                         buildBaseToolset (toolsets/base)
 ├── services/conversation-interop   ConversationSource type (registered from bootstrap), createConversationInteropMcpServer (lazy, when collaboration is on)
@@ -1840,7 +1963,7 @@ current team task or standalone run, never another team's private question.
 Run environments are immutable snapshots captured before new work begins. Chat
 session environments are pinned when native sessions are created or other sessions first run. Forks retain their source environment. A one-time startup backfill pins provable legacy transcripts and registry sessions; a durable marker avoids rescanning their history on each launch. Changing future defaults pins any
 provable legacy environments before moving; existing records keep their old
-working/data/memory paths. Missing original storage blocks continuation rather than recreating empty memory or switching spaces. Connection bindings retain installed instance IDs: chat captures workspace inheritance minus explicit denials, while independent runs capture declared connections. Current revocations still apply, and replacing an original connection with a same-name account blocks continuation. Public runtime activity/state types re-export the shared
+working/data/memory paths. Missing original storage blocks continuation rather than recreating empty memory or switching spaces. Connection bindings retain installed instance IDs: chat captures workspace inheritance minus explicit denials, while independent runs capture declared connections. Binding validation checks identity, not availability: pausing or a failed connection does not block a chat while the original instance remains effective. Tool assembly omits paused connections; independent runs still check declared prerequisites separately. Current revocations still apply, and removing or replacing an original connection with a same-name account blocks continuation. Public runtime activity/state types re-export the shared
 renderer-safe contract rather than maintaining another structural copy.
 
 `getAppState` is a projection: automatic enablement, active execution, pending

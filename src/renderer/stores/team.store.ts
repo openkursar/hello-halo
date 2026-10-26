@@ -173,6 +173,8 @@ export interface TeamState {
   dissolveTeam: (teamId: string) => Promise<boolean>
   /** Leave a joined office (joiner): removes this node's local shadow of it. */
   leaveOffice: (teamId: string) => Promise<boolean>
+  /** Take one of this computer's digital humans out of a joined office; the others stay. */
+  withdrawMember: (teamId: string, appId: string) => Promise<boolean>
   addMember: (teamId: string, member: TeamMemberInput) => Promise<boolean>
   /** Rewrite what one of your own members does here, and what teammates may ask of it. */
   updateMember: (teamId: string, appId: string, input: UpdateTeamMemberInput) => Promise<boolean>
@@ -677,6 +679,37 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     }
   },
 
+  withdrawMember: async (teamId, appId) => {
+    try {
+      const name = detailOf(get(), teamId)?.members.find(m => m.appId === appId)?.memberName ?? ''
+      const res = await api.teamLeaveOffice(teamId, [appId])
+      if (res.success) {
+        // The row goes when the team's roster says so; the event it raises reloads again.
+        await get().loadDetail(teamId)
+        return true
+      }
+      // It left already, or the team did: nothing to say, show what is there now.
+      if (res.error === 'MEMBER_NOT_FOUND' || res.error === 'NOT_JOINED') {
+        await get().loadDetail(teamId)
+        return false
+      }
+      notifyError(
+        i18n.t('Could not remove {{name}} from the team', { name }),
+        res.error === 'OFFICE_UNREACHABLE'
+          ? i18n.t('This team can’t be reached right now — its owner may be offline. Try again later.')
+          : res.error === 'ELECTED_AUTHORITY'
+            ? i18n.t('This team can’t take out one digital human on its own right now. You can leave with all of your digital humans instead — their duties are kept.')
+            : res.error === 'DESKTOP_ONLY'
+              ? i18n.t('Taking a digital human out of a team is only available in the desktop app.')
+              : undefined,
+      )
+      return false
+    } catch (err) {
+      console.error('[TeamStore] withdrawMember error:', err)
+      return false
+    }
+  },
+
   addMember: async (teamId, member) => {
     try {
       const res = await api.teamAddMember(teamId, member)
@@ -757,30 +790,18 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       const res = await api.teamSaveCollab(teamId, name)
       if (res.success) {
         await get().loadTeams()
-        // The ephemeral workbench showed the collaboration's single room
-        // implicitly (it ignores the selection). Once saved, the Teams page
-        // routes by selection, so every surface showing this team reselects the
-        // room and records it as the team's last task — otherwise the Teams page
-        // lands in the blank new-task state and the conversation "disappears".
-        // A canvas tab keeps showing the room regardless (see TeamView).
+        // The source tab keeps its room; the Teams page opens ready for new work.
         if (get().currentTeamId === teamId || get().views[teamId]) {
           await get().loadDetail(teamId)
           await get().loadConversations(teamId)
         }
-        if (get().currentTeamId === teamId && !get().selectedConversationId) {
-          const room = get().conversations.find(c => c.kind === 'collab')
-          if (room) get().selectConversation(room.epochId)
-        }
-        const view = get().views[teamId]
-        if (view && !view.selectedConversationId) {
-          const room = view.conversations.find(c => c.kind === 'collab')
-          if (room) get().selectViewConversation(teamId, room.epochId)
-        }
         return true
       }
+      notifyError(i18n.t('Could not save the change.'), String(res.error || i18n.t('Please try again.')))
       return false
     } catch (err) {
       console.error('[TeamStore] saveCollab error:', err)
+      notifyError(i18n.t('Could not save the change.'), String((err as Error)?.message ?? err))
       return false
     }
   },

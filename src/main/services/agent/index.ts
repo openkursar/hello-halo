@@ -114,6 +114,7 @@ export { WorkingDirectoryUnavailableError, workingDirErrorDetail, retireWorkingD
 
 // Conversation goal (engines with features.goal)
 export { getConversationGoal, setConversationGoal } from './goal'
+export { initializeSdkRuntime, closeSdkRuntime, getSdkDiagnostics } from './resolved-sdk'
 
 // ============================================
 // MCP Management
@@ -141,7 +142,7 @@ export { listToolsets, openToolsetByUser, closeToolsetByUser } from './toolsets'
  */
 export { openToolset, closeToolset, getToolset } from './toolsets'
 export type { ToolsetStatus, ToolsetsChangedEvent } from './toolsets'
-export { getWorkingDir, getApiCredentials, getApiCredentialsForConversation } from './helpers'
+export { getWorkingDir, getApiCredentials, getApiCredentialsForSelection } from './helpers'
 /**
  * The one way to add engine hooks to session options: merges event by event,
  * so no concern that watches tool calls (the memory guard, a delegation audit,

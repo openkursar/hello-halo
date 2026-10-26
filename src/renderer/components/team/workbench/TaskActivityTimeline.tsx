@@ -1,6 +1,7 @@
 import { useMemo, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, ArrowRight, ArrowUp, Bell, ChevronDown, FileText } from 'lucide-react'
 import type { TeamActivity, TeamDetail } from '../../../../shared/apps/team-types'
+import { parseSpaceCoordinatorAppId } from '../../../../shared/apps/team-types'
 import { useTranslation } from '../../../i18n'
 import { AutomationAvatar } from '../../apps/AutomationAvatar'
 import { MarkdownRenderer } from '../../chat/MarkdownRenderer'
@@ -72,7 +73,7 @@ export function TaskActivityTimeline({ messages, activities, detail, showEmpty =
   }, [focusActivityId, rows, liveRows, readingRows, page])
   const members = useMemo(() => new Map(detail.roster.map(member => [member.appId, member])), [detail.roster])
   const names = useMemo(() => new Map(detail.roster.map(member => [member.appId, member.memberName])), [detail.roster])
-  const name = (id: string) => names.get(id) ?? t('Former member')
+  const name = (id: string) => parseSpaceCoordinatorAppId(id) ? t('Main chat') : names.get(id) ?? t('Former member')
   const kinds = { message: t('Message'), reply: t('Reply'), task_post: t('Task assigned'), task_update: t('Progress update'), finding: t('Output'), check_set: t('Follow-up scheduled'), check_stop: t('Follow-up stopped'), run_end: t('Task summary'), decision: t('Decision') }
   const header = (appId: string, at: number | null, label: string, recordId: string, targetId?: string | null) => <div className="flex items-start gap-2.5">
     <span className="mt-0.5 shrink-0"><AutomationAvatar name={name(appId)} size={26} /></span>
@@ -97,6 +98,7 @@ export function TaskActivityTimeline({ messages, activities, detail, showEmpty =
       {header(from, taskTime(act.createdAt), label, act.id, to)}
       {attention && <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-halo-warning"><AlertTriangle size={13} />{attentionLabel}</p>}
       {undelivered && <UndeliveredNote recipient={undelivered.recipientAppId ? members.get(undelivered.recipientAppId) : undefined} taskCompleted={taskCompleted} className="mt-1.5 break-words text-xs leading-5 text-foreground/80" />}
+      {undelivered && act.kind === 'reply' && <details className="mt-2 break-words text-xs text-muted-foreground"><summary className="cursor-pointer">{t('Details')}</summary><p className="mt-1 whitespace-pre-wrap">{act.subject}</p></details>}
       {(!undelivered || act.kind === 'message') && <ActivityContent content={act.body || act.subject} attention={attention} />}
       {act.kind === 'finding' && act.refId && canOpenArtifact?.(act.refId) && <button onClick={() => openArtifact(act.refId!)} className="mt-2 inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-primary/5 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><FileText size={13} />{t('View output')}</button>}
     </article>

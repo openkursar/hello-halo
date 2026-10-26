@@ -70,7 +70,8 @@ vi.mock('electron', () => {
       on: vi.fn()
     },
     powerMonitor: {
-      on: vi.fn()
+      on: vi.fn(),
+      removeListener: vi.fn()
     },
     shell: {
       openPath: vi.fn(),

@@ -370,11 +370,11 @@ export function unmaskSentinels(
   // Legacy wecomBot
   restore(incoming.wecomBot, existing.wecomBot, 'secret')
 
-  // IM channels instances — matched by instance ID. The frontend
-  // (MessageChannelsSection.saveInstances) always sends the full instances
-  // array, and unchanged instances carry the '***' mask sentinel from
-  // getConfig(). Index-based matching would cross-contaminate or skip secrets
-  // whenever the array is reordered, appended, or partially updated.
+  // IM channels instances — matched by instance ID. A client saving whole
+  // settings sends the full instances array, and unchanged instances carry the
+  // '***' mask sentinel from getConfig(). Index-based matching would
+  // cross-contaminate or skip secrets whenever the array is reordered,
+  // appended, or partially updated.
   const iIm = (incoming.imChannels as Record<string, unknown>)?.instances as Record<string, unknown>[] | undefined
   const eIm = (existing.imChannels as Record<string, unknown>)?.instances as Record<string, unknown>[] | undefined
   if (Array.isArray(iIm) && Array.isArray(eIm)) {

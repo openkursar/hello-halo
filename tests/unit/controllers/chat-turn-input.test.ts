@@ -13,6 +13,12 @@ import { parseCanvasContext, toAppChatRequest } from '../../../src/main/controll
 const reference = { id: 'r', source: { kind: 'path', path: '/tmp/a.pdf', isDirectory: false } }
 
 describe('toAppChatRequest', () => {
+  it('refuses a source-conversation address before constructing a digital-human chat', () => {
+    expect(toAppChatRequest('space-conv-source', { spaceId: '', message: 'hello' })).toMatchObject({
+      ok: false, status: 400, error: 'Continue this collaboration in its original conversation.',
+    })
+    expect(toAppChatRequest('space-conv-source', { spaceId: 'valid-space', message: 'hello' }).ok).toBe(false)
+  })
   it('keeps what a client may send and derives the rest', () => {
     const result = toAppChatRequest('app-1', {
       appId: 'someone-else',

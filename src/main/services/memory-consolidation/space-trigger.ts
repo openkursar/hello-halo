@@ -7,7 +7,7 @@
  * here keeps the agent engine unaware of consolidation.
  */
 
-import { onAgentEvent, activeSessions, getApiCredentialsForConversation, getApiCredentials } from '../agent'
+import { onAgentEvent, activeSessions, getApiCredentialsForSelection, getApiCredentials } from '../agent'
 import { resolveCredentialsForSdk } from '../agent/sdk-config'
 import { getConversation } from '../conversation.service'
 import { getSpace, getSpaceMemoryLayout, getSpaceMemorySettings } from '../space.service'
@@ -36,7 +36,7 @@ function spaceRequest(
     resolveCredentials: async () => {
       // The conversation's own model when a turn triggered it; otherwise the global one.
       const credentials = conversationId
-        ? await getApiCredentialsForConversation(getConversation(spaceId, conversationId))
+        ? await getApiCredentialsForSelection(getConversation(spaceId, conversationId))
         : await getApiCredentials()
       return resolveCredentialsForSdk(credentials)
     },

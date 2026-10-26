@@ -1421,6 +1421,7 @@ describe('TeamOrchestration', () => {
         const hold = {
           cancelled: false,
           stoppedBy: undefined as 'user' | 'internal' | undefined,
+          reset: false,
           bindSession: vi.fn(),
           releaseSession: vi.fn(),
           end: () => {

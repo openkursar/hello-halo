@@ -93,8 +93,8 @@ POST   /api/im-channels/reload                                     Reload all IM
 
 GET    /api/im-channels/status                                     Get connection status for all IM channel instances, or one via ?instanceId=
      curl -s "$HALO_API_URL/api/im-channels/status" -H "Authorization: Bearer $HALO_API_TOKEN"
-     # out: {success:true,data:{id,type,enabled,connected,state?,appId,appName?,reason?,identityResolution?}[] | <single instance object>}
-     # note: No credentials in this response. instanceId not found → {success:false,error}.
+     # out: {success:true,data:{id,type,enabled,connected,state?,link?,appId,appName?,reason?,identityResolution?}[] | <single instance object>}
+     # note: No credentials in this response. state: online | connecting (not up yet since start) | reconnecting (was up, retrying on its own) | standby (another device holds the bot) | offline (disabled, or stopped until someone acts — see link.lastError). link: {attempt (failed attempts in a row), nextRetryAt? (epoch ms), lastError?, viaProxy, drops}. A link that is connecting or reconnecting recovers by itself; reconnect only to retry at once. instanceId not found → {success:false,error}.
 
 GET    /api/im-sessions                                            List every chat thread a digital human has, its own and IM ones
      curl -s "$HALO_API_URL/api/im-sessions" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000

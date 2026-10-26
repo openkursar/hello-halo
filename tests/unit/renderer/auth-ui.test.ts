@@ -12,6 +12,7 @@ vi.mock('../../../src/renderer/api', () => ({ api: env.api }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }), getCurrentLanguage: () => 'en' }))
 vi.mock('../../../src/renderer/stores/app.store', () => ({ useAppStore: () => env.app }))
 vi.mock('../../../src/renderer/components/settings/ProviderSelector', () => ({ ProviderSelector: () => null }))
+vi.mock('../../../src/renderer/components/settings/ModelConfigPanel', () => ({ ModelConfigPanel: () => null }))
 vi.mock('../../../src/renderer/components/settings/DelegatedLoginDialog', () => ({ DelegatedLoginDialog: () => null }))
 vi.mock('../../../src/renderer/components/icons/BrandIcons', () => ({ getBrandIcon: () => null }))
 vi.mock('../../../src/renderer/components/icons/ProviderIconTile', () => ({ ProviderIconTile: () => null }))
@@ -20,6 +21,9 @@ vi.mock('../../../src/renderer/components/setup/SetupProviderConfig', () => ({ S
 vi.mock('../../../src/renderer/components/setup/PreferencesStep', () => ({ PreferencesStep: () => null }))
 
 import { AISourcesSection } from '../../../src/renderer/components/settings/AISourcesSection'
+import { OAuthAccountEditor } from '../../../src/renderer/components/settings/OAuthAccountEditor'
+import { ProviderSelector } from '../../../src/renderer/components/settings/ProviderSelector'
+import { ModelConfigPanel } from '../../../src/renderer/components/settings/ModelConfigPanel'
 import { SetupPage } from '../../../src/renderer/pages/SetupPage'
 import { LoginSelector } from '../../../src/renderer/components/setup/LoginSelector'
 import { PreferencesStep } from '../../../src/renderer/components/setup/PreferencesStep'
@@ -117,30 +121,36 @@ async function settings() {
   return { runner, render, setConfig }
 }
 
-describe('deleted account model recovery', () => {
-  it.each([false, true])('keeps a missing pin visible and unchanged with empty sources=%s', empty => {
+describe('digital human model override whose account was removed', () => {
+  const otherAccount = { id: 'b', name: 'Other account', model: 'b-model', availableModels: [{ id: 'b-model', name: 'B model' }] }
+
+  it('shows that it follows the global selection now, without changing the stored override by itself', () => {
     vi.stubGlobal('document', { addEventListener: vi.fn(), removeEventListener: vi.fn() })
-    env.app.config.aiSources = { version: 2, currentId: empty ? null : 'b', sources: empty ? [] : [{ id: 'b', name: 'Other account', model: 'b-model', availableModels: [{ id: 'b-model', name: 'B model' }] }] }
-    env.app.navigate = vi.fn()
+    env.app.config.aiSources = { version: 2, currentId: 'b', sources: [otherAccount] }
     const onChange = vi.fn()
     const runner = new ComponentRunner()
     const render = () => runner.render(() => AppModelSelector({ modelSourceId: 'removed', modelId: 'old-model', onChange }))
     const tree = render()
-    expect(text(tree)).toContain('Account removed. Choose another account.')
-    expect(text(tree)).not.toContain('B model')
+    expect(text(tree)).toContain('Follow global (B model)')
+    expect(text(tree)).toContain('The account it was set to use was removed, so it follows the global selection.')
+    expect(text(tree)).not.toContain('old-model')
+    expect(nodes(tree).some(node => node.type === 'button' && node.props['aria-label'] === 'Reset to global')).toBe(false)
     expect(onChange).not.toHaveBeenCalled()
-    expect(nodes(tree).filter(node => node.type === 'button').every(node => !nodes(node.props.children).some(child => child.type === 'button'))).toBe(true)
-    button(tree, 'Account removed').props.onClick()
+    button(tree, 'Follow global').props.onClick()
     const options = render()
-    if (empty) {
-      button(options, 'Configure AI Source').props.onClick()
-      expect(env.app.navigate).toHaveBeenCalledWith('settings')
-      expect(onChange).not.toHaveBeenCalled()
-    }
-    nodes(render()).find(node => node.type === 'button' && node.props['aria-label'] === 'Reset to global').props.onClick()
+    const followGlobal = nodes(options).filter(node => node.type === 'button' && text(node).includes('Follow global')).at(-1)
+    expect(nodes(followGlobal).some(node => node.type?.displayName === 'Check')).toBe(true)
+    followGlobal.props.onClick()
     expect(onChange).toHaveBeenCalledWith(undefined, undefined)
     runner.unmount()
     vi.unstubAllGlobals()
+  })
+
+  it('renders nothing once no account is left, like any other digital human', () => {
+    env.app.config.aiSources = { version: 2, currentId: null, sources: [] }
+    const runner = new ComponentRunner()
+    expect(runner.render(() => AppModelSelector({ modelSourceId: 'removed', modelId: 'old-model', onChange: vi.fn() }))).toBeNull()
+    runner.unmount()
   })
 })
 
@@ -154,29 +164,31 @@ describe('AI sources OAuth UI', () => {
     expect(env.api.onAuthLoginProgress).not.toHaveBeenCalled()
   })
 
-  it('targets the source on reauthentication and uses a generic redirect dialog', async () => {
-    const { render } = await settings()
+  it('offers Edit and Logout on an OAuth account, and Edit opens its account editor', async () => {
+    const { render, setConfig } = await settings()
+    nodes(render()).find(node => node.props?.onClick && text(node).includes('Personal account') && node.type === 'div').props.onClick()
     let tree = render()
-    nodes(tree).find(node => node.props?.onClick && text(node).includes('Personal account') && node.type === 'div').props.onClick()
+    expect(button(tree, 'Reauthenticate')).toBeUndefined()
+    expect(button(tree, 'Rename')).toBeUndefined()
+    expect(button(tree, 'Logout')).toBeDefined()
+    button(tree, 'Edit').props.onClick()
     tree = render()
-    await button(tree, 'Reauthenticate').props.onClick()
-    expect(env.api.authStartLogin).toHaveBeenCalledWith('external-pkce', 'account-1')
-    tree = render()
-    expect(button(tree, 'Open Login Window')).toBeDefined()
-    await button(tree, 'Open Login Window').props.onClick()
-    expect(env.api.authOpenLoginWindow).toHaveBeenCalledWith('external-pkce', 'owned-login')
+    const editor = nodes(tree).find(node => node.type === OAuthAccountEditor)
+    expect(editor.props.source.id).toBe('account-1')
+    expect(nodes(tree).some(node => node.type === ProviderSelector)).toBe(false)
+    await editor.props.onSaved()
+    expect(env.api.getConfig).toHaveBeenCalledWith({ snapshot: true })
+    expect(setConfig).toHaveBeenCalledTimes(1)
+    expect(nodes(render()).some(node => node.type === OAuthAccountEditor)).toBe(false)
+    expect(env.api.authStartLogin).not.toHaveBeenCalled()
   })
 
-  it('renames only source metadata without resending credentials or switching accounts', async () => {
+  it('leaves the CLI-delegated account without an Edit action', async () => {
     const { render } = await settings()
-    let tree = render()
-    nodes(tree).find(node => node.props?.onClick && text(node).includes('Personal account') && node.type === 'div').props.onClick()
-    await button(render(), 'Rename').props.onClick()
-    tree = render()
-    nodes(tree).find(node => node.type === 'input' && node.props['aria-label'] === 'Account name').props.onChange({ target: { value: ' Work account ' } })
-    await button(render(), 'Save').props.onClick()
-    expect(env.api.aiSourcesUpdateSource).toHaveBeenCalledWith('account-1', { name: 'Work account' })
-    expect(env.api.authStartLogin).not.toHaveBeenCalled()
+    nodes(render()).find(node => node.props?.onClick && text(node).includes('CLI') && node.type === 'div').props.onClick()
+    const tree = render()
+    expect(button(tree, 'Remove')).toBeDefined()
+    expect(button(tree, 'Edit')).toBeUndefined()
   })
 
   it('truncates a long signed-in email inside a shrinkable card name column', async () => {
@@ -211,7 +223,7 @@ describe('AI sources OAuth UI', () => {
     const { runner, render, setConfig } = await settings()
     const pending = button(render(), 'external-pkce Add another account').props.onClick()
     await flush()
-    expect(env.api.authStartLogin).toHaveBeenCalledWith('external-pkce', undefined)
+    expect(env.api.authStartLogin).toHaveBeenCalledWith('external-pkce')
     expect(env.api.authCompleteLogin).toHaveBeenCalledTimes(1)
     expect(env.api.authCompleteLogin).toHaveBeenCalledWith('external-pkce', 'original-state', 'owned-login')
     const waiting = render()
@@ -298,6 +310,80 @@ describe('AI sources OAuth UI', () => {
   })
 })
 
+describe('OAuth account editor', () => {
+  const account = (modelOverrides?: Record<string, unknown>) => ({
+    id: 'account-1', provider: 'external-pkce', authType: 'oauth', name: 'Personal account', model: 'model-1',
+    availableModels: [
+      { id: 'model-1', name: 'Model 1', capabilities: { contextWindow: 272000 } },
+      { id: 'model-2', name: 'Model 2', supportsVision: true, capabilities: { contextWindow: 400000 } },
+    ],
+    ...(modelOverrides ? { modelOverrides } : {}),
+  }) as any
+  function editor(source = account()) {
+    const runner = new ComponentRunner()
+    const onSaved = vi.fn().mockResolvedValue(undefined)
+    const onCancel = vi.fn()
+    const render = () => runner.render(() => OAuthAccountEditor({ source, onSaved, onCancel }))
+    return { render, onSaved, onCancel }
+  }
+  const panel = (tree: any) => nodes(tree).find(node => node.type === ModelConfigPanel)
+
+  it('edits the chosen model with its catalog values and saves only name and overrides', async () => {
+    const { render, onSaved } = editor()
+    expect(panel(render()).props).toMatchObject({ modelId: 'model-1', catalogCapability: { contextWindow: 272000 } })
+    nodes(render()).find(node => node.type === 'select').props.onChange({ target: { value: 'model-2' } })
+    expect(panel(render()).props).toMatchObject({ modelId: 'model-2', catalogCapability: { contextWindow: 400000 }, catalogSupportsVision: true })
+    panel(render()).props.onChange({ 'model-2': { contextWindow: 817000 } })
+    nodes(render()).find(node => node.type === 'input').props.onChange({ target: { value: ' Work account ' } })
+    await button(render(), 'Save').props.onClick()
+    expect(env.api.aiSourcesUpdateSource).toHaveBeenCalledWith('account-1', {
+      name: 'Work account',
+      modelOverrides: { 'model-2': { contextWindow: 817000 } },
+    })
+    expect(onSaved).toHaveBeenCalledTimes(1)
+    expect(env.api.authStartLogin).not.toHaveBeenCalled()
+  })
+
+  it('sends an empty override map so resetting every model is saved', async () => {
+    const { render } = editor(account({ 'model-1': { contextWindow: 817000 } }))
+    expect(panel(render()).props.overrides).toEqual({ 'model-1': { contextWindow: 817000 } })
+    panel(render()).props.onChange({})
+    await button(render(), 'Save').props.onClick()
+    expect(env.api.aiSourcesUpdateSource).toHaveBeenCalledWith('account-1', { name: 'Personal account', modelOverrides: {} })
+  })
+
+  it('keeps the draft open with the reason when saving fails', async () => {
+    env.api.aiSourcesUpdateSource.mockResolvedValue({ success: false, error: 'Settings could not be saved' })
+    const { render, onSaved } = editor()
+    await button(render(), 'Save').props.onClick()
+    const tree = render()
+    expect(text(nodes(tree).find(node => node.props?.role === 'alert'))).toContain('Settings could not be saved')
+    expect(button(tree, 'Save').props.disabled).toBe(false)
+    expect(onSaved).not.toHaveBeenCalled()
+  })
+
+  it('saves on Enter in the name field, but not on the Enter that confirms an IME candidate', async () => {
+    const { render, onSaved } = editor()
+    const nameInput = () => nodes(render()).find(node => node.type === 'input')
+    nameInput().props.onKeyDown({ key: 'Enter', keyCode: 229, nativeEvent: { isComposing: true } })
+    await flush()
+    expect(env.api.aiSourcesUpdateSource).not.toHaveBeenCalled()
+    nameInput().props.onKeyDown({ key: 'Enter', keyCode: 13, nativeEvent: { isComposing: false } })
+    await flush()
+    expect(env.api.aiSourcesUpdateSource).toHaveBeenCalledWith('account-1', { name: 'Personal account', modelOverrides: {} })
+    expect(onSaved).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a blank name and cancels without saving', () => {
+    const { render, onCancel } = editor()
+    nodes(render()).find(node => node.type === 'input').props.onChange({ target: { value: '   ' } })
+    expect(button(render(), 'Save').props.disabled).toBe(true)
+    button(render(), 'Cancel').props.onClick()
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    expect(env.api.aiSourcesUpdateSource).not.toHaveBeenCalled()
+  })
+})
+
 describe('first-run setup OAuth ownership', () => {
   it('preserves the first-launch preferences step', () => {
     env.app.config.isFirstLaunch = true
@@ -331,7 +417,7 @@ describe('first-run setup OAuth ownership', () => {
     const pending = nodes(render()).find(node => node.type === LoginSelector).props.onSelectProvider('external-pkce')
     await flush()
     expect(env.api.authStartLogin).toHaveBeenCalledTimes(1)
-    expect(env.api.authStartLogin).toHaveBeenCalledWith('external-pkce', undefined)
+    expect(env.api.authStartLogin).toHaveBeenCalledWith('external-pkce')
     expect(env.api.authCompleteLogin).toHaveBeenCalledTimes(1)
     expect(env.api.authCompleteLogin).toHaveBeenCalledWith('external-pkce', 'original-state', 'owned-login')
     const waiting = render()

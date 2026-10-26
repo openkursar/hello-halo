@@ -115,12 +115,15 @@ system_prompt: |
   6. Produce a Markdown report: overview counts, what was auto-handled, what failed and why,
      what needs human attention.
 escalation:
-  enabled: true
   timeout_hours: 24
 browser_login:
   - url: https://internal-system.example.com
     label: Internal System
 ```
+
+`escalation` carries only `timeout_hours`: a question left unanswered for 24 hours expires and
+the run ends as an error. `escalation.enabled` is schema-only and is left out on purpose — the
+`auto_approve` config field and the prompt's rules are what keep this app from acting alone.
 
 No `output` block — `output.notify.system`/`output.notify.channels`/`output.format` are all
 schema-only and the runtime never reads any of them (see `create-digital-human/spec-reference.md`'s

@@ -62,6 +62,7 @@ function setup(opts: { self: string; online: string[]; roster: string[]; authori
   const onAuthorityChange = vi.fn()
   const onStepdown = vi.fn()
   const onPausedChange = vi.fn()
+  const requestCatchup = vi.fn()
   const handover = createHandover({
     officeId: 'O',
     selfNodeId: opts.self,
@@ -76,10 +77,11 @@ function setup(opts: { self: string; online: string[]; roster: string[]; authori
     onAuthorityChange,
     onStepdown,
     onPausedChange,
+    requestCatchup,
     schedule: sched.schedule,
     jitter: () => 0,
   })
-  return { handover, sched, termState, reconciler, onBecomeAuthority, onAuthorityChange, onStepdown, onPausedChange }
+  return { handover, sched, termState, reconciler, onBecomeAuthority, onAuthorityChange, onStepdown, onPausedChange, requestCatchup }
 }
 
 describe('handover', () => {
@@ -129,5 +131,78 @@ describe('handover', () => {
     expect(s.onPausedChange).toHaveBeenCalledWith(true)
     s.handover.onNodePresence('b', 'online')
     expect(s.handover.election.isElecting()).toBe(true)
+  })
+
+  it('resumes behind the returning authority only after its catch-up is confirmed', () => {
+    const opts = { self: 'self', online: ['self'], roster: ['old', 'self'], authority: 'old' }
+    const s = setup(opts)
+    s.handover.onNodePresence('old', 'offline')
+    for (let i = 0; i < 40; i++) s.sched.runAll()
+    expect(s.handover.isPaused()).toBe(true)
+
+    opts.online = ['old', 'self']
+    s.handover.onNodePresence('old', 'online')
+    expect(s.requestCatchup).toHaveBeenCalledWith('old')
+    expect(s.handover.isPaused()).toBe(true)
+    s.handover.confirmAuthority('old', 1)
+
+    expect(s.handover.isPaused()).toBe(false)
+    expect(s.handover.election.isElecting()).toBe(false)
+    expect(s.handover.isAuthoritySelf()).toBe(false)
+    expect(s.onBecomeAuthority).not.toHaveBeenCalled()
+    expect(s.onPausedChange.mock.calls).toEqual([[true], [false]])
+    for (let i = 0; i < 40; i++) s.sched.runAll()
+    expect(s.handover.isPaused()).toBe(false)
+  })
+
+  it('cancels an in-flight election when the same authority returns before the pause', () => {
+    const s = setup({ self: 'self', online: ['self'], roster: ['old', 'self'], authority: 'old' })
+    s.handover.onNodePresence('old', 'offline')
+    expect(s.handover.election.isElecting()).toBe(true)
+    s.handover.onNodePresence('old', 'online')
+    expect(s.requestCatchup).toHaveBeenCalledWith('old')
+    s.handover.confirmAuthority('old', 1)
+    for (let i = 0; i < 40; i++) s.sched.runAll()
+    expect(s.handover.election.isElecting()).toBe(false)
+    expect(s.handover.isPaused()).toBe(false)
+    expect(s.onBecomeAuthority).not.toHaveBeenCalled()
+  })
+
+  it('follows a newer authority before reporting recovery, and rejects an old authority confirmation', () => {
+    const s = setup({ self: 'self', online: ['self'], roster: ['old', 'self', 'new'], authority: 'old' })
+    s.handover.onNodePresence('old', 'offline')
+    for (let i = 0; i < 40; i++) s.sched.runAll()
+    s.handover.observeFrameTerm('new', 2)
+    expect(s.handover.getBelievedAuthority()).toBe('new')
+    expect(s.requestCatchup).toHaveBeenCalledWith('new')
+    expect(s.handover.isPaused()).toBe(true)
+
+    s.handover.confirmAuthority('old', 2)
+    s.handover.confirmAuthority('new', 1)
+    s.handover.confirmAuthority('new', 3)
+    expect(s.handover.isPaused()).toBe(true)
+    expect(s.termState.getTerm()).toBe(2)
+    s.onPausedChange.mockImplementation(paused => {
+      if (!paused) {
+        expect(s.handover.getBelievedAuthority()).toBe('new')
+        expect(s.termState.getTerm()).toBe(2)
+        expect(s.handover.election.isElecting()).toBe(false)
+      }
+    })
+    s.handover.confirmAuthority('new', 2)
+    expect(s.handover.isPaused()).toBe(false)
+    expect(s.onBecomeAuthority).not.toHaveBeenCalled()
+  })
+
+  it('keeps a partition minority paused when only a non-authority returns without a quorum', () => {
+    const s = setup({ self: 'self', online: ['self'], roster: ['old', 'self', 'peer', 'other'], authority: 'old' })
+    s.handover.onNodePresence('old', 'offline')
+    for (let i = 0; i < 40; i++) s.sched.runAll()
+    s.handover.onNodePresence('peer', 'online')
+    s.handover.confirmAuthority('peer', 1)
+    for (let i = 0; i < 40; i++) s.sched.runAll()
+    expect(s.handover.isPaused()).toBe(true)
+    expect(s.handover.isAuthoritySelf()).toBe(false)
+    expect(s.onBecomeAuthority).not.toHaveBeenCalled()
   })
 })

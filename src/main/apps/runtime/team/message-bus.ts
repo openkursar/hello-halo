@@ -915,7 +915,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       case 'timeout':
         return 'The member did not finish in time (timeout). Read the board to reconcile.'
       case 'undelivered':
-        return 'The message was not delivered (the member is offline or unreachable). Reassign or retry later.'
+        return `The message was not delivered: ${outcome.reason}`
       default:
         return '(no result)'
     }

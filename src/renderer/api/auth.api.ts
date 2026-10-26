@@ -50,11 +50,11 @@ export const authApi = {
     return httpRequest('GET', '/api/auth/providers')
   },
 
-  authStartLogin: async (providerType: string, sourceId?: string): Promise<ApiResponse<OAuthLoginStart>> => {
+  authStartLogin: async (providerType: string): Promise<ApiResponse<OAuthLoginStart>> => {
     if (isElectron()) {
-      return window.halo.authStartLogin(providerType, sourceId)
+      return window.halo.authStartLogin(providerType)
     }
-    return httpRequest('POST', '/api/auth/start-login', { providerType, sourceId })
+    return httpRequest('POST', '/api/auth/start-login', { providerType })
   },
 
   authOpenLoginWindow: async (providerType: string, loginId: string): Promise<ApiResponse<OAuthCompleteResult>> => {

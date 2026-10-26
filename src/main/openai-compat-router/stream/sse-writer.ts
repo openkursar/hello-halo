@@ -206,7 +206,7 @@ export class SSEWriter {
    * Write message_delta event
    */
   writeMessageDelta(
-    stopReason: AnthropicStopReason,
+    stopReason: AnthropicStopReason | null,
     usage: Partial<NormalizedUsage>
   ): boolean {
     const event: AnthropicMessageDeltaEvent = {
@@ -248,7 +248,7 @@ export class SSEWriter {
   writeError(message: string): boolean {
     return this.writeEvent('error', {
       type: 'error',
-      message: { type: 'api_error', message }
+      error: { type: 'api_error', message }
     })
   }
 

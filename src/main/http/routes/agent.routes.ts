@@ -23,7 +23,7 @@ export function registerAgentRoutes(app: Express): void {
 
   app.post('/api/agent/stop', async (req: Request, res: Response) => {
     const { conversationId } = req.body
-    const result = agentController.stopGeneration(conversationId)
+    const result = await agentController.stopGeneration(conversationId)
     res.json(result)
   })
 

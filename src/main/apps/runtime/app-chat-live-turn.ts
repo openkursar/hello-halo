@@ -33,6 +33,7 @@ const LOG_TAG = '[AppChatLiveTurn]'
 interface StartEntry {
   cancelled: boolean
   stoppedBy?: StopReason
+  reset: boolean
   isUsable?: () => boolean
   retire?: () => void
 }
@@ -93,6 +94,12 @@ export interface AppChatTurnStart {
   readonly cancelled: boolean
   /** Who stopped it on the way: a person's stop voids a person's message. */
   readonly stoppedBy: StopReason | undefined
+  /**
+   * The conversation was reset under the message (cleared, restarted, its team
+   * session closed): whatever the turn built on its way rests on state the
+   * reset replaced. Set by every system stop, whoever stopped it first.
+   */
+  readonly reset: boolean
   /** A failed acquired instance must not hold up its successor while preparation unwinds. */
   bindSession(lease: Pick<V2SessionLease, 'isUsable'>, retire: () => void): void
   /** Stops tracking the acquired instance when this caller finishes or retires. */
@@ -114,7 +121,7 @@ export interface AppChatTurnStart {
  * Called synchronously where the turn is decided, before any await.
  */
 export function beginAppChatTurnStart(conversationId: string): AppChatTurnStart {
-  const entry: StartEntry = { cancelled: false }
+  const entry: StartEntry = { cancelled: false, reset: false }
   const entries = startingTurns.get(conversationId) ?? new Set<StartEntry>()
   entries.add(entry)
   startingTurns.set(conversationId, entries)
@@ -124,6 +131,9 @@ export function beginAppChatTurnStart(conversationId: string): AppChatTurnStart 
     },
     get stoppedBy() {
       return entry.stoppedBy
+    },
+    get reset() {
+      return entry.reset
     },
     bindSession: (lease, retire) => {
       entry.isUsable = () => lease.isUsable
@@ -171,6 +181,8 @@ export function cancelAppChatTurnStarts(conversationId: string, reason: StopReas
     for (const entry of entries) {
       entry.cancelled = true
       entry.stoppedBy ??= reason
+      // The system stops a message on its way only to reset its conversation.
+      if (reason === 'internal') entry.reset = true
     }
   }
   for (const waiter of liveTurnWaiters.get(conversationId) ?? []) waiter.stopped = true

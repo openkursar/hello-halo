@@ -315,7 +315,14 @@ function checkEngine(engineId) {
     }
   }
 
-  const fingerprint = createHash('sha256').update(fs.readFileSync(entry)).digest('hex').slice(0, 12)
+  const missingRuntimeFile = (engine.requiredFiles ?? []).find(file => !fs.existsSync(path.join(PROJECT_ROOT, pkgDir, file)))
+  if (missingRuntimeFile) {
+    return { engineId, name: engine.name, status: 'invalid', path: label,
+      info: `missing execution runtime: ${missingRuntimeFile}`, fix: engine.fix }
+  }
+
+  const fingerprintEntry = engine.fingerprintFile ? path.join(PROJECT_ROOT, pkgDir, engine.fingerprintFile) : entry
+  const fingerprint = createHash('sha256').update(fs.readFileSync(fingerprintEntry)).digest('hex').slice(0, 12)
   return {
     engineId,
     name: engine.name,

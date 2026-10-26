@@ -27,6 +27,7 @@ import { EventEmitter } from 'events'
 // so a machine that only reaches WeCom through a proxy connects at all.
 vi.mock('../../../../../src/main/services/proxy-fetch', () => ({
   resolveProxyAgent: async () => undefined,
+  resolveProxyDialAgent: async () => undefined,
 }))
 
 const notifyAppEventMock = vi.fn()
@@ -116,9 +117,9 @@ interface InstanceWithInternals {
   stop(): void
   isConnected(): boolean
   getConnectionState(): string
+  getLinkStatus(): { nextRetryAt?: number; lastError?: string } | undefined
   connMode: 'active' | 'yielding'
   confirmTimer: ReturnType<typeof setTimeout> | null
-  probeTimer: ReturnType<typeof setTimeout> | null
   pendingPushes: Array<{
     chatId: string
     text: string
@@ -145,12 +146,16 @@ async function settleOpen(): Promise<void> {
   await vi.advanceTimersByTimeAsync(0)
 }
 
-/** Drive the active-mode supersede storm until the instance yields to standby. */
-function forceYield(client: FakeWSClient): void {
-  // Default arbiter threshold is 3 supersedes within the window.
-  client.emit('event.disconnected_event')
-  client.emit('event.disconnected_event')
-  client.emit('event.disconnected_event')
+/**
+ * Drive the active-mode supersede storm until the instance yields to standby.
+ * Default arbiter threshold is 3 supersedes within the window; each kick lands
+ * on the connection the previous reconnect opened, as it does in production.
+ */
+async function forceYield(): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    latestClient().emit('event.disconnected_event')
+    if (i < 2) await vi.advanceTimersByTimeAsync(10_000)
+  }
 }
 
 // ============================================
@@ -177,7 +182,7 @@ describe('WecomBotInstance connMode state machine', () => {
     client.goAuthenticated()
     expect(inst.getConnectionState()).toBe('online')
 
-    forceYield(client)
+    await forceYield()
     expect(inst.connMode).toBe('yielding')
     // Yielded: not authenticated, so state is standby (not connecting/offline).
     expect(inst.getConnectionState()).toBe('standby')
@@ -208,7 +213,7 @@ describe('WecomBotInstance connMode state machine', () => {
     const inst = makeInstance()
     inst.start()
     await settleOpen()
-    forceYield(latestClient())
+    await forceYield()
     expect(inst.connMode).toBe('yielding')
 
     // Advance to fire the scheduled probe → a fresh client connects.
@@ -246,7 +251,7 @@ describe('WecomBotInstance connMode state machine', () => {
     const inst = makeInstance()
     inst.start()
     await settleOpen()
-    forceYield(latestClient())
+    await forceYield()
 
     // Fire the first probe.
     vi.runOnlyPendingTimers()
@@ -265,8 +270,8 @@ describe('WecomBotInstance connMode state machine', () => {
     // Confirm was cancelled; must not recover.
     expect(inst.confirmTimer).toBeNull()
     expect(inst.connMode).toBe('yielding')
-    // A new probe was scheduled (timer armed) rather than recovering.
-    expect(inst.probeTimer).not.toBeNull()
+    // A new probe was scheduled rather than recovering.
+    expect(inst.getLinkStatus()?.nextRetryAt).toBeDefined()
 
     // Fire the rescheduled probe → a NEW client is opened, still yielding.
     vi.runOnlyPendingTimers()
@@ -279,12 +284,33 @@ describe('WecomBotInstance connMode state machine', () => {
     expect(inst.connMode).toBe('yielding')
   })
 
+  it('reports stopped, not standby, once standby probes are rejected for good', async () => {
+    const inst = makeInstance()
+    inst.start()
+    await settleOpen()
+    await forceYield()
+    expect(inst.getConnectionState()).toBe('standby')
+
+    // Each probe is refused by the platform; the fifth refusal stops retrying.
+    for (let i = 0; i < 5; i++) {
+      vi.runOnlyPendingTimers()
+      await settleOpen()
+      const probe = latestClient()
+      probe.emit('error', new Error('Authentication failed: invalid secret (code: 40058)'))
+      probe.emit('disconnected', 'code: 1006')
+    }
+
+    expect(inst.connMode).toBe('yielding')
+    expect(inst.getConnectionState()).toBe('offline')
+    expect(inst.getLinkStatus()?.lastError).toContain('rejected the bot credentials')
+  })
+
   it('does not recover if the confirm timer fires after leaving yielding mode', async () => {
     // Guard: recoverToActive is gated on connMode still being 'yielding'.
     const inst = makeInstance()
     inst.start()
     await settleOpen()
-    forceYield(latestClient())
+    await forceYield()
     vi.runOnlyPendingTimers()
     await settleOpen()
     const probeClient = latestClient()

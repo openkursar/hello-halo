@@ -173,7 +173,8 @@ POST   /api/teams/<teamId>/leave                                   Leave a team 
           -d '{}'
      # body: {}
      # out: {success:true} | {success:false,error}
-     # note: Only for a joined team (hostNodeId set in GET /api/teams). The members this computer brought leave with it; coming back needs a new invite from the host. Confirm with the user first.
+     # note: Only for a team joined from another computer (hostNodeId set in GET /api/teams). All of this computer's digital humans in it leave with it; their duties there are kept on this computer and come back if they join the same team again, which needs a new invite from the host. Confirm with the user first.
+     # err: NOT_JOINED: this computer has no team joined from elsewhere with that id; nothing changed. A team it hosts is not left but dissolved (DELETE /api/teams/:teamId), which deletes much more — ask the user, never switch to it on your own.
 
 POST   /api/teams/<teamId>/members                                 Add an existing digital human to a team
      # note: reversible — can be undone or corrected afterward.
