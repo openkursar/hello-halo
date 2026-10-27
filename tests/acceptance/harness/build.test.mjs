@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { buildApplication, verifyBuild } from '../../../scripts/acceptance/lib/build.mjs'
 
 async function fixture(context) {
@@ -145,4 +146,63 @@ test('provenance from a builder without a clean-output guarantee cannot be reuse
   const record = await buildApplication(root)
   await write('out/.acceptance-build.json', JSON.stringify({ ...record, version: 1 }))
   await assert.rejects(verifyBuild(root), /rebuild from clean outputs/)
+})
+
+async function useProductSelection(context, write) {
+  const previous = process.env.HALO_PRODUCT_SOURCE
+  delete process.env.HALO_PRODUCT_SOURCE
+  context.after(() => {
+    if (previous === undefined) delete process.env.HALO_PRODUCT_SOURCE
+    else process.env.HALO_PRODUCT_SOURCE = previous
+  })
+  await write('scripts/product-source.mjs', await fs.readFile(fileURLToPath(new URL('../../../scripts/product-source.mjs', import.meta.url))))
+}
+
+test('a vanilla checkout materializes its own default product before capturing build inputs', async context => {
+  const { root, write } = await fixture(context)
+  await useProductSelection(context, write)
+  await fs.rm(path.join(root, 'product.json'))
+  const product = JSON.stringify({ name: 'Default fixture product', authProviders: [] }, null, 2) + '\n'
+  await write('product.example.json', product)
+  const record = await buildApplication(root)
+  assert.equal(await fs.readFile(path.join(root, 'product.json'), 'utf8'), product)
+  assert.equal((await verifyBuild(root)).id, record.id)
+  assert(record.inputs.files.some(file => file.path === 'product.json'))
+})
+
+test('default product preparation preserves existing local configuration byte for byte', async context => {
+  const { root, write } = await fixture(context)
+  await useProductSelection(context, write)
+  const product = '{\n  "name": "Existing fixture product",\n  "authProviders": []\n}\n'
+  await write('product.json', product)
+  await write('product.example.json', JSON.stringify({ name: 'Unselected default', authProviders: [] }))
+  await buildApplication(root)
+  assert.equal(await fs.readFile(path.join(root, 'product.json'), 'utf8'), product)
+})
+
+test('an explicitly selected variant is synchronized before the snapshot and remains stable through prebuild', async context => {
+  const { root, write, build } = await fixture(context)
+  await useProductSelection(context, write)
+  const variant = JSON.stringify({ name: 'Selected fixture product', dataFolderName: '.fixture-selected', authProviders: [] }, null, 2) + '\n'
+  await write('halo-local/product.fixture.json', variant)
+  await write('.product-source', 'halo-local/product.fixture.json\n')
+  await write('product.example.json', JSON.stringify({ name: 'Unselected default', authProviders: [] }))
+  await write('prebuild.mjs', "import { syncProductJson } from './scripts/product-source.mjs';await syncProductJson({interactive:false});")
+  const descriptor = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'))
+  descriptor.scripts.prebuild = 'node prebuild.mjs'
+  await write('package.json', JSON.stringify(descriptor))
+  await write('build.cjs', build + `if(JSON.parse(fs.readFileSync('product.json','utf8')).name!=='Selected fixture product')process.exit(9);`)
+  const record = await buildApplication(root)
+  assert.equal(await fs.readFile(path.join(root, 'product.json'), 'utf8'), variant)
+  assert.equal((await verifyBuild(root)).id, record.id)
+})
+
+test('missing product configuration fails explicitly and leaves neither a stamp nor a build lock', async context => {
+  const { root, write } = await fixture(context)
+  await useProductSelection(context, write)
+  await buildApplication(root)
+  await fs.rm(path.join(root, 'product.json'))
+  await assert.rejects(buildApplication(root), /No product configuration is available/)
+  await assert.rejects(verifyBuild(root), /No controlled acceptance build/)
+  await assert.rejects(fs.access(path.join(root, 'out/.acceptance-build.lock')), { code: 'ENOENT' })
 })

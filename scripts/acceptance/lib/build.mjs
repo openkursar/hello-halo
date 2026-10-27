@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 import ts from 'typescript'
 import { fingerprintFile, manifestFromFiles, gitCatalogue, atomicJson } from '../../../tests/perf/build-identity/index.mjs'
 import { execute } from './process.mjs'
@@ -183,6 +184,39 @@ async function snapshot(root) {
   return { inputs: await productInputs(root), sdk: await sdkSnapshot(root) }
 }
 
+async function prepareProductInput(root) {
+  const product = path.join(root, 'product.json')
+  const selected = path.join(root, 'scripts/product-source.mjs')
+  for (const file of [product, selected]) {
+    const stat = await fs.lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error })
+    if (stat && !stat.isFile()) throw new Error(`Product configuration inputs must be regular files: ${posix(path.relative(root, file))}`)
+  }
+  if (await exists(selected)) {
+    const { syncProductJson } = await import(pathToFileURL(selected).href)
+    if (typeof syncProductJson !== 'function') throw new Error('The selected checkout has no supported product synchronization entry')
+    await syncProductJson({ interactive: false })
+  }
+  if (await exists(product)) return
+  const example = path.join(root, 'product.example.json')
+  let contents
+  try {
+    if (!(await fs.lstat(example)).isFile()) throw new Error('Default product configuration must be a regular product.example.json file')
+    contents = await fs.readFile(example)
+  } catch (error) {
+    if (error.code === 'ENOENT') throw new Error('No product configuration is available; provide product.json, a selected variant, or product.example.json')
+    throw error
+  }
+  try { JSON.parse(contents.toString('utf8')) }
+  catch { throw new Error('The default product.example.json is not valid JSON') }
+  try {
+    await fs.writeFile(product, contents, { flag: 'wx' })
+    console.log('acceptance: prepared product.json from this checkout’s default example')
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error
+    console.log('acceptance: preserved product.json created during configuration preparation')
+  }
+}
+
 export async function buildApplication(root, { timeoutMs = 1800000 } = {}) {
   root = await fs.realpath(root)
   for (const directory of ['out', 'resources']) {
@@ -205,9 +239,10 @@ export async function buildApplication(root, { timeoutMs = 1800000 } = {}) {
 }
 
 async function buildOwnedApplication(root, timeoutMs) {
-  const before = await snapshot(root)
   const file = path.join(root, stampName)
   await fs.rm(file, { force: true })
+  await prepareProductInput(root)
+  const before = await snapshot(root)
   for (const directory of generatedOutputs) await fs.rm(path.join(root, directory), { recursive: true, force: true })
   const id = randomUUID()
   const logFile = path.join(root, 'tests/acceptance/output/builds', `${id}.log`)

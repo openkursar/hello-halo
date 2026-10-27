@@ -78,6 +78,12 @@ before invoking the real build. It holds an exclusive build lock and records
 version 2 provenance; older stamps must be rebuilt. Source files, installed
 dependencies and previous run evidence are not cleared.
 
+Before capturing inputs, `build` runs this checkout's noninteractive product
+selection. An explicit selected variant is synchronized; otherwise an existing
+`product.json` is preserved. A fresh clone with neither materializes its own
+`product.example.json` without overwriting a configuration created concurrently.
+Missing configuration and default example fail the build explicitly.
+
 ```bash
 npm run acceptance -- build
 npm run acceptance -- doctor --level e2e
