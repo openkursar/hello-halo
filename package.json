@@ -180,6 +180,7 @@
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "remend": "1.2.0",
+    "sax": "1.4.3",
     "setimmediate": "^1.0.5",
     "shiki": "^3.22.0",
     "sm-crypto": "^0.4.0",

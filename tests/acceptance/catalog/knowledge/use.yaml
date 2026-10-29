@@ -12,6 +12,7 @@ references:
   - src/renderer/components/tlon/SettingsTab.tsx
   - src/renderer/pages/TlonPage.tsx
   - src/main/services/tlon/service.ts
+  - tests/e2e/specs/acceptance-knowledge.spec.ts
 promises:
   scope:
     en: Knowledge attachment and workspace connection determine where it is available.
@@ -37,7 +38,12 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
+    notes:
+      en: The selected knowledge is injected into the model context and real Grep/Read tool results produce the cited answer. An unselected knowledge base is not automatically shared; this is context selection, not an access-control boundary. Scripted model choices do not establish live-model retrieval quality.
+      zh: 选定知识进入模型上下文，由真实 Grep/Read 结果生成带来源的回答。未选知识库不被自动分享；这是上下文选择，不是权限边界。脚本模型的工具选择不证明真实模型检索质量。
     preconditions:
       - en: Two knowledge bases contain distinct synthetic facts.
         zh: 两个知识库含不同合成事实。

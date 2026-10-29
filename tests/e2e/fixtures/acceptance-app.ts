@@ -14,7 +14,7 @@ export interface AcceptanceApp {
   profile: string
   app: ElectronApplication
   window: Page
-  restart(): Promise<Page>
+  restart(afterClose?: (profile: string) => void | Promise<void>): Promise<Page>
 }
 
 interface Fixtures {
@@ -63,13 +63,17 @@ async function open(entry: string, profile: string) {
 }
 
 async function close(app: ElectronApplication) {
+  const child = app.process()
+  if (child.exitCode !== null || child.signalCode !== null) return
   let timeout: ReturnType<typeof setTimeout> | undefined
+  let onExit!: () => void
+  const exited = new Promise<void>(resolve => { onExit = resolve; child.once('exit', onExit) })
   try {
     await Promise.race([
-      app.close(),
+      Promise.all([app.close(), exited]),
       new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => reject(new Error('Acceptance application did not close within 15 seconds')), 15000) }),
     ])
-  } finally { clearTimeout(timeout) }
+  } finally { clearTimeout(timeout); child.removeListener('exit', onExit) }
 }
 
 async function attachEvidence(profile: string, model: AcceptanceModel, info: TestInfo) {
@@ -100,8 +104,9 @@ export const test = base.extend<Fixtures>({
       const launched = await open(entry, profile)
       session = {
         profile, ...launched,
-        async restart() {
+        async restart(afterClose) {
           await close(this.app)
+          if (afterClose) await afterClose(profile)
           const next = await open(entry, profile)
           this.app = next.app
           this.window = next.window

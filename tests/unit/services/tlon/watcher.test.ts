@@ -184,7 +184,7 @@ describe('Tlon Watcher', () => {
       expect(enqueueFiles).toHaveBeenCalledWith(kb.id, expect.arrayContaining([
         expect.objectContaining({ sourcePath: path.join(linked, 'while-paused.md'), sourceType: 'linked' }),
         expect.objectContaining({ sourcePath: 'added-while-paused.md', sourceType: 'raw' }),
-      ]))
+      ]), { automatic: true })
       expect(processQueue).toHaveBeenCalledWith(kb.id)
     })
 
@@ -199,7 +199,7 @@ describe('Tlon Watcher', () => {
       await vi.dynamicImportSettled()
       await vi.waitFor(() => expect(subscriptions.has(getKBRawDir(kb.id))).toBe(true))
       await vi.advanceTimersByTimeAsync(500)
-      expect(enqueueFiles).toHaveBeenCalledWith(kb.id, [expect.objectContaining({ sourcePath: 'doc.md' })])
+      expect(enqueueFiles).toHaveBeenCalledWith(kb.id, [expect.objectContaining({ sourcePath: 'doc.md' })], { automatic: true })
     })
 
     it('off and straight back on leaves the knowledge base watched', async () => {
@@ -277,7 +277,8 @@ describe('Tlon Watcher', () => {
       expect(enqueueFiles).toHaveBeenCalledTimes(1)
       expect(enqueueFiles).toHaveBeenCalledWith(
         kb.id,
-        expect.arrayContaining([expect.objectContaining({ sourcePath: 'new.md', sourceType: 'raw' })])
+        expect.arrayContaining([expect.objectContaining({ sourcePath: 'new.md', sourceType: 'raw' })]),
+        { automatic: true }
       )
       expect(processQueue).toHaveBeenCalledTimes(1)
       expect(processQueue).toHaveBeenCalledWith(kb.id)

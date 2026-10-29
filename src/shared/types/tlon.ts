@@ -80,7 +80,24 @@ export interface KBIndexV1 {
  */
 export interface IngestHashesV1 {
   version: 1
-  files: Record<string, { hash: string; ingestedAt: string; textPath?: string; empty?: boolean; lastError?: string }>
+  files: Record<string, {
+    hash: string
+    ingestedAt: string
+    textPath?: string
+    empty?: boolean
+    lastError?: string
+    /** Format-specific extractor revision; absent entries predate versioned extraction. */
+    extractorRevision?: number
+    protection?: {
+      revision: number
+      sourceHash: string
+      textPath: string
+      scope: 'path' | 'directory' | 'text'
+      textHash?: string
+      textStamp?: { size: number; mtimeMs: number; ctimeMs: number; ino: number; dev: number }
+      reason: string
+    }
+  }>
 }
 
 export interface IngestJob {
@@ -91,6 +108,8 @@ export interface IngestJob {
   /** Real absolute path to read from */
   absolutePath: string
   sourceType: 'raw' | 'linked'
+  /** Automatic scans stand down on pause; an explicit Learn request remains manual. */
+  automatic?: boolean
   status: IngestStatus
   contentHash?: string
   startedAt?: string
@@ -107,8 +126,8 @@ export interface KBReference {
 
 /**
  * Learned status the UI pulls (NOT derived from events).
- * `learned` is true IFF hashes.json has an entry whose hash matches the
- * current file content. `state` refines it: 'no-text' = extraction found
+ * `learned` requires the current extractor revision, source hash and an owned
+ * extracted text file. `state` refines it: 'no-text' = extraction found
  * nothing (e.g. scanned PDF), 'failed' = last extraction threw (`error`
  * carries the message), 'pending' = not yet learned.
  */
