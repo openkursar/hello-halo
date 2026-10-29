@@ -14,6 +14,7 @@ references:
   - tests/e2e/specs/navigation.spec.ts
   - tests/e2e/specs/settings.spec.ts
   - tests/e2e/specs/smoke.spec.ts
+  - tests/e2e/specs/acceptance-navigation.spec.ts
 promises:
   routes:
     en: Primary destinations remain reachable from the application shell.
@@ -36,7 +37,10 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: none
-    automation: planned
+    automation: automated
+    notes:
+      en: Real installed person and knowledge records plus a local protocol-compatible store source identify the page content. Navigation does not establish each destination's complete feature behavior or external catalog availability.
+      zh: 用真实安装的数字人、知识记录及兼容实际协议的本地市场源识别页面内容。导航通过不代表各页面全部功能或外部市场可用性已验证。
     preconditions:
       - en: Halo has a configured isolated profile.
         zh: Halo 使用已配置的隔离资料。
@@ -57,16 +61,16 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: none
-    automation: planned
+    automation: automated
     preconditions:
       - en: A named conversation is open.
         zh: 已打开一个有名称的对话。
     steps:
-      - en: Open Settings and use its back action.
-        zh: 打开设置再点击返回。
+      - en: Enter a draft, open Settings and return through the Conversation navigation entry.
+        zh: 输入草稿，打开设置，再通过对话导航入口返回。
     expected:
-      - en: The same conversation remains selected.
-        zh: 仍选中同一个对话。
+      - en: The same saved messages and unsent draft remain selected; a separate conversation is unchanged.
+        zh: 仍显示同一对话的保存消息及未发草稿，另一对话不受影响。
   - id: startup.navigation.rail
     title:
       en: Find the primary navigation entries

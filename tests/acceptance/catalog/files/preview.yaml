@@ -15,6 +15,7 @@ references:
   - tests/e2e/specs/acceptance-artifacts.spec.ts
   - tests/e2e/specs/browser-view-frame.spec.ts
   - tests/e2e/specs/acceptance-preview-formats.spec.ts
+  - tests/e2e/specs/acceptance-preview-recovery.spec.ts
 questions:
   - en: Should PowerPoint slides render inside Halo, or should the existing explicit unsupported notice remain the product boundary? PptxViewer currently offers external-open and download actions without rendering slide content. The pptx content-preview variant remains unbound until this expectation is decided and implemented.
     zh: PowerPoint 幻灯片应在 Halo 内渲染，还是保留当前明确的不支持提示作为产品边界？PptxViewer 当前仅提供外部打开和下载操作，不渲染幻灯片内容；pptx 内容预览变体保留未绑定，等待预期确认及实现。
@@ -103,7 +104,10 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: none
-    automation: planned
+    automation: automated
+    notes:
+      en: Real filesystem operations create, rename and remove a root-level Markdown file while its workspace rail stays open. A second workspace starts with the same filename but different content and must retain its own listing and bytes. No refresh or application change-event handler is called by the test; generated and renamed content is opened through the rail. Nested directories, network drives and sleep recovery are outside this fixture.
+      zh: 在空间文件栏保持打开时，通过真实文件系统操作创建、重命名并删除根目录 Markdown 文件；另一空间预存同名但内容不同的文件，必须保留自身列表和字节。测试不调用刷新或应用变更事件处理器，新增及改名内容均从文件栏打开；本例不代表嵌套目录、网络盘或休眠恢复已验证。
     preconditions:
       - en: The workspace rail is open.
         zh: 空间文件栏已打开。
@@ -124,7 +128,10 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: none
-    automation: planned
+    automation: automated
+    notes:
+      en: A valid generated DOCX is copied and its ZIP bytes truncated. An independent ZIP/XML reader validates the original and rejects the truncated copy. The real viewer must show the failed-preview explanation and available external-open/download actions, then render a separate valid DOCX's text and number in the same application. No external action is invoked, and neither source nor the unrelated control file may change.
+      zh: 从合法生成的 DOCX 复制并截断 ZIP 字节，独立 ZIP/XML 读取器验证原件并拒绝截断副本。真实查看器必须显示预览失败原因及可用的外部打开、下载操作，随后在同一应用渲染另一份有效 DOCX 的文字和数字；不触发外部操作，两个源文件及无关控制文件都不得改变。
     preconditions:
       - en: A corrupt supported-format fixture exists.
         zh: 有一个支持格式的损坏文件。

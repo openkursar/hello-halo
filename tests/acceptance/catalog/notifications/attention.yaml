@@ -13,6 +13,7 @@ references:
   - src/renderer/stores/task.store.ts
   - tests/e2e/specs/people-tasks.spec.ts
   - tests/e2e/specs/digital-human-chat.spec.ts
+  - tests/e2e/specs/acceptance-attention.spec.ts
 promises:
   target:
     en: A task-panel entry opens the corresponding conversation, person or team task.
@@ -58,7 +59,12 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
+    notes:
+      en: A real automation run is held inside a real command, asks through report_to_user, resumes from the UI answer and completes. The Tasks panel and rail counts are checked while viewing Settings, and navigation is matched to the real app, run, session and message/activity IDs. An idle automation leaves Tasks on completion; its activity and transcript remain readable. This does not claim pinned-conversation or unseen-completion behavior for automation items.
+      zh: 真实自动运行在真实命令中等待，通过 report_to_user 提问，收到界面答复后继续并完成。停留设置时核对任务面板及导航栏计数，跳转目标与真实数字人、运行、会话及消息/活动 ID 对照。自动运行完成进入空闲后从任务面板退场，活动和对话记录仍可读取；不据此声称自动任务具有普通对话的置顶或未读完成保留行为。
     preconditions:
       - en: A controlled task can transition from running to waiting to complete.
         zh: 受控任务可从运行变为等待再完成。

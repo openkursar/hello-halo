@@ -11,6 +11,11 @@ basis: documented
 references:
   - src/main/platform/memory/DESIGN.md
   - src/renderer/components/memory/MemorySettingsPanel.tsx
+  - src/renderer/components/apps/AppConfigPanel.tsx
+  - src/renderer/components/space/EditSpaceDialog.tsx
+  - src/main/apps/runtime/turn/memory-lifecycle.ts
+  - tests/e2e/fixtures/acceptance-memory.ts
+  - tests/e2e/specs/acceptance-memory-control.spec.ts
 promises:
   owner:
     en: Workspace and digital-human memories have distinct ownership and sharing rules.
@@ -18,6 +23,9 @@ promises:
   disable:
     en: Turning memory off stops reads and writes while keeping existing memory.
     zh: 关闭记忆会停止读写，但保留已有记忆。
+questions:
+  - en: The control says the AI neither reads nor writes disabled memory, but the current design stops automatic injection, retains a read-only write guard for a person's memory, and omits memory setup for workspace chat. Should explicit file-tool requests also be refused? A person's direct Read remains allowed by the existing read-only boundary, while workspace direct Read and Write have no dedicated disabled-memory guard. Those three obligations remain unbound pending this product decision; automatic-use and a person's Edit denial must not stand in for them.
+    zh: 开关表述为关闭后 AI 不读不写，但当前设计停止自动注入、为数字人保留只读写入保护、为空间聊天省略记忆配置。明确要求文件工具访问时是否也应拒绝？数字人的直接 Read 仍由现有只读边界允许，空间直接 Read 与 Write 没有专门的禁用记忆保护。这三项义务保留未绑定，等待产品取舍；自动使用与数字人的 Edit 拒绝不能替代它们。
 scenarios:
   - id: memory.control.scope
     title:
@@ -33,34 +41,85 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
     preconditions:
-      - en: A workspace and two people have distinct memory markers.
-        zh: 空间与两位数字人有不同记忆标记。
+      - en: An isolated workspace and two people have distinct memory facts, topic descriptions and topic bodies; automatic consolidation is disabled through the real UI. The workspace is opened through its own UI first so its ordinary conversation is initialized.
+        zh: 隔离空间与两位数字人各有不同的记忆事实、主题描述和主题正文，且通过真实界面关闭自动整理。先从空间界面打开空间，使普通对话完成初始化。
     steps:
-      - en: Start turns with workspace-memory inheritance on and off.
-        zh: 分别开启和关闭空间记忆继承后启动任务。
+      - en: Start a fresh workspace conversation and fresh conversations with each person; use the person's settings to turn workspace-memory inheritance on and off.
+        zh: 新建空间对话及两位数字人的对话，在数字人设置中开启和关闭空间记忆继承。
     expected:
-      - en: Each request receives only memory allowed by the documented ownership and settings.
-        zh: 请求仅接收归属及设置所允许的记忆。
+      - en: Workspace chat receives its own current facts and topic index. Each person receives only their own facts and topics, plus the workspace's read-only topic index while that person opts in.
+        zh: 空间聊天接收自身当前事实与主题索引；每位数字人仅接收自己的事实和主题，并仅在其选择继承时额外获得空间只读主题索引。
+      - en: Inheritance does not inject the workspace's current facts, full topic bodies or another person's memory; toggling one person does not change the other.
+        zh: 继承不会注入空间当前事实、完整主题正文或另一位数字人的记忆；切换一人的设置不改变另一人。
+    notes:
+      en: Actual first model requests in five distinct conversations are inspected. Synthetic memory is seeded only in owned data directories; no memory text is inserted by the model fixture. This is not an access-control or old-history erasure claim. Markdown memory requires no embedding service.
+      zh: 检查五个不同对话中的实际首个模型请求；合成记忆仅写入自有数据目录，模型 fixture 不注入记忆文字。本例不代表访问权限隔离或旧历史遗忘。Markdown 记忆不依赖 embedding 服务。
   - id: memory.control.disable
     title:
-      en: Disable and restore memory
-      zh: 关闭并恢复记忆
+      en: Disable and restore automatic memory use
+      zh: 关闭并恢复记忆的自动使用
     verifies:
       - disable
+    variants:
+      scope:
+        - workspace
+        - person
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: Existing memory has a synthetic fact and topic description, with automatic consolidation disabled through the UI; the workspace has first been opened normally to initialize its ordinary conversation.
+        zh: 已有记忆包含合成事实和主题描述，并通过界面关闭自动整理；空间已先正常打开，完成普通对话初始化。
+    steps:
+      - en: Run a fresh conversation while enabled, turn memory off through its settings and run another fresh conversation, then re-enable and start a third.
+        zh: 启用时新建对话，再从相应设置关闭记忆并新建另一对话，随后重新启用并新建第三个对话。
+    expected:
+      - en: The actual initial requests include memory only while enabled. Disabled work preserves the memory and topic files byte-for-byte without changing their file identity or timestamps, and restored work receives the old fact again.
+        zh: 实际首个请求仅在启用时包含记忆；关闭期间记忆及主题文件的字节、文件身份和时间戳不变，恢复后重新收到旧事实。
+    notes:
+      en: This verifies automatic context use and retention during chat turns with no file-tool request. Direct reads and writes are separate required obligations below; these passes do not resolve their permission semantics or prove forced file operations are blocked.
+      zh: 本例验证没有文件工具请求的聊天轮次中的自动上下文使用与保留。直接读写在下方独立列为必需义务；本例通过不解决其权限语义，也不证明强制文件操作被阻止。
+  - id: memory.control.disable-tools
+    title:
+      en: Enforce the disabled-memory boundary for explicit file tools
+      zh: 核对显式文件工具的禁用记忆边界
+    verifies:
+      - disable
+    variants:
+      scope:
+        - workspace
+        - person
+      operation:
+        - read
+        - write
     platforms: *a1
     profiles:
       - regression
     evidence: app-e2e
     mode: scripted
     automation: planned
+    requirements:
+      - halo-sdk
     preconditions:
-      - en: Existing memory contains a known synthetic fact.
-        zh: 记忆中已有已知合成事实。
+      - en: An isolated memory exists in a workspace opened normally to initialize its ordinary conversation; a native file operation is attempted while memory is disabled.
+        zh: 空间已正常打开并完成普通对话初始化，隔离记忆已存在；关闭记忆后尝试原生文件操作。
     steps:
-      - en: Turn memory off, run a turn, then re-enable.
-        zh: 关闭记忆并执行一轮，再恢复。
+      - en: Compare an allowed operation while enabled, the corresponding direct operation while disabled, and an operation after re-enabling, retaining real tool results and file evidence.
+        zh: 对比启用时允许的操作、关闭后的对应直接操作及重新启用后的操作，保留真实工具结果和文件证据。
     expected:
-      - en: Disabled work neither reads nor changes it; the old fact remains after re-enabling.
-        zh: 关闭时不读取也不修改记忆，恢复后旧事实仍在。
+      - en: The disabled-memory read/write promise is evaluated separately for each owner and operation; automatic-use evidence cannot satisfy a direct-operation obligation.
+        zh: 对每种归属和操作分别核对禁用记忆的读写承诺；自动使用证据不能替代直接操作义务。
+      - en: For the documented person/write boundary, a real Edit receives an explicit read-only refusal, memory bytes and file identity stay intact, and real Read then Edit works before and after the disabled stage.
+        zh: 对已有约定的数字人写入边界，真实 Edit 收到明确只读拒绝，记忆字节和文件身份保持；禁用前后均能完成真实 Read 后 Edit 的正向对照。
+    notes:
+      en: Only person/write currently has an executable binding, scoped to the native Edit guard. A person's explicit Read and workspace Read/Write remain unbound because the broad control wording and current file-tool behavior need a decision. No ACL is added, no shell bypass is tested, and no existing requirement is counted as passed by changing its wording.
+      zh: 当前仅数字人写入有可执行绑定，限定原生 Edit 保护。数字人的显式 Read 及空间 Read/Write 保留未绑定，因为开关的广义表述与当前文件工具行为尚待决策；不新增 ACL、不测试 shell 绕过，也不通过改弱文案把既有要求算作通过。
