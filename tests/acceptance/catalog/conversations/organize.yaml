@@ -14,6 +14,7 @@ references:
   - tests/e2e/specs/spaces.spec.ts
   - tests/e2e/specs/acceptance-conversations.spec.ts
   - tests/e2e/specs/acceptance-conversation-title.spec.ts
+  - tests/e2e/specs/acceptance-person-chat-entry.spec.ts
 promises:
   identity:
     en: A new conversation has independent history and a blank composer.
@@ -49,6 +50,34 @@ scenarios:
     expected:
       - en: The new composer is blank and the old history remains in the original.
         zh: 新输入框为空，旧记录仍属于原对话。
+  - id: conversations.organize.person-new
+    title:
+      en: Keep the requested person when opening consecutive new chats
+      zh: 连续新开聊天时保持选定数字人
+    verifies:
+      - identity
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A newly installed person belongs to an isolated workspace with no ordinary or person conversations.
+        zh: 新安装数字人属于隔离空间，该空间尚无普通对话或个人聊天。
+    steps:
+      - en: Open Chat from the person's details, send a message, return to their details and open Chat again.
+        zh: 从数字人详情打开聊天并发送消息，返回其详情后再次打开聊天。
+    expected:
+      - en: Both actions create a distinct empty chat addressed to the requested person; actual requests and saved replies retain those identities.
+        zh: 两次操作均创建面向所选数字人的独立空聊天，实际请求与保存回复保持对应身份。
+      - en: The earlier chat remains unchanged and no ordinary workspace conversation receives these person-chat messages.
+        zh: 先前聊天保持不变，普通空间对话不会收到这些数字人聊天消息。
+    notes:
+      en: The empty-workspace entry is deliberately retained as its own regression. Other fixtures may initialize an ordinary conversation as a precondition; doing so does not verify this direct details-to-chat route. Only the model endpoint is scripted, and no recipient or navigation handler is replaced.
+      zh: 空空间入口单独保留为回归；其他fixture可以先初始化普通对话，但那不代表已验证此详情直达聊天路径。仅脚本化模型端点，不替换接收者或导航处理器。
   - id: conversations.organize.pin
     title:
       en: Rename and pin a conversation
