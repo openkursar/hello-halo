@@ -102,6 +102,13 @@ describe('a teammate message in the transcript', () => {
     expect(html).not.toContain('Details follow')
   })
 
+  it('that opened a reply’s turn opens on the sender line for a jump to it, where search and references can find it', () => {
+    const opener = team()
+    const html = renderToStaticMarkup(createElement(ReplyOpeners, { senderName: 'Halo', openers: [opener], reveal: { messageId: opener.id } }))
+    expect(html).toContain(`data-message-id="${opener.id}"`)
+    expect(html).toContain('Details follow')
+  })
+
   it('received by a reply that did no work is drawn after it as its own card', () => {
     const reply: Message = { id: 'reply', role: 'assistant', content: 'Sure', timestamp: at(30) }
     const arrival = team({ id: 'live', metadata: { teamId: 'team', teamName: 'Crew', inputMode: 'live', inputReplyId: 'reply' } })

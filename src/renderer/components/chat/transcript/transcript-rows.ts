@@ -91,6 +91,14 @@ function inputsFor(source: readonly Message[], index: number): ReplyInputs {
   return { injections, arrivals }
 }
 
+/** The reply whose sender line draws the opener `messageId`, if any. */
+export function openerOwner(rows: TranscriptRows, messageId: string): string | undefined {
+  for (const [replyId, opened] of rows.openers) {
+    if (opened.some(message => message.id === messageId)) return replyId
+  }
+  return undefined
+}
+
 /** The same attachment by reply id, for views that draw their own selection of a transcript. */
 export function inputsByReply(messages: readonly Message[]): Map<string, ReplyInputs> {
   const byReply = new Map<string, ReplyInputs>()

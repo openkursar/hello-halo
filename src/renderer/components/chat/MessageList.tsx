@@ -17,10 +17,10 @@
  * - Creates a clean, focused reading experience
  */
 
-import { useRef, useMemo, useCallback, forwardRef, useImperativeHandle } from 'react'
+import { useRef, useMemo, useCallback, useState, forwardRef, useImperativeHandle } from 'react'
 import type { ReactNode } from 'react'
 import { MessageRow } from './MessageRow'
-import { isTeamMessage, type TeamRunPosition } from './team-collab'
+import { isTeamMessage, type OpenerReveal, type TeamRunPosition } from './team-collab'
 import { StreamingSection } from './StreamingSection'
 import { withoutLiveInputs } from '../../utils/live-inputs'
 import type { LiveInput } from '../../types'
@@ -28,7 +28,7 @@ import { useBrowserToolCalls, type BrowserToolCall } from './useBrowserToolCalls
 import { useTerminalToolCalls, type TerminalToolCall } from './useTerminalToolCalls'
 import { CompactNotice } from './CompactNotice'
 import { InterruptedBubble } from './InterruptedBubble'
-import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, nextTranscriptRows, liveArrivals, type ScrollMotion, type TranscriptRows } from './transcript'
+import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, nextTranscriptRows, openerOwner, liveArrivals, type ScrollMotion, type TranscriptRows } from './transcript'
 import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion, WorkDirIssue } from '../../types'
 import { WorkingDirUnavailableNotice } from './WorkingDirUnavailableNotice'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
@@ -139,6 +139,7 @@ function StreamingFooter({
   senderName,
   arrivals,
   openers,
+  openerReveal,
 }: {
   conversationId: string
   streamingContent: string
@@ -156,6 +157,7 @@ function StreamingFooter({
   senderName?: string
   arrivals: Message[]
   openers: readonly Message[]
+  openerReveal?: OpenerReveal
 }) {
   const queuedMessages = useChatStore(s => s.sessions.get(conversationId)?.queuedMessages)
   const liveInputs = useChatStore(s => s.sessions.get(conversationId)?.liveInputs)
@@ -178,6 +180,7 @@ function StreamingFooter({
       liveInputs={liveInputs ?? EMPTY_LIVE_INPUTS}
       arrivals={arrivals}
       openers={openers}
+      openerReveal={openerReveal}
       senderName={senderName}
       apiRetry={apiRetry}
       onStop={onStop}
@@ -277,11 +280,25 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   const displayMessagesRef = useRef(displayMessages)
   displayMessagesRef.current = displayMessages
+  const [openerReveal, setOpenerReveal] = useState<OpenerReveal | null>(null)
 
   useImperativeHandle(ref, () => ({
     scrollToMessage: (messageId: string, behavior: ScrollMotion = 'smooth') => {
-      const index = displayMessagesRef.current.findIndex(m => m.id === messageId)
-      if (index < 0 || !scroller) return false
+      if (!scroller) return false
+      const rows = transcriptRef.current
+      let index = displayMessagesRef.current.findIndex(m => m.id === messageId)
+      if (index < 0 && rows) {
+        // A teammate's delivery is drawn on the reply it opened, not as a row of its own.
+        if (rows.liveOpeners.some(m => m.id === messageId)) {
+          setOpenerReveal({ messageId })
+          scrollToBottom(behavior)
+          return true
+        }
+        const owner = openerOwner(rows, messageId)
+        if (owner) index = displayMessagesRef.current.findIndex(m => m.id === owner)
+        if (index >= 0) setOpenerReveal({ messageId })
+      }
+      if (index < 0) return false
       detach()
       reveal(index, el => revealRowInView(scroller, el, behavior))
       return true
@@ -344,6 +361,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             injectionMessages={injections.get(message.id)}
             arrivals={arrivals.get(message.id)}
             openers={openers.get(message.id)}
+            openerReveal={openerReveal && openers.get(message.id)?.some(m => m.id === openerReveal.messageId) ? openerReveal : undefined}
             actionsOnHover={index !== latestReply}
             className={contentWidthClass}
             senderName={message.role === 'assistant' ? senderName : undefined}
@@ -354,7 +372,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     }
     if (liveStart >= displayMessages.length) out.push(<div key="history-start" ref={sentinelRef} aria-hidden="true" />)
     return out
-  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCosts, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, allowViewChanges, rowKeys, injections, arrivals, openers, contentWidthClass, senderName])
+  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCosts, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, allowViewChanges, rowKeys, injections, arrivals, openers, openerReveal, contentWidthClass, senderName])
 
   // Keep the footer mounted for an active question independently of isGenerating:
   // a recovered question can be paused on the answer with isGenerating false, and
@@ -390,6 +408,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               senderName={senderName}
               arrivals={activeArrivals}
               openers={liveOpeners}
+              openerReveal={openerReveal && liveOpeners.some(m => m.id === openerReveal.messageId) ? openerReveal : undefined}
             />
           )}
 

@@ -110,7 +110,8 @@ turn runs, those at the transcript's end or before its placeholder are drawn on
 the streaming reply the same way. One with no reply after it (none yet and no
 turn running, or a person's message in between), and any record no drawn reply
 claims (older history, remote records), is its kind's own card with its usual
-fresh-arrival behaviour.
+fresh-arrival behaviour. A search or reference jump to an opener drawn on a
+reply lands on that reply and opens its sender line (`openerOwner`).
 
 `transcript-rows` attaches an arrival only when the writer's `inputReplyId` names
 the reply right before it across system/injection records, and never a push;

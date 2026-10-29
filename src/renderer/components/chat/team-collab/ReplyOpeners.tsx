@@ -5,7 +5,7 @@
  * expanding shows them in full.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronRight, Users } from 'lucide-react'
 import type { Message } from '../../../types'
 import { useTranslation } from '../../../i18n'
@@ -13,14 +13,23 @@ import { canvasLifecycle } from '../../../services/canvas-lifecycle'
 import { formatTimeAgo } from '../../../utils/format-time'
 import { readTeamProvenance } from './message-source'
 
+/** A request to show one of the openers, e.g. from a search jump; a new object per request. */
+export interface OpenerReveal {
+  messageId: string
+}
+
 interface ReplyOpenersProps {
   senderName?: string
   openers: readonly Message[]
+  reveal?: OpenerReveal
 }
 
-export function ReplyOpeners({ senderName, openers }: ReplyOpenersProps) {
+export function ReplyOpeners({ senderName, openers, reveal }: ReplyOpenersProps) {
   const { t } = useTranslation()
-  const [isExpanded, setIsExpanded] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(!!reveal)
+  useEffect(() => {
+    if (reveal) setIsExpanded(true)
+  }, [reveal])
   const team = readTeamProvenance(openers[0])
   const members = [...new Set(openers.map(message => readTeamProvenance(message)?.fromMemberName).filter(Boolean))] as string[]
 
@@ -49,7 +58,7 @@ export function ReplyOpeners({ senderName, openers }: ReplyOpenersProps) {
         <div className="-mx-3 mt-1.5 mb-2 rounded-lg bg-card/50 px-3 py-2.5 animate-slide-down">
           <div className="space-y-3">
             {openers.map(message => (
-              <div key={message.clientKey ?? message.id}>
+              <div key={message.clientKey ?? message.id} data-message-id={message.id}>
                 <div className="mb-0.5 flex items-center gap-1.5 text-xs">
                   <span className="font-medium text-muted-foreground">
                     {readTeamProvenance(message)?.fromMemberName || t('Team update')}

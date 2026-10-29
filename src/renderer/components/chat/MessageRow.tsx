@@ -17,7 +17,7 @@ import {
   isCrossConversationMessage,
   isCrossConversationNotice,
 } from './cross-conversation'
-import { ReplyOpeners, TeamMemberMessage, isTeamMessage, type TeamRunPosition } from './team-collab'
+import { ReplyOpeners, TeamMemberMessage, isTeamMessage, type OpenerReveal, type TeamRunPosition } from './team-collab'
 import { ArrivalCard } from './ArrivalCard'
 import { mergeArrivalThoughts, toArrivalThought } from './transcript'
 import { PushedMessageLabel, isPushedMessage } from './PushedMessageLabel'
@@ -67,6 +67,9 @@ export interface MessageRowProps {
   /** Teammates' deliveries that started this reply (see transcript/transcript-rows); drawn on its sender line. */
   openers?: Message[]
 
+  /** Opens the openers to show one of them (a search or reference jump). */
+  openerReveal?: OpenerReveal
+
   /** Additional className for the outer wrapper (e.g., width constraints from the list) */
   className?: string
 
@@ -94,6 +97,7 @@ export const MessageRow = memo(function MessageRow({
   injectionMessages,
   arrivals,
   openers,
+  openerReveal,
   actionsOnHover = false,
   className = '',
   senderName,
@@ -137,7 +141,7 @@ export const MessageRow = memo(function MessageRow({
   // Reply-sender label — plain text, always the topmost element of
   // the reply (above thoughts, above the bubble), assistant messages only.
   const senderLabel = message.role !== 'assistant' ? null
-    : openers?.length ? <ReplyOpeners senderName={senderName} openers={openers} />
+    : openers?.length ? <ReplyOpeners senderName={senderName} openers={openers} reveal={openerReveal} />
     : senderName ? <div className="mb-2 text-xs font-medium text-muted-foreground">{senderName}</div>
     : null
 

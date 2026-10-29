@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { inputsByReply, nextTranscriptRows, type TranscriptRows } from '../../../src/renderer/components/chat/transcript/transcript-rows'
+import { inputsByReply, nextTranscriptRows, openerOwner, type TranscriptRows } from '../../../src/renderer/components/chat/transcript/transcript-rows'
 import type { Message } from '../../../src/renderer/types'
 
 let seq = 0
@@ -102,6 +102,17 @@ describe('transcript rows', () => {
     expect(appended.messages).toEqual(rows.messages)
     expect([...appended.arrivals]).toEqual([...rows.arrivals])
     expect([...appended.openers]).toEqual([...rows.openers])
+  })
+
+  it('finds the reply a delivery drawn on its sender line belongs to, so a jump can land there', () => {
+    const opener = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'turn' } })
+    const second = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'turn' } })
+    const opened = reply()
+    const shown = user()
+    const rows = nextTranscriptRows(null, [shown, reply(), opener, second, opened], false)
+    expect(openerOwner(rows, opener.id)).toBe(opened.id)
+    expect(openerOwner(rows, second.id)).toBe(opened.id)
+    expect(openerOwner(rows, shown.id)).toBeUndefined()
   })
 
   it('gives a running turn its openers, at the end or before its placeholder, and keeps them on the settled reply', () => {

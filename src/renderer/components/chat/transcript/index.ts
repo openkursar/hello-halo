@@ -9,7 +9,7 @@ export type { StickToBottom, StickToBottomOptions, ScrollMotion } from './useSti
 export { useHistoryWindow } from './useHistoryWindow'
 export type { HistoryWindow, HistoryWindowOptions } from './useHistoryWindow'
 export { transcriptRowClass, estimatedRowHeight } from './row'
-export { inputsByReply, nextTranscriptRows } from './transcript-rows'
+export { inputsByReply, nextTranscriptRows, openerOwner } from './transcript-rows'
 export type { ReplyInputs, TranscriptRows } from './transcript-rows'
 export { isArrivalRecord, isArrivalThought, liveArrivals, mergeArrivalThoughts, projectArrivalThoughts, toArrivalThought, workSeconds } from './arrivals'
 export type { ArrivalThought } from './arrivals'
