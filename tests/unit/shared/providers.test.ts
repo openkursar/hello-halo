@@ -81,7 +81,7 @@ describe('Cheaper Inference built-in provider', () => {
       'gpt-5.4-mini',
       'gpt-5.4',
       'claude-sonnet-5',
-      'gemini-3.1-pro',
+      'gemini-3.1-pro-preview',
       'deepseek-v4-flash'
     ])
   })
