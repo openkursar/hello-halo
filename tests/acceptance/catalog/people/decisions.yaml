@@ -13,6 +13,8 @@ references:
   - src/renderer/components/apps/PeopleInbox.tsx
   - src/main/apps/runtime/service.ts
   - tests/e2e/specs/people-upgrade.spec.ts
+  - src/main/apps/runtime/DESIGN.md
+  - tests/e2e/specs/acceptance-decisions.spec.ts
 promises:
   draft:
     en: Unsent answers survive navigation between inbox and person detail.
@@ -59,16 +61,23 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
     preconditions:
-      - en: One person has questions from two independent tasks.
-        zh: 同一数字人在两个任务中分别提问。
+      - en: One isolated digital human creates two independent manual runs and asks a distinct question from each through the real report tool.
+        zh: 同一隔离数字人创建两个独立手动任务，各通过真实报告工具提出不同问题。
     steps:
-      - en: Answer one, repeat its submission, then answer the other.
-        zh: 回答一个后重复提交，再回答另一个。
+      - en: Answer the later question first using a repeated submit gesture, verify its answered card no longer offers submission, and reopen that card after its work completes.
+        zh: 先通过重复提交操作回答后提出的问题，确认已回答卡片不再提供提交入口，并在该任务完成后重新查看卡片。
+      - en: Answer the remaining question and inspect both real continuations and persisted run records.
+        zh: 回答另一问题，检查两次真实续跑及保存的任务记录。
     expected:
       - en: Each task resumes with only its own answer and duplicate submission does not resume twice.
         zh: 各任务只使用自己的回答，重复提交不造成重复恢复。
+    notes:
+      en: Local owner UI actions, actual decision records, one continuation attempt per question and the next model inputs establish routing. The scripted model records those inputs without judging the user's decision. This does not claim cross-client duplicate-RPC coverage, other-owner authorization or complete recovery of earlier model history.
+      zh: 通过本地主人界面操作、真实决策记录、每题一次续跑计数及下一模型输入验证路由。脚本模型只记录输入，不评判用户决策。不据此宣称跨客户端重复 RPC、其他主人授权或此前完整模型历史恢复已覆盖。
   - id: people.decisions.natural
     title:
       en: Reply naturally through a connected channel

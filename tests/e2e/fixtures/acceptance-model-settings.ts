@@ -189,8 +189,8 @@ export const test = base.extend<ModelSettingsFixtures>({
   }, { auto: true }],
 })
 
-export function modelSettingsAcceptance(caseId: string, mode: 'scripted' | 'none' = 'scripted') {
-  return { annotation: { type: 'acceptance', description: JSON.stringify({ caseId, evidence: 'app-e2e', mode, variant: {} }) } }
+export function modelSettingsAcceptance(caseId: string, mode: 'scripted' | 'none' = 'scripted', variant: Record<string, string> = {}) {
+  return { annotation: { type: 'acceptance', description: JSON.stringify({ caseId, evidence: 'app-e2e', mode, variant }) } }
 }
 
 export function aiSection(page: Page): Locator { return page.locator('#ai-model') }

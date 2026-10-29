@@ -10,6 +10,10 @@ story:
 basis: observed
 references:
   - tests/e2e/specs/references.spec.ts
+  - tests/e2e/specs/acceptance-reference-context.spec.ts
+  - tests/e2e/specs/acceptance-reference-diff.spec.ts
+  - tests/e2e/specs/acceptance-reference-message.spec.ts
+  - tests/e2e/specs/acceptance-reference-terminal.spec.ts
   - src/renderer/components/references/ReferenceChips.tsx
   - src/main/services/agent/references.ts
 promises:
@@ -60,7 +64,17 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    variants:
+      source:
+        - file
+        - diff
+        - message
+    requirements:
+      - halo-sdk
+    notes:
+      en: Each source variant pairs its passage with a selection from a different file. The file variant includes a commented selection; the diff variant includes both sides. Counts and absence of unrelated text are checked in the submitted reference block alongside the saved message records. A fixed model reply alone proves nothing about received context. Terminal output has a separate scenario because its supported platforms differ.
+      zh: 每种来源的片段均搭配另一文件的选区。文件变体包含带评论的选区，差异变体包含两侧内容。引用块中的次数、无关内容缺失及消息保存记录会一起验证，不能仅凭脚本模型固定回复认定已收到上下文。终端输出因支持平台不同而单独列为场景。
     preconditions:
       - en: A message draft includes two distinct source references.
         zh: 消息草稿含两个不同来源引用。
@@ -68,5 +82,34 @@ scenarios:
       - en: Send through the UI to a scripted model and inspect the request.
         zh: 通过界面发送到脚本模型并检查请求。
     expected:
-      - en: Both selected excerpts and locations reach the model without unrelated content or duplication.
-        zh: 两个选区及位置传给模型，不夹带无关内容或重复。
+      - en: All selected excerpts and locations reach the model without unrelated content or duplication.
+        zh: 所选片段及位置均传给模型，不夹带无关内容或重复。
+  - id: references.context.send-terminal
+    title:
+      en: Send selected terminal output with a file passage
+      zh: 同时发送终端输出选区与文件片段
+    verifies:
+      - send
+      - source
+    platforms:
+      - darwin
+      - win32
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A real terminal session has produced selectable output and a separate source file is readable.
+        zh: 真实终端会话已产生可选输出，另一个源文件可读。
+    steps:
+      - en: Select output with the pointer, add it and a file selection to the conversation, then send.
+        zh: 用鼠标选择终端输出，将它与文件选区加入对话后发送。
+    expected:
+      - en: The model receives each selected excerpt once with the correct terminal or file identity; saved references retain those identities after restart.
+        zh: 模型收到各选区一次并携带正确终端或文件身份，保存的引用在重启后仍保留这些身份。
+    notes:
+      en: This requires the real application PTY on its supported desktop platforms. Linux has no application PTY implementation and is not covered by a passing skip. No fixture replaces terminal output or inserts a selection directly into application state.
+      zh: 此场景要求在支持的桌面平台使用应用真实 PTY；Linux 没有对应实现，不能用跳过算通过。测试不替换终端输出，也不向应用状态直接注入选区。
