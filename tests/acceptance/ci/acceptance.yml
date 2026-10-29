@@ -189,6 +189,13 @@ jobs:
           HALO_CI_STAGE_OUTCOMES: ${{ toJSON(steps) }}
         run: node scripts/acceptance/ci-state.mjs summary
 
+      - name: Archive acceptance evidence locally
+        id: archive
+        if: always() && steps.initial.outcome == 'success'
+        env:
+          HALO_ACCEPTANCE_ARCHIVE_ROOT: ${{ vars.HALO_ACCEPTANCE_ARCHIVE_ROOT }}
+        run: node scripts/acceptance/ci-archive.mjs
+
       - name: Preserve acceptance report and evidence
         if: always() && steps.initial.outcome == 'success'
         uses: actions/upload-artifact@v4

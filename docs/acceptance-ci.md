@@ -130,6 +130,7 @@ Configure these repository variables as needed:
 | `HALO_ALLOWED_SOURCE_BRANCHES` | JSON array of branches authorized for this runner | Configured source branch only |
 | `HALO_ACCEPTANCE_PROFILE` | `fast` or `regression` | `regression` |
 | `HALO_ACCEPTANCE_RUNNER` | JSON runner label array | `["self-hosted","acceptance","macOS"]` |
+| `HALO_ACCEPTANCE_ARCHIVE_ROOT` | Dedicated absolute local evidence archive directory, outside checkout, workspace and runner temporary storage | `~/.halo-acceptance-archives` under the runner account |
 | `HALO_SDK_REPOSITORY` | Optional separately authorized SDK repository | Absent |
 | `HALO_SDK_REVISION` | Exact 40-character SDK commit, required when provisioning it | Absent |
 
@@ -221,6 +222,72 @@ Job summaries and report/evidence artifacts are attempted even after failure.
 Dependency/build failures have a blocked summary rather than an empty passing
 run. Artifact retention is 30 days for evidence and 90 for baselines; loss of an
 old baseline safely increases the next selection.
+
+## Local evidence retention
+
+After writing the job summary, the template always attempts a local archive when
+the initial source context was captured. This step uses only Node built-ins, so
+dependency installation or application-build failure can still leave a useful
+archive. It runs before the independent `upload-artifact` step. An archive error
+fails its CI stage; upload still runs under `always()`. Neither a local archive nor
+an attempted upload confirms that GitHub received an artifact.
+
+The runner account owns a dedicated `~/.halo-acceptance-archives` directory.
+`HALO_ACCEPTANCE_ARCHIVE_ROOT` can select another absolute location with an
+existing real parent directory. The helper refuses symlinks, any overlap with
+checkout/workspace/runner temporary storage, and an existing root without its
+management marker. Use a new dedicated directory; do not point this at a folder
+containing unrelated files. Archives are private evidence with the same disclosure
+limits as the original run, even when their reports are readable by the local
+account's group.
+
+Each controller run and attempt gets an exclusive entry containing:
+
+```text
+run-<run-id>-attempt-<attempt>-<controller-hash>/
+  archive.json       # management identity
+  manifest.json      # copied paths, sizes, SHA-256 and observed run metadata
+  COMPLETE.json      # atomically published only after copy verification
+  ci/                # exact regular files from tests/acceptance/output/ci
+```
+
+The helper copies actual files under `ci/`; it does not follow links or collect
+paths mentioned inside JSON. It records source commit, catalog identity and test
+status when those records are available, and preserves uninterpretable records as
+original bytes. Original files, modes and evidence-integrity fields are never
+changed. New directories use mode `0750`. Files preserve owner read/write and
+group read permissions already present, removing other permissions: `0644`
+becomes `0640`, while `0600` remains `0600`. This implementation requires POSIX
+ownership and no-follow file opens. Windows reports an unsupported **archive
+stage**, not a product-test failure; the separate remote upload is still attempted.
+
+`COMPLETE.json` means the listed local copy was fully verified. It does not mean
+tests passed, integrity passed, upload succeeded or a baseline advanced. The
+manifest records the observed test status separately from
+`remoteUpload.status: not-observed`. Later verification reads and hashes the copy
+without altering it:
+
+```bash
+node scripts/acceptance/ci-archive.mjs verify /absolute/archive-entry
+```
+
+The helper never overwrites a run/attempt entry, including an interrupted pending
+copy. A root-wide exclusive lock serializes copying and retention across
+controllers. A lock surviving interruption is retained: inspect its PID and
+confirm that archival has stopped before resolving it; do not remove a live lock
+to start a competing archive.
+
+**This dedicated root is automatically cleaned.** Only after the new archive has
+been published and fully verified does retention keep the newest fourteen
+verified complete archives for the current controller repository. Runs, refs and
+profiles of that controller share this quota. Verified archives belonging to
+other controllers are separately logged, counted and preserved. The new archive
+is always retained. Older eligible candidates are verified again before removal.
+Unknown, pending, tampered or unmarked entries are logged and preserved;
+they can exceed the fourteen-archive limit and require operator review. Failure to
+copy or verify the new archive never starts cleanup. The files are write-once through
+this helper, not an operating-system immutable backup: verification detects later
+local alteration, and local retention is independent of GitHub's artifact expiry.
 
 The helpers can be exercised without GitHub or Electron:
 

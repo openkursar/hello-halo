@@ -66,3 +66,19 @@ test('GUI readiness fails fast after public installation and before SDK preparat
   assert.match(artifacts.if, /always\(\)/)
   assert.equal(artifacts.with.path, 'halo/tests/acceptance/output/ci/')
 })
+
+test('local archival runs after the summary even when preparation fails, without preventing the independent upload attempt', () => {
+  const steps = workflow.jobs.acceptance.steps
+  const summaryIndex = steps.findIndex(step => step.name === 'Write job summary')
+  const archiveIndex = steps.findIndex(step => step.id === 'archive')
+  const uploadIndex = steps.findIndex(step => step.name === 'Preserve acceptance report and evidence')
+  assert(summaryIndex >= 0 && archiveIndex > summaryIndex && uploadIndex > archiveIndex)
+  const archive = steps[archiveIndex], upload = steps[uploadIndex]
+  assert.equal(archive.if, "always() && steps.initial.outcome == 'success'")
+  assert.equal(archive['continue-on-error'], undefined)
+  assert.equal(archive.env.HALO_ACCEPTANCE_ARCHIVE_ROOT, '${{ vars.HALO_ACCEPTANCE_ARCHIVE_ROOT }}')
+  assert.equal(archive.run, 'node scripts/acceptance/ci-archive.mjs')
+  assert.equal(upload.if, "always() && steps.initial.outcome == 'success'")
+  assert.equal(upload.uses, 'actions/upload-artifact@v4')
+  assert.equal(steps.find(step => step.name === 'Publish successful baseline').if, "success() && steps.execute.outcome == 'success'")
+})
