@@ -14,6 +14,7 @@ references:
   - src/renderer/components/chat/InputArea.tsx
   - tests/e2e/specs/digital-human-chat.spec.ts
   - tests/e2e/specs/chat.spec.ts
+  - tests/e2e/specs/acceptance-chat-recovery.spec.ts
 promises:
   persist:
     en: Messages and completed replies remain readable after restart and support a follow-up.
@@ -86,13 +87,15 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
     preconditions:
       - en: Two conversations have distinct marker tasks.
         zh: 两个对话包含不同标记的任务。
     steps:
-      - en: Start A, switch to B, send B’s message, then revisit A.
-        zh: 启动 A，切到 B 发消息，再查看 A。
+      - en: Start real tools in A and B, supplement B, finish A while B is still running, then finish B.
+        zh: 在 A 和 B 中启动真实工具，向 B 补充消息，让 A 先结束且 B 仍运行，再结束 B。
     expected:
       - en: Messages, live state and final replies stay with their originating conversation.
         zh: 消息、运行状态及最终回复各归原对话。

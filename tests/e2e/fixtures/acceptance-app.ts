@@ -152,11 +152,15 @@ export async function waitForAcceptanceIdle(window: Page, conversationId: string
   await expect(window.getByTitle('Stop generation (Esc)', { exact: true })).toHaveCount(0)
 }
 
+export async function readAcceptanceErrors(window: Page) {
+  return window.evaluate(() => (globalThis as unknown as AcceptanceWindow).acceptanceProbe!.errors)
+}
+
 export async function readAcceptanceConversation(window: Page, spaceId: string, conversationId: string) {
   return window.evaluate(async ({ spaceId, conversationId }) => {
     const result = await (globalThis as unknown as AcceptanceWindow).halo.getConversation(spaceId, conversationId)
     if (!result.success || !result.data) throw new Error('The conversation could not be read from persistent storage')
-    return result.data as { id: string; title: string; messages: Array<{ id: string; role: string; content: string; images?: Array<{ data?: string; mediaType?: string }> }> }
+    return result.data as { id: string; title: string; messages: Array<{ id: string; role: string; content: string; error?: string; images?: Array<{ data?: string; mediaType?: string }> }> }
   }, { spaceId, conversationId })
 }
 

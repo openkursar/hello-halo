@@ -21,6 +21,8 @@ export interface ModelRequest {
 export interface ModelReply {
   text?: string
   tools?: ModelToolCall[]
+  /** Deliberate provider rejection; script failures remain unexpected errors. */
+  failure?: { status: number; type: string; message: string }
   /** Keeps the stream open until the test releases it or the client cancels. */
   hold?: Promise<void>
 }
@@ -28,7 +30,7 @@ export interface ModelReply {
 export interface ModelExchange {
   request: ModelRequest
   startedAt: string
-  reply?: { text?: string; tools?: ModelToolCall[] }
+  reply?: Pick<ModelReply, 'text' | 'tools' | 'failure'>
   completed: boolean
   cancelled: boolean
   error?: string
@@ -117,7 +119,15 @@ export async function startAcceptanceModel() {
     const exchange: ModelExchange = { request: normalized, startedAt: new Date().toISOString(), completed: false, cancelled: false }
     exchanges.push(exchange)
     const reply = await handler(normalized)
-    exchange.reply = { text: reply.text, tools: reply.tools }
+    exchange.reply = { text: reply.text, tools: reply.tools, failure: reply.failure }
+    if (reply.failure) {
+      const { status, type, message } = reply.failure
+      if (!Number.isInteger(status) || status < 400 || status > 599 || !type || !message || reply.text || reply.tools?.length || reply.hold) throw new Error('A scripted provider rejection requires an error status and cannot also contain a successful response')
+      const body = normalized.protocol === 'anthropic' ? { type: 'error', error: { type, message } } : { error: { type, message, code: type } }
+      response.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body))
+      exchange.completed = true
+      return
+    }
     const id = `acceptance-${randomUUID()}`
     const model = String(body.model ?? 'gpt-4o')
     const calls = reply.tools ?? []

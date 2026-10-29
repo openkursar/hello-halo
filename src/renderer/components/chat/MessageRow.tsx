@@ -160,10 +160,8 @@ export const MessageRow = memo(function MessageRow({
           )}
 
           {afterThoughts && <div className="my-3 space-y-3">{afterThoughts}</div>}
-          {/* Only render bubble if there is text content.
-              Assistant events with only tool_use/thinking blocks have empty content —
-              rendering MessageItem for those would produce empty visible bubbles. */}
-          {message.content && (
+          {/* Empty tool/thinking output has no bubble; a persisted error still needs its existing error block. */}
+          {(message.content || message.error) && (
             <MessageItem
               message={message}
               previousCost={previousCost}

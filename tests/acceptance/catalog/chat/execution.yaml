@@ -12,6 +12,7 @@ references:
   - src/main/services/agent/DESIGN.md
   - src/renderer/components/chat/ChatView.tsx
   - tests/e2e/specs/chat.spec.ts
+  - tests/e2e/specs/acceptance-chat-recovery.spec.ts
 promises:
   stop:
     en: Stopping settles the active reply and permits a later turn.
@@ -60,10 +61,15 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
+    notes:
+      en: A deliberate HTTP 401 response verifies visible provider failure and a manual resend after recovery. Automatic retries, every provider error type and reconnecting a changed account remain separate behavior.
+      zh: 明确返回 HTTP 401，验证服务错误可见及恢复后的手动重发；不代表已覆盖自动重试、全部错误类型或账号变更重连。
     preconditions:
-      - en: A local endpoint fails the first request and succeeds on retry.
-        zh: 本地模型端点首次失败，重试恢复。
+      - en: A local endpoint rejects the initial turn and is restored before the user resends it.
+        zh: 本地模型端点拒绝初次请求，在用户重发前恢复。
     steps:
       - en: Submit a message, inspect the failure, then retry.
         zh: 发送消息，查看错误，再重试。
