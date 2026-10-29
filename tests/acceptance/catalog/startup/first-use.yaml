@@ -11,6 +11,7 @@ basis: observed
 references:
   - src/renderer/pages/SetupPage.tsx
   - src/renderer/stores/app.store.ts
+  - tests/e2e/specs/acceptance-first-use.spec.ts
 promises:
   entry:
     en: A new profile presents setup; completing setup leads to the workspace.
@@ -32,17 +33,24 @@ scenarios:
     profiles:
       - regression
     evidence: app-e2e
-    mode: none
-    automation: planned
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
     preconditions:
-      - en: A disposable new profile has no AI account.
-        zh: 全新测试资料没有 AI 账户。
+      - en: A fresh, never-launched disposable profile has no AI account and has not deferred setup or completed the optional tour.
+        zh: 从未启动过的全新隔离资料没有 AI 账户，也未选择稍后配置或完成可选游览。
     steps:
-      - en: Complete setup with a local test endpoint, then reopen Halo.
-        zh: 用本地测试模型端点完成配置，然后重新打开 Halo。
+      - en: Choose preferences, open Custom API, enter a local test key, actively choose the provider, replace its URL with a loopback endpoint, test the connection and save to enter the workspace.
+        zh: 选择偏好，打开自定义 API，输入本地测试密钥、主动选择供应商并将地址设为本机端点，测试连接后保存进入空间。
+      - en: Complete a real chat through that account, restart, then inspect the selected account and saved exchange.
+        zh: 通过该账户完成真实对话，重启后检查当前账户和保存的问答。
     expected:
-      - en: The workspace opens and the configured account is selected.
-        zh: 进入工作空间，已配置账户可用。
+      - en: The configured account supplies the real connection check and chat; restart returns to the workspace with the same selected account, valid credential and saved messages rather than forcing setup again.
+        zh: 已配置账户实际承载连接检查和对话；重启直接进入空间，保留当前账户、有效凭据和保存消息，不重新强制配置。
+    notes:
+      en: The first account is created through the real setup UI. Only the model endpoint is substituted locally, with the Halo engine explicitly requested and fallback rejected. This does not verify OAuth, external account services or another engine. An offered Windows Git Bash installation is explicitly skipped through its UI without downloading.
+      zh: 首个账户通过真实首次设置界面创建，仅用本地端点替代模型服务；明确请求 Halo 引擎并拒绝降级，不据此证明 OAuth、外部账户服务或其他引擎。若 Windows 提供 Git Bash 安装引导，通过界面明确跳过，不下载。
   - id: startup.first-use.defer
     title:
       en: Defer configuration and return later
@@ -54,13 +62,16 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: none
-    automation: planned
+    automation: automated
     preconditions:
-      - en: A new profile is on the setup page.
-        zh: 新资料停留在首次配置页。
+      - en: A fresh, never-launched profile has no AI account and has not deferred model setup.
+        zh: 从未启动过的全新资料没有 AI 账户，也未选择稍后配置模型。
     steps:
-      - en: Choose the offered deferral, restart, then open AI settings.
-        zh: 选择稍后配置，重启后打开 AI 设置。
+      - en: Finish preferences, choose Skip for now on the account-selection page, restart, then open and cancel the account-configuration form in Settings.
+        zh: 完成偏好选择，在账户选择页点击暂时跳过，重启后打开设置中的账户配置表单并取消。
     expected:
       - en: The app remembers deferral and still provides a clear account setup entry.
         zh: 应用记住稍后配置，并保留清晰的账户配置入口。
+    notes:
+      en: The account deferral is separate from the optional tour's Skip action. The current tour is dormant; this journey keeps its completion flag separate while checking modelConfigSkipped, a direct workspace entry after restart and an editable account form. It makes no provider or model request and does not require the Halo SDK. It does not claim that a deferred account was subsequently saved.
+      zh: 账户暂缓配置与可选游览中的跳过是不同动作。当前游览未自动启动，本例分别检查游览完成状态和 modelConfigSkipped，并验证重启直达空间及可编辑账户表单；不发起供应商或模型请求，也不要求 Halo SDK，不声称随后已保存账户。
