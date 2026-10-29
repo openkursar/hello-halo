@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { test as base, expect } from './browser-site'
 import { createTestConfigDir, cleanupTestConfigDir } from './electron'
+import { packagedCommandEnvironment, type HostCommandPolicy } from './packaged-command-environment'
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
@@ -15,18 +16,23 @@ export function packagedAppPath(): string {
   return path.join(projectRoot, 'dist/linux-unpacked/halo')
 }
 
-export const test = base.extend({
-  electronApp: async ({ sdkEngine }, use, testInfo) => {
+export const test = base.extend<{ hostCommands: HostCommandPolicy }>({
+  hostCommands: ['inherit', { option: true }],
+  electronApp: async ({ sdkEngine, hostCommands }, use, testInfo) => {
     const executablePath = packagedAppPath()
     if (!fs.existsSync(executablePath)) throw new Error(`Packaged app missing: ${executablePath}`)
-    const profile = createTestConfigDir(executablePath, undefined, { sdkEngine })
     const { ELECTRON_RUN_AS_NODE: _unused, ...environment } = process.env
+    const commandEnvironment = packagedCommandEnvironment(environment, hostCommands)
+    const profile = createTestConfigDir(executablePath, undefined, { sdkEngine })
     const instance = await electron.launch({
       executablePath,
       args: ['--lang=en-US', ...(process.env.HALO_E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : [])],
-      env: { ...environment, HOME: profile, USERPROFILE: profile, HALO_DATA_DIR: path.join(profile, '.halo'), HALO_E2E_TEST: '1', ELECTRON_DISABLE_GPU: '1' },
+      env: { ...commandEnvironment, HOME: profile, USERPROFILE: profile, HALO_DATA_DIR: path.join(profile, '.halo'), HALO_E2E_TEST: '1', ELECTRON_DISABLE_GPU: '1' },
     })
     try {
+      if (hostCommands === 'system-only') await testInfo.attach('packaged-launch-command-policy', {
+        body: JSON.stringify({ hostCommands, launchPath: commandEnvironment.PATH, isolatedProfile: true, packagePathsAddedByFixture: false }), contentType: 'application/json',
+      })
       await use(instance)
     } finally {
       if (testInfo.status !== testInfo.expectedStatus) {

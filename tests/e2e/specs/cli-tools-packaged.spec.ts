@@ -13,15 +13,26 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { deflateSync } from 'node:zlib'
+import type { ElectronApplication } from '@playwright/test'
 import type { HaloAPI } from '../../../src/preload'
 import { test, expect } from '../fixtures/electron-packaged'
+import { inspectHostCommands, inspectPackagedToolOrigins } from '../fixtures/packaged-command-environment'
 import { navigateToChat } from '../fixtures/helpers'
 
 test.setTimeout(180000)
 
-const AGENT = 'e43-probe-agent'
-const COMMAND = 'e43-probe-command'
-const NEEDLE = 'e43-needle-text'
+const AGENT = 'packaged-probe-probe-agent'
+const COMMAND = 'packaged-probe-probe-command'
+const NEEDLE = 'packaged-probe-needle-text'
+
+async function observeHostCommands(app: ElectronApplication) {
+  const runtime = await app.evaluate(({ app }) => ({
+    platform: process.platform, cwd: process.cwd(), commandPath: process.env.PATH,
+    appPath: app.getAppPath(), resources: process.resourcesPath,
+    userData: app.getPath('userData'), profile: process.env.HOME!, execPath: process.execPath,
+  }))
+  return inspectHostCommands(runtime)
+}
 
 type ToolResult = { text: string; isError: boolean; hasImage: boolean }
 type ModelBlock =
@@ -40,7 +51,7 @@ interface ScriptedModel {
 function sse(res: http.ServerResponse, blocks: ModelBlock[], stop: string): void {
   res.writeHead(200, { 'content-type': 'text/event-stream' })
   const events: Array<{ type: string } & Record<string, unknown>> = [
-    { type: 'message_start', message: { id: `msg_${Date.now()}`, type: 'message', role: 'assistant', model: 'e43-mock', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } },
+    { type: 'message_start', message: { id: `msg_${Date.now()}`, type: 'message', role: 'assistant', model: 'packaged-probe-mock', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } },
     ...blocks.flatMap((block, index): Array<{ type: string } & Record<string, unknown>> => block.type === 'tool_use'
       ? [{ type: 'content_block_start', index, content_block: { type: 'tool_use', id: block.id, name: block.name, input: {} } },
          { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(block.input) } },
@@ -58,10 +69,10 @@ function sse(res: http.ServerResponse, blocks: ModelBlock[], stop: string): void
 async function startScriptedModel(workDir: string): Promise<ScriptedModel> {
   const toolCalls: ModelBlock[] = [
     { type: 'tool_use', id: 'toolu_grep', name: 'Grep', input: { pattern: NEEDLE, path: workDir } },
-    { type: 'tool_use', id: 'toolu_glob', name: 'Glob', input: { pattern: '**/e43-needle.txt', path: workDir } },
-    { type: 'tool_use', id: 'toolu_rg', name: 'Bash', input: { command: 'rg --version', description: 'Show the bundled ripgrep version' } },
-    { type: 'tool_use', id: 'toolu_office', name: 'Bash', input: { command: `halo-node -e "require('exceljs'); require('docx'); console.log('office-runtime-ok')"`, description: 'Load the bundled Office libraries' } },
-    { type: 'tool_use', id: 'toolu_image', name: 'Read', input: { file_path: path.join(workDir, 'e43-large.png') } },
+    { type: 'tool_use', id: 'toolu_glob', name: 'Glob', input: { pattern: '**/packaged-probe-needle.txt', path: workDir } },
+    { type: 'tool_use', id: 'toolu_rg', name: 'Bash', input: { command: "printf 'ACCEPTANCE_RG_PATH='; command -v rg; rg --version", description: 'Report the actual ripgrep command path and version' } },
+    { type: 'tool_use', id: 'toolu_office', name: 'Bash', input: { command: `printf 'ACCEPTANCE_OFFICE_SHIM='; command -v halo-node; halo-node -e "require('exceljs'); require('docx'); console.log('office-runtime-ok'); console.log('ACCEPTANCE_OFFICE_ORIGIN='+JSON.stringify({execPath:process.execPath,exceljs:require.resolve('exceljs'),docx:require.resolve('docx')}))"`, description: 'Load the Office libraries and report their actual executable and module paths' } },
+    { type: 'tool_use', id: 'toolu_image', name: 'Read', input: { file_path: path.join(workDir, 'packaged-probe-large.png') } },
   ]
   const model: Omit<ScriptedModel, 'url' | 'close'> = { results: new Map(), sawAgent: false, sawCommand: false }
 
@@ -100,7 +111,7 @@ async function startScriptedModel(workDir: string): Promise<ScriptedModel> {
         return
       }
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ id: 'msg_plain', type: 'message', role: 'assistant', model: 'e43-mock', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }))
+      res.end(JSON.stringify({ id: 'msg_plain', type: 'message', role: 'assistant', model: 'packaged-probe-mock', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }))
     })
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -149,8 +160,8 @@ function seedProject(workDir: string): void {
   fs.mkdirSync(path.join(workDir, '.claude', 'commands'), { recursive: true })
   fs.writeFileSync(path.join(workDir, '.claude', 'agents', `${AGENT}.md`), `---\nname: ${AGENT}\ndescription: Project subagent the packaged check looks for\n---\nYou are a probe.\n`)
   fs.writeFileSync(path.join(workDir, '.claude', 'commands', `${COMMAND}.md`), `---\ndescription: Project command the packaged check looks for\n---\nSay probe.\n`)
-  fs.writeFileSync(path.join(workDir, 'e43-needle.txt'), `${NEEDLE}\n`)
-  fs.writeFileSync(path.join(workDir, 'e43-large.png'), largePng())
+  fs.writeFileSync(path.join(workDir, 'packaged-probe-needle.txt'), `${NEEDLE}\n`)
+  fs.writeFileSync(path.join(workDir, 'packaged-probe-large.png'), largePng())
 }
 
 for (const [sdkEngine, caseId] of [
@@ -158,7 +169,7 @@ for (const [sdkEngine, caseId] of [
   ['halo', 'terminal.environment.packaged-tools-halo'],
 ] as const) {
   test.describe(`Packaged tools with ${sdkEngine === 'anthropic' ? 'Claude Code' : 'Halo'}`, () => {
-    test.use({ sdkEngine })
+    test.use({ sdkEngine, hostCommands: 'system-only' })
 
     const discovery = sdkEngine === 'anthropic' ? 'project agents and commands' : 'project commands'
     test(`the packaged AI can search files, run the bundled ripgrep and Office runtime, read large images, and sees ${discovery}`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId, evidence: 'app-e2e', mode: 'scripted', variant: {} }) } }, async ({ electronApp, window }, testInfo) => {
@@ -181,6 +192,9 @@ for (const [sdkEngine, caseId] of [
       seedProject(workDir)
 
       const model = await startScriptedModel(workDir)
+      const hostObservations: Array<ReturnType<typeof inspectHostCommands> & { phase: 'before-tools' | 'after-tools' }> = []
+      let toolOrigins: ReturnType<typeof inspectPackagedToolOrigins> | undefined
+      let hostObservationError: string | undefined
       try {
         // The scripted model becomes the only account, so no turn can reach a real one
         // a profile may have been given through HALO_TEST_* variables.
@@ -188,9 +202,9 @@ for (const [sdkEngine, caseId] of [
           const halo = (window as unknown as { halo: HaloAPI }).halo
           const now = new Date().toISOString()
           const scripted = {
-            id: 'e43-scripted-model', name: 'Scripted model', provider: 'anthropic', authType: 'api-key',
-            apiUrl: url, apiKey: 'sk-e43-scripted', model: 'e43-mock',
-            availableModels: [{ id: 'e43-mock', name: 'e43-mock' }], createdAt: now, updatedAt: now,
+            id: 'packaged-probe-scripted-model', name: 'Scripted model', provider: 'anthropic', authType: 'api-key',
+            apiUrl: url, apiKey: 'sk-packaged-probe-scripted', model: 'packaged-probe-mock',
+            availableModels: [{ id: 'packaged-probe-mock', name: 'packaged-probe-mock' }], createdAt: now, updatedAt: now,
           }
           const added = await halo.aiSourcesAddSource(scripted)
           if (!added.success) throw new Error(`Could not add the scripted model: ${added.error}`)
@@ -204,10 +218,14 @@ for (const [sdkEngine, caseId] of [
           const final = (await halo.getConfig()).data as { aiSources: { currentId: string; sources: Array<{ id: string }> } }
           return { currentId: final.aiSources.currentId, ids: final.aiSources.sources.map(source => source.id) }
         }, model.url)
-        expect(sources).toEqual({ currentId: 'e43-scripted-model', ids: ['e43-scripted-model'] })
+        expect(sources).toEqual({ currentId: 'packaged-probe-scripted-model', ids: ['packaged-probe-scripted-model'] })
         await window.reload()
         await navigateToChat(window)
-        await expect(window.getByRole('button', { name: 'e43-mock', exact: true })).toBeVisible()
+        await expect(window.getByRole('button', { name: 'packaged-probe-mock', exact: true })).toBeVisible()
+
+        const before = await observeHostCommands(electronApp)
+        hostObservations.push({ phase: 'before-tools', ...before })
+        expect.soft(before.hostRgExcluded, 'The main process must not resolve an external host rg after its production PATH initialization').toBe(true)
 
         await window.locator('textarea').fill('Run the packaged tool check')
         await window.locator('[data-onboarding="send-button"]').click({ force: true })
@@ -216,15 +234,37 @@ for (const [sdkEngine, caseId] of [
 
         // Soft, so one run reports every capability a build lost, not just the first.
         const result = (id: string): ToolResult => model.results.get(id)!
-        expect.soft(result('toolu_grep'), 'Grep').toMatchObject({ isError: false, text: expect.stringContaining('e43-needle.txt') })
-        expect.soft(result('toolu_glob'), 'Glob').toMatchObject({ isError: false, text: expect.stringContaining('e43-needle.txt') })
+        expect.soft(result('toolu_grep'), 'Grep').toMatchObject({ isError: false, text: expect.stringContaining('packaged-probe-needle.txt') })
+        expect.soft(result('toolu_glob'), 'Glob').toMatchObject({ isError: false, text: expect.stringContaining('packaged-probe-needle.txt') })
+        expect.soft(result('toolu_rg').isError, 'The ripgrep shell command must exit successfully, even if it printed valid output first').toBe(false)
         expect.soft(result('toolu_rg').text, 'rg in the shell').toMatch(/^ripgrep \d+\.\d+/m)
+        expect.soft(result('toolu_office').isError, 'The Office shell command must exit successfully, even if it printed valid output first').toBe(false)
         expect.soft(result('toolu_office').text, 'halo-node with the Office libraries').toContain('office-runtime-ok')
+        toolOrigins = inspectPackagedToolOrigins(result('toolu_rg').text, result('toolu_office').text, before.runtime)
+        expect.soft(toolOrigins.rg.origin, 'The Bash rg command must resolve inside this application package').toBe('package')
+        expect.soft(toolOrigins.office.shim.origin, 'halo-node must be packaged or an application-generated shim in the isolated profile').toMatch(/^(package|generated-shim)$/)
+        expect.soft(toolOrigins.office.executable.origin, 'The Office command must run this package’s Electron executable, not a host Node.js').toBe('package')
+        expect.soft(toolOrigins.office.libraries.exceljs.origin, 'exceljs must load from this package’s Office runtime').toBe('package')
+        expect.soft(toolOrigins.office.libraries.docx.origin, 'docx must load from this package’s Office runtime').toBe('package')
         expect.soft(result('toolu_image'), 'Read of an oversized image').toMatchObject({ isError: false, hasImage: true })
         if (sdkEngine === 'anthropic') expect.soft(model.sawAgent, 'Claude Code project subagent offered to the model').toBe(true)
         expect.soft(model.sawCommand, 'project command offered to the model').toBe(true)
       } finally {
         try {
+          try {
+            const after = await observeHostCommands(electronApp)
+            hostObservations.push({ phase: 'after-tools', ...after })
+            expect.soft(after.hostRgExcluded, 'The main process must not acquire an external host rg during the tool check').toBe(true)
+          } catch (error) {
+            hostObservationError = error instanceof Error ? error.message : String(error)
+            expect.soft(hostObservationError, 'The actual command environment must remain observable after the tool check').toBeUndefined()
+          }
+          await testInfo.attach('packaged-command-origins', { body: JSON.stringify({
+            policy: 'system-only', hostCommandsExcluded: hostObservations.length === 2 && hostObservations.every(item => item.hostRgExcluded) && toolOrigins?.verified === true,
+            scope: 'The exercised search and Office commands; available system node is recorded but is not evidence that the application used it.',
+            grepBoundary: 'Main PATH resolution is observed separately from the Bash rg command; this is not an internal Grep spawn trace.',
+            hostObservations, toolOrigins, hostObservationError,
+          }, null, 2), contentType: 'application/json' })
           await testInfo.attach('packaged-tool-results', { body: JSON.stringify({ requestedEngine: sdkEngine, activeEngine: state?.activeEngine, degradedFrom: state?.degradedFrom, results: Object.fromEntries(model.results), sawAgent: model.sawAgent, sawCommand: model.sawCommand }, null, 2), contentType: 'application/json' })
         } finally {
           await model.close()
