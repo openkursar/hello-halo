@@ -14,6 +14,10 @@ references:
   - src/renderer/components/canvas/viewers/OfficeFallback.tsx
   - tests/e2e/specs/acceptance-artifacts.spec.ts
   - tests/e2e/specs/browser-view-frame.spec.ts
+  - tests/e2e/specs/acceptance-preview-formats.spec.ts
+questions:
+  - en: Should PowerPoint slides render inside Halo, or should the existing explicit unsupported notice remain the product boundary? PptxViewer currently offers external-open and download actions without rendering slide content. The pptx content-preview variant remains unbound until this expectation is decided and implemented.
+    zh: PowerPoint 幻灯片应在 Halo 内渲染，还是保留当前明确的不支持提示作为产品边界？PptxViewer 当前仅提供外部打开和下载操作，不渲染幻灯片内容；pptx 内容预览变体保留未绑定，等待预期确认及实现。
 promises:
   open:
     en: A selected file opens the appropriate viewer for its supported format.
@@ -40,6 +44,9 @@ scenarios:
     evidence: app-e2e
     mode: none
     automation: planned
+    notes:
+      en: Nine formats have executable desktop viewer checks using synthetic local files and no model calls. Text, HTML, Word and table cases inspect actual rendered text and numbers; the image checks its displayed pixels; the native PDF guest must reproduce the fixture's complete encoded color pattern. The pptx content-preview variant remains a visible gap because the current product only shows an unsupported notice. These cases do not establish remote-browser PDF rendering, arbitrary format features or external application handoff.
+      zh: 九种格式已有可执行桌面查看器测试，使用本地合成文件且不调用模型。文本、HTML、Word 和表格检查实际渲染的文字及数字，图片核对显示像素，原生 PDF 查看器必须完整绘出文件中的编码色彩图案。pptx 内容预览仍保留明确缺口，因为当前产品只显示不支持提示；这些用例不代表远程浏览器 PDF 渲染、格式所有特性或外部应用交接已验证。
     preconditions:
       - en: The current workspace contains safe fixture files.
         zh: 当前空间中有安全测试文件。
@@ -61,6 +68,30 @@ scenarios:
         - docx
         - xlsx
         - pptx
+  - id: files.preview.unsupported-presentation
+    title:
+      en: Understand the unsupported presentation preview
+      zh: 理解演示文稿暂不支持预览
+    verifies:
+      - failure
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: The isolated workspace contains a valid synthetic PowerPoint file.
+        zh: 隔离空间中有合法的合成 PowerPoint 文件。
+    steps:
+      - en: Open the file from the rail and inspect the offered fallback.
+        zh: 从文件栏打开文件并查看提供的替代操作。
+    expected:
+      - en: Halo clearly states that presentation preview is unsupported, exposes external-open and download actions, and leaves the source file unchanged.
+        zh: Halo 明确说明不支持演示文稿预览，显示外部打开和下载操作，并保持原文件不变。
+    notes:
+      en: The test does not activate either action or claim that an external application opened the presentation. It does not satisfy the separate pptx content-preview obligation.
+      zh: 本例不触发这些操作，也不声称外部应用已打开演示文稿，不能替代独立的 pptx 内容预览要求。
   - id: files.preview.watcher
     title:
       en: Find newly generated and renamed files
