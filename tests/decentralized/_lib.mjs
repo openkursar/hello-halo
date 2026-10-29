@@ -8,6 +8,7 @@
  */
 
 import { spawn, spawnSync } from 'child_process'
+import { once } from 'node:events'
 import { fileURLToPath } from 'url'
 import crypto from 'crypto'
 import path from 'path'
@@ -23,10 +24,13 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 // ── Cluster lifecycle (delegates to launch-nodes.mjs) ────────────────────────
 
 export function clusterStop(clusterDir = '.cluster') {
-  spawnSync('node', [LAUNCHER, 'stop', '--cluster', clusterDir], {
+  if (!fs.existsSync(path.resolve(PROJECT_ROOT, clusterDir, 'nodes.json'))) return
+  const result = spawnSync(process.execPath, [LAUNCHER, 'stop', '--cluster', clusterDir], {
     cwd: PROJECT_ROOT,
     stdio: 'inherit',
+    timeout: 20000,
   })
+  if (result.error || result.status !== 0) throw new Error(`Cluster stop failed (${result.error?.code ?? result.signal ?? result.status})`)
 }
 
 /**
@@ -349,6 +353,10 @@ export function killNode(node) {
  * Returns the new pid (the node object's pid is updated in place).
  */
 export async function reviveNode(node, clusterDir = '.cluster') {
+  const manifestFile = path.resolve(PROJECT_ROOT, clusterDir, 'nodes.json')
+  const manifest = loadManifest(clusterDir)
+  const recorded = manifest.nodes.find(entry => entry.index === node.index)
+  if (!recorded || recorded.pid !== node.pid) throw new Error('The node to revive does not match its cluster manifest')
   const appEntry = appEntryPath()
   const nodeDir = path.resolve(PROJECT_ROOT, clusterDir, `node-${node.index}`)
   const out = fs.openSync(node.logFile ?? path.join(nodeDir, 'node.log'), 'a')
@@ -367,6 +375,24 @@ export async function reviveNode(node, clusterDir = '.cluster') {
       ELECTRON_DISABLE_GPU: '1',
     },
   })
+  try { await once(child, 'spawn') }
+  finally { fs.closeSync(out) }
+  const staged = `${manifestFile}.${crypto.randomUUID()}.tmp`
+  try {
+    recorded.pid = child.pid
+    fs.writeFileSync(staged, JSON.stringify(manifest, null, 2), { flag: 'wx' })
+    fs.renameSync(staged, manifestFile)
+  } catch (error) {
+    try {
+      if (clusterDetached()) process.kill(-child.pid, 'SIGKILL')
+      else child.kill('SIGKILL')
+    } catch (stopError) {
+      if (stopError.code !== 'ESRCH') console.error(`[cluster] Unrecorded revived node could not be stopped: pid=${child.pid}, code=${stopError.code ?? 'unknown'}`)
+    }
+    throw new Error('Could not record the revived cluster process', { cause: error })
+  } finally {
+    fs.rmSync(staged, { force: true })
+  }
   child.unref()
   node.pid = child.pid
   const ok = await pollUntil(

@@ -594,8 +594,9 @@ async function main() {
   if (tally.FAIL > 0) process.exitCode = 1
   } catch (error) { failure = error; throw error }
   finally {
-    clusterStop(clusterDir)
-    acceptance?.finish(report.records, failure)
+    try { clusterStop(clusterDir) }
+    catch (error) { failure ??= error; throw error }
+    finally { acceptance?.finish(report.records, failure) }
   }
 }
 
