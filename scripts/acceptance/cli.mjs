@@ -12,6 +12,7 @@ import { changedPaths, resolveCurrentHead, sourceIdentity } from './lib/source.m
 import { buildApplication, verifyBuild } from './lib/build.mjs'
 import { loadLiveConfig } from './lib/live-config.mjs'
 import { packageApplication } from './lib/package.mjs'
+import { probeGuiReadiness } from './lib/gui-readiness.mjs'
 
 const root = path.resolve(fileURLToPath(new URL('../..', import.meta.url)))
 const outputRoot = path.join(root, 'tests/acceptance/output')
@@ -25,7 +26,7 @@ const { values } = parseArgs({ args: process.argv.slice(3), strict: true, option
   'allow-live': { type: 'boolean' }, 'allow-external': { type: 'boolean' },
   'live-config': { type: 'string' },
   'include-proposed': { type: 'boolean' },
-  'timeout-ms': { type: 'string', default: '1800000' }, locale: { type: 'string', default: 'zh' },
+  'timeout-ms': { type: 'string', default: command === 'doctor' ? '15000' : '1800000' }, locale: { type: 'string', default: 'zh' },
   level: { type: 'string', default: 'e2e' }, story: { type: 'string' }, hash: { type: 'string' },
   reviewer: { type: 'string' }, decision: { type: 'string' },
 } })
@@ -48,7 +49,13 @@ async function plan(catalog) {
 }
 
 async function doctor() {
-  if (!['catalog', 'e2e'].includes(values.level)) throw new Error('--level must be catalog or e2e')
+  if (!['catalog', 'gui', 'e2e'].includes(values.level)) throw new Error('--level must be catalog, gui or e2e')
+  if (values.level === 'gui') {
+    const result = await probeGuiReadiness(root, { outputDirectory: values.output, timeoutMs: Number(values['timeout-ms']) })
+    output(result)
+    process.exitCode = result.ready ? 0 : 2
+    return
+  }
   const checks = []
   const check = async (name, operation, required = true) => {
     try { await operation(); checks.push({ name, status: 'ready', required }) }

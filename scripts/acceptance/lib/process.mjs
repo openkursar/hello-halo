@@ -54,6 +54,9 @@ async function terminateTree(pid, onFailure) {
   }
 }
 
+// Callers must own the spawned process; on POSIX it must lead its own process group.
+export { groupExists as ownedProcessGroupExists, terminateTree as terminateOwnedProcessTree }
+
 export async function execute(root, args, { environment = {}, timeoutMs = 1800000, logFile, executable = process.execPath, shell = false } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2147483647) throw new Error('Execution timeout must be between 1 and 2147483647 milliseconds')
   const childEnvironment = { ...process.env, ...environment }

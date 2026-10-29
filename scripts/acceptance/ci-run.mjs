@@ -89,6 +89,14 @@ try {
       verify: () => packagedExecutable(stamp, previous, context),
     })
   }
+  const readinessDirectory = path.join(directory, 'host-readiness-execution')
+  if (fs.existsSync(readinessDirectory)) throw new Error('This checkout already contains host-readiness evidence. Preserve it and use a fresh CI checkout.')
+  execute('host readiness', ['doctor', '--level', 'gui', '--json', '--output', readinessDirectory], {
+    verify: () => {
+      const readiness = readJson(path.join(readinessDirectory, 'readiness.json'))
+      if (readiness.version !== 1 || readiness.kind !== 'host-gui-readiness' || readiness.ready !== true || readiness.cleanup?.complete !== true || !['electronConnected', 'appReady', 'windowCreated', 'clickConfirmed'].every(key => readiness.observations?.[key] === true)) throw new Error('The host GUI probe did not establish a ready and cleaned-up graphical session.')
+    },
+  })
   runStarted = true
   execute('acceptance execution', ['run', '--plan', plan, '--output', path.join(directory, 'run'), '--timeout-ms', '1800000'], { env: runEnvironment })
   execute('report generation', ['report', '--run', path.join(directory, 'run'), '--output', path.join(directory, 'report')])

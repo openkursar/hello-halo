@@ -50,3 +50,19 @@ for (const [name, metadata] of [
 test('metadata lookup failure blocks work with an explicit verification error', async () => {
   await assert.rejects(verify({ rest: { repos: { get: async () => { throw Object.assign(new Error('Repository metadata unavailable'), { status: 403 }) } } } }, context), /Could not verify controller repository visibility \(HTTP 403\); acceptance has not started/)
 })
+
+test('GUI readiness fails fast after public installation and before SDK preparation or application build', () => {
+  const steps = workflow.jobs.acceptance.steps
+  const index = steps.findIndex(step => step.id === 'gui')
+  const probe = steps[index]
+  assert(index > steps.findIndex(step => step.id === 'install'))
+  assert(index < steps.findIndex(step => step.name === 'Check out optional SDK'))
+  assert(index < steps.findIndex(step => step.id === 'build'))
+  assert.equal(probe.if, undefined)
+  assert.equal(probe['continue-on-error'], undefined)
+  assert.equal(probe.run, 'node scripts/acceptance/cli.mjs doctor --level gui --json --output tests/acceptance/output/ci/host-readiness-install')
+  assert.equal(steps.find(step => step.id === 'install').run, 'node scripts/acceptance/ci-prepare.mjs install')
+  const artifacts = steps.find(step => step.name === 'Preserve acceptance report and evidence')
+  assert.match(artifacts.if, /always\(\)/)
+  assert.equal(artifacts.with.path, 'halo/tests/acceptance/output/ci/')
+})

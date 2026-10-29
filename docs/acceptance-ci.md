@@ -267,6 +267,33 @@ can still require manual login. See [GitHub service setup](https://docs.github.c
 [Apple user sessions](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPMultipleUsers/Concepts/FastUserSwitching.html)
 and [scheduled wake](https://support.apple.com/en-au/guide/mac-help/-mchl40376151/mac).
 
+The template runs a separate GUI readiness check immediately after public
+dependency installation, before the optional SDK checkout or application build.
+`ci-run.mjs` repeats it immediately before product execution, after any browser
+or package preparation. Public dependency installation itself remains usable
+without a graphical session. To check a runner independently:
+
+```bash
+node scripts/acceptance/cli.mjs doctor --level gui --json
+```
+
+This probe uses the installed Electron and Playwright runtimes to open an owned,
+isolated window, reach app readiness, perform a real button click and verify
+cleanup. It needs no SDK, product build, model credentials or runtime download.
+Its default execution budget is 15 seconds, followed by bounded cleanup. Each
+invocation writes to a new evidence directory; `--output` may select a new
+directory under `tests/acceptance/output`. It never overwrites previous evidence.
+
+The workflow retains early-check evidence under
+`tests/acceptance/output/ci/host-readiness-install/`; the second check uses
+`host-readiness-execution/` beside it. Each includes `readiness.json`, `probe.log`
+and a screenshot when available. A failure records the stage and cleanup result;
+an unconfirmed cleanup also retains the isolated profile for diagnosis. Exit code
+2 means the host was not ready. CI stops before product tests and baseline
+publication, preserving the host failure in its summary and artifacts. A ready
+probe is environment evidence, contributes no passing acceptance cases and does
+not establish that every OS permission or native interaction works.
+
 Playwright's Electron protocol operations do not justify blanket permissions.
 Grant screen recording, accessibility or filesystem permissions only when a
 specific real test needs them, to the actual executable performing that action.

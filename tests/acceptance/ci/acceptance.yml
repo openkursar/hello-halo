@@ -127,6 +127,10 @@ jobs:
         id: install
         run: node scripts/acceptance/ci-prepare.mjs install
 
+      - name: Check the runner graphical session
+        id: gui
+        run: node scripts/acceptance/cli.mjs doctor --level gui --json --output tests/acceptance/output/ci/host-readiness-install
+
       - name: Check out optional SDK
         if: vars.HALO_SDK_REPOSITORY != ''
         uses: actions/checkout@v4

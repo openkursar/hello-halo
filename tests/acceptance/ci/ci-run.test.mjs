@@ -32,6 +32,10 @@ const context=JSON.parse(fs.readFileSync('tests/acceptance/output/ci/context.jso
 const record=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,JSON.stringify(value));};
 const output=()=>args[args.indexOf('--output')+1];
 fs.appendFileSync('tests/acceptance/output/ci/invocations.jsonl',JSON.stringify({command,args,packaged:process.env.HALO_E2E_PACKAGED_APP??null,browserCache:process.env.PLAYWRIGHT_BROWSERS_PATH??null})+'\\n');
+if(command==='doctor' && args[args.indexOf('--level')+1]==='gui') {
+  if(configuration.guiRecord!=='absent') record(output()+'/readiness.json',{version:1,kind:'host-gui-readiness',ready:!configuration.guiFailure,observations:{electronConnected:true,appReady:true,windowCreated:true,clickConfirmed:configuration.guiRecord!=='unclicked'},cleanup:{complete:configuration.guiRecord!=='unclean'},failure:configuration.guiFailure?{stage:'app-ready',message:'No graphical session'}:undefined});
+  if(configuration.guiFailure) process.exit(2);
+}
 if(command==='discover') record(output(),{version:1,tests:configuration.plan.tests});
 if(command==='plan') record(output(),configuration.plan);
 if(command==='package') {
@@ -77,7 +81,7 @@ test('a selected executable packaged journey builds a fresh package and passes o
   const result = selected.run()
   assert.equal(result.status, 0, result.stderr)
   const { calls, stages, baseline } = evidence(selected)
-  assert.deepEqual(calls.map(call => call.command), ['validate', 'doctor', 'discover', 'plan', 'package', 'run', 'report'])
+  assert.deepEqual(calls.map(call => call.command), ['validate', 'doctor', 'discover', 'plan', 'package', 'doctor', 'run', 'report'])
   assert(calls.filter(call => call.command !== 'run').every(call => call.packaged === null))
   const run = calls.find(call => call.command === 'run')
   assert.equal(run.packaged, path.join(selected.root, 'tests/acceptance/output/packaged/application/application'))
@@ -103,7 +107,7 @@ test('selected Chromium requirements prepare the browser before the normal run w
   const result = selected.run()
   assert.equal(result.status, 0, result.stderr)
   const { calls, stages, baseline } = evidence(selected)
-  assert.deepEqual(calls.map(call => call.command), ['validate', 'doctor', 'discover', 'plan', 'browser', 'run', 'report'])
+  assert.deepEqual(calls.map(call => call.command), ['validate', 'doctor', 'discover', 'plan', 'browser', 'doctor', 'run', 'report'])
   assert(calls.every(call => call.browserCache === null))
   assert.equal(stages.find(stage => stage.stage === 'browser preparation').exitCode, 0)
   assert.equal(baseline, true)
@@ -167,4 +171,41 @@ test('a successful package command still fails its stage if its recorded output 
     assert(stages.at(-1).error)
     assert.equal(baseline, false)
   }
+})
+
+test('host GUI readiness is a distinct bounded prerequisite before execution and is not a product case', context => {
+  const selected = fixture(context, { plan: selection([]) })
+  const result = selected.run()
+  assert.equal(result.status, 0, result.stderr)
+  const { calls, stages, baseline } = evidence(selected)
+  const probe = calls.find(call => call.command === 'doctor' && call.args.includes('gui'))
+  assert(probe)
+  assert.equal(probe.args[probe.args.indexOf('--output') + 1], path.join(selected.directory, 'host-readiness-execution'))
+  assert.equal(calls[calls.indexOf(probe) + 1].command, 'run')
+  assert.equal(stages.find(stage => stage.stage === 'host readiness').exitCode, 0)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(selected.directory, 'run/run.json'), 'utf8')).selectedCount, 1)
+  assert.equal(baseline, true)
+})
+
+test('unavailable GUI or an absent, unclicked or unclean probe result blocks product execution and baseline publication', context => {
+  for (const options of [{ guiFailure: true }, { guiRecord: 'absent' }, { guiRecord: 'unclicked' }, { guiRecord: 'unclean' }]) {
+    const selected = fixture(context, { plan: selection([]), ...options })
+    assert.equal(selected.run().status, 1)
+    const { calls, stages, baseline } = evidence(selected)
+    assert.equal(stages.at(-1).stage, 'host readiness')
+    assert.equal(stages.at(-1).exitCode, options.guiFailure ? 2 : 1)
+    assert.equal(calls.some(call => call.command === 'run' || call.command === 'report'), false)
+    assert.equal(fs.existsSync(path.join(selected.directory, 'run/run.json')), false)
+    assert.equal(baseline, false)
+  }
+})
+
+test('a previous host probe cannot be reused as current GUI readiness evidence', context => {
+  const selected = fixture(context, { plan: selection([]) })
+  fs.mkdirSync(path.join(selected.directory, 'host-readiness-execution'))
+  const result = selected.run()
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /already contains host-readiness evidence/)
+  assert.equal(evidence(selected).calls.some(call => call.command === 'run'), false)
+  assert.equal(evidence(selected).baseline, false)
 })
