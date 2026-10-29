@@ -314,6 +314,41 @@ display title. Match that identifier when looking up the workflow run; never
 assume the most recent run belongs to the request. An uncertain response is a
 reason to inspect that receipt and run history, not to submit duplicate work.
 
+Query a saved receipt without changing it, or explicitly save the latest
+observation alongside the original dispatch result:
+
+```bash
+node scripts/acceptance/ci-dispatch.mjs --receipt tests/acceptance/output/dispatches/request-id.json
+node scripts/acceptance/ci-dispatch.mjs --receipt tests/acceptance/output/dispatches/request-id.json --reconcile
+```
+
+Both commands only issue GET requests. They never resend or cancel a dispatch,
+and reconciliation preserves its original request, identity and transport result.
+The JSON result distinguishes no match yet, one match, multiple matches and an
+incomplete lookup. No match is not proof of rejection: a queued run may not yet
+be visible. A unique match is established only after completing the bounded
+search; a failed page or exhausted limit leaves the observation incomplete.
+Lookup uses the workflow filename, dispatch event and fixed creation-time range,
+deduplicates run IDs, and stops after 10 pages or 60 seconds. Individual requests
+are limited to 15 seconds and the remaining total budget. See the official
+[workflow run listing parameters](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-workflow).
+The run's revision belongs to the controller; the tested source revision must
+come from the acceptance artifacts.
+
+For a local network that needs an explicit proxy, configure
+`git config --local halo.acceptanceProxy https://proxy.example:8443` or set
+`HALO_ACCEPTANCE_CI_PROXY` in the calling process. The environment override takes
+precedence; an explicitly empty value clears inherited proxy settings for the
+helper's `gh` children. Only complete HTTP(S) proxy endpoints are accepted. The
+helper changes no system proxy, global Git configuration or account selection.
+Keep proxy credentials in the process environment rather than local Git config.
+Receipts record only the configuration source and safe transport classification,
+exit code, error code and HTTP status, never a proxy URL, token or raw stderr.
+EOF, TLS, timeout and HTTP 5xx responses leave dispatch status `unknown`; inspect
+the receipt before deciding whether another dispatch is appropriate. Exit code
+2 means an incomplete lookup; a complete lookup returns 0 even when it finds
+zero or multiple matches.
+
 The self-hosted template executes only its configured source repository and the
 exact branches in `HALO_ALLOWED_SOURCE_BRANCHES` (a JSON array). Without that
 variable, only the configured default source branch is allowed. It resolves the
