@@ -5,8 +5,9 @@
  * lifecycle.
  *
  * A regular conversation's live error is cleared, since the error is also
- * persisted on its message. A digital-human session keeps its error on screen
- * (its transcript has no error record) and is only marked as seen.
+ * persisted on its message. Directory recovery actions and digital-human
+ * errors stay on screen and are only marked as seen: the transcript cannot
+ * replace those session details.
  */
 import type { ChatState } from './internal'
 import { api } from './internal'
@@ -38,7 +39,9 @@ export function readTransition(
   pulseReadAt.set(conversationId, { readAt, originalStatus, spaceId, title })
   unseenCompletions.delete(conversationId)
   if (hasError) {
-    sessions.set(conversationId, conversationKind(conversationId) !== 'space'
+    const keepError = conversationKind(conversationId) !== 'space'
+      || (session!.errorType === 'working_dir_unavailable' && !!session!.workDirIssue)
+    sessions.set(conversationId, keepError
       ? { ...session!, errorSeen: true }
       : { ...session!, error: null, errorType: null })
   }

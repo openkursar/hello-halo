@@ -12,6 +12,9 @@ references:
   - src/main/services/space.service.ts
   - tests/e2e/specs/spaces.spec.ts
   - src/renderer/services/canvas-lifecycle.ts
+  - src/renderer/components/chat/WorkingDirUnavailableNotice.tsx
+  - src/main/services/agent/working-dir.ts
+  - tests/e2e/specs/acceptance-workspace-directory.spec.ts
 promises:
   isolation:
     en: Open files and unsaved edits belong to their workspace.
@@ -84,16 +87,25 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
     preconditions:
-      - en: The selected project folder is temporarily unavailable.
-        zh: 选定的项目目录暂时不可访问。
+      - en: The selected project folder and an unrelated control folder are owned by the isolated test profile; the selected folder is temporarily moved aside.
+        zh: 选定项目目录和无关对照目录均属于隔离测试配置；选定目录被临时移走。
     steps:
-      - en: Try to send a task, then restore or change the folder through the offered action.
-        zh: 尝试发送任务，再通过提供的入口恢复或修改目录。
+      - en: Send a task through the UI while the folder is unavailable and inspect the settled error, stored conversation and actual model requests.
+        zh: 目录不可用时从界面发送任务，检查完成后的错误提示、保存的会话及实际模型请求。
+      - en: Restore the original path and manually resend the same request; run a real local command that reports its working directory and writes a relative output there.
+        zh: 恢复原路径并手动重发相同请求；执行真实本地命令，回报工作目录并在其中写入相对路径产物。
     expected:
-      - en: The user sees the directory problem; retry targets the restored selected folder.
-        zh: 用户看见目录问题，重试使用恢复后的选定目录。
+      - en: The failure identifies the unavailable folder and explains how to restore or change it; no model request or command output is produced elsewhere.
+        zh: 错误指出不可用目录，并说明恢复或更换方式；不会在别处产生模型请求或命令产物。
+      - en: The retry keeps the same conversation and original folder selection, preserves the failure history, and completes the command in the restored folder only.
+        zh: 重试保留同一会话和原目录选择，保留失败历史，且仅在恢复后的目录完成命令。
+    notes:
+      en: This verifies restoring the existing path and sending again, which the UI explicitly offers. Choosing a different folder through the native picker is not covered. The command uses the test host's explicit Node executable to verify cwd and side effects, not packaged runtime provenance. Error presentation remains a failing assertion if the recovery chain succeeds without the required settled explanation.
+      zh: 本场景验证界面明确支持的恢复原路径并重发；不覆盖原生选择器更换目录。命令使用测试宿主的明确 Node 路径验证工作目录与副作用，不代表已验证打包运行时来源。即使后续恢复成功，缺少应有的稳定错误说明仍判失败。
   - id: workspaces.context.terminal-session
     title:
       en: Return to the same live terminal after switching spaces
