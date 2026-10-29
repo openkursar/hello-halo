@@ -20,6 +20,8 @@ references:
   - src/main/foundation/config.service.ts
   - tests/e2e/specs/acceptance-profile-migration.spec.ts
   - tests/e2e/fixtures/data/app-runtime-v3.sql
+  - tests/e2e/specs/acceptance-conversation-migration.spec.ts
+  - tests/e2e/fixtures/data/conversation-v1.json
 promises:
   package:
     en: The packaged app starts using its shipped dependencies, not the source checkout.
@@ -84,16 +86,16 @@ scenarios:
       - en: An isolated profile contains the selected documented historical data format, with known record identities and readable control data.
         zh: 隔离资料包含所选文档支持的历史格式，并有已知记录身份及可读对照资料。
     steps:
-      - en: Open the profile with the current real application, inspect retained records and its pre-migration snapshot, and execute a new task that persists real activity.
-        zh: 用当前真实应用打开资料，检查保留记录与迁移前快照，再执行保存真实活动的新任务。
+      - en: Open the profile with the current real application, inspect retained records and any documented migration snapshot, and execute supported new work that persists its actual result.
+        zh: 用当前真实应用打开资料，检查保留记录及该路径约定的迁移快照，再执行实际保存结果的新工作。
       - en: Restart again and verify that completed migrations do not repeat or change the retained records.
         zh: 再次重启，验证已完成迁移不会重复或改变保留记录。
     expected:
-      - en: Valid older identities, history and activity survive; the new task records its actual result without database-constraint failures, and the pre-migration snapshot remains readable.
-        zh: 有效旧身份、历史及活动得以保留，新任务实际结果保存成功且无数据库约束错误，迁移前快照仍可读取。
+      - en: Valid older identities, history and activity for the selected dataset survive; supported new work records its actual result without storage failures. Any snapshot produced by that documented migration path remains readable.
+        zh: 所选数据集的有效旧身份、历史及活动得以保留，受支持的新工作实际保存结果且无存储错误；该迁移路径按约定产生的快照仍可读取。
     notes:
-      en: Only app-runtime-v3 has a binding. It preserves the real appInstall manager state and all other current namespaces, reconstructs independently frozen runtime v3 SQL in a closed owned profile, then lets the current build run every later runtime migration. The reviewed target is explicitly v8; a version or layout change requires fixture review instead of deriving old input from current migration functions. Valid people, run/activity and space-history records are checked; a known deleted-app orphan is deliberately removed by the documented v4 rule. A real manual automation run uses the local scripted model and report_to_user to create new activity; its run, report identity and transcript must survive another restart. Ordinary person chat is not treated as a reporting entry point. This is a schema-boundary integration, not a historical release binary or UI migration test. Other listed old-format datasets remain required and unbound; no coverage of their migrations or old SDK-session formats is inferred.
-      zh: 仅 app-runtime-v3 已绑定。它保留真实 appInstall 的管理器状态及其他当前命名空间，在已关闭的自有资料中按独立冻结 SQL 重建 runtime v3 结构，再由当前构建执行后续全部 runtime 迁移。已复核目标明确为 v8，版本或布局变化必须重审 fixture，不从当前迁移函数推导旧输入。检查有效数字人、运行/活动及空间历史记录；已删除数字人的已知孤儿记录按 v4 约定移除。真实手动自动任务通过本地脚本模型调用 report_to_user 产生新活动，运行、报表身份及过程记录必须在再次重启后保留。不把普通数字人聊天视为报表入口。本例是结构边界集成，不是历史发布二进制或迁移界面测试。其余旧格式仍为必需且未绑定，不推断已覆盖其迁移或旧 SDK 会话格式。
+      en: App-runtime-v3 preserves the real appInstall manager state and all other current namespaces, reconstructs independently frozen runtime v3 SQL in a closed owned profile, then lets the current build run every later runtime migration. The reviewed target is explicitly v8; a version or layout change requires fixture review instead of deriving old input from current migration functions. Valid people, run/activity and space-history records are checked; a known deleted-app orphan is deliberately removed by the documented v4 rule. A real manual automation run uses the local scripted model and report_to_user to create new activity; its run, report identity and transcript must survive another restart. Ordinary person chat is not treated as a reporting entry point. This is a schema-boundary integration, not a historical release binary or UI migration test. Conversation-v1 independently freezes unversioned JSON with inline thoughts, images, tool calls and usage metadata. The actual application separates thoughts while preserving message identities and image bytes; a new turn and repeated reads/restarts must keep the old records, sidecar and control file intact without extra rewriting. This format has no migration snapshot promise or synthetic SDK session. Other listed old-format datasets remain required and unbound; no coverage of their migrations or old SDK-session recovery is inferred.
+      zh: App-runtime-v3 保留真实 appInstall 的管理器状态及其他当前命名空间，在已关闭的自有资料中按独立冻结 SQL 重建 runtime v3 结构，再由当前构建执行后续全部 runtime 迁移。已复核目标明确为 v8，版本或布局变化必须重审 fixture，不从当前迁移函数推导旧输入。检查有效数字人、运行/活动及空间历史记录；已删除数字人的已知孤儿记录按 v4 约定移除。真实手动自动任务通过本地脚本模型调用 report_to_user 产生新活动，运行、报表身份及过程记录必须在再次重启后保留。不把普通数字人聊天视为报表入口。本例是结构边界集成，不是历史发布二进制或迁移界面测试。Conversation-v1 独立冻结带内联思考、图片、工具调用和用量信息的无版本 JSON，由真实应用分离思考并保留消息身份和图片字节；新增轮次及重复读取、重启必须保持旧记录、思考旁文件和对照文件，不额外重写。此格式不承诺迁移快照，也不伪造 SDK 会话。其余旧格式仍为必需且未绑定，不推断已覆盖其迁移或旧 SDK 会话恢复。
   - id: lifecycle.install.migration-failure
     title:
       en: Report a controlled migration failure

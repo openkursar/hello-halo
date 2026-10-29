@@ -1,0 +1,98 @@
+{
+  "id": "conversation-v1-fixture",
+  "spaceId": "space-v1-fixture",
+  "title": "Retained conversation archive",
+  "createdAt": "2025-12-10T10:00:00.000Z",
+  "updatedAt": "2025-12-10T10:00:08.000Z",
+  "messageCount": 4,
+  "preview": "The archived second answer preserves reference maple-782.",
+  "messages": [
+    {
+      "id": "legacy-user-image",
+      "role": "user",
+      "content": "Keep this image and reference maple-782.\n旧会话资料保留。",
+      "timestamp": "2025-12-10T10:00:00.000Z",
+      "images": [
+        {
+          "id": "legacy-image-colors",
+          "type": "image",
+          "mediaType": "image/png",
+          "data": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAGklEQVR4AWN8IGHw36BCgYHJwmMDww2NAwwAN/gF49qj0Z8AAAAASUVORK5CYII=",
+          "name": "archived-colors.png",
+          "size": 83
+        }
+      ]
+    },
+    {
+      "id": "legacy-assistant-tools",
+      "role": "assistant",
+      "content": "The archived first answer includes the file result and image reference.",
+      "timestamp": "2025-12-10T10:00:04.000Z",
+      "thoughts": [
+        {
+          "id": "legacy-thinking",
+          "type": "thinking",
+          "content": "Compare the saved image with the archived notes.",
+          "timestamp": "2025-12-10T10:00:01.000Z"
+        },
+        {
+          "id": "legacy-tool-use",
+          "type": "tool_use",
+          "content": "Reading archived notes.",
+          "timestamp": "2025-12-10T10:00:02.000Z",
+          "toolName": "Read",
+          "toolInput": {
+            "file_path": "archive-notes.txt"
+          }
+        },
+        {
+          "id": "legacy-tool-result",
+          "type": "tool_result",
+          "content": "Archived notes contain maple-782.",
+          "timestamp": "2025-12-10T10:00:03.000Z",
+          "toolOutput": "Archived notes contain maple-782.",
+          "isError": false
+        },
+        {
+          "id": "legacy-result",
+          "type": "result",
+          "content": "Archived work finished.",
+          "timestamp": "2025-12-10T10:00:04.000Z",
+          "duration": 3
+        }
+      ],
+      "toolCalls": [
+        {
+          "id": "legacy-call-read",
+          "name": "Read",
+          "status": "success",
+          "input": {
+            "file_path": "archive-notes.txt"
+          },
+          "output": "Archived notes contain maple-782.",
+          "progress": 100
+        }
+      ],
+      "tokenUsage": {
+        "inputTokens": 82,
+        "outputTokens": 31,
+        "cacheReadTokens": 16,
+        "cacheCreationTokens": 8,
+        "totalCostUsd": 0.0012,
+        "contextWindow": 200000
+      }
+    },
+    {
+      "id": "legacy-user-text",
+      "role": "user",
+      "content": "Keep the second question unchanged.",
+      "timestamp": "2025-12-10T10:00:07.000Z"
+    },
+    {
+      "id": "legacy-assistant-text",
+      "role": "assistant",
+      "content": "The archived second answer preserves reference maple-782.",
+      "timestamp": "2025-12-10T10:00:08.000Z"
+    }
+  ]
+}
