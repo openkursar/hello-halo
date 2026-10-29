@@ -23,6 +23,7 @@ import { useLanguagePicker } from '../../hooks/useLanguagePicker'
 import { api } from '../../api'
 import { useAppStore } from '../../stores/app.store'
 import type { HaloConfig, ThemeMode } from '../../types'
+import { HaloLogo } from '../brand/HaloLogo'
 
 interface PreferencesStepProps {
   /** Invoked once preferences are persisted, hands off to LoginSelector. */
@@ -84,9 +85,7 @@ export function PreferencesStep({ onContinue }: PreferencesStepProps) {
     <div className="h-full w-full flex flex-col items-center justify-center bg-background p-4 sm:p-8">
       {/* Header with Logo */}
       <div className="flex flex-col items-center mb-8 sm:mb-10">
-        <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full border-2 border-primary/60 flex items-center justify-center halo-glow">
-          <div className="w-11 h-11 sm:w-14 sm:h-14 rounded-full bg-gradient-to-br from-primary/30 to-transparent" />
-        </div>
+        <HaloLogo size={64} className="sm:!w-20 sm:!h-20" />
         <h1 className="mt-4 text-2xl sm:text-3xl font-light tracking-wide">Halo</h1>
         <p className="mt-2 text-sm text-muted-foreground">{t("Let's set things up")}</p>
       </div>

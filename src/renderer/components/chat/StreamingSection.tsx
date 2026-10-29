@@ -12,6 +12,7 @@ import { ThoughtProcess } from './ThoughtProcess'
 import { MessageRow } from './MessageRow'
 import { InjectionAnnotation } from './InjectionAnnotation'
 import { ArrivalCard } from './ArrivalCard'
+import { ReplyOpeners, type OpenerReveal } from './team-collab'
 import { isArrivalRecord, isArrivalThought, mergeArrivalThoughts, projectArrivalThoughts, type ArrivalThought } from './transcript'
 import { splitLiveInputSections, type LiveInputSection } from '../../utils/live-inputs'
 import type { LiveInput, Message } from '../../types'
@@ -77,6 +78,11 @@ export interface StreamingSectionProps {
    */
   arrivals?: Message[]
 
+  /** Teammates' deliveries that started this turn; drawn on the sender line, as the saved reply draws them. */
+  openers?: readonly Message[]
+  /** Opens the openers to show one of them (a search or reference jump). */
+  openerReveal?: OpenerReveal
+
   /**
    * Reply-sender name — the digital-human's display name for an
    * app-chat conversation, or "Halo" for a regular one. Resolved by the
@@ -125,6 +131,8 @@ export function StreamingSection({
   queuedMessages = [],
   liveInputs = EMPTY_INPUTS,
   arrivals,
+  openers,
+  openerReveal,
   senderName,
   apiRetry = null,
   onStop,
@@ -158,8 +166,10 @@ export function StreamingSection({
     <div className={`animate-fade-in pb-4 ${className}`}>
       {layout.sections.map(section => <ArrivedInputSection key={section.input.message.clientKey ?? section.input.message.id} {...section} embedded={embedded} />)}
       <div className={`${embedded ? 'w-full' : 'w-[85%]'} relative`}>
-        {senderName && (
-          <div className="mb-1 text-xs font-medium text-muted-foreground">{senderName}</div>
+        {openers?.length ? (
+          <ReplyOpeners senderName={senderName} openers={openers} reveal={openerReveal} />
+        ) : senderName && (
+          <div className="mb-2 text-xs font-medium text-muted-foreground">{senderName}</div>
         )}
 
         {/* Real-time thought process */}

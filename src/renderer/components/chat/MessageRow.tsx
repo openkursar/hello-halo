@@ -17,7 +17,7 @@ import {
   isCrossConversationMessage,
   isCrossConversationNotice,
 } from './cross-conversation'
-import { TeamMemberMessage, isTeamMessage } from './team-collab'
+import { ReplyOpeners, TeamMemberMessage, isTeamMessage, type OpenerReveal, type TeamRunPosition } from './team-collab'
 import { ArrivalCard } from './ArrivalCard'
 import { mergeArrivalThoughts, toArrivalThought } from './transcript'
 import { PushedMessageLabel, isPushedMessage } from './PushedMessageLabel'
@@ -61,6 +61,15 @@ export interface MessageRowProps {
    *  its process, or after it as their own cards when it has none. */
   arrivals?: Message[]
 
+  /** Reveal the reply's copy and token usage on hover only (every reply but the latest). */
+  actionsOnHover?: boolean
+
+  /** Teammates' deliveries that started this reply (see transcript/transcript-rows); drawn on its sender line. */
+  openers?: Message[]
+
+  /** Opens the openers to show one of them (a search or reference jump). */
+  openerReveal?: OpenerReveal
+
   /** Additional className for the outer wrapper (e.g., width constraints from the list) */
   className?: string
 
@@ -70,6 +79,9 @@ export interface MessageRowProps {
    * Only meaningful for assistant messages; pass undefined for user messages.
    */
   senderName?: string
+
+  /** Where a team message sits among consecutive ones, so a run reads as one block. */
+  teamRunPosition?: TeamRunPosition
 }
 
 export const MessageRow = memo(function MessageRow({
@@ -84,8 +96,12 @@ export const MessageRow = memo(function MessageRow({
   allowViewChanges = false,
   injectionMessages,
   arrivals,
+  openers,
+  openerReveal,
+  actionsOnHover = false,
   className = '',
   senderName,
+  teamRunPosition = 'single',
 }: MessageRowProps) {
   const hasInlineThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0
   const processThoughts = useMemo(() => hasInlineThoughts && arrivals?.length
@@ -112,9 +128,10 @@ export const MessageRow = memo(function MessageRow({
   }
 
   if (isTeamMessage(message)) {
+    const endsRun = teamRunPosition === 'single' || teamRunPosition === 'last'
     return (
-      <div className={`pb-4 ${className}`}>
-        <TeamMemberMessage message={message} />
+      <div className={`${endsRun ? 'pb-4 ' : ''}${className}`}>
+        <TeamMemberMessage message={message} runPosition={teamRunPosition} />
       </div>
     )
   }
@@ -123,9 +140,10 @@ export const MessageRow = memo(function MessageRow({
 
   // Reply-sender label — plain text, always the topmost element of
   // the reply (above thoughts, above the bubble), assistant messages only.
-  const senderLabel = message.role === 'assistant' && senderName ? (
-    <div className="mb-1 text-xs font-medium text-muted-foreground">{senderName}</div>
-  ) : null
+  const senderLabel = message.role !== 'assistant' ? null
+    : openers?.length ? <ReplyOpeners senderName={senderName} openers={openers} reveal={openerReveal} />
+    : senderName ? <div className="mb-2 text-xs font-medium text-muted-foreground">{senderName}</div>
+    : null
 
   // A reply without a process of its own shows what it received as cards after it.
   const trailingArrivals = arrivals?.length && !hasInlineThoughts && !hasSeparatedThoughts ? (
@@ -137,7 +155,7 @@ export const MessageRow = memo(function MessageRow({
   // Assistant messages with thoughts: show collapsed thoughts above message bubble
   if (message.role === 'assistant' && (hasInlineThoughts || hasSeparatedThoughts)) {
     return (
-      <div className={`flex justify-start pb-5 ${className}`}>
+      <div className={`group/reply flex justify-start pb-5 ${className}`}>
         <div className="w-[85%]">
           {senderLabel}
           {hasInlineThoughts ? (
@@ -172,6 +190,7 @@ export const MessageRow = memo(function MessageRow({
               hideBrowserLiveView={hideBrowserLiveView}
               hideTerminalOpen={hideTerminalOpen}
               allowViewChanges={allowViewChanges}
+              actionsOnHover={actionsOnHover}
             />
           )}
 
@@ -189,7 +208,7 @@ export const MessageRow = memo(function MessageRow({
   const hasInjections = injectionMessages && injectionMessages.length > 0
   if (message.role === 'assistant' && hasInjections) {
     return (
-      <div className={`pb-5 ${className}`}>
+      <div className={`group/reply pb-5 ${className}`}>
         <div className="flex justify-start">
           <div className="w-[85%]">
             {senderLabel}
@@ -199,6 +218,7 @@ export const MessageRow = memo(function MessageRow({
               hideBrowserLiveView={hideBrowserLiveView}
               hideTerminalOpen={hideTerminalOpen}
               allowViewChanges={allowViewChanges}
+              actionsOnHover={actionsOnHover}
               isInContainer
             />
             <InjectionAnnotation messages={injectionMessages} />
@@ -210,7 +230,7 @@ export const MessageRow = memo(function MessageRow({
   }
 
   return (
-    <div className={`pb-5 ${className}`}>
+    <div className={`group/reply pb-5 ${className}`}>
       {senderLabel}
       {isPushedMessage(message) && <PushedMessageLabel via={message.metadata?.pushVia} by={message.metadata?.pushedByName} />}
       <MessageItem
@@ -219,6 +239,7 @@ export const MessageRow = memo(function MessageRow({
         hideBrowserLiveView={hideBrowserLiveView}
         hideTerminalOpen={hideTerminalOpen}
         allowViewChanges={allowViewChanges}
+        actionsOnHover={actionsOnHover}
       />
       {trailingArrivals}
     </div>

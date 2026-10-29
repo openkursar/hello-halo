@@ -129,7 +129,8 @@ export function parseTodoInput(input: Record<string, unknown>): TodoItem[] {
 export function latestTodos(thoughts: readonly Thought[]): TodoItem[] | null {
   for (let i = thoughts.length - 1; i >= 0; i--) {
     const th = thoughts[i]
-    if (th.type === 'tool_use' && th.toolName === 'TodoWrite' && th.toolInput && !th.parentToolUseId) {
+    // A call still streaming carries `{}`; skip it, or the list blanks out until its input lands.
+    if (th.type === 'tool_use' && th.toolName === 'TodoWrite' && Array.isArray(th.toolInput?.todos) && !th.parentToolUseId) {
       return parseTodoInput(th.toolInput)
     }
   }

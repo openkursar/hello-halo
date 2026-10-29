@@ -15,15 +15,10 @@
 import { useState, useEffect, useMemo } from 'react'
 import {
   Globe,
-  Eye,
   CheckCircle2,
   Loader2,
-  MousePointer2,
-  Type,
-  Navigation,
-  Camera,
   XCircle,
-  Maximize2,
+  ArrowUpRight,
 } from 'lucide-react'
 import { useCanvasStore } from '../../stores/canvas.store'
 import { useAIBrowserStore, useActiveConversationBrowserView } from '../../stores/ai-browser.store'
@@ -110,50 +105,37 @@ function toolCallToStep(
   }
 }
 
-/**
- * Get icon for step action
- */
-function getStepIcon(kind: string) {
-  if (kind.includes('new_page') || kind.includes('navigate')) return Navigation
-  if (kind.includes('click')) return MousePointer2
-  if (kind.includes('fill') || kind.includes('type') || kind.includes('press_key')) return Type
-  if (kind.includes('screenshot')) return Camera
-  if (kind.includes('snapshot')) return Eye
-  return Globe
-}
 
 // ============================================
 // Sub-components
 // ============================================
 
 
+/** The header's globe and each step's status icon share this column, centered on one axis. */
+const ICON_COLUMN = 'flex-shrink-0 w-4 flex items-center justify-center'
+
 /**
  * Single step item
  */
 function StepItem({ step, isLatest }: { step: BrowserStep; isLatest: boolean }) {
-  const Icon = getStepIcon(step.kind)
-
   return (
     <div
       className={`flex items-center gap-2 text-sm transition-all duration-300 ${
         isLatest ? 'opacity-100' : 'opacity-60'
       }`}
     >
-      {/* Status indicator */}
-      <div className="flex-shrink-0 w-5 h-5 flex items-center justify-center">
+      {/* Status indicator, in a column as wide as the header's globe so their centers line up */}
+      <div className={`${ICON_COLUMN} h-5`}>
         {step.status === 'running' ? (
           <Loader2 size={14} className="text-primary animate-spin" />
         ) : step.status === 'success' ? (
-          <CheckCircle2 size={14} className="text-green-500" />
+          <CheckCircle2 size={14} className="text-halo-success" />
         ) : step.status === 'error' ? (
-          <XCircle size={14} className="text-red-500" />
+          <XCircle size={14} className="text-halo-error" />
         ) : (
           <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground/30" />
         )}
       </div>
-
-      {/* Action icon */}
-      <Icon size={14} className="text-muted-foreground flex-shrink-0" />
 
       {/* Description */}
       <span className="truncate">
@@ -326,45 +308,49 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
 
   return (
     <div className="browser-task-card mt-3 relative">
-      {/* Sci-fi background */}
-      <div className="relative rounded-xl border border-primary/30 bg-gradient-to-br from-primary/5 via-background to-primary/10 overflow-hidden">
+      {/* The same quiet surface as a reply; color marks only a browser in use. */}
+      <div className="relative rounded-lg border border-border-soft bg-card overflow-hidden">
 
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-primary/20">
-          <div className="flex items-center gap-2">
+        {/* Header: title and step count, with the canvas link on the right like the team strip's;
+            on a narrow card the link wraps below rather than squeezing the title out. */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 pt-3 pb-1.5 text-xs">
+          <div className="flex min-w-0 items-center gap-2">
             {/* AI Browser icon */}
-            <div className="relative">
+            <div className={`relative ${ICON_COLUMN}`}>
               <Globe
-                size={18}
-                className="text-primary"
+                size={16}
+                className={isActive && hasRunningStep ? 'text-primary' : 'text-muted-foreground'}
               />
               {isActive && hasRunningStep && (
-                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-green-500 rounded-full" />
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-halo-success rounded-full" />
               )}
             </div>
-            <span className="font-medium text-sm">
+            <span className="truncate font-semibold text-[13px]">
               {isActive && hasRunningStep ? t('AI is operating the browser') : t('AI browser actions')}
+            </span>
+            <span className="text-muted-foreground">·</span>
+            <span className="shrink-0 text-muted-foreground">
+              {steps.filter(s => s.status === 'success').length}/{steps.length} {t('steps')}
             </span>
           </div>
 
-          {/* Step count */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">
-              {steps.filter(s => s.status === 'success').length}/{steps.length} {t('steps')}
-            </span>
-            {steps.length > 3 && (
-              <button
-                onClick={() => setIsExpanded(!isExpanded)}
-                className="text-xs text-primary/70 hover:text-primary transition-colors"
-              >
-                {isExpanded ? t('Collapse') : t('Expand')}
-              </button>
-            )}
-          </div>
+          {/* Hidden in contexts without the Canvas browser (e.g. automation apps). Enabled only
+              once the AI's live view id is known, so it always reveals the exact view the AI
+              drives (never a divergent copy). */}
+          {showViewButton && (
+            <button
+              onClick={handleViewLive}
+              disabled={!activeViewId}
+              className="ml-auto shrink-0 inline-flex items-center gap-0.5 text-primary hover:underline disabled:text-muted-foreground disabled:no-underline disabled:cursor-not-allowed"
+            >
+              {t('Open browser view')}
+              <ArrowUpRight size={11} />
+            </button>
+          )}
         </div>
 
         {/* Step list */}
-        <div className="px-4 py-3 space-y-2 max-h-48 overflow-y-auto">
+        <div className="px-4 py-1.5 space-y-1.5 max-h-48 overflow-y-auto">
           {visibleSteps.map((step, index) => (
             <StepItem
               key={step.id}
@@ -374,42 +360,23 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
           ))}
         </div>
 
-        {/* Footer action area */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-primary/20 bg-primary/5">
-          {/* URL display */}
-          <div className="flex items-center gap-2 flex-1 min-w-0">
-            {currentUrl && (
-              <span className="text-xs text-muted-foreground truncate">
-                {(() => {
-                  try {
-                    return new URL(currentUrl).hostname
-                  } catch {
-                    return currentUrl.slice(0, 30)
-                  }
-                })()}
-              </span>
-            )}
-          </div>
-
-          {/* View button — hidden in contexts without the Canvas browser (e.g. automation apps).
-              Enabled only once the AI's live view id is known, so it always reveals the
-              exact view the AI drives (never a divergent copy). */}
-          {showViewButton && (
+        {/* Footer: the page in use, and the list toggle once it has more than three steps */}
+        <div className="flex items-center justify-between gap-2 px-4 pt-1 pb-3 text-xs text-muted-foreground">
+          <span className="min-w-0 truncate">
+            {currentUrl && (() => {
+              try {
+                return new URL(currentUrl).hostname
+              } catch {
+                return currentUrl.slice(0, 30)
+              }
+            })()}
+          </span>
+          {steps.length > 3 && (
             <button
-              onClick={handleViewLive}
-              disabled={!activeViewId}
-              className={`
-                flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium
-                transition-all duration-200
-                ${activeViewId
-                  ? 'bg-primary/20 text-primary hover:bg-primary/30 hover:scale-[1.02] active:scale-[0.98]'
-                  : 'bg-muted/30 text-muted-foreground cursor-not-allowed'
-                }
-              `}
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="shrink-0 hover:text-foreground transition-colors"
             >
-              <Eye size={14} />
-              <span>{t('View live feed')}</span>
-              <Maximize2 size={12} className="opacity-50" />
+              {isExpanded ? t('Collapse') : t('Expand')}
             </button>
           )}
         </div>
