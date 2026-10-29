@@ -30,6 +30,14 @@ also refuses an existing SDK path or shared `node_modules` link. Use a fresh
 checkout for dependency preparation; never move an SDK that another checkout
 may be using just to pass this check.
 
+`package-lock.json` is the authoritative npm installation input. npm can still
+rewrite an accompanying `yarn.lock` while saving its hidden dependency lock,
+even during `npm ci`. The helper temporarily retains the original Yarn lock
+outside npm's input, restores it byte-for-byte before running installation hooks,
+and verifies all source manifests and locks after each stage. Unexpected lock
+creation or modification blocks preparation and preserves the conflicting files
+for inspection. No changed lock is silently reset or ignored for baseline checks.
+
 The bundler externalizes the Halo SDK and runtime loading is lazy. Therefore
 catalog validation and discovery do not need the private SDK, and UI/service
 scenarios that do not execute that engine can use the public checkout. This is
@@ -177,6 +185,22 @@ normal runner, which still verifies the package before and after execution.
 An inherited `HALO_E2E_PACKAGED_APP` is ignored. Packaging failure or an invalid
 package record fails its recorded CI stage and cannot advance a baseline.
 
+Selected, unblocked scenarios with a matching binding and `chromium-browser`
+requirement also trigger `ci-prepare.mjs browser`. It resolves Chromium, its
+headless shell and supporting runtime files from the installed Playwright version
+and checks that version against the lock. Matching files are reused; missing
+files are prepared with that installed package's `install chromium` command.
+No `npx` version lookup, operating-system package installation or browser launch
+is performed by preparation.
+
+CI uses Playwright's standard isolated `ms-playwright` cache, ignoring inherited
+browser-path overrides. Browser-cache garbage collection is disabled so preparing
+this revision does not prune other projects' runtimes. Preparation failure or
+missing binaries stop execution and baseline publication. Runtime-file readiness
+does not establish that the host's system dependencies or browser interactions
+work; the selected scenarios still provide that evidence. Selections without
+this requirement do not prepare or download Chromium.
+
 Only a nonempty run from a clean source checkout whose selected instances all
 passed can publish a new baseline. Failed, flaky, skipped, blocked, not-run and manual results cannot
 advance it. The restore lookup also checks the enclosing workflow's final
@@ -213,11 +237,31 @@ environment input, not command-line arguments or a source file. It registers
 only; it does not install a system daemon or modify login/power settings.
 
 On macOS, first log into the dedicated account graphically. No Apple ID or
-separate full GitHub login is required merely to run Electron tests. Start the
-runner in that session and execute a real launch/click/assertion test. Only then
-install/start its user service using that distribution's `svc.sh`. GitHub's
-default macOS service is a user LaunchAgent; a system daemon does not establish
-a GUI session. Validate locked-screen, switched-user and wake-from-sleep behavior
+separate full GitHub login is required merely to run Electron tests. The bundled
+runner service template can set `SessionCreate=true`, which creates a separate
+security session. A GUI runner must reuse the existing login session. The shipped
+[GUI service template](../tests/acceptance/ci/macos-gui-runner.plist.template)
+sets `SessionCreate=false` and limits loading to `Aqua`, while retaining the
+official `svc.sh` placeholders. From the new runner directory, install its user
+service once with a readable template path:
+
+```bash
+GITHUB_ACTIONS_RUNNER_SERVICE_TEMPLATE="/path/to/checkout/tests/acceptance/ci/macos-gui-runner.plist.template" ./svc.sh install
+./svc.sh start
+```
+
+Use the dedicated user's graphical session and no `sudo`. Do not install over an
+existing runner or modify another runner's service. For an authorized update to
+the dedicated service, inspect its generated plist and stop it cleanly; confirm
+the old service has fully exited before loading the replacement. A transient
+bootstrap error during teardown is a reason to inspect state, not to retry
+indefinitely. Service reinstalls or updates can regenerate the plist, so inspect
+and revalidate it afterward.
+
+A runner showing online does not establish GUI readiness: verify Electron reaches
+ready, creates a window and completes a real UI action from that service. Changing
+`SessionCreate` alone is not passing product evidence. A system daemon does not
+establish a GUI login. Validate locked-screen, switched-user and wake-from-sleep behavior
 on the actual machine before depending on those states. Restart with FileVault
 can still require manual login. See [GitHub service setup](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/configure-the-application?platform=mac),
 [Apple user sessions](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPMultipleUsers/Concepts/FastUserSwitching.html)

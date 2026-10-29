@@ -31,7 +31,7 @@ const configuration=JSON.parse(fs.readFileSync('fixture.json','utf8'));
 const context=JSON.parse(fs.readFileSync('tests/acceptance/output/ci/context.json','utf8'));
 const record=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,JSON.stringify(value));};
 const output=()=>args[args.indexOf('--output')+1];
-fs.appendFileSync('tests/acceptance/output/ci/invocations.jsonl',JSON.stringify({command,args,packaged:process.env.HALO_E2E_PACKAGED_APP??null})+'\\n');
+fs.appendFileSync('tests/acceptance/output/ci/invocations.jsonl',JSON.stringify({command,args,packaged:process.env.HALO_E2E_PACKAGED_APP??null,browserCache:process.env.PLAYWRIGHT_BROWSERS_PATH??null})+'\\n');
 if(command==='discover') record(output(),{version:1,tests:configuration.plan.tests});
 if(command==='plan') record(output(),configuration.plan);
 if(command==='package') {
@@ -53,8 +53,14 @@ if(command==='run') {
 }
 if(command==='report') record(output()+'/generated.json',{generated:true});
 `)
+  write('scripts/acceptance/ci-prepare.mjs', `
+import fs from 'node:fs';
+const configuration=JSON.parse(fs.readFileSync('fixture.json','utf8'));
+fs.appendFileSync('tests/acceptance/output/ci/invocations.jsonl',JSON.stringify({command:'browser',args:process.argv.slice(2),packaged:process.env.HALO_E2E_PACKAGED_APP??null,browserCache:process.env.PLAYWRIGHT_BROWSERS_PATH??null})+'\\n');
+if(configuration.browserFailure)process.exit(12);
+`)
   return { root, directory: path.join(root, 'tests/acceptance/output/ci'), run() {
-    return spawnSync(process.execPath, [source], { cwd: root, encoding: 'utf8', env: { ...process.env, HALO_E2E_PACKAGED_APP: path.join(root, 'unrelated-old-package'), HALO_ACCEPTANCE_BASELINE: '', HALO_ACCEPTANCE_FULL: 'true' }, timeout: 20000 })
+    return spawnSync(process.execPath, [source], { cwd: root, encoding: 'utf8', env: { ...process.env, HALO_E2E_PACKAGED_APP: path.join(root, 'unrelated-old-package'), PLAYWRIGHT_BROWSERS_PATH: path.join(root, 'unrelated-browser-data'), HALO_ACCEPTANCE_BASELINE: '', HALO_ACCEPTANCE_FULL: 'true' }, timeout: 20000 })
   } }
 }
 
@@ -87,8 +93,38 @@ test('a selection without packaged requirements neither builds nor inherits an a
   assert.equal(result.status, 0, result.stderr)
   const { calls, stages } = evidence(selected)
   assert.equal(calls.some(call => call.command === 'package'), false)
+  assert.equal(calls.some(call => call.command === 'browser'), false)
   assert(calls.every(call => call.packaged === null))
   assert.equal(stages.some(stage => stage.stage === 'package preparation'), false)
+})
+
+test('selected Chromium requirements prepare the browser before the normal run with the same isolated cache policy', context => {
+  const selected = fixture(context, { plan: selection(['chromium-browser']) })
+  const result = selected.run()
+  assert.equal(result.status, 0, result.stderr)
+  const { calls, stages, baseline } = evidence(selected)
+  assert.deepEqual(calls.map(call => call.command), ['validate', 'doctor', 'discover', 'plan', 'browser', 'run', 'report'])
+  assert(calls.every(call => call.browserCache === null))
+  assert.equal(stages.find(stage => stage.stage === 'browser preparation').exitCode, 0)
+  assert.equal(baseline, true)
+})
+
+test('blocked or unbound Chromium cases do not prepare a browser', context => {
+  for (const entry of [{ ...scenario(['chromium-browser']), blockedReason: 'Unsupported condition' }, { ...scenario(['chromium-browser']), testIds: [] }]) {
+    const selected = fixture(context, { plan: { ...selection(['chromium-browser']), cases: [entry] }, runFailure: true })
+    assert.equal(selected.run().status, 1)
+    assert.equal(evidence(selected).calls.some(call => call.command === 'browser'), false)
+  }
+})
+
+test('browser preparation failure records the failed stage before any package, test or baseline is produced', context => {
+  const selected = fixture(context, { plan: selection(['chromium-browser', 'packaged-app']), browserFailure: true })
+  assert.equal(selected.run().status, 1)
+  const { calls, stages, baseline } = evidence(selected)
+  assert.equal(calls.some(call => call.command === 'package' || call.command === 'run'), false)
+  assert.equal(stages.at(-1).stage, 'browser preparation')
+  assert.equal(stages.at(-1).exitCode, 12)
+  assert.equal(baseline, false)
 })
 
 test('blocked, unbound and mismatched-variant cases cannot trigger packaging', context => {

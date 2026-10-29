@@ -86,6 +86,55 @@ test('real offline npm ci can install the public lock before a required local SD
   assert.equal(fs.readFileSync(path.join(root, 'host-binaries.txt'), 'utf8'), 'complete')
 })
 
+test('a real offline npm install preserves both source locks while installing an actual local dependency', context => {
+  const { root, write } = workspace(context)
+  write('seed/package.json', JSON.stringify({ name: 'fixture-runtime', version: '1.0.0' }))
+  write('seed/index.js', 'module.exports = 1')
+  const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+  const npm = (args, cwd = root) => execFileSync(npmCommand, args, { cwd, env: { ...process.env, npm_config_offline: 'true' }, stdio: 'pipe', shell: process.platform === 'win32' })
+  npm(['pack', '--ignore-scripts', '--offline', '--pack-destination', root], path.join(root, 'seed'))
+  write('package.json', JSON.stringify({ name: 'dual-lock-fixture', version: '1.0.0', scripts: { prepare: 'node scripts/prepare.mjs' }, dependencies: { 'fixture-runtime': 'file:fixture-runtime-1.0.0.tgz' } }))
+  npm(['install', '--package-lock-only', '--ignore-scripts', '--legacy-peer-deps', '--offline', '--no-audit', '--no-fund'])
+  const yarn = '# yarn lockfile v1\n\n"fixture-runtime@file:fixture-runtime-1.0.0.tgz":\n  version "1.0.0"\n  resolved "file:fixture-runtime-1.0.0.tgz"\n\nunused@^1.0.0:\n  version "1.0.0"\n'
+  write('yarn.lock', yarn)
+  write('scripts/postinstall.mjs', 'export {}')
+  write('scripts/prepare.mjs', 'export {}')
+  const npmLock = fs.readFileSync(path.join(root, 'package-lock.json'))
+  prepareDependencies(root, 'install', { environment: { ...process.env, npm_config_offline: 'true' } })
+  assert.equal(fs.readFileSync(path.join(root, 'yarn.lock'), 'utf8'), yarn)
+  assert.deepEqual(fs.readFileSync(path.join(root, 'package-lock.json')), npmLock)
+  assert.equal(fs.readFileSync(path.join(root, 'node_modules/fixture-runtime/index.js'), 'utf8'), 'module.exports = 1')
+  assert.equal(fs.readdirSync(root).some(name => name.startsWith('.acceptance-lock-')), false)
+})
+
+test('failed npm installation restores the original Yarn lock but never overwrites an unexpected new lock', context => {
+  const retained = workspace(context)
+  retained.write('yarn.lock', 'original lock')
+  assert.throws(() => prepareDependencies(retained.root, 'install', { run() {
+    assert.equal(fs.existsSync(path.join(retained.root, 'yarn.lock')), false)
+    throw new Error('fixture npm failure')
+  } }), /fixture npm failure/)
+  assert.equal(fs.readFileSync(path.join(retained.root, 'yarn.lock'), 'utf8'), 'original lock')
+  assert.equal(fs.readdirSync(retained.root).some(name => name.startsWith('.acceptance-lock-')), false)
+  const conflict = workspace(context)
+  conflict.write('yarn.lock', 'original lock')
+  assert.throws(() => prepareDependencies(conflict.root, 'install', { run() { conflict.write('yarn.lock', 'unexpected new lock') } }), /unexpected yarn.lock; it was not overwritten/)
+  assert.equal(fs.readFileSync(path.join(conflict.root, 'yarn.lock'), 'utf8'), 'unexpected new lock')
+  const backup = fs.readdirSync(conflict.root).find(name => name.startsWith('.acceptance-lock-'))
+  assert.equal(fs.readFileSync(path.join(conflict.root, backup, 'yarn.lock'), 'utf8'), 'original lock')
+})
+
+test('manifest or lock changes during installation hooks fail without resetting the evidence', context => {
+  for (const stage of ['ci', 'scripts/postinstall.mjs', 'run']) {
+    const selected = workspace(context)
+    selected.write('package-lock.json', '{}')
+    assert.throws(() => prepareDependencies(selected.root, 'install', { run(command, args) {
+      if (args[0] === stage) selected.write('package-lock.json', '{"unexpected":true}')
+    } }), /changed package-lock.json/)
+    assert.equal(fs.readFileSync(path.join(selected.root, 'package-lock.json'), 'utf8'), '{"unexpected":true}')
+  }
+})
+
 test('public installation refuses existing SDK sources, shared dependencies and unrecognized generated content', context => {
   const original = workspace(context)
   original.write('src/sdk/halo-sdk/package.json', 'existing SDK')

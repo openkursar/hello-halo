@@ -2,18 +2,19 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { baselineReason, git, makeBaseline, readJson, writeJson } from './ci-state.mjs'
+import { browserEnvironment } from './ci-prepare.mjs'
 
 const root = process.cwd()
 const directory = path.join(root, 'tests/acceptance/output/ci')
 const cli = path.join(root, 'scripts/acceptance/cli.mjs')
 const stages = []
-const environment = { ...process.env }
+const environment = browserEnvironment(process.env)
 delete environment.HALO_E2E_PACKAGED_APP
 
-function execute(stage, args, { env = environment, verify } = {}) {
+function execute(stage, args, { env = environment, verify, program = cli } = {}) {
   console.log(`[Acceptance CI] Starting ${stage}.`)
   const startedAt = new Date().toISOString()
-  const result = spawnSync(process.execPath, [cli, ...args], { cwd: root, env, stdio: 'inherit' })
+  const result = spawnSync(process.execPath, [program, ...args], { cwd: root, env, stdio: 'inherit' })
   let value, failure = result.error?.message
   if (!failure && result.status === 0 && verify) {
     try { value = verify() } catch (error) { failure = error.message }
@@ -27,9 +28,9 @@ function execute(stage, args, { env = environment, verify } = {}) {
 const variantKey = variant => JSON.stringify(Object.entries(variant ?? {}).sort(([left], [right]) => left.localeCompare(right)))
 const inside = (parent, file) => { const relative = path.relative(parent, file); return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative) }
 
-function needsPackage(plan) {
+function needsRequirement(plan, requirement) {
   if (!Array.isArray(plan.cases) || !Array.isArray(plan.tests)) throw new Error('The generated plan has no case and executable-test records.')
-  return plan.cases.some(scenario => !scenario.blockedReason && scenario.requirements?.includes('packaged-app') &&
+  return plan.cases.some(scenario => !scenario.blockedReason && scenario.requirements?.includes(requirement) &&
     plan.tests.some(test => scenario.testIds?.includes(test.id) && test.bindings?.some(binding =>
       binding.caseId === scenario.caseId && variantKey(binding.variant) === variantKey(scenario.variant))))
 }
@@ -79,7 +80,9 @@ try {
   writeJson(path.join(directory, 'selection.json'), { full: Boolean(reason), reason: reason ?? 'Changes since the last successful validation.' })
   execute('test planning', args)
   const runEnvironment = { ...environment }
-  if (needsPackage(readJson(plan))) {
+  const planned = readJson(plan)
+  if (needsRequirement(planned, 'chromium-browser')) execute('browser preparation', ['browser'], { program: path.join(root, 'scripts/acceptance/ci-prepare.mjs') })
+  if (needsRequirement(planned, 'packaged-app')) {
     const stamp = path.join(root, 'out/.acceptance-package.json')
     const previous = fs.existsSync(stamp) ? fs.readFileSync(stamp, 'utf8') : null
     runEnvironment.HALO_E2E_PACKAGED_APP = execute('package preparation', ['package', '--timeout-ms', '1800000'], {
