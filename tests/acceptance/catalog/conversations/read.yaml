@@ -12,6 +12,7 @@ references:
   - tests/e2e/specs/transcript-scroll.spec.ts
   - tests/e2e/specs/digital-human-chat.spec.ts
   - src/renderer/components/chat/transcript/DESIGN.md
+  - tests/e2e/specs/acceptance-conversation-reading.spec.ts
 promises:
   anchor:
     en: Reading old messages is not interrupted by new streamed content.
@@ -35,18 +36,23 @@ scenarios:
       - linux
     profiles:
       - regression
-    evidence: ui
-    mode: none
-    automation: planned
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
     preconditions:
-      - en: A long seeded transcript has an active streamed reply.
-        zh: 长测试记录中有正在输出的回复。
+      - en: A long ordinary workspace conversation has been written through the real application API and reopened after a process restart.
+        zh: 较长的普通空间对话已通过真实应用 API 保存，并在进程重启后重新打开。
     steps:
-      - en: Scroll away from the bottom, receive more output and return to latest.
-        zh: 向上阅读，接收更多输出，再回到最新位置。
+      - en: Start a controlled real tool operation, scroll to an older message with the mouse, release the tool and receive the actual model endpoint's streamed reply; after it finishes, select Back to latest.
+        zh: 发起受控的真实工具操作，用鼠标上翻到旧消息，释放工具并接收真实模型端点的流式回复；完成后点击回到最新。
     expected:
       - en: The old reading position stays stable and the latest action reaches the newest reply.
         zh: 旧阅读位置稳定，回到最新能找到最新回复。
+    notes:
+      en: Uses the Halo engine, an owned waiting Bash process and a local scripted HTTP model that emits one large real SSE text delta and holds stream completion. The old visible message identity, content and offset are checked during that growth and completion, with stored history checked afterward. No renderer stream event, history handler or scroll position is replaced. Other engines, repeated token deltas and live-provider pacing are not inferred.
+      zh: 使用 Halo 引擎、隔离的等待 Bash 进程及本地脚本 HTTP 模型；模型发送一次较大的真实 SSE 文本增量并等待完成释放。在这次增长与完成期间核对旧消息身份、完整正文和位置，之后核对持久历史；不替换界面流事件、历史处理器或滚动位置。不据此推断其他引擎、连续多次文本增量及真实供应商输出节奏。
   - id: conversations.read.draft
     title:
       en: Keep a draft during conversation loading
@@ -77,18 +83,21 @@ scenarios:
     platforms: *a1
     profiles:
       - regression
-    evidence: ui
+    evidence: app-e2e
     mode: none
-    automation: planned
+    automation: automated
     preconditions:
-      - en: A conversation has more messages than one history page.
-        zh: 对话记录超过一页。
+      - en: An ordinary workspace conversation has 420 messages saved through the real application API and reopened after a process restart.
+        zh: 普通空间对话通过真实应用 API 保存 420 条消息，并在进程重启后重新打开。
     steps:
-      - en: Load older pages and navigate to a known older message.
-        zh: 加载前面的记录并找到指定旧消息。
+      - en: Read upward through the actual display windows with the mouse wheel, reach the oldest message, then use Back to latest.
+        zh: 使用鼠标滚轮逐段上翻实际显示的历史，读到最早消息，再回到最新。
     expected:
-      - en: No messages duplicate or disappear at page boundaries.
-        zh: 分页边界不重复也不丢消息。
+      - en: Every saved message remains reachable with its original identity and content, display boundaries do not duplicate or omit messages, and at most 300 message components are live while distant rows retire to placeholders.
+        zh: 每条保存的消息均可到达且身份内容保持，显示段落边界不重复也不丢消息，同时最多保留 300 个实际消息组件，远处记录退为占位。
+    notes:
+      en: Ordinary workspace history currently crosses IPC as one complete read; only its displayed message components are paged and bounded. This proves real stored-history loading and frontend display boundaries, not backend history pagination, bounded total history memory or digital-human pagination. Existing synthetic renderer cases remain separate evidence.
+      zh: 普通空间历史当前通过 IPC 一次完整读取，仅显示的消息组件分段且有数量上限。本例证明真实持久历史加载和前端显示边界，不证明后端历史分页、全部历史内存有界或数字人分页；现有合成界面用例仍保留为独立证据。
   - id: conversations.read.loading-draft
     title:
       en: Keep text typed while a person’s history loads
