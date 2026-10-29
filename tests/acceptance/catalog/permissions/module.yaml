@@ -13,6 +13,12 @@ paths:
   - src/main/apps/runtime/turn-file-access.ts
   - src/renderer/components/capability/**
   - src/renderer/components/settings/ImInstancePermissionSection.tsx
+  - src/main/apps/runtime/im-sender-standing.ts
+  - src/main/apps/runtime/im-permission-registry.ts
+  - src/main/apps/runtime/im-channels/im-prompt.ts
+  - src/main/apps/runtime/app-chat.ts
+  - src/main/apps/runtime/dispatch-inbound.ts
+  - src/main/apps/runtime/im-channels/binding.ts
 dependsOn:
   - startup
 scope:

@@ -12,6 +12,7 @@ references:
   - src/shared/apps/capability-policy.ts
   - src/main/apps/runtime/turn-file-access.ts
   - src/main/foundation/path-containment.ts
+  - tests/e2e/specs/acceptance-guest.spec.ts
 promises:
   path:
     en: Allowed workspace paths cannot be escaped by traversal or an unintended link.
@@ -29,15 +30,15 @@ scenarios:
       zh: 拒绝范围外文件
     verifies:
       - path
-    platforms: &a1
+    platforms:
       - darwin
       - win32
       - linux
     profiles:
       - regression
-    evidence: integration
+    evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
     preconditions:
       - en: A guest has access to a test work folder with an external symlink fixture.
         zh: 访客可访问测试工作目录，其中有指向外部的符号链接。
@@ -47,13 +48,22 @@ scenarios:
     expected:
       - en: Only the authorized file is readable; outside contents are not returned.
         zh: 只有授权文件可读，范围外内容不会返回。
+    requirements:
+      - halo-sdk
+      - file-symlinks
+    notes:
+      en: The WeCom service and model endpoint are local fixtures. Halo configuration UI, the real channel SDK, dispatch, permission enforcement, persistence and reply rendering remain active. This does not certify the real WeCom client or natural-model wording quality.
+      zh: 企业微信服务和模型端点使用本机替身；Halo 配置界面、真实通道 SDK、投递、权限执行、持久化和回复显示均保留。不据此证明真实企业微信客户端或真实模型的措辞质量。
   - id: permissions.files.commands
     title:
       en: Reject mixed allowed and denied commands
       zh: 拒绝夹带未授权命令
     verifies:
       - command
-    platforms: *a1
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
     profiles:
       - regression
     evidence: integration

@@ -83,7 +83,11 @@ export async function navigateToApps(window: Page) {
 
   await window.getByRole('button', { name: 'Digital Humans', exact: true }).first().click()
 
-  // Wait for Apps page tab bar to render
+  const directory = window.getByText('My Digital Humans', { exact: true })
+  const back = window.getByRole('button', { name: 'All digital humans', exact: true })
+  await expect(directory.or(back).first()).toBeVisible()
+  if (await back.isVisible()) await back.click()
+
   await window.waitForSelector(
     'text=/My Digital Humans|我的数字人/i',
     { timeout: 10000 }

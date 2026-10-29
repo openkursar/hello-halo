@@ -482,6 +482,10 @@ src/main/apps/runtime/
 
 **Single call site**: `app-chat.ts` is the only place that decides which
 entry/constraint builder to invoke based on whether `imSession` is present.
+IM identity rules do not impose a separate blanket guest policy. They direct
+the model to the current turn's actual capability grants. Notification guidance
+also requires the guest notification grant as well as the app's configured
+tool availability; withdrawing that grant removes the usage instructions.
 The assembler call itself is one line:
 
 ```ts
