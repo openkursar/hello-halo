@@ -12,6 +12,7 @@ references:
   - src/shared/types/goal.ts
   - src/renderer/components/goal/GoalEditor.tsx
   - src/main/services/agent/goal/index.ts
+  - tests/e2e/specs/acceptance-goals.spec.ts
 promises:
   state:
     en: The objective, completion conditions and current state are shown together.
@@ -35,7 +36,12 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
+    notes:
+      en: A local scripted model calls a real command while the user edits the goal; the next model request and engine acknowledgement must contain the revised goal. This verifies delivery and state, not a model's judgement or context-compaction recovery.
+      zh: 本地脚本模型调用真实命令，期间用户修改目标；下一次模型请求及引擎确认必须包含新版目标。验证传递与状态，不代表模型判断能力或上下文压缩后的恢复已验证。
     preconditions:
       - en: The current engine supports goals.
         zh: 当前引擎支持目标。
@@ -57,7 +63,17 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
+    variants:
+      action:
+        - complete
+        - abandon
+        - clear
+    notes:
+      en: Completion and abandonment use the real advertised Goal tool; clearing uses the UI confirmation while a command is running. A later ordinary message must finish without another open-goal model step. Paused goals and percentage progress are not supported states.
+      zh: 完成和放弃通过真实公开的 Goal 工具执行；清除在命令运行中通过界面确认。之后的普通消息必须正常结束，不能因旧目标触发额外模型步骤。目标暂停与百分比进度不是当前支持的状态。
     preconditions:
       - en: A goal is active.
         zh: 当前有活动目标。
