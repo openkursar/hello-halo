@@ -27,8 +27,8 @@ promises:
 scenarios:
   - id: terminal.environment.packaged-tools
     title:
-      en: Use bundled search and document tools
-      zh: 使用附带搜索与文档工具
+      en: Use packaged search and document tools with Claude Code
+      zh: 使用 Claude Code 执行打包搜索与文档工具
     verifies:
       - packaged
     platforms:
@@ -41,16 +41,57 @@ scenarios:
     mode: scripted
     automation: automated
     preconditions:
-      - en: Launch a packaged application in an isolated test profile.
-        zh: 在隔离测试资料中启动打包应用。
+      - en: Launch a packaged application in an isolated profile explicitly requesting the Claude Code engine.
+        zh: 在隔离资料中启动打包应用，明确请求 Claude Code 引擎。
     steps:
+      - en: Record the active engine and verify that Claude Code is running without fallback.
+        zh: 记录实际引擎并确认 Claude Code 正在运行且未降级。
       - en: Use real tool calls for file search, the bundled search executable, Office libraries and a large image.
         zh: 用真实工具执行文件搜索、附带搜索程序、Office 库及大图读取。
+      - en: Verify that project agents and commands are advertised to the model.
+        zh: 确认项目代理和命令已提供给模型。
     expected:
       - en: Each tool returns a successful result from the packaged runtime.
         zh: 每个工具从打包运行时返回成功结果。
     requirements:
       - packaged-app
+    notes:
+      en: This case establishes only Claude Code behavior, including its project .claude/agents discovery. New results retain actual engine evidence on success and failure; older results without that evidence do not retroactively establish which engine ran.
+      zh: 本场景仅验证 Claude Code 行为，包括项目 .claude/agents 发现。新结果在成功和失败时均保留实际引擎证据；缺少此证据的旧结果不能被追认运行了哪个引擎。
+  - id: terminal.environment.packaged-tools-halo
+    title:
+      en: Use packaged search and document tools with Halo SDK
+      zh: 使用 Halo SDK 执行打包搜索与文档工具
+    verifies:
+      - packaged
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: Launch a packaged application containing Halo SDK in an isolated profile explicitly requesting that engine.
+        zh: 在隔离资料中启动包含 Halo SDK 的打包应用，并明确请求该引擎。
+    steps:
+      - en: Record the active engine and verify that Halo SDK is running without fallback.
+        zh: 记录实际引擎并确认 Halo SDK 正在运行且未降级。
+      - en: Use real tool calls for file search, the bundled search executable, Office libraries and a large image.
+        zh: 用真实工具执行文件搜索、附带搜索程序、Office 库及大图读取。
+      - en: Verify that project commands are advertised to the model.
+        zh: 确认项目命令已提供给模型。
+    expected:
+      - en: Each tool returns a successful result from the packaged runtime while Halo SDK remains the active engine.
+        zh: Halo SDK 为实际引擎时，每个工具从打包运行时返回成功结果。
+    requirements:
+      - packaged-app
+      - halo-sdk
+    notes:
+      en: A Claude Code pass or a fallback engine is not evidence for this case. Project command discovery is covered; automatic .claude/agents discovery is not asserted for Halo SDK. No host tool installation or PATH adjustment is supplied by the fixture.
+      zh: Claude Code 通过或降级引擎不能作为本场景证据。覆盖项目命令发现，不对 Halo SDK 断言自动发现 .claude/agents。测试不安装主机工具或调整 PATH。
   - id: terminal.environment.windows-shell
     title:
       en: Open the Windows terminal without MSYS assumptions

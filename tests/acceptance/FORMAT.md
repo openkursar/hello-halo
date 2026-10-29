@@ -80,6 +80,15 @@ case instance records its actual attempts and one result: `passed`, `failed`,
 Test-runner failure cannot be converted into a passing empty report. Historical
 results cannot be reused against changed expectations or silently overwritten.
 
+Run version 1 may also include `executionBatches`. Each batch identifies its
+selected test ids, executor, model mode, execution configuration, timestamps and
+terminal state. Its `executionHost` names `source`, `packaged` or `cluster`, the
+controlled `buildId`, and an optional supplied `packageId`. Attempts carry the
+same configuration and `batchId`. These fields record what the runner supplied,
+not what an application actually launched; app and engine observations remain
+test evidence. Older records without these fields show the configuration as
+unrecorded, even when the run has a top-level package identity.
+
 The run's `evidenceIntegrity` record has `version: 1`, `valid` and `reasons`.
 It records whether source/build identity and runner-level checks remained valid.
 If those checks fail, otherwise passing cases become `not-run`, with raw attempts

@@ -69,6 +69,12 @@ const translations = {
   'Counts describe catalog variants, not every combination of operating systems and profiles.': '数量按目录声明的变体计算，不代表已穷举所有操作系统与执行范围的组合。',
   'No pass percentage is inferred from unselected, manual or planned cases.': '未选、人工及待补自动化场景不会被换算为通过率。',
   'Download summary': '下载摘要', 'Skip to stories': '跳到用户故事',
+  'Execution configuration': '执行配置', 'Execution batches': '执行批次', 'Batch': '批次',
+  'Build identity': '构建标识', 'Supplied package': '提供的包', 'Not recorded': '未记录',
+  'Source build or test host': '源码构建或测试宿主', 'Controlled package supplied': '已提供受控包',
+  'Packaged application requested': '请求打包应用',
+  'Built application cluster': '应用构建集群',
+  'Batch configuration records what the harness supplied. Application observations establish what actually ran.': '批次配置记录测试框架提供了什么；应用观测才能证明实际运行了什么。',
 }
 
 const resultLabels = { passed: 'Passed', failed: 'Failed', flaky: 'Flaky', skipped: 'Skipped', blocked: 'Blocked', 'not-run': 'Not run', manual: 'Manual', 'not-selected': 'Not selected', 'different-platform': 'Different platform', historical: 'Historical evidence', invalid: 'Incomplete record' }
@@ -165,6 +171,8 @@ export async function generateReport(root, catalog, run, output, { locale = 'zh'
   const badge = (value, state = '') => `<span class="badge ${escape(state)}">${label(value)}</span>`
   const list = values => `<ul>${values.map(value => `<li>${bilingual(value)}</li>`).join('')}</ul>`
   const facts = items => `<dl class="facts">${items.filter(([, value]) => value !== undefined && value !== '').map(([name, value]) => `<div><dt>${label(name)}</dt><dd>${escape(value)}</dd></div>`).join('')}</dl>`
+  const hostName = host => t({ source: 'Source build or test host', packaged: host?.packageId ? 'Controlled package supplied' : 'Packaged application requested', cluster: 'Built application cluster' }[host?.kind] ?? 'Not recorded')
+  const hostFacts = host => facts([['Execution configuration', hostName(host)], ['Batch', host?.batchId], ['Build identity', host?.buildId], ['Supplied package', host?.packageId]])
   const result = resultsFor(catalog, run)
   const total = result.instances.length
   const passed = result.instances.filter(item => item.status === 'passed').length
@@ -225,7 +233,7 @@ export async function generateReport(root, catalog, run, output, { locale = 'zh'
       const rendered = []
       for (const [index, attempt] of (record.attempts ?? []).entries()) {
         const attachments = await Promise.all((attempt.attachments ?? []).map(evidence))
-        rendered.push(`<div class="attempt"><p>${label('Attempt')} ${index + 1} · ${escape(t(resultLabels[attempt.status] ?? attempt.status))} · ${label('Duration')}: ${escape(attempt.duration ?? '—')} ms</p>${(attempt.errors ?? []).map(error => `<pre class="error">${escape(typeof error === 'string' ? error : error.message ?? JSON.stringify(error))}</pre>`).join('')}${attachments.length ? `<ul class="evidence">${attachments.join('')}</ul>` : ''}</div>`)
+        rendered.push(`<div class="attempt"><p>${label('Attempt')} ${index + 1} · ${escape(t(resultLabels[attempt.status] ?? attempt.status))} · ${label('Duration')}: ${escape(attempt.duration ?? '—')} ms</p>${hostFacts(attempt.executionHost)}${(attempt.errors ?? []).map(error => `<pre class="error">${escape(typeof error === 'string' ? error : error.message ?? JSON.stringify(error))}</pre>`).join('')}${attachments.length ? `<ul class="evidence">${attachments.join('')}</ul>` : ''}</div>`)
       }
       attempts = `<details><summary>${label('Recorded result')} · ${escape(t(resultLabels[record.status] ?? record.status))}</summary>${facts([['Evidence boundary', t(evidenceLabels[record.evidence] ?? record.evidence)], ['Model mode', t(modeLabels[record.mode] ?? record.mode)]])}${rendered.join('') || `<p class="muted">${label('No evidence files were attached.')}</p>`}</details>`
     }
@@ -271,8 +279,9 @@ export async function generateReport(root, catalog, run, output, { locale = 'zh'
     ['Platform', run.platform], ['Profile', run.profile], ['Started', run.startedAt], ['Finished', run.finishedAt],
     ['Selection', run.selectionReason], ['Catalog hash', run.catalogHash], ['Manifest hash', run.manifestHash],
   ]) : ''
+  const batchDetails = run?.executionBatches?.length ? `<details><summary>${label('Execution batches')} · ${run.executionBatches.length}</summary><p>${label('Batch configuration records what the harness supplied. Application observations establish what actually ran.')}</p>${run.executionBatches.map(batch => `<div class="attempt">${hostFacts({ ...batch.executionHost, batchId: batch.id })}${facts([['Result', t({ completed: 'Finished', failed: 'Failed', 'not-run': 'Not run', running: 'Started' }[batch.status] ?? 'Not recorded')], ['Started', batch.startedAt], ['Finished', batch.finishedAt]])}</div>`).join('')}</details>` : ''
   const old = run && !result.current
-  const record = `<section class="record"><strong>${label(old ? 'Historical evidence' : run ? 'Run' : 'No execution record')}</strong><p>${label(old ? 'This execution used a different catalog. Its results are historical and do not verify these expectations.' : run ? 'A passing record applies only to its recorded source revision, platform and selected cases.' : 'Catalog only. No scenario is claimed to have passed.')}</p>${run && !result.evidenceValid ? `<p>${label('Run evidence integrity is missing or failed; recorded attempts are diagnostic only.')}</p>` : ''}${runDetails}${run?.errors?.length ? `<details><summary>${label('Run-level errors')} · ${run.errors.length}</summary>${run.errors.map(error => `<pre class="error">${escape(error)}</pre>`).join('')}</details>` : ''}</section>`
+  const record = `<section class="record"><strong>${label(old ? 'Historical evidence' : run ? 'Run' : 'No execution record')}</strong><p>${label(old ? 'This execution used a different catalog. Its results are historical and do not verify these expectations.' : run ? 'A passing record applies only to its recorded source revision, platform and selected cases.' : 'Catalog only. No scenario is claimed to have passed.')}</p>${run && !result.evidenceValid ? `<p>${label('Run evidence integrity is missing or failed; recorded attempts are diagnostic only.')}</p>` : ''}${runDetails}${batchDetails}${run?.errors?.length ? `<details><summary>${label('Run-level errors')} · ${run.errors.length}</summary>${run.errors.map(error => `<pre class="error">${escape(error)}</pre>`).join('')}</details>` : ''}</section>`
   const csp = `default-src 'none'; script-src 'sha256-${createHash('sha256').update(script).digest('base64')}'; style-src 'sha256-${createHash('sha256').update(css).digest('base64')}'; img-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'`
   const storyDirectory = path.join(destination, 'stories')
   await fs.mkdir(storyDirectory, { recursive: true })
@@ -293,6 +302,7 @@ export async function generateReport(root, catalog, run, output, { locale = 'zh'
     old ? t('This execution used a different catalog. Its results are historical and do not verify these expectations.') : run ? `${t('Run status')}: ${markdown(runStatus)}` : t('Catalog only. No scenario is claimed to have passed.'), '',
     `${t('Catalog hash')}: ${markdown(catalog.hash)}`]
   if (run) summaryLines.push(`${t('Revision')}: ${markdown(typeof run.revision === 'string' ? run.revision : run.revision?.commit)}`, `${t('Platform')}: ${markdown(run.platform)} · ${t('Profile')}: ${markdown(run.profile)}`, `${t('Run')}: ${markdown(run.id)}`, `${t('Selection')}: ${markdown(run.selectionReason)}`)
+  if (run?.executionBatches?.length) summaryLines.push('', t('Batch configuration records what the harness supplied. Application observations establish what actually ran.'), ...run.executionBatches.map(batch => `- ${t('Batch')} ${markdown(batch.id)}: ${markdown(hostName(batch.executionHost))}${batch.executionHost?.packageId ? ` · ${t('Supplied package')}: ${markdown(batch.executionHost.packageId)}` : ''}`))
   if (run && !result.evidenceValid) summaryLines.push('', t('Run evidence integrity is missing or failed; recorded attempts are diagnostic only.'))
   summaryLines.push('', `## ${t('Human decision')}`, '')
   for (const story of catalog.stories) {

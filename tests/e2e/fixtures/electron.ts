@@ -59,8 +59,11 @@ if (TEST_API_KEY && (!TEST_API_URL || !TEST_MODEL || !TEST_PROVIDER)) {
 }
 
 // Types for the fixture
+type TestSdkEngine = 'anthropic' | 'halo' | 'codex' | 'dsh'
+
 interface ElectronFixtures {
   appStoreRegistries: RegistrySource[] | undefined
+  sdkEngine: TestSdkEngine | undefined
   electronApp: ElectronApplication
   window: Page
 }
@@ -141,7 +144,8 @@ function ensureProductJson(projectRoot: string): void {
  * anything written to the SQLite/config files before the app opens them is
  * picked up on boot exactly like a real prior install.
  */
-export function createTestConfigDir(appPath: string, registries?: RegistrySource[]): string {
+export function createTestConfigDir(appPath: string, registries?: RegistrySource[], options: { sdkEngine?: TestSdkEngine } = {}): string {
+  const sdkEngine = options.sdkEngine ?? TEST_SDK_ENGINE
   const testDir = path.join(
     process.env.TMPDIR || '/tmp',
     `halo-e2e-test-${Date.now()}`
@@ -228,8 +232,8 @@ export function createTestConfigDir(appPath: string, registries?: RegistrySource
       completed: true  // Skip onboarding in tests
     },
     mcpServers: {},
-    ...(TEST_SDK_ENGINE || ACCEPTANCE_MODE ? { agent: {
-      ...(TEST_SDK_ENGINE ? { sdkEngine: TEST_SDK_ENGINE } : {}),
+    ...(sdkEngine || ACCEPTANCE_MODE ? { agent: {
+      ...(sdkEngine ? { sdkEngine } : {}),
       ...(ACCEPTANCE_MODE ? { configDirMode: 'custom', customConfigDir: path.join(testDir, 'engine-state') } : {})
     } } : {}),
     ...(ACCEPTANCE_MODE ? { imChannels: [], notificationChannels: [] } : {}),
@@ -371,10 +375,11 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
  */
 export const test = base.extend<ElectronFixtures>({
   appStoreRegistries: [undefined, { option: true }],
+  sdkEngine: [undefined, { option: true }],
   // Electron application instance
-  electronApp: async ({ appStoreRegistries }, use, testInfo) => {
+  electronApp: async ({ appStoreRegistries, sdkEngine }, use, testInfo) => {
     const appEntryPath = getAppEntryPath()
-    const testConfigDir = createTestConfigDir(appEntryPath, appStoreRegistries)
+    const testConfigDir = createTestConfigDir(appEntryPath, appStoreRegistries, { sdkEngine })
     const app = await launchElectronApp(appEntryPath, testConfigDir)
 
     // Use the app in tests

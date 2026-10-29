@@ -153,58 +153,83 @@ function seedProject(workDir: string): void {
   fs.writeFileSync(path.join(workDir, 'e43-large.png'), largePng())
 }
 
-test('the packaged AI can search files, run the bundled ripgrep and Office runtime, read large images, and sees project agents and commands', { annotation: { type: 'acceptance', description: "{\"caseId\":\"terminal.environment.packaged-tools\",\"evidence\":\"app-e2e\",\"mode\":\"scripted\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
-  expect(await electronApp.evaluate(({ app }) => app.isPackaged)).toBe(true)
-  const dataDir = await electronApp.evaluate(() => process.env.HALO_DATA_DIR)
-  expect(dataDir).toBeTruthy()
-  // The Halo temporary space, where a conversation opened from the rail runs.
-  const workDir = path.join(dataDir!, 'temp', 'artifacts')
-  seedProject(workDir)
+for (const [sdkEngine, caseId] of [
+  ['anthropic', 'terminal.environment.packaged-tools'],
+  ['halo', 'terminal.environment.packaged-tools-halo'],
+] as const) {
+  test.describe(`Packaged tools with ${sdkEngine === 'anthropic' ? 'Claude Code' : 'Halo'}`, () => {
+    test.use({ sdkEngine })
 
-  const model = await startScriptedModel(workDir)
-  try {
-    // The scripted model becomes the only account, so no turn can reach a real one
-    // a profile may have been given through HALO_TEST_* variables.
-    const sources = await window.evaluate(async url => {
-      const halo = (window as unknown as { halo: HaloAPI }).halo
-      const now = new Date().toISOString()
-      const scripted = {
-        id: 'e43-scripted-model', name: 'Scripted model', provider: 'anthropic', authType: 'api-key',
-        apiUrl: url, apiKey: 'sk-e43-scripted', model: 'e43-mock',
-        availableModels: [{ id: 'e43-mock', name: 'e43-mock' }], createdAt: now, updatedAt: now,
+    const discovery = sdkEngine === 'anthropic' ? 'project agents and commands' : 'project commands'
+    test(`the packaged AI can search files, run the bundled ripgrep and Office runtime, read large images, and sees ${discovery}`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId, evidence: 'app-e2e', mode: 'scripted', variant: {} }) } }, async ({ electronApp, window }, testInfo) => {
+      expect(await electronApp.evaluate(({ app }) => app.isPackaged)).toBe(true)
+      const engine = await window.evaluate(() => (window as unknown as { halo: HaloAPI }).halo.getEngineAvailability())
+      const state = engine.data as { activeEngine?: string; degradedFrom?: string | null; engines?: Array<{ engineId: string; available: boolean; version: string; fingerprint: string }> } | undefined
+      await testInfo.attach('packaged-engine', { body: JSON.stringify({
+        requestedEngine: sdkEngine,
+        success: engine.success,
+        activeEngine: state?.activeEngine,
+        degradedFrom: state?.degradedFrom,
+        engines: state?.engines?.map(({ engineId, available, version, fingerprint }) => ({ engineId, available, version, fingerprint })),
+      }, null, 2), contentType: 'application/json' })
+      expect(engine.success, 'The packaged runtime must identify the engine actually executing this case').toBe(true)
+      expect(state, 'A fallback engine cannot provide evidence for the requested engine').toMatchObject({ activeEngine: sdkEngine, degradedFrom: null })
+      const dataDir = await electronApp.evaluate(() => process.env.HALO_DATA_DIR)
+      expect(dataDir).toBeTruthy()
+      // The Halo temporary space, where a conversation opened from the rail runs.
+      const workDir = path.join(dataDir!, 'temp', 'artifacts')
+      seedProject(workDir)
+
+      const model = await startScriptedModel(workDir)
+      try {
+        // The scripted model becomes the only account, so no turn can reach a real one
+        // a profile may have been given through HALO_TEST_* variables.
+        const sources = await window.evaluate(async url => {
+          const halo = (window as unknown as { halo: HaloAPI }).halo
+          const now = new Date().toISOString()
+          const scripted = {
+            id: 'e43-scripted-model', name: 'Scripted model', provider: 'anthropic', authType: 'api-key',
+            apiUrl: url, apiKey: 'sk-e43-scripted', model: 'e43-mock',
+            availableModels: [{ id: 'e43-mock', name: 'e43-mock' }], createdAt: now, updatedAt: now,
+          }
+          const added = await halo.aiSourcesAddSource(scripted)
+          if (!added.success) throw new Error(`Could not add the scripted model: ${added.error}`)
+          const switched = await halo.aiSourcesSwitchSource(scripted.id)
+          if (!switched.success) throw new Error(`Could not select the scripted model: ${switched.error}`)
+          const config = (await halo.getConfig()).data as { aiSources: { sources: Array<{ id: string }> } }
+          for (const other of config.aiSources.sources.filter(source => source.id !== scripted.id)) {
+            const deleted = await halo.aiSourcesDeleteSource(other.id)
+            if (!deleted.success) throw new Error(`Could not remove account ${other.id}: ${deleted.error}`)
+          }
+          const final = (await halo.getConfig()).data as { aiSources: { currentId: string; sources: Array<{ id: string }> } }
+          return { currentId: final.aiSources.currentId, ids: final.aiSources.sources.map(source => source.id) }
+        }, model.url)
+        expect(sources).toEqual({ currentId: 'e43-scripted-model', ids: ['e43-scripted-model'] })
+        await window.reload()
+        await navigateToChat(window)
+        await expect(window.getByRole('button', { name: 'e43-mock', exact: true })).toBeVisible()
+
+        await window.locator('textarea').fill('Run the packaged tool check')
+        await window.locator('[data-onboarding="send-button"]').click({ force: true })
+        await expect.poll(() => model.results.size, { timeout: 120000 }).toBe(5)
+        await expect(window.getByText('Halo is working', { exact: true })).toHaveCount(0, { timeout: 60000 })
+
+        // Soft, so one run reports every capability a build lost, not just the first.
+        const result = (id: string): ToolResult => model.results.get(id)!
+        expect.soft(result('toolu_grep'), 'Grep').toMatchObject({ isError: false, text: expect.stringContaining('e43-needle.txt') })
+        expect.soft(result('toolu_glob'), 'Glob').toMatchObject({ isError: false, text: expect.stringContaining('e43-needle.txt') })
+        expect.soft(result('toolu_rg').text, 'rg in the shell').toMatch(/^ripgrep \d+\.\d+/m)
+        expect.soft(result('toolu_office').text, 'halo-node with the Office libraries').toContain('office-runtime-ok')
+        expect.soft(result('toolu_image'), 'Read of an oversized image').toMatchObject({ isError: false, hasImage: true })
+        if (sdkEngine === 'anthropic') expect.soft(model.sawAgent, 'Claude Code project subagent offered to the model').toBe(true)
+        expect.soft(model.sawCommand, 'project command offered to the model').toBe(true)
+      } finally {
+        try {
+          await testInfo.attach('packaged-tool-results', { body: JSON.stringify({ requestedEngine: sdkEngine, activeEngine: state?.activeEngine, degradedFrom: state?.degradedFrom, results: Object.fromEntries(model.results), sawAgent: model.sawAgent, sawCommand: model.sawCommand }, null, 2), contentType: 'application/json' })
+        } finally {
+          await model.close()
+        }
       }
-      const added = await halo.aiSourcesAddSource(scripted)
-      if (!added.success) throw new Error(`Could not add the scripted model: ${added.error}`)
-      const switched = await halo.aiSourcesSwitchSource(scripted.id)
-      if (!switched.success) throw new Error(`Could not select the scripted model: ${switched.error}`)
-      const config = (await halo.getConfig()).data as { aiSources: { sources: Array<{ id: string }> } }
-      for (const other of config.aiSources.sources.filter(source => source.id !== scripted.id)) {
-        const deleted = await halo.aiSourcesDeleteSource(other.id)
-        if (!deleted.success) throw new Error(`Could not remove account ${other.id}: ${deleted.error}`)
-      }
-      const final = (await halo.getConfig()).data as { aiSources: { currentId: string; sources: Array<{ id: string }> } }
-      return { currentId: final.aiSources.currentId, ids: final.aiSources.sources.map(source => source.id) }
-    }, model.url)
-    expect(sources).toEqual({ currentId: 'e43-scripted-model', ids: ['e43-scripted-model'] })
-    await window.reload()
-    await navigateToChat(window)
-    await expect(window.getByRole('button', { name: 'e43-mock', exact: true })).toBeVisible()
-
-    await window.locator('textarea').fill('Run the packaged tool check')
-    await window.locator('[data-onboarding="send-button"]').click({ force: true })
-    await expect.poll(() => model.results.size, { timeout: 120000 }).toBe(5)
-    await expect(window.getByText('Halo is working', { exact: true })).toHaveCount(0, { timeout: 60000 })
-
-    // Soft, so one run reports every capability a build lost, not just the first.
-    const result = (id: string): ToolResult => model.results.get(id)!
-    expect.soft(result('toolu_grep'), 'Grep').toMatchObject({ isError: false, text: expect.stringContaining('e43-needle.txt') })
-    expect.soft(result('toolu_glob'), 'Glob').toMatchObject({ isError: false, text: expect.stringContaining('e43-needle.txt') })
-    expect.soft(result('toolu_rg').text, 'rg in the shell').toMatch(/^ripgrep \d+\.\d+/m)
-    expect.soft(result('toolu_office').text, 'halo-node with the Office libraries').toContain('office-runtime-ok')
-    expect.soft(result('toolu_image'), 'Read of an oversized image').toMatchObject({ isError: false, hasImage: true })
-    expect.soft(model.sawAgent, 'project subagent offered to the model').toBe(true)
-    expect.soft(model.sawCommand, 'project command offered to the model').toBe(true)
-  } finally {
-    await model.close()
-  }
-})
+    })
+  })
+}

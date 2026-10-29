@@ -185,6 +185,18 @@ normal runner, which still verifies the package before and after execution.
 An inherited `HALO_E2E_PACKAGED_APP` is ignored. Packaging failure or an invalid
 package record fails its recorded CI stage and cannot advance a baseline.
 
+One plan can contain source, packaged and cluster tests. The runner groups
+eligible tests by the requirements of their selected scenario variants. Only
+the packaged group receives the verified package path; source test hosts and
+cluster processes explicitly clear it. Every group shares the run's time budget
+and contributes to the same report, including cases that remain blocked or
+unimplemented. Grouping does not reduce the planned coverage.
+
+The report records each batch's execution configuration and the build or package
+supplied to it. These records describe the harness input. Tests must still
+observe the actual application and engine to establish packaged behavior; a
+package supplied to one batch says nothing about another batch's runtime.
+
 Selected, unblocked scenarios with a matching binding and `chromium-browser`
 requirement also trigger `ci-prepare.mjs browser`. It resolves Chromium, its
 headless shell and supporting runtime files from the installed Playwright version

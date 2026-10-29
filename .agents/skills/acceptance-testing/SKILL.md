@@ -29,6 +29,12 @@ while replacing only the model endpoint can retain real application E2E behavior
 A screenshot alone does not prove persistence, permissions or absence of side
 effects. Verify those outcomes through the actual application flow too.
 
+Required variants are obligations, not examples. Keep missing bindings visible
+when only some formats, roles or actions have been implemented. For a promise
+about every member, exercise every member in the controlled team; do not silently
+replace that with one convenient member. Validate generated document fixtures
+with an independent reader before blaming the application's importer.
+
 Use the narrowest useful profile and record its limits:
 
 ```bash
@@ -81,6 +87,20 @@ For packaged behavior, create a controlled `package` and run the applicable test
 with its executable. Package provenance binds the output and SDK bytes and records
 the emitted bundle; it does not replace actual packaged-app execution or prove
 that every dependency, installer flow or signing step works.
+
+A bundle may contain several engines. Request the engine being verified, record
+the actual engine and any fallback, and reject fallback as evidence for the
+requested engine. Do not treat a default-engine pass as proof about another
+engine. Declare the fixture's real prerequisites even for a UI journey that
+makes no model request. Isolate HOME, USERPROFILE and application storage; do not
+install host commands or borrow a developer's PATH to conceal missing packaged
+tools.
+
+Keep a scripted provider's wire protocol valid while observing product behavior.
+Prefer recording whether context or tool results arrived and asserting that in
+the test, rather than throwing inside the provider and turning a product defect
+into artificial HTTP failures and retries. Keep full exchanges as private
+diagnostic attachments, with concise assertion outcomes in the user report.
 
 For a failed user journey, preserve its trace and application logs, determine
 whether the failure is product behavior, the test, or the environment, and add a

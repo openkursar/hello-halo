@@ -227,3 +227,42 @@ test('existing observed behavior without an individual approval is not turned in
   const proposal = await generateReport(root, catalog, null, path.join(root, 'proposal'), { locale: 'en' })
   assert.match(await fs.readFile(proposal.index, 'utf8'), /data-pending="true"/)
 }))
+
+test('runtime configuration is shown per attempt without inferring an application observation', async () => workspace(async root => {
+  const catalog = catalogFixture()
+  const run = runFixture(catalog)
+  run.cases[0].attempts[0].executionHost = { kind: 'source', batchId: 'source-batch', buildId: 'source-build' }
+  run.cases[0].attempts.push({ ...run.cases[0].attempts[0], executionHost: { kind: 'packaged', batchId: 'package-batch', buildId: 'source-build', packageId: 'verified-package' } })
+  run.executionBatches = [
+    { id: 'source-batch', status: 'completed', executionHost: { kind: 'source', buildId: 'source-build' } },
+    { id: 'package-batch', status: 'completed', executionHost: { kind: 'packaged', buildId: 'source-build', packageId: 'verified-package' } },
+    { id: 'not-started-batch', status: 'not-run', executionHost: { kind: 'packaged', buildId: 'source-build' } },
+  ]
+  const files = await generateReport(root, catalog, run, path.join(root, 'report'), { locale: 'en' })
+  const html = await readPages(files)
+  assert.match(html, /Source build or test host/)
+  assert.match(html, /Controlled package supplied/)
+  assert.match(html, /Packaged application requested/)
+  assert.match(html, /Application observations establish what actually ran/)
+  assert.match(html, /verified-package/)
+  const summary = await fs.readFile(files.summary, 'utf8')
+  assert.match(summary, /source-batch: Source build or test host/)
+  assert.match(summary, /not-started-batch: Packaged application requested/)
+}))
+
+test('old attempts do not inherit a package identity from the run and runtime metadata remains escaped', async () => workspace(async root => {
+  const catalog = catalogFixture()
+  const run = runFixture(catalog)
+  run.packageIdentity = { id: 'unrelated-package' }
+  const old = await generateReport(root, catalog, run, path.join(root, 'old'), { locale: 'en' })
+  const oldHtml = await readPages(old)
+  assert.match(oldHtml, /Not recorded/)
+  assert.doesNotMatch(oldHtml, /Controlled package supplied|unrelated-package/)
+  const payload = '<img src=x onerror="bad()">'
+  run.cases[0].attempts[0].executionHost = { kind: 'packaged', packageId: payload, batchId: payload, buildId: payload }
+  run.executionBatches = [{ id: payload, status: 'completed', executionHost: run.cases[0].attempts[0].executionHost }]
+  const files = await generateReport(root, catalog, run, path.join(root, 'escaped'), { locale: 'en' })
+  const html = await readPages(files)
+  assert.doesNotMatch(html, /<img src=x/)
+  assert.match(html, /&lt;img/)
+}))

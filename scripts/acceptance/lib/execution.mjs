@@ -14,7 +14,7 @@ import { verifyPackagedApplication } from './package.mjs'
 export { execute } from './process.mjs'
 
 export function cleanEnvironment(source = process.env) {
-  const environment = { ...source, HALO_ACCEPTANCE_MODE: 'deterministic' }
+  const environment = { ...source, HALO_ACCEPTANCE_MODE: 'deterministic', HALO_E2E_PACKAGED_APP: undefined }
   for (const key of Object.keys(environment)) {
     // Git's counted configuration must be removed together, not with only its KEY entries blanked.
     if (key.startsWith('GIT_CONFIG_')) environment[key] = undefined
@@ -69,6 +69,23 @@ export function executionBatches(tests, maximum = 8192) {
   }
   if (batch.length) batches.push(batch)
   return batches
+}
+
+export function executionGroups(tests, cases) {
+  const groups = new Map()
+  for (const test of tests) {
+    const selected = cases.filter(scenario => !scenario.blockedReason && scenario.testIds.includes(test.id) && test.bindings.some(binding => instanceKey(binding.caseId, binding.variant) === instanceKey(scenario.caseId, scenario.variant)))
+    if (!selected.length) throw new Error(`Executable test has no eligible selected binding: ${test.id}`)
+    const executor = test.executor ?? 'playwright'
+    const packaged = selected.some(scenario => scenario.requirements?.includes('packaged-app'))
+    if (executor === 'cluster' && packaged) throw new Error('Cluster execution cannot fulfill a packaged-app requirement')
+    const host = executor === 'cluster' ? 'cluster' : packaged ? 'packaged' : 'source'
+    const mode = test.bindings.some(binding => binding.mode === 'live') ? 'live' : 'deterministic'
+    const key = `${mode}-${host}`
+    if (!groups.has(key)) groups.set(key, { mode, executor, host, tests: [] })
+    groups.get(key).tests.push(test)
+  }
+  return ['deterministic-source', 'deterministic-packaged', 'deterministic-cluster', 'live-source', 'live-packaged', 'live-cluster'].flatMap(key => groups.has(key) ? [groups.get(key)] : [])
 }
 
 export function collectResults(plan, events, execution) {
@@ -199,53 +216,105 @@ export async function runPlan(root, catalog, plan, output, { timeoutMs = 1800000
   const selected = actual.tests.filter(test => actual.cases.some(scenario => !scenario.blockedReason && scenario.testIds.includes(test.id)))
   const eventFile = path.join(output, 'playwright-events.jsonl')
   let execution = { code: null, timedOut: false, log: '' }, events = [], buildIdentity = null, packageIdentity = null, broker = null, liveUsage = null
+  const batchRecords = []
   const baseRecord = { version: 1, id: path.basename(output), startedAt, revision, catalogHash: catalog.hash, manifestHash: plan.manifestHash, profile: plan.profile, platform: plan.platform, selection: plan.selection, selectionReason: plan.selectionReason, selectedCount: plan.cases.length, excluded: plan.excluded }
   await writeJson(path.join(output, 'plan.json'), actual, { exclusive: true })
   await writeJson(path.join(output, 'in-progress.json'), { ...baseRecord, pid: process.pid }, { exclusive: true })
   try {
     if (selected.length) {
       const build = await verifyBuild(root)
-      if (process.env.HALO_E2E_PACKAGED_APP) {
-        const packaged = await verifyPackagedApplication(root, process.env.HALO_E2E_PACKAGED_APP)
-        packageIdentity = { id: packaged.id, packagedAt: packaged.packagedAt, contentHash: packaged.content.rootSha256, executable: packaged.executable, coverage: packaged.coverage }
-        await writeJson(path.join(output, 'package.json'), packaged, { exclusive: true })
-      }
       buildIdentity = { id: build.id, builtAt: build.builtAt, inputsHash: build.inputs.rootSha256, artifactsHash: build.artifacts.rootSha256, sdk: build.sdk, platform: build.platform, architecture: build.architecture, node: build.node }
       await writeJson(path.join(output, 'build.json'), build, { exclusive: true })
       const deadline = Date.now() + timeoutMs
       const invocations = []
-      for (const [mode, executor] of [['deterministic', 'playwright'], ['deterministic', 'cluster'], ['live', 'playwright'], ['live', 'cluster']]) {
-        const group = selected.filter(test => (test.executor ?? 'playwright') === executor && test.bindings.some(binding => binding.mode === 'live') === (mode === 'live'))
-        if (!group.length) continue
-        if (Date.now() >= deadline) { invocations.push({ code: 1, timedOut: true, log: 'The shared run time budget was exhausted before this group' }); break }
+      const batches = executionGroups(selected, actual.cases).flatMap(group => {
+        const selections = group.executor === 'cluster' ? [group.tests] : executionBatches(group.tests)
+        return selections.map((tests, index) => ({ ...group, tests, id: `${group.mode}-${group.host}-${index}` }))
+      })
+      for (const batch of batches) batchRecords.push({ id: batch.id, executor: batch.executor, mode: batch.mode, testIds: batch.tests.map(test => test.id), executionHost: { kind: batch.host, buildId: build.id }, status: 'not-run' })
+      const saveBatches = () => writeJson(path.join(output, 'execution-batches.json'), batchRecords)
+      await saveBatches()
+      let rawEvents = []
+      const captureBatchEvents = async batch => {
+        const recorded = await readEvents(eventFile)
+        if (hash(recorded.slice(0, rawEvents.length)) !== hash(rawEvents)) throw new Error('Previously recorded runner events changed during execution')
+        const added = recorded.slice(rawEvents.length)
+        rawEvents = recorded
+        for (const event of added) {
+          if (event.type === 'test') {
+            if (!batch.testIds.includes(event.id)) events.push({ type: 'error', message: `The runner executed a test outside its selected runtime batch: ${event.id}` })
+            events.push({ ...event, executionHost: { ...batch.executionHost, batchId: batch.id } })
+          } else events.push(event)
+        }
+        return added
+      }
+      let verifiedPackage = null
+      for (const [index, batch] of batches.entries()) {
+        const record = batchRecords[index]
+        if (Date.now() >= deadline) { invocations.push({ code: 1, timedOut: true, log: 'The shared run time budget was exhausted before this batch' }); record.reason = 'The shared run time budget was exhausted'; break }
         const environment = cleanEnvironment()
-        if (mode === 'live') {
+        if (batch.mode === 'live') {
           if (!liveConfig) throw new Error('Live tests cannot run without a budget broker')
           broker ??= await startLiveBroker({ ...liveConfig.config, apiKey: liveConfig.apiKey })
           environment[liveConfig.config.apiKeyEnv] = ''
           Object.assign(environment, { HALO_ACCEPTANCE_MODE: 'brokered-live', HALO_TEST_API_URL: broker.url, HALO_TEST_API_KEY: broker.clientKey, HALO_TEST_MODEL: liveConfig.config.model, HALO_TEST_PROVIDER: liveConfig.config.protocol })
         }
-        if (executor === 'cluster') {
-          invocations.push(await executeClusterTests(root, group, { outputDirectory: output, eventFile, environment, timeoutMs: Math.max(1, deadline - Date.now()) }))
-          continue
+        if (batch.host === 'packaged') {
+          verifiedPackage ??= await verifyPackagedApplication(root, process.env.HALO_E2E_PACKAGED_APP)
+          environment.HALO_E2E_PACKAGED_APP = path.resolve(root, verifiedPackage.executable)
         }
-        let batchIndex = 0
-        for (const batch of executionBatches(group)) {
-          if (Date.now() >= deadline) { invocations.push({ code: 1, timedOut: true, log: 'The shared run time budget was exhausted before this batch' }); break }
-          const name = `${mode}-${batchIndex++}`
-          const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-          const grep = batch.map(test => `(?:^| )${escape(test.titlePath.join(' '))}$`).join('|')
-          const selectionFile = path.join(output, `selection-${name}.json`)
-          await writeJson(selectionFile, batch, { exclusive: true })
-          const args = ['node_modules/@playwright/test/cli.js', 'test', '--config', 'tests/playwright.config.ts', ...new Set(batch.map(test => test.file)), ...[...new Set(batch.map(test => test.project))].flatMap(project => [`--project=${project}`]), '--grep', grep, '--workers', '1', '--retries', '0', '--reporter', './scripts/acceptance/playwright-reporter.ts', '--output', path.join(output, 'artifacts', name)]
-          invocations.push(await execute(root, args, { environment: { ...environment, HALO_ACCEPTANCE_ROOT: root, HALO_ACCEPTANCE_REPORT: eventFile, HALO_ACCEPTANCE_SELECTION_FILE: selectionFile }, timeoutMs: Math.max(1, deadline - Date.now()), logFile: path.join(output, `runner-${name}.log`) }))
+        if (Date.now() >= deadline) { invocations.push({ code: 1, timedOut: true, log: 'The shared run time budget was exhausted while preparing the runtime' }); record.reason = 'The shared run time budget was exhausted'; break }
+        record.startedAt = new Date().toISOString()
+        record.status = 'running'
+        await saveBatches()
+        let invocation
+        try {
+          if (batch.executor === 'cluster') {
+            invocation = await executeClusterTests(root, batch.tests, { outputDirectory: output, eventFile, environment, timeoutMs: Math.max(1, deadline - Date.now()) })
+          } else {
+            const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+            const grep = batch.tests.map(test => `(?:^| )${escape(test.titlePath.join(' '))}$`).join('|')
+            const selectionFile = path.join(output, `selection-${batch.id}.json`)
+            await writeJson(selectionFile, batch.tests, { exclusive: true })
+            const args = ['node_modules/@playwright/test/cli.js', 'test', '--config', 'tests/playwright.config.ts', ...new Set(batch.tests.map(test => test.file)), ...[...new Set(batch.tests.map(test => test.project))].flatMap(project => [`--project=${project}`]), '--grep', grep, '--workers', '1', '--retries', '0', '--reporter', './scripts/acceptance/playwright-reporter.ts', '--output', path.join(output, 'artifacts', batch.id)]
+            invocation = await execute(root, args, { environment: { ...environment, HALO_ACCEPTANCE_ROOT: root, HALO_ACCEPTANCE_REPORT: eventFile, HALO_ACCEPTANCE_SELECTION_FILE: selectionFile }, timeoutMs: Math.max(1, deadline - Date.now()), logFile: path.join(output, `runner-${batch.id}.log`) })
+          }
+          invocations.push(invocation)
+          if (batch.host === 'packaged') record.executionHost.packageId = verifiedPackage.id
+          if (batch.host === 'packaged' && !packageIdentity) {
+            packageIdentity = { id: verifiedPackage.id, packagedAt: verifiedPackage.packagedAt, contentHash: verifiedPackage.content.rootSha256, executable: verifiedPackage.executable, coverage: verifiedPackage.coverage }
+            await writeJson(path.join(output, 'package.json'), verifiedPackage, { exclusive: true })
+          }
+          record.exitCode = invocation.code
+          record.timedOut = invocation.timedOut
+          record.cleanupFailed = Boolean(invocation.cleanupFailed)
+          record.status = invocation.code === 0 ? 'completed' : 'failed'
+          const added = await captureBatchEvents(record)
+          if (invocation.code === 0 && (!added.some(event => event.type === 'begin') || added.findLast(event => event.type === 'end')?.status !== 'passed')) {
+            invocation.code = 1
+            record.status = 'failed'
+            record.error = 'The runner completed without a successful terminal batch record'
+            events.push({ type: 'error', message: record.error })
+          }
+          if (invocation.cleanupFailed) {
+            events.push({ type: 'error', message: 'An execution batch could not confirm cleanup; remaining batches were not started' })
+            break
+          }
+        } catch (error) {
+          record.status = 'failed'
+          record.error = redact(error.message, root)
+          try { await captureBatchEvents(record) } catch (readError) { events.push({ type: 'error', message: redact(readError.message, root) }) }
+          throw error
+        } finally {
+          record.finishedAt = new Date().toISOString()
+          await saveBatches()
         }
       }
+      await saveBatches()
       execution = { code: invocations.some(result => result.code !== 0) ? 1 : 0, timedOut: invocations.some(result => result.timedOut), log: invocations.map(result => result.log).join('\n') }
       await fs.writeFile(path.join(output, 'runner.log'), execution.log)
-      events = await readEvents(eventFile)
       await verifyBuild(root)
-      if (process.env.HALO_E2E_PACKAGED_APP) await verifyPackagedApplication(root, process.env.HALO_E2E_PACKAGED_APP)
+      if (packageIdentity) await verifyPackagedApplication(root, process.env.HALO_E2E_PACKAGED_APP)
     }
   } catch (error) {
     execution = { code: 1, timedOut: false, log: redact(error.stack ?? error.message, root) }
@@ -272,7 +341,7 @@ export async function runPlan(root, catalog, plan, output, { timeoutMs = 1800000
   const end = events.findLast(event => event.type === 'end')
   const runnerFailed = selected.length && (execution.code !== 0 || !end || end.status !== 'passed')
   const status = summary.failed || errors.length ? 'failed' : !cases.length || summary.passed !== cases.length || runnerFailed ? 'incomplete' : 'passed'
-  const result = { ...baseRecord, buildIdentity, packageIdentity, evidenceIntegrity, live: plan.live ?? null, liveUsage, finishedAt: new Date().toISOString(), status, summary, cases, errors, runner: { code: execution.code, timedOut: execution.timedOut, status: end?.status ?? 'not-started' } }
+  const result = { ...baseRecord, buildIdentity, packageIdentity, executionBatches: batchRecords, evidenceIntegrity, live: plan.live ?? null, liveUsage, finishedAt: new Date().toISOString(), status, summary, cases, errors, runner: { code: execution.code, timedOut: execution.timedOut, status: end?.status ?? 'not-started' } }
   await writeJson(path.join(output, 'run.json'), result, { exclusive: true })
   await fs.unlink(path.join(output, 'in-progress.json'))
   return result
