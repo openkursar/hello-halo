@@ -638,7 +638,28 @@ export function listConversations(spaceId: string): ConversationMeta[] {
 
   const index = readIndex(conversationsDir)
   if (index) {
-    return index.conversations.filter(meta => !meta.ephemeral)
+    const pending = pendingIndexWrites.get(conversationsDir)
+    if (!pending?.entries.size) return index.conversations.filter(meta => !meta.ephemeral)
+
+    // Pending metadata is authoritative even while its disk write is coalesced.
+    // Sort only changed entries, then merge with the already-ordered index.
+    const positions = new Map(index.conversations.map((meta, position) => [meta.id, position]))
+    const compare = (left: ConversationMeta, right: ConversationMeta) =>
+      new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+      || (positions.get(left.id) ?? -1) - (positions.get(right.id) ?? -1)
+    const updates = [...pending.entries.values()]
+      .filter((meta): meta is ConversationMeta => meta !== null && !meta.ephemeral)
+      // Return-owned records must not let a caller mutate the delayed write.
+      .map(meta => ({ ...meta }))
+      .sort(compare)
+    const result: ConversationMeta[] = []
+    let next = 0
+    for (const meta of index.conversations) {
+      if (pending.entries.has(meta.id) || meta.ephemeral) continue
+      while (next < updates.length && compare(updates[next], meta) < 0) result.push(updates[next++])
+      result.push(meta)
+    }
+    return result.concat(updates.slice(next))
   }
 
   const metas = fullScanConversations(conversationsDir, spaceId)

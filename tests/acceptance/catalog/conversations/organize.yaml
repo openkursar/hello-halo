@@ -13,13 +13,14 @@ references:
   - src/renderer/components/chat/ConversationList.tsx
   - tests/e2e/specs/spaces.spec.ts
   - tests/e2e/specs/acceptance-conversations.spec.ts
+  - tests/e2e/specs/acceptance-conversation-title.spec.ts
 promises:
   identity:
     en: A new conversation has independent history and a blank composer.
     zh: 新对话拥有独立记录与空白输入框。
   organize:
-    en: Names and pinned state survive reopening.
-    zh: 名称与置顶状态在重新打开后保留。
+    en: The conversation list and header reflect the current saved name; names and pinned state survive reopening.
+    zh: 对话列表和页眉反映当前保存的名称；名称与置顶状态在重新打开后保留。
   delete:
     en: Removing a selected conversation affects only its history; clearing a digital-human conversation requires its explicit confirmation.
     zh: 移除选中对话只影响其历史；清空数字人对话需要明确确认。
@@ -69,6 +70,39 @@ scenarios:
     expected:
       - en: Only that conversation changes name and pinned placement.
         zh: 只有该对话改变名称和置顶位置。
+  - id: conversations.organize.auto-title
+    title:
+      en: Keep the first-question title current across navigation and restart
+      zh: 首问生成的标题在切换页面和重启后保持一致
+    verifies:
+      - organize
+      - identity
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A separate conversation remains untouched; a new conversation uses its default automatic naming.
+        zh: 保留一个不改动的对照会话；新对话使用默认自动命名。
+    steps:
+      - en: Send a short unique first question through the UI and wait for the real local provider response.
+        zh: 从界面发送简短且唯一的首问，等待真实本地服务回复。
+      - en: Immediately visit Settings and return without renaming the conversation or waiting for the index write.
+        zh: 立即进入设置后返回，不手动改名，也不等待索引落盘。
+      - en: Compare the saved conversation, list response, sidebar and header for the same conversation, then restart and reopen it.
+        zh: 对照同一会话的保存记录、列表返回、侧栏和页眉，再重启并重新打开。
+    expected:
+      - en: The first question becomes the same current title in storage and on screen; the original conversation identity and messages remain intact.
+        zh: 首问成为存储和界面中一致的当前标题；原会话身份与消息保持完整。
+      - en: The title and history survive restart, and the control conversation remains unchanged.
+        zh: 重启后标题和历史仍在，对照会话不受影响。
+    notes:
+      en: Index timing is diagnostic evidence, not a wall-clock performance assertion. A separate real-file service regression verifies reads during the pending-write window deterministically. Restart checks retained history and makes no model-context recovery claim.
+      zh: 索引时间仅作诊断，不以运行耗时作为性能断言。另有真实文件服务回归确定性验证待落盘窗口内的读取；重启只检查已存历史，不代表模型上下文恢复已通过。
   - id: conversations.organize.delete
     title:
       en: Cancel then confirm clearing
