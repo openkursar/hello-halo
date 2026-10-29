@@ -13,6 +13,7 @@ references:
   - src/renderer/components/settings/CredentialAlertBanner.tsx
   - src/renderer/components/settings/SystemSection.tsx
   - tests/e2e/specs/acceptance-settings.spec.ts
+  - tests/e2e/specs/acceptance-config-recovery.spec.ts
 promises:
   unreadable:
     en: Unreadable configuration is reported and protected from an ordinary stale save.
@@ -35,16 +36,27 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: none
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
     preconditions:
-      - en: An isolated profile has deliberately unreadable configuration.
-        zh: 隔离资料的配置被故意设为不可读。
+      - en: An isolated application has saved preferences and an existing AI source. After its process exits, only its configuration JSON is deliberately damaged.
+        zh: 隔离应用已有保存的偏好和 AI 来源；确认进程退出后，仅故意损坏其配置 JSON。
     steps:
-      - en: Open Halo, inspect the warning and attempt a normal settings save.
-        zh: 打开 Halo 查看警告并尝试普通设置保存。
+      - en: Reopen Halo, inspect the unreadable-file warning and attempt the theme save offered on the first-launch preferences screen.
+        zh: 重开 Halo，查看文件不可读警告，并在实际显示的首次偏好设置页尝试保存主题。
+      - en: Restore the valid configuration bytes, select Check again, then leave setup through Skip for now and save a different theme in Settings.
+        zh: 恢复原合法配置字节，点击再次检查，再通过暂时跳过离开设置引导，并在设置页保存不同主题。
+      - en: Restart and inspect the saved theme, original AI source and an unrelated file.
+        zh: 重启后检查保存的主题、原 AI 来源和无关文件。
     expected:
-      - en: The read failure remains explicit and the damaged source is not silently replaced by an empty default.
-        zh: 读取失败明确，不用空默认值悄悄覆盖损坏来源。
+      - en: Halo identifies the unreadable file and reports Not saved; the failed save preserves the damaged bytes exactly.
+        zh: Halo 明确指出不可读文件并提示未保存；失败保存逐字节保留损坏内容。
+      - en: Check again reloads the repaired preferences without replacing them with fallback defaults. A later normal save persists across restart while the original AI source and unrelated file remain.
+        zh: 再次检查重新载入修复后的偏好，不用回退默认值替换；之后的正常保存跨重启保留，原 AI 来源和无关文件仍在。
+    notes:
+      en: Unreadable configuration currently enters first-launch setup, where the normal Settings navigation is unavailable. This case exercises that real save and recovery route, not a forced Settings route. An offered Windows Git Bash setup is explicitly skipped through its UI without downloading. No model request is made; the shared fixture requires the Halo SDK for its initial engine check.
+      zh: 当前配置不可读时进入首次设置引导，普通设置导航不可用。本例验证该真实保存和恢复路径，不强制跳入设置页；若 Windows 提供 Git Bash 安装引导，通过界面明确跳过，不下载。全程不发送模型请求，共享夹具初始引擎检查需要 Halo SDK。
   - id: settings.safety.clear-browser
     title:
       en: Cancel and confirm shared-browser cleanup

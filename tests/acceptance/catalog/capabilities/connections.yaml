@@ -13,6 +13,7 @@ references:
   - src/main/services/agent/mcp-manager.ts
   - src/main/services/agent/DESIGN.md
   - tests/e2e/specs/acceptance-mcp.spec.ts
+  - tests/e2e/specs/acceptance-mcp-recovery.spec.ts
 promises:
   states:
     en: Saving, enabling and connection health are separate observable states.
@@ -63,7 +64,12 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
+    notes:
+      en: An established engine session sends a real MCP tool request that receives HTTP 503. Restoring the same local endpoint is followed by two successful turns in the same conversation, with request receipts, model inputs and saved tool results checked. This does not infer other engines or every long-term retry policy.
+      zh: 已建立的引擎会话发出真实 MCP 工具请求并收到 HTTP 503；恢复同一本地端点后，在同一对话连续两轮成功调用，同时核对请求记录、模型输入和保存的工具结果。不据此推断其他引擎或所有长期重试策略。
     preconditions:
       - en: An engine session has observed a failed MCP server.
         zh: 引擎会话已观察到 MCP 失败。
@@ -85,7 +91,12 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
+    notes:
+      en: A real pending HTTP tool call stays on its original endpoint while the shared connection URL is edited and confirmed through the UI. The original call completes after release; two later turns call only the replacement endpoint. Other setting and enablement changes are not inferred from this URL-edit journey.
+      zh: 真实 HTTP 工具请求在途时，通过界面编辑并确认共享连接 URL；原请求保留在旧端点并在释放后完成，后续两轮仅调用新端点。此 URL 编辑旅程不代表其他配置或启用状态变更均已验证。
     preconditions:
       - en: A controlled turn is running.
         zh: 受控任务正在运行。
