@@ -51,6 +51,8 @@ describe('thought panel steps', () => {
       toolResult: { output: 'done', isError: false, timestamp: at },
     }]
     expect(steps(done, true, true)).toBe(steps(done, false, true))
-    expect(steps(done, false, true)).toContain('Done')
+    // A finished step carries no status label; only pending or failed ones do.
+    expect(steps(done, false, true)).not.toContain('Running')
+    expect(steps(done, false, true)).toContain('Bash')
   })
 })

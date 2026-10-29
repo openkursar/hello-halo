@@ -83,22 +83,55 @@ describe('transcript rows', () => {
     expect(ended.injections.get(placeholder.id)).toHaveLength(2)
   })
 
-  it('draws a delivery read mid-turn in the reply it joined, and one that opened a turn as its own card', () => {
+  it('draws a delivery read mid-turn in the reply it joined, and one that opened a turn on the reply it opened', () => {
     const first = reply()
     const live = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'live', inputReplyId: first.id } })
     const idle = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'turn' } })
     const second = reply()
     const source = [user(), first, live, injection(), idle, second]
     const rows = nextTranscriptRows(null, source, false)
-    expect(rows.messages).toEqual([source[0], first, idle, second])
+    expect(rows.messages).toEqual([source[0], first, second])
     expect(rows.arrivals.get(first.id)).toEqual([live])
     expect(rows.arrivals.has(second.id)).toBe(false)
+    expect(rows.openers.get(second.id)).toEqual([idle])
     expect(rows.injections.get(first.id)).toEqual([source[3]])
+    // No reply yet and no turn running: the delivery is its own card.
     const pending = nextTranscriptRows(null, source.slice(0, -1), false)
     expect(pending.messages).toContain(idle)
     const appended = nextTranscriptRows(pending, source, false)
     expect(appended.messages).toEqual(rows.messages)
     expect([...appended.arrivals]).toEqual([...rows.arrivals])
+    expect([...appended.openers]).toEqual([...rows.openers])
+  })
+
+  it('gives a running turn its openers, at the end or before its placeholder, and keeps them on the settled reply', () => {
+    const opener = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'turn' } })
+    const notice = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'turn' } })
+    const history = [user(), reply()]
+    const started = nextTranscriptRows(nextTranscriptRows(null, history, false), [...history, opener, notice], true)
+    expect(started.messages).toEqual(history)
+    expect(started.liveOpeners).toEqual([opener, notice])
+
+    const placeholder = reply(undefined, { content: '' })
+    const running = nextTranscriptRows(started, [...history, opener, notice, placeholder], true)
+    expect(running.messages).toEqual(history)
+    expect(running.liveOpeners).toEqual([opener, notice])
+
+    const settled = { ...placeholder, content: 'done' }
+    const done = nextTranscriptRows(running, [...history, opener, notice, settled], false)
+    expect(done.messages).toEqual([...history, settled])
+    expect(done.openers.get(settled.id)).toEqual([opener, notice])
+    expect(done.liveOpeners).toEqual([])
+  })
+
+  it('never draws a delivery on a push, another sender’s card, or a reply after a user message', () => {
+    const opener = message({ role: 'system', source: 'team-message', metadata: { teamId: 'team', inputMode: 'turn' } })
+    const push = reply(undefined, { source: 'push' })
+    const cross = message({ role: 'system', source: 'cross-conversation', metadata: { fromConversationId: 'other', inputMode: 'turn' } })
+    const source = [user(), reply(), opener, push, cross, reply(), opener, user(), reply()]
+    const rows = nextTranscriptRows(null, source, false)
+    expect(rows.messages).toEqual(source)
+    expect(rows.openers.size).toBe(0)
   })
 
   it('gives a view drawing its own selection the same attachment, by reply', () => {
@@ -192,6 +225,8 @@ describe('transcript rows', () => {
       expect(rows.previousCosts).toEqual(full.previousCosts)
       expect([...rows.injections]).toEqual([...full.injections])
       expect([...rows.arrivals]).toEqual([...full.arrivals])
+      expect([...rows.openers]).toEqual([...full.openers])
+      expect(rows.liveOpeners).toEqual(full.liveOpeners)
     }
   })
 
