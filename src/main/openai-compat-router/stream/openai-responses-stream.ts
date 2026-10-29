@@ -200,8 +200,6 @@ export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
   private handleTextDone(): void {
     if (this.state.hasTextBlock) {
       this.closeCurrentBlock()
-      this.state.hasTextBlock = false
-      this.state.contentBlockIndex++
     }
   }
 
@@ -240,8 +238,7 @@ export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
         if (typeof item.arguments === 'string') {
           this.writeToolInputIfMissing(outputIndex, item.arguments)
         }
-        this.writer.writeBlockStop(blockIndex)
-        this.state.currentBlockIndex = -1
+        this.closeToolUseBlock(outputIndex)
       }
     } else if (item.type === 'reasoning') {
       // Reasoning item complete

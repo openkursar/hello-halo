@@ -26,6 +26,7 @@ export interface StreamState {
   messageId: string
   model: string
   currentBlockIndex: number
+  /** Next unused Anthropic content index, independent of provider tool indices. */
   contentBlockIndex: number
   hasTextBlock: boolean
   hasThinkingBlock: boolean
@@ -79,6 +80,7 @@ export abstract class BaseStreamHandler {
   // Tool call tracking
   protected toolCallMap = new Map<number, StreamToolCallState>()
   protected toolIndexToBlock = new Map<number, number>()
+  private openToolIndices = new Set<number>()
 
   constructor(res: ExpressResponse, options: StreamHandlerOptions = {}) {
     this.writer = new SSEWriter(res, { debug: options.debug })
@@ -179,7 +181,7 @@ export abstract class BaseStreamHandler {
     // for tool call arguments. Inject a corrective input_json_delta event before
     // content_block_stop so downstream consumers (CC SDK, stream-processor)
     // receive valid JSON.
-    this.repairToolArguments()
+    for (const toolIndex of this.openToolIndices) this.closeToolUseBlock(toolIndex)
 
     // Close any open block
     this.closeCurrentBlock()
@@ -206,7 +208,7 @@ export abstract class BaseStreamHandler {
       const hasToolCalls = this.toolCallMap.size > 0
 
       if (!hasActualText && !hasToolCalls) {
-        const idx = this.state.contentBlockIndex
+        const idx = this.state.contentBlockIndex++
         this.writer.writeTextBlockStart(idx)
         this.writer.writeTextDelta(idx, ' ')
         this.writer.writeBlockStop(idx)
@@ -291,7 +293,16 @@ export abstract class BaseStreamHandler {
     if (this.state.currentBlockIndex >= 0) {
       this.writer.writeBlockStop(this.state.currentBlockIndex)
       this.state.currentBlockIndex = -1
+      this.state.hasTextBlock = false
+      this.state.hasThinkingBlock = false
     }
+  }
+
+  protected closeToolUseBlock(toolIndex: number): void {
+    if (!this.openToolIndices.has(toolIndex)) return
+    this.repairToolArguments(toolIndex)
+    this.writer.writeBlockStop(this.toolIndexToBlock.get(toolIndex)!)
+    this.openToolIndices.delete(toolIndex)
   }
 
   /**
@@ -310,51 +321,50 @@ export abstract class BaseStreamHandler {
    * - The repaired output is verified with JSON.parse before being sent.
    * - Valid JSON is never touched (fast-path exit).
    */
-  protected repairToolArguments(): void {
-    for (const [toolIndex, state] of this.toolCallMap) {
-      if (!state.arguments) continue
+  protected repairToolArguments(toolIndex: number): void {
+    const state = this.toolCallMap.get(toolIndex)
+    if (!state?.arguments) return
 
-      // Fast path: valid JSON, nothing to do
-      try {
-        JSON.parse(state.arguments)
-        continue
-      } catch {
-        // Fall through to repair
-      }
+    // Fast path: valid JSON, nothing to do
+    try {
+      JSON.parse(state.arguments)
+      return
+    } catch {
+      // Fall through to repair
+    }
 
-      try {
-        const repaired = jsonrepair(state.arguments)
-        JSON.parse(repaired) // Verify repair produced valid JSON
+    try {
+      const repaired = jsonrepair(state.arguments)
+      JSON.parse(repaired) // Verify repair produced valid JSON
 
-        // Only apply suffix-only repairs (appended missing brackets/braces).
-        // If jsonrepair modified content in the middle, the already-sent
-        // partial_json deltas cannot be retracted — log and skip.
-        if (!repaired.startsWith(state.arguments)) {
-          console.warn(
-            `[StreamHandler] Tool args for "${state.name}" need non-suffix repair, cannot fix in-stream. ` +
-            `Original (${state.arguments.length} chars): ${state.arguments}`
-          )
-          continue
-        }
-
-        const suffix = repaired.slice(state.arguments.length)
-        if (!suffix) continue
-
-        const blockIndex = this.toolIndexToBlock.get(toolIndex)
-        if (blockIndex === undefined) continue
-
+      // Only apply suffix-only repairs (appended missing brackets/braces).
+      // If jsonrepair modified content in the middle, the already-sent
+      // partial_json deltas cannot be retracted — log and skip.
+      if (!repaired.startsWith(state.arguments)) {
         console.warn(
-          `[StreamHandler] Repaired malformed tool args for "${state.name}": ` +
-          `appended "${suffix}" (${state.arguments.length} → ${repaired.length} chars)`
-        )
-        this.writer.writeInputJsonDelta(blockIndex, suffix)
-        state.arguments = repaired
-      } catch (e) {
-        console.warn(
-          `[StreamHandler] Cannot repair tool args for "${state.name}": ${(e as Error).message}. ` +
+          `[StreamHandler] Tool args for "${state.name}" need non-suffix repair, cannot fix in-stream. ` +
           `Original (${state.arguments.length} chars): ${state.arguments}`
         )
+        return
       }
+
+      const suffix = repaired.slice(state.arguments.length)
+      if (!suffix) return
+
+      const blockIndex = this.toolIndexToBlock.get(toolIndex)
+      if (blockIndex === undefined) return
+
+      console.warn(
+        `[StreamHandler] Repaired malformed tool args for "${state.name}": ` +
+        `appended "${suffix}" (${state.arguments.length} → ${repaired.length} chars)`
+      )
+      this.writer.writeInputJsonDelta(blockIndex, suffix)
+      state.arguments = repaired
+    } catch (e) {
+      console.warn(
+        `[StreamHandler] Cannot repair tool args for "${state.name}": ${(e as Error).message}. ` +
+        `Original (${state.arguments.length} chars): ${state.arguments}`
+      )
     }
   }
 
@@ -369,7 +379,7 @@ export abstract class BaseStreamHandler {
 
       this.state.hasTextBlock = true
       this.writer.writeTextBlockStart(this.state.contentBlockIndex)
-      this.state.currentBlockIndex = this.state.contentBlockIndex
+      this.state.currentBlockIndex = this.state.contentBlockIndex++
 
       return true
     }
@@ -388,7 +398,7 @@ export abstract class BaseStreamHandler {
 
       this.state.hasThinkingBlock = true
       this.writer.writeThinkingBlockStart(this.state.contentBlockIndex)
-      this.state.currentBlockIndex = this.state.contentBlockIndex
+      this.state.currentBlockIndex = this.state.contentBlockIndex++
 
       return true
     }
@@ -412,7 +422,8 @@ export abstract class BaseStreamHandler {
     this.state.contentBlockIndex++
 
     this.writer.writeToolUseBlockStart(blockIndex, toolId, toolName)
-    this.state.currentBlockIndex = blockIndex
+    // Parallel calls can interleave argument deltas until each call completes.
+    this.openToolIndices.add(toolIndex)
 
     // Track tool state
     this.toolCallMap.set(toolIndex, {
@@ -461,18 +472,17 @@ export abstract class BaseStreamHandler {
       this.startThinkingBlock()
     }
 
-    this.writer.writeThinkingDelta(this.state.contentBlockIndex, thinking)
+    this.writer.writeThinkingDelta(this.state.currentBlockIndex, thinking)
   }
 
   protected writeSignatureDelta(signature: string): void {
     if (this.isFinished || !signature) return
 
     if (this.state.hasThinkingBlock) {
-      this.writer.writeSignatureDelta(this.state.contentBlockIndex, signature)
+      this.writer.writeSignatureDelta(this.state.currentBlockIndex, signature)
 
       // Close thinking block and move to next
       this.closeCurrentBlock()
-      this.state.contentBlockIndex++
     }
   }
 
@@ -530,16 +540,10 @@ export abstract class BaseStreamHandler {
   ): void {
     if (this.isFinished) return
 
-    // Close current block if needed
-    if (this.state.currentBlockIndex >= 0 && this.state.hasTextBlock) {
-      this.closeCurrentBlock()
-      this.state.hasTextBlock = false
-    }
-
-    this.state.contentBlockIndex++
-    this.writer.writeWebSearchBlockStart(this.state.contentBlockIndex, toolUseId, results)
-    this.writer.writeBlockStop(this.state.contentBlockIndex)
-    this.state.currentBlockIndex = -1
+    this.closeCurrentBlock()
+    const blockIndex = this.state.contentBlockIndex++
+    this.writer.writeWebSearchBlockStart(blockIndex, toolUseId, results)
+    this.writer.writeBlockStop(blockIndex)
   }
 
   protected writeError(message: string): void {
