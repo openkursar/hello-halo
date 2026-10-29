@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { FullConfig, FullResult, Reporter, Suite, TestCase, TestResult } from '@playwright/test/reporter'
 import { redact } from './lib/process.mjs'
 
@@ -64,10 +64,23 @@ export default class AcceptanceReporter implements Reporter {
 
   private attachment(attachment: TestResult['attachments'][number]) {
     const result = { name: attachment.name, contentType: attachment.contentType, path: '' }
-    if (!this.output || !attachment.path) return result
+    if (!this.output) return result
     let ownedTextFile: string | undefined
     try {
       const runDirectory = fs.realpathSync(path.dirname(this.output))
+      if (!attachment.path) {
+        if (!Buffer.isBuffer(attachment.body)) throw new Error('Attachment has neither a file nor an inline body')
+        if (attachment.body.length > 16 * 1024 * 1024) throw new Error('Inline attachment exceeds the export limit')
+        const directory = path.join(runDirectory, 'inline-attachments')
+        fs.mkdirSync(directory, { recursive: true })
+        if (fs.lstatSync(directory).isSymbolicLink() || fs.realpathSync(directory) !== directory) throw new Error('Inline attachment directory is not owned by this run')
+        const isText = /^text\//i.test(attachment.contentType) || /json|xml|yaml|javascript|svg/i.test(attachment.contentType)
+        const extension = isText ? '.txt' : attachment.contentType === 'image/png' ? '.png' : attachment.contentType === 'image/jpeg' ? '.jpg' : '.bin'
+        const target = path.join(directory, randomUUID() + extension)
+        fs.writeFileSync(target, isText ? redact(attachment.body.toString('utf8'), this.root) : attachment.body, { flag: 'wx', mode: 0o600 })
+        result.path = path.relative(runDirectory, target).split(path.sep).join('/')
+        return result
+      }
       const file = fs.realpathSync(attachment.path)
       const relative = path.relative(runDirectory, file)
       if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative) || !fs.lstatSync(attachment.path).isFile()) throw new Error('Attachment is outside the owned run directory or is not a regular file')
@@ -104,7 +117,7 @@ export default class AcceptanceReporter implements Reporter {
       status: result.status, retry: result.retry, duration: result.duration, startedAt: result.startTime.toISOString(),
       isolation: test.annotations.filter(annotation => annotation.type === 'acceptance-isolation').map(annotation => annotation.description),
       errors: result.errors.map(error => error.message ?? 'Unknown test failure'),
-      attachments: result.attachments.filter(attachment => attachment.path).map(attachment => this.attachment(attachment)),
+      attachments: result.attachments.map(attachment => this.attachment(attachment)),
     })
   }
 
