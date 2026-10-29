@@ -14,6 +14,7 @@ paths:
   - src/main/services/agent/toolsets/**
   - src/main/services/agent/mcp-manager.ts
   - src/main/apps/manager/skill-sync.ts
+  - src/main/platform/memory/**
 dependsOn:
   - people
 scope:

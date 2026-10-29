@@ -18,6 +18,7 @@ references:
   - src/main/apps/skill-discovery.ts
   - src/main/apps/manager/DESIGN.md
   - tests/e2e/specs/acceptance-skills.spec.ts
+  - tests/e2e/specs/acceptance-skill-invocation.spec.ts
 promises:
   draft:
     en: Closing the skill editor can retain the draft until it is installed.
@@ -232,15 +233,28 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    variants:
+      memory:
+        - enabled
+        - disabled
     preconditions:
-      - en: A local scripted model and an installed skill are available in the selected workspace.
-        zh: 选定空间有本地脚本模型及已安装技能。
+      - en: A selected skill and an unselected control are installed through the real application manager into an isolated workspace before its first engine session starts.
+        zh: 在隔离空间的首个引擎会话启动前，通过真实应用管理器安装目标技能与未调用的对照技能。
+      - en: Workspace memory follows the required enabled/disabled variant, with automatic consolidation disabled through its real settings.
+        zh: 空间记忆按必需变体启用或关闭，通过真实设置关闭自动整理。
     steps:
-      - en: Use the skill’s UI action or command, submit the request and inspect the real invocation result and persisted conversation.
-        zh: 使用技能界面操作或命令并提交，检查真实调用结果及保存对话。
+      - en: Open the installed skill in the capability library, select Use, add an argument to its prefilled command and send through the conversation UI.
+        zh: 在能力库打开已安装技能，点击使用，在预填命令后追加参数并从对话界面发送。
+      - en: Inspect the actual model request and stored reply, then restart and reopen the conversation without another model turn.
+        zh: 检查实际模型请求与保存的回复，再重启并重新打开对话，不发起新的模型轮次。
     expected:
-      - en: The model receives the actual installed instruction content for that skill and the conversation preserves the resulting reply.
-        zh: 模型接收该技能真实安装的指令内容，对话保留由此产生的回复。
+      - en: The Halo engine expands the selected installed instructions and invocation argument into one actual request; the other skill’s instruction body is absent.
+        zh: Halo 引擎把选定技能的已安装指令和调用参数展开到一次实际请求中，不夹带另一技能的指令正文。
+      - en: The invoking workspace and conversation preserve the original command and reply across restart, while both installed skill files remain unchanged.
+        zh: 发起调用的空间及会话在重启后保留原命令与回复，两份已安装技能文件均不改变。
+    notes:
+      en: Installation is a real application-manager precondition, not a native file-picker test. Invocation uses the skill detail action and the Halo engine's native slash expansion, observed at the local model boundary; instruction text is never inserted into the prompt by the fixture. This does not establish Claude Code, Codex, DSH, global-skill configuration or natural-language model compliance.
+      zh: 安装通过真实应用管理器完成前置，不代表已验证原生文件选择器。调用走技能详情入口与 Halo 引擎原生斜杠展开，并在本地模型边界观察；fixture 不将指令正文塞入提示。不据此推断 Claude Code、Codex、DSH、全局技能配置或模型自然语言遵循效果。
     requirements:
       - halo-sdk
