@@ -13,6 +13,7 @@ references:
   - tests/e2e/specs/digital-human-chat.spec.ts
   - src/renderer/components/chat/transcript/DESIGN.md
   - tests/e2e/specs/acceptance-conversation-reading.spec.ts
+  - tests/e2e/specs/acceptance-conversation-draft.spec.ts
 promises:
   anchor:
     en: Reading old messages is not interrupted by new streamed content.
@@ -64,7 +65,11 @@ scenarios:
       - regression
     evidence: ui
     mode: none
-    automation: planned
+    automation: automated
+    notes:
+      en: >-
+        A real installed person has two independently registered local sessions with known saved JSONL history, validated through the native reader. The UI fixture wraps only the publicly exported renderer appChatTranscript function: it calls the original native transport immediately and delays delivery of its unmodified result separately for each session. Each draft is entered before its session's result is delivered; the first result arrives while the second conversation is selected, and switching back must recover each draft with the correct history. The wrapper is restored afterward. This is UI timing evidence, not app-e2e or real slow-disk evidence; it does not claim drafts survive a process restart. An ordinary workspace conversation is initialized before this loading test, separately from the empty-workspace person-entry regression.
+      zh: 真实安装数字人拥有两个独立注册的本地会话，各自已知 JSONL 历史先通过原生读取器验证。UI fixture 只包装公开导出的 renderer appChatTranscript 函数，立即调用原原生传输，再分别延迟各会话未改动的结果交付；各自结果交付前输入草稿，第一份结果在第二会话选中时到达，切回必须恢复各自草稿与正确历史，之后恢复原函数。这是界面时序证据，不是 app-e2e 或真实慢磁盘证据，也不承诺草稿跨进程重启保留；本测试先初始化普通空间对话，与空空间数字人入口回归分开。
     preconditions:
       - en: A digital-human conversation loads its history.
         zh: 数字人对话正在载入历史。
