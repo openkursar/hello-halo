@@ -10,10 +10,11 @@ test.setTimeout(90000)
 test('space messages survive an application restart and remain available to the next turn', acceptance('chat.messages.persist'), async ({ acceptanceApp, model, window }) => {
   const token = randomUUID()
   let replies = 0
+  const receivedContext: boolean[] = []
   model.respond(request => {
     if (request.lastUserText.includes(`Remember this reference: ${token}`)) return { text: `Reference saved: ${token}` }
     if (request.lastUserText.includes('Repeat the reference I gave you.')) {
-      expect(request.text).toContain(`Remember this reference: ${token}`)
+      receivedContext.push(request.text.includes(`Remember this reference: ${token}`))
       replies++
       return { text: `The reference is ${token}` }
     }
@@ -43,6 +44,7 @@ test('space messages survive an application restart and remain available to the 
   const afterRestart = await readAcceptanceConversation(reopened, first.spaceId, first.conversationId)
   expect(afterRestart.messages.filter(message => message.role === 'user')).toHaveLength(3)
   expect(replies).toBe(2)
+  expect(receivedContext, 'The model must receive the original reference both before and after restart').toEqual([true, true])
 })
 
 test('a supplement sent while a real tool is running reaches the next model step', acceptance('chat.messages.live-input'), async ({ acceptanceApp, model, window }) => {

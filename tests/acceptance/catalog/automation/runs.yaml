@@ -12,6 +12,7 @@ references:
   - src/main/apps/runtime/DESIGN.md
   - tests/e2e/specs/digital-human-lifecycle.spec.ts
   - src/renderer/components/apps/SessionDetailView.tsx
+  - tests/e2e/specs/acceptance-automation.spec.ts
 promises:
   progress:
     en: A manual run exposes its actual current process and persisted result.
@@ -19,6 +20,9 @@ promises:
   followup:
     en: A follow-up belongs to the finished run’s conversation and is a new turn.
     zh: 追问属于已完成任务的对话，作为新一轮执行。
+  live-input:
+    en: A message sent during an active execution reaches its next processing step and remains in that run's history.
+    zh: 执行中发送的补充消息到达下一处理步骤，并保留在该任务历史中。
   recovery:
     en: A failed or stopped run remains distinguishable from successful completion.
     zh: 失败或停止的任务与成功完成可以区分。
@@ -37,7 +41,9 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
     preconditions:
       - en: A runnable person is installed with a scripted model.
         zh: 已安装可运行的数字人并使用脚本模型。
@@ -58,7 +64,9 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
     preconditions:
       - en: A completed run has a known first reply.
         zh: 已完成任务有已知首轮回复。
@@ -79,13 +87,51 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
+    variants:
+      outcome:
+        - stopped
+        - failed
     preconditions:
-      - en: A test run is executing a controlled tool.
-        zh: 测试任务正在执行可控工具。
+      - en: Use isolated application data and a local model endpoint. The stopped variant waits in a real tool; the failed variant receives a permanent rejection from the model endpoint.
+        zh: 使用隔离应用数据及本地模型端点。停止变体等待真实工具执行；失败变体由模型端点返回不可重试的拒绝。
     steps:
-      - en: Stop it or inject a deterministic tool failure, then reopen activity.
-        zh: 停止它或触发确定性工具错误，再查看活动。
+      - en: Stop the active execution through the UI, or let the model request fail, and inspect its activity.
+        zh: 通过界面停止活动执行，或让模型请求真实失败，然后查看活动。
+      - en: Restore the model endpoint, start a separate execution through Run now, and reopen both records after an application restart.
+        zh: 恢复模型端点，通过立即运行启动独立执行，并在应用重启后重新查看两条记录。
     expected:
       - en: The retained record explains the actual outcome and offers only supported continuation.
         zh: 保存记录说明真实结果，仅提供受支持的继续方式。
+      - en: A later successful run has a distinct identity and does not replace the earlier stopped or failed record.
+        zh: 后续成功执行具有独立身份，不覆盖之前停止或失败的记录。
+    notes:
+      en: Stopping and provider failure are separate required variants. A recoverable tool error alone does not establish failed-run recovery.
+      zh: 主动停止与供应商失败是两个独立必测变体。单个可恢复工具错误不构成任务失败恢复证据。
+  - id: automation.runs.live-input
+    title:
+      en: Add an instruction while a tool is running
+      zh: 工具执行时补充说明
+    verifies:
+      - live-input
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: An isolated digital human is running a real local tool held by a test-owned file gate.
+        zh: 隔离数字人正在执行真实本地工具，由测试自有文件控制其结束。
+    steps:
+      - en: Open the live process, send a correction through its composer, then release the tool.
+        zh: 打开实时过程，通过输入框发送修正，再释放工具。
+      - en: Observe the next model request and completed report, then restart and reopen the process.
+        zh: 检查下一模型请求及完成报告，然后重启并重新打开过程。
+    expected:
+      - en: The correction reaches the next model step of the same run, is saved once in its transcript and remains readable after restart.
+        zh: 修正到达同一任务的下一模型步骤，在记录中仅保存一次，并在重启后仍可阅读。

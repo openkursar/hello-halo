@@ -14,6 +14,7 @@ references:
   - src/renderer/components/apps/AppConfigPanel.tsx
   - tests/e2e/specs/people-settings.spec.ts
   - tests/e2e/specs/digital-human-lifecycle.spec.ts
+  - tests/e2e/specs/acceptance-automation.spec.ts
 promises:
   trigger:
     en: A valid enabled trigger starts the configured digital human and records the outcome.
@@ -37,15 +38,17 @@ scenarios:
       - linux
     profiles:
       - regression
-    evidence: integration
+    evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
     preconditions:
       - en: A disposable person has a due scheduled trigger and a scripted model.
         zh: 测试数字人有到期日程和脚本化模型。
     steps:
-      - en: Advance the controlled schedule boundary and open its activity.
-        zh: 推进受控时间边界并查看活动。
+      - en: Enable the saved schedule and wait across its actual next due time without manually triggering a run.
+        zh: 启用保存的计划，等待跨过真实的下次到期时间，不手动触发执行。
     expected:
       - en: One intended run and its result appear with the trigger identity.
         zh: 出现一次预期执行与结果，并显示对应触发来源。
@@ -58,9 +61,11 @@ scenarios:
     platforms: *a1
     profiles:
       - regression
-    evidence: integration
+    evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
     preconditions:
       - en: A repeating schedule is enabled.
         zh: 周期日程已启用。
@@ -70,6 +75,9 @@ scenarios:
     expected:
       - en: No paused trigger runs; resumed scheduling uses the saved configuration.
         zh: 暂停期间不执行，恢复后仍使用保存的配置。
+    notes:
+      en: The executable waits across real runtime due times using a local scripted provider. It does not change the system clock or replace the scheduler.
+      zh: 测试使用本地脚本供应商并等待真实运行时到期时间，不修改系统时钟或替换调度器。
   - id: automation.schedule.working-days
     title:
       en: Change working-day restrictions
