@@ -1,4 +1,5 @@
 import { test as base, expect, type ElectronApplication, type Page, type TestInfo } from '@playwright/test'
+import type { ChildProcess } from 'node:child_process'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -53,27 +54,38 @@ async function attachProbe(window: Page) {
   })
 }
 
-async function open(entry: string, profile: string) {
+interface OwnedApplication {
+  app: ElectronApplication
+  child: ChildProcess | null
+}
+
+function hasExited(owned: OwnedApplication): boolean {
+  return !!owned.child && (owned.child.exitCode != null || owned.child.signalCode != null)
+}
+
+async function open(entry: string, profile: string, register: (app: ElectronApplication) => void) {
   const project = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
   const app = await launchElectronApp(entry, profile, { bootstrapDirectory: project })
+  register(app)
   const window = await app.firstWindow()
   await window.waitForLoadState('domcontentloaded')
   await attachProbe(window)
   return { app, window }
 }
 
-async function close(app: ElectronApplication) {
-  const child = app.process()
-  if (child.exitCode !== null || child.signalCode !== null) return
+async function close(owned: OwnedApplication) {
+  const { app, child } = owned
+  if (hasExited(owned)) return
   let timeout: ReturnType<typeof setTimeout> | undefined
   let onExit!: () => void
-  const exited = new Promise<void>(resolve => { onExit = resolve; child.once('exit', onExit) })
+  const exited = child ? new Promise<void>(resolve => { onExit = resolve; child.once('exit', onExit) }) : Promise.resolve()
   try {
     await Promise.race([
       Promise.all([app.close(), exited]),
       new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => reject(new Error('Acceptance application did not close within 15 seconds')), 15000) }),
     ])
-  } finally { clearTimeout(timeout); child.removeListener('exit', onExit) }
+    if (!child) throw new Error('Acceptance application exit could not be confirmed without a process handle')
+  } finally { clearTimeout(timeout); if (child) child.removeListener('exit', onExit) }
 }
 
 async function attachEvidence(profile: string, model: AcceptanceModel, info: TestInfo) {
@@ -99,15 +111,39 @@ export const test = base.extend<Fixtures>({
     config.imChannels = { instances: [] }
     config.notificationChannels = {}
     writeFileSync(file, JSON.stringify(config, null, 2))
+    const applications: OwnedApplication[] = []
+    let launchWithoutHandle = false
+    const openOwned = async () => {
+      let registered = false
+      try {
+        return await open(entry, profile, app => {
+          const owned: OwnedApplication = { app, child: null }
+          applications.push(owned)
+          // The public Playwright facade may be disposed before final cleanup.
+          owned.child = app.process() ?? null
+          if (!owned.child) throw new Error('The launched acceptance application did not expose a process handle')
+          registered = true
+        })
+      } catch (error) {
+        if (!registered) launchWithoutHandle = true
+        throw error
+      }
+    }
+    const closeOwned = async (app: ElectronApplication) => {
+      const owned = applications.find(owned => owned.app === app)
+      if (!owned) throw new Error('Refusing to close an application outside this acceptance fixture')
+      await close(owned)
+    }
+    const failures: unknown[] = []
     let session: AcceptanceApp | undefined
     try {
-      const launched = await open(entry, profile)
+      const launched = await openOwned()
       session = {
         profile, ...launched,
         async restart(afterClose) {
-          await close(this.app)
+          await closeOwned(this.app)
           if (afterClose) await afterClose(profile)
-          const next = await open(entry, profile)
+          const next = await openOwned()
           this.app = next.app
           this.window = next.window
           return this.window
@@ -118,15 +154,26 @@ export const test = base.extend<Fixtures>({
       await testInfo.attach('application-runtime', { body: JSON.stringify(await session.app.evaluate(({ app }) => ({ packaged: app.isPackaged, platform: process.platform, arch: process.arch, electron: process.versions.electron, node: process.versions.node }))), contentType: 'application/json' })
       await use(session)
       expect(model.errors, 'Every model request must match the declared script').toEqual([])
+    } catch (error) {
+      failures.push(error)
     } finally {
       try {
         if (session && !session.window.isClosed()) await session.window.screenshot({ path: testInfo.outputPath('final-window.png') })
-        if (session) await close(session.app)
-      } finally {
-        await attachEvidence(profile, model, testInfo)
-        cleanupTestConfigDir(profile)
+      } catch (error) { failures.push(error) }
+      for (const owned of applications) {
+        try { await close(owned) } catch (error) { failures.push(error) }
+      }
+      try { await attachEvidence(profile, model, testInfo) } catch (error) { failures.push(error) }
+      if (!launchWithoutHandle && applications.length > 0 && applications.every(hasExited)) {
+        try { cleanupTestConfigDir(profile) } catch (error) { failures.push(error) }
+      } else {
+        console.error('[AcceptanceApp] Retained the isolated profile because application exit was not established', {
+          profile, launchWithoutHandle, pids: applications.filter(owned => !hasExited(owned)).map(owned => owned.child?.pid ?? null),
+        })
       }
     }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, `Acceptance fixture lifecycle failed: ${failures.map(error => error instanceof Error ? error.message : String(error)).join('; ')}`)
   },
   window: async ({ acceptanceApp }, use) => { await use(acceptanceApp.window) },
 })

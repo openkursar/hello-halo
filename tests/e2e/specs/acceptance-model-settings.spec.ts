@@ -215,7 +215,9 @@ test('cancelling account creation, editing and deletion preserves the stored con
   expect(providerGateway.requests).toEqual([])
 })
 
-test('default account switching and deleting the current account preserve the remaining account model', modelSettingsAcceptance('models.accounts.current-fallback'), async ({ providerGateway, managementApp, window }) => {
+const shutdownTest = test.extend({ diagnoseShutdown: true })
+
+shutdownTest('default account switching and deleting the current account preserve the remaining account model', modelSettingsAcceptance('models.accounts.current-fallback'), async ({ providerGateway, managementApp, window }) => {
   await openAdd(window)
   await fillProvider(window, { name: 'First account', url: providerGateway.url('primary'), key: providerGateway.key('primary') })
   await fetchAndChoose(window, 'gpt-4o-mini')

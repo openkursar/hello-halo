@@ -34,6 +34,7 @@ interface ManagementApp {
 }
 
 interface ManagementFixtures {
+  diagnoseShutdown: boolean
   seedPersonChat: boolean
   managementApp: ManagementApp
   window: Page
@@ -45,7 +46,8 @@ export function managementAcceptance(caseId: string, variant: Record<string, str
 
 export const test = base.extend<ManagementFixtures>({
   seedPersonChat: [false, { option: true }],
-  managementApp: async ({ seedPersonChat }, use, testInfo) => {
+  diagnoseShutdown: [false, { option: true }],
+  managementApp: async ({ seedPersonChat, diagnoseShutdown }, use, testInfo) => {
     const entry = getAppEntryPath()
     const profile = createTestConfigDir(entry, [])
     const configuration = join(profile, '.halo/config.json')
@@ -60,14 +62,14 @@ export const test = base.extend<ManagementFixtures>({
     const personChat = seedPersonChat ? seedDigitalHumanChat(profile, { name: 'Management Recorder', turnCount: 3 }) : undefined
     const project = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
     const ownedApplications: OwnedManagementApp[] = []
-    const close = async (app: ElectronApplication) => {
+    const close = async (app: ElectronApplication, phase: string) => {
       const owned = ownedApplications.find(owned => owned.application === app)
       if (!owned) throw new Error('Refusing to close an application outside this management fixture')
-      await closeManagementApp(owned)
+      await closeManagementApp(owned, 15000, phase)
     }
     const open = async () => {
       const app = await launchElectronApp(entry, profile, { bootstrapDirectory: project })
-      ownedApplications.push(trackManagementApp(app))
+      ownedApplications.push(trackManagementApp(app, diagnoseShutdown))
       try {
         const window = await app.firstWindow()
         await window.waitForLoadState('domcontentloaded')
@@ -78,7 +80,7 @@ export const test = base.extend<ManagementFixtures>({
         }).toBe(true)
         return { app, window }
       } catch (error) {
-        await close(app)
+        await close(app, 'startup-failure')
         throw error
       }
     }
@@ -89,7 +91,7 @@ export const test = base.extend<ManagementFixtures>({
         personChat,
         ...await open(),
         async restart() {
-          await close(this.app)
+          await close(this.app, 'restart')
           const next = await open()
           this.app = next.app
           this.window = next.window
@@ -102,12 +104,13 @@ export const test = base.extend<ManagementFixtures>({
         if (session && !session.window.isClosed()) await session.window.screenshot({ path: testInfo.outputPath('management-final-window.png') })
       } finally {
         try {
-          if (session) await close(session.app)
+          if (session) await close(session.app, 'teardown')
         } finally {
           const log = join(profile, '.halo/logs/main.log')
           if (existsSync(log)) await testInfo.attach('management-main-log', { body: readFileSync(log).subarray(-1000000), contentType: 'text/plain' })
           if (ownedApplications.every(owned => owned.closed)) cleanupTestConfigDir(profile)
-          else console.error('[AcceptanceManagement] Retained the isolated profile because an owned application has not exited', { profile, pids: ownedApplications.filter(owned => !owned.closed).map(owned => owned.application.process().pid) })
+          else console.error('[AcceptanceManagement] Retained the isolated profile because an owned application has not exited', { profile, pids: ownedApplications.filter(owned => !owned.closed).map(owned => owned.child.pid) })
+          if (diagnoseShutdown) await testInfo.attach('management-shutdown-diagnostics', { body: JSON.stringify({ version: 1, applications: ownedApplications.map(owned => owned.diagnostics) }, null, 2), contentType: 'application/json' })
         }
       }
     }
