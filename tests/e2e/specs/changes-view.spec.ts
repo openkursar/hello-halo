@@ -247,6 +247,7 @@ test.describe('changes view', () => {
   })
 
   test('keeps a large file at the reading position when its list is filtered or refreshed', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.reading-anchor\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, workspace }) => {
+    await window.setViewportSize({ width: 1600, height: 720 })
     const folder = path.join(workspace.repoRoot, 'src', 'bulk')
     fs.mkdirSync(folder, { recursive: true })
     for (let i = 0; i < 12; i++) fs.writeFileSync(path.join(folder, `item-${i}.ts`), `export const item${i} = ${i}\n`)
@@ -260,6 +261,7 @@ test.describe('changes view', () => {
     await expect.poll(() => diffCardPaths(window)).toEqual(['src/prompts/system-prompt.ts'])
     const scroller = window.locator('[data-diff-scroll]')
     await expect(scroller.locator('.cm-editor').first()).toBeVisible()
+    await expect.poll(() => scroller.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(160)
     await scroller.hover()
     await window.mouse.wheel(0, 160)
     await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(100)
@@ -542,6 +544,7 @@ test.describe('changes view', () => {
     test.use({ replyEditCount: 25 })
 
     test('pages fragments, navigates across them and restores the page after switching tabs', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.reply-pagination\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
+      await window.setViewportSize({ width: 1600, height: 720 })
       await window.getByRole('button', { name: /View changes/ }).click()
       await expect(window.getByText('Large diff · Showing one file at a time')).toBeVisible()
       // The file list puts notes/ before src/, and so do the diffs.
@@ -579,6 +582,7 @@ test.describe('changes view', () => {
       await window.getByRole('button', { name: 'Next file', exact: true }).click()
       await expect(window.getByText('Edits 13–24 of 25', { exact: true })).toBeVisible()
       const scroller = window.locator('[data-diff-scroll]')
+      await expect.poll(() => scroller.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(100)
       await scroller.hover()
       await window.mouse.wheel(0, 100)
       await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(50)

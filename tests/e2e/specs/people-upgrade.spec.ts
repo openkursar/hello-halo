@@ -22,8 +22,16 @@ test('directory search, bounded pages, return state and dedicated coordinator se
   await window.getByRole('button', { name: 'All digital humans', exact: true }).click()
   await expect(search).toHaveValue('Evidence team')
   await search.fill('')
-  await window.getByRole('button', { name: 'Next', exact: true }).click()
+  await expect(window.getByText('Page 1 of 3', { exact: true })).toBeVisible()
   await expect(window.locator('article')).toHaveCount(24)
+  const firstPage = await window.locator('article').getByRole('heading', { level: 2 }).allTextContents()
+  await window.getByRole('button', { name: 'Next page', exact: true }).click()
+  await expect(window.getByText('Page 2 of 3', { exact: true })).toBeVisible()
+  await expect(window.locator('article')).toHaveCount(24)
+  await expect.poll(async () => {
+    const names = await window.locator('article').getByRole('heading', { level: 2 }).allTextContents()
+    return names.length === 24 && names.every(name => !firstPage.includes(name))
+  }).toBe(true)
   await window.screenshot({ path: 'tests/e2e/results/people-directory-list.png' })
 })
 

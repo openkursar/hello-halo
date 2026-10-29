@@ -105,12 +105,15 @@ test.describe('Settings Page', () => {
     })
   }
 
-  test('the header back button returns to the previous conversation view', { annotation: { type: 'acceptance', description: "{\"caseId\":\"startup.navigation.header-back\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
+  test('returning from settings through the navigation rail restores the conversation draft', { annotation: { type: 'acceptance', description: "{\"caseId\":\"startup.navigation.header-back\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await navigateToChat(window)
+    const draft = 'Keep this unsent conversation draft while I check settings.'
+    await window.locator('textarea').fill(draft)
     await navigateToSettings(window)
-    await window.locator('header').getByRole('button', { name: 'Settings', exact: true }).click()
+    await window.locator('#ai-model').getByRole('heading', { name: 'AI Model', exact: true }).waitFor({ state: 'visible' })
+    await window.getByRole('button', { name: 'Conversation', exact: true }).first().click()
 
-    await expect(window.locator('textarea')).toBeVisible()
+    await expect(window.locator('textarea')).toHaveValue(draft)
     await expect(window.locator('#ai-model')).toHaveCount(0)
   })
 })

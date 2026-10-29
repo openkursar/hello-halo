@@ -158,8 +158,8 @@ scenarios:
         zh: 对应设置分组进入可见范围。
   - id: startup.navigation.header-back
     title:
-      en: Return to chat with the settings header
-      zh: 用设置标题返回对话
+      en: Return from settings to the conversation draft
+      zh: 从设置返回对话草稿
     verifies:
       - back
     platforms: *a2
@@ -172,11 +172,11 @@ scenarios:
       - en: Use the isolated fixture described by the referenced executable test.
         zh: 使用引用测试中定义的隔离测试资料。
     steps:
-      - en: Open settings from chat and use its header back control.
-        zh: 从对话打开设置并使用标题返回。
+      - en: Write a draft, open settings and return through the Conversation navigation entry.
+        zh: 输入草稿，打开设置，再通过对话导航入口返回。
     expected:
-      - en: Chat is visible again and settings content is no longer shown.
-        zh: 再次看到对话，设置内容不再显示。
+      - en: The conversation draft is retained and settings content is no longer shown.
+        zh: 对话草稿仍保留，设置内容不再显示。
   - id: startup.navigation.no-unhandled
     title:
       en: Navigate without unhandled application failures

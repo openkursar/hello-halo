@@ -12,7 +12,12 @@ references:
   - src/renderer/components/canvas/viewers/CodeViewer.tsx
   - src/renderer/components/canvas/CanvasTabs.tsx
   - src/renderer/stores/canvas.store.ts
+  - src/renderer/services/canvas-lifecycle.ts
   - tests/e2e/specs/acceptance-artifacts.spec.ts
+  - tests/e2e/specs/acceptance-file-save.spec.ts
+questions:
+  - en: What should happen when a code, text or Markdown tab closes with unsaved edits? The current close guard is registered for goal tabs only; the save/discard/cancel expectation below is not established existing behavior for ordinary files.
+    zh: 关闭有未保存修改的代码、文本或 Markdown 标签时应如何处理？当前关闭保护只注册在目标标签，以下保存、放弃或取消的预期尚不能认定为普通文件已有行为。
 promises:
   save:
     en: Saved edits reach the intended file; unsaved edits remain visibly dirty.
@@ -37,17 +42,21 @@ scenarios:
     profiles:
       - regression
     evidence: app-e2e
-    mode: none
-    automation: planned
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
     preconditions:
-      - en: Open a text fixture in editable mode.
-        zh: 以编辑模式打开文本测试文件。
+      - en: Real tools create a target text file and an independent control file; open both through the workspace file list.
+        zh: 真实工具创建目标文本和独立对照文件，并通过工作空间文件列表打开两者。
     steps:
       - en: Change a known line, save, close and reopen.
         zh: 修改已知行并保存，关闭后重开。
     expected:
       - en: Disk and reopened content match the saved edit, and dirty state clears.
         zh: 磁盘和重开内容匹配保存编辑，未保存标识清除。
+      - en: The independent file remains unchanged. Closing happens only after saving; no unimplemented dirty-close choice is assumed.
+        zh: 独立对照文件保持不变。仅在保存后关闭，不假设已有尚未实现的未保存关闭选项。
   - id: files.edit.dirty-close
     title:
       en: Close a tab with an unsaved draft
@@ -61,6 +70,9 @@ scenarios:
     evidence: app-e2e
     mode: none
     automation: planned
+    notes:
+      en: This unbound expectation needs a product decision. Do not claim the ordinary editor already provides three close choices or manufacture those controls in a test fixture.
+      zh: 此未绑定预期需要产品决策；不能声称普通编辑器已有三种关闭选择，也不能在测试资料中虚构这些控件。
     preconditions:
       - en: A text tab has unsaved edits.
         zh: 文本标签有未保存修改。

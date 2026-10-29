@@ -400,7 +400,6 @@ test.describe('production webview carrier', () => {
     const pages: Array<{ url: string; id: number; viewId: string; nonce: unknown }> = []
     for (let index = 0; index <= MAX_LIVE_BROWSER_VIEWS; index++) {
       await openFromHeaderMenu(window, 'Open browser')
-      await window.keyboard.press('Escape')
       const url = browserSite.pageUrl(`live-budget-${index}`)
       const address = window.getByPlaceholder(/Enter URL or search Bing/)
       await address.fill(url)
@@ -442,7 +441,6 @@ test.describe('production webview carrier', () => {
     const draft = 'fullscreen chat draft 中文🙂'
     await window.locator('textarea').fill(draft)
     await openFromHeaderMenu(window, 'Open browser')
-    await window.keyboard.press('Escape')
     const url = browserSite.pageUrl('fullscreen-capsule')
     const address = window.getByPlaceholder(/Enter URL or search Bing/)
     await address.fill(url)
@@ -484,7 +482,6 @@ test.describe('production webview carrier', () => {
   test('real canvas tab switching, collapse, page navigation and fullscreen retain the page', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.canvas-navigation\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }, testInfo) => {
     await navigateToChat(window)
     await openFromHeaderMenu(window, 'Open browser')
-    await window.keyboard.press('Escape')
     const firstUrl = browserSite.pageUrl('canvas-first')
     const address = window.getByPlaceholder(/Enter URL or search Bing/)
     await address.fill(firstUrl)
@@ -497,7 +494,6 @@ test.describe('production webview carrier', () => {
     }, id)
     const nonce = await executeBrowser(window, viewId, `document.querySelector('#draft').value = 'canvas draft'; carrierNonce`)
     await openFromHeaderMenu(window, 'Open browser')
-    await window.keyboard.press('Escape')
     const secondUrl = browserSite.pageUrl('canvas-second')
     await address.fill(secondUrl)
     await address.press('Enter')
@@ -513,7 +509,6 @@ test.describe('production webview carrier', () => {
     await window.keyboard.press('Escape')
     await expect(address).toBeHidden()
     await openFromHeaderMenu(window, 'Open browser')
-    await window.keyboard.press('Escape')
     await window.locator('.canvas-tab').nth(0).click()
     await expect(address).toBeVisible()
     await window.getByRole('button', { name: 'Settings', exact: true }).first().click()
@@ -533,7 +528,6 @@ test.describe('production webview carrier', () => {
   test('display scaling aligns the guest with the real canvas surface without duplicating page zoom', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.display-scaling\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }, testInfo) => {
     await navigateToChat(window)
     await openFromHeaderMenu(window, 'Open browser')
-    await window.keyboard.press('Escape')
     const url = browserSite.pageUrl('display-scale')
     const address = window.getByPlaceholder(/Enter URL or search Bing/)
     await address.fill(url)
@@ -732,7 +726,6 @@ test.describe('production webview carrier', () => {
     expect(frame.paperWidth).toBeGreaterThan(100)
     await testInfo.attach('local-pdf-webview', { body: await window.screenshot(), contentType: 'image/png' })
     await openFromHeaderMenu(window, 'Open browser')
-    await window.keyboard.press('Escape')
     const address = window.getByPlaceholder(/Enter URL or search Bing/)
     await address.fill(browserSite.pageUrl('pdf-second-tab'))
     await address.press('Enter')
