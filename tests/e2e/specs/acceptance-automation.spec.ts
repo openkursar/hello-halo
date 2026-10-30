@@ -7,6 +7,7 @@ import {
 import { createModelGate, modelTool, type ModelRequest } from '../fixtures/acceptance-model'
 
 test.setTimeout(180000)
+const shutdownTest = test.extend({ diagnoseShutdown: true })
 
 function report(request: ModelRequest, id: string, summary: string) {
   const receipt = request.toolResults.find(result => result.id === id)
@@ -95,7 +96,7 @@ test('a follow-up receives the completed execution context and appends to that s
   } finally { gate.release() }
 })
 
-test('a message added during a real automation tool reaches its next model step in the same run', acceptance('automation.runs.live-input'), async ({ model, automation, window }, testInfo) => {
+shutdownTest('a message added during a real automation tool reaches its next model step in the same run', acceptance('automation.runs.live-input'), async ({ model, automation, window }, testInfo) => {
   const gate = createAutomationToolGate(automation.session.profile, 'automation-live-input')
   const supplement = 'Include the late correction: the reference date is 2040-06-12.'
   const summary = 'The independent run completed with the late reference-date correction.'

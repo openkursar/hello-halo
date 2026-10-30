@@ -5,6 +5,7 @@ import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createTestConfigDir, getAppEntryPath, launchElectronApp, cleanupTestConfigDir } from './electron'
 import { startAcceptanceModel, type AcceptanceModel } from './acceptance-model'
+import { observeAcceptanceShutdown, type AcceptanceShutdownObserver } from './acceptance-shutdown-diagnostics'
 import type { HaloAPI } from '../../../src/preload'
 
 interface TurnRecord { conversationId: string; spaceId: string; completed: boolean }
@@ -19,6 +20,7 @@ export interface AcceptanceApp {
 }
 
 interface Fixtures {
+  diagnoseShutdown: boolean
   model: AcceptanceModel
   acceptanceApp: AcceptanceApp
   window: Page
@@ -57,6 +59,13 @@ async function attachProbe(window: Page) {
 interface OwnedApplication {
   app: ElectronApplication
   child: ChildProcess | null
+  shutdown?: AcceptanceShutdownObserver
+  diagnosticErrors: unknown[]
+}
+
+function observe<T>(owned: OwnedApplication, operation: (observer: AcceptanceShutdownObserver) => T): T | undefined {
+  if (!owned.shutdown) return
+  try { return operation(owned.shutdown) } catch (error) { owned.diagnosticErrors.push(error) }
 }
 
 function hasExited(owned: OwnedApplication): boolean {
@@ -73,19 +82,40 @@ async function open(entry: string, profile: string, register: (app: ElectronAppl
   return { app, window }
 }
 
-async function close(owned: OwnedApplication) {
+async function close(owned: OwnedApplication, phase: string) {
   const { app, child } = owned
-  if (hasExited(owned)) return
+  const attempt = observe(owned, observer => observer.begin(phase, 15000))
+  if (hasExited(owned)) {
+    if (attempt) observe(owned, observer => observer.finish(attempt))
+    return
+  }
   let timeout: ReturnType<typeof setTimeout> | undefined
   let onExit!: () => void
   const exited = child ? new Promise<void>(resolve => { onExit = resolve; child.once('exit', onExit) }) : Promise.resolve()
   try {
+    if (attempt) observe(owned, observer => observer.called(attempt))
+    let closing: Promise<void>
+    try { closing = app.close() } catch (error) {
+      if (attempt) observe(owned, observer => observer.settled(attempt, 'rejected', error))
+      throw error
+    }
+    if (attempt) closing = closing.then(() => { observe(owned, observer => observer.settled(attempt, 'resolved')) }, error => {
+      observe(owned, observer => observer.settled(attempt, 'rejected', error))
+      throw error
+    })
     await Promise.race([
-      Promise.all([app.close(), exited]),
-      new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => reject(new Error('Acceptance application did not close within 15 seconds')), 15000) }),
+      Promise.all([closing, exited]),
+      new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => {
+        if (attempt) observe(owned, observer => observer.deadline(attempt))
+        reject(new Error('Acceptance application did not close within 15 seconds'))
+      }, 15000) }),
     ])
     if (!child) throw new Error('Acceptance application exit could not be confirmed without a process handle')
-  } finally { clearTimeout(timeout); if (child) child.removeListener('exit', onExit) }
+  } finally {
+    clearTimeout(timeout)
+    if (child) child.removeListener('exit', onExit)
+    if (attempt) observe(owned, observer => observer.finish(attempt))
+  }
 }
 
 async function attachEvidence(profile: string, model: AcceptanceModel, info: TestInfo) {
@@ -95,11 +125,12 @@ async function attachEvidence(profile: string, model: AcceptanceModel, info: Tes
 }
 
 export const test = base.extend<Fixtures>({
+  diagnoseShutdown: [false, { option: true }],
   model: async ({}, use) => {
     const model = await startAcceptanceModel()
     try { await use(model) } finally { await model.close() }
   },
-  acceptanceApp: async ({ model }, use, testInfo) => {
+  acceptanceApp: async ({ model, diagnoseShutdown }, use, testInfo) => {
     const entry = getAppEntryPath()
     const profile = createTestConfigDir(entry, [])
     const file = join(profile, '.halo/config.json')
@@ -116,23 +147,32 @@ export const test = base.extend<Fixtures>({
     const openOwned = async () => {
       let registered = false
       try {
-        return await open(entry, profile, app => {
-          const owned: OwnedApplication = { app, child: null }
+        const opened = await open(entry, profile, app => {
+          const owned: OwnedApplication = { app, child: null, diagnosticErrors: [] }
           applications.push(owned)
           // The public Playwright facade may be disposed before final cleanup.
           owned.child = app.process() ?? null
           if (!owned.child) throw new Error('The launched acceptance application did not expose a process handle')
           registered = true
+          if (diagnoseShutdown) {
+            try { owned.shutdown = observeAcceptanceShutdown(app, owned.child, profile) }
+            catch (error) { owned.diagnosticErrors.push(error) }
+          }
         })
+        const owned = applications.find(owned => owned.app === opened.app)!
+        if (owned.shutdown) {
+          try { await owned.shutdown.installMain() } catch (error) { owned.diagnosticErrors.push(error) }
+        }
+        return opened
       } catch (error) {
         if (!registered) launchWithoutHandle = true
         throw error
       }
     }
-    const closeOwned = async (app: ElectronApplication) => {
+    const closeOwned = async (app: ElectronApplication, phase: string) => {
       const owned = applications.find(owned => owned.app === app)
       if (!owned) throw new Error('Refusing to close an application outside this acceptance fixture')
-      await close(owned)
+      await close(owned, phase)
     }
     const failures: unknown[] = []
     let session: AcceptanceApp | undefined
@@ -141,7 +181,7 @@ export const test = base.extend<Fixtures>({
       session = {
         profile, ...launched,
         async restart(afterClose) {
-          await closeOwned(this.app)
+          await closeOwned(this.app, 'restart')
           if (afterClose) await afterClose(profile)
           const next = await openOwned()
           this.app = next.app
@@ -161,9 +201,24 @@ export const test = base.extend<Fixtures>({
         if (session && !session.window.isClosed()) await session.window.screenshot({ path: testInfo.outputPath('final-window.png') })
       } catch (error) { failures.push(error) }
       for (const owned of applications) {
-        try { await close(owned) } catch (error) { failures.push(error) }
+        try { await close(owned, 'teardown') } catch (error) { failures.push(error) }
       }
       try { await attachEvidence(profile, model, testInfo) } catch (error) { failures.push(error) }
+      if (diagnoseShutdown) {
+        const observations: unknown[] = []
+        for (const owned of applications) {
+          if (owned.shutdown) {
+            try { observations.push(await owned.shutdown.evidence()) } catch (error) {
+              failures.push(error)
+              observations.push({ ...observe(owned, observer => observer.state()), mainEvidenceUnavailable: true })
+            }
+            try { owned.shutdown.dispose() } catch (error) { failures.push(error) }
+          }
+          failures.push(...owned.diagnosticErrors)
+        }
+        try { await testInfo.attach('application-shutdown-diagnostics', { body: JSON.stringify({ version: 1, applications: observations }, null, 2), contentType: 'application/json' }) }
+        catch (error) { failures.push(error) }
+      }
       if (!launchWithoutHandle && applications.length > 0 && applications.every(hasExited)) {
         try { cleanupTestConfigDir(profile) } catch (error) { failures.push(error) }
       } else {
