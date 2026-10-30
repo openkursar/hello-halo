@@ -102,7 +102,7 @@ function ftsEscape(raw: string): string {
 
 // FTS5's default tokenizer doesn't segment CJK, so Chinese queries miss almost
 // everything via MATCH. Escape the term for a LIKE substring fallback (also
-// reaches the i18n JSON column, which the FTS index doesn't cover).
+// reaches display_name and the i18n JSON column, which the FTS index doesn't cover).
 function escapeLike(raw: string): string {
   return raw.trim().replace(/[\\%_]/g, c => `\\${c}`)
 }
@@ -306,12 +306,13 @@ export class QueryService {
       conditions.push(
         "(ri.rowid IN (SELECT rowid FROM registry_items_fts WHERE registry_items_fts MATCH ?)" +
         " OR ri.name LIKE ? ESCAPE '\\'" +
+        " OR ri.display_name LIKE ? ESCAPE '\\'" +
         " OR ri.description LIKE ? ESCAPE '\\'" +
         " OR ri.author LIKE ? ESCAPE '\\'" +
         " OR ri.tags LIKE ? ESCAPE '\\'" +
         " OR ri.i18n LIKE ? ESCAPE '\\')"
       )
-      bindings.push(ftsQuery, like, like, like, like, like)
+      bindings.push(ftsQuery, like, like, like, like, like, like)
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
