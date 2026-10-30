@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises'
+import { constants } from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
@@ -62,6 +63,88 @@ function builder(root) {
   const entry = path.resolve(path.dirname(descriptorPath), relative)
   if (!inside(path.dirname(descriptorPath), entry)) throw new Error('The electron-builder CLI leaves its installed package')
   return { entry, directory: path.dirname(descriptorPath), version: descriptor.version }
+}
+
+async function electronRuntime(root) {
+  if (process.env.ELECTRON_OVERRIDE_DIST_PATH) throw new Error('Controlled packaging refuses ELECTRON_OVERRIDE_DIST_PATH; use the checkout-installed Electron runtime')
+  const descriptor = await readJson(path.join(root, 'package.json'))
+  const lock = await readJson(path.join(root, 'package-lock.json'))
+  const version = descriptor.devDependencies?.electron ?? descriptor.dependencies?.electron
+  const lockedDeclaration = lock.packages?.['']?.devDependencies?.electron ?? lock.packages?.['']?.dependencies?.electron
+  const declarations = [descriptor.devDependencies?.electron, descriptor.dependencies?.electron, lock.packages?.['']?.devDependencies?.electron, lock.packages?.['']?.dependencies?.electron].filter(value => value !== undefined)
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?$/.test(version) || declarations.some(value => value !== version) || lockedDeclaration !== version || lock.packages?.['node_modules/electron']?.version !== version) throw new Error('Electron must have one exact matching version in package.json and package-lock.json')
+  const directory = await fs.realpath(path.join(root, 'node_modules/electron'))
+  if (!inside(root, directory)) throw new Error('The installed Electron package must belong to the current checkout')
+  const installed = await readJson(path.join(directory, 'package.json'))
+  if (installed.name !== 'electron' || installed.version !== version) throw new Error('The installed Electron package differs from the locked version')
+  const distribution = path.join(directory, 'dist')
+  if (!(await fs.lstat(distribution)).isDirectory()) throw new Error('The installed Electron distribution must be a real directory')
+  const dist = await fs.realpath(distribution)
+  if (!inside(directory, dist)) throw new Error('The installed Electron distribution leaves its package')
+  const distributionVersion = (await fs.readFile(path.join(dist, 'version'), 'utf8')).trim()
+  if (distributionVersion !== version) throw new Error('The installed Electron distribution version differs from the lock')
+  // electron-builder prefers this archive over an unpacked electronDist directory.
+  if (await exists(path.join(dist, `electron-v${version}-${process.platform}-${process.arch}.zip`))) throw new Error('The installed Electron distribution contains an archive that would override the verified unpacked runtime')
+  const entry = (await fs.readFile(path.join(directory, 'path.txt'), 'utf8')).trim()
+  const executable = relativeFile(dist, entry)
+  const executableStat = await fs.lstat(executable)
+  if (!executableStat.isFile() || !inside(dist, await fs.realpath(executable)) || (process.platform !== 'win32' && !(executableStat.mode & 0o111))) throw new Error('The installed Electron executable is not a contained executable file')
+  const entries = [
+    ...await tree(directory, path.join(directory, 'package.json'), 'electron-input'),
+    ...await tree(directory, path.join(directory, 'path.txt'), 'electron-input'),
+    ...(await tree(dist, dist, 'electron-input')).map(file => ({ ...file, path: `dist/${file.path}` })),
+  ]
+  return { directory, dist, executable, identity: { version, executable: entry, content: compactManifest(entries) } }
+}
+
+async function probeElectron(root, runtime, timeoutMs, logFile) {
+  const prefix = 'ACCEPTANCE_ELECTRON_RUNTIME='
+  const program = `process.stdout.write(${JSON.stringify(prefix)} + JSON.stringify({electron:process.versions.electron,node:process.versions.node,platform:process.platform,arch:process.arch}) + '\\n')`
+  const result = await execute(root, ['-e', program], {
+    executable: runtime.executable, timeoutMs: Math.min(timeoutMs, 15000), logFile,
+    environment: { ...packagingEnvironment(), ELECTRON_RUN_AS_NODE: '1', ELECTRON_OVERRIDE_DIST_PATH: undefined, NODE_OPTIONS: undefined, NODE_PATH: undefined },
+  })
+  if (result.code !== 0 || result.timedOut || result.cleanupFailed) throw new Error('The installed Electron runtime could not complete its bounded Node identity probe')
+  const lines = result.log.split(/\r?\n/).filter(line => line.startsWith(prefix))
+  if (lines.length !== 1) throw new Error('The installed Electron runtime did not report one unambiguous identity')
+  let observed
+  try { observed = JSON.parse(lines[0].slice(prefix.length)) } catch { throw new Error('The installed Electron runtime reported an invalid identity') }
+  if (observed.electron !== runtime.identity.version || observed.platform !== process.platform || observed.arch !== process.arch || typeof observed.node !== 'string' || !/^\d+\.\d+\.\d+$/.test(observed.node)) throw new Error('The actual Electron runtime version, platform or architecture differs from the controlled target')
+  return { electron: observed.electron, node: observed.node, platform: observed.platform, arch: observed.arch }
+}
+
+async function stageElectron(root, output, runtime) {
+  const directory = await fs.mkdtemp(path.join(output, '.electron-input-'))
+  const stat = await fs.lstat(directory)
+  if (!inside(root, await fs.realpath(directory))) throw new Error('The owned Electron staging directory leaves the checkout; it was retained')
+  const dist = path.join(directory, 'dist')
+  const cleanup = async () => {
+    const current = await fs.lstat(directory)
+    if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== stat.dev || current.ino !== stat.ino || !inside(output, await fs.realpath(directory))) throw new Error('The owned Electron staging directory changed identity; it was retained')
+    await fs.rm(directory, { recursive: true })
+  }
+  try {
+    await fs.cp(runtime.dist, dist, { recursive: true, dereference: false, verbatimSymlinks: true, force: false, errorOnExist: true, mode: constants.COPYFILE_FICLONE })
+    if (!(await fs.lstat(dist)).isDirectory() || await fs.realpath(dist) !== dist) throw new Error('The copied Electron runtime is not an owned real directory')
+    const captured = runtime.identity.content.files.filter(file => file.path.startsWith('dist/')).map(file => ({ ...file, path: file.path.slice('dist/'.length) }))
+    if (!same(compactManifest(captured), compactManifest(await tree(dist, dist, 'electron-input')))) throw new Error('The copied Electron runtime differs from its captured distribution')
+    // Custom electronDist bypasses electron-builder's stock-unpack cleanup.
+    // Normalize only the owned copy, before the normal application hooks and signing.
+    const removed = ['version', process.platform === 'darwin' ? 'Electron.app/Contents/Resources/default_app.asar' : 'resources/default_app.asar']
+    for (const name of removed) {
+      const file = relativeFile(dist, name)
+      if (!await exists(file)) continue
+      if (!inside(dist, await fs.realpath(path.dirname(file)))) throw new Error('Stock Electron cleanup would leave the owned staging copy')
+      await fs.rm(file)
+    }
+    const expected = captured.filter(file => !removed.includes(file.path))
+    const actual = await tree(dist, dist, 'electron-input')
+    if (!same(compactManifest(expected), compactManifest(actual))) throw new Error('The staged Electron runtime differs from the captured installed distribution')
+    return { directory, dist, cleanup, content: compactManifest(actual) }
+  } catch (error) {
+    try { await cleanup() } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Electron staging and owned-directory cleanup failed') }
+    throw error
+  }
 }
 
 async function dependencyInputs(root) {
@@ -143,13 +226,14 @@ async function packagingInputs(root, tool) {
     const file = relativeFile(root, name)
     if (!entries.some(entry => entry.path === name)) entries.push(...await tree(root, file, 'packaging-input'))
   }
-  return { files: compactManifest(entries), builder: { version: tool.version }, dependencies: await dependencyInputs(root) }
+  return { files: compactManifest(entries), builder: { version: tool.version }, electron: (await electronRuntime(root)).identity, dependencies: await dependencyInputs(root) }
 }
 
 function packagingEnvironment() {
   const environment = { ...process.env }
   for (const name of Object.keys(environment)) {
     if (name.startsWith('GIT_CONFIG_')) environment[name] = undefined
+    else if (name === 'NODE_OPTIONS' || name === 'NODE_PATH') environment[name] = undefined
     else if (/KEY|TOKEN|SECRET|PASSWORD|AUTHORIZATION|CREDENTIAL|COOKIE|^CSC_|^WIN_CSC_|^APPLE_/i.test(name)) environment[name] = ''
   }
   return { ...environment, CSC_IDENTITY_AUTO_DISCOVERY: 'false', HALO_MAC_SIGN_MODE: 'adhoc' }
@@ -274,24 +358,41 @@ export async function packageApplication(root, { timeoutMs = 1800000 } = {}) {
   const output = path.join(root, 'tests/acceptance/output/packages', id)
   await fs.mkdir(output, { recursive: true })
   if (!inside(root, await fs.realpath(output))) throw new Error('The controlled package output leaves the checkout')
-  const platform = { darwin: '--mac', win32: '--win', linux: '--linux' }[process.platform]
-  // Directory-only targets omit updater configuration on desktop platforms.
-  const target = { darwin: 'zip', win32: 'nsis', linux: 'AppImage' }[process.platform]
-  const args = [tool.entry, platform, target, '--' + process.arch, '--config', 'electron-builder.cjs', '--publish', 'never', '-c.directories.output=' + posix(path.relative(root, output)), '-c.forceCodeSigning=false']
-  if (process.platform === 'darwin') args.push('-c.mac.identity=null', '-c.mac.notarize=false')
-  if (process.platform === 'win32') args.push('-c.win.signAndEditExecutable=false')
-  console.log('acceptance: packaging the verified application for local testing without publishing')
-  const logFile = path.join(output, 'package.log')
-  const result = await execute(root, args, { timeoutMs, logFile, environment: packagingEnvironment() })
-  if (result.code !== 0 || result.timedOut || result.cleanupFailed) throw new Error(`Controlled packaging did not complete successfully; see tests/acceptance/output/packages/${id}/package.log`)
-  if (!same(buildIdentity(build), buildIdentity(await verifyBuild(root))) || !same(before, await packagingInputs(root, tool))) throw new Error('Build or packaging inputs changed during packaging; no package provenance was recorded')
-  const application = await locateApplication(root, output)
-  const content = compactManifest(await tree(application.directory, application.directory, 'package-content'))
-  const identity = await packagedIdentity(root, build, application)
-  if (!same(buildIdentity(build), buildIdentity(await verifyBuild(root))) || !same(before, await packagingInputs(root, tool))) throw new Error('Build or packaging inputs changed while recording the package')
-  const record = { version: 1, id, packagedAt: new Date().toISOString(), platform: process.platform, architecture: process.arch, command: ['electron-builder', ...args.slice(1)], signing: process.platform === 'darwin' ? 'local-adhoc' : 'unsigned', build: buildIdentity(build), inputs: before, directory: posix(path.relative(root, application.directory)), executable: posix(path.relative(root, application.executable)), resources: posix(path.relative(root, application.resources)), content, application: identity, coverage: 'Directory package provenance: controlled application/SDK byte identity and the complete emitted bundle fingerprint. Other dependency behavior, installer flows, operating-system consent, distribution signing and notarization require separate execution checks.' }
-  atomicJson(stamp, record)
-  return record
+  const runtime = await electronRuntime(root)
+  if (!same(before.electron, runtime.identity)) throw new Error('The installed Electron runtime changed before packaging')
+  const observed = await probeElectron(root, runtime, timeoutMs, path.join(output, 'electron-runtime.log'))
+  if (!same(before.electron, (await electronRuntime(root)).identity)) throw new Error('The installed Electron runtime changed during its identity probe')
+  const staged = await stageElectron(root, output, runtime)
+  let failure
+  try {
+    const platform = { darwin: '--mac', win32: '--win', linux: '--linux' }[process.platform]
+    // Directory-only targets omit updater configuration on desktop platforms.
+    const target = { darwin: 'zip', win32: 'nsis', linux: 'AppImage' }[process.platform]
+    const args = [tool.entry, platform, target, '--' + process.arch, '--config', 'electron-builder.cjs', '--publish', 'never', '-c.directories.output=' + posix(path.relative(root, output)), '-c.forceCodeSigning=false', '-c.electronVersion=' + runtime.identity.version, '-c.electronDist=' + posix(path.relative(root, staged.dist))]
+    if (process.platform === 'darwin') args.push('-c.mac.identity=null', '-c.mac.notarize=false')
+    if (process.platform === 'win32') args.push('-c.win.signAndEditExecutable=false')
+    console.log('acceptance: packaging the verified application for local testing without publishing')
+    const logFile = path.join(output, 'package.log')
+    const result = await execute(root, args, { timeoutMs, logFile, environment: packagingEnvironment() })
+    if (result.code !== 0 || result.timedOut || result.cleanupFailed) throw new Error(`Controlled packaging did not complete successfully; see tests/acceptance/output/packages/${id}/package.log`)
+    if (!same(staged.content, compactManifest(await tree(staged.dist, staged.dist, 'electron-input')))) throw new Error('The staged Electron runtime changed during packaging')
+    if (!same(buildIdentity(build), buildIdentity(await verifyBuild(root))) || !same(before, await packagingInputs(root, tool))) throw new Error('Build or packaging inputs changed during packaging; no package provenance was recorded')
+    const application = await locateApplication(root, output)
+    const content = compactManifest(await tree(application.directory, application.directory, 'package-content'))
+    const identity = await packagedIdentity(root, build, application)
+    if (!same(buildIdentity(build), buildIdentity(await verifyBuild(root))) || !same(before, await packagingInputs(root, tool))) throw new Error('Build or packaging inputs changed while recording the package')
+    const record = { version: 2, id, packagedAt: new Date().toISOString(), platform: process.platform, architecture: process.arch, command: ['electron-builder', ...args.slice(1)], signing: process.platform === 'darwin' ? 'local-adhoc' : 'unsigned', electronRuntime: observed, build: buildIdentity(build), inputs: before, directory: posix(path.relative(root, application.directory)), executable: posix(path.relative(root, application.executable)), resources: posix(path.relative(root, application.resources)), content, application: identity, coverage: 'Directory package provenance: controlled application/SDK byte identity and the complete emitted bundle fingerprint. Other dependency behavior, installer flows, operating-system consent, distribution signing and notarization require separate execution checks.' }
+    atomicJson(stamp, record)
+    return record
+  } catch (error) { failure = error; throw error }
+  finally {
+    try { await staged.cleanup() }
+    catch (error) {
+      await fs.rm(stamp, { force: true })
+      if (failure) throw new AggregateError([failure, error], 'Controlled packaging and owned Electron staging cleanup failed')
+      throw error
+    }
+  }
 }
 
 export async function verifyPackagedApplication(root, executablePath) {
@@ -299,7 +400,7 @@ export async function verifyPackagedApplication(root, executablePath) {
   let record
   try { record = await readJson(path.join(root, stampName)) }
   catch (error) { if (error.code === 'ENOENT') throw new Error('No controlled acceptance package exists; run acceptance package first'); throw error }
-  if (record.version !== 1 || record.platform !== process.platform || record.architecture !== process.arch) throw new Error('The package provenance is unsupported or belongs to another platform')
+  if (record.version !== 2 || record.platform !== process.platform || record.architecture !== process.arch || record.electronRuntime?.electron !== record.inputs?.electron?.version || record.electronRuntime?.platform !== process.platform || record.electronRuntime?.arch !== process.arch) throw new Error('The package provenance is unsupported or belongs to another platform; create a fresh controlled package')
   const directory = relativeFile(root, record.directory)
   const executable = relativeFile(root, record.executable)
   const resources = relativeFile(root, record.resources)

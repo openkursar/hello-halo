@@ -186,6 +186,26 @@ normal runner, which still verifies the package before and after execution.
 An inherited `HALO_E2E_PACKAGED_APP` is ignored. Packaging failure or an invalid
 package record fails its recorded CI stage and cannot advance a baseline.
 
+Controlled packaging reuses the checkout-installed Electron distribution through
+the official [`electronDist` option](https://www.electron.build/v26/docs/api/app-builder-lib.interface.configuration/#electrondist).
+The exact package declaration, lock entry, installed package and distribution
+version must agree. A bounded Node-mode probe checks the actual Electron version,
+platform and architecture; an inherited `ELECTRON_OVERRIDE_DIST_PATH` is refused.
+An archive that would take priority over the unpacked distribution is rejected,
+and external Node preload/module-path settings are cleared for the probe and builder.
+The complete runtime tree is fingerprinted before and after packaging and remains
+part of package verification. Version 2 package records require a fresh package;
+older records do not establish this runtime provenance.
+
+The helper copies that runtime into an owned temporary staging directory and
+removes only the stock `default_app.asar` and `version` files that the normal
+download/extraction path removes. It then runs the existing product configuration,
+hooks and local signing flow with publishing disabled. The installed distribution
+is kept intact, and staged bytes must still match their captured inputs before
+the staging directory is removed. This avoids repeated Electron artifact downloads;
+dependency installation and other platform packaging tools can still need network
+access. Actual Windows and Linux packaging need their own execution evidence.
+
 One plan can contain source, packaged and cluster tests. The runner groups
 eligible tests by the requirements of their selected scenario variants. Only
 the packaged group receives the verified package path; source test hosts and

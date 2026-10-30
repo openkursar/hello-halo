@@ -46,7 +46,7 @@ if(command==='package') {
       const directory='tests/acceptance/output/packaged/application';
       const executable=directory+'/application';
       record(executable,{application:'fresh'});
-      record('out/.acceptance-package.json',{version:1,id:'new-package',platform:context.platform,architecture:context.architecture,build:{id:configuration.packageRecord==='wrong-build'?'old-build':'current-controlled-build'},directory,executable:configuration.packageRecord==='external'?path.resolve('..','external-application'):executable});
+      record('out/.acceptance-package.json',{version:configuration.packageRecord==='legacy'?1:2,id:'new-package',platform:context.platform,architecture:context.architecture,build:{id:configuration.packageRecord==='wrong-build'?'old-build':'current-controlled-build'},directory,executable:configuration.packageRecord==='external'?path.resolve('..','external-application'):executable});
     }
   }
 }
@@ -171,6 +171,16 @@ test('a successful package command still fails its stage if its recorded output 
     assert(stages.at(-1).error)
     assert.equal(baseline, false)
   }
+})
+
+test('a newly written version 1 package cannot run tests or advance the baseline without runtime provenance', context => {
+  const selected = fixture(context, { packageRecord: 'legacy' })
+  assert.equal(selected.run().status, 1)
+  const { calls, stages, baseline } = evidence(selected)
+  assert.equal(calls.some(call => call.command === 'run'), false)
+  assert.equal(stages.at(-1).stage, 'package preparation')
+  assert.match(stages.at(-1).error, /current Electron runtime identity/)
+  assert.equal(baseline, false)
 })
 
 test('host GUI readiness is a distinct bounded prerequisite before execution and is not a product case', context => {

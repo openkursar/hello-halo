@@ -41,7 +41,8 @@ function packagedExecutable(stamp, previous, context) {
   if (serialized === previous) throw new Error('Controlled packaging did not replace the previous provenance record.')
   const record = JSON.parse(serialized)
   const build = readJson(path.join(root, 'out/.acceptance-build.json'))
-  if (record.version !== 1 || !record.id || record.build?.id !== build.id || record.platform !== context.platform || record.architecture !== context.architecture) throw new Error('Package provenance does not match the current controlled build and platform.')
+  if (record.version !== 2) throw new Error('Package provenance lacks the current Electron runtime identity; create a fresh controlled package.')
+  if (!record.id || record.build?.id !== build.id || record.platform !== context.platform || record.architecture !== context.architecture) throw new Error('Package provenance does not match the current controlled build and platform.')
   for (const name of [record.directory, record.executable]) {
     if (typeof name !== 'string' || !name || path.isAbsolute(name) || /^[a-z]:[\\/]/i.test(name) || name.includes('\\') || name.split('/').some(part => !part || part === '.' || part === '..')) throw new Error('The controlled package declares an invalid application path.')
   }
