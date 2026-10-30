@@ -21,6 +21,7 @@ import { ReplyOpeners, TeamMemberMessage, isTeamMessage, type OpenerReveal, type
 import { ArrivalCard } from './ArrivalCard'
 import { mergeArrivalThoughts, toArrivalThought } from './transcript'
 import { PushedMessageLabel, isPushedMessage } from './PushedMessageLabel'
+import { ContinuityNotice, isContinuityNotice } from './ContinuityNotice'
 import type { Message, Thought } from '../../types'
 
 export interface MessageRowProps {
@@ -123,6 +124,14 @@ export const MessageRow = memo(function MessageRow({
     return (
       <div className={className}>
         <CrossConversationNotice message={message} />
+      </div>
+    )
+  }
+
+  if (isContinuityNotice(message)) {
+    return (
+      <div className={className}>
+        <ContinuityNotice message={message} />
       </div>
     )
   }

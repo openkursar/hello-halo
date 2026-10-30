@@ -297,12 +297,18 @@ function leaseSession(
       markTurnDispatched(conversationId)
       try {
         const pendingHandoff = pendingEngineHandoffs.get(session)
-        const handoff = pendingHandoff ? preparedHandoff?.() ?? pendingHandoff : undefined
+        const handoff = pendingHandoff ? preparedHandoff?.() ?? pendingHandoff.text : undefined
         if (handoff) pendingEngineHandoffs.delete(session)
+        // Before the send: the reply this input starts must not be stored ahead of the notice.
+        if (handoff && pendingHandoff?.onSent) {
+          try { pendingHandoff.onSent() } catch (error) {
+            console.error(`[Agent][${conversationId}] Continuity notice could not be recorded:`, error)
+          }
+        }
         try {
           await session.send(handoff ? prependEngineHandoff(message as any, handoff) : message)
         } catch (error) {
-          if (handoff && lease.isCurrent) pendingEngineHandoffs.set(session, handoff)
+          if (handoff && lease.isCurrent) pendingEngineHandoffs.set(session, { text: handoff })
           throw error
         }
       } catch (error) {
@@ -1034,8 +1040,11 @@ interface InFlightSessionCreation {
 /** conversationId -> in-flight getOrCreateV2Session creation. */
 const inFlightSessionCreations = new Map<string, InFlightSessionCreation>()
 
-/** Released with the session; populated only for an explicit context handoff. */
-const pendingEngineHandoffs = new WeakMap<V2SDKSession, string>()
+/**
+ * Released with the session; populated only for a context handoff. `onSent`
+ * tells the conversation when the handoff replaces a record the engine lost.
+ */
+const pendingEngineHandoffs = new WeakMap<V2SDKSession, { text: string; onSent?: () => void }>()
 
 /** spaceId -> how many times a session of the space has been asked for. */
 const sessionAcquisitions = new Map<string, number>()
@@ -1059,7 +1068,12 @@ export type SessionConsumerOptions = Omit<ConsumerContext, 'spaceId' | 'conversa
 
 /** Conditions a caller needs the returned session to actually meet. */
 export interface SessionGates {
-  /** Read neutral history only after a bound native resume fails, before retrying a fresh session. */
+  /**
+   * This conversation's own transcript, prepared as handoff context, for when
+   * the engine cannot restore its record of the earlier turns as it was — the
+   * stored session is gone, unreadable, or would come back with gaps. A bound
+   * resume fails without it; a legacy resume starts fresh, as it always did.
+   */
   recoverNativeSession?: () => string | Promise<string>
   /**
    * Refuse rather than hand back a busy session built on different inputs
@@ -1325,8 +1339,19 @@ async function getOrCreateV2SessionInner(
     if (!content.trim()) throw error
     recoveredNativeSession = true
     effectiveSessionId = undefined
-    sdkOptions = { ...sdkOptions, resume: undefined, engineHandoffContent: content }
+    sdkOptions = { ...sdkOptions, resume: undefined, strictResume: undefined, engineHandoffContent: content, engineHandoffRecovered: true }
     console.warn(`[Agent][${conversationId}] Native ${engineId} session unavailable; continuing from Halo's recorded context`)
+  }
+  // A legacy resume never fails on a lost record: without a readable
+  // transcript of its own it starts fresh (or keeps what the engine can read).
+  const recoverLegacySession = async (error: unknown): Promise<boolean> => {
+    try {
+      await recoverNativeSession(error)
+      return true
+    } catch (recoveryError) {
+      console.warn(`[Agent][${conversationId}] Legacy session ${sessionId} has no transcript to continue from:`, recoveryError instanceof Error ? recoveryError.message : recoveryError)
+      return false
+    }
   }
   if (sessionId && workDir && engineId !== 'codex' && engineId !== 'dsh') {
     // Attempt to migrate session file from old config directory if needed
@@ -1334,14 +1359,20 @@ async function getOrCreateV2SessionInner(
     if (sessionExists) {
       console.log(`[Agent][${conversationId}] With resume: ${sessionId}`)
     } else {
-      if (sdkOptions.strictNativeResume) await recoverNativeSession(new NativeSessionResumeError(engineId, sessionId))
-      else {
+      const lost = new NativeSessionResumeError(engineId, sessionId)
+      if (sdkOptions.strictNativeResume) await recoverNativeSession(lost)
+      else if (!await recoverLegacySession(lost)) {
         console.warn(`[Agent][${conversationId}] Legacy session ${sessionId} unavailable in the configured or legacy directories, starting fresh conversation`)
         effectiveSessionId = undefined
       }
     }
   } else if (sessionId) {
     console.log(`[Agent][${conversationId}] With resume: ${sessionId}`)
+  }
+  // The halo engine reads the stored record itself; with a transcript to fall
+  // back on, it refuses a record that would come back with gaps.
+  if (effectiveSessionId && engineId === 'halo' && gates?.recoverNativeSession) {
+    sdkOptions = { ...sdkOptions, strictResume: true }
   }
   const startTime = Date.now()
 
@@ -1363,7 +1394,11 @@ async function getOrCreateV2SessionInner(
       session = (await createSession(sdkOptions)) as unknown as V2SDKSession
     } catch (error) {
       if (!isNativeSessionResumeError(error)) throw error
-      await recoverNativeSession(error)
+      if (sdkOptions.strictNativeResume) await recoverNativeSession(error)
+      else if (!await recoverLegacySession(error)) {
+        console.warn(`[Agent][${conversationId}] Resuming legacy session ${sessionId} with what the engine can read`)
+        sdkOptions = { ...sdkOptions, strictResume: undefined }
+      }
       session = (await createSession(sdkOptions)) as unknown as V2SDKSession
     }
   } finally {
@@ -1417,7 +1452,12 @@ async function getOrCreateV2SessionInner(
   }
 
   if (typeof sdkOptions.engineHandoffContent === 'string' && sdkOptions.engineHandoffContent) {
-    pendingEngineHandoffs.set(session, sdkOptions.engineHandoffContent)
+    const sink = consumerOptions?.sink
+    pendingEngineHandoffs.set(session, {
+      text: sdkOptions.engineHandoffContent,
+      ...(sdkOptions.engineHandoffRecovered === true && sink?.onContinuedFromRecord
+        ? { onSent: () => sink.onContinuedFromRecord?.() } : {}),
+    })
   }
 
   // Start cleanup if not already running
@@ -1542,7 +1582,7 @@ export async function ensureSessionWarm(
       resolveKnowledgeBases,
       {
         creationContext: spaceMemory?.contextKey,
-        recoverNativeSession: continuation.strictNativeResume ? async () => (await prepareConversationContinuation(
+        recoverNativeSession: sessionId ? async () => (await prepareConversationContinuation(
           spaceId, conversationId, conversation, engineId, { forceHandoff: true }
         )).engineHandoffContent ?? '' : undefined,
       }

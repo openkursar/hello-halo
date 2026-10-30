@@ -68,7 +68,8 @@ import type {
   StreamingHandle,
   ProgressEvent,
 } from '../../../../shared/types/inbound-message'
-import type { ImageAttachment, ImageMediaType } from '../../../../shared/types/image-attachment'
+import type { ImageAttachment } from '../../../../shared/types/image-attachment'
+import { detectImageMediaType } from '../../../../shared/image-media-type'
 import {
   WECOM_MESSAGE_LIMIT,
   WecomStreamSession,
@@ -1600,26 +1601,28 @@ class WecomBotInstance implements ImChannelInstance {
       const { buffer, filename } = await downloadWecomMedia(url, aesKey)
       const staged = await stageMediaFile(TEMP_DIR, filename || `image_${Date.now()}.jpg`, buffer)
 
-      const ext = (url.split('?')[0].split('.').pop() ?? '').toLowerCase()
-      const mimeMap: Record<string, ImageMediaType> = {
-        png: 'image/png',
-        gif: 'image/gif',
-      }
-      const mediaType: ImageMediaType = mimeMap[ext] ?? 'image/jpeg'
+      // The bytes decide: WeCom URLs carry no extension and screenshots are PNG.
+      // A model rejects a mislabeled image for the whole conversation, so an
+      // unrecognized format goes as a file only.
+      const mediaType = detectImageMediaType(buffer)
 
       attachments.push({
         type: 'image',
         filename: staged.filename,
         localPath: staged.localPath,
-        mimeType: 'image/jpeg',
+        ...(mediaType ? { mimeType: mediaType } : {}),
       })
-      images.push({
-        id: `wecom_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        type: 'image',
-        mediaType,
-        data: buffer.toString('base64'),
-        name: staged.filename,
-      })
+      if (mediaType) {
+        images.push({
+          id: `wecom_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          type: 'image',
+          mediaType,
+          data: buffer.toString('base64'),
+          name: staged.filename,
+        })
+      } else {
+        logEvent(this.instanceId, 'warn', 'image_format_unrecognized', { filename: staged.filename, bytes: buffer.length })
+      }
       logEvent(this.instanceId, 'info', 'media_download_done', {
         mediaType: 'image',
         filename: staged.filename,

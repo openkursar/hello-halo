@@ -6,7 +6,7 @@ import type { EngineSessionBinding } from '../../../../src/shared/types/engine-s
 
 vi.mock('fs', async importOriginal => {
   const actual = await importOriginal<typeof import('fs')>()
-  return { ...actual, renameSync: vi.fn(actual.renameSync) }
+  return { ...actual, renameSync: vi.fn(actual.renameSync), readFileSync: vi.fn(actual.readFileSync) }
 })
 
 const binding = (engineId: EngineSessionBinding['engineId'], sessionId: string): EngineSessionBinding => ({ version: 1, engineId, sessionId })
@@ -92,12 +92,37 @@ describe('app engine session bindings', () => {
     expect(fs.readdirSync(join(root, '.halo/apps/app/runs')).filter(name => name.endsWith('.tmp'))).toEqual([])
   })
 
-  it('refuses corrupt binding storage instead of overwriting it as an empty map', () => {
+  it('sets a torn binding file aside, keeping its bytes, and lets every chat continue', () => {
+    const { root, map } = paths()
+    const runs = join(root, '.halo/apps/app/runs')
+    saveChatSessionId(root, 'app', 'run', 'old')
+    fs.writeFileSync(map, '{"run":"old","other":"se')
+    expect(loadChatEngineState(root, 'app', 'run')).toEqual({})
+    const aside = fs.readdirSync(runs).filter(name => name.startsWith('_session-ids.json.corrupt-'))
+    expect(aside).toHaveLength(1)
+    expect(fs.readFileSync(join(runs, aside[0]), 'utf8')).toBe('{"run":"old","other":"se')
+    expect(saveChatEngineBinding(root, 'app', 'run', binding('halo', 'h'), {})).toBe(true)
+    expect(loadChatEngineState(root, 'app', 'run')).toEqual({ sessionId: 'h', binding: binding('halo', 'h') })
+  })
+
+  it('treats an empty or non-object binding file as torn', () => {
+    const { root, map } = paths()
+    for (const content of ['', '[]', 'null']) {
+      fs.mkdirSync(join(map, '..'), { recursive: true })
+      fs.writeFileSync(map, content)
+      expect(saveChatEngineRouting(root, 'app', 'run', 'halo', {})).toEqual({ routingEngine: 'halo' })
+      fs.rmSync(map)
+    }
+  })
+
+  it('keeps the file and fails only this turn when it cannot be read right now', () => {
     const { root, map } = paths()
     saveChatSessionId(root, 'app', 'run', 'old')
-    fs.writeFileSync(map, '{broken')
-    expect(() => saveChatEngineBinding(root, 'app', 'run', binding('halo', 'h'), {})).toThrow('unavailable')
-    expect(fs.readFileSync(map, 'utf8')).toBe('{broken')
+    const locked = Object.assign(new Error('resource busy'), { code: 'EBUSY' })
+    vi.spyOn(fs, 'readFileSync').mockImplementationOnce(() => { throw locked })
+    expect(() => loadChatEngineState(root, 'app', 'run')).toThrow('unavailable')
+    expect(JSON.parse(fs.readFileSync(map, 'utf8'))).toEqual({ run: 'old' })
+    expect(loadChatEngineState(root, 'app', 'run')).toEqual({ sessionId: 'old' })
   })
 })
 

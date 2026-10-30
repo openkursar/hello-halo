@@ -554,15 +554,42 @@ function getSessionIdMapPath(spacePath: string, appId: string): string {
 
 function readSessionIdMap(spacePath: string, appId: string, strict = false): SessionIdMap {
   const filePath = getSessionIdMapPath(spacePath, appId)
+  let raw: string
   try {
-    const parsed: unknown = JSON.parse(readFileSync(filePath, 'utf8'))
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid session map')
-    return parsed as SessionIdMap
+    raw = readFileSync(filePath, 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
-    console.warn(`[SessionStore] Cannot read session bindings: app=${appId}, code=${(error as NodeJS.ErrnoException).code ?? 'invalid-data'}`)
+    // Possibly transient (locked, unreadable for now): fail this turn, keep the file.
+    console.warn(`[SessionStore] Cannot read session bindings: app=${appId}, code=${(error as NodeJS.ErrnoException).code ?? 'unknown'}`)
     if (strict) throw new Error('Stored engine binding is unavailable')
     return {}
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    parsed = undefined
+  }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as SessionIdMap
+  quarantineSessionIdMap(filePath, appId, raw.length)
+  return {}
+}
+
+/**
+ * A map that is not a JSON object can only be a torn write from an older
+ * release (this one replaces it atomically). Every chat of the digital human
+ * would otherwise fail on it, so it is set aside — never deleted — and each
+ * chat continues from its own transcript.
+ */
+function quarantineSessionIdMap(filePath: string, appId: string, bytes: number): void {
+  const aside = `${filePath}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`
+  try {
+    renameSync(filePath, aside)
+    console.warn(`[SessionStore] Session bindings unreadable; set aside and continuing from transcripts: app=${appId}, bytes=${bytes}, file=${aside}`)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    console.error(`[SessionStore] Unreadable session bindings could not be set aside: app=${appId}, code=${(error as NodeJS.ErrnoException).code ?? 'unknown'}`)
+    throw new Error('Stored engine binding is unavailable')
   }
 }
 

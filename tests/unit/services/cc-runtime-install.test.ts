@@ -8,8 +8,10 @@ const mocks = vi.hoisted(() => ({
   config: { agent: { sdkEngine: 'halo', ccRuntime: {} as CcRuntimeConfig } },
   save: true,
   fetch: vi.fn(),
-  probe: vi.fn()
+  probe: vi.fn(),
+  preset: undefined as { name?: string; baseUrl: string } | undefined,
 }))
+vi.mock('../../../src/main/foundation/product-config', () => ({ getClaudeCodeDownloadSource: () => mocks.preset }))
 vi.mock('../../../src/main/foundation/config.service', () => ({
   getHaloDir: () => join(globalThis.__HALO_TEST_DIR__, '.halo'),
   getConfig: () => structuredClone(mocks.config),
@@ -42,6 +44,7 @@ beforeEach(() => {
   clearReleaseCache()
   mocks.config = { agent: { sdkEngine: 'halo', ccRuntime: { installVersion: '2.1.89' } } }
   mocks.save = true
+  mocks.preset = undefined
   mocks.fetch.mockReset()
   mocks.probe.mockReset().mockImplementation(async (path: string) => ({
     path, resolvedPath: path, version: '2.1.89', kind: 'native', compatibility: 'verified', recommended: true, managed: true, checkedAt: new Date().toISOString()
@@ -69,6 +72,16 @@ describe('managed CC installation', () => {
     clearReleaseCache()
     downloads()
     await expect(installCcRuntime()).resolves.toMatchObject({ compatibility: 'verified' })
+  })
+
+  it('looks up and installs from a build source declared without a name', async () => {
+    mocks.preset = { baseUrl: 'http://mirror.example.test/cc' }
+    downloads()
+    expect((await getCcRuntimeStatus()).sourceId).toBe('preset')
+    await expect(lookupCcRelease()).resolves.toMatchObject({ version: '2.1.89', checksum })
+    await expect(installCcRuntime()).resolves.toMatchObject({ compatibility: 'verified' })
+    expect(mocks.fetch.mock.calls.map(call => call[0])).toContain(
+      `http://mirror.example.test/cc/2.1.89/${platform}/${process.platform === 'win32' ? 'claude.exe' : 'claude'}`)
   })
 
   it('supports a private mirror without ever running a downloaded installer script', async () => {

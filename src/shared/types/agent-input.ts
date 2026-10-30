@@ -45,7 +45,7 @@ function isInputRecordBatch(messages: TranscriptMessage[] | undefined): messages
   return messages.every(message => {
     if (!message || typeof message !== 'object' || typeof message.id !== 'string' || typeof message.content !== 'string' || typeof message.timestamp !== 'string') return false
     if (!['user', 'assistant', 'system'].includes(message.role)) return false
-    if (message.source !== undefined && !['injection', 'cross-conversation', 'cross-conversation-notice', 'team-message', 'push'].includes(message.source)) return false
+    if (message.source !== undefined && !['injection', 'cross-conversation', 'cross-conversation-notice', 'team-message', 'push', 'continuity-notice'].includes(message.source)) return false
     if (message.metadata !== undefined && (!message.metadata || typeof message.metadata !== 'object' || Array.isArray(message.metadata))) return false
     if (message.metadata) {
       const metadata = message.metadata as Record<string, unknown>

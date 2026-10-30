@@ -256,7 +256,7 @@ export async function createSession(options: Record<string, any>): Promise<any> 
   await waitForSdkInitialization()
   const engineId = options.engineId ?? await resolveDefaultEngine()
   const borrow = await borrowEngine(engineId, options.abortController?.signal)
-  const { engineId: _engineId, engineHandoffContent: _engineHandoffContent, ...sessionOptions } = options
+  const { engineId: _engineId, engineHandoffContent: _engineHandoffContent, engineHandoffRecovered: _engineHandoffRecovered, ...sessionOptions } = options
   try {
     const create = borrow.module.createSession ?? borrow.module.unstable_v2_createSession
     if (!create) throw new EngineUnavailableError(engineId, 'The adapter does not expose session creation')
@@ -271,7 +271,7 @@ async function* queryIterable(params: any): AsyncGenerator<any> {
   await waitForSdkInitialization()
   const engineId = params.options?.engineId ?? await resolveDefaultEngine()
   const borrow = await borrowEngine(engineId, params.options?.abortController?.signal)
-  const { engineId: _engineId, engineHandoffContent: _engineHandoffContent, ...options } = params.options ?? {}
+  const { engineId: _engineId, engineHandoffContent: _engineHandoffContent, engineHandoffRecovered: _engineHandoffRecovered, ...options } = params.options ?? {}
   try { yield* borrow.module.query({ ...params, options: { ...options, abortController: borrow.controller } }) }
   finally { borrow.release() }
 }

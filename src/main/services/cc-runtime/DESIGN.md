@@ -143,6 +143,14 @@ installer source at https://claude.ai/install.sh (checked 2026-10-25). The nativ
 release base is https://downloads.claude.ai/claude-code-releases. Private mirrors
 must preserve the platform manifest and matching artifact checksum.
 
+A build may declare its own source in product.json (`claudeCodeDownloadSource`,
+for an intranet mirror). It is listed beside the official source under the
+reserved id `preset`, preselected while the user has chosen none, and never
+written into user settings, so a later build can move it. A remembered source
+that no longer exists falls back the same way. Such a mirror usually carries only
+the recommended version; asked for another, Settings says the source lacks it and
+offers to find a local installation instead.
+
 ## Settings and user intent
 
 The settings UI nests installation management inside the Claude Code engine card.

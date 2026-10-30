@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -32,7 +32,8 @@ vi.mock('../../../../src/main/services/api-ref', () => ({ HALO_API_TOOLSET_ID: '
 vi.mock('../../../../src/main/services/conversation.service', () => ({ getConversation: vi.fn(() => null) }))
 vi.mock('../../../../src/main/services/health', () => ({ registerProcess: vi.fn(), unregisterProcess: vi.fn(), getCurrentInstanceId: vi.fn(() => null) }))
 
-import { getOrCreateV2Session, closeAllV2Sessions, stopSessionCleanup } from '../../../../src/main/services/agent/session-manager'
+import { acquireV2Session, getOrCreateV2Session, closeAllV2Sessions, stopSessionCleanup } from '../../../../src/main/services/agent/session-manager'
+import { NativeSessionResumeError } from '../../../../src/shared/types/engine-session'
 
 const directories: string[] = []
 beforeEach(() => {
@@ -126,4 +127,72 @@ it.each(['codex', 'dsh'])('leaves %s resumption to its adapter', async engine =>
   const { configDir, sessionId, resume } = fixture()
   await resume(configDir)
   expect(createSession.mock.calls[0][0].resume).toBe(sessionId)
+})
+
+describe('continuing from the transcript when the stored record is lost', () => {
+  const lease = async (options: { root: string; sessionId: string; workDir: string; recover?: () => string; engine?: string }) => {
+    const sink = { onTurnComplete: vi.fn(), onContinuedFromRecord: vi.fn() }
+    const acquired = await acquireV2Session('space', randomUUID(), {
+      model: 'test-model', systemPrompt: 'test', env: { CLAUDE_CONFIG_DIR: options.root }, ...(options.engine ? { engineId: options.engine } : {}),
+    }, options.sessionId, options.workDir, { sink } as never, undefined, undefined, undefined,
+    options.recover ? { recoverNativeSession: options.recover } : undefined)
+    return { acquired, sink }
+  }
+  const session = () => ({ close: vi.fn(), send: vi.fn(async (_message: unknown) => {}), query: { transport: { isReady: () => true, onExit: () => () => {} } } })
+
+  it('hands a legacy chat whose record is gone its transcript and records the notice before the first input', async () => {
+    const { configDir, sessionId } = fixture()
+    const native = session()
+    createSession.mockResolvedValue(native)
+    const { acquired, sink } = await lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => 'Historical context: kept the files.' })
+    const options = createSession.mock.calls[0][0]
+    expect(options.resume).toBeUndefined()
+    expect(options).toMatchObject({ engineHandoffContent: 'Historical context: kept the files.', engineHandoffRecovered: true })
+    await acquired.send('Next question')
+    expect(sink.onContinuedFromRecord).toHaveBeenCalledOnce()
+    expect(sink.onContinuedFromRecord.mock.invocationCallOrder[0]).toBeLessThan(native.send.mock.invocationCallOrder[0])
+    expect(native.send.mock.calls[0][0]).toContain('Historical context: kept the files.')
+    acquired.release()
+  })
+
+  it('still starts a legacy chat fresh when it has no transcript either', async () => {
+    const { configDir, sessionId } = fixture()
+    createSession.mockResolvedValue(session())
+    const { acquired, sink } = await lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => { throw new Error('no record') } })
+    expect(createSession.mock.calls[0][0]).not.toHaveProperty('resume')
+    expect(createSession.mock.calls[0][0]).not.toHaveProperty('engineHandoffContent')
+    await acquired.send('Next question')
+    expect(sink.onContinuedFromRecord).not.toHaveBeenCalled()
+    acquired.release()
+  })
+
+  it('asks the halo engine for an exact restore and falls back to the transcript when it refuses', async () => {
+    const { configDir, sessionId, save } = fixture()
+    save(configDir)
+    createSession.mockRejectedValueOnce(new NativeSessionResumeError('halo', sessionId)).mockResolvedValue(session())
+    await lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => 'Historical context.' })
+    expect(createSession.mock.calls[0][0]).toMatchObject({ resume: sessionId, strictResume: true })
+    expect(createSession.mock.calls[1][0].resume).toBeUndefined()
+    expect(createSession.mock.calls[1][0]).toMatchObject({ engineHandoffContent: 'Historical context.', engineHandoffRecovered: true })
+    expect(createSession.mock.calls[1][0].strictResume).toBeUndefined()
+  })
+
+  it('resumes a legacy record with what the engine can read when there is no transcript to fall back on', async () => {
+    const { configDir, sessionId, save } = fixture()
+    save(configDir)
+    createSession.mockRejectedValueOnce(new NativeSessionResumeError('halo', sessionId)).mockResolvedValue(session())
+    await lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => '' })
+    expect(createSession.mock.calls[1][0]).toMatchObject({ resume: sessionId })
+    expect(createSession.mock.calls[1][0].strictResume).toBeUndefined()
+  })
+
+  it('does not ask other engines for a strict restore', async () => {
+    getActiveEngine.mockReturnValue('anthropic')
+    const { configDir, sessionId, save } = fixture()
+    save(configDir)
+    createSession.mockResolvedValue(session())
+    await lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => 'Historical context.' })
+    expect(createSession.mock.calls[0][0]).toMatchObject({ resume: sessionId })
+    expect(createSession.mock.calls[0][0]).not.toHaveProperty('strictResume')
+  })
 })

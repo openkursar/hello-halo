@@ -227,7 +227,11 @@
     "@parcel/watcher-darwin-arm64": "^2.5.6",
     "@parcel/watcher-darwin-x64": "^2.5.6",
     "@parcel/watcher-linux-x64-glibc": "^2.5.6",
-    "@parcel/watcher-win32-x64": "^2.5.6"
+    "@parcel/watcher-win32-x64": "^2.5.6",
+    "@vscode/ripgrep-darwin-arm64": "1.18.0",
+    "@vscode/ripgrep-darwin-x64": "1.18.0",
+    "@vscode/ripgrep-linux-x64": "1.18.0",
+    "@vscode/ripgrep-win32-x64": "1.18.0"
   },
   "build": {
     "npmRebuild": false,
@@ -288,6 +292,7 @@
       "node_modules/@openai/codex-sdk/dist/**/*",
       "node_modules/cloudflared/**/*",
       "node_modules/@parcel/watcher-*/**/*",
+      "node_modules/@vscode/ripgrep-*/**/*",
       "node_modules/better-sqlite3/prebuilds/*.node",
       "node_modules/node-pty/prebuilds/**",
       "node_modules/tesseract.js/**",

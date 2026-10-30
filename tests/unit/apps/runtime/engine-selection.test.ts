@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   transcriptPath: undefined as string | undefined,
   historyReads: 0,
   emptyHistory: false,
+  answered: false,
 }))
 
 vi.mock('../../../../src/main/services/agent', async () => ({
@@ -30,7 +31,10 @@ vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
   resolveTranscriptPath: () => state.transcriptPath,
   readChatHandoffHistory: () => {
     state.historyReads++
-    return { transcriptPath: state.transcriptPath, truncated: false, messages: state.emptyHistory ? [] : [{ id: 'history', role: 'user', content: 'Keep the existing files.', timestamp: '2026-10-25T00:00:00Z' }] }
+    return { transcriptPath: state.transcriptPath, truncated: false, messages: state.emptyHistory ? [] : [
+      { id: 'history', role: 'user', content: 'Keep the existing files.', timestamp: '2026-10-25T00:00:00Z' },
+      ...(state.answered ? [{ id: 'reply', role: 'assistant', content: 'Kept them.', timestamp: '2026-10-25T00:00:01Z' }] : []),
+    ] }
   },
 }))
 
@@ -47,6 +51,7 @@ beforeEach(() => {
   state.transcriptPath = undefined
   state.historyReads = 0
   state.emptyHistory = false
+  state.answered = false
 })
 
 describe('digital human engine selection', () => {
@@ -129,9 +134,33 @@ describe('digital human engine selection', () => {
     expect(state.historyReads).toBe(1)
   })
 
-  it('keeps legacy native resume until an explicit switch needs a handoff', () => {
-    expect(prepareAppEngineSession({ engineId: 'anthropic', state: {}, legacySessionId: 'old', spacePath: '/space', appId: 'person', runId: 'run' })).toEqual({ resumeSessionId: 'old' })
+  it('keeps legacy native resume until an explicit switch needs a handoff, with the transcript as its fallback', () => {
+    const plan = prepareAppEngineSession({ engineId: 'anthropic', state: {}, legacySessionId: 'old', spacePath: '/space', appId: 'person', runId: 'run' })
+    expect(plan).toEqual({ resumeSessionId: 'old', recoverNativeSession: expect.any(Function) })
     expect(state.historyReads).toBe(0)
+  })
+
+  it('continues an answered chat whose session record was lost from its transcript, flagged for the notice', () => {
+    state.transcriptPath = '/space/chat.jsonl'
+    state.answered = true
+    const plan = prepareAppEngineSession({ engineId: 'halo', state: {}, spacePath: '/space', appId: 'person', runId: 'chat' })
+    expect(plan.engineHandoffContent).toContain('Kept them.')
+    expect(plan.engineHandoffRecovered).toBe(true)
+  })
+
+  it('does not call a chat that was never answered a lost record', () => {
+    state.transcriptPath = '/space/chat.jsonl'
+    const plan = prepareAppEngineSession({ engineId: 'halo', state: { routingEngine: 'halo' }, spacePath: '/space', appId: 'person', runId: 'chat' })
+    expect(plan.engineHandoffContent).toContain('Keep the existing files.')
+    expect(plan.engineHandoffRecovered).toBeUndefined()
+  })
+
+  it('does not flag a person\'s explicit engine change of a legacy chat', () => {
+    state.transcriptPath = '/space/chat.jsonl'
+    state.answered = true
+    const plan = prepareAppEngineSession({ engineId: 'halo', state: {}, legacySessionId: 'old', spacePath: '/space', appId: 'person', runId: 'chat' })
+    expect(plan.engineHandoffContent).toBeDefined()
+    expect(plan.engineHandoffRecovered).toBeUndefined()
   })
 
   it('refuses a cross-engine continuation when its previous transcript is missing', () => {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronRight, Download, Loader2, Settings2 } from 'lucide-react'
-import type { CcInstallation, CcInstallRequest, CcReleaseInfo, CcRuntimeIssue, CcRuntimeStatus } from '../../../../shared/types/cc-runtime'
+import type { CcDownloadSource, CcInstallation, CcInstallRequest, CcReleaseInfo, CcRuntimeIssue, CcRuntimeStatus } from '../../../../shared/types/cc-runtime'
 import { api } from '../../../api'
 import { useTranslation } from '../../../i18n'
 import { useCcRuntimeMessages } from './messages'
@@ -14,13 +14,15 @@ interface Props {
   onInstall: (request: CcInstallRequest) => Promise<void>
   onSelect: (item: CcInstallation) => void
   onRefresh: () => Promise<CcRuntimeStatus>
+  /** Look for installations on this computer instead. */
+  onFindLocal: () => void
 }
 
 const normalizeVersion = (input: string) => input.trim().replace(/^v(?=\d)/i, '')
 const validVersion = (input: string) => input.length <= 80 && (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(input) || input === 'latest' || input === 'stable')
 const usable = (item: CcInstallation) => ['unchecked', 'verified', 'compatible'].includes(item.compatibility)
 
-export function CcDownloadPanel({ status, installing, busy, onInstall, onSelect, onRefresh }: Props) {
+export function CcDownloadPanel({ status, installing, busy, onInstall, onSelect, onRefresh, onFindLocal }: Props) {
   const { t } = useTranslation()
   const messages = useCcRuntimeMessages()
   const [version, setVersion] = useState('')
@@ -42,9 +44,12 @@ export function CcDownloadPanel({ status, installing, busy, onInstall, onSelect,
   const selectedRecommended = Boolean(recommended && recommended.path === status.selectedPath)
   const selectedCustom = Boolean((installed?.path ?? preview?.installedPath) && (installed?.path ?? preview?.installedPath) === status.selectedPath)
   const disabled = busy || installing || saving || checking
+  // A build's own source may come without a name of its own.
+  const label = (source: CcDownloadSource) => source.name || (source.id === 'preset' ? t('Default download source') : source.id)
+  const current = status.sources.find(source => source.id === sourceId)
   const sourceName = sourceId === 'official' ? t('Official')
     : sourceId === 'custom' ? t('Custom source / internal mirror')
-      : status.sources.find(source => source.id === sourceId)?.name ?? sourceId
+      : current ? label(current) : sourceId
 
   const invalidate = () => {
     revision.current++
@@ -110,7 +115,7 @@ export function CcDownloadPanel({ status, installing, busy, onInstall, onSelect,
       <label className="block space-y-1 text-xs font-medium">
         <span>{t('Download source')}</span>
         <select aria-label={t('Download source')} className={runtimeInputClass} value={sourceId} disabled={installing || saving} onChange={event => { invalidate(); setSourceId(event.target.value) }}>
-          {status.sources.filter(source => source.id !== 'custom').map(source => <option key={source.id} value={source.id}>{source.id === 'official' ? t('Official (Anthropic)') : source.name}</option>)}
+          {status.sources.filter(source => source.id !== 'custom').map(source => <option key={source.id} value={source.id}>{source.id === 'official' ? t('Official (Anthropic)') : label(source)}</option>)}
           <option value="custom">{t('Custom source / internal mirror')}</option>
         </select>
       </label>
@@ -159,7 +164,10 @@ export function CcDownloadPanel({ status, installing, busy, onInstall, onSelect,
             {checking && <Loader2 className="h-4 w-4 animate-spin" />}{t('Check version')}
           </RuntimeButton>
         </div>
-        {versionFailure && <p role="alert" className="text-xs text-destructive">{messages.issue(versionFailure.issue)}</p>}
+        {versionFailure && <div role="alert" className="space-y-2">
+          <p className="text-xs text-destructive">{messages.issue(versionFailure.issue)}</p>
+          {versionFailure.issue === 'version-not-found' && <RuntimeButton disabled={disabled} onClick={onFindLocal}>{t('Find local installations')}</RuntimeButton>}
+        </div>}
         {preview && <div className="space-y-2 rounded-lg border border-border p-3">
           <p role="status" className="text-sm">{installed || preview.installedPath
             ? t('Version {{version}} is already installed.', { version: preview.version })

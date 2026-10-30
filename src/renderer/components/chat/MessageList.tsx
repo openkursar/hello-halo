@@ -57,6 +57,8 @@ export interface MessageListProps {
   errorType?: AgentErrorType | null  // Special error type for custom UI handling
   /** The folder a turn could not start in; offers to change it where the surface passes it. */
   workDirIssue?: WorkDirIssue | null
+  /** This surface shows the engine note below the transcript, so an engine failure may point at it. */
+  engineNoticeShown?: boolean
   onContinue?: () => void  // Callback to continue after interrupt (for InterruptedBubble)
   /** Stops the running turn; offered on the live retry notice. */
   onStop?: () => void
@@ -214,6 +216,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   error = null,
   errorType = null,
   workDirIssue = null,
+  engineNoticeShown = false,
   onContinue,
   onStop,
   isCompact = false,
@@ -438,6 +441,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                     <span className="text-sm font-medium">{t('Something went wrong')}</span>
                   </div>
                   <p className="mt-2 text-sm text-destructive/80">{error}</p>
+                  {errorType === 'engine_unavailable' && engineNoticeShown && (
+                    <p className="mt-1 text-sm text-destructive/80">{t('The note below says what to do.')}</p>
+                  )}
                 </div>
               </div>
             </div>

@@ -182,6 +182,17 @@
       "description": "iCalendar holiday calendar behind digital-human schedules set to run on mainland China working days only (holidays and make-up workdays included). Omit to use the built-in public calendar; builds whose machines cannot reach it point this at their own copy, which must carry the same special-day markers. An empty string provides no calendar: such schedules then skip their runs and tell the user why.",
       "examples": ["https://intranet.example.com/holidays/cn.ics"]
     },
+    "claudeCodeDownloadSource": {
+      "type": "object",
+      "description": "Default download source for installing Claude Code from Settings: a mirror with the official release layout (<baseUrl>/<version>/manifest.json and <baseUrl>/<version>/<platform>/claude). Offered beside the official source and preselected; a source the user chooses still wins. It must carry at least the version Halo recommends. Omit to offer the official source only.",
+      "properties": {
+        "name": { "type": "string", "description": "Name shown in the source list." },
+        "baseUrl": { "type": "string", "description": "HTTP or HTTPS base URL without credentials, query or fragment." }
+      },
+      "required": ["baseUrl"],
+      "additionalProperties": false,
+      "examples": [{ "name": "Intranet mirror", "baseUrl": "http://mirror.example.com/claude-code-releases" }]
+    },
     "officialContent": {
       "type": "object",
       "description": "Where the official AI guides (agent-facing raw markdown, read by the read_halo_doc tool) are published. Omit to use the built-in public docs host; enterprise builds point this at their own mirror.",

@@ -21,9 +21,16 @@ export const MAX_TRANSCRIPT_THROUGH = 2000
 /** Messages kept above a `through` target so it does not sit at the very top edge. */
 const THROUGH_CONTEXT = 5
 
+/**
+ * Stored text of a `continuity-notice`. The chat shows its own translation;
+ * this wording is what other readers of the record (exports, handoff) see.
+ */
+export const CONTINUITY_NOTICE_TEXT = 'Some earlier details could not be restored exactly; the conversation continues from its record.'
+
 /** The role a message of this source is stored and shown with. */
 export function roleForTranscriptSource(source: TranscriptSource | undefined): TranscriptRole {
   return source === 'cross-conversation' || source === 'cross-conversation-notice' || source === 'team-message'
+    || source === 'continuity-notice'
     ? 'system'
     : 'user'
 }

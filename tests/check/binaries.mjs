@@ -34,6 +34,7 @@ import engineRuntimes from '../../scripts/engine-runtimes.cjs'
 import { BETTER_SQLITE3_TARGETS, getBetterSqlite3PrebuildPath, validateBetterSqlite3Prebuild } from '../../scripts/lib/better-sqlite3-prebuilds.mjs'
 import { CLOUDFLARED_MINIMUM_MACOS } from '../../scripts/lib/cloudflared.mjs'
 import deployment from '../../scripts/lib/macho-deployment-target.cjs'
+import ripgrep from '../../scripts/lib/ripgrep.cjs'
 
 const { ENGINE_RUNTIMES, VALID_ENGINES, resolveEngineEntry, engineArtifactPaths } = engineRuntimes
 
@@ -249,6 +250,22 @@ const BINARY_DEPENDENCIES = [
   },
   // node-pty Linux: terminal panel is not supported on Linux (no public prebuilds available).
   // Linux users get Halo without the terminal feature. Platform check at runtime handles this.
+
+  // ripgrep - the Halo SDK engine's Grep tool runs it; most machines have none.
+  ...Object.entries(ripgrep.PREPARE_PLATFORM_KEYS).map(([platform, key]) => ({
+    name: `${platform} ripgrep`,
+    path: path.join('node_modules', ripgrep.ripgrepBinaryPath(key)),
+    platform,
+    fix: `node scripts/prepare-binaries.mjs --platform ${platform}`,
+    validate: (filePath) => {
+      try {
+        const stats = fs.statSync(filePath)
+        return { valid: stats.size > 1024 * 1024, info: `${(stats.size / 1024 / 1024).toFixed(1)} MB` }
+      } catch {
+        return { valid: false, info: 'cannot read file' }
+      }
+    }
+  })),
 
   ...Object.entries(BETTER_SQLITE3_TARGETS).map(([platform, target]) => ({
     name: `${platform} better-sqlite3`,

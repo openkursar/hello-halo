@@ -111,6 +111,7 @@ export { deleteStoredSession, copyStoredSessions } from './stored-session'
 // A session's working directory is missing; the chat offers to choose another.
 // Once a space moves, no session starts in the folders it left.
 export { WorkingDirectoryUnavailableError, workingDirErrorDetail, retireWorkingDirs } from './working-dir'
+export { engineErrorDetail, isEngineSetupError } from './engine-error'
 
 // Conversation goal (engines with features.goal)
 export { getConversationGoal, setConversationGoal } from './goal'

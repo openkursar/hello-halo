@@ -25,6 +25,7 @@ import {
   CLOUDFLARED_VERSION,
 } from './lib/cloudflared.mjs'
 import deployment from './lib/macho-deployment-target.cjs'
+import ripgrep from './lib/ripgrep.cjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '..')
@@ -463,6 +464,51 @@ function installCodex(platform) {
   }
 }
 
+function checkRipgrep(platform) {
+  const binaryPath = path.join(PROJECT_ROOT, 'node_modules', ripgrep.ripgrepBinaryPath(ripgrep.PREPARE_PLATFORM_KEYS[platform]))
+  if (!fs.existsSync(binaryPath)) return { exists: false }
+  const stats = fs.statSync(binaryPath)
+  return { exists: true, valid: stats.size > 1024 * 1024, size: stats.size }
+}
+
+/**
+ * Install the Halo SDK engine's ripgrep package for a target platform.
+ * Downloads the tarball directly from the npm registry to bypass host os/cpu checks.
+ */
+function installRipgrep(platform) {
+  const { packageName } = ripgrep.RIPGREP_TARGETS[ripgrep.PREPARE_PLATFORM_KEYS[platform]]
+  const version = ripgrep.pinnedRipgrepVersion(PROJECT_ROOT)
+  const unscoped = packageName.replace('@vscode/', '')
+  const registry = execSync('npm config get registry', { encoding: 'utf8' }).trim().replace(/\/+$/, '')
+  const tarballUrl = `${registry}/${packageName}/-/${unscoped}-${version}.tgz`
+  const destDir = path.join(PROJECT_ROOT, 'node_modules', packageName)
+  const tmpTgz = path.join(PROJECT_ROOT, `node_modules/.${unscoped}.tgz`)
+
+  log.info(`Installing ${packageName}@${version} from registry...`)
+
+  try {
+    if (fs.existsSync(destDir)) {
+      fs.rmSync(destDir, { recursive: true })
+    }
+    fs.mkdirSync(destDir, { recursive: true })
+
+    curlDownload(tarballUrl, tmpTgz)
+    execSync(`tar -xzf "${tmpTgz}" -C "${destDir}" --strip-components=1`, { stdio: 'pipe' })
+    fs.unlinkSync(tmpTgz)
+
+    const status = checkRipgrep(platform)
+    if (!status.exists || !status.valid) {
+      throw new Error(`No valid ripgrep binary found in downloaded ${packageName}`)
+    }
+
+    log.success(`Installed ${packageName}@${version}`)
+  } catch (err) {
+    if (fs.existsSync(tmpTgz)) fs.unlinkSync(tmpTgz)
+    log.error(`Failed to install ${packageName}: ${err.message}`)
+    throw err
+  }
+}
+
 /**
  * Prepare all binaries for a platform
  */
@@ -500,6 +546,14 @@ function preparePlatform(platform) {
     log.success(`@openai/codex native package already exists for ${platform}`)
   }
 
+  // ripgrep for the Halo SDK engine's Grep tool
+  const ripgrepStatus = checkRipgrep(platform)
+  if (!ripgrepStatus.exists || !ripgrepStatus.valid) {
+    installRipgrep(platform)
+  } else {
+    log.success(`ripgrep already exists for ${platform}`)
+  }
+
   // Portable Git: bundled into the Windows build for offline Git Bash setup
   if (platform === 'win') {
     const gitStatus = checkPortableGit()
@@ -520,6 +574,7 @@ function preparePlatform(platform) {
     const nativePaths = [
       `node_modules/${WATCHER_PACKAGES[platform]}`,
       `node_modules/${CODEX_PACKAGES[platform].pkg}`,
+      `node_modules/${ripgrep.ripgrepBinaryPath(ripgrep.PREPARE_PLATFORM_KEYS[platform])}`,
       `node_modules/node-pty/prebuilds/darwin-${arch}`,
     ]
     let count = 0

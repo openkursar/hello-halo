@@ -43,7 +43,7 @@ vi.mock('../../../../src/main/apps/runtime/im-channels/file-send-resolve', () =>
 vi.mock('../../../../src/main/apps/runtime/im-permission-registry', () => ({ setImPermissionContext: env.setPermission }))
 vi.mock('../../../../src/main/services/space.service', () => ({ getSpaceDir: () => '/work' }))
 // What a chat is told of a refused local connection is im-error-reply.test's.
-vi.mock('../../../../src/main/services/agent', () => ({ isRefusedLocalConnection: () => false }))
+vi.mock('../../../../src/main/services/agent', () => ({ isRefusedLocalConnection: () => false, isEngineSetupError: () => false }))
 
 const { deliverReminder } = await import('../../../../src/main/apps/runtime/reminders/delivery')
 const { AppChatTurnInterrupted, withTurnEndingNote } = await import('../../../../src/main/apps/runtime/turn-ending')

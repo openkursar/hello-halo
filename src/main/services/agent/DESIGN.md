@@ -22,6 +22,7 @@
 | MCP server routing | `mcp-manager.ts` | Registration, discovery, per-session MCP bindings. Owns the shared status cache (`agent:mcp-status` broadcast). |
 | MCP connection probe | `mcp-probe.ts` | Native initialize+tools/list handshake via `@modelcontextprotocol/sdk` — no agent session, no token cost. Classifies failures (401→needs-auth, refused/timeout→failed + `errorDetail`). Triggered by app lifecycle events (install/resume/spec-update, wired in `apps/runtime`), by SDK-reported `failed`/`needs-auth` (stream-processor follow-up), and manually via `agent:probe-mcp` IPC. A probe that connects also clears the server's CC auth record, and lets sessions that reported the server failed rebuild (see §2). |
 | Stored session removal and carry-over | `stored-session.ts` | Deletes what the default engine stored for one session — `<config dir>/projects/<project dir>/<id>.jsonl` and its `<id>/` folder — for a session that will never be resumed (apps/runtime's run transcript retention); and, when a space's working directory changes, copies a folder's stored sessions to the new folder's project dir (the engine's own name: resolved, NFC, cut at 200 with its Node hash), a newer file winning (staged beside it and renamed over it, so a cut-off copy never stands), folders merged, nothing moved. Only the configured config dir is looked in. The Halo SDK also uses the session's configured directory. Codex and dsh store sessions elsewhere and are not covered. |
+| Engine or account that cannot run here | `engine-error.ts` | `engineErrorDetail` adds `errorType: 'engine_unavailable'` to a chat's error event when Claude Code is missing or a Claude Code login account meets another engine; the chat's `EngineRecoveryNotice` then offers setting up Claude Code, moving the conversation or digital human to an engine that can run, or another account. `isEngineSetupError` lets an IM reply say only "try later" (`apps/runtime/im-error-reply.ts`). |
 | Missing or left working directory | `working-dir.ts` | `WorkingDirectoryUnavailableError` (folder + space in its fields, never in its message, which travels to team leads and memory summaries), thrown by the spawn check in `sdk-config.ts` and by apps/runtime's environment check; `workingDirErrorDetail` turns it into the chat error event's `errorType: 'working_dir_unavailable'` + `workDirIssue`, which the chat shows with a change-folder button. The space controller changes a folder only when `session-manager.ts` reports nothing in the space running (`isSpaceBusy`) and no session of it asked for while the old folder's sessions were copied (`countSessionAcquisitions`, counted on every acquisition); then `retireWorkingDirs`, after which session acquisition refuses that space's sessions in the folders it left with `WorkingDirectoryChangedError` — a turn that read the old folder just before the change is sent again rather than run where nothing will read it. In memory only — after a restart no such turn exists. Deleting a space goes the same way: refused while `isSpaceBusy`, then `closeSpaceSessions` closes the space's idle sessions and waits (bounded) for their engine processes to exit, read from the engine-neutral `V2SDKSession.pid`, because Windows will not remove a folder a live process works in. |
 | Refused local connections | `local-connection.ts` | Engines reach every model through the router on 127.0.0.1; security software that filters per program can refuse the engine's process while the app gets through. `explainEngineError` turns the engine's bare EACCES/EPERM (Claude Code, Node, and the halo engine's `fetch failed (EACCES)`) into what happened and the program to allow — applied to every turn error (stream-processor) and run error (apps/runtime `execute.ts`); every engine reports a failed model call as an error result, never as a thrown exception, so those two places see them all. The program path is local: a surface outside this computer (IM) tests the text with `isRefusedLocalConnection` and says it without the path. `checkChildLocalConnection` makes that connection from a child process for Run diagnostics. |
 | CC MCP auth state | `mcp-auth-state.ts` | Removes stale OAuth records CC persists under `CLAUDE_CONFIG_DIR` after any 4xx from a URL-based MCP server. Such a record has no expiry and makes CC skip the server entirely, so it is cleared before session creation and after a successful probe. Mirrors CC-internal formats; a mismatch degrades to a no-op. |
@@ -208,6 +209,12 @@ to the SDK contract, not Halo's chat services.
 Bootstrap initializes the runtime after the first screen and awaits its shutdown
 before releasing host tools. A worker-backed session must never register the main
 process PID as a killable engine process.
+
+Grep in the halo engine runs the ripgrep Halo ships for it (the per-platform
+`@vscode/ripgrep-*` package, unpacked; `scripts/lib/ripgrep.cjs` for packaging,
+`halo/ripgrep.ts` at runtime), passed as `AGENT_RIPGREP_PATH` in the session env.
+Most machines have no `rg` of their own. It is the engine's own copy, separate
+from the ones Codex and dsh carry.
 
 Request identity uses a pure Node setup module so history stays on the execution
 side. The setup consumes the router's public identity surface and is bundled by
@@ -751,6 +758,20 @@ readers. App `_session-ids.json` entries remain strings for legacy runs; an opte
 run's entry becomes the versioned binding, atomically in the same file. The legacy
 read API still returns a session-id string. Preparation/serialization does not
 write a binding; the session owner commits only after preparation succeeds.
+
+**When the record cannot be restored as it was.** Whenever a resume has Halo's
+transcript to fall back on (`SessionGates.recoverNativeSession`, offered by space
+chat, digital-human chat and run follow-ups for every resumed session), a native
+record that is missing, unreadable, or would come back with gaps is replaced by
+that transcript as handoff context, and the conversation's sink records a
+`continuity-notice` line just before the input that carries it
+(`TurnSink.onContinuedFromRecord`; shown in Halo, never sent to an IM party).
+The halo engine reads the record itself, so the host asks it for `strictResume`;
+the SDK then refuses a record it would have to repair (`RESUME_HISTORY_UNAVAILABLE`,
+mapped to `NativeSessionResumeError` in `halo/index.ts`). A legacy resume with no
+transcript either keeps what the engine can read, or starts fresh when nothing
+is stored; a bound resume without one fails as before. Deliberate engine changes
+are handoffs too but are not losses and carry no notice.
 
 Opted-in Codex bindings pass `strictNativeResume: true`. A rejected `thread/resume` raises `NativeSessionResumeError` without starting a fresh thread; the session owner decides how to rebuild from neutral records. Startup failures close the app-server, RPC handlers and MCP bridge before returning. Legacy unbound resume retains its earlier fallback contract.
 

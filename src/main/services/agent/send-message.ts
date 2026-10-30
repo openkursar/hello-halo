@@ -57,6 +57,7 @@ import { createConversationSink } from './conversation-sink'
 import { prepareGoalInput, setGoalForTurn } from './goal'
 import { flushToolStats } from './stream-processor'
 import { workingDirErrorDetail } from './working-dir'
+import { engineErrorDetail } from './engine-error'
 import { onAgentError, runPpidScanAndCleanup } from '../health'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
@@ -197,7 +198,7 @@ export async function sendMessage(
       })
     }
 
-    emitAgentEvent('agent:error', spaceId, conversationId, { type: 'error', error: errorMessage, ...workingDirErrorDetail(error, spaceId) })
+    emitAgentEvent('agent:error', spaceId, conversationId, { type: 'error', error: errorMessage, ...workingDirErrorDetail(error, spaceId), ...engineErrorDetail(error) })
     try {
       addMessage(spaceId, conversationId, {
         role: 'assistant', content: '', error: errorMessage, toolCalls: [],
@@ -333,7 +334,7 @@ export async function sendMessage(
       resolveKnowledgeBases,
       {
         creationContext: spaceMemory?.contextKey,
-        recoverNativeSession: continuation.strictNativeResume ? async () => (await prepareConversationContinuation(
+        recoverNativeSession: sessionId ? async () => (await prepareConversationContinuation(
           spaceId, conversationId, conversation, engineId, {
             beforeMessageId: userMessage.id, forceHandoff: true,
             excludedHistoryMessageIds: internal?.excludedHistoryMessageIds,
