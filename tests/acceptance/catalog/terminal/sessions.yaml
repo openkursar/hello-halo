@@ -12,6 +12,8 @@ references:
   - src/main/services/ai-terminal/DESIGN.md
   - src/renderer/components/canvas/TerminalCloseGuard.tsx
   - src/main/services/ai-terminal/available.ts
+  - tests/e2e/specs/acceptance-terminal-sessions.spec.ts
+  - tests/e2e/fixtures/acceptance-terminal-sessions.ts
 promises:
   lifetime:
     en: An AI-touched terminal offers background retention versus termination when its tab is closed.
@@ -36,7 +38,13 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
+    requirements: &terminal_requirements
+      - halo-sdk
+      - terminal-shell
+    notes: &terminal_evidence
+      en: A real UI-created PTY runs a harmless program from the isolated profile using the test runner's absolute Node executable. Actual local scripted terminal tools establish AI contact; no handler or aiTouched state is replaced. Session identity, ordered input receipts, working directory and OS process state are checked. This does not verify a Node executable shipped by Halo. Unknown process state retains the profile instead of being counted as an exit. macOS uses the fixed system Bash; Windows requires its system PowerShell and still needs actual platform execution.
+      zh: 真实界面创建的 PTY 使用测试运行器的绝对 Node 路径，运行隔离资料内的无害程序；真实本地脚本模型终端工具建立 AI 接触，不替换处理器或 aiTouched 状态。检查会话身份、有序输入回执、工作目录及操作系统进程状态；不据此验证 Halo 随包 Node。进程状态未知时保留资料，不能计为退出。macOS 使用固定系统 Bash；Windows 要求系统 PowerShell，仍须实际在该平台执行。
     preconditions:
       - en: A local terminal runs a harmless interactive fixture.
         zh: 本地终端运行无害交互测试。
@@ -59,8 +67,10 @@ scenarios:
     profiles:
       - regression
     evidence: app-e2e
-    mode: none
-    automation: planned
+    mode: scripted
+    automation: automated
+    requirements: *terminal_requirements
+    notes: *terminal_evidence
     preconditions:
       - en: A running terminal has been used by the AI.
         zh: 运行中的终端已被 AI 使用。
@@ -83,8 +93,12 @@ scenarios:
     profiles:
       - regression
     evidence: app-e2e
-    mode: none
-    automation: planned
+    mode: scripted
+    automation: automated
+    requirements: *terminal_requirements
+    notes:
+      en: The target terminal is created through the UI. A separately titled control terminal is created through the real public terminal API as a setup condition; this does not verify a UI naming action. The scripted model reads both actual terminals, after which the aggregate tray opens each exact entry. The user starts the isolated control program through its visible terminal, closes the target completely, then verifies the target is absent and the control remains in the tray. Actual program and shell PID exit, unchanged control identity and keyboard acknowledgements are required. Runner Node is only the harmless fixture executable, not evidence for Halo-shipped commands; unknown exit state retains the profile. macOS uses system Bash and Windows requires actual system PowerShell execution.
+      zh: 目标终端通过界面创建；带独立标题的对照终端通过真实公开终端 API 建立前置，不据此声称验证了界面命名。脚本模型实际读取两个终端后，从聚合入口打开对应的唯一条目；用户在可见对照终端启动隔离程序，完全关闭目标，再确认列表中目标消失而对照保留。必须验证程序及 shell 的操作系统 PID 已退出、对照身份不变及键盘回执。运行器 Node 仅是无害测试程序执行器，不代表 Halo 随包命令覆盖；退出状态未知时保留资料。macOS 使用系统 Bash，Windows 要求实际系统 PowerShell 执行。
     preconditions:
       - en: A test process runs in a retained terminal.
         zh: 测试进程在保留终端运行。

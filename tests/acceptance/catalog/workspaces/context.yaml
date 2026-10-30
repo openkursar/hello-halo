@@ -15,6 +15,7 @@ references:
   - src/renderer/components/chat/WorkingDirUnavailableNotice.tsx
   - src/main/services/agent/working-dir.ts
   - tests/e2e/specs/acceptance-workspace-directory.spec.ts
+  - tests/e2e/specs/acceptance-terminal-sessions.spec.ts
 promises:
   isolation:
     en: Open files and unsaved edits belong to their workspace.
@@ -63,7 +64,10 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: none
-    automation: planned
+    automation: automated
+    requirements:
+      - halo-sdk
+      - terminal-shell
     preconditions:
       - en: A terminal is running in workspace A.
         zh: 空间 A 有运行中的终端。
@@ -74,8 +78,8 @@ scenarios:
       - en: The same terminal remains alive and returns the marker.
         zh: 同一终端仍存活并输出标记。
     notes:
-      en: The existing scenario skips Linux; Linux terminal support needs explicit capability review, not an inferred pass.
-      zh: 现有场景跳过 Linux；Linux 终端能力需明确复核，不能推定通过。
+      en: Two UI-created PTYs run harmless interactive programs in separate owned working folders. Real workspace navigation preserves each session ID, program and shell PID, visible output and ordered keyboard receipts; the other workspace receives no input. The fixture requires the installed engine for application startup but makes no model request. The runner's absolute Node executable is only the fixture program, not evidence for commands shipped by Halo. macOS uses system Bash; Windows requires actual system PowerShell execution. Linux terminal support needs explicit capability review and is not inferred from another platform.
+      zh: 两个通过界面创建的 PTY 分别在自有工作目录运行无害交互程序。真实空间切换保留各自会话身份、程序和 shell 进程身份、可见输出及有序键盘回执，另一空间不会收到输入。测试需要已安装引擎供应用启动，但不请求模型。运行器的绝对 Node 路径仅用于测试程序，不证明 Halo 随包命令可用。macOS 使用系统 Bash；Windows 要求实际执行系统 PowerShell。Linux 终端能力需明确复核，不能从其他平台推定。
   - id: workspaces.context.missing-folder
     title:
       en: Recover an unavailable project folder
