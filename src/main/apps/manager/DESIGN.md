@@ -157,6 +157,13 @@ Interrupting an in-flight turn is a separate and explicitly manual concern —
 **Rationale**: Consistent with the test example in `database-manager.test.ts` which already
 uses `'app_manager'` as a namespace. Follows the underscore convention used by other modules.
 
+Version 3 rebuilds `installed_apps`, a parent of runtime and other modules' records.
+Its historical SQL is unchanged, but its execution metadata declares
+`foreignKeys: 'rebuild'` so the store suppresses cascading deletion during the
+atomic copy/drop/rename and rejects newly broken references before commit.
+This protects profiles that have not crossed version 3; it cannot recreate records
+already deleted by an earlier build without restoring a retained backup.
+
 ### 2.8 App Work Directory Structure
 
 Automation identity storage is pinned in `installed_apps.data_path` before a

@@ -192,7 +192,7 @@ export function conversationRow(page: Page, title: string): Locator {
   })
 }
 
-export async function openManagedConversation(page: Page, title: string, spaceId = 'halo-temp') {
+export async function openManagedConversation(page: Page, title: string, spaceId = 'halo-temp', options: { empty?: boolean } = {}) {
   await navigateToChat(page)
   const space = await page.evaluate(spaceId => (window as unknown as { halo: HaloAPI }).halo.getSpace(spaceId), spaceId)
   expect(space.success, 'The conversation workspace must still exist').toBe(true)
@@ -210,7 +210,14 @@ export async function openManagedConversation(page: Page, title: string, spaceId
   const row = conversationRow(page, title)
   await expect(row).toHaveCount(1)
   await row.click()
-  await expect(page.locator('[data-testid="transcript-scroller"]')).toBeVisible()
+  if (options.empty) {
+    await expect(page.getByRole('banner').getByText(title, { exact: true })).toBeVisible()
+    await expect(page.locator('textarea').first()).toHaveValue('')
+    await expect(page.locator('.message-user')).toHaveCount(0)
+    await expect(page.locator('.message-assistant')).toHaveCount(0)
+  } else {
+    await expect(page.locator('[data-testid="transcript-scroller"]')).toBeVisible()
+  }
 }
 
 export async function listManagedPeople(page: Page): Promise<InstalledApp[]> {
