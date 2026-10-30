@@ -12,6 +12,9 @@ references:
   - src/main/services/email-mcp/index.ts
   - src/main/services/email-mcp/tools/email-send.ts
   - src/main/services/email-mcp/tools/calendar-create.ts
+  - tests/e2e/specs/acceptance-mail.spec.ts
+  - tests/e2e/fixtures/acceptance-mail-smtp.ts
+  - tests/e2e/fixtures/acceptance-mail-caldav.ts
 promises:
   read:
     en: Reading/searching identifies the correct mailbox item and attachments.
@@ -60,6 +63,11 @@ scenarios:
     evidence: integration
     mode: scripted
     automation: planned
+    requirements:
+      - halo-sdk
+    notes:
+      en: Send, calendar-create and calendar-delete have scripted integration bindings through a real installed digital human, native chat APIs, MCP tools and production protocol clients. Only the external services are replaced by owned IPv4-loopback SMTP/HTTP CalDAV fixtures with random ports and generated test credentials. Independent MIME parsing and persisted iCalendar bytes verify recipients, attachments, account/UID scope, authentication refusal, temporary refusal and actual recovery; selected chat records also survive restart. Control files and calendar records remain unchanged. This does not verify the email configuration UI, TLS, invitations delivered by a real calendar service, public mail delivery, every MIME/calendar feature or old SDK context recovery. Read, reply and move remain unbound; the current IMAP client uses fixed TLS port 993, which requires a separately owned protocol fixture and readiness check.
+      zh: 发送、创建日历项和删除日历项已通过真实安装的数字人、原生聊天 API、MCP 工具及生产协议客户端建立脚本模型集成绑定。仅外部服务使用自有 IPv4 回环 SMTP/HTTP CalDAV 测试服务替代，采用随机端口及生成的测试凭据。独立 MIME 解析和持久化 iCalendar 字节验证收件人、附件、账户与 UID 范围、认证拒绝、临时拒绝及实际恢复；所选聊天记录也须在重启后保留，对照文件及日历记录不变。不据此验证邮件配置界面、TLS、真实日历服务的邀请送达、公开邮件投递、所有 MIME/日历特性或旧 SDK 上下文恢复。读取、回复和移动仍未绑定；当前 IMAP 客户端固定使用 TLS 993 端口，需要单独拥有的协议服务与就绪检查。
     preconditions:
       - en: All email and calendar endpoints are isolated fixtures.
         zh: 所有邮件及日历端点均为隔离测试服务。
