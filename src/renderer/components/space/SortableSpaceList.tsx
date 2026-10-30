@@ -24,10 +24,13 @@ import {
   PointerSensor,
   TouchSensor,
   KeyboardSensor,
+  KeyboardCode,
   useSensor,
   useSensors,
   closestCenter,
+  type Activator,
   type DragEndEvent,
+  type KeyboardCodes,
 } from '@dnd-kit/core'
 import {
   SortableContext,
@@ -38,6 +41,43 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { Space } from '../../types'
+
+/**
+ * React bubbles events out of portals along the component tree, so keys and
+ * pointers inside a dialog a card renders (e.g. Space typed into its input)
+ * would otherwise start a drag and have their default swallowed. Only events
+ * whose DOM target sits inside the row may activate.
+ */
+function fromRowOnly<A extends Activator<never>>(activators: A[]): A[] {
+  return activators.map(activator => {
+    const handler: Activator<never>['handler'] = (event, options, context) =>
+      (event.currentTarget as Node).contains(event.target as Node) && activator.handler(event, options, context)
+    return { ...activator, handler: handler as A['handler'] }
+  })
+}
+
+class RowPointerSensor extends PointerSensor {
+  static activators = fromRowOnly(PointerSensor.activators)
+}
+
+class RowTouchSensor extends TouchSensor {
+  static activators = fromRowOnly(TouchSensor.activators)
+}
+
+class RowKeyboardSensor extends KeyboardSensor {
+  static activators = fromRowOnly(KeyboardSensor.activators)
+}
+
+// Enter belongs to the row's own action (e.g. opening the space). Letting it
+// also pick the row up starts a drag the opened page never ends, and its
+// document-level key listener keeps swallowing keys there. Enter still drops
+// a lifted row: without it, Enter mid-drag opens the space and strands the
+// drag the same way.
+const KEYBOARD_CODES: KeyboardCodes = {
+  start: [KeyboardCode.Space],
+  cancel: [KeyboardCode.Esc],
+  end: [KeyboardCode.Space, KeyboardCode.Enter, KeyboardCode.Tab],
+}
 
 interface SortableSpaceListProps {
   items: Space[]
@@ -55,9 +95,9 @@ export function SortableSpaceList({
   className,
 }: SortableSpaceListProps) {
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    useSensor(RowPointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(RowTouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
+    useSensor(RowKeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates, keyboardCodes: KEYBOARD_CODES })
   )
   const [activeId, setActiveId] = useState<string | null>(null)
 
