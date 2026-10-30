@@ -17,7 +17,8 @@ import { stat, readdir, mkdir, cp, readFile, access } from 'fs/promises'
 import { getConfig, saveConfig, resolveClaudeConfigDir } from '../foundation/config.service'
 import type { McpServerConfig } from '../foundation/config.service'
 import { getAppManager, AppAlreadyInstalledError } from '../apps/manager'
-import type { McpSpec } from '../apps/spec/schema'
+import type { McpSpec } from '../apps/spec'
+import { DEFAULT_MAX_TURNS } from '../../shared/constants/agent-limits'
 import { cliConfigRpc } from '../../shared/rpc/contracts/cli-config.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -232,6 +233,11 @@ export function registerCliConfigHandlers(): void {
         const results: Array<{ name: string; status: 'merged' | 'skipped' | 'error'; error?: string }> = []
 
         for (const { name, action } of actions) {
+          if (action !== 'skip' && action !== 'overwrite') {
+            console.warn(`[CliConfig] Unsupported MCP import action for '${name}'`)
+            results.push({ name, status: 'error', error: 'Unsupported MCP import action' })
+            continue
+          }
           if (action === 'skip' || !(name in ccServers)) {
             results.push({ name, status: 'skipped' })
             continue
@@ -239,19 +245,13 @@ export function registerCliConfigHandlers(): void {
 
           try {
             const spec = ccMcpConfigToSpec(name, ccServers[name])
-            await manager.install(null, spec, buildUserConfigFromEnv(ccServers[name]))
+            await manager.importMcpConnection(null, spec, buildUserConfigFromEnv(ccServers[name]))
             console.log(`[CliConfig] Migrated MCP server to DB: ${name}`)
             results.push({ name, status: 'merged' })
           } catch (err: unknown) {
-            // Already installed is not an error — treat as success
-            if (err instanceof AppAlreadyInstalledError) {
-              console.log(`[CliConfig] MCP server '${name}' already installed, skipping`)
-              results.push({ name, status: 'skipped' })
-            } else {
-              const e = err as Error
-              console.error(`[CliConfig] Failed to migrate MCP server '${name}':`, e.message)
-              results.push({ name, status: 'error', error: e.message })
-            }
+            const e = err as Error
+            console.error(`[CliConfig] Failed to migrate MCP server '${name}':`, e.message)
+            results.push({ name, status: 'error', error: e.message })
           }
         }
 
@@ -288,6 +288,7 @@ export function registerCliConfigHandlers(): void {
         saveConfig({
           agent: {
             ...currentConfig.agent,
+            maxTurns: currentConfig.agent?.maxTurns ?? DEFAULT_MAX_TURNS,
             configDirMode: mode,
             customConfigDir: mode === 'custom' ? resolvedCustomDir : undefined,
           }
@@ -324,7 +325,7 @@ export function registerCliConfigHandlers(): void {
  * Halo McpSpec for installation into the App Manager DB.
  */
 function ccMcpConfigToSpec(name: string, config: McpServerConfig): McpSpec {
-  const typed = config as Record<string, unknown>
+  const typed = config as unknown as Record<string, unknown>
   const transport = inferTransport(typed)
 
   const spec: McpSpec = {
@@ -384,7 +385,7 @@ function inferTransport(config: Record<string, unknown>): 'stdio' | 'sse' | 'str
  * which get merged into env at runtime (via getDbMcpServers in helpers.ts).
  */
 function buildUserConfigFromEnv(config: McpServerConfig): Record<string, unknown> {
-  const typed = config as Record<string, unknown>
+  const typed = config as unknown as Record<string, unknown>
   const env = typed.env as Record<string, string> | undefined
   if (!env || typeof env !== 'object') return {}
   // Copy all env vars as userConfig entries

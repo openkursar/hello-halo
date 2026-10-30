@@ -10,7 +10,7 @@
  */
 
 import type Database from 'better-sqlite3'
-import type { AppSpec } from '../spec'
+import type { AppSpec, McpSpec } from '../spec'
 import type { InstalledApp, AppStatus, RunOutcome, AppListFilter, UpgradeStrategy } from './types'
 
 // ============================================
@@ -111,6 +111,7 @@ export class AppManagerStore {
   private readonly stmtUpdatePermissions: Database.Statement
   private readonly stmtUpdateLastRun: Database.Statement
   private readonly stmtUpdateSpec: Database.Statement
+  private readonly stmtUpdateMcpConnection: Database.Statement
   private readonly stmtUpdateSpaceId: Database.Statement
   private readonly stmtListAll: Database.Statement
   private readonly stmtGetBySpecAndSpace: Database.Statement
@@ -256,6 +257,12 @@ export class AppManagerStore {
       UPDATE installed_apps
       SET spec_json = @spec_json,
           spec_id = @spec_id
+      WHERE id = @id
+    `)
+
+    this.stmtUpdateMcpConnection = db.prepare(`
+      UPDATE installed_apps
+      SET spec_json = @spec_json, user_config_json = @user_config_json
       WHERE id = @id
     `)
 
@@ -462,6 +469,14 @@ export class AppManagerStore {
       id: appId,
       spec_json: JSON.stringify(spec),
       spec_id: spec.name,
+    })
+  }
+
+  updateMcpConnection(appId: string, spec: McpSpec, userConfig: Record<string, unknown>): void {
+    this.stmtUpdateMcpConnection.run({
+      id: appId,
+      spec_json: JSON.stringify(spec),
+      user_config_json: JSON.stringify(userConfig),
     })
   }
 

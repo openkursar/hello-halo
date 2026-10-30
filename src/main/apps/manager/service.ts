@@ -16,7 +16,7 @@ import { join } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { isReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
 
-import type { AppSpec, SkillSpec } from '../spec'
+import type { AppSpec, SkillSpec, McpSpec } from '../spec'
 import { validateAppSpec } from '../spec'
 import type {
   AppManagerService,
@@ -569,6 +569,30 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       notifyInstalled(app)
 
       return appId
+    },
+
+    async importMcpConnection(spaceId: string | null, spec: McpSpec, userConfig: Record<string, unknown>): Promise<string> {
+      const incoming = validateAppSpec(spec)
+      if (incoming.type !== 'mcp') throw new Error('Only MCP connections can be imported')
+
+      const existing = store.getBySpecAndSpace(incoming.name, spaceId)
+      if (existing && existing.spec.type !== 'mcp') {
+        throw new AppAlreadyInstalledError(incoming.name, spaceId)
+      }
+      if (!existing || existing.status === 'uninstalled') {
+        return service.install(spaceId, incoming, userConfig)
+      }
+
+      const nextSpec = validateAppSpec({ ...existing.spec, mcp_server: incoming.mcp_server }) as McpSpec
+      if (isMcpCommandBlocked(nextSpec.mcp_server.command)) {
+        throw new McpCommandBlockedError(nextSpec.mcp_server.command)
+      }
+
+      // Notify only after both the connection and its credentials are committed.
+      store.updateMcpConnection(existing.id, nextSpec, userConfig)
+      emitMcpChange(existing.spaceId, { appId: existing.id, specId: existing.specId, action: 'updated' })
+      console.log(`[AppManager] Updated MCP connection ${existing.id}`)
+      return existing.id
     },
 
     async uninstall(appId: string, options?: UninstallOptions): Promise<void> {

@@ -5,7 +5,7 @@
  * Consumed by apps/runtime, IPC handlers, and renderer (via shared types).
  */
 
-import type { AppSpec, AppType } from '../spec'
+import type { AppSpec, AppType, McpSpec } from '../spec'
 import { isBuiltinApp } from '../../../shared/apps/app-types'
 import type { SpecUpgradeOutcome } from '../../../shared/apps/app-types'
 
@@ -251,6 +251,13 @@ export interface AppManagerService {
    * @throws AppAlreadyInstalledError if same specId+spaceId combination exists
    */
   install(spaceId: string | null, spec: AppSpec, userConfig?: Record<string, unknown>): Promise<string>
+
+  /**
+   * Explicitly import an MCP connection. An installed same-name MCP keeps its
+   * identity and state while its connection and userConfig are replaced atomically.
+   * Missing or uninstalled MCPs use install; other app types remain a conflict.
+   */
+  importMcpConnection(spaceId: string | null, spec: McpSpec, userConfig: Record<string, unknown>): Promise<string>
 
   /**
    * Uninstall an App (soft-delete).
