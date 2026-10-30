@@ -11,6 +11,8 @@ basis: documented
 references:
   - .agents/skills/halo-dev/quick.md
   - src/renderer/i18n/index.ts
+  - tests/e2e/specs/acceptance-localization.spec.ts
+  - tests/e2e/fixtures/data/localization-expectations.json
 promises:
   language:
     en: User-facing labels and errors follow the chosen supported language.
@@ -34,7 +36,7 @@ scenarios:
       - regression
     evidence: ui
     mode: none
-    automation: planned
+    automation: automated
     preconditions:
       - en: Representative user-authored names include Chinese, emoji and long text.
         zh: 代表性自定名称包含中文、表情及长文字。
@@ -52,3 +54,6 @@ scenarios:
         - settings
         - store
         - knowledge
+    notes:
+      en: Six UI-boundary journeys use actual stored conversations, people, teams/tasks, a local registry and a knowledge base. Language changes use the real Settings control; selected system phrases have separately reviewed fixed English/Chinese expectations, while user-authored names, text, IDs and owned file bytes have independent preservation checks. Natural failures cover corrupt-image decoding, empty-person-name validation, an invite refused while Remote Access is off, invalid proxy syntax, missing required install configuration, and a previously active native watched folder becoming unavailable after an owned rename. Knowledge files and links are prepared through real application APIs; this does not verify UI import or the native picker. The watcher must first actually start and later actually recover; its state is never injected. Language persistence and saved data are checked after restart; unsent-draft persistence across restart is not claimed. These representative paths do not establish complete translation coverage, other languages, every failure cause, or platform results that have not been executed. No live model or external account is used.
+      zh: 六个 UI 边界旅程使用真实保存的会话、数字人、团队与任务、本机目录服务和知识库。通过真实设置控件切换语言；选定系统文案使用独立审阅的固定中英文期望，用户自定名称、正文、身份及自有文件字节另行核对。自然失败包括损坏图片解码、空名称校验、关闭远程访问时邀请被拒、非法代理格式、安装配置缺少必填项，以及原先实际运行的原生监视目录在自有改名后不可用。知识资料和目录链接通过真实应用 API 准备，不代表验证了界面导入或原生选择器；必须先证实监视器实际启动并最终恢复，不注入状态。重启后检查语言及已保存数据，不承诺未发送草稿跨重启保留。这些代表路径不证明所有翻译、其他语言、全部失败原因或尚未实际执行的平台均已覆盖，不使用真实模型或外部账号。

@@ -1,0 +1,23 @@
+{
+  "scope": "Reviewed phrase pairs for six representative UI journeys. These fixed expectations are independent of the runtime translation dictionaries; user-authored data is checked separately.",
+  "en": {
+    "conversation": "Conversation", "people": "Digital Humans", "settings": "Settings", "knowledge": "Knowledge Base", "store": "Store",
+    "appearance": "Appearance", "language": "Language", "save": "Save", "reset": "Reset", "cancel": "Cancel", "close": "Close", "pin": "Pin", "unpin": "Unpin",
+    "personSearch": "Search digital humans", "allPeople": "All digital humans", "personSettings": "Capabilities and settings", "identity": "Identity & Instructions", "name": "Name", "systemPrompt": "System Prompt",
+    "personError": "App name is required", "imageError": "Failed to process image: {name}", "proxyError": "Unsupported protocol. Use http://, https://",
+    "teams": "Teams", "tasks": "Tasks", "members": "Members", "teamSettings": "Team settings", "taskRoom": "Task room", "teamGoal": "Team goal", "viewGoal": "View team goal", "chooseMember": "Choose which of your digital humans to talk to",
+    "invite": "Invite", "inviteTitle": "Invite to this team", "inviteError": "Turn on Remote Access in Settings so others can join this team.", "tryAgain": "Try again",
+    "storeBack": "Back to Store", "storeSearch": "Search Digital Humans / Skills / MCP", "digitalHuman": "Digital Human", "install": "Install", "next": "Next", "defaultWorkspace": "Default workspace", "required": "Required", "storeError": "Please complete the required fields",
+    "files": "Files", "learned": "Learned", "watchedFolders": "Watched folders", "unavailable": "Unavailable", "retry": "Retry", "collapseCanvas": "Collapse canvas"
+  },
+  "zh-CN": {
+    "conversation": "会话", "people": "数字人", "settings": "设置", "knowledge": "知识库", "store": "商店",
+    "appearance": "外观", "language": "语言", "save": "保存", "reset": "重置", "cancel": "取消", "close": "关闭", "pin": "固定", "unpin": "取消固定",
+    "personSearch": "搜索数字人", "allPeople": "所有数字人", "personSettings": "能力与设置", "identity": "身份与指令", "name": "名称", "systemPrompt": "系统提示词",
+    "personError": "应用名称是必需的", "imageError": "处理图片失败:{name}", "proxyError": "不支持的协议。请使用 http:// 或 https://",
+    "teams": "团队", "tasks": "任务", "members": "成员", "teamSettings": "团队设置", "taskRoom": "任务室", "teamGoal": "团队目标", "viewGoal": "查看团队目标", "chooseMember": "选择跟你的哪个数字人说话",
+    "invite": "邀请", "inviteTitle": "邀请加入该团队", "inviteError": "请在设置中开启远程访问，以便他人加入该团队。", "tryAgain": "重试",
+    "storeBack": "返回商店", "storeSearch": "搜索数字人 / 技能 / MCP", "digitalHuman": "数字人", "install": "安装", "next": "下一步", "defaultWorkspace": "默认工作区", "required": "必填", "storeError": "请填写必填项",
+    "files": "文件", "learned": "已学习", "watchedFolders": "监视的文件夹", "unavailable": "不可用", "retry": "重试", "collapseCanvas": "收起画布"
+  }
+}
