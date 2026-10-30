@@ -42,8 +42,13 @@ scenarios:
     profiles:
       - regression
     evidence: app-e2e
-    mode: none
-    automation: planned
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    notes:
+      en: A real space conversation uses the production browser tools to open owned local control and target pages. The user reveals, edits, scrolls, collapses and reopens the same guest; a later real model step receives the resulting tool read before deliberately navigating that guest. Only the model endpoint and local website are fixtures.
+      zh: 真实空间对话通过生产浏览器工具打开自有本地对照页及目标页。用户显示、编辑、滚动、收起并重开同一网页进程；后续真实模型步骤先收到工具读取的用户状态，再明确导航该网页。仅模型端点及本地网站使用测试服务。
     preconditions:
       - en: An AI context has opened a controlled local page.
         zh: AI 上下文已打开受控本地网页。
@@ -63,8 +68,14 @@ scenarios:
     profiles:
       - regression
     evidence: app-e2e
-    mode: none
-    automation: planned
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+      - mac-clipboard
+    notes:
+      en: A real browser conversation owns the tested page. Native user input covers normal and same-origin iframe fields, selection, clipboard copy/paste and page-cancelled shortcuts; a later production browser key tool and tool read must preserve the independent composer and control page. Original clipboard formats are used only for restoration; all pasted data is fixture-owned. The registered mac-clipboard prerequisite checks the selected developer tools and compiles the public complete-format AppKit helper without running it or touching the clipboard. Missing tools, SDKs or a full-format backend on other platforms remain blocked, with platform obligations retained. File-picker, upload, download and cross-origin variants retain their separate obligations.
+      zh: 真实浏览对话拥有待测页面。用户原生输入覆盖普通及同源 iframe 字段、选区、剪贴板复制粘贴和网页取消的快捷键；后续生产浏览按键工具与读取工具须保留独立聊天输入框及对照页。原剪贴板格式仅用于恢复，所有粘贴数据均由测试自己准备。已注册的 mac-clipboard 前置检查所选开发工具，并编译公开的完整格式 AppKit helper，不执行 helper 或触碰剪贴板。缺少工具、SDK 或其他平台的完整格式后端时明确阻塞，并保留平台义务。文件选择、上传、下载及跨源变体继续保留各自义务。
     preconditions:
       - en: A local fixture contains normal and iframe inputs.
         zh: 本地测试网页含普通和 iframe 输入框。
@@ -74,6 +85,33 @@ scenarios:
     expected:
       - en: The intended field changes and cancelled input does not leak into another field or host editor.
         zh: 目标字段改变，被取消输入不泄漏到其他字段或宿主编辑器。
+  - id: browser.work.live-metadata
+    title:
+      en: Keep live page labels current without changing the viewed page
+      zh: 活动网页标签保持更新而不改变查看页面
+    verifies:
+      - identity
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: One real browser conversation owns two controlled local pages, and the user has collapsed the target canvas with a focused chat draft.
+        zh: 一段真实浏览对话拥有两个受控本地页面，用户已收起目标画布并聚焦聊天草稿。
+    steps:
+      - en: Observe both loaded page labels, then let the local website asynchronously change an inactive title and URL, change the active title and navigate the active page.
+        zh: 查看两个页面加载后的标签，再由本地网站异步改变非活动页标题和 URL、活动页标题，并导航活动页。
+      - en: Reopen through the conversation's live-view action and choose the target's current label in the live-session tray, then ask the AI to read it.
+        zh: 从对话实时查看入口重开，再在活动会话托盘中按目标当前标签选择页面，并让 AI 读取。
+    expected:
+      - en: Live rows show their own current titles and reopen the current URLs while the target remains selected; metadata updates do not open the canvas, move focus, alter the draft or reassign page ownership.
+        zh: 活动条目显示自身当前标题并重开当前 URL，目标选择不变；元数据更新不打开画布、不移动焦点、不改草稿或页面归属。
+      - en: Reopening uses the same view and guest, control content stays intact, and the AI receives the actual navigated document state.
+        zh: 重开使用原视图及网页进程，对照内容完整，AI 收到实际导航后的文档状态。
   - id: browser.work.isolation
     title:
       en: Keep browser contexts apart

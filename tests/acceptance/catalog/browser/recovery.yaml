@@ -37,8 +37,13 @@ scenarios:
     profiles:
       - regression
     evidence: app-e2e
-    mode: none
-    automation: planned
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    notes:
+      en: A real space conversation opens the target with production browser tools. Closing its borrowed canvas tab must keep the owned guest, nonce and user state; the real live-session tray reopens that view identity, and the next model step receives a production tool read of its retained state. The independent owned control page remains unchanged.
+      zh: 真实空间对话通过生产浏览器工具打开目标页。关闭借用的画布标签须保留原网页进程、文档标记及用户状态；真实活动会话托盘按原视图身份重开，下一模型步骤收到生产工具对保留状态的读取。独立自有对照页保持不变。
     preconditions:
       - en: An AI-owned page is visible in the canvas.
         zh: AI 拥有的页面正在画布显示。

@@ -14,6 +14,7 @@ import { loadLiveConfig } from './live-config.mjs'
 import { startLiveBroker } from './live-broker.mjs'
 import { discoverClusterTests, executeClusterTests } from '../adapters/cluster.mjs'
 import { verifyPackagedApplication } from './package.mjs'
+import { macClipboardFailure } from './clipboard-readiness.mjs'
 export { execute } from './process.mjs'
 
 export function cleanEnvironment(source = process.env) {
@@ -171,7 +172,7 @@ export async function terminalShellFailure({ platform = process.platform, enviro
   }
 }
 
-export async function prerequisiteFailures(root, scenario, { liveReady = false } = {}) {
+export async function prerequisiteFailures(root, scenario, { liveReady = false, clipboardProbe = macClipboardFailure } = {}) {
   const problems = []
   if (scenario.mode === 'live' && !liveReady) problems.push('Live execution requires an explicit, credentialed budget broker configuration')
   for (const requirement of scenario.requirements ?? []) {
@@ -192,6 +193,9 @@ export async function prerequisiteFailures(root, scenario, { liveReady = false }
       if (process.platform !== 'win32') problems.push('This scenario requires actual Windows execution')
     } else if (requirement === 'terminal-shell') {
       const missing = await terminalShellFailure()
+      if (missing) problems.push(missing)
+    } else if (requirement === 'mac-clipboard') {
+      const missing = await clipboardProbe(root)
       if (missing) problems.push(missing)
     } else if (requirement === 'chromium-browser') {
       try {
