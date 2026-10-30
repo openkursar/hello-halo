@@ -3,6 +3,7 @@ import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import type { FullConfig, FullResult, Reporter, Suite, TestCase, TestResult } from '@playwright/test/reporter'
 import { redact } from './lib/process.mjs'
+import { beginEvidenceProducer, finishEvidenceProducer, assertEvidenceOutputWritable } from './lib/ci-evidence.mjs'
 
 function bindings(test: TestCase) {
   return test.annotations.filter(annotation => annotation.type === 'acceptance').map(annotation => JSON.parse(annotation.description ?? ''))
@@ -19,13 +20,23 @@ function selection(tests: Array<Record<string, unknown>>) {
 }
 
 export default class AcceptanceReporter implements Reporter {
-  private root = process.cwd()
+  private root = process.env.HALO_ACCEPTANCE_ROOT ?? process.cwd()
   private output = process.env.HALO_ACCEPTANCE_REPORT
+
+  constructor() {
+    assertEvidenceOutputWritable(this.root, this.output)
+    const producer = beginEvidenceProducer(this.root, 'playwright-reporter', { self: true })
+    if (producer) process.once('exit', code => {
+      try { finishEvidenceProducer(producer, { exitCode: code }) }
+      catch (error) { console.error(`acceptance: reporter completion could not be recorded: ${error instanceof Error ? error.message : String(error)}`); if (!code) process.exitCode = 1 }
+    })
+  }
 
   printsToStdio() { return false }
 
   private emit(event: Record<string, unknown>) {
     if (!this.output) throw new Error('HALO_ACCEPTANCE_REPORT must name the acceptance discovery or event output')
+    assertEvidenceOutputWritable(this.root, this.output)
     fs.mkdirSync(path.dirname(this.output), { recursive: true })
     const clean = (value: unknown): unknown => {
       if (typeof value === 'string') return redact(value, this.root)
@@ -33,7 +44,8 @@ export default class AcceptanceReporter implements Reporter {
       if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clean(item)]))
       return value
     }
-    fs.appendFileSync(this.output, JSON.stringify(clean(event)) + '\n')
+    const fd = fs.openSync(this.output, fs.constants.O_CREAT | fs.constants.O_APPEND | fs.constants.O_WRONLY | (fs.constants.O_NOFOLLOW ?? 0), 0o640)
+    try { fs.writeSync(fd, JSON.stringify(clean(event)) + '\n') } finally { fs.closeSync(fd) }
   }
 
   onBegin(config: FullConfig, suite: Suite) {

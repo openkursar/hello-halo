@@ -181,35 +181,36 @@ jobs:
         id: execute
         env:
           HALO_ACCEPTANCE_BASELINE: ${{ runner.temp }}/acceptance-baseline-${{ github.run_id }}/baseline.json
-        run: node scripts/acceptance/ci-run.mjs
+        run: exec node scripts/acceptance/ci-run.mjs
 
-      - name: Write job summary
+      - name: Finalize and freeze acceptance evidence
+        id: finalize
         if: always() && steps.initial.outcome == 'success'
         env:
           HALO_CI_STAGE_OUTCOMES: ${{ toJSON(steps) }}
-        run: node scripts/acceptance/ci-state.mjs summary
+        run: exec node scripts/acceptance/ci-finalize.mjs
 
       - name: Archive acceptance evidence locally
         id: archive
         if: always() && steps.initial.outcome == 'success'
         env:
           HALO_ACCEPTANCE_ARCHIVE_ROOT: ${{ vars.HALO_ACCEPTANCE_ARCHIVE_ROOT }}
-        run: node scripts/acceptance/ci-archive.mjs
+        run: exec node scripts/acceptance/ci-archive.mjs
 
       - name: Preserve acceptance report and evidence
-        if: always() && steps.initial.outcome == 'success'
+        if: always() && steps.archive.outputs.snapshot-directory != ''
         uses: actions/upload-artifact@v4
         with:
           name: acceptance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: halo/tests/acceptance/output/ci/
+          path: ${{ steps.archive.outputs.snapshot-directory }}
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish successful baseline
-        if: success() && steps.execute.outcome == 'success'
+        if: success() && steps.execute.outcome == 'success' && steps.finalize.outputs.final == 'true' && steps.archive.outputs.source-final == 'true' && steps.finalize.outputs.baseline-file != ''
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.context.outputs.artifact-name }}
-          path: halo/tests/acceptance/output/ci/baseline.json
+          path: ${{ steps.finalize.outputs.baseline-file }}
           if-no-files-found: error
           retention-days: 90

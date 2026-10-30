@@ -64,12 +64,12 @@ test('GUI readiness fails fast after public installation and before SDK preparat
   assert.equal(steps.find(step => step.id === 'install').run, 'node scripts/acceptance/ci-prepare.mjs install')
   const artifacts = steps.find(step => step.name === 'Preserve acceptance report and evidence')
   assert.match(artifacts.if, /always\(\)/)
-  assert.equal(artifacts.with.path, 'halo/tests/acceptance/output/ci/')
+  assert.equal(artifacts.with.path, '${{ steps.archive.outputs.snapshot-directory }}')
 })
 
 test('local archival runs after the summary even when preparation fails, without preventing the independent upload attempt', () => {
   const steps = workflow.jobs.acceptance.steps
-  const summaryIndex = steps.findIndex(step => step.name === 'Write job summary')
+  const summaryIndex = steps.findIndex(step => step.id === 'finalize')
   const archiveIndex = steps.findIndex(step => step.id === 'archive')
   const uploadIndex = steps.findIndex(step => step.name === 'Preserve acceptance report and evidence')
   assert(summaryIndex >= 0 && archiveIndex > summaryIndex && uploadIndex > archiveIndex)
@@ -77,8 +77,15 @@ test('local archival runs after the summary even when preparation fails, without
   assert.equal(archive.if, "always() && steps.initial.outcome == 'success'")
   assert.equal(archive['continue-on-error'], undefined)
   assert.equal(archive.env.HALO_ACCEPTANCE_ARCHIVE_ROOT, '${{ vars.HALO_ACCEPTANCE_ARCHIVE_ROOT }}')
-  assert.equal(archive.run, 'node scripts/acceptance/ci-archive.mjs')
-  assert.equal(upload.if, "always() && steps.initial.outcome == 'success'")
+  assert.equal(archive.run, 'exec node scripts/acceptance/ci-archive.mjs')
+  assert.equal(upload.if, "always() && steps.archive.outputs.snapshot-directory != ''")
   assert.equal(upload.uses, 'actions/upload-artifact@v4')
-  assert.equal(steps.find(step => step.name === 'Publish successful baseline').if, "success() && steps.execute.outcome == 'success'")
+  assert.equal(steps.find(step => step.name === 'Publish successful baseline').if, "success() && steps.execute.outcome == 'success' && steps.finalize.outputs.final == 'true' && steps.archive.outputs.source-final == 'true' && steps.finalize.outputs.baseline-file != ''")
+})
+
+test('the CI owner receives signals directly and finalization precedes immutable-snapshot upload', () => {
+  const steps = workflow.jobs.acceptance.steps
+  assert.equal(steps.find(step => step.id === 'execute').run, 'exec node scripts/acceptance/ci-run.mjs')
+  assert.equal(steps.find(step => step.id === 'finalize').run, 'exec node scripts/acceptance/ci-finalize.mjs')
+  assert.equal(steps.find(step => step.name === 'Publish successful baseline').with.path, '${{ steps.finalize.outputs.baseline-file }}')
 })

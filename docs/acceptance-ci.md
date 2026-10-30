@@ -170,7 +170,9 @@ failed runs. See [GitHub schedule behavior](https://docs.github.com/en/actions/r
 The baseline artifact is scoped by source repository/ref, profile, OS,
 architecture and SDK identity. The controller restores it only from a completed
 successful run of the same workflow. The baseline carries the source commit,
-catalog/manifest hashes and originating acceptance run id. It is a change-selection
+catalog/manifest hashes, originating acceptance run id and final evidence-freeze
+hash. Version 2 baselines require this freeze proof; older baselines safely select
+the full profile. A baseline is a change-selection
 cursor for that profile, not evidence that every product behavior passed.
 
 The diff starts at the last successful baseline, not at a calendar day. Missing,
@@ -235,7 +237,8 @@ work; the selected scenarios still provide that evidence. Selections without
 this requirement do not prepare or download Chromium.
 
 Only a nonempty run from a clean source checkout whose selected instances all
-passed can publish a new baseline. Failed, flaky, skipped, blocked, not-run and manual results cannot
+passed, whose evidence producers stopped and whose final snapshot was verified
+can publish a new baseline. Failed, flaky, skipped, blocked, not-run and manual results cannot
 advance it. The restore lookup also checks the enclosing workflow's final
 conclusion, so an artifact created before a later workflow failure is ignored.
 Job summaries and report/evidence artifacts are attempted even after failure.
@@ -243,13 +246,46 @@ Dependency/build failures have a blocked summary rather than an empty passing
 run. Artifact retention is 30 days for evidence and 90 for baselines; loss of an
 old baseline safely increases the next selection.
 
+## Cancellation and evidence completion
+
+The execution step uses `exec node scripts/acceptance/ci-run.mjs` so CI signals
+reach the asynchronous owner directly. Each stage is recorded as running before
+its child starts. Registered subprocesses, source CLI commands and the Playwright
+reporter retain producer identities outside the report payload. Registration and
+owner closure share an exclusive admission gate: an in-progress registration
+cannot be missed by a finishing owner. This tracks evidence-producing processes,
+not every internal product process or agent session.
+
+SIGINT or SIGTERM stops new stages and requests cleanup of only the owned process
+tree. Cancellation remains cancellation even if a cooperative child exits zero.
+The existing execution deadline is unchanged. No daemon or detached replacement
+job continues the task after CI cancellation. An unknown cleanup result, missing
+process identity or surviving process group prevents final evidence confirmation.
+
+The separate `ci-finalize.mjs` step requires the recorded owner to have finished
+and exited and every registered producer to have closed and exited. It collects
+declared diagnostics, writes the summary, then publishes a write-once
+`producer-completion.json` and `evidence-freeze.json` containing the complete payload
+hashes and controller run/attempt identity. Verification rejects changed files,
+wrong source revisions and late summary writes. A failed or cancelled execution
+can have a final, verified failure snapshot; that never makes its cases pass.
+
+If the owner is killed, a registration gate is abandoned or a producer's exit
+cannot be established, finalization fails closed without a freeze. Failures before
+the execution owner starts also retain only diagnostic, non-final snapshots.
+A quiet period or fixed sleep cannot establish completion. Baseline creation is
+separate from the frozen payload and occurs only after finalization verifies the
+exact successful run and source context. The workflow then additionally requires
+a final archive and successful enclosing steps before publishing that baseline.
+
 ## Local evidence retention
 
-After writing the job summary, the template always attempts a local archive when
+After attempting evidence finalization, the template always attempts a local archive when
 the initial source context was captured. This step uses only Node built-ins, so
 dependency installation or application-build failure can still leave a useful
 archive. It runs before the independent `upload-artifact` step. An archive error
-fails its CI stage; upload still runs under `always()`. Neither a local archive nor
+fails its CI stage; upload still runs under `always()` when the archiver provides
+a verified safe snapshot path. Neither a local archive nor
 an attempted upload confirms that GitHub received an artifact.
 
 The runner account owns a dedicated `~/.halo-acceptance-archives` directory.
@@ -266,10 +302,32 @@ Each controller run and attempt gets an exclusive entry containing:
 ```text
 run-<run-id>-attempt-<attempt>-<controller-hash>/
   archive.json       # management identity
-  manifest.json      # copied paths, sizes, SHA-256 and observed run metadata
-  COMPLETE.json      # atomically published only after copy verification
+  manifest.json      # copied paths, hashes, observed metadata and source finality
+  COMPLETE.json      # version 2: matching frozen input and verified copy
   ci/                # exact regular files from tests/acceptance/output/ci
 ```
+
+Before copying, the helper checks the matching run's producer-completion and
+`evidence-freeze.json` contract. It checks the source again immediately before
+publishing completion and verifies the frozen payload inside the copy. The
+archiver never stops processes or treats a quiet interval as proof that writers
+have finished.
+
+Missing, mismatched or unsettled freeze evidence cannot produce a final archive.
+Where a safe copy is possible, it is retained with `INCOMPLETE.json` and the
+archive stage fails explicitly. An interrupted or changing copy remains pending
+without either completion marker. These diagnostic snapshots do not trigger
+retention cleanup or authorize a baseline, and the helper never later fills in a
+completion marker for the same run/attempt entry.
+
+The upload step reads the retained snapshot entry, not the possibly still-active
+checkout evidence directory. Successful archives expose `source-final=true`;
+a failed archive exposes `source-final=false` and a snapshot path only after
+rechecking that invocation's original root and entry identities, ownership,
+permissions and complete regular-file payload. Unsafe or unconfirmed paths are
+withheld from upload. A downloaded bundle therefore contains reports beneath
+`ci/report/`, alongside its archive management records. A safe diagnostic upload
+does not turn the failed archival stage into success or permit baseline publication.
 
 The helper copies actual files under `ci/`; it does not follow links or collect
 paths mentioned inside JSON. It records source commit, catalog identity and test
@@ -279,10 +337,12 @@ changed. New directories use mode `0750`. Files preserve owner read/write and
 group read permissions already present, removing other permissions: `0644`
 becomes `0640`, while `0600` remains `0600`. This implementation requires POSIX
 ownership and no-follow file opens. Windows reports an unsupported **archive
-stage**, not a product-test failure; the separate remote upload is still attempted.
+stage**, not a product-test failure. Without a verified safe snapshot path the
+template withholds remote upload; it does not fall back to a possibly live directory.
 
-`COMPLETE.json` means the listed local copy was fully verified. It does not mean
-tests passed, integrity passed, upload succeeded or a baseline advanced. The
+Version 2 `COMPLETE.json` means the listed local copy and its final source freeze
+were verified. It does not mean tests passed, integrity passed, upload succeeded
+or a baseline advanced. The
 manifest records the observed test status separately from
 `remoteUpload.status: not-observed`. Later verification reads and hashes the copy
 without altering it:
@@ -290,6 +350,10 @@ without altering it:
 ```bash
 node scripts/acceptance/ci-archive.mjs verify /absolute/archive-entry
 ```
+
+Historical version 1 completion records remain readable as verified copies with
+`sourceFinality.state: legacy-unverified`. Their original manifests, completion
+markers and payloads are never rewritten or backfilled with newer evidence.
 
 The helper never overwrites a run/attempt entry, including an interrupted pending
 copy. A root-wide exclusive lock serializes copying and retention across
@@ -299,11 +363,13 @@ to start a competing archive.
 
 **This dedicated root is automatically cleaned.** Only after the new archive has
 been published and fully verified does retention keep the newest fourteen
-verified complete archives for the current controller repository. Runs, refs and
+verified version 2 final archives for the current controller repository. Runs, refs and
 profiles of that controller share this quota. Verified archives belonging to
 other controllers are separately logged, counted and preserved. The new archive
-is always retained. Older eligible candidates are verified again before removal.
-Unknown, pending, tampered or unmarked entries are logged and preserved;
+is always retained. Older eligible candidates and the current source freeze are
+verified again before removal; a late source change stops further retention cleanup.
+Legacy copies without final-source proof, non-final snapshots, unknown, pending,
+tampered or unmarked entries are logged and preserved;
 they can exceed the fourteen-archive limit and require operator review. Failure to
 copy or verify the new archive never starts cleanup. The files are write-once through
 this helper, not an operating-system immutable backup: verification detects later

@@ -10,6 +10,27 @@ import { build } from 'esbuild'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const reporterPath = path.join(root, 'scripts/acceptance/playwright-reporter.ts')
 
+test('a reporter refuses a replaced event-output link before writing outside the CI payload', async context => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'acceptance-reporter-boundary-'))
+  const directory = await fs.realpath(temporary)
+  context.after(() => fs.rm(directory, { recursive: true, force: true }))
+  const output = path.join(directory, 'tests/acceptance/output/ci/events.jsonl')
+  const external = path.join(directory, 'external-evidence')
+  const previous = { HALO_ACCEPTANCE_ROOT: process.env.HALO_ACCEPTANCE_ROOT, HALO_ACCEPTANCE_REPORT: process.env.HALO_ACCEPTANCE_REPORT }
+  context.after(() => { for (const [name, value] of Object.entries(previous)) if (value === undefined) delete process.env[name]; else process.env[name] = value })
+  process.env.HALO_ACCEPTANCE_ROOT = directory
+  process.env.HALO_ACCEPTANCE_REPORT = output
+  const compiled = await build({ entryPoints: [reporterPath], bundle: true, platform: 'node', format: 'esm', write: false, logLevel: 'silent' })
+  const { default: Reporter } = await import('data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].text).toString('base64'))
+  const reporter = new Reporter()
+  reporter.onError({ message: 'Original owned evidence' })
+  await fs.writeFile(external, 'External bytes remain unchanged')
+  await fs.unlink(output)
+  await fs.symlink(external, output)
+  assert.throws(() => reporter.onError({ message: 'Late writer must be rejected' }), /symbolic links/)
+  assert.equal(await fs.readFile(external, 'utf8'), 'External bytes remain unchanged')
+})
+
 test('reporter errors, metadata and owned text attachments are all redacted', async context => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'acceptance-reporter-redaction-'))
   context.after(() => fs.rm(directory, { recursive: true, force: true }))

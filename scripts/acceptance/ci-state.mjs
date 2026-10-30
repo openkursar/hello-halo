@@ -3,6 +3,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { assertOwnedEvidencePath, writeEvidenceJson, writeEvidenceText } from './lib/ci-evidence.mjs'
 
 const hash = value => createHash('sha256').update(value).digest('hex')
 const shaPattern = /^[a-f0-9]{40}$/
@@ -71,11 +72,11 @@ export function contextFor({ root = process.cwd(), repository, ref = 'main', pro
 
 export function baselineName(context) {
   const scope = [context.repository, context.ref, context.profile, context.platform, context.architecture, context.sdk, context.modules ?? [], context.cases ?? []]
-  return `acceptance-baseline-${hash(JSON.stringify(scope)).slice(0, 24)}`
+  return `acceptance-baseline-v2-${hash(JSON.stringify(scope)).slice(0, 24)}`
 }
 
 export function baselineReason(baseline, context, isAncestor) {
-  if (!baseline || baseline.version !== 1) return 'No supported successful baseline is available.'
+  if (!baseline || baseline.version !== 2 || !/^[a-f0-9]{64}$/.test(baseline.evidenceFreezeSha256 ?? '')) return 'No supported frozen successful baseline is available.'
   for (const key of ['repository', 'ref', 'profile', 'platform', 'architecture']) {
     if (baseline[key] !== context[key]) return `Baseline ${key} does not match this run.`
   }
@@ -87,7 +88,8 @@ export function baselineReason(baseline, context, isAncestor) {
   return null
 }
 
-export function makeBaseline(context, run) {
+export function assertBaselineRun(context, run) {
+  if (!run) throw new Error('A complete run record is required before the baseline advances.')
   if (context.dirty !== false) throw new Error('Source checkout must be clean before the baseline advances.')
   if (run.version !== 1 || run.status !== 'passed' || !Number.isInteger(run.selectedCount) || run.selectedCount < 1) throw new Error('Only a nonempty passing run can advance the baseline.')
   if (run.evidenceIntegrity?.version !== 1 || run.evidenceIntegrity?.valid !== true || !Array.isArray(run.evidenceIntegrity.reasons) || run.evidenceIntegrity.reasons.length) throw new Error('Verified evidence integrity is required before the baseline advances.')
@@ -99,7 +101,13 @@ export function makeBaseline(context, run) {
   if (!run.id || !run.finishedAt || !run.catalogHash || !run.manifestHash) throw new Error('Run evidence is incomplete.')
   if (JSON.stringify(run.selection?.modules ?? []) !== JSON.stringify(context.modules ?? []) || JSON.stringify(run.selection?.cases ?? []) !== JSON.stringify(context.cases ?? [])) throw new Error('Run module or case scope differs from its CI context.')
   if (context.sdk.state === 'present' && (!context.sdk.revision || context.sdk.dirty !== false || !context.sdk.buildHash)) throw new Error('SDK source must have a clean known revision and a built distribution before the baseline advances.')
-  return { ...context, sourceIdentity: run.revision, catalogHash: run.catalogHash, manifestHash: run.manifestHash, runId: run.id, completedAt: run.finishedAt }
+}
+
+export function makeBaseline(context, run, frozen) {
+  assertBaselineRun(context, run)
+  if (!frozen || !/^[a-f0-9]{64}$/.test(frozen.freezeSha256 ?? '') || frozen.receipt?.revision !== context.revision || frozen.receipt?.completion?.outcome !== 'passed' || !frozen.receipt?.payload?.files?.some(file => file.path === 'run/run.json')) throw new Error('Final frozen evidence is required before the baseline advances.')
+  if (JSON.stringify(frozen.documents?.context) !== JSON.stringify(context) || JSON.stringify(frozen.documents?.run) !== JSON.stringify(run)) throw new Error('Baseline inputs must be the exact frozen context and run documents.')
+  return { ...context, version: 2, evidenceFreezeSha256: frozen.freezeSha256, sourceIdentity: run.revision, catalogHash: run.catalogHash, manifestHash: run.manifestHash, runId: run.id, completedAt: run.finishedAt }
 }
 
 export async function findBaselineRun({ repository, artifactName, workflowPath, token, apiUrl = 'https://api.github.com', request = fetch }) {
@@ -147,9 +155,16 @@ async function main() {
   const [command] = process.argv.slice(2)
   const directory = path.resolve('tests/acceptance/output/ci')
   const contextFile = path.join(directory, 'context.json')
+  const assertUnowned = () => {
+    assertOwnedEvidencePath(process.cwd(), directory)
+    if (fs.existsSync(path.join(directory, 'evidence-freeze.json'))) throw new Error('Frozen CI evidence cannot be rewritten by a later metadata command.')
+    if (fs.existsSync(path.join(directory, 'evidence-owner.json'))) throw new Error('Recorded CI evidence can only be completed by its finalizer; metadata writes are closed.')
+  }
   if (command === 'context') {
+    assertUnowned()
     const context = contextFor({ repository: process.env.HALO_SOURCE_REPOSITORY, ref: process.env.HALO_SOURCE_REF || 'main', profile: process.env.HALO_ACCEPTANCE_PROFILE || 'regression', modules: parseSelection(process.env.HALO_ACCEPTANCE_MODULES), cases: parseSelection(process.env.HALO_ACCEPTANCE_CASES) })
-    writeJson(contextFile, context)
+    fs.mkdirSync(directory, { recursive: true })
+    writeEvidenceJson(contextFile, context, { mode: 0o640 })
     output('artifact-name', baselineName(context))
     output('revision', context.revision)
     console.log(`[Acceptance CI] Fixed source revision ${context.revision}; SDK ${context.sdk.state}.`)
@@ -166,13 +181,14 @@ async function main() {
       console.warn(`[Acceptance CI] ${error.message} Falling back to full selection.`)
     }
   } else if (command === 'summary') {
+    assertUnowned()
     const context = fs.existsSync(contextFile) ? readJson(contextFile) : { repository: process.env.HALO_SOURCE_REPOSITORY, ref: process.env.HALO_SOURCE_REF, profile: process.env.HALO_ACCEPTANCE_PROFILE }
     const runFile = path.join(directory, 'run/run.json')
     const run = fs.existsSync(runFile) ? readJson(runFile) : null
     const stages = process.env.HALO_CI_STAGE_OUTCOMES ? JSON.parse(process.env.HALO_CI_STAGE_OUTCOMES) : {}
     const summary = renderSummary(context, run, stages)
     fs.mkdirSync(directory, { recursive: true })
-    fs.writeFileSync(path.join(directory, 'summary.md'), summary)
+    writeEvidenceText(path.join(directory, 'summary.md'), summary, { mode: 0o640 })
     if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
     else console.log(summary)
   } else throw new Error('Usage: node scripts/acceptance/ci-state.mjs context|find-baseline|summary')

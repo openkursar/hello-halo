@@ -1,27 +1,52 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
-import { baselineReason, git, makeBaseline, readJson, writeJson } from './ci-state.mjs'
+import { randomUUID } from 'node:crypto'
+import { execute as executeProcess } from './lib/process.mjs'
+import { createEvidenceScope, cancelEvidenceScope, finishEvidenceScope, evidenceScopeVariable, writeEvidenceJson } from './lib/ci-evidence.mjs'
+import { baselineReason, git, readJson } from './ci-state.mjs'
 import { browserEnvironment } from './ci-prepare.mjs'
 
-const root = process.cwd()
+const root = fs.realpathSync(process.cwd())
 const directory = path.join(root, 'tests/acceptance/output/ci')
 const cli = path.join(root, 'scripts/acceptance/cli.mjs')
 const stages = []
 const environment = browserEnvironment(process.env)
-delete environment.HALO_E2E_PACKAGED_APP
+for (const name of Object.keys(process.env)) if (!Object.hasOwn(environment, name)) environment[name] = undefined
+environment.HALO_E2E_PACKAGED_APP = undefined
 
-function execute(stage, args, { env = environment, verify, program = cli } = {}) {
+let interruption = null
+let scope
+function interrupt(signal) {
+  if (interruption) return
+  interruption = { signal, receivedAt: new Date().toISOString() }
+  console.error(`[Acceptance CI] Received ${signal}; stopping owned stage processes and refusing new stages.`)
+  try { if (scope) cancelEvidenceScope(scope, signal) }
+  catch (error) { console.error(`[Acceptance CI] Cancellation state could not be recorded: ${error.message}`) }
+}
+const onInterrupt = () => interrupt('SIGINT')
+const onTerminate = () => interrupt('SIGTERM')
+
+async function execute(stage, args, { env = environment, verify, program = cli } = {}) {
+  if (interruption) throw new Error('CI execution was cancelled; no additional stage was started.')
   console.log(`[Acceptance CI] Starting ${stage}.`)
-  const startedAt = new Date().toISOString()
-  const result = spawnSync(process.execPath, [program, ...args], { cwd: root, env, stdio: 'inherit' })
-  let value, failure = result.error?.message
-  if (!failure && result.status === 0 && verify) {
-    try { value = verify() } catch (error) { failure = error.message }
-  }
-  stages.push({ stage, startedAt, finishedAt: new Date().toISOString(), exitCode: failure ? 1 : result.status, signal: result.signal, error: failure })
-  writeJson(path.join(directory, 'stages.json'), stages)
-  if (failure || result.status !== 0) throw new Error(`${stage} did not pass (${failure ?? result.signal ?? result.status}).`)
+  const record = { stage, startedAt: new Date().toISOString(), finishedAt: null, status: 'running', exitCode: null, signal: null }
+  stages.push(record)
+  writeEvidenceJson(path.join(directory, 'stages.json'), stages, { mode: 0o640 })
+  let result, value, failure
+  try {
+    result = await executeProcess(root, [program, ...args], { environment: env, stdio: 'inherit', producerRole: 'ci-stage', timeoutMs: 1800000 })
+    if (!interruption && result.code === 0 && !result.timedOut && !result.cleanupFailed && verify) value = verify()
+  } catch (error) { failure = error.message }
+  record.finishedAt = new Date().toISOString()
+  record.processExitCode = result && Object.hasOwn(result, 'processExitCode') ? result.processExitCode : result?.code ?? null
+  record.exitCode = failure ? 1 : result?.code ?? null
+  record.signal = result?.signal ?? null
+  record.cleanupConfirmed = result ? !result.cleanupFailed : false
+  record.status = interruption ? 'cancelled' : failure || result?.code !== 0 || result?.timedOut || result?.cleanupFailed ? 'failed' : 'completed'
+  if (interruption) record.interruption = interruption
+  if (failure) record.error = failure
+  writeEvidenceJson(path.join(directory, 'stages.json'), stages, { mode: 0o640 })
+  if (record.status !== 'completed') throw new Error(`${stage} did not pass (${failure ?? record.signal ?? record.exitCode ?? record.status}).`)
   return value
 }
 
@@ -53,15 +78,20 @@ function packagedExecutable(stamp, previous, context) {
 }
 
 let runStarted = false
+let outcome = 'failed'
 try {
   const context = readJson(path.join(directory, 'context.json'))
   if (git(['rev-parse', 'HEAD']) !== context.revision) throw new Error('The source checkout changed after its identity was captured.')
   if (fs.existsSync(path.join(directory, 'run/run.json'))) throw new Error('This checkout already contains acceptance evidence. Preserve it and use a fresh CI checkout.')
+  scope = createEvidenceScope(root, { repository: process.env.GITHUB_REPOSITORY || context.repository, runId: process.env.GITHUB_RUN_ID || `local-${randomUUID()}`, attempt: process.env.GITHUB_RUN_ATTEMPT || '1' })
+  environment[evidenceScopeVariable] = scope.path
+  process.on('SIGINT', onInterrupt)
+  process.on('SIGTERM', onTerminate)
   const manifest = path.join(directory, 'manifest.json')
   const plan = path.join(directory, 'plan.json')
-  execute('catalog validation', ['validate'])
-  execute('environment check', ['doctor', '--level', 'e2e', '--json'])
-  execute('test discovery', ['discover', '--output', manifest])
+  await execute('catalog validation', ['validate'])
+  await execute('environment check', ['doctor', '--level', 'e2e', '--json'])
+  await execute('test discovery', ['discover', '--output', manifest])
   const args = ['plan', '--profile', context.profile, '--head', context.revision, '--platform', context.platform, '--manifest', manifest, '--output', plan]
   for (const module of context.modules ?? []) args.push('--module', module)
   for (const scenario of context.cases ?? []) args.push('--case', scenario)
@@ -78,36 +108,44 @@ try {
     } catch (error) { reason = `Baseline could not be read: ${error.message}` }
   }
   console.log(`[Acceptance CI] ${reason ?? 'Selecting changes since the last successful validation.'}`)
-  writeJson(path.join(directory, 'selection.json'), { full: Boolean(reason), reason: reason ?? 'Changes since the last successful validation.' })
-  execute('test planning', args)
+  writeEvidenceJson(path.join(directory, 'selection.json'), { full: Boolean(reason), reason: reason ?? 'Changes since the last successful validation.' }, { exclusive: true, mode: 0o640 })
+  await execute('test planning', args)
   const runEnvironment = { ...environment }
   const planned = readJson(plan)
-  if (needsRequirement(planned, 'chromium-browser')) execute('browser preparation', ['browser'], { program: path.join(root, 'scripts/acceptance/ci-prepare.mjs') })
+  if (needsRequirement(planned, 'chromium-browser')) await execute('browser preparation', ['browser'], { program: path.join(root, 'scripts/acceptance/ci-prepare.mjs') })
   if (needsRequirement(planned, 'packaged-app')) {
     const stamp = path.join(root, 'out/.acceptance-package.json')
     const previous = fs.existsSync(stamp) ? fs.readFileSync(stamp, 'utf8') : null
-    runEnvironment.HALO_E2E_PACKAGED_APP = execute('package preparation', ['package', '--timeout-ms', '1800000'], {
+    runEnvironment.HALO_E2E_PACKAGED_APP = await execute('package preparation', ['package', '--timeout-ms', '1800000'], {
       verify: () => packagedExecutable(stamp, previous, context),
     })
   }
   const readinessDirectory = path.join(directory, 'host-readiness-execution')
   if (fs.existsSync(readinessDirectory)) throw new Error('This checkout already contains host-readiness evidence. Preserve it and use a fresh CI checkout.')
-  execute('host readiness', ['doctor', '--level', 'gui', '--json', '--output', readinessDirectory], {
+  await execute('host readiness', ['doctor', '--level', 'gui', '--json', '--output', readinessDirectory], {
     verify: () => {
       const readiness = readJson(path.join(readinessDirectory, 'readiness.json'))
       if (readiness.version !== 1 || readiness.kind !== 'host-gui-readiness' || readiness.ready !== true || readiness.cleanup?.complete !== true || !['electronConnected', 'appReady', 'windowCreated', 'clickConfirmed'].every(key => readiness.observations?.[key] === true)) throw new Error('The host GUI probe did not establish a ready and cleaned-up graphical session.')
     },
   })
   runStarted = true
-  execute('acceptance execution', ['run', '--plan', plan, '--output', path.join(directory, 'run'), '--timeout-ms', '1800000'], { env: runEnvironment })
-  execute('report generation', ['report', '--run', path.join(directory, 'run'), '--output', path.join(directory, 'report')])
-  writeJson(path.join(directory, 'baseline.json'), makeBaseline(context, readJson(path.join(directory, 'run/run.json'))))
-  console.log('[Acceptance CI] Every selected instance passed; the baseline is eligible for publication after this workflow succeeds.')
+  await execute('acceptance execution', ['run', '--plan', plan, '--output', path.join(directory, 'run'), '--timeout-ms', '1800000'], { env: runEnvironment })
+  await execute('report generation', ['report', '--run', path.join(directory, 'run'), '--output', path.join(directory, 'report')])
+  outcome = 'passed'
+  console.log('[Acceptance CI] Execution finished; finalization must freeze evidence before any baseline can advance.')
 } catch (error) {
   console.error(`[Acceptance CI] ${error.message}`)
-  if (runStarted && fs.existsSync(path.join(directory, 'run/run.json'))) {
-    try { execute('report generation after failure', ['report', '--run', path.join(directory, 'run'), '--output', path.join(directory, 'report')]) }
+  if (!interruption && runStarted && fs.existsSync(path.join(directory, 'run/run.json'))) {
+    try { await execute('report generation after failure', ['report', '--run', path.join(directory, 'run'), '--output', path.join(directory, 'report')]) }
     catch (reportError) { console.error(`[Acceptance CI] ${reportError.message}`) }
   }
   process.exitCode = 1
+} finally {
+  if (scope) {
+    try { finishEvidenceScope(scope, { outcome: interruption ? 'cancelled' : outcome, exitCode: outcome === 'passed' && !interruption ? 0 : 1, signal: interruption?.signal ?? null }) }
+    catch (error) { console.error(`[Acceptance CI] Evidence owner completion failed: ${error.message}`); process.exitCode = 1 }
+  }
+  process.removeListener('SIGINT', onInterrupt)
+  process.removeListener('SIGTERM', onTerminate)
+  if (interruption) process.exitCode = 1
 }

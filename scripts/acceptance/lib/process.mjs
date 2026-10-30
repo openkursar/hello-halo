@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { beginEvidenceProducer, startEvidenceProducer, finishEvidenceProducer, rejectEvidenceSpawn, assertEvidenceOutputWritable, writeEvidenceText } from './ci-evidence.mjs'
 
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 
@@ -38,16 +39,26 @@ async function terminateTree(pid, onFailure) {
   }
   try {
     if (!groupExists(pid)) return true
-    process.kill(-pid, 'SIGTERM')
-    const deadline = Date.now() + 5000
-    while (Date.now() < deadline) {
-      if (!groupExists(pid)) return true
-      await delay(50)
+    let uncertain = false
+    const observeUntil = async deadline => {
+      while (performance.now() < deadline) {
+        try { if (!groupExists(pid)) return true }
+        catch (error) {
+          if (error.code !== 'EPERM') throw error
+          if (!uncertain) onFailure('Owned process-group exit observation returned EPERM; waiting for confirmed absence')
+          uncertain = true
+        }
+        await delay(25)
+      }
+      return false
     }
+    try { process.kill(-pid, 'SIGTERM') } catch (error) { if (error.code === 'ESRCH') return true; throw error }
+    if (await observeUntil(performance.now() + 5000)) return true
     // The group remains owned even after its leader exits; descendants may ignore SIGTERM.
     try { process.kill(-pid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error }
-    await delay(50)
-    return true
+    if (await observeUntil(performance.now() + 1000)) return true
+    onFailure('The owned process group has not been confirmed absent after termination; cleanup is unconfirmed')
+    return false
   } catch (error) {
     onFailure(`Owned process-group termination failed: ${error.message}`)
     return false
@@ -57,12 +68,20 @@ async function terminateTree(pid, onFailure) {
 // Callers must own the spawned process; on POSIX it must lead its own process group.
 export { groupExists as ownedProcessGroupExists, terminateTree as terminateOwnedProcessTree }
 
-export async function execute(root, args, { environment = {}, timeoutMs = 1800000, logFile, executable = process.execPath, shell = false } = {}) {
+export async function execute(root, args, { environment = {}, timeoutMs = 1800000, logFile, executable = process.execPath, shell = false, stdio = 'pipe', producerRole = 'subprocess' } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2147483647) throw new Error('Execution timeout must be between 1 and 2147483647 milliseconds')
   const childEnvironment = { ...process.env, ...environment }
+  assertEvidenceOutputWritable(root, logFile, childEnvironment)
+  if (!['pipe', 'inherit'].includes(stdio)) throw new Error('Execution stdio must be pipe or inherit')
+  const producer = beginEvidenceProducer(root, producerRole, { environment: childEnvironment, evidencePaths: logFile ? [logFile] : [] })
   let log = ''
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { cwd: root, env: childEnvironment, shell, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
+    let child
+    try { child = spawn(executable, args, { cwd: root, env: childEnvironment, shell, stdio: stdio === 'inherit' ? 'inherit' : ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' }) }
+    catch (error) { rejectEvidenceSpawn(producer, error.code); reject(error); return }
+    let registrationError
+    try { if (child.pid) startEvidenceProducer(producer, child.pid, { group: process.platform !== 'win32' }) }
+    catch (error) { registrationError = error }
     let timedOut = false, termination, settled = false
     const receive = data => { log = (log + data.toString()).slice(-8 * 1024 * 1024) }
     const failure = message => {
@@ -86,8 +105,8 @@ export async function execute(root, args, { environment = {}, timeoutMs = 180000
     }
     process.once('SIGINT', onSignal)
     process.once('SIGTERM', onSignal)
-    child.stdout.on('data', receive)
-    child.stderr.on('data', receive)
+    child.stdout?.on('data', receive)
+    child.stderr?.on('data', receive)
     const cleanupListeners = () => {
       clearTimeout(timer)
       process.removeListener('SIGINT', onSignal)
@@ -95,8 +114,15 @@ export async function execute(root, args, { environment = {}, timeoutMs = 180000
     }
     child.once('error', error => {
       if (settled) return
+      if (child.pid) {
+        registrationError ??= error
+        failure('the started process reported an error; stopping its owned process tree')
+        void stop()
+        return
+      }
       settled = true
       cleanupListeners()
+      try { rejectEvidenceSpawn(producer, error.code) } catch (evidenceError) { reject(new AggregateError([error, evidenceError], 'Process startup and evidence registration failed')); return }
       reject(new Error(`Could not start test runner: ${redact(error.message, root, childEnvironment)}`))
     })
     child.once('close', async (code, signal) => {
@@ -116,9 +142,17 @@ export async function execute(root, args, { environment = {}, timeoutMs = 180000
       const terminated = termination ? await termination : true
       const output = redact(log, root, childEnvironment)
       try {
-        if (logFile) { await fs.mkdir(path.dirname(logFile), { recursive: true }); await fs.writeFile(logFile, output) }
-        resolve({ code: orphaned || !terminated ? 1 : code, signal, timedOut, log: output, cleanupFailed: !terminated })
+        if (logFile) {
+          assertEvidenceOutputWritable(root, logFile, childEnvironment)
+          await fs.mkdir(path.dirname(logFile), { recursive: true })
+          if (producer) writeEvidenceText(logFile, output, { mode: 0o640 })
+          else await fs.writeFile(logFile, output)
+        }
+        finishEvidenceProducer(producer, { exitCode: code, signal, cleanupConfirmed: terminated && !registrationError })
+        if (registrationError) throw registrationError
+        resolve({ code: orphaned || !terminated ? 1 : code, processExitCode: code, signal, timedOut, log: output, cleanupFailed: !terminated })
       } catch (error) { reject(error) }
     })
+    if (registrationError) { failure('evidence producer registration failed; stopping its owned process tree'); void stop() }
   })
 }

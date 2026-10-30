@@ -3,13 +3,16 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { verifyEvidenceSource, verifyFrozenEvidence } from './lib/ci-evidence.mjs'
 
 const rootMarker = '.acceptance-archive-root.json'
 const lockName = '.archive.lock'
 const creationName = 'archive.json'
 const manifestName = 'manifest.json'
 const completionName = 'COMPLETE.json'
+const incompleteName = 'INCOMPLETE.json'
 const completionTemporary = '.completion.pending'
+const failedSnapshots = new WeakMap()
 const sourceRelative = 'tests/acceptance/output/ci'
 const noFollow = fs.constants.O_NOFOLLOW ?? 0
 const digest = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -312,6 +315,14 @@ function observedMetadata(directory, log) {
   }
 }
 
+function finality(freeze) {
+  return { state: 'frozen', freezeSha256: freeze.freezeSha256, identity: freeze.receipt.identity, revision: freeze.receipt.revision, completion: freeze.receipt.completion }
+}
+
+function evidenceErrorCode(error) {
+  return ['EVIDENCE_NOT_FROZEN', 'EVIDENCE_UNSETTLED', 'EVIDENCE_IDENTITY_MISMATCH', 'EVIDENCE_CHANGED'].includes(error?.code) ? error.code : 'EVIDENCE_NOT_FROZEN'
+}
+
 export function verifyArchive(directory) {
   const uid = owner()
   directory = path.resolve(directory)
@@ -332,26 +343,79 @@ export function verifyArchive(directory) {
   catch { fail('The archive manifest is not valid JSON.') }
   const request = requestIdentity(created.identity)
   if (created.kind !== 'halo-acceptance-ci-archive' || created.version !== 1 || created.rootId !== root.marker.rootId || entryName(request) !== path.basename(directory) || !/^[a-f0-9-]{36}$/.test(created.archiveId ?? '')) fail('The archive creation marker does not identify this managed entry.')
-  if (manifest.kind !== 'halo-acceptance-ci-manifest' || manifest.version !== 1 || manifest.rootId !== created.rootId || manifest.archiveId !== created.archiveId || JSON.stringify(manifest.identity) !== JSON.stringify(request)) fail('The archive manifest identity does not match its creation marker.')
-  if (complete.kind !== 'halo-acceptance-ci-complete' || complete.version !== 1 || complete.rootId !== created.rootId || complete.archiveId !== created.archiveId || complete.manifestSha256 !== digest(manifestBytes) || !Number.isFinite(Date.parse(complete.completedAt))) fail('The archive completion record does not match its manifest.')
+  if (manifest.kind !== 'halo-acceptance-ci-manifest' || ![1, 2].includes(manifest.version) || manifest.rootId !== created.rootId || manifest.archiveId !== created.archiveId || JSON.stringify(manifest.identity) !== JSON.stringify(request)) fail('The archive manifest identity does not match its creation marker.')
+  if (complete.kind !== 'halo-acceptance-ci-complete' || complete.version !== manifest.version || complete.rootId !== created.rootId || complete.archiveId !== created.archiveId || complete.manifestSha256 !== digest(manifestBytes) || !Number.isFinite(Date.parse(complete.completedAt))) fail('The archive completion record does not match its manifest.')
   const tree = verifyPayload(directory, manifest, uid)
+  let sourceFinality = { state: 'legacy-unverified' }
+  if (manifest.version === 2) {
+    const frozen = verifyFrozenEvidence(path.join(directory, 'ci'), { identity: request })
+    sourceFinality = finality(frozen)
+    if (complete.freezeSha256 !== frozen.freezeSha256 || JSON.stringify(manifest.sourceFinality) !== JSON.stringify(sourceFinality)) fail('The archive does not contain its matching frozen evidence identity.')
+  }
   managedDirectory(root.directory, uid, root.directoryStat)
   managedDirectory(directory, uid, archiveStat)
   if (JSON.stringify(fs.readdirSync(directory).sort()) !== JSON.stringify(allowed) || [...records].some(([name, value]) => stamp(stat(path.join(directory, name))) !== stamp(value))) fail('The archive management records changed during verification.')
-  return { directory, manifest, complete, tree, records, directoryStat: archiveStat }
+  return { directory, manifest, complete, sourceFinality, tree, records, directoryStat: archiveStat }
 }
 
-function retainArchives(root, current, controller, keep, log) {
+// A failure path is uploadable only with this invocation's original ownership proof.
+export function archiveSnapshotForUpload(error) {
+  const proof = error && typeof error === 'object' ? failedSnapshots.get(error) : null
+  if (!proof) return null
+  try {
+    const { directory, uid, root, archiveStat, archiveId, request } = proof
+    const currentRoot = loadRoot(root.directory, uid)
+    if (currentRoot.marker.rootId !== root.marker.rootId) return null
+    managedDirectory(root.directory, uid, root.directoryStat)
+    managedDirectory(directory, uid, archiveStat)
+    const names = fs.readdirSync(directory).sort()
+    const hasComplete = names.includes(completionName), hasIncomplete = names.includes(incompleteName)
+    if (hasComplete && hasIncomplete) return null
+    const expected = [creationName, manifestName, 'ci', ...(hasComplete ? [completionName] : []), ...(hasIncomplete ? [incompleteName] : [])].sort()
+    if (JSON.stringify(names) !== JSON.stringify(expected)) return null
+    const records = new Map()
+    for (const name of expected.filter(name => name !== 'ci')) {
+      const value = stat(path.join(directory, name))
+      if (!value?.isFile() || value.isSymbolicLink() || Number(value.uid) !== uid || mode(value) !== 0o640) return null
+      records.set(name, value)
+    }
+    const created = readJson(path.join(directory, creationName))
+    const manifestBytes = readRegular(path.join(directory, manifestName), 64 * 1024 * 1024)
+    const manifest = JSON.parse(manifestBytes.toString('utf8'))
+    if (created.kind !== 'halo-acceptance-ci-archive' || created.version !== 1 || created.archiveId !== archiveId || created.rootId !== root.marker.rootId || JSON.stringify(requestIdentity(created.identity)) !== JSON.stringify(request) || entryName(request) !== path.basename(directory)) return null
+    if (manifest.kind !== 'halo-acceptance-ci-manifest' || manifest.version !== 2 || manifest.archiveId !== archiveId || manifest.rootId !== root.marker.rootId || JSON.stringify(manifest.identity) !== JSON.stringify(request)) return null
+    if (hasIncomplete) {
+      const marker = readJson(path.join(directory, incompleteName))
+      if (marker.kind !== 'halo-acceptance-ci-incomplete' || marker.version !== 2 || marker.archiveId !== archiveId || marker.rootId !== root.marker.rootId || marker.manifestSha256 !== digest(manifestBytes)) return null
+    }
+    verifyPayload(directory, manifest, uid)
+    if (hasComplete) verifyArchive(directory)
+    managedDirectory(root.directory, uid, root.directoryStat)
+    managedDirectory(directory, uid, archiveStat)
+    if (JSON.stringify(fs.readdirSync(directory).sort()) !== JSON.stringify(names) || [...records].some(([name, value]) => stamp(stat(path.join(directory, name))) !== stamp(value))) return null
+    return { directory, sourceFinal: false }
+  } catch {
+    // The caller reports withheld upload separately from the original archival failure.
+    return null
+  }
+}
+
+function retainArchives(root, current, controller, keep, log, checkSource) {
+  checkSource()
   const verified = [], protectedEntries = [], otherControllerEntries = []
   for (const name of fs.readdirSync(root.directory).sort()) {
     if (name === rootMarker || name === lockName) continue
     const directory = path.join(root.directory, name)
     try {
       const archive = verifyArchive(directory)
-      if (archive.manifest.identity.repository === controller) verified.push(archive)
-      else {
+      if (archive.manifest.identity.repository !== controller) {
         otherControllerEntries.push(name)
         log(`[Acceptance archive] Retained verified archive ${JSON.stringify(name)} belonging to another controller.`)
+      } else if (archive.sourceFinality.state !== 'frozen') {
+        protectedEntries.push(name)
+        log(`[Acceptance archive] Retained legacy copy ${JSON.stringify(name)} without final-source evidence.`)
+      } else {
+        verified.push(archive)
       }
     } catch (error) {
       if (directory === current) throw error
@@ -361,6 +425,7 @@ function retainArchives(root, current, controller, keep, log) {
   }
   if (!verified.some(archive => archive.directory === current)) fail('The new archive is no longer available; retention was not started.')
   verifyArchive(current)
+  checkSource()
   const removed = []
   const eligible = verified.filter(archive => archive.directory !== current).sort((left, right) => Date.parse(left.complete.completedAt) - Date.parse(right.complete.completedAt) || left.directory.localeCompare(right.directory))
   for (const candidate of eligible.slice(0, Math.max(0, verified.length - keep))) {
@@ -370,6 +435,7 @@ function retainArchives(root, current, controller, keep, log) {
     if (inventory(path.join(candidate.directory, 'ci')).signature !== checked.tree.signature) fail('An archive changed immediately before retention cleanup.')
     if ([...checked.records].some(([name, value]) => stamp(stat(path.join(candidate.directory, name))) !== stamp(value))) fail('An archive management record changed immediately before retention cleanup.')
     managedDirectory(candidate.directory, root.uid, checked.directoryStat)
+    checkSource()
     fs.rmSync(candidate.directory, { recursive: true })
     synchronizeDirectory(root.directory)
     removed.push(path.basename(candidate.directory))
@@ -386,18 +452,22 @@ export function archiveCi({ checkout = process.cwd(), archiveRoot = path.join(os
   checkout = fs.realpathSync(checkout)
   const source = path.join(checkout, sourceRelative)
   directoryParents(source)
+  let frozen, freezeError
+  try { frozen = verifyEvidenceSource(checkout, { identity: request }) }
+  catch (error) { freezeError = error }
   const initial = inventory(source)
   if (!initial.files.some(file => file.path === 'context.json')) fail('The CI evidence directory has no captured initial context.')
   const root = prepareRoot(archiveRoot, [checkout, workspace, runnerTemp], uid)
   const unlock = lockRoot(root)
   const directory = path.join(root.directory, entryName(request))
-  let failure
+  let failure, snapshotProof
   try {
     managedDirectory(root.directory, uid, root.directoryStat)
     if (stat(directory)) fail('This controller run and attempt already has a local archive or pending copy; it will not be overwritten.', 'ARCHIVE_EXISTS')
     const archiveStat = newDirectory(directory)
     const archiveId = randomUUID(), startedAt = new Date().toISOString()
     newJson(path.join(directory, creationName), { kind: 'halo-acceptance-ci-archive', version: 1, rootId: root.marker.rootId, archiveId, identity: request, startedAt })
+    snapshotProof = { directory, uid, root, archiveStat, archiveId, request }
     const destination = path.join(directory, 'ci')
     const sourceDirectories = new Map(initial.directories.map(item => [item.path, item.stat]))
     const destinationDirectories = new Map()
@@ -411,9 +481,10 @@ export function archiveCi({ checkout = process.cwd(), archiveRoot = path.join(os
     const files = initial.files.map(record => copyFile(source, destination, record, sourceDirectories, destinationDirectories, root, directory, archiveStat))
     if (inventory(source).signature !== initial.signature) fail('The CI evidence tree changed during copying; no complete archive was published.')
     const manifest = {
-      kind: 'halo-acceptance-ci-manifest', version: 1, rootId: root.marker.rootId, archiveId, identity: request, startedAt,
+      kind: 'halo-acceptance-ci-manifest', version: 2, rootId: root.marker.rootId, archiveId, identity: request, startedAt,
       sourceDirectory: sourceRelative, copyMeaning: 'Complete means the listed local files were copied and verified; it is not a passing-test or baseline decision.',
       permissionModel: 'POSIX owner/group reads and owner write retained; other permissions removed',
+      sourceFinality: frozen ? finality(frozen) : { state: 'unconfirmed', reasonCode: evidenceErrorCode(freezeError) },
       ...observedMetadata(directory, log),
       directories: initial.directories.map(item => item.path).filter(Boolean), files, fileCount: files.length, totalBytes: files.reduce((sum, file) => sum + file.bytes, 0),
     }
@@ -424,7 +495,18 @@ export function archiveCi({ checkout = process.cwd(), archiveRoot = path.join(os
     managedDirectory(root.directory, uid, root.directoryStat)
     managedDirectory(directory, uid, archiveStat)
     const manifestSha256 = digest(readRegular(path.join(directory, manifestName)))
-    const complete = { kind: 'halo-acceptance-ci-complete', version: 1, rootId: root.marker.rootId, archiveId, manifestSha256, completedAt: new Date().toISOString() }
+    if (!frozen) {
+      const reasonCode = evidenceErrorCode(freezeError)
+      newJson(path.join(directory, incompleteName), { kind: 'halo-acceptance-ci-incomplete', version: 2, rootId: root.marker.rootId, archiveId, manifestSha256, capturedAt: new Date().toISOString(), reasonCode })
+      synchronizeDirectory(directory)
+      synchronizeDirectory(root.directory)
+      log(`[Acceptance archive] Retained a non-final snapshot (${reasonCode}); no completion or retention cleanup was performed.`)
+      fail('Source evidence was not frozen before copying; the non-final snapshot is retained.', reasonCode)
+    }
+    const finalSource = verifyEvidenceSource(checkout, { identity: request })
+    const copiedSource = verifyFrozenEvidence(destination, { identity: request })
+    if (finalSource.freezeSha256 !== frozen.freezeSha256 || copiedSource.freezeSha256 !== frozen.freezeSha256) fail('The evidence freeze changed before archive publication; the pending copy is retained.', 'EVIDENCE_CHANGED')
+    const complete = { kind: 'halo-acceptance-ci-complete', version: 2, rootId: root.marker.rootId, archiveId, manifestSha256, freezeSha256: frozen.freezeSha256, completedAt: new Date().toISOString() }
     newJson(path.join(directory, completionTemporary), complete)
     managedDirectory(root.directory, uid, root.directoryStat)
     managedDirectory(directory, uid, archiveStat)
@@ -434,12 +516,15 @@ export function archiveCi({ checkout = process.cwd(), archiveRoot = path.join(os
     synchronizeDirectory(directory)
     synchronizeDirectory(root.directory)
     const verified = verifyArchive(directory)
-    const retention = retainArchives(root, directory, request.repository, keep, log)
+    const retention = retainArchives(root, directory, request.repository, keep, log, () => {
+      if (verifyEvidenceSource(checkout, { identity: request }).freezeSha256 !== frozen.freezeSha256) fail('The source freeze changed before retention; older evidence was retained.', 'EVIDENCE_CHANGED')
+    })
     log(`[Acceptance archive] Verified ${files.length} files (${manifest.totalBytes} bytes) in ${directory}. Test status: ${manifest.testRun.status ?? 'no run record'}; remote upload not observed.`)
-    return { directory, archiveId, manifestSha256: verified.complete.manifestSha256, fileCount: files.length, totalBytes: manifest.totalBytes, testStatus: manifest.testRun.status, remoteUpload: 'not-observed', retention }
+    return { directory, archiveId, manifestSha256: verified.complete.manifestSha256, sourceFinality: verified.sourceFinality, fileCount: files.length, totalBytes: manifest.totalBytes, testStatus: manifest.testRun.status, remoteUpload: 'not-observed', retention }
   } catch (error) {
     failure = error
     if (stat(directory)) error.archiveDirectory = directory
+    if (snapshotProof && error && typeof error === 'object') failedSnapshots.set(error, snapshotProof)
     throw error
   } finally {
     try { unlock() }
@@ -450,7 +535,7 @@ export function archiveCi({ checkout = process.cwd(), archiveRoot = path.join(os
 function main() {
   if (process.argv[2] === 'verify' && process.argv.length === 4) {
     const checked = verifyArchive(process.argv[3])
-    console.log(JSON.stringify({ directory: checked.directory, copyVerified: true, files: checked.manifest.fileCount, testStatus: checked.manifest.testRun.status, remoteUpload: checked.manifest.remoteUpload.status }, null, 2))
+    console.log(JSON.stringify({ directory: checked.directory, copyVerified: true, sourceFinality: checked.sourceFinality, files: checked.manifest.fileCount, testStatus: checked.manifest.testRun.status, remoteUpload: checked.manifest.remoteUpload.status }, null, 2))
     return
   }
   if (process.argv.length !== 2) fail('Usage: node scripts/acceptance/ci-archive.mjs [verify /absolute/archive-directory]')
@@ -459,10 +544,10 @@ function main() {
     workspace: process.env.GITHUB_WORKSPACE, runnerTemp: process.env.RUNNER_TEMP,
     identity: { repository: process.env.GITHUB_REPOSITORY, runId: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT },
   })
-  if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `archive-directory=${archived.directory}\narchive-manifest-sha256=${archived.manifestSha256}\n`)
+  if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `archive-directory=${archived.directory}\narchive-manifest-sha256=${archived.manifestSha256}\nsnapshot-directory=${archived.directory}\nsource-final=true\n`)
   if (process.env.GITHUB_STEP_SUMMARY) {
     const location = archived.directory.replace(/[`<>|]/g, ' ')
-    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### Local evidence archive\n\nVerified local copy: \`${location}\` (${archived.fileCount} files). Completion describes the copy, not the test result or a baseline. Remote artifact upload has not been confirmed by this step. Retention removed ${archived.retention.removed.length} verified archives for this controller and preserved ${archived.retention.protectedEntries.length} unverified entries plus ${archived.retention.otherControllerEntries.length} verified archives belonging to other controllers.\n`)
+    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### Local evidence archive\n\nVerified local copy from frozen evidence: \`${location}\` (${archived.fileCount} files). Completion describes the copy, not the test result or a baseline. Remote artifact upload has not been confirmed by this step. Retention removed ${archived.retention.removed.length} verified final archives for this controller and preserved ${archived.retention.protectedEntries.length} protected entries plus ${archived.retention.otherControllerEntries.length} verified archives belonging to other controllers.\n`)
   }
 }
 
@@ -470,8 +555,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try { main() }
   catch (error) {
     console.error(`[Acceptance archive] ${error.code ?? 'ARCHIVE_FAILED'}: ${error.message}${error.archiveDirectory ? ` Pending or completed evidence was retained at ${error.archiveDirectory}.` : ''}`)
+    const snapshot = archiveSnapshotForUpload(error)
+    if (snapshot && process.env.GITHUB_OUTPUT) {
+      try { fs.appendFileSync(process.env.GITHUB_OUTPUT, `snapshot-directory=${snapshot.directory}\nsource-final=false\n`) }
+      catch { console.error('[Acceptance archive] The safe non-final snapshot could not be announced for upload.') }
+    } else if (!snapshot) console.error('[Acceptance archive] Snapshot upload withheld because no safe retained copy was confirmed.')
     if (process.env.GITHUB_STEP_SUMMARY) {
-      try { fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### Local archive stage\n\n${error.code === 'ARCHIVE_UNSUPPORTED' ? 'Unsupported on this host' : 'Failed to finish local retention'}. This is an infrastructure archival outcome, not a product-test result. Original evidence was not modified; remote upload is attempted by a separate always-running step. See the archive step log.\n`) }
+      try { fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### Local archive stage\n\n${error.code === 'ARCHIVE_UNSUPPORTED' ? 'Unsupported on this host' : 'Failed to finish local retention'}. This is an infrastructure archival outcome, not a product-test result. Original evidence was not modified; remote upload requires a separately confirmed safe snapshot path. See the archive step log.\n`) }
       catch { console.error('[Acceptance archive] The archival outcome could not be appended to the job summary.') }
     }
     process.exitCode = error.code === 'ARCHIVE_UNSUPPORTED' ? 2 : 1

@@ -13,6 +13,7 @@ import { buildApplication, verifyBuild } from './lib/build.mjs'
 import { loadLiveConfig } from './lib/live-config.mjs'
 import { packageApplication } from './lib/package.mjs'
 import { probeGuiReadiness } from './lib/gui-readiness.mjs'
+import { beginEvidenceProducer, finishEvidenceProducer, assertEvidenceOutputWritable } from './lib/ci-evidence.mjs'
 
 const root = path.resolve(fileURLToPath(new URL('../..', import.meta.url)))
 const outputRoot = path.join(root, 'tests/acceptance/output')
@@ -132,4 +133,11 @@ async function main() {
   } else throw new Error(`Unknown acceptance command: ${command}`)
 }
 
+const requestedOutput = values.output ? path.resolve(values.output) : command === 'report' && values.run ? path.join(path.resolve(values.run), 'report') : undefined
+assertEvidenceOutputWritable(root, requestedOutput)
+const producer = beginEvidenceProducer(root, `cli:${command}`, { self: true })
+if (producer) process.once('exit', code => {
+  try { finishEvidenceProducer(producer, { exitCode: code }) }
+  catch (error) { console.error(`acceptance: evidence producer completion failed: ${error.message}`); if (!code) process.exitCode = 1 }
+})
 main().catch(error => { console.error(`acceptance: ${error.message}`); process.exitCode = 1 })

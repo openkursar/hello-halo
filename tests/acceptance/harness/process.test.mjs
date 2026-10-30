@@ -3,7 +3,40 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { execute, redact } from '../../../scripts/acceptance/lib/process.mjs'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { execute, redact, terminateOwnedProcessTree } from '../../../scripts/acceptance/lib/process.mjs'
+
+for (const persistent of [false, true]) test(`${persistent ? 'persistent' : 'transient'} exit-probe EPERM requires an actual absence observation`, { skip: process.platform === 'win32', timeout: 10000 }, async context => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { detached: true, stdio: 'ignore' })
+  const closed = once(child, 'close')
+  await once(child, 'spawn')
+  const kill = process.kill
+  let signalled = false, denied = 0
+  process.kill = function (pid, signal) {
+    if (pid === -child.pid) {
+      if (signal === 0 && signalled && (persistent || denied < 2)) {
+        denied++
+        throw Object.assign(new Error('Synthetic owned exit-probe denial'), { code: 'EPERM' })
+      }
+      if (signal === 'SIGTERM') signalled = true
+    }
+    return kill.call(process, pid, signal)
+  }
+  context.after(async () => {
+    process.kill = kill
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    await closed
+  })
+  const messages = []
+  const result = await terminateOwnedProcessTree(child.pid, message => messages.push(message))
+  assert.equal(result, !persistent)
+  assert(denied >= 2)
+  assert.equal(messages.filter(message => message.includes('returned EPERM')).length, 1)
+  await closed
+  assert.throws(() => kill.call(process, child.pid, 0), { code: 'ESRCH' })
+  if (persistent) assert(messages.some(message => message.includes('cleanup is unconfirmed')))
+})
 
 test('captured output and persisted logs redact credentials supplied only to the child', async context => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'acceptance-process-log-'))
@@ -12,6 +45,7 @@ test('captured output and persisted logs redact credentials supplied only to the
   const logfile = path.join(directory, 'runner.log')
   const result = await execute(directory, ['-e', 'console.log(process.env.PROVIDER_API_KEY);console.error("Authorization: Bearer another-sensitive-value")'], { environment: { PROVIDER_API_KEY: secret }, logFile: logfile })
   assert.equal(result.code, 0)
+  assert.equal(result.processExitCode, 0)
   assert.equal(result.cleanupFailed, false)
   assert.doesNotMatch(result.log, /synthetic-child-secret|another-sensitive-value/)
   assert.equal(await fs.readFile(logfile, 'utf8'), result.log)
@@ -37,6 +71,7 @@ test('timeout kills an owned descendant after its group leader has already exite
   const result = await execute(directory, ['-e', launcher], { timeoutMs: 500 })
   descendantPid = Number(await fs.readFile(marker, 'utf8'))
   assert.equal(result.timedOut, true)
+  assert.equal(result.processExitCode, null)
   assert.equal(result.cleanupFailed, false)
   let alive = true
   for (let attempt = 0; attempt < 20; attempt++) {

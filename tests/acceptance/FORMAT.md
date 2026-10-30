@@ -112,6 +112,16 @@ Nightly plans use the previous successful validation baseline and a resolved tar
 commit. A branch name alone is not a build identity. Live-model and external runs
 are opt-in and bounded; missing prerequisites remain visible in the report.
 
+CI evidence finality is separate from case status. The execution owner registers
+evidence producers before they write, records cancellation independently of child
+exit codes, and acknowledges completion only after its execution stages stop.
+The finalizer confirms the owner and all registered processes have exited, writes
+the final summary and publishes `evidence-freeze.json` with the full payload hash
+inventory and controller run/attempt identity. Unknown writers or a killed owner
+leave non-final diagnostic snapshots, not a successful empty run. An archive
+completion record verifies that frozen copy; it does not imply passing cases.
+Only verified final successful evidence can advance a version 2 CI baseline.
+
 Application runs require a controlled `build`: it records product inputs before
 and after the real build, compiled artifacts and the independently installed SDK.
 Build provenance uses `version: 2` and names the generated outputs cleaned before
