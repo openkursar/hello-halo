@@ -23,12 +23,14 @@ export function ExistingSkillDialog({ spaceId, onClose, onAdded }: { spaceId: st
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       <div className="space-y-2">{skills.filter(skill => `${skill.spec.display_name ?? skill.spec.name} ${skill.spec.description ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map(skill => {
         const sameName = skills.find(other => other.spaceId === spaceId && toSkillDirName(other.specId) === toSkillDirName(skill.specId))
+        // The engine loads the global copy of a name both scopes hold.
+        const shadowedByGlobal = skill.spaceId !== null && skills.some(other => other.spaceId === null && other.status === 'active' && toSkillDirName(other.specId) === toSkillDirName(skill.specId))
         const inScope = skill.spaceId === null || skill.spaceId === spaceId
         const scopeName = skill.spaceId === null ? t('Global') : [haloSpace, ...spaces].find(space => space?.id === skill.spaceId)?.name ?? t('Unavailable workspace')
         const copied = added.includes(skill.id)
         return <div key={skill.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3">
           <div className="min-w-0"><p className="break-words text-sm font-medium">{skill.spec.display_name ?? skill.spec.name}</p><p className="text-xs text-muted-foreground">{scopeName}</p></div>
-          {inScope ? <span className="text-xs text-muted-foreground">{sameName && sameName.status === 'active' && sameName.id !== skill.id ? t('Overridden in this workspace') : skill.status === 'paused' ? t('Disabled in shared settings') : t('Already available')}</span> : <button disabled={!!busy || !!sameName || copied} onClick={async () => {
+          {inScope ? <span className="text-xs text-muted-foreground">{shadowedByGlobal ? t('The global skill of the same name runs instead') : skill.status === 'paused' ? t('Disabled in shared settings') : t('Already available')}</span> : <button disabled={!!busy || !!sameName || copied} onClick={async () => {
             setBusy(skill.id); setError(null)
             try {
               const id = await installApp(spaceId, skill.spec)

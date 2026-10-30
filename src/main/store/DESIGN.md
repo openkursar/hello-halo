@@ -26,9 +26,13 @@ its mirrored rows, so every catalog read of the mirror (list, search, the "All"
 preview, category counts) filters by the enabled source ids; turning it back on
 shows the rows again without a download. Single-entry lookups by slug
 (`findEntry`: details, installs, update checks) are not filtered, so apps
-installed from it keep working. The renderer caches what it read (browse list,
-discover page, category counts), so adding, removing or switching a source in
-Settings drops those and reads the catalog again (`reloadStoreCatalog`).
+installed from it keep working. Asking whether installers can fetch a skill
+dependency from the Store is the exception (`findSkillListing`, used by
+publishing and the digital-human tools): only a skill listing from an enabled
+source counts, the source a local copy came from preferred. The renderer
+caches what it read (browse list, discover page, category counts), so adding,
+removing or switching a source in Settings drops those and reads the catalog
+again (`reloadStoreCatalog`).
 
 Consequence: adding support for a new registry protocol means adding one file
 under `adapters/`, one `case` in `adapters/index.ts`, and one entry in

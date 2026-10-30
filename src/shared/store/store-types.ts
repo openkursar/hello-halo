@@ -626,3 +626,23 @@ export interface StoreCapabilities {
   /** Creator identity strength for publish / my-publications. */
   identity: StoreIdentityMode
 }
+
+/** How publishing will handle one skill a digital human depends on. */
+export interface SkillDepInspection {
+  id: string
+  /** The author declared this dependency `bundled: true`. */
+  declaredBundled: boolean
+  /** Resolves from a configured registry — installers fetch it there; not packaged. */
+  resolvable: boolean
+  /** A skill this digital human can load locally satisfies this dependency:
+   * an installed skill app, or a skill folder placed by hand. */
+  installed: boolean
+  /** The installed skill app's id; null for a hand-placed folder, which is
+   * packaged from disk and cannot be listed separately. */
+  appId: string | null
+  /** Display name of the matched registry entry, when `resolvable` is true. */
+  storeName: string | null
+  /** False for a local skill the system prompt names but `requires.skills`
+   * lacks — publishing will not package it until it is declared. */
+  declared: boolean
+}

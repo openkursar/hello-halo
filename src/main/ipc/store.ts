@@ -33,7 +33,6 @@ import {
   getPublishPreview,
   findAppByPublishSlug,
   collectFiles,
-  inspectSkillDeps,
   packDhpkg,
   packSkill,
 } from '../store'
@@ -147,17 +146,7 @@ export function registerStoreHandlers(): void {
 
     // ── store:inspect-skill-deps ─────────────────────────────────────────────
     storeInspectSkillDeps: async (input: { appId: string }) => {
-      try {
-        const manager = getAppManager()
-        if (!manager) return { success: false, error: 'App Manager not ready' }
-        const app = manager.getApp(input.appId)
-        if (!app) return { success: false, error: `App not found: ${input.appId}` }
-        return { success: true, data: inspectSkillDeps(app.spec, manager, app.spaceId) }
-      } catch (error: unknown) {
-        const err = error as Error
-        console.error('[StoreIPC] store:inspect-skill-deps error:', err.message)
-        return { success: false, error: err.message }
-      }
+      return storeController.inspectAppSkillDeps({ appId: input.appId })
     },
 
     // ── store:inspect-skill-deps-for-spec ────────────────────────────────────
@@ -168,15 +157,7 @@ export function registerStoreHandlers(): void {
     // submit creates for this flow — it starts empty and only gains the
     // folder's own bundled skills plus whatever is globally installed.
     storeInspectSkillDepsForSpec: async (input: { spec: AppSpec }) => {
-      try {
-        const manager = getAppManager()
-        if (!manager) return { success: false, error: 'App Manager not ready' }
-        return { success: true, data: inspectSkillDeps(input.spec, manager, null) }
-      } catch (error: unknown) {
-        const err = error as Error
-        console.error('[StoreIPC] store:inspect-skill-deps-for-spec error:', err.message)
-        return { success: false, error: err.message }
-      }
+      return storeController.inspectAppSkillDeps({ spec: input.spec })
     },
 
     // ── store:find-app-by-publish-slug ─────────────────────────────────────
@@ -243,11 +224,14 @@ export function registerStoreHandlers(): void {
             success: false,
             error:
               `Skill dependencies are unresolvable — exporting would produce a broken package. ` +
-              `Not found in any configured registry, and not installed locally: ${missingSkillIds.join(', ')}. ` +
-              `Install them first, then export again.`,
+              `Not found in any configured registry or among the skills this digital human can load, or their SKILL.md cannot be read: ${missingSkillIds.join(', ')}. ` +
+              `Install them (or fix SKILL.md) first, then export again.`,
           }
         }
 
+        // Not packagedSpec: an export keeps the author's spec as written, and
+        // marking dependencies `bundled` would let uninstalling a locally
+        // imported copy delete same-named skills of the importer's.
         const buf = await packDhpkg(app.spec, files)
         await writeFile(dialogResult.filePath, buf)
 

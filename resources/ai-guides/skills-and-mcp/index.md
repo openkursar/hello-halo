@@ -22,12 +22,14 @@ itself, that one covers the spec syntax.
   app database, not in `config.json`.
 
 Both are installed the same way (see §2) and follow the **same scope rule** everywhere in the
-codebase: **`spaceId: null` = global; `spaceId: <uuid>` = space-scoped, and a space-scoped item
-overrides a global one that shares the same identifier.** This is implemented independently at
-the filesystem layer for skills (`listAvailableSkills()`, `src/main/apps/skill-discovery.ts:75-98`)
-and at the database layer for both types (`listEffectiveByType()`,
-`src/main/apps/manager/service.ts:356-369`, with thin wrappers
-`listEffectiveMcpApps()`/`listEffectiveSkillApps()` at lines 1155-1162).
+codebase: **`spaceId: null` = global; `spaceId: <uuid>` = space-scoped.** For MCP servers a
+space-scoped item overrides a global one with the same identifier (`listEffectiveByType()` in
+`src/main/apps/manager/service.ts`). **Skills are the opposite at runtime:** when a global and a
+space skill share a folder name, the engine loads the **global** one — it reads user (global)
+skills before project (space) ones and takes the first match. Halo's skill listing and publishing
+follow the engine (`listAvailableSkills()` / `listLoadableSkills()` in
+`src/main/apps/skill-discovery.ts`). To use a customized copy in one space, give it a different
+name.
 
 **A real asymmetry between the two once scope is resolved:** access to *user-installed* MCP
 servers is least-privilege and declared for scheduled/triggered automation runs (only the ones
@@ -45,10 +47,14 @@ digital-human/IM chat alike) is built with `settingSources: ['user', 'project']`
 `session-manager.ts:1498`, `send-message.ts:276`, `execute.ts:539`, and `app-chat.ts:1038`). That
 means **any skill physically present in the resolved global or space skills directory is
 available in every conversation**, regardless of whether an automation's spec lists it under
-`requires.skills` — that field only controls *install-time* auto-installation/bundling
-(`installRequiredSkills()`, `registry.service.ts:643-744`), not runtime availability filtering.
-Don't tell a user a skill needs to be "granted" to a specific digital human the way an MCP
-dependency does — skills are ambient within scope, not permissioned per app. **One exception:**
+`requires.skills` — that field controls install-time auto-installation and what publishing
+packages (`installRequiredSkills()` in `src/main/store/registry.service.ts`; `collectFiles()` in
+`src/main/store/publish/index.ts`), not runtime availability filtering. Don't tell a user a skill
+needs to be "granted" to a specific digital human the way an MCP dependency does — skills are
+ambient within scope, not permissioned per app. **But a digital human must still declare every
+skill its prompt relies on**: a package carries only declared skills, so an undeclared one works
+for the author and is missing for everyone who installs the published digital human
+(`create-digital-human/spec-reference.md`, `requires`). **One exception:**
 a turn driven by someone other than the owner — an IM guest, or a teammate from another machine
 reaching a team member — is held to a capability policy whose `allowedSkills` list can limit
 which skills load, by folder name (`src/shared/apps/capability-policy.ts`,
@@ -153,9 +159,9 @@ parent package, non-bundled entries are separately fetched from the store.
 - **Skill installed and visible?** Call `skill_manage` is not needed for checking — ask the agent
   to read the skill (via the normal skill-invocation path) or check **Capability library ›
   Skills**.
-  Remember: a space-scoped skill with the same name as a global one **replaces** the global one
-  for that space (§1) — if a skill "isn't updating," check whether an older space-scoped copy is
-  shadowing the newly-installed global one, or vice versa.
+  Remember: when a global and a space skill share a name, the **global** one runs (§1) — if an
+  edit to a space skill "doesn't take effect," check whether a global skill of the same name is
+  shadowing it.
 - **MCP server connected?** The Settings UI runs a manual connection test
   (`testMcpConnections()`/`runMcpConnectionTest()`, `src/main/services/agent/mcp-manager.ts:247-387`)
   that spins up a throwaway session and reports per-server status, cached and broadcast over IPC

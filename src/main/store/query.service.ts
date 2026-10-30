@@ -213,6 +213,25 @@ export class QueryService {
     return this.findEntryInQueryCache(slug)
   }
 
+  /**
+   * The skill listing `slug` names among `registryIds` (in that order of
+   * preference), from mirror data and then proxy caches. Unlike `findEntry`,
+   * a listing of another type or from a source not given never answers.
+   */
+  findSkillEntry(slug: string, registryIds: readonly string[]): { entry: RegistryEntry; registryId: string } | null {
+    if (registryIds.length === 0) return null
+    const rows = this.db.prepare(
+      `SELECT * FROM registry_items WHERE slug = ? AND type = 'skill'`
+    ).all(slug) as ItemRow[]
+    for (const registryId of registryIds) {
+      const row = rows.find(candidate => candidate.registry_id === registryId)
+      if (!row) continue
+      const { _registryId, ...entry } = rowToEntry(row)
+      return { entry: entry as RegistryEntry, registryId: _registryId }
+    }
+    return this.findEntryInQueryCache(slug, { registryIds, type: 'skill' })
+  }
+
   /** How many mirrored sources list this slug; proxy caches are not counted. */
   countSourcesListing(slug: string): number {
     const row = this.db.prepare(
@@ -225,15 +244,19 @@ export class QueryService {
    * Search through proxy query cache results for a matching slug.
    * Used when the entry isn't in registry_items (proxy sources).
    */
-  private findEntryInQueryCache(slug: string): { entry: RegistryEntry; registryId: string } | null {
+  private findEntryInQueryCache(
+    slug: string,
+    only?: { registryIds: readonly string[]; type: string },
+  ): { entry: RegistryEntry; registryId: string } | null {
     const rows = this.db.prepare(
       `SELECT registry_id, results, cached_at, ttl_ms FROM registry_query_cache`
     ).all() as Array<{ registry_id: string; results: string; cached_at: number; ttl_ms: number }>
 
     for (const row of rows) {
+      if (only && !only.registryIds.includes(row.registry_id)) continue
       if (Date.now() - row.cached_at > row.ttl_ms) continue
       const items = safeParse<RegistryEntry[]>(row.results, [])
-      const match = items.find(item => item.slug === slug)
+      const match = items.find(item => item.slug === slug && (!only || item.type === only.type))
       if (match) {
         return { entry: match, registryId: row.registry_id }
       }

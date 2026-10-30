@@ -137,6 +137,14 @@ This prompts the user to log in before the automation runs and stores no secret
   `output` section.
 - **`update_automation_app` requires a prior `get_automation_status` call** — it is a JSON
   Merge Patch, so guessing the current spec corrupts fields you didn't intend to touch.
+- **Declare every skill the `system_prompt` relies on in `requires.skills`, yourself.** At
+  runtime the skill loads either way, but sharing to the Store or exporting a `.dhpkg` ships only
+  declared skills — an undeclared one is missing for everyone who installs the digital human.
+  Halo does not add them for you. Use the skill's folder name as `id`; skip the skills Halo ships
+  (`docx`, `pdf`, `pptx`, `xlsx`, ...). After creating, tell the user which skills you declared.
+  The tool result names local skills the prompt mentions that you left out — decide each one
+  yourself. A declared skill found neither in this space nor in the Store fails creation and
+  rolls it back. Details: `create-digital-human/spec-reference.md`'s `requires` section.
 - **`create_automation_app` rolls back on dependency failure** — if `requires.skills`
   installation fails, the app is uninstalled automatically. A failure means nothing was left
   behind; it is safe to fix the spec and retry.

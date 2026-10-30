@@ -10,7 +10,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
-import type { StoreSignInStatus } from '../../shared/store/store-types'
+import type { StoreSignInStatus, SkillDepInspection } from '../../shared/store/store-types'
 import type { AppType, AppSpec } from '../../shared/apps/spec-types'
 import type { SpecUpgradeOutcome } from '../../shared/apps/app-types'
 
@@ -155,18 +155,18 @@ export const storeApi = {
     return httpRequest('POST', `/api/store/publish/preview`, { appId, author, name })
   },
 
-  storeInspectSkillDeps: async (appId: string): Promise<ApiResponse<Array<{ id: string; declaredBundled: boolean; resolvable: boolean; installed: boolean; appId: string | null; storeName: string | null }>>> => {
+  storeInspectSkillDeps: async (appId: string): Promise<ApiResponse<SkillDepInspection[]>> => {
     if (isElectron()) {
       return window.halo.storeInspectSkillDeps({ appId })
     }
-    return { success: false, error: 'Not supported outside Electron' }
+    return httpRequest('POST', `/api/store/inspect-skill-deps`, { appId })
   },
 
-  storeInspectSkillDepsForSpec: async (spec: AppSpec): Promise<ApiResponse<Array<{ id: string; declaredBundled: boolean; resolvable: boolean; installed: boolean; appId: string | null; storeName: string | null }>>> => {
+  storeInspectSkillDepsForSpec: async (spec: AppSpec): Promise<ApiResponse<SkillDepInspection[]>> => {
     if (isElectron()) {
       return window.halo.storeInspectSkillDepsForSpec({ spec })
     }
-    return { success: false, error: 'Not supported outside Electron' }
+    return httpRequest('POST', `/api/store/inspect-skill-deps-for-spec`, { spec })
   },
 
   storeFindAppByPublishSlug: async (slug: string, type?: AppType, author?: string): Promise<ApiResponse<{ appId: string | null }>> => {

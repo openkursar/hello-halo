@@ -74,6 +74,9 @@ import { useStoreCapabilities } from '../../hooks/useStoreCapabilities'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 import { compareDotVersions, suggestNextVersion } from '../../../shared/store/version-compare'
 import { useAssociatedSkills } from '../../hooks/useAssociatedSkills'
+import { UndeclaredSkillsNotice } from './UndeclaredSkillsNotice'
+import { withDeclaredSkills } from '../../../shared/apps/skill-references'
+import { ensureSkillMdName } from '../../../shared/skill-frontmatter'
 import { runPublishPreflight, type PreflightFinding } from './publish-preflight'
 
 // ────────────────────────────────────────────────
@@ -85,6 +88,8 @@ type ShareSource = 'installed' | 'import'
 
 /** A staged spec ready for publish (parsed but not yet installed) */
 interface StagedSpec {
+  /** Identifies one import; kept when the staged spec is edited in place. */
+  importId: number
   spec: AppSpec
   /** Display label for the preview card */
   label: string
@@ -92,6 +97,9 @@ interface StagedSpec {
   origin: 'file' | 'folder'
   /** Skill-only: extra files keyed by relative path */
   skillFiles?: Record<string, string>
+  /** Skill-only: SKILL.md declares no `name`, so the command name was only a
+   * file/folder-name fallback and follows the publish name instead. */
+  commandFollowsName?: boolean
   /** Digital-human-only: skills bundled inside the imported package. They are
    * installed alongside the DH at publish time and can be co-listed. */
   bundledSkills?: BundledSkill[]
@@ -138,6 +146,9 @@ interface ReviewFinding {
  * take at all. It carries no message: the failure describer replaces it with
  * the accepted-format copy, which is translated and names every format. */
 class UnsupportedImport extends Error {}
+
+/** Source of `StagedSpec.importId`. */
+let importCount = 0
 
 // Seeds the digital-human chooser card cycles through — each renders a distinct
 // generated avatar (same style as the home page), one per second.
@@ -204,6 +215,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
   const targetCommandName = republishTarget?.commandName
   const { t } = useTranslation()
   const apps = useAppsStore(s => s.apps)
+  const updateAppSpec = useAppsStore(s => s.updateAppSpec)
   const showToast = useNotificationStore(s => s.show)
   // Post-publish "View" jumps to My Publications so the creator can see the
   // freshly-listed entry. This dialog can be opened from outside StorePage
@@ -312,6 +324,26 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     ? apps.find(a => a.id === selectedInstalledId)?.spec
     : staged?.spec
   const sourceTags = sourceSpec?.store?.tags
+  // Keyed by value: refreshing the app (e.g. after declaring a dependency)
+  // hands back a new tags array, which must not re-seed what the user typed.
+  const sourceTagsKey = JSON.stringify(sourceTags ?? [])
+
+  // An imported skill whose SKILL.md names nothing takes its command from the
+  // publish name, as the Add Skill form does. Updating an existing listing
+  // keeps that listing's command, since the slug derives from it.
+  const commandFollowsName = source === 'import' && type === 'skill' && !!staged?.commandFollowsName && !targetCommandName
+  const [derivedCommandName, setDerivedCommandName] = useState('')
+  useEffect(() => {
+    setDerivedCommandName('')
+    const trimmed = debouncedName.trim()
+    if (!commandFollowsName || !trimmed) return
+    let cancelled = false
+    void api.appDeriveSkillCommandName(trimmed).then(res => {
+      if (!cancelled && res.success && res.data) setDerivedCommandName(res.data)
+    })
+    return () => { cancelled = true }
+  }, [commandFollowsName, debouncedName])
+  const commandName = (commandFollowsName && derivedCommandName) || sourceSpec?.name
   const sourceCategory = sourceSpec?.store?.category
   // Where a missing dependency gets installed when the author supplies it
   // locally: the source automation's own space (matching the scope
@@ -352,7 +384,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     }
     // Re-seeding a fresh target is not a user edit.
     draftDirty.current = false
-  }, [sourceSpec?.name, sourceSpec?.display_name, sourceSpec?.description, sourceTags, sourceCategory, draft])
+  }, [sourceSpec?.name, sourceSpec?.display_name, sourceSpec?.description, sourceTagsKey, sourceCategory, draft])
 
   // Updating an existing listing: which installed app a publish would actually
   // land on that slug. It runs the same derivation publish does, so the answer
@@ -432,7 +464,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     // does not overwrite it; otherwise fall back to the suggested version.
     if (draft?.version) { setVersion(draft.version); setVersionTouched(true) }
     else setVersionTouched(false)
-  }, [selectedInstalledId, staged, draft])
+  }, [selectedInstalledId, staged?.importId, draft])
   const suggestedVersion = useMemo(() => {
     const specVersion = sourceSpec?.version?.trim() || '1.0.0'
     if (!storeVersion) return specVersion
@@ -462,6 +494,18 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     return assoc.missingSkillIds.filter(id => !bundledIds.has(id))
   }, [source, assoc.missingSkillIds, staged])
 
+  // Installed source: written back to the local app. Imported source: only the
+  // staged spec this publish submits.
+  const declareUndeclaredSkills = useCallback(async (ids: string[]) => {
+    if (sourceSpec?.type !== 'automation') return false
+    const requires = withDeclaredSkills(sourceSpec.requires, ids)
+    if (source === 'installed') {
+      return selectedInstalledId ? updateAppSpec(selectedInstalledId, { requires }) : false
+    }
+    setStaged(prev => prev && prev.spec.type === 'automation' ? { ...prev, spec: { ...prev.spec, requires } } : prev)
+    return true
+  }, [source, selectedInstalledId, sourceSpec, updateAppSpec])
+
   const formSkills = useMemo<FormSkill[]>(() => {
     // assoc.skills covers dependencies satisfied by an already-installed skill
     // app — for an imported (not-yet-installed) automation that includes a
@@ -481,8 +525,9 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
         ]
     const missing: FormSkill[] = missingSkillIds.map(id => ({ key: `missing:${id}`, name: id, published: false, missing: true }))
     const storeLinked: FormSkill[] = assoc.storeLinkedSkills.map(s => ({ key: `store:${s.specId}`, name: s.name, published: false, fromStore: true }))
-    return [...resolved, ...storeLinked, ...missing]
-  }, [source, assoc.skills, assoc.storeLinkedSkills, staged, missingSkillIds])
+    const embedded: FormSkill[] = assoc.embeddedSkillIds.map(id => ({ key: `embedded:${id}`, name: id, published: false, declaredBundled: false }))
+    return [...resolved, ...embedded, ...storeLinked, ...missing]
+  }, [source, assoc.skills, assoc.embeddedSkillIds, assoc.storeLinkedSkills, staged, missingSkillIds])
 
   const preflight = useMemo<PreflightFinding[]>(() => {
     if (!sourceSpec) return []
@@ -497,7 +542,9 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
   const [coPublishIds, setCoPublishIds] = useState<string[]>([])
   // Reset co-list selections when the underlying app/import changes so stale
   // keys never leak into a different publish.
-  useEffect(() => { setCoPublishIds([]) }, [source, selectedInstalledId, staged])
+  useEffect(() => { setCoPublishIds([]) }, [source, selectedInstalledId, staged?.importId])
+  const [untickedSkills, setUntickedSkills] = useState<string[]>([])
+  useEffect(() => { setUntickedSkills([]) }, [source, selectedInstalledId, staged?.importId])
 
   useEffect(() => {
     void api.trackEvent('store.publish.open', entry ? { entry } : {})
@@ -559,7 +606,8 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
       type: 'skill',
       skill_files: parsed.skillFiles,
     }
-    setStaged({ spec, label, origin, skillFiles: parsed.skillFiles })
+    const commandFollowsName = !parseMd(parsed.skillFiles['SKILL.md'] ?? '').name
+    setStaged({ importId: ++importCount, spec, label, origin, skillFiles: parsed.skillFiles, commandFollowsName })
   }
 
   const parseAutomationZip = useCallback(async (file: File) => {
@@ -594,14 +642,14 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     if (spec.type !== 'automation') {
       throw new Error(t('This YAML is not an automation spec (type must be "automation").'))
     }
-    setStaged({ spec, label: file.name, origin: 'file' })
+    setStaged({ importId: ++importCount, spec, label: file.name, origin: 'file' })
   }, [t])
 
   function stageAutomation(result: ZipParseResult, label: string, origin: 'file' | 'folder') {
     // Re-parse yamlContent into an AutomationSpec. parseDigitalHumanZip already
     // validated structure; here we just need the typed object to ship to install.
     const spec = parseYaml(result.yamlContent) as AutomationSpec
-    setStaged({ spec, label, origin, bundledSkills: result.bundledSkills })
+    setStaged({ importId: ++importCount, spec, label, origin, bundledSkills: result.bundledSkills })
   }
 
   // ── Import failure messages ──────────────────
@@ -775,7 +823,12 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
           }
           bundledAppIdByKey[`bundled:${b.name}`] = id
         }
-        const installRes = await api.appInstall({ spaceId: sid, spec: staged.spec })
+        let stagedSpec = staged.spec
+        if (commandFollowsName && stagedSpec.type === 'skill') {
+          const derived = await api.appDeriveSkillCommandName(name.trim())
+          if (derived.success && derived.data) stagedSpec = withDeclaredCommandName(stagedSpec, derived.data)
+        }
+        const installRes = await api.appInstall({ spaceId: sid, spec: stagedSpec })
         const installedId = (installRes.data as { appId?: string } | undefined)?.appId
         if (!installRes.success || !installedId) {
           throw new Error(installRes.error ?? t('Install failed before publish.'))
@@ -839,7 +892,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
       if (stagingSpaceId) await api.deleteSpace(stagingSpaceId).catch(() => undefined)
       setSubmitting(false)
     }
-  }, [type, source, selectedInstalledId, staged, author, category, version, changelog, name, description, tags, formSkills, coPublishIds, hasBlockingIssue, draftKey, showToast, t, entry, republish])
+  }, [type, source, selectedInstalledId, staged, commandFollowsName, author, category, version, changelog, name, description, tags, formSkills, coPublishIds, hasBlockingIssue, draftKey, showToast, t, entry, republish])
 
   // Post-publish "View": close the dialog and open My Publications so the
   // creator lands on the freshly-listed entry.
@@ -1057,9 +1110,9 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
                   onChange={e => { draftDirty.current = true; setName(e.target.value); clearInvalid('name'); setSubmitError(null) }}
                   className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground ${invalid.has('name') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border-soft'}`}
                 />
-                {type === 'skill' && sourceSpec?.name && (
+                {type === 'skill' && commandName && (
                   <p className="text-[11px] text-muted-foreground">
-                    {t('Command')} <span className="font-mono">/{sourceSpec.name}</span>
+                    {t('Command')} <span className="font-mono">/{commandName}</span>
                   </p>
                 )}
               </div>
@@ -1170,11 +1223,27 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
 
           {/* Associated skills — always submitted with the digital human; only the
               "list separately" toggle is the creator's choice. */}
-          {!submitSuccess && formSkills.length > 0 && (
+          {!submitSuccess && sourceSpec?.type === 'automation' && (
             <div className="space-y-2">
               <FormSection>{t('Associated Skills')}</FormSection>
               <div className="rounded-xl bg-background p-4 space-y-4">
 
+              {formSkills.length === 0 && assoc.undeclaredSkillIds.length === 0 && (
+                <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                  {assoc.status === 'loading' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {assoc.status === 'loading'
+                    ? t('Checking associated skills...')
+                    : assoc.status === 'error'
+                      ? t('Could not check associated skills.')
+                      : t('No associated skills: no skill dependencies declared.')}
+                </p>
+              )}
+
+              {assoc.undeclaredSkillIds.length > 0 && (
+                <UndeclaredSkillsNotice skillIds={assoc.undeclaredSkillIds} unticked={untickedSkills} onUntickedChange={setUntickedSkills} onDeclare={declareUndeclaredSkills} />
+              )}
+
+              {formSkills.length > 0 && (
               <div className="flex flex-col gap-1.5">
                 <div className="flex flex-col divide-y divide-border-soft rounded-lg border border-border-soft overflow-hidden bg-background">
                   {formSkills.map(skill => (
@@ -1187,6 +1256,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
                       declaredBundled={skill.declaredBundled}
                       missing={skill.missing}
                       fromStore={skill.fromStore}
+                      coListable={!!(skill.appId || skill.bundled)}
                       installSpaceId={missingSkillInstallSpaceId}
                     />
                   ))}
@@ -1195,6 +1265,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
                   {t('These skills are submitted together with this digital human. Turn on "List separately" to also publish the skill as its own entry in the store\'s Skill list; otherwise it stays a private capability of the digital human and is not listed on its own.')}
                 </p>
               </div>
+              )}
               </div>
             </div>
           )}
@@ -1359,12 +1430,15 @@ interface BundledSkillItemProps {
   /** Already resolves from a configured registry under its own listing — not
    * packaged with this DH. No co-list toggle (nothing local to co-publish). */
   fromStore?: boolean
+  /** False for a skill folder with no installed app: it is embedded, but there
+   * is nothing to publish as its own entry. */
+  coListable?: boolean
   /** Space a locally-supplied fix for a `missing` dependency installs into —
    * the source automation's own space, or global (null) when imported. */
   installSpaceId?: string | null
 }
 
-function BundledSkillItem({ name, published, coListed, onToggle, declaredBundled = true, missing = false, fromStore = false, installSpaceId = null }: BundledSkillItemProps) {
+function BundledSkillItem({ name, published, coListed, onToggle, declaredBundled = true, missing = false, fromStore = false, coListable = true, installSpaceId = null }: BundledSkillItemProps) {
   const { t } = useTranslation()
   return (
     <div className="flex items-center gap-2.5 px-3 py-2.5 bg-background text-[13px]">
@@ -1372,7 +1446,7 @@ function BundledSkillItem({ name, published, coListed, onToggle, declaredBundled
         <span className={`truncate ${missing ? 'text-red-400' : 'text-foreground'}`}>{name}</span>
         {missing && (
           <span className="text-[11px] text-red-400/80">
-            {t('Not installed and not resolvable from a registry — publish will fail until this is resolved.')}
+            {t('Not installed, not resolvable from a registry, or its SKILL.md cannot be read — publish will fail until this is resolved.')}
           </span>
         )}
         {fromStore && (
@@ -1401,12 +1475,12 @@ function BundledSkillItem({ name, published, coListed, onToggle, declaredBundled
         <span className="flex-shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-px rounded text-[10.5px] leading-4 font-medium bg-app-skill/10 text-app-skill">
           {t('Already listed')}
         </span>
-      ) : (
+      ) : coListable ? (
         <>
           <span className="flex-shrink-0 text-[11px] text-muted-foreground whitespace-nowrap">{t('List separately')}</span>
           <Switch checked={coListed} onCheckedChange={onToggle} size="sm" />
         </>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -1510,6 +1584,14 @@ function MissingSkillInstallButton({ depId, spaceId }: MissingSkillInstallButton
       </PopoverContent>
     </Popover>
   )
+}
+
+/** A staged skill renamed to `commandName`, with SKILL.md declaring it so the
+ * published package carries the same command it installs under. */
+function withDeclaredCommandName(spec: SkillSpec, commandName: string): SkillSpec {
+  const skillMd = spec.skill_files?.['SKILL.md']
+  if (skillMd === undefined) return { ...spec, name: commandName }
+  return { ...spec, name: commandName, skill_files: { ...spec.skill_files, 'SKILL.md': ensureSkillMdName(skillMd, commandName) } }
 }
 
 interface TagInputProps {

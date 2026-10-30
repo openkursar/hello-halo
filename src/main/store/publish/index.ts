@@ -7,15 +7,18 @@
 
 import { loadProductConfig } from '../../foundation/product-config'
 import { getAppManager } from '../../apps/manager'
+import { findLoadableSkill, findUndeclaredSkills, hasPackageableSkillMd, listLoadableSkills, readLoadableSkillFiles, type LoadableSkill } from '../../apps/skill-discovery'
 import type { AppManagerService } from '../../apps/manager'
-import { getRegistries, findStoreEntry } from '../registry.service'
-import type { RegistryEntry } from '../../../shared/store/store-types'
+import { getRegistries, findStoreEntry, findSkillListing } from '../registry.service'
+import type { RegistryEntry, SkillDepInspection } from '../../../shared/store/store-types'
 import { fetchMyPublications } from '../backend/publications'
 import { dispatch as dispatchGithubPr } from './dispatchers/github-pr'
 import { dispatch as dispatchHttpRegistry } from './dispatchers/http-registry'
 import { dispatch as dispatchLocalDhpkg } from './dispatchers/local-dhpkg'
 import { enrichSpecForPublish } from './spec-enrich'
-import { withSkillMdName } from '../../../shared/skill-frontmatter'
+import { skillFilesOf, withSkillMdName } from '../../../shared/skill-frontmatter'
+import { toSkillDirName } from '../../../shared/skill-naming'
+import { isHaloShippedSkill } from '../../../shared/apps/app-types'
 import type { PublishResult, PublishContext } from './types'
 import type { AppSpec, SkillSpec } from '../../apps/spec'
 import type { SkillDependency } from '../../../shared/apps/spec-types'
@@ -206,18 +209,18 @@ export async function publish(appId: string, overrides: PublishOverrides = {}): 
       details: (e as Error).message,
     }
   }
-  const { files, missingSkillIds } = collectFiles(spec, manager, app.spaceId)
+  const { files, missingSkillIds, packagedSpec } = collectFiles(spec, manager, app.spaceId)
   if (missingSkillIds.length > 0) {
     return {
       status: 'error',
       target: target.config.target,
       details:
         `Skill dependencies are unresolvable — publishing would produce a broken package. ` +
-        `Not found in any configured registry, and not installed locally: ${missingSkillIds.join(', ')}. ` +
-        `Install them first, then publish again.`,
+        `Not found in any configured registry or among the skills this digital human can load, or their SKILL.md cannot be read: ${missingSkillIds.join(', ')}. ` +
+        `Install them (or fix SKILL.md) first, then publish again.`,
     }
   }
-  spec = declareBundledSkillFiles(spec, files)
+  spec = packagedSpec
 
   const registries = getRegistries()
   const registry = registries.find(r => r.id === target.registryId)
@@ -260,25 +263,27 @@ export async function publish(appId: string, overrides: PublishOverrides = {}): 
 /**
  * Declare each packaged skill's uploaded files in the wire spec's
  * requires.skills[] so the install adapter knows what to fetch. collectFiles
- * uploads them under `skills/<id>/<file>`; the declaration is the matching
- * relative-path list. Without it, a registry install fails with "declares no
- * files" — this includes skills collectFiles packaged because they were not
- * resolvable from any registry, even if the author never marked them
- * `bundled: true`: once the files travel inside the package, the dependency
- * must say so, or an installer will try (and fail) to fetch them elsewhere.
+ * uploads them under `skills/<dir>/<file>`; the declaration is the matching
+ * relative-path list, under the id `<dir>`. Without it, a registry install
+ * fails with "declares no files" — this includes skills collectFiles packaged
+ * because they were not resolvable from any registry, even if the author never
+ * marked them `bundled: true`: once the files travel inside the package, the
+ * dependency must say so, or an installer will try (and fail) to fetch them
+ * elsewhere.
  */
-function declareBundledSkillFiles(spec: AppSpec, files: Record<string, string>): AppSpec {
+function declareBundledSkillFiles(spec: AppSpec, files: Record<string, string>, packageDirs: Map<string, string>): AppSpec {
   if (spec.type !== 'automation') return spec
   const deps = spec.requires?.skills
   if (!deps || deps.length === 0) return spec
   const skills = deps.map(dep => {
-    const id = typeof dep === 'string' ? dep : dep.id
-    const prefix = `skills/${id}/`
+    const dir = packageDirs.get(typeof dep === 'string' ? dep : dep.id)
+    if (!dir) return dep
+    const prefix = `skills/${dir}/`
     const fileList = Object.keys(files)
       .filter(k => k.startsWith(prefix))
       .map(k => k.slice(prefix.length))
     if (fileList.length === 0) return dep
-    const base = typeof dep === 'string' ? { id } : dep
+    const base = typeof dep === 'string' ? { id: dir } : { ...dep, id: dir }
     return { ...base, bundled: true, files: fileList }
   })
   return { ...spec, requires: { ...spec.requires, skills } }
@@ -293,32 +298,35 @@ function declareBundledSkillFiles(spec: AppSpec, files: Record<string, string>):
  *   self-contained. The DH spec only carries `requires.skills[]` metadata —
  *   each dependency's content lives in its own installed skill app
  *   (materialized at install time), so it is read back from there and
- *   uploaded under `skills/<id>/<file>`, the layout the registry stores and
- *   `fetchBundledSkills()` reads on install.
+ *   uploaded under `skills/<dir>/<file>`, the layout the registry stores and
+ *   `fetchBundledSkills()` reads on install. `<dir>` is the dependency id, or
+ *   the skill's folder name when the id is a namespaced Store slug: importers
+ *   take the first segment under `skills/` as the skill.
  *
- * A dependency is packaged when it is not resolvable from any configured
- * registry (`findStoreEntry`) — regardless of whether the author remembered
- * to mark it `bundled: true`. Most dependencies are plain store references
- * and are deliberately left alone here: they resolve at install time, same as
- * the real install path (registry.service.ts's `installRequiredSkills`), so
- * they are not re-packaged into every consumer. Only a dependency that
+ * A dependency is packaged when no Store skill listing serves it
+ * (`findSkillListing`) — regardless of whether the author remembered to mark
+ * it `bundled: true`. Most dependencies are plain store references and are
+ * deliberately left alone here: installers fetch them from the Store, so they
+ * are not re-packaged into every consumer. Only a dependency that
  * install-time resolution could never satisfy — because it isn't published
  * anywhere the current registries know about — gets its files pulled in
  * here, so the reference doesn't silently produce a broken package for every
  * installer, whether or not the author declared it `bundled`.
  *
- * Skills are looked up with the same effective-resolution semantics the
- * runtime uses (space-scoped overriding global), so a skill installed in
- * global scope satisfies the dependency. A dependency that resolves nowhere —
- * not in a registry, not installed locally — is returned in
+ * Skills are looked up as the engine loads them (a global folder winning a
+ * name the space also holds), so a skill installed in global scope satisfies
+ * the dependency, and a skill folder placed by hand is read from disk. A dependency that resolves nowhere —
+ * not in a registry, not loadable locally — is returned in
  * `missingSkillIds`; the caller must fail rather than ship a package that can
- * never be completed by any installer.
+ * never be completed by any installer. `packagedSpec` is `spec` with each
+ * packaged dependency declared bundled under its package folder — the spec to
+ * ship alongside `files`.
  */
 export function collectFiles(
   spec: AppSpec,
   manager: AppManagerService,
   spaceId: string | null,
-): { files: Record<string, string>; missingSkillIds: string[] } {
+): { files: Record<string, string>; missingSkillIds: string[]; packagedSpec: AppSpec } {
   if (spec.type === 'skill') {
     const skillFiles = (spec as SkillSpec).skill_files ?? {}
     const files: Record<string, string> = {}
@@ -326,30 +334,46 @@ export function collectFiles(
       if (name === 'spec.yaml') continue
       files[name] = content
     }
-    return { files, missingSkillIds: [] }
+    return { files, missingSkillIds: [], packagedSpec: spec }
   }
 
   const files: Record<string, string> = {}
   const missingSkillIds: string[] = []
+  const packageDirs = new Map<string, string>()
   const deps = spec.requires?.skills ?? []
-  if (deps.length === 0) return { files, missingSkillIds }
+  if (deps.length === 0) return { files, missingSkillIds, packagedSpec: spec }
 
   const installedSkills = effectiveSkillApps(manager, spaceId)
+  const loadable = listLoadableSkills(spaceId, manager)
 
+  const shippedIds = new Set<string>()
   for (const dep of deps) {
-    const { id, resolvable, skillApp } = classifySkillDep(dep, installedSkills)
+    const { id, shipped, resolvable, skillApp, localSkill, packageable } = classifySkillDep(dep, installedSkills, loadable)
+    if (shipped) {
+      shippedIds.add(id)
+      continue
+    }
     if (resolvable) continue
-    if (!skillApp) {
+    const skillFiles = !packageable ? null : skillApp ? skillFilesOf(skillApp.spec as SkillSpec) : readLoadableSkillFiles(localSkill!)
+    if (!skillFiles?.['SKILL.md']) {
       missingSkillIds.push(id)
       continue
     }
-    const skillFiles = (skillApp.spec as SkillSpec).skill_files ?? {}
+    const dir = id.includes('/') ? (localSkill?.folder ?? toSkillDirName(skillApp!.specId)) : id
+    packageDirs.set(id, dir)
     for (const [name, content] of Object.entries(skillFiles)) {
       if (name === 'spec.yaml') continue
-      files[`skills/${id}/${name}`] = content
+      files[`skills/${dir}/${name}`] = content
     }
   }
-  return { files, missingSkillIds }
+  return { files, missingSkillIds, packagedSpec: declareBundledSkillFiles(withoutSkills(spec, shippedIds), files, packageDirs) }
+}
+
+/** `spec` without the `requires.skills` entries whose id is in `ids`. */
+function withoutSkills(spec: AppSpec, ids: Set<string>): AppSpec {
+  if (spec.type !== 'automation' || ids.size === 0 || !spec.requires?.skills) return spec
+  const skills = spec.requires.skills.filter(dep => !ids.has(typeof dep === 'string' ? dep : dep.id))
+  return { ...spec, requires: { ...spec.requires, skills } }
 }
 
 type InstalledSkillApp = ReturnType<AppManagerService['listApps']>[number]
@@ -365,30 +389,33 @@ function effectiveSkillApps(manager: AppManagerService, spaceId: string | null):
  * local installs. Shared by `collectFiles` (decides what to package) and
  * `inspectSkillDeps` (tells the publish UI what it's about to package), so
  * the two can never disagree about which dependencies are self-contained.
+ *
+ * - `shipped`: a skill Halo itself ships — never packaged nor fetched.
+ * - `resolvable`: installers fetch it from the Store. Only a skill listing
+ *   from an enabled source counts, and a dependency that names a local skill
+ *   counts only when that skill was installed from that very listing, so a
+ *   hand-placed folder is never swapped for someone else's of the same name.
+ * - `localSkill` wins over `skillApp`: the folder the engine loads for the
+ *   name, not an installed app that folder shadows.
+ * - `packageable`: something local holds the skill and its SKILL.md would
+ *   survive packaging (not a symlink, binary or oversized file): an importer
+ *   skips a skill without one. Checked without reading the whole folder.
  */
 function classifySkillDep(
   dep: SkillDependency,
   installedSkills: InstalledSkillApp[],
-): { id: string; declaredBundled: boolean; resolvable: boolean; skillApp: InstalledSkillApp | null; storeEntry: RegistryEntry | null } {
+  loadable: LoadableSkill[],
+): { id: string; declaredBundled: boolean; shipped: boolean; resolvable: boolean; skillApp: InstalledSkillApp | null; localSkill: LoadableSkill | null; packageable: boolean; storeEntry: RegistryEntry | null } {
   const id = typeof dep === 'string' ? dep : dep.id
   const declaredBundled = typeof dep !== 'string' && dep.bundled === true
-  const found = declaredBundled ? null : findStoreEntry(id)
-  const skillApp = installedSkills.find(a => a.specId === id) ?? null
-  return { id, declaredBundled, resolvable: Boolean(found), skillApp, storeEntry: found?.entry ?? null }
-}
-
-export interface SkillDepInspection {
-  id: string
-  /** The author declared this dependency `bundled: true`. */
-  declaredBundled: boolean
-  /** Resolves from a configured registry — installers fetch it there; not packaged. */
-  resolvable: boolean
-  /** A locally installed skill app satisfies this dependency. */
-  installed: boolean
-  /** The installed skill app's id, when `installed` is true. */
-  appId: string | null
-  /** Display name of the matched registry entry, when `resolvable` is true. */
-  storeName: string | null
+  const localSkill = findLoadableSkill(loadable, dep) ?? null
+  const skillApp = localSkill ? localSkill.app : (installedSkills.find(a => a.specId === id) ?? null)
+  const shipped = !!localSkill?.app && isHaloShippedSkill(localSkill.app)
+  const localStore = localSkill?.app?.spec.store
+  const trustStore = !localSkill || (!!localStore?.slug && localStore.slug.toLowerCase() === id.toLowerCase())
+  const found = declaredBundled || shipped || !trustStore ? null : findSkillListing(id, localStore?.registry_id)?.entry ?? null
+  const packageable = skillApp ? !!skillFilesOf(skillApp.spec as SkillSpec)['SKILL.md'] : !!localSkill && hasPackageableSkillMd(localSkill)
+  return { id, declaredBundled, shipped, resolvable: Boolean(found), skillApp, localSkill, packageable, storeEntry: found }
 }
 
 /**
@@ -405,18 +432,24 @@ export function inspectSkillDeps(
 ): SkillDepInspection[] {
   if (spec.type !== 'automation') return []
   const deps = spec.requires?.skills ?? []
-  if (deps.length === 0) return []
+  const loadable = listLoadableSkills(spaceId, manager)
+  const undeclared = findUndeclaredSkills(spec, loadable).map(skill => skill.id)
+  if (deps.length === 0 && undeclared.length === 0) return []
 
   const installedSkills = effectiveSkillApps(manager, spaceId)
-  return deps.map(dep => {
-    const { id, declaredBundled, resolvable, skillApp, storeEntry } = classifySkillDep(dep, installedSkills)
+  const inspect = (dep: SkillDependency, declared: boolean): SkillDepInspection | null => {
+    const { id, declaredBundled, shipped, resolvable, skillApp, localSkill, packageable, storeEntry } = classifySkillDep(dep, installedSkills, loadable)
+    if (shipped) return null
     return {
       id,
       declaredBundled,
       resolvable,
-      installed: skillApp !== null,
+      installed: resolvable ? skillApp !== null || localSkill !== null : packageable,
       appId: skillApp?.id ?? null,
       storeName: storeEntry ? (storeEntry.display_name ?? storeEntry.name) : null,
+      declared,
     }
-  })
+  }
+  return [...deps.map(dep => inspect(dep, true)), ...undeclared.map(id => inspect(id, false))]
+    .filter((entry): entry is SkillDepInspection => entry !== null)
 }

@@ -1227,6 +1227,14 @@
   },
   {
     "method": "POST",
+    "path": "/api/store/inspect-skill-deps"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/inspect-skill-deps-for-spec"
+  },
+  {
+    "method": "POST",
     "path": "/api/store/publish"
   },
   {

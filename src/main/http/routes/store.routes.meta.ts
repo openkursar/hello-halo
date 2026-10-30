@@ -211,6 +211,8 @@ export const MODULE: RouteModuleMeta = {
       returns: '{success:true,data:{appId: string|null}}',
       notes: 'Optional fields: type, author. appId is null when no locally installed app uniquely matches.',
     },
+    'POST /api/store/inspect-skill-deps': { expose: 'internal' },
+    'POST /api/store/inspect-skill-deps-for-spec': { expose: 'internal' },
     // The publish dispatcher's projectSpecForWire() (store/publish/dispatchers/
     // http-registry.ts:216-234) strips skill_files but never sanitizes
     // mcp.env/mcp.headers — publishing an installed MCP app with real
