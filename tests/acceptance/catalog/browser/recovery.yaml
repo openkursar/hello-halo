@@ -59,7 +59,7 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: none
-    automation: planned
+    automation: automated
     preconditions:
       - en: A local page is mounted in the real application.
         zh: 真实应用已挂载本地页面。
@@ -80,7 +80,7 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: none
-    automation: planned
+    automation: automated
     preconditions:
       - en: Browser content is open at 375px with non-default display scale.
         zh: 375px 窄屏下打开浏览器并使用非默认缩放。
