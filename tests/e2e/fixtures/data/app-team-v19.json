@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 19,
+  "targetVersion": 20,
+  "schemaDeclaration": "132f1fed11cb9417a58b36f5926f9481bcf666c2",
+  "provenance": "Supported schema checkpoint before migration 20; not a claim about a separately released historical binary.",
+  "task": {
+    "id": "legacy-team-task", "title": "Retained completed review", "status": "done",
+    "note": "The old review result remains readable: 87261345.", "created_at": 1735689600000, "updated_at": 1735689660000
+  },
+  "finding": {
+    "id": "legacy-team-finding", "body": "Retained team finding: amber ledger 635812.", "created_at": 1735689650000
+  },
+  "activity": {
+    "id": "legacy-team-activity", "kind": "task_update", "subject": "Retained completed review",
+    "body": "The old team completed its review.", "status": "done", "created_at": 1735689660000
+  },
+  "audit": {
+    "id": "legacy-team-audit", "tool_name": "Read", "detail": "isolated-review.txt",
+    "decision": "allowed", "external": 1, "created_at": 1735689650000
+  },
+  "trigger": {
+    "id": "legacy-team-trigger", "source_type": "schedule", "config_json": "{\"every\":\"24h\"}", "enabled": 0, "created_at": 1735689600000
+  },
+  "duplicates": [
+    { "id": "legacy-collaboration-old", "name": "Older retained collaboration", "created_at": 1735689600000 },
+    { "id": "legacy-collaboration-new", "name": "Newer retained collaboration", "created_at": 1735689700000 }
+  ]
+}
