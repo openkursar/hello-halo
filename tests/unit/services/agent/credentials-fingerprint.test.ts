@@ -18,6 +18,8 @@ import type { ApiCredentials } from '../../../../src/main/services/agent/types'
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() }
 }))
+vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ resolveDefaultEngine: async () => 'anthropic' }))
+vi.mock('../../../../src/main/services/agent/cli-auth', () => ({ assertDelegatedAuthReady: vi.fn() }))
 
 vi.mock('../../../../src/main/openai-compat-router', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../../src/main/openai-compat-router')>()
@@ -32,7 +34,8 @@ import {
   buildSdkEnv,
   resolveCredentialsForSdk,
 } from '../../../../src/main/services/agent/sdk-config'
-import { encodeBackendConfig, decodeBackendConfig, DELEGATED_ROUTING_HEADER } from '../../../../src/main/openai-compat-router'
+import { encodeBackendConfig, decodeBackendConfig, DELEGATED_ROUTING_HEADER, ensureOpenAICompatRouter } from '../../../../src/main/openai-compat-router'
+import { assertDelegatedAuthReady } from '../../../../src/main/services/agent/cli-auth'
 
 function sdkOptionsWithEncodedKey(overrides: {
   headers?: Record<string, string>
@@ -251,6 +254,32 @@ afterEach(() => {
 })
 
 describe('SDK source markers and request-local routing', () => {
+  it.each([
+    { provider: 'anthropic' as const },
+    { provider: 'openai' as const, apiType: 'anthropic_passthrough' as const },
+    { provider: 'oauth' as const, apiType: 'kiro' as const },
+  ])('rejects unsupported Codex credentials before starting the router: %o', async patch => {
+    vi.mocked(ensureOpenAICompatRouter).mockClear()
+    await expect(resolveCredentialsForSdk({ baseUrl: 'https://selected.invalid', apiKey: 'selected-key', model: 'selected-model', ...patch }, undefined, 'codex'))
+      .rejects.toMatchObject({ code: 'ENGINE_SOURCE_INCOMPATIBLE' })
+    expect(ensureOpenAICompatRouter).not.toHaveBeenCalled()
+  })
+
+  it('does not decorate or replace the Codex model when an OpenAI gateway uses a Claude name', async () => {
+    const credentials: ApiCredentials = {
+      provider: 'openai', apiType: 'responses', apiKey: 'selected-key', baseUrl: 'https://selected.invalid/v1/responses',
+      model: 'claude-mythos-preview', capabilities: { maxOutputTokens: 16000, maxOutputTokensConfigured: false, contextWindow: 1000000 },
+    }
+    const resolved = await resolveCredentialsForSdk(credentials, undefined, 'codex')
+    expect(resolved.sdkModel).toBe(credentials.model)
+    expect(resolved.apiCredentials).toBe(credentials)
+    expect(decodeBackendConfig(resolved.anthropicApiKey)).toMatchObject({ model: credentials.model, url: credentials.baseUrl, key: credentials.apiKey })
+  })
+  it('separates the same source and model on different engines', () => {
+    const options = sdkOptionsWithEncodedKey()
+    expect(computeCredentialsFingerprint({ ...options, engineId: 'halo' }))
+      .not.toBe(computeCredentialsFingerprint({ ...options, engineId: 'anthropic' }))
+  })
   it('recovers source identity from the explicit marker, encoded key or delegated header', () => {
     const encoded = encodeBackendConfig({ sourceId: 'account-a', url: 'https://example.invalid', key: 'test' })
     expect(getSdkSourceId({ env: { HALO_AI_SOURCE_ID: 'account-b', ANTHROPIC_API_KEY: encoded } })).toBe('account-b')
@@ -275,7 +304,9 @@ describe('SDK source markers and request-local routing', () => {
       profileArn: 'test-profile-a',
       codexModelCapabilities: { reasoningSummary: true, responsesLite: false, reasoningLevels: ['high'] },
     }
-    const resolved = await resolveCredentialsForSdk(credentials)
+    const resolved = await resolveCredentialsForSdk(credentials, undefined, 'anthropic')
+    expect(resolved.engineId).toBe('anthropic')
+    if (kind === 'delegated') expect(assertDelegatedAuthReady).toHaveBeenCalledWith('anthropic')
     expect(resolved.sourceId).toBe('account-a')
     expect(resolved.credentialsGeneration).toBe('snapshot-before-async')
     expect(resolved.apiCredentials).toBe(credentials)

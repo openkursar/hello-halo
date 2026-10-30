@@ -121,6 +121,7 @@ vi.mock('../../../src/renderer/stores/app.store', () => {
   useAppStore.getState = () => state
   return { useAppStore }
 })
+vi.mock('../../../src/renderer/stores/engine.store', () => ({ useEngineId: () => 'halo' }))
 for (const path of [
   'AppModelSelector', 'AppNotifyChannelsSection', 'AppCapabilitiesSection', 'AppMcpDepsSection', 'AppSkillsSection',
   'AppSettingsNav', 'AppBotBindingSection', 'AppExternalChannelsCard', 'AppKnowledgeSection', 'SystemPromptEditor', 'SchedulePicker',

@@ -73,6 +73,8 @@ export interface InstalledApp {
 
   /** User overrides for tunable per-app settings */
   userOverrides: {
+    /** Explicit engine; existing sessions retain their binding until a safe handoff. */
+    engineId?: import('../../../shared/types/engine').EngineId
     /** Notification level: 'all' | 'important' | 'none'. Defaults to 'important'. */
     notificationLevel?: 'all' | 'important' | 'none'
     /** Override AI source for this App. When set, uses this source instead of the global one. */

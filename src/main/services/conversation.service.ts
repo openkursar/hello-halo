@@ -19,6 +19,8 @@ import { isReasoningEffortLevel, type ReasoningEffortLevel } from '../../shared/
 import { getHaloSpace, getSpace, listSpaces, touchSpaceActivity } from './space.service'
 import { getSeedKBIds } from './tlon'
 import { getConfig } from '../foundation/config.service'
+import type { EngineId } from '../../shared/types/engine'
+import { isEngineSessionBinding, sameEngineSessionState, type EngineSessionBinding, type EngineSessionState, type EngineHandoffHistory } from '../../shared/types/engine-session'
 import { v4 as uuidv4 } from 'uuid'
 import { previewFromMessages, titleFromFirstMessage } from '../../shared/conversation-title'
 import { DEFAULT_TOOLSETS } from '../../shared/constants/toolsets'
@@ -49,12 +51,12 @@ export interface ConversationMeta {
   messageCount: number
   preview?: string
   starred?: boolean
-  /**
-   * Agent engine that owns this conversation. Mirrored from the full
-   * Conversation object by `toMeta()` so the conversation list can render
-   * the engine badge without loading the full conversation.
-   */
+  /** Initial engine for versioned routing; historical records may carry only an origin badge. */
   engineId?: 'anthropic' | 'halo' | 'codex' | 'dsh' | null
+  /** New records keep their initial engine identity even before a native session succeeds. */
+  engineRoutingVersion?: 1
+  engineBinding?: EngineSessionBinding
+  engineOverride?: EngineId
   /**
    * Set when the title was chosen rather than derived: the user renamed the
    * conversation, or it was created with a title that must stay (a review).
@@ -88,15 +90,7 @@ export interface Conversation extends ConversationMeta {
    * legacy conversations work without migration (same pattern as engineId).
    */
   knowledgeBaseIds?: string[]
-  /**
-   * Agent engine that owns this conversation.
-   *
-   * Recorded on `createConversation` from the active `config.agent.sdkEngine`.
-   * Read with `?? 'anthropic'` fallback so legacy conversations (created
-   * before this field existed) keep working without migration. Used purely
-   * for UI display (EngineBadge) — engine selection at runtime is still
-   * process-bound (see resolved-sdk.ts), changing it requires a restart.
-   */
+  /** Initial engine identity; the current native session is owned by engineBinding. */
   engineId?: 'anthropic' | 'halo' | 'codex' | 'dsh' | null
   /**
    * Per-conversation model pin (Cursor-style). Pins this conversation to a
@@ -471,6 +465,9 @@ function toMeta(conversation: Conversation): ConversationMeta {
   if (conversation.engineId) {
     meta.engineId = conversation.engineId
   }
+  if (conversation.engineRoutingVersion === 1) meta.engineRoutingVersion = 1
+  if (conversation.engineBinding) meta.engineBinding = conversation.engineBinding
+  if (conversation.engineOverride) meta.engineOverride = conversation.engineOverride
 
   if (conversation.titleCustomized) {
     meta.titleCustomized = true
@@ -669,15 +666,12 @@ export function createConversation(
   spaceId: string,
   title?: string,
   reasoningEffort?: unknown,
-  options?: { keepTitle?: boolean; ephemeral?: boolean }
+  options?: { keepTitle?: boolean; ephemeral?: boolean; engineId?: ConversationMeta['engineId'] }
 ): Conversation {
   const id = uuidv4()
   const now = new Date().toISOString()
 
-  // Stamp the conversation with the engine that created it. Cheap to read
-  // (single config field) and avoids needing a separate IPC call from
-  // the renderer when displaying the engine badge.
-  let engineId: 'anthropic' | 'halo' | 'codex' | 'dsh' = 'anthropic'
+  const engineId = options?.engineId ?? 'halo'
   // Stamp the active global model selection so a new conversation inherits the
   // last-used source + model (Cursor-style). Left undefined when no source is
   // configured — the credential resolver falls back to the global selection.
@@ -696,9 +690,6 @@ export function createConversation(
   let knowledgeBaseIds: string[] = []
   try {
     const cfg = getConfig()
-    const cfgEngine = cfg?.agent?.sdkEngine
-    if (cfgEngine === 'halo' || cfgEngine === 'codex' || cfgEngine === 'dsh') engineId = cfgEngine
-
     const aiSources = cfg?.aiSources
     if (aiSources?.version === 2 && aiSources.currentId) {
       const currentSource = aiSources.sources.find(s => s.id === aiSources.currentId)
@@ -731,6 +722,7 @@ export function createConversation(
     messages: [],
     version: CONVERSATION_FORMAT_VERSION,
     engineId,
+    engineRoutingVersion: 1,
     // Only persist the pin when a source is configured; conditional spread keeps
     // undefined keys out of the JSON so legacy detection stays clean.
     ...(modelSourceId ? { modelSourceId, modelId } : {}),
@@ -866,6 +858,11 @@ export function updateConversation(
   conversationId: string,
   updates: Partial<Conversation>
 ): Conversation | null {
+  if ('engineBinding' in updates || 'sessionId' in updates || 'engineRoutingVersion' in updates || 'engineId' in updates) {
+    console.warn(`[Conversation] Ignored engine-identity fields in a generic update: conversation=${conversationId}`)
+    const { engineBinding: _binding, sessionId: _sessionId, engineRoutingVersion: _routingVersion, engineId: _origin, ...editable } = updates
+    updates = editable
+  }
   const result = cachedRead(spaceId, conversationId)
   if (!result) return null
 
@@ -1203,13 +1200,130 @@ export function deleteConversation(spaceId: string, conversationId: string): boo
   return false
 }
 
+/** The binding snapshot is captured before session preparation, not immediately before commit. */
+export function getConversationEngineState(spaceId: string, conversationId: string): EngineSessionState | null {
+  const result = cachedRead(spaceId, conversationId)
+  if (!result) return null
+  return conversationEngineState(result.conversation)
+}
+
+function conversationEngineState(conversation: Conversation): EngineSessionState {
+  if (conversation.engineBinding !== undefined && !isEngineSessionBinding(conversation.engineBinding)) {
+    console.warn(`[Conversation] Unsupported engine binding refused: conversation=${conversation.id}`)
+    throw new Error('Unsupported conversation engine binding')
+  }
+  return {
+    ...(conversation.sessionId ? { sessionId: conversation.sessionId } : {}),
+    ...(conversation.engineBinding ? { binding: { ...conversation.engineBinding } } : {}),
+  }
+}
+
+/** Atomically commits one prepared native session; a stale owner cannot replace its successor. */
+export function saveConversationEngineBinding(spaceId: string, conversationId: string, binding: EngineSessionBinding, expected?: EngineSessionState): boolean {
+  if (!isEngineSessionBinding(binding)) throw new TypeError('Invalid engine session binding')
+  const result = cachedRead(spaceId, conversationId)
+  if (!result) {
+    console.warn(`[Conversation] Engine binding dropped for a missing conversation: conversation=${conversationId}`)
+    return false
+  }
+  if (expected && !sameEngineSessionState(conversationEngineState(result.conversation), expected)) {
+    console.warn(`[Conversation] Stale engine binding commit refused: conversation=${conversationId} engine=${binding.engineId}`)
+    return false
+  }
+  if (sameEngineSessionState(conversationEngineState(result.conversation), { sessionId: binding.sessionId, binding })) return true
+  const updated: Conversation = { ...result.conversation, sessionId: binding.sessionId, engineBinding: { ...binding } }
+  try {
+    atomicWriteFileSync(result.filePath, JSON.stringify(updated, null, 2))
+  } catch (error) {
+    console.error(`[Conversation] Engine binding could not be saved: conversation=${conversationId} engine=${binding.engineId}`, error)
+    throw error
+  }
+  cachePut(conversationId, updated, result.filePath, result.conversationsDir, spaceId)
+  debouncedUpdateIndexEntry(result.conversationsDir, spaceId, conversationId, toMeta(updated))
+  return true
+}
+
+/** The readable conversation record; thoughts remain in the separate thoughts file. */
+export function resolveConversationTranscriptPath(spaceId: string, conversationId: string): string | undefined {
+  if (conversationId.includes('..')) return undefined
+  const file = join(getConversationsDir(spaceId), `${conversationId}.json`)
+  return existsSync(file) ? file : undefined
+}
+
+/** Reads the latest neutral records up to a captured boundary, excluding a newly appended input. */
+export function readConversationHandoffHistory(
+  spaceId: string, conversationId: string,
+  options: { throughMessageId?: string; beforeMessageId?: string; limit?: number; maxBytes?: number; excludeMessageIds?: readonly string[] } = {},
+): EngineHandoffHistory {
+  const result = cachedRead(spaceId, conversationId)
+  if (!result) {
+    console.warn(`[Conversation] Handoff history unavailable: conversation=${conversationId}`)
+    throw new Error('Conversation history is unavailable for the engine change')
+  }
+  const { conversation, filePath, conversationsDir } = result
+  let end = conversation.messages.length
+  const boundaryId = options.beforeMessageId ?? options.throughMessageId
+  if (boundaryId) {
+    const index = conversation.messages.findIndex(message => message.id === boundaryId)
+    if (index < 0) {
+      console.warn(`[Conversation] Handoff boundary no longer exists: conversation=${conversationId}`)
+      throw new Error('Conversation history changed while preparing the engine change')
+    }
+    end = index + (options.beforeMessageId ? 0 : 1)
+  }
+  const limit = Math.max(1, Math.min(options.limit ?? 128, 256))
+  const excluded = new Set(options.excludeMessageIds ?? [])
+  let start = end
+  const messages: Message[] = []
+  while (start > 0 && messages.length < limit) {
+    const message = conversation.messages[--start]
+    if (!excluded.has(message.id)) messages.unshift({ ...message })
+  }
+  const thoughtsPath = join(conversationsDir, `${conversationId}.thoughts.json`)
+  const completeRecordPaths = [filePath]
+  let truncated = start > 0
+  const needsThoughts = messages.some(message => message.thoughts === null)
+  if (needsThoughts) {
+    const maxBytes = Math.max(2048, Math.min(options.maxBytes ?? 4 * 1024 * 1024, 8 * 1024 * 1024))
+    try {
+      const size = statSync(thoughtsPath).size
+      completeRecordPaths.push(thoughtsPath)
+      if (size > maxBytes) {
+        truncated = true
+      } else {
+        const stored: ThoughtsFile = JSON.parse(readFileSync(thoughtsPath, 'utf8'))
+        if (!stored.messages || typeof stored.messages !== 'object') throw new Error('Invalid tool-result history')
+        for (const message of messages) {
+          if (message.thoughts === null) message.thoughts = stored.messages[message.id] ?? []
+        }
+      }
+    } catch (error) {
+      console.warn(`[Conversation] Cannot read handoff tool results: conversation=${conversationId}, code=${(error as NodeJS.ErrnoException).code ?? 'invalid-data'}`)
+      throw new Error('Conversation tool history is unavailable for the engine change')
+    }
+  }
+  for (const message of messages) {
+    if (message.thoughts) message.thoughts = message.thoughts.filter(thought => thought.type === 'tool_use' || thought.type === 'tool_result')
+  }
+  return { messages, truncated, transcriptPath: filePath, completeRecordPaths, latestMessageId: messages.at(-1)?.id }
+}
+
+
 // Save session ID for a conversation
-export function saveSessionId(spaceId: string, conversationId: string, sessionId: string): void {
+export function saveSessionId(spaceId: string, conversationId: string, sessionId: string, engineId?: ConversationMeta['engineId']): void {
   const result = cachedRead(spaceId, conversationId)
   if (!result) return
 
   const { conversation, filePath, conversationsDir } = result
+  if (conversation.engineBinding && conversation.engineBinding.sessionId !== sessionId) {
+    console.warn(`[Conversation] Legacy session-id write refused for an engine-bound conversation: conversation=${conversationId}`)
+    return
+  }
+  const firstExecution = !conversation.sessionId && !conversation.messages.some(message => message.role === 'assistant')
+  const originChanged = firstExecution && engineId && conversation.engineId !== engineId
+  if (originChanged) conversation.engineId = engineId
   conversation.sessionId = sessionId
+  if (originChanged) debouncedUpdateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
   cachedWrite(conversationId, conversation, filePath, conversationsDir, spaceId)
 }
 

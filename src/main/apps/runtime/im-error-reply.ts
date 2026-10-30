@@ -9,7 +9,7 @@
  * Hardcoded Chinese like the other IM-facing notices.
  */
 
-import { isRefusedLocalConnection } from '../../services/agent'
+import { isEngineSetupError, isRefusedLocalConnection } from '../../services/agent'
 import { truncateUtf16Safe } from './text-truncate'
 import { AppChatTurnInterrupted, withTurnEndingNote } from './turn-ending'
 
@@ -18,6 +18,13 @@ const MAX_ERROR_CHARS = 200
 
 const REFUSED_LOCAL_CONNECTION_NOTE =
   '⚠️ Halo 所在电脑的安全软件拦截了本机连接，这次没能处理。请主人在 Halo 里查看并处理。'
+
+/**
+ * The digital human's engine or account cannot run on this computer. Only its
+ * owner can fix that, in Halo, where the chat says how; the person asking
+ * gets no internals.
+ */
+const ENGINE_SETUP_NOTE = '⚠️ 暂时无法回复，请稍后再试。'
 
 /**
  * A turn's working folder (services/agent working-dir), told by the error's
@@ -54,6 +61,7 @@ export function imErrorReply(error: unknown): string {
   if (error instanceof AppChatTurnInterrupted) return withTurnEndingNote('', { kind: 'interrupted' })
   const folderNote = error instanceof Error ? WORKING_FOLDER_NOTES.get(error.name) : undefined
   if (folderNote) return folderNote
+  if (isEngineSetupError(error)) return ENGINE_SETUP_NOTE
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
   // Its explanation names the program to allow, which is for the owner, in Halo.
   if (isRefusedLocalConnection(message)) return REFUSED_LOCAL_CONNECTION_NOTE

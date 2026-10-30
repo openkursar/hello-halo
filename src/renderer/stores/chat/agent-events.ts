@@ -384,11 +384,11 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentInputArrived' | 'hand
 
   // Handle session-info from SDK system:init — store slash_commands / skills / agents
   handleAgentSessionInfo: (data) => {
-    const { conversationId, slashCommands, skills, agents } = data
+    const { conversationId, slashCommands, skills, agents, engineId } = data
     set((state) => {
       if (!acceptsDetailEvent(state, conversationId)) return state
       const newSessionInitInfo = new Map(state.sessionInitInfo)
-      newSessionInitInfo.set(conversationId, { slashCommands, skills, agents })
+      newSessionInitInfo.set(conversationId, { slashCommands, skills, agents, engineId })
       return { sessionInitInfo: newSessionInitInfo }
     })
   },

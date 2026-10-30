@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -44,6 +44,7 @@ function credentials(): ApiCredentials {
 
 beforeAll(() => { state.haloDir = mkdtempSync(join(tmpdir(), 'halo-codex-options-')) })
 afterAll(() => { rmSync(state.haloDir, { recursive: true, force: true }) })
+afterEach(() => { vi.unstubAllEnvs() })
 beforeEach(() => {
   state.getApiCredentials.mockReset().mockResolvedValue({ ...credentials(), sourceId: 'account-b', apiKey: 'test-key-b' })
   state.ensureRouter.mockReset().mockResolvedValue({ baseUrl: 'http://127.0.0.1:51234' })
@@ -87,14 +88,52 @@ describe('Codex captured-account egress', () => {
     expect(state.getApiCredentials).not.toHaveBeenCalled()
   })
 
-  it('preserves direct Anthropic validation credentials without consulting a stored account', async () => {
-    const resolved = await resolveCodexOptions({ model: 'gpt-validation', env: {
+  it('refuses direct Anthropic credentials before preparing any MCP or router resources', async () => {
+    await expect(resolveCodexOptions({ model: 'gpt-validation', env: {
       ANTHROPIC_API_KEY: 'test-direct', ANTHROPIC_BASE_URL: 'https://example.invalid',
-    } })
-    expect(resolved.env.OPENAI_API_KEY).toBe('test-direct')
-    expect(resolved.env.CODEX_API_KEY).toBe('test-direct')
-    expect(resolved.env).not.toHaveProperty('ANTHROPIC_API_KEY')
+    } })).rejects.toMatchObject({ code: 'ENGINE_SOURCE_INCOMPATIBLE', issue: 'codex-unsupported-protocol' })
+    expect(state.prepareMcp).not.toHaveBeenCalled()
+    expect(state.ensureRouter).not.toHaveBeenCalled()
     expect(state.getApiCredentials).not.toHaveBeenCalled()
+  })
+
+  it.each(['anthropic_passthrough', 'kiro'] as const)('refuses the unsupported %s protocol', async apiType => {
+    await expect(resolveCodexOptions({ apiCredentials: { ...credentials(), apiType } }))
+      .rejects.toMatchObject({ code: 'ENGINE_SOURCE_INCOMPATIBLE' })
+    expect(state.prepareMcp).not.toHaveBeenCalled()
+    expect(state.ensureRouter).not.toHaveBeenCalled()
+  })
+
+  it.each(['chat_completions', 'responses'] as const)('preserves a Claude-named model on an OpenAI-compatible %s source', async apiType => {
+    const suffix = apiType === 'responses' ? 'responses' : 'chat/completions'
+    const selected = { ...credentials(), provider: 'openai' as const, model: 'claude-private-gateway-model', apiType, baseUrl: `https://selected.example/v1/${suffix}` }
+    vi.stubEnv('HALO_CODEX_DEFAULT_MODEL', 'must-not-replace-the-model')
+    const result = await resolveCodexOptions({ apiCredentials: selected, model: 'stale-model', env: {} })
+    expect(result.model).toBe(selected.model)
+    expect(result.threadParams.model).toBe(selected.model)
+    expect(result.threadParams.config).toMatchObject({ model_provider: 'halo-router', model_providers: { 'halo-router': {
+      base_url: 'http://127.0.0.1:51234/v1', wire_api: 'responses', requires_openai_auth: false, env_key: 'HALO_ROUTER_KEY',
+    } } })
+    expect(decodeBackendConfig(result.env.HALO_ROUTER_KEY!)).toMatchObject({ url: selected.baseUrl, key: selected.apiKey, model: selected.model, apiType })
+  })
+
+  it('uses only the selected router key instead of inherited vendor credentials or destinations', async () => {
+    const inherited = {
+      OPENAI_API_KEY: 'ambient-openai', OPENAI_BASE_URL: 'https://wrong.example', OPENAI_ORGANIZATION: 'ambient-org',
+      CODEX_API_KEY: 'ambient-codex', CODEX_AUTH_TOKEN: 'ambient-token', CODEX_ACCESS_TOKEN: 'ambient-access',
+      CODEX_BASE_URL: 'https://wrong-codex.example', ANTHROPIC_AUTH_TOKEN: 'ambient-anthropic',
+      ANTHROPIC_CUSTOM_HEADERS: 'Authorization: secret', HALO_ROUTER_KEY: 'ambient-router', PATH: '/bin',
+    }
+    const result = await resolveCodexOptions({ apiCredentials: credentials(), env: inherited })
+    for (const key of Object.keys(inherited).filter(key => !['PATH', 'HALO_ROUTER_KEY'].includes(key))) expect(result.env).not.toHaveProperty(key)
+    expect(result.env.PATH).toBe('/bin')
+    expect(decodeBackendConfig(result.env.HALO_ROUTER_KEY!)).toMatchObject({ sourceId: 'account-a', key: 'test-key-a' })
+  })
+
+  it('requires an explicit model instead of picking a process default', async () => {
+    vi.stubEnv('HALO_CODEX_DEFAULT_MODEL', 'must-not-be-used')
+    await expect(resolveCodexOptions({ apiCredentials: { ...credentials(), model: '' } })).rejects.toThrow('Choose a model')
+    expect(state.prepareMcp).not.toHaveBeenCalled()
   })
 
   it.each(['missing', 'unusable', 'delegated'] as const)('refuses %s credentials rather than resolving the global account', async kind => {

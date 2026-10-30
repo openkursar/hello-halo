@@ -17,6 +17,7 @@
 import { app, dialog, shell, type BrowserWindow } from 'electron'
 import { fileURLToPath } from 'url'
 import { handleDeepLinkUrl } from './deep-link.service'
+import { getDeepLinkScheme } from '../foundation/product-config'
 
 export type ExternalLinkAction =
   | { kind: 'open' }
@@ -36,7 +37,7 @@ export function classifyExternalLink(raw: string): ExternalLinkAction {
     return { kind: 'refuse' }
   }
   if (OPEN_DIRECTLY.has(url.protocol)) return { kind: 'open' }
-  if (url.protocol === 'halo:') return { kind: 'deep-link' }
+  if (url.protocol === `${getDeepLinkScheme()}:`) return { kind: 'deep-link' }
   if (REFUSED.has(url.protocol)) return { kind: 'refuse' }
   if (url.protocol === 'file:' && (!url.host || url.host === 'localhost')) {
     try {

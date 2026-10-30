@@ -89,7 +89,7 @@ export function DelegatedLoginDialog({ open, onClose, onComplete }: DelegatedLog
     let cancelled = false
     const tick = async () => {
       const next = await readStatus()
-      if (cancelled || !next?.loggedIn) return
+      if (cancelled || !next?.loggedIn || !next.loginCommand) return
       void activate()
     }
 
@@ -179,7 +179,11 @@ export function DelegatedLoginDialog({ open, onClose, onComplete }: DelegatedLog
             </div>
           )}
 
-          {status?.supported && !status.loggedIn && (
+          {status?.supported && !status.loginCommand && (
+            <p className="text-sm text-muted-foreground">{t('Connect or install Claude Code in Settings > Advanced before signing in. You can also choose another AI source to use Halo SDK.')}</p>
+          )}
+
+          {status?.supported && !status.loggedIn && status.loginCommand && (
             <>
               <p className="text-sm text-muted-foreground">
                 {t('Run this command and complete the sign-in. Halo keeps no token — the CLI stores and refreshes its own credential.')}

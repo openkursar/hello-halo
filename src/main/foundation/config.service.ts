@@ -20,6 +20,7 @@ import type {
   ModelOption
 } from '../../shared/types'
 import { DEFAULT_MODEL } from '../../shared/types'
+import type { CcRuntimeConfig } from '../../shared/types/cc-runtime'
 import { BUILTIN_PROVIDERS, getBuiltinProvider } from '../../shared/constants'
 import { applyNewToolsetDefaults } from '../../shared/constants/toolsets'
 import { DEFAULT_MAX_TURNS, LEGACY_DEFAULT_MAX_TURNS } from '../../shared/constants/agent-limits'
@@ -645,6 +646,11 @@ export function onNetworkConfigChange(handler: NetworkConfigChangeHandler): () =
 
 type AgentConfigChangeHandler = (agent: HaloConfig['agent']) => void
 const agentConfigChangeHandlers: AgentConfigChangeHandler[] = []
+let agentEngineChoiceRevision = 0
+
+/** Explicit settings choices supersede a pending install even when the value is unchanged. */
+export function recordAgentEngineChoice(): void { agentEngineChoiceRevision++ }
+export function getAgentEngineChoiceRevision(): number { return agentEngineChoiceRevision }
 
 /**
  * Register a callback to be notified when agent config changes.
@@ -734,8 +740,11 @@ interface HaloConfig {
     promptProfile?: 'official' | 'halo'
     configDirMode?: 'halo' | 'cc' | 'custom'
     customConfigDir?: string
-    /** Experimental: switch agent engine. 'anthropic' = Claude Code SDK (default), 'halo' = Halo SDK, 'codex' = Codex SDK adapter, 'dsh' = DeepSeek Harness adapter. */
+    /** Engine changes apply after restart; an absent legacy choice uses Halo. */
     sdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh'
+    /** Default that legacy sessions used before the first live default-engine change. */
+    legacySdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh'
+    ccRuntime?: CcRuntimeConfig
     /** Enable Digital Humans MCP tools (automation app management) */
     enableDigitalHumans?: boolean
     /** Master switch for Cross-Conversation Interop (conversation_read/conversation_send). Undefined/true = on. */
@@ -947,7 +956,7 @@ export function getHaloDir(): string {
   // 2. Auto-detect development mode: use separate directory
   //    app.isPackaged is false when running via electron-vite dev
   if (!app.isPackaged) {
-    return join(homedir(), '.halo-dev')
+    return join(homedir(), `.${getDataFolderName()}-dev`)
   }
 
   // 3. Production: use dataFolderName from product.json for per-variant isolation
@@ -1027,6 +1036,7 @@ const DEFAULT_CONFIG: HaloConfig = {
   },
   agent: {
     maxTurns: DEFAULT_MAX_TURNS,
+    sdkEngine: 'halo',
     promptProfile: 'halo'
   },
   remoteAccess: {

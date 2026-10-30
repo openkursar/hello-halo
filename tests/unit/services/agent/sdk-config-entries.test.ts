@@ -31,7 +31,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
-  getActiveEngine: () => state.engine,
+  getDefaultEngine: () => state.engine, resolveDefaultEngine: async () => state.engine,
   getEngineCapabilities: () => ({ features: { hooks: true } }),
 }))
 vi.mock('../../../../src/main/foundation/device-identity', () => ({
@@ -82,6 +82,28 @@ beforeEach(() => {
 })
 
 describe('buildUserSessionSdkOptions', () => {
+  it('captures an explicit engine for prompts, hooks and identity despite a different default', async () => {
+    state.engine = 'halo'
+    const cc = await buildUserSessionSdkOptions({ ...params(), engineId: 'anthropic' })
+    state.engine = 'anthropic'
+    const halo = await buildUserSessionSdkOptions({ ...params(), engineId: 'halo' })
+    expect(cc.engineId).toBe('anthropic')
+    expect(typeof cc.systemPrompt).toBe('string')
+    expect(cc).not.toHaveProperty('workerGroup')
+    expect(cc).not.toHaveProperty('haloRequestIdentity')
+    expect(halo.engineId).toBe('halo')
+    expect(halo.systemPrompt).toMatchObject({ type: 'preset', preset: 'default' })
+    expect(halo.workerGroup).toBe('space-1')
+    expect(halo.haloRequestIdentity).toMatchObject({ sessionId: 'conv-1' })
+  })
+
+  it('retains the credential engine after defaults change and rejects an explicit mismatch', async () => {
+    state.engine = 'anthropic'
+    const captured = { ...credentials, engineId: 'halo' as const }
+    expect((await buildInternalTaskSdkOptions({ ...params(), credentials: captured })).engineId).toBe('halo')
+    await expect(buildUserSessionSdkOptions({ ...params(), credentials: captured, engineId: 'anthropic' }))
+      .rejects.toThrow('different engine')
+  })
   it('reads the user AI settings from config once per build', async () => {
     const reads = { promptProfile: 0, enableDigitalHumans: 0 }
     state.config.agent = {

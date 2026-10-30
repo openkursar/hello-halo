@@ -2,12 +2,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { findMachOFiles } = require('./lib/mac-local-signing.cjs');
+const { validateExperimentalProduct } = require('./lib/experimental-product.cjs');
 
 try {
   if (process.platform !== 'darwin') throw new Error('Local macOS installation requires macOS.');
   const root = path.resolve(__dirname, '..');
   const config = require('../electron-builder.cjs');
-  const source = path.join(root, 'dist', process.arch === 'arm64' ? 'mac-arm64' : 'mac', `${config.productName}.app`);
+  const args = process.argv.slice(2);
+  if (args.length > 1 || args.some(arg => arg !== '--experimental')) throw new Error('Usage: npm run install:mac -- [--experimental]');
+  const experimental = args.includes('--experimental');
+  if (experimental) validateExperimentalProduct(JSON.parse(fs.readFileSync(path.join(root, 'product.json'), 'utf8')));
+  const source = path.join(root, 'dist', ...(experimental ? ['experimental'] : []), process.arch === 'arm64' ? 'mac-arm64' : 'mac', `${config.productName}.app`);
   const target = path.join('/Applications', path.basename(source));
   const readPlist = (app, key) => execFileSync('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, path.join(app, 'Contents', 'Info.plist')], { encoding: 'utf8' }).trim();
   if (!fs.existsSync(source)) throw new Error(`Missing local build: ${source}`);

@@ -13,6 +13,12 @@ import { clusterStart, clusterStop, apiOk, api, pollUntil, sleep, Reporter } fro
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a)
 const report = new Reporter()
+if (process.argv.includes('--protocol-only')) {
+  const run = report.run.bind(report)
+  report.run = (id, body) => id.startsWith('1.1.')
+    ? run(id, body)
+    : Promise.resolve(report.skip(id, 'Not selected: this run covers creation and assembly only'))
+}
 
 const manifest = clusterStart({ nodes: 1, basePort: 3560, fresh: true, clusterDir: '.cluster-single' })
 const node = manifest.nodes[0]

@@ -13,7 +13,8 @@
 
 import { create } from 'zustand'
 import { api } from '../api'
-import { useEngineCapabilities, useEngineStore } from './engine.store'
+import { useEngineCapabilities } from './engine.store'
+import type { EngineId } from '../../shared/types/engine'
 import type { Goal, GoalInput, GoalUpdatedEvent } from '../../shared/types/goal'
 
 export type { Goal, GoalInput, GoalStatus, GoalChangeSource } from '../../shared/types/goal'
@@ -61,10 +62,6 @@ function bump(conversationId: string): void {
   revisions.set(conversationId, (revisions.get(conversationId) ?? 0) + 1)
 }
 
-function goalsDisabled(): boolean {
-  return useEngineStore.getState().capabilities?.features.goal === false
-}
-
 export const useGoalStore = create<GoalState>((set, get) => {
   const put = (conversationId: string, goal: Goal | null | undefined): void => {
     const next = new Map(get().byConversation)
@@ -108,7 +105,6 @@ export const useGoalStore = create<GoalState>((set, get) => {
     unseenByModel: new Set(),
 
     load: async (spaceId, conversationId) => {
-      if (goalsDisabled()) return
       const startedAt = revisions.get(conversationId) ?? 0
       loading.set(conversationId, (loading.get(conversationId) ?? 0) + 1)
       try {
@@ -186,8 +182,8 @@ export function initGoalStoreListeners(): () => void {
 }
 
 /** Whether the running engine keeps goals. False while capabilities load. */
-export function useGoalSupported(): boolean {
-  return useEngineCapabilities()?.features.goal === true
+export function useGoalSupported(engineId?: EngineId): boolean {
+  return useEngineCapabilities(engineId)?.features.goal === true
 }
 
 /** The conversation's goal: undefined until loaded, null when it has none. */

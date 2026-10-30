@@ -39,8 +39,8 @@ export type WindowsUpdateMode = 'legacy' | 'staged'
  * Update configuration for auto-updater
  */
 export interface UpdateConfig {
-  /** Provider type: 'github' for GitHub Releases, 'generic' for custom server */
-  provider: 'github' | 'generic'
+  /** Feed provider, or disabled for builds that must never update themselves. */
+  provider: 'github' | 'generic' | 'disabled'
   /** URL for generic provider (empty string = disabled) */
   url?: string
   /** GitHub repository owner (for github provider) */
@@ -239,6 +239,8 @@ export interface ProductConfig {
    * Electron userData directory. Defaults to 'halo' when omitted.
    */
   dataFolderName?: string
+  /** OS protocol handler owned by this product; defaults to halo. */
+  deepLinkScheme?: string
   authProviders: AuthProviderConfig[]
   /** Update configuration (optional, defaults to GitHub if not specified) */
   updateConfig?: UpdateConfig
@@ -264,6 +266,13 @@ export interface ProductConfig {
    * schedules then skip their runs and say why.
    */
   workdayCalendarUrl?: string
+  /**
+   * Where this build installs Claude Code from by default (optional): a mirror
+   * with the official release layout. Offered beside the official source and
+   * preselected; a source the user picks still wins. Omitted: the official
+   * source only.
+   */
+  claudeCodeDownloadSource?: { name?: string; baseUrl: string }
   /**
    * Official AI-guide host (optional; falls back to the public docs host).
    */
@@ -530,6 +539,14 @@ export function getDataFolderName(): string {
   return loadProductConfig().dataFolderName || DEFAULT_DATA_FOLDER_NAME
 }
 
+export function getDeepLinkScheme(): string {
+  const scheme = loadProductConfig().deepLinkScheme?.trim() || 'halo'
+  if (!/^[a-z][a-z0-9+.-]*$/.test(scheme)) {
+    throw new Error('[ProductConfig] Invalid deepLinkScheme; refusing to register an ambiguous protocol')
+  }
+  return scheme
+}
+
 /** Default appId when product.json omits it (the open-source build's) */
 export const DEFAULT_APP_ID = 'com.halo.app'
 
@@ -614,6 +631,17 @@ export function getWorkdayCalendarUrl(): string | undefined {
   const configured = loadProductConfig().workdayCalendarUrl
   if (configured === undefined) return DEFAULT_WORKDAY_CALENDAR_URL
   return configured.trim() || undefined
+}
+
+/** This build's default Claude Code download source; undefined when it has none. */
+export function getClaudeCodeDownloadSource(): { name?: string; baseUrl: string } | undefined {
+  const source: unknown = loadProductConfig().claudeCodeDownloadSource
+  if (!source || typeof source !== 'object') return undefined
+  const { name, baseUrl } = source as { name?: unknown; baseUrl?: unknown }
+  // A value that is not text is an invalid declaration; the source reader reports it.
+  const url = typeof baseUrl === 'string' ? baseUrl.trim() : baseUrl === undefined ? '' : String(baseUrl)
+  const label = typeof name === 'string' ? name.trim() : ''
+  return url ? { ...(label ? { name: label } : {}), baseUrl: url } : undefined
 }
 
 /**

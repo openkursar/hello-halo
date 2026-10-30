@@ -3,7 +3,7 @@ import type { Response as ExpressResponse } from 'express'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({
-  app: { isPackaged: false, getPath: () => '/tmp/halo-test', getName: () => 'Halo', getVersion: () => 'test' },
+  app: { isPackaged: true, getAppPath: () => globalThis.__HALO_TEST_DIR__, getPath: () => globalThis.__HALO_TEST_DIR__, getName: () => 'Halo', getVersion: () => 'test' },
   session: { defaultSession: { resolveProxy: vi.fn(async () => 'DIRECT') } }
 }))
 

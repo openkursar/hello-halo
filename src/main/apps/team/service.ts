@@ -1983,11 +1983,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
  * without them has no credentials and fails with 403.
  */
 export async function proposeMembersViaSdk(goal: string, owningSpaceId: string): Promise<ProposedMember[]> {
-  const [{ query }, helpers, sdkConfig] = await Promise.all([
-    import('../../services/agent/resolved-sdk'),
-    import('../../services/agent/helpers'),
-    import('../../services/agent/sdk-config'),
-  ])
+  const agent = await import('../../services/agent')
 
   const prompt =
     `You are assembling a small digital team to accomplish a goal. Propose at most ` +
@@ -1998,12 +1994,14 @@ export async function proposeMembersViaSdk(goal: string, owningSpaceId: string):
 
   let text = ''
   try {
-    const credentials = await helpers.getApiCredentials()
-    const resolvedCreds = await sdkConfig.resolveCredentialsForSdk(credentials)
-    const workDir = helpers.getWorkingDir(owningSpaceId)
-    const electronPath = helpers.getHeadlessElectronPath()
+    const engineId = await agent.resolveDefaultEngine()
+    const credentials = await agent.getApiCredentials()
+    const resolvedCreds = await agent.resolveCredentialsForSdk(credentials, undefined, engineId)
+    const workDir = agent.getWorkingDir(owningSpaceId)
+    const electronPath = agent.getHeadlessElectronPath()
 
-    const options = await sdkConfig.buildInternalTaskSdkOptions({
+    const options = await agent.buildInternalTaskSdkOptions({
+      engineId,
       credentials: resolvedCreds,
       workDir,
       electronPath,
@@ -2019,7 +2017,7 @@ export async function proposeMembersViaSdk(goal: string, owningSpaceId: string):
     // SDK stream messages overlap; only the `result` message is authoritative.
     let resultText = ''
     let lastAssistant = ''
-    for await (const msg of query({ prompt, options })) {
+    for await (const msg of agent.query({ prompt, options })) {
       const m = msg as { type?: string; result?: unknown }
       if (m?.type === 'result' && typeof m.result === 'string') {
         resultText = m.result

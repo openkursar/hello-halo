@@ -9,7 +9,7 @@
 
 import { getConfig } from '../../foundation/config.service'
 import { createConversation } from '../conversation.service'
-import { closeToolset, getToolset, getWorkingDir, openToolset, sendMessage } from '../agent'
+import { closeToolset, getToolset, getWorkingDir, openToolset, sendMessage, resolveDefaultEngine } from '../agent'
 import { createSnapshot, getChangeList, isGitError, resolveRepository } from '../git'
 import { TEAM_MCP_SERVER_NAME } from '../../../shared/apps/team-types'
 import type {
@@ -94,7 +94,7 @@ export async function startReview(request: CodeReviewStartRequest): Promise<Code
   let conversationId: string
   try {
     const title = request.title.trim().slice(0, MAX_TITLE_CHARS) || `Review · ${task.repoName}`
-    conversationId = createConversation(spaceId, title, undefined, { keepTitle: true }).id
+    conversationId = createConversation(spaceId, title, undefined, { keepTitle: true, engineId: await resolveDefaultEngine() }).id
   } catch (error) {
     console.error(`${LOG_TAG} Review not started: creating its conversation failed (space=${spaceId}):`, error)
     return refusalFromError(error)

@@ -1,3 +1,4 @@
+import type { EngineId } from '../shared/types/engine'
 /**		      	    				  	  	  	 		 		       	 	 	         	 	    					 
  * Preload Script - Exposes IPC to renderer
  */
@@ -23,6 +24,7 @@ import type { ModelCatalogChangedEvent } from '../shared/types/ai-sources'
 import type { PickedLocalEntry } from '../shared/attached-paths'
 import type { ImChannelInstanceConfig, ImChannelInstancePatch } from '../shared/types/im-channel'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
+import { ccRuntimeRpc } from '../shared/rpc/contracts/cc-runtime.contract'
 import { onboardingRpc } from '../shared/rpc/contracts/onboarding.contract'
 import { securityRpc } from '../shared/rpc/contracts/security.contract'
 import { perfRpc } from '../shared/rpc/contracts/perf.contract'
@@ -110,7 +112,7 @@ type AuthRpcClient = RpcClient<typeof authRpc>
 }
 
 // Type definitions for exposed API
-export interface HaloAPI extends BrowserHostBridge {
+export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRpc> {
   // Generic Auth (provider-agnostic)
   authGetProviders: () => Promise<IpcResponse>
   authGetBuiltinProviders: () => Promise<IpcResponse>
@@ -218,7 +220,7 @@ export interface HaloAPI extends BrowserHostBridge {
   probeMcpApp: (appId: string) => Promise<{ success: boolean; result?: unknown; error?: string }>
   answerQuestion: (data: { conversationId: string; id: string; answers: Record<string, string> }) => Promise<IpcResponse>
   injectMessage: (data: AgentInjectRequest) => Promise<IpcResponse>
-  getEngineCapabilities: () => Promise<IpcResponse>
+  getEngineCapabilities: (engineId?: EngineId) => Promise<IpcResponse>
   getEngineAvailability: () => Promise<IpcResponse>
   listToolsets: (data: { spaceId: string; conversationId: string }) => Promise<IpcResponse>
   openToolset: (data: { spaceId: string; conversationId: string; toolsetId: string }) => Promise<IpcResponse>
@@ -613,16 +615,16 @@ export interface HaloAPI extends BrowserHostBridge {
   // Add a message to the running turn; delivered:false when no turn was in flight
   appChatInject: (input: { appId: string; conversationId: string; message: string; references?: ContentReference[] }) => Promise<IpcResponse<{ delivered: boolean; stopped?: boolean }>>
   appChatStatus: (appId: string, conversationId?: string) => Promise<IpcResponse<{ isGenerating: boolean; conversationId: string }>>
-  appChatMessages: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
+  appChatMessages: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse<import('../shared/types/transcript').TranscriptMessage[]> & import('../shared/apps/app-types').AppChatEngineMetadata>
   // Paged read, newest page first; messages carry thoughts:null (see appChatMessageThoughts)
-  appChatTranscript: (input: { appId: string; spaceId: string; conversationId?: string; before?: string; limit?: number; through?: string }) => Promise<IpcResponse<TranscriptPage>>
+  appChatTranscript: (input: { appId: string; spaceId: string; conversationId?: string; before?: string; limit?: number; through?: string }) => Promise<IpcResponse<import('../shared/apps/app-types').AppChatTranscriptPage>>
   appChatMessageThoughts: (input: { appId: string; spaceId: string; conversationId?: string; messageId: string }) => Promise<IpcResponse<Thought[]>>
   appChatSessionState: (appId: string, conversationId?: string) => Promise<IpcResponse>
   appChatClear: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
   appChatRestart: (appId: string) => Promise<IpcResponse<{ sessionsClosed: number }>>
   appChatsClearable: (appId: string) => Promise<IpcResponse<{ total: number; im: number; teamIm: number }>>
   appChatsClearAll: (appId: string) => Promise<IpcResponse<{ cleared: number; failed: number }>>
-  appImChatMessages: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
+  appImChatMessages: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse<import('../shared/types/transcript').TranscriptMessage[]> & import('../shared/apps/app-types').AppChatEngineMetadata>
   appImChatClear: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
   appImChatStop: (input: { appId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse<{ stopped: boolean }>>
 
@@ -880,6 +882,7 @@ const api: HaloAPI = {
   // Typed-RPC-derived bindings (see shared/rpc/contracts). Channel names and
   // argument shapes come from the contract — no manual sync needed.
   ...bindRpc(modelCapabilitiesRpc),
+  ...bindRpc(ccRuntimeRpc),
 
   // Generic Auth (provider-agnostic)
   ...bindRpc(authRpc),

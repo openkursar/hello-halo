@@ -268,7 +268,7 @@ export function registerAuthHandlers(): void {
             loggedIn: state.loggedIn,
             account: state.account,
             configDir: state.configDir,
-            loginCommand: supported ? buildCliLoginCommand() : ''
+            loginCommand: supported ? await buildCliLoginCommand() : ''
           }
         }
       } catch (error: unknown) {

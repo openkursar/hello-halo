@@ -93,4 +93,6 @@ workspace-confinement checks.
 
 Credentials are resolved only when a consolidation actually starts: the digital
 human's model override, the triggering conversation's model for a space, or the
-global model for a space's "consolidate now".
+global model for a space's "consolidate now". The engine is captured with those
+credentials and retained for all feedback rounds. Hook support comes from that
+engine, even if the application default changes while consolidation is running.

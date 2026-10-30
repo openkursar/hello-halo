@@ -1367,13 +1367,17 @@ describe('MessageBus', () => {
       const bus = createMessageBus({ store, hooks })
       const envelope = { id: 'm1', teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, toAppId: RESEARCHER_APP, body: 'unread report', correlationId: 'c1', createdAt: Date.now() }
       bus.holdSession(MEMBER_KEY)
-      bus.returnDeliveries(MEMBER_KEY, [{ envelope, trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'c1', fromAppId: LEAD_APP, wait: false, kind: 'message' }, inputRecorded: true }])
+      bus.returnDeliveries(MEMBER_KEY, [{ envelope, trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'c1', fromAppId: LEAD_APP, wait: false, kind: 'message' }, inputRecorded: true, recordedInputIds: ['receiver-local-input'] }])
+      expect(bus.getPendingRecordedInputIds(MEMBER_KEY)).toEqual(['receiver-local-input'])
+      expect(bus.getPendingRecordedInputIds(TESTER_KEY)).toEqual([])
       busy.delete(MEMBER_KEY)
       await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'new mail', wait: false })
       expect(wakes).toHaveLength(1)
       expect(wakes[0].deliveries?.map((delivery) => [delivery.envelope.body, delivery.inputRecorded])).toEqual([
         ['unread report', true], ['new mail', undefined],
       ])
+      expect(wakes[0].deliveries?.[0].recordedInputIds).toEqual(['receiver-local-input'])
+      expect(bus.getPendingRecordedInputIds(MEMBER_KEY)).toEqual([])
     })
 
     it('hands back a woken turn a stop held before the member read it: slot free, own words void, the rest held', async () => {

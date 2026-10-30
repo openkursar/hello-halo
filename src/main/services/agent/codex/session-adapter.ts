@@ -28,6 +28,7 @@
  */
 
 import { randomUUID } from 'crypto'
+import { NativeSessionResumeError } from '../../../../shared/types/engine-session'
 import {
   createCodexConnection,
   resolveBundledCodexBinary,
@@ -61,6 +62,7 @@ interface AdapterOptions {
   conversationId?: string
   /** Optional thread id for resume (set by Halo when a conversation has prior history). */
   resume?: string
+  strictNativeResume?: boolean
 }
 
 interface QueuedInput {
@@ -79,6 +81,7 @@ export class CodexAppServerSession {
   private threadId: string | null = null
   private currentTurnId: string | null = null
   private closed = false
+  private closePromise?: Promise<void>
   private starting: Promise<void> | null = null
   private notificationQueue: any[] = []
   private queuedTurnStarts = 0
@@ -160,6 +163,7 @@ export class CodexAppServerSession {
       spaceId: sdkOptions.spaceId,
       conversationId: sdkOptions.conversationId,
       resume: sdkOptions.resume,
+      strictNativeResume: sdkOptions.strictNativeResume === true,
     })
     await adapter.start()
     return adapter
@@ -171,7 +175,11 @@ export class CodexAppServerSession {
 
   private async start(): Promise<void> {
     if (this.starting) return this.starting
-    this.starting = this.doStart()
+    this.starting = this.doStart().catch(async error => {
+      console.warn(`[Codex][session] Startup failed; closing native resources: resume=${Boolean(this.opts.resume)}`)
+      await this.close()
+      throw error
+    })
     return this.starting
   }
 
@@ -246,6 +254,7 @@ export class CodexAppServerSession {
           threadId: this.opts.resume,
         })
       } catch (err) {
+        if (this.opts.strictNativeResume) throw new NativeSessionResumeError('codex', this.opts.resume, err)
         // A thread that cannot be resumed (cleared Codex home, another machine)
         // must not fail every later message: continue on a fresh thread.
         console.warn(`[Codex][session] thread/resume failed, starting a fresh thread: thread=${this.opts.resume}; ${(err as Error).message}`)
@@ -429,7 +438,11 @@ export class CodexAppServerSession {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return
+    this.closePromise ??= this.disposeResources()
+    return this.closePromise
+  }
+
+  private async disposeResources(): Promise<void> {
     this.closed = true
 
     // Reject any AskUserQuestion bridges waiting on user input.

@@ -22,6 +22,7 @@ import {
   getConfigPath,
   getConfigReadFailure,
   isConfigUnreadable,
+  getConfig,
   saveConfig,
 } from '../../../src/main/foundation/config.service'
 import { getConfig as loadSettings, setConfig } from '../../../src/main/controllers/config.controller'
@@ -63,6 +64,15 @@ describe('unreadable config file', () => {
     expect(getConfigReadFailure()).toBeNull()
     expect(setConfig({ appearance: { theme: 'dark' } }).success).toBe(true)
     expect(JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8')).appearance.theme).toBe('dark')
+  })
+})
+
+describe('runtime selection ownership', () => {
+  it('preserves the checked runtime when generic settings contain another path', () => {
+    writeRaw(JSON.stringify({ agent: { sdkEngine: 'halo', maxTurns: 50, ccRuntime: { selectedPath: '/checked/claude' } } }))
+    const result = setConfig({ agent: { maxTurns: 70, ccRuntime: { selectedPath: '/unchecked/program' } } })
+    expect(result.success).toBe(true)
+    expect(getConfig().agent).toMatchObject({ maxTurns: 70, ccRuntime: { selectedPath: '/checked/claude' } })
   })
 })
 

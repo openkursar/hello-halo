@@ -19,7 +19,7 @@ vi.mock('../../../src/renderer/stores/goal.store', () => ({
   useGoalStore: { getState: () => ({ load: vi.fn(), byConversation: new Map() }) },
 }))
 vi.mock('../../../src/renderer/stores/goal-ui.store', () => ({ useGoalUiStore: Object.assign((select: any) => select(env.ui), { getState: () => env.ui }) }))
-vi.mock('../../../src/renderer/stores/chat.store', () => ({ useChatStore: (select: any) => select({ spaceStates: new Map([['s', { conversations: env.conversations }]]) }) }))
+vi.mock('../../../src/renderer/stores/chat.store', () => ({ useChatStore: (select: any) => select({ conversationCache: new Map(), sessionInitInfo: new Map(), spaceStates: new Map([['s', { conversations: env.conversations }]]) }) }))
 vi.mock('../../../src/renderer/services/canvas-lifecycle', () => ({
   canvasLifecycle: { openGoal: vi.fn(), closeTab: vi.fn(), markTabSaved: vi.fn(), updateTabContent: vi.fn(), setRefreshHandler: () => () => {} },
 }))

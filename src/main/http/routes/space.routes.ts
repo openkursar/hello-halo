@@ -109,7 +109,7 @@ export function registerSpaceRoutes(app: Express): void {
 
   app.post('/api/spaces/:spaceId/conversations', async (req: Request, res: Response) => {
     const { title, reasoningEffort, ephemeral } = req.body
-    const result = conversationController.createConversation(req.params.spaceId, title, reasoningEffort, { ephemeral: ephemeral === true })
+    const result = await conversationController.createConversation(req.params.spaceId, title, reasoningEffort, { ephemeral: ephemeral === true })
     res.json(result)
   })
 
@@ -123,7 +123,7 @@ export function registerSpaceRoutes(app: Express): void {
   })
 
   app.put('/api/spaces/:spaceId/conversations/:conversationId', async (req: Request, res: Response) => {
-    const result = conversationController.updateConversation(
+    const result = await conversationController.updateConversation(
       req.params.spaceId,
       req.params.conversationId,
       req.body

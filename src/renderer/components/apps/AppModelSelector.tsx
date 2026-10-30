@@ -34,6 +34,7 @@ import { groupModels, ModelAvailabilityNotice, ModelGroupHeading, ModelRowLabel 
 // ============================================
 
 interface AppModelSelectorProps {
+  disabled?: boolean
   /** Currently selected source ID (undefined = follow global) */
   modelSourceId?: string
   /** Currently selected model ID within that source */
@@ -88,6 +89,7 @@ function resolveSelectionLabel(
 // ============================================
 
 export function AppModelSelector({
+  disabled = false,
   modelSourceId,
   modelId,
   recommendedModel,
@@ -150,11 +152,13 @@ export function AppModelSelector({
   const selectionLabel = resolveSelectionLabel(aiSources, selected, t)
 
   const handleSelectGlobal = () => {
+    if (disabled) return
     onChange(undefined, undefined)
     setIsOpen(false)
   }
 
   const handleSelectModel = (sourceId: string, selectedModelId: string) => {
+    if (disabled) return
     onChange(sourceId, selectedModelId)
     setIsOpen(false)
   }
@@ -188,6 +192,7 @@ export function AppModelSelector({
         >
           <button
             type="button"
+            disabled={disabled}
             onClick={() => setIsOpen(!isOpen)}
             aria-expanded={isOpen}
             className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3 py-2 text-left"
@@ -198,6 +203,7 @@ export function AppModelSelector({
           {hasOverride && (
             <button
               type="button"
+              disabled={disabled}
               onClick={handleSelectGlobal}
               className="mr-2 shrink-0 p-1.5 hover:bg-secondary rounded transition-colors"
               title={t('Reset to global')}

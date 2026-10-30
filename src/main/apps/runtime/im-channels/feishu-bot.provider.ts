@@ -82,6 +82,7 @@ import {
   type StreamLogger,
 } from './feishu-stream-session'
 import { notifyAppEvent } from '../../../services/notification.service'
+import { redactSecrets, truncateField } from '../../../foundation/logging'
 import { DIRECT_ROUTE, openLinkRoute, type LinkRoute } from './link-route'
 import { CredentialRejectionBudget, LinkSupervisor } from './link-supervisor'
 
@@ -220,18 +221,85 @@ function credentialRejection(err: unknown): string | undefined {
   return undefined
 }
 
-/** Render one SDK log argument; objects would otherwise print as [object Object]. */
-function describeLogArg(value: unknown): string {
+/** Field names whose values are credentials, on whatever object carries them. */
+const SECRET_FIELD = /secret|token|authorization|password|cookie|ticket|encrypt_key|api[-_]?key/i
+/**
+ * HTTP client internals. A request's config holds its headers (the tenant
+ * token) and body (the App Secret, when it is the token request), and its
+ * agents hold socket caches tens of KB long — none of it is a diagnosis.
+ */
+const TRANSPORT_FIELDS = new Set(['config', 'request', 'response', 'headers', 'httpAgent', 'httpsAgent', 'agent', 'socket'])
+const SDK_LOG_MAX_CHARS = 2048
+
+/** A request's endpoint without its query string, which can carry tokens. */
+function describeRequestTarget(config: unknown): string | undefined {
+  const { method, url, baseURL } = (config ?? {}) as { method?: unknown; url?: unknown; baseURL?: unknown }
+  if (typeof url !== 'string') return undefined
+  let target = url.split('?')[0]
+  try {
+    const parsed = new URL(url, typeof baseURL === 'string' ? baseURL : undefined)
+    target = `${parsed.origin}${parsed.pathname}`
+  } catch {
+    // A relative URL with no base: its path, as given.
+  }
+  return typeof method === 'string' ? `${method.toUpperCase()} ${target}` : target
+}
+
+/**
+ * What a failed SDK call is worth logging: its message, error code, HTTP
+ * status, endpoint and the platform's own code/msg — never its request config.
+ */
+function describeSdkError(err: Error | Record<string, unknown>, depth: number): string {
+  const source = err as {
+    name?: unknown; message?: unknown; code?: unknown; status?: unknown
+    config?: unknown; response?: { status?: unknown; data?: unknown }; cause?: unknown
+  }
+  const parts = [typeof source.message === 'string' ? source.message : String(err)]
+  if (typeof source.code === 'string' || typeof source.code === 'number') parts.push(`code=${source.code}`)
+  const status = source.response?.status ?? source.status
+  if (typeof status === 'number') parts.push(`status=${status}`)
+  const target = describeRequestTarget(source.config)
+  if (target) parts.push(`request=${target}`)
+  const body = source.response?.data as { code?: unknown; msg?: unknown } | undefined
+  if (body && typeof body === 'object' && (typeof body.code === 'number' || typeof body.msg === 'string')) {
+    parts.push(`platform=${String(body.code)}:${typeof body.msg === 'string' ? body.msg : ''}`)
+  }
+  if (source.cause !== undefined && depth < 2) parts.push(`cause=(${describeLogArg(source.cause, depth + 1)})`)
+  return parts.join(' ')
+}
+
+function isErrorLike(value: object): value is Error | Record<string, unknown> {
+  return value instanceof Error
+    || ('message' in value && ('config' in value || 'response' in value || 'isAxiosError' in value))
+}
+
+/**
+ * One SDK log argument as text. The SDK hands over raw axios errors, often
+ * wrapped in an array, whose serialized form carries the request's credentials.
+ */
+function describeLogArg(value: unknown, depth = 0): string {
   if (typeof value === 'string') return value
-  if (value instanceof Error) return value.message
+  if (Array.isArray(value)) return value.map(item => describeLogArg(item, depth + 1)).join(' ')
   if (value && typeof value === 'object') {
+    if (isErrorLike(value)) return describeSdkError(value, depth)
     try {
-      return JSON.stringify(value)
+      return JSON.stringify(value, (key, field: unknown) => {
+        if (key === '') return field
+        if (TRANSPORT_FIELDS.has(key)) return undefined
+        if (SECRET_FIELD.test(key)) return '[REDACTED]'
+        return field
+      })
     } catch {
-      return String(value)
+      return '[unserializable]'
     }
   }
   return formatVal(value)
+}
+
+/** The SDK's log arguments as one bounded line with no credentials in it. */
+function describeSdkLog(args: readonly unknown[]): string {
+  // Redacted before it is cut, so a cut cannot leave part of a token behind.
+  return truncateField(redactSecrets(args.map(arg => describeLogArg(arg)).join(' ')), SDK_LOG_MAX_CHARS)
 }
 
 /**
@@ -1011,7 +1079,7 @@ class FeishuBotInstance implements ImChannelInstance {
     const wrap = (level: LogLevel) =>
       (...args: unknown[]): void => {
         logEvent(this.instanceId, level, 'sdk', {
-          msg: args.map(describeLogArg).join(' '),
+          msg: describeSdkLog(args),
         })
       }
     return {
@@ -1364,7 +1432,8 @@ class FeishuBotInstance implements ImChannelInstance {
         cat: 'network',
         err: describeError(err),
       })
-      throw err instanceof Error ? err : new Error(String(err))
+      // Only the message goes on: the SDK's error carries the request, tenant token included.
+      throw new Error(describeError(err))
     }
   }
 

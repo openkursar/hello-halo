@@ -138,7 +138,7 @@ async function renderPage(group: string): Promise<string> {
   return rendered
 }
 
-function buildTools(): unknown[] {
+function buildTools() {
   const halo_api_ref = tool(
     'halo_api_ref',
     TOOL_DESCRIPTION,

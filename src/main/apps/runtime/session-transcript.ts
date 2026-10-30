@@ -635,6 +635,7 @@ const TRANSCRIPT_SOURCES: ReadonlySet<string> = new Set<TranscriptSource>([
   'cross-conversation',
   'cross-conversation-notice',
   'team-message',
+  'continuity-notice',
 ])
 
 /** A stored `_source`, or undefined when absent or unrecognised (read as an ordinary turn). */

@@ -15,6 +15,10 @@ import { existsSync, mkdirSync, readdirSync, rmSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { isReasoningEffortLevel } from '../../../shared/constants/reasoning-effort'
+import { isEngineId } from '../../../shared/types/engine'
+import { assertEngineSourceCompatible } from '../../../shared/engine-source'
+import { resolveModelSelection } from '../../../shared/types/ai-sources'
+import { getConfig } from '../../foundation/config.service'
 
 import type { AppSpec, SkillSpec } from '../spec'
 import { validateAppSpec } from '../spec'
@@ -860,6 +864,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       // HTTP path (null via JSON serialization) correctly clear optional fields.
       const merged: Record<string, unknown> = { ...app.userOverrides }
       for (const [key, value] of Object.entries(partial as Record<string, unknown>)) {
+        if (key === 'engineId' && value != null && (app.spec.type !== 'automation' || !isEngineId(value))) {
+          console.warn('[AppManager] Engine preference was rejected', { appId, reason: app.spec.type !== 'automation' ? 'not-automation' : 'unknown-engine' })
+          throw new Error(app.spec.type !== 'automation' ? 'engineId applies to digital humans only' : 'Invalid engineId')
+        }
         if (key === 'disabledTools' && app.spec.type !== 'mcp') {
           throw new Error('disabledTools applies to MCP servers only')
         }
@@ -885,7 +893,16 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
             : value
         }
       }
+      if (isEngineId(merged.engineId) && ['engineId', 'modelSourceId', 'modelId'].some(key => Object.hasOwn(partial, key))) {
+        const sources = getConfig().aiSources
+        const source = sources?.version === 2 ? resolveModelSelection(sources, merged as InstalledApp['userOverrides']).source : null
+        if (source) assertEngineSourceCompatible(merged.engineId, source)
+      }
       store.updateOverrides(appId, merged as InstalledApp['userOverrides'])
+
+      if (app.userOverrides.engineId !== merged.engineId) {
+        console.log('[AppManager] Digital human engine preference saved', { appId, engineId: merged.engineId ?? 'default' })
+      }
 
       // Sessions were given the server's tools when they were built.
       const before = JSON.stringify([...(app.userOverrides.disabledTools ?? [])].sort())

@@ -14,8 +14,8 @@
  *   - process env: CODEX_HOME isolation, ANTHROPIC_* stripped, proxy policy
  *   - thread/start params: model, cwd, sandbox, approvalPolicy, config{...}
  *   - per-turn parameters (model override; we don't override anything else)
- *   - OpenAI-compat router config (when the user has selected a non-Anthropic
- *     provider): inject as `model_provider` + `model_providers` inside
+ *   - OpenAI-compat router config for every supported source: inject as
+ *     `model_provider` + `model_providers` inside
  *     `config` instead of via TOML
  */
 
@@ -31,6 +31,7 @@ import type { AskForApproval, SandboxMode, ThreadStartParams } from './types/cod
 import { prepareCodexMcpServers } from './mcp-config'
 import { applyProxyEnv } from '../../proxy-policy'
 import type { SdkMcpBridge } from '../mcp/sdk-bridge'
+import { assertEngineSourceCompatible } from '../../../../shared/engine-source'
 
 export interface CodexResolvedOptions {
   /** Process env passed to the app-server child. */
@@ -75,6 +76,7 @@ export interface CodexResolvedOptions {
 
 export async function resolveCodexOptions(sdkOptions: Record<string, any>): Promise<CodexResolvedOptions> {
   const credentials = getSdkApiCredentials(sdkOptions)
+  assertEngineSourceCompatible('codex', credentials)
   const model = resolveCodexModel(sdkOptions.model, credentials)
   const cwd = sdkOptions.cwd || process.cwd()
 
@@ -91,7 +93,7 @@ export async function resolveCodexOptions(sdkOptions: Record<string, any>): Prom
     const { config, processEnvAdditions } = await buildThreadConfig(
       sdkOptions, credentials, preparedMcp.mcpServers, reasoningEffort
     )
-    const env = await buildCodexEnv(sdkOptions, credentials, processEnvAdditions)
+    const env = await buildCodexEnv(sdkOptions, processEnvAdditions)
 
     const threadParams: ThreadStartParams = {
       model,
@@ -128,7 +130,6 @@ export async function resolveCodexOptions(sdkOptions: Record<string, any>): Prom
 
 async function buildCodexEnv(
   sdkOptions: Record<string, any>,
-  credentials: ApiCredentials,
   additions: Record<string, string>,
 ): Promise<NodeJS.ProcessEnv> {
   const env: NodeJS.ProcessEnv = {}
@@ -137,23 +138,16 @@ async function buildCodexEnv(
     if (value !== undefined) env[key] = String(value)
   }
 
-  // Codex app-server picks up Anthropic env vars and tries to dial Anthropic;
-  // strip them so it routes through our credentials path instead.
-  delete env.ANTHROPIC_API_KEY
-  delete env.ANTHROPIC_BASE_URL
+  // Ambient credentials and endpoint overrides cannot escape the selected router account.
+  for (const key of Object.keys(env)) {
+    if (/^(?:ANTHROPIC_|OPENAI_|AZURE_OPENAI_|CODEX_(?:API|AUTH|ACCESS_TOKEN|REFRESH_TOKEN|ID_TOKEN|BASE_URL|ENDPOINT))/.test(key)) delete env[key]
+  }
   delete env.CLAUDE_CONFIG_DIR
+  delete env.HALO_ROUTER_KEY
 
   env.CODEX_HOME = ensureCodexHome()
   env.DISABLE_TELEMETRY = '1'
   applyProxyEnv(env, getConfig().network)
-
-  // Forward our chosen API key to the app-server. For Anthropic-direct
-  // routes, this is the user's key; for routed providers we set the
-  // env var named in `model_providers.<id>.env_key` (see buildThreadConfig).
-  if (credentials.provider === 'anthropic') {
-    env.OPENAI_API_KEY = credentials.apiKey
-    env.CODEX_API_KEY = credentials.apiKey
-  }
 
   // Router-encoded keys / any other env additions buildThreadConfig
   // declared. These MUST land in process env — Codex's `env_key` lookup
@@ -181,8 +175,8 @@ function ensureCodexHome(): string {
 
 function resolveCodexModel(optionModel: string | undefined, credentials: ApiCredentials): string {
   const candidate = credentials.model || optionModel
-  if (candidate && !candidate.startsWith('claude-')) return candidate
-  return process.env.HALO_CODEX_DEFAULT_MODEL || 'gpt-5.1-codex-max'
+  if (!candidate) throw new Error('Choose a model before starting Codex.')
+  return candidate
 }
 
 // ============================================================================
@@ -236,41 +230,37 @@ async function buildThreadConfig(
 
   const processEnvAdditions: Record<string, string> = {}
 
-  if (credentials.provider !== 'anthropic') {
-    // Route everything else through Halo's OpenAI-compat proxy so the
-    // app-server can speak responses/chat_completions while Halo handles
-    // upstream auth + adapter selection.
-    const router = await ensureOpenAICompatRouter({ debug: false })
-    const upstreamApiType = credentials.apiType || inferCodexUpstreamApiType(credentials.baseUrl)
-    const backendUrl = normalizeBackendEndpointUrl(credentials.baseUrl, upstreamApiType)
-    const apiKey = encodeBackendConfig(
-      credentialsToBackendConfig(credentials, {
-        url: backendUrl,
-        apiType: upstreamApiType,
-        // Codex's own effort reaches the router only as "thinking on", so the
-        // picked level rides in the key, as on the Claude path.
-        pickedReasoningEffort: pickReasoningEffort(sdkOptions.pickedReasoningEffort),
-      }),
-    )
+  // Route the selected account through Halo so Codex never uses ambient credentials.
+  const router = await ensureOpenAICompatRouter({ debug: false })
+  const upstreamApiType = credentials.apiType || inferCodexUpstreamApiType(credentials.baseUrl)
+  const backendUrl = normalizeBackendEndpointUrl(credentials.baseUrl, upstreamApiType)
+  const apiKey = encodeBackendConfig(
+    credentialsToBackendConfig(credentials, {
+      url: backendUrl,
+      apiType: upstreamApiType,
+      // Codex's own effort reaches the router only as "thinking on", so the
+      // picked level rides in the key, as on the Claude path.
+      pickedReasoningEffort: pickReasoningEffort(sdkOptions.pickedReasoningEffort),
+    }),
+  )
 
-    // Codex removed `wire_api = "chat"` (see codex-rs/model-provider-info
-    // lib.rs L41 — "wire_api = \"chat\" is no longer supported"). Always
-    // tell codex to speak the Responses API; Halo's OpenAI-compat router
-    // accepts /v1/responses and converts to whatever protocol the upstream
-    // provider speaks (chat_completions vs responses) using the apiType
-    // encoded in the router-key blob.
-    config.model_provider = 'halo-router'
-    config.model_providers = {
-      'halo-router': {
-        name: 'Halo OpenAI compatibility router',
-        base_url: `${router.baseUrl}/v1`,
-        wire_api: 'responses',
-        requires_openai_auth: false,
-        env_key: 'HALO_ROUTER_KEY',
-      },
-    }
-    processEnvAdditions.HALO_ROUTER_KEY = apiKey
+  // Codex removed `wire_api = "chat"` (see codex-rs/model-provider-info
+  // lib.rs L41 — "wire_api = \"chat\" is no longer supported"). Always
+  // tell codex to speak the Responses API; Halo's OpenAI-compat router
+  // accepts /v1/responses and converts to whatever protocol the upstream
+  // provider speaks (chat_completions vs responses) using the apiType
+  // encoded in the router-key blob.
+  config.model_provider = 'halo-router'
+  config.model_providers = {
+    'halo-router': {
+      name: 'Halo OpenAI compatibility router',
+      base_url: `${router.baseUrl}/v1`,
+      wire_api: 'responses',
+      requires_openai_auth: false,
+      env_key: 'HALO_ROUTER_KEY',
+    },
   }
+  processEnvAdditions.HALO_ROUTER_KEY = apiKey
 
   return { config, processEnvAdditions }
 }

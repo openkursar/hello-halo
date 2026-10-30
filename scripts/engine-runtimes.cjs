@@ -16,16 +16,9 @@ const path = require('path');
 const { RUNTIME_DIR, RUNTIME_ENTRY } = require('../runtimes/dsh/manifest.cjs');
 
 const ENGINE_RUNTIMES = {
-  anthropic: {
-    name: 'Claude Code SDK engine',
-    packageId: '@anthropic-ai/claude-agent-sdk',
-    fix: 'npm install',
-  },
-  // Optional `file:` dependency whose source directory is gitignored. npm skips
-  // it without failing when that directory is empty, which ships a package with
-  // no halo engine — the failure this table exists to make visible.
   halo: {
     name: 'Halo SDK engine',
+    required: true,
     packageId: '@hello-halo/agent-sdk',
     requiredFiles: ['dist/worker/index.js', 'dist/worker/entry.js'],
     fingerprintFile: 'dist/worker/entry.js',

@@ -20,7 +20,8 @@ const { emitAgentEvent, getEngineCapabilities, ensureSessionWarm, v2Sessions, ge
 
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ getEngineCapabilities }))
-vi.mock('../../../../src/main/services/agent/session-manager', () => ({ ensureSessionWarm, v2Sessions }))
+vi.mock('../../../../src/main/services/agent/engine-routing', () => ({ resolveConversationEngine: async () => getEngineCapabilities()?.engineId }))
+vi.mock('../../../../src/main/services/agent/session-manager', () => ({ ensureSessionWarm, v2Sessions, getSessionEngineId: () => undefined, isSessionBusy: () => false }))
 vi.mock('../../../../src/main/services/conversation.service', () => ({ getConversation }))
 
 import {

@@ -59,3 +59,30 @@ describe('OrcaRouter built-in provider', () => {
     ])
   })
 })
+
+describe('Cheaper Inference built-in provider', () => {
+  it('registers an OpenAI-compatible gateway provider with dynamic model discovery', () => {
+    const provider = getBuiltinProvider('cheaperinference')
+
+    expect(provider).toMatchObject({
+      id: 'cheaperinference',
+      authType: 'api-key',
+      apiUrl: 'https://api.cheaperinference.com/v1',
+      modelsUrl: 'https://api.cheaperinference.com/v1/models',
+      region: 'global'
+    })
+    expect(provider?.recommended).toBeUndefined()
+    expect(getAllProviderIds()).toContain('cheaperinference')
+  })
+
+  it('defaults to the mini tier, with bare model ids', () => {
+    expect(getDefaultModel('cheaperinference')).toBe('gpt-5.4-mini')
+    expect(getBuiltinProvider('cheaperinference')?.models.map(model => model.id)).toEqual([
+      'gpt-5.4-mini',
+      'gpt-5.4',
+      'claude-sonnet-5',
+      'gemini-3.1-pro-preview',
+      'deepseek-v4-flash'
+    ])
+  })
+})

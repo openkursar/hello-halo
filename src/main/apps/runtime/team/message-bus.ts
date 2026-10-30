@@ -275,6 +275,7 @@ export interface MessageBus {
    */
   tripExternal(teamId: string, epochId: string, reason: CircuitBreachReason): void
   onBreach(listener: (event: CircuitBreachEvent) => void): () => void
+  getPendingRecordedInputIds(sessionKey: string): readonly string[]
   hasBufferedMessages(epochId: string): boolean
   /**
    * Whether this team session can take a turn right now — a running turn OR a
@@ -346,6 +347,8 @@ export interface TeamDelivery {
   trigger: TeamTriggerContext
   /** Taken back after a person's stop and delivered again: its record already stands where it first arrived. */
   inputRecorded?: boolean
+  /** Receiver-local transcript identities; never part of a team envelope. */
+  recordedInputIds?: readonly string[]
 }
 
 interface EnvelopeJob extends TeamDelivery {
@@ -1020,7 +1023,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       pendingWaits.delete(trigger.correlationId)
       pending.resolve({ from: pending.fromMemberName, message: '', status: 'queued' })
     }
-    turnGate.putBack(sessionKey, deliveries.map((delivery) => ({ envelope: delivery.envelope, trigger: delivery.trigger, inputRecorded: delivery.inputRecorded })))
+    turnGate.putBack(sessionKey, deliveries.map((delivery) => ({ envelope: delivery.envelope, trigger: delivery.trigger, inputRecorded: delivery.inputRecorded, recordedInputIds: delivery.recordedInputIds })))
   }
 
   function returnHeldBack(sessionKey: string, deliveries: readonly TeamDelivery[]): TeamDelivery[] {
@@ -1059,6 +1062,10 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     return () => breachListeners.delete(listener)
   }
 
+  function getPendingRecordedInputIds(sessionKey: string): readonly string[] {
+    return turnGate.bufferedJobs(sessionKey).flatMap(job => (job.deliveries ?? [job]).flatMap(delivery => delivery.recordedInputIds ?? []))
+  }
+
   function hasBufferedMessages(epochId: string): boolean {
     return turnGate.hasAnyBuffered((key) => key.endsWith(`:${epochId}`))
   }
@@ -1080,6 +1087,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     tripExternal: trip,
     onBreach,
     hasBufferedMessages,
+    getPendingRecordedInputIds,
     isSessionOccupied,
     drainMailbox,
   }

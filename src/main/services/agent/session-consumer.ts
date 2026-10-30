@@ -1,3 +1,4 @@
+import type { EngineId } from '../../../shared/types/engine'
 /**
  * Agent Module - Session Consumer
  *
@@ -71,6 +72,7 @@ export interface ConsumerHandle {
 
 /** Everything a consumer needs beyond the session itself. */
 export interface ConsumerContext {
+  engineId?: EngineId
   spaceId: string
   conversationId: string
   /** Display model name for thought parsing */
@@ -85,6 +87,7 @@ export interface ConsumerContext {
  * Internal consumer state — tracks everything the consumer needs across turns.
  */
 interface ConsumerState {
+  engineId?: EngineId
   spaceId: string
   conversationId: string
   displayModel: string
@@ -130,6 +133,7 @@ export function startConsumer(
 ): ConsumerHandle {
   const { conversationId } = context
   const state: ConsumerState = {
+    engineId: context.engineId,
     spaceId: context.spaceId,
     conversationId,
     displayModel: context.displayModel,
@@ -256,6 +260,7 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
       // key off, uniformly for user-initiated and autonomous turns.
 
       const result = await processStream({
+        engineId: state.engineId,
         v2Session,
         sessionState,
         spaceId,

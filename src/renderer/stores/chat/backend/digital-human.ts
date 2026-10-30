@@ -9,7 +9,7 @@
  */
 import { api, createEmptySessionState } from '../internal'
 import type { Conversation, Message, Thought } from '../internal'
-import type { TranscriptPage } from '../../../../shared/types/transcript'
+import type { AppChatTranscriptPage } from '../../../../shared/apps/app-types'
 import type { ContentReference } from '../../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../../shared/content-reference'
 import i18n from '../../../i18n'
@@ -43,10 +43,10 @@ function resolve(ctx: BackendContext, conversationId: string): { appId: string; 
   return appId && spaceId ? { appId, spaceId } : null
 }
 
-async function readPage(appId: string, ref: ConversationRef, request: { before?: string; limit?: number; through?: string } = {}): Promise<TranscriptPage> {
+async function readPage(appId: string, ref: ConversationRef, request: { before?: string; limit?: number; through?: string } = {}): Promise<AppChatTranscriptPage> {
   const response = await api.appChatTranscript({ appId, spaceId: ref.spaceId, conversationId: ref.conversationId, ...request })
   if (!response.success || !response.data) throw new Error(response.error || i18n.t('Failed to load chat'))
-  return response.data as TranscriptPage
+  return response.data
 }
 
 function emptyConversation(appId: string, ref: ConversationRef): Conversation {
@@ -83,7 +83,7 @@ function withPage(
   existing: Conversation | undefined,
   appId: string,
   ref: ConversationRef,
-  page: TranscriptPage,
+  page: AppChatTranscriptPage,
   inFlight: boolean
 ): Conversation {
   const base = existing ?? emptyConversation(appId, ref)
@@ -104,6 +104,8 @@ function withPage(
   const last = messages[messages.length - 1]
   return {
     ...base,
+    engineBinding: page.engineBinding,
+    resolvedEngineId: page.engineId,
     messages,
     messageCount: page.total,
     updatedAt: last?.timestamp ?? base.updatedAt,
@@ -276,7 +278,7 @@ async function settleTurn(ctx: BackendContext, ref: ConversationRef, turnId: num
   // Not open anywhere: nothing to settle into, and reading it would only push
   // conversations the user has open out of the cache. `open` reads it later.
   const cached = ctx.get().conversationCache.has(ref.conversationId)
-  let page: TranscriptPage | null = null
+  let page: AppChatTranscriptPage | null = null
   if (appId && cached) {
     try {
       page = await readPage(appId, ref, { limit: PAGE_SIZE })

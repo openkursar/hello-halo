@@ -15,6 +15,10 @@ const m = vi.hoisted(() => ({
   ensureMemoryFile: vi.fn(async () => false),
 }))
 
+vi.mock('../../../../src/main/services/agent/engine-routing', () => ({
+  resolveConversationEngine: async () => 'halo',
+  prepareConversationContinuation: (_spaceId: string, _conversationId: string, conversation: { sessionId?: string }, _engine: unknown, options?: { legacySessionId?: string }) => ({ engineId: 'halo', engineState: {}, resumeSessionId: options?.legacySessionId ?? conversation?.sessionId }),
+}))
 vi.mock('../../../../src/main/foundation/config.service', () => ({ getConfig: () => ({ agent: {} }) }))
 vi.mock('../../../../src/main/services/conversation.service', () => ({
   addMessage: m.addMessage,
@@ -41,6 +45,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
+  getSessionEngineId: () => undefined, isSessionBusy: () => false,
   acquireV2Session: m.acquireV2Session,
   closeV2Session: vi.fn(),
   updateConsumerDisplayModel: vi.fn(),
@@ -161,7 +166,8 @@ describe('space memory session context', () => {
       expect(options.memoryGuard).toMatchObject({ writable: [memoryLayout] })
     }
     expect(m.acquireV2Session.mock.calls.at(-1)?.[3]).toBe('saved-session')
-    expect(m.acquireV2Session.mock.calls.at(-1)?.[9]).toEqual({ creationContext: `space-memory:${memoryLayout.file}` })
+    // A resumed conversation can always continue from its transcript if its stored session is lost.
+    expect(m.acquireV2Session.mock.calls.at(-1)?.[9]).toEqual({ creationContext: `space-memory:${memoryLayout.file}`, recoverNativeSession: expect.any(Function) })
   })
 
   it('resuming another transcript uses the destination conversation author without repeating the snapshot', async () => {

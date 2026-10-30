@@ -11,7 +11,9 @@
 
 import { spawn } from 'node:child_process'
 import type { ChildLocalConnectionInfo } from '../../../shared/types/health'
-import { getActiveEngine } from './resolved-sdk'
+import { getDefaultEngine } from './resolved-sdk'
+import type { EngineId } from '../../../shared/types/engine'
+import { getConfig } from '../../foundation/config.service'
 import { getHeadlessElectronPath } from './helpers'
 import { resolveBundledCodexBinary } from './codex/transport/connection'
 
@@ -33,13 +35,17 @@ const BLOCKED_CODES = new Set(['EACCES', 'EPERM'])
 const CHECK_TIMEOUT_MS = 5000
 
 /** The program whose connection the router sees: what an allowlist has to name. */
-export function localConnectionProgram(): string {
-  switch (getActiveEngine()) {
+export function localConnectionProgram(engineId: EngineId = getDefaultEngine()): string {
+  switch (engineId) {
     case 'halo':
       return process.execPath
     case 'codex': {
       const codex = resolveBundledCodexBinary()
       return codex && !codex.isJsShim ? codex.binaryPath : getHeadlessElectronPath()
+    }
+    case 'anthropic': {
+      const selectedPath = getConfig().agent?.ccRuntime?.selectedPath
+      return selectedPath ? (/\.(?:m?js|cjs)$/i.test(selectedPath) ? process.execPath : selectedPath) : getHeadlessElectronPath()
     }
     default:
       return getHeadlessElectronPath()
@@ -58,12 +64,12 @@ export function isRefusedLocalConnection(error: string): boolean {
  * An engine error as the user should read it: a refused local connection is
  * explained, with the program to allow; any other error comes back unchanged.
  */
-export function explainEngineError(error: string): string {
+export function explainEngineError(error: string, engineId?: EngineId): string {
   if (!isRefusedLocalConnection(error)) return error
   return (
     "Security software on this computer blocked Halo's internal connection to 127.0.0.1, so the request never " +
     'reached the model. This is not a problem with the model, the account or the gateway. Ask your IT team to ' +
-    `allow this program to make local connections: ${localConnectionProgram()} (engine error: ${error})`
+    `allow this program to make local connections: ${localConnectionProgram(engineId)} (engine error: ${error})`
   )
 }
 

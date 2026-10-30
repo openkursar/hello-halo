@@ -30,6 +30,38 @@ import {
 } from '../../../src/main/openai-compat-router/server/codex-responses-handler'
 
 describe('Codex Responses compatibility', () => {
+  it.each(['anthropic_passthrough', 'kiro', 'future-protocol'])('refuses %s before forwarding or logging request content', async apiType => {
+    proxyFetch.mockReset()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() }
+    try {
+      await handleResponsesRequest({ model: 'chosen-model', input: 'private-test-content' }, {
+        url: 'https://selected.example/v1/messages', key: 'selected-test-secret', apiType: apiType as any,
+        headers: { Authorization: 'Bearer selected-test-secret' },
+      }, res as any)
+      expect(res.status).toHaveBeenCalledWith(400)
+      expect(res.json).toHaveBeenCalledWith({ error: { type: 'invalid_request_error', message: expect.stringContaining('OpenAI-compatible') } })
+      expect(proxyFetch).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledOnce()
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(/selected-test-secret|private-test-content/)
+      expect(log).not.toHaveBeenCalled()
+    } finally { warn.mockRestore(); log.mockRestore() }
+  })
+
+  it('keeps the legacy undefined protocol on its selected Chat Completions endpoint and model', async () => {
+    proxyFetch.mockReset().mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'fixture response' } }), { status: 400 }))
+    try {
+      await handleResponsesRequest({ model: 'claude-mythos-preview', input: 'test' }, {
+        url: 'https://selected.example/v1/chat/completions', key: 'selected-key', model: 'claude-mythos-preview',
+      }, { status: vi.fn().mockReturnThis(), json: vi.fn() } as any)
+      expect(proxyFetch).toHaveBeenCalledOnce()
+      const [url, init] = proxyFetch.mock.calls[0]
+      expect(url).toBe('https://selected.example/v1/chat/completions')
+      expect(JSON.parse(init.body).model).toBe('claude-mythos-preview')
+      expect(init.headers.Authorization).toBe('Bearer selected-key')
+    } finally { proxyFetch.mockReset() }
+  })
   it('restores native Responses tool namespaces across split SSE chunks while preserving opaque events', async () => {
     const item = { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'mcp__halo_team__collab_start', arguments: '{"message":"你好"}' }
     const shell = { type: 'function_call', id: 'fc_2', call_id: 'call_2', name: 'functions__exec_command', arguments: '{"cmd":"echo hello"}' }

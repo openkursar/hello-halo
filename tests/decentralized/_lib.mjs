@@ -367,7 +367,23 @@ export async function reviveNode(node, clusterDir = '.cluster') {
     },
   })
   child.unref()
+  fs.closeSync(out)
   node.pid = child.pid
+  // Stop commands also run in another process, so the manifest must follow a revival.
+  const manifestPath = path.resolve(PROJECT_ROOT, clusterDir, 'nodes.json')
+  try {
+    const manifest = loadManifest(clusterDir)
+    const recorded = manifest.nodes.find(entry => entry.index === node.index)
+    if (!recorded) throw new Error(`Revived node-${node.index} is absent from the cluster manifest`)
+    recorded.pid = node.pid
+    const temporary = `${manifestPath}.tmp`
+    fs.writeFileSync(temporary, JSON.stringify(manifest, null, 2))
+    fs.renameSync(temporary, manifestPath)
+  } catch (error) {
+    if (process.platform === 'win32') child.kill('SIGTERM')
+    else process.kill(-child.pid, 'SIGTERM')
+    throw error
+  }
   const ok = await pollUntil(
     async () => {
       const r = await api(node, 'GET', '/api/teams')

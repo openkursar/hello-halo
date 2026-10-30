@@ -3,7 +3,7 @@
  * Modular design with left sidebar navigation and right content area
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useAppStore } from '../stores/app.store'
 import { api } from '../api'
 import type { HaloConfig } from '../types'
@@ -36,7 +36,13 @@ export function SettingsPage() {
   const isRemoteMode = api.isRemoteMode()
 
   // Active navigation section (click-only, no scroll spy - standard settings page behavior)
-  const [activeSection, setActiveSection] = useState('ai-model')
+  const settingsFocus = useAppStore(state => state.settingsFocus)
+  const [activeSection, setActiveSection] = useState(settingsFocus === 'claude-code' && !isRemoteMode ? 'advanced' : 'ai-model')
+  useEffect(() => {
+    if (!settingsFocus) return
+    if (!isRemoteMode) scrollToSection('advanced')
+    useAppStore.getState().clearSettingsFocus()
+  }, [settingsFocus, isRemoteMode])
 
   // Handle navigation click
   const handleNavClick = useCallback((sectionId: string) => {

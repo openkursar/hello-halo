@@ -149,6 +149,7 @@ async function resolveImRoute(
 }
 
 export interface TeamRuntime {
+  getPendingRecordedInputIds(conversationId: string): readonly string[]
   bus: MessageBus
   blackboard: Blackboard
   /** Periodic checks: set/stop/inspect the standing instructions in this office. */
@@ -557,6 +558,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     reconcileAwaitingDecision: (appId) => orchestration!.reconcileAwaitingDecision(appId),
     activeRunEpochId: (teamId) => orchestration!.activeRunEpochId(teamId),
     recoverInterruptedRuns: () => orchestration!.recoverInterruptedRuns(),
+    getPendingRecordedInputIds: conversationId => bus.getPendingRecordedInputIds(conversationId),
     startEpoch: (teamId, trigger, instruction) => orchestration!.startEpoch(teamId, trigger, instruction),
     ensureConversationEpoch: (teamId, chatKey, title, createdBy, entryAppId) =>
       orchestration!.ensureConversationEpoch(teamId, chatKey, title, createdBy, entryAppId),
@@ -619,13 +621,14 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
       // Held in a box, not a `let`: the assignments happen inside callbacks, which
       // TypeScript's flow analysis does not see, so a plain local reads as `null`
       // below and silently types the IM push away.
-      const captured: { reply: string | null; ending?: AppChatTurnEnding; delivers: boolean; heldBack?: { recorded: boolean } } = { reply: null, delivers: false }
+      const captured: { reply: string | null; ending?: AppChatTurnEnding; delivers: boolean; heldBack?: { recorded: boolean; recordedInputIds?: readonly (string | undefined)[] } } = { reply: null, delivers: false }
       try {
         await sendAppChatMessage({
           appId: request.appId,
           spaceId: request.spaceId,
           message: request.message,
           recordedMessages: request.recordedMessages,
+          recordedInputIds: request.recordedInputIds,
           coalescingKey: request.coalescingKey,
           conversationId: request.conversationId,
           teamContext: request.teamContext,
@@ -644,8 +647,8 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
           },
           // A person's stop held the turn back before the member read it: their
           // own words already written are marked; the bus decides the rest.
-          onHeldBack: (records) => {
-            captured.heldBack = { recorded: records.length > 0 }
+          onHeldBack: (records, recordedInputIds) => {
+            captured.heldBack = { recorded: records.length > 0, recordedInputIds }
             keepStoppedInputs(request.conversationId, (request.recordedMessages ?? []).flatMap((record, index) =>
               records[index] && isPersonsOwnDelivery({ ...request.teamContext, kind: record.teamOrigin?.kind }) ? [records[index]] : []))
           },
@@ -685,7 +688,7 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
         // A person's own 1:1 words: void after their stop; the team's wait for the next turn.
         return { ...item, personal: !!trigger && isPersonsOwnDelivery({ ...trigger, kind }) }
       })
-      return injectIntoAppChatBatch(sessionKey, batch, (indexes) => onTakenBack?.(indexes))
+      return injectIntoAppChatBatch(sessionKey, batch, (indexes, recordedInputIds) => onTakenBack?.(indexes, recordedInputIds))
     },
     recordStoppedInputs(sessionKey, records) {
       keepStoppedInputs(sessionKey, [], records)

@@ -12,6 +12,20 @@ places, and the page must not know which:
 
 What differs is exactly a set of verbs, and they live behind one interface.
 
+Engine identity is per conversation. `useConversationEngineId` reads live
+`sessionInitInfo.engineId`, then the persisted native-session binding, then an
+explicit preference. `engine.store` caches at most four capability descriptors;
+its default descriptor is only for an unbound new conversation. An idle
+composer follows an explicit next-engine preference, while a running composer
+and the goal editor use the actual session's capabilities. A default-engine
+change does not alter those flags on existing conversations.
+
+The model menu's Advanced section changes a space conversation's
+`engineOverride`. It confirms the handoff before saving, shows the engine still
+running separately, and can cancel a pending handoff by choosing that engine.
+Clearing an override retains an existing binding. The backend validates and
+performs the handoff; the renderer never rewrites native session identity.
+
 ## Backends (`backend/`)
 
 `backendFor(conversationId)` is the only place an id is turned into a decision

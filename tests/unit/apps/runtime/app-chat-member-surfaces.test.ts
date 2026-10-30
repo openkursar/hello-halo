@@ -85,6 +85,7 @@ const { sink, beginRound } = vi.hoisted(() => {
   }
 })
 vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
+  bindAppChatEngine: (sink: unknown) => sink,
   onAppChatRoundChange: () => () => {},
   getAppChatSink: () => sink,
   peekAppChatSink: () => undefined,
@@ -236,7 +237,15 @@ const { loadChatSessionId } = vi.hoisted(() => ({ loadChatSessionId: vi.fn<[], s
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
   getImSessionRegistry: () => sessionRegistry.current,
 }))
+vi.mock('../../../../src/main/apps/runtime/engine-selection', () => ({
+  resolveAppSessionEngine: async (selection: { engineId?: string }) => selection.engineId ?? 'halo',
+  prepareAppEngineSession: (options: { state: { sessionId?: string }; legacySessionId?: string }) => ({ resumeSessionId: options.state.sessionId ?? options.legacySessionId }),
+}))
+
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
+  saveChatEngineRouting: (_space: string, _app: string, _run: string, engineId: string, state: any = {}) => state.sessionId || state.binding || state.routingEngine ? state : { routingEngine: engineId },
+  loadChatEngineState: () => ({ sessionId: loadChatSessionId() }),
+  saveChatEngineBinding: vi.fn(() => true),
   loadChatSessionId,
   saveChatSessionId: vi.fn(),
   deleteChatSessionId: vi.fn(),
@@ -263,7 +272,7 @@ const { app, environment, activityStore, listEffectiveMcpApps } = vi.hoisted(() 
     status: 'active',
     permissions: { granted: [], denied: [] },
     userConfig: {},
-    userOverrides: undefined,
+    userOverrides: undefined as { engineId?: string } | undefined,
     spec: {
       name: 'Tester',
       type: 'automation',
@@ -346,6 +355,7 @@ import { buildTeamSessionKey } from '../../../../src/shared/apps/team-types'
 import { fullCapabilityPolicy } from '../../../../src/shared/apps/capability-policy'
 
 beforeEach(() => {
+  app.userOverrides = undefined
   getPromptInstructions.mockImplementation(generatePromptInstructions)
   send.mockClear()
   loadChatSessionId.mockReset()
@@ -390,10 +400,10 @@ function memberTurn(opts: { origin?: 'colleague' | 'guest' } = {}): Parameters<t
 /** What the turn handed the session layer, once it had assembled everything. */
 function mountedSurfaces(): { mcpServers: Record<string, unknown>; systemPrompt: string } {
   const call = buildUserSessionSdkOptions.mock.calls.at(-1) as unknown as [{ mcpServers: Record<string, unknown> }]
-  const options = buildUserSessionSdkOptions.mock.results.at(-1)!.value as { systemPrompt?: string }
+  const options = buildUserSessionSdkOptions.mock.results.at(-1)!.value as { systemPrompt?: string | { append: string } }
   return {
     mcpServers: call[0].mcpServers,
-    systemPrompt: options.systemPrompt ?? '',
+    systemPrompt: typeof options.systemPrompt === 'string' ? options.systemPrompt : options.systemPrompt?.append ?? '',
   }
 }
 
@@ -642,10 +652,12 @@ describe('a restricted borrowed turn keeps every tool-call watcher', () => {
   })
 
   it('on an engine that cannot enforce a policy (Codex), a restricted turn does not start at all', async () => {
+    app.userOverrides = { engineId: 'codex' }
     getEngineCapabilities.mockReturnValue({ features: { permissionRules: false, hooks: false } })
     vi.mocked(acquireV2Session).mockClear()
     await expect(sendAppChatMessage(memberTurn({ origin: 'colleague' }))).rejects.toThrow(/cannot hold/)
     expect(acquireV2Session).not.toHaveBeenCalled()
+    expect(getEngineCapabilities).toHaveBeenCalledWith('codex')
   })
 
   it('on an engine that runs no hooks (Codex, dsh), a colleague turn with full reach does not start: nothing would record it', async () => {

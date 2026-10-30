@@ -140,6 +140,7 @@ function dispatchBatch(
   if (!ref) return Promise.reject(new Error(`not a digital-human session: ${conversationId}`))
   // A message taken back after a stop keeps the record it already has.
   const fresh = messages.filter((message) => !message.inputRecorded)
+  const recordedInputIds = messages.flatMap(message => message.recordedInputIds ?? [])
   const first = fresh[0] ?? messages[0]
   return new Promise((resolve, reject) => {
     let accepted = false
@@ -157,6 +158,7 @@ function dispatchBatch(
         content: message.record.content,
         provenance: { source: message.record.source, metadata: message.record.metadata },
       })),
+      ...(recordedInputIds.length ? { recordedInputIds } : {}),
       onMessageAccepted: () => {
         accepted = true
         resolve(outcomes)
@@ -224,7 +226,8 @@ export function createDigitalHumanConversationSource(): ConversationSource {
         text: message.turnInput,
         recorded: { content: message.record.content, provenance: { source: message.record.source, metadata: message.record.metadata } },
         inputRecorded: message.inputRecorded,
-      })), () => onWithdrawn())
+        ...(message.recordedInputIds?.length ? { recordedInputIds: message.recordedInputIds } : {}),
+      })), (_indexes, recordedInputIds) => onWithdrawn(recordedInputIds))
       return accepted ? messages.map(() => ({})) : false
     },
 

@@ -9,7 +9,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 
 // Mock heavy dependencies that mcp-manager.ts imports transitively
 vi.mock('../../../src/main/services/agent/resolved-sdk', () => ({
-  query: vi.fn()
+  query: vi.fn(), resolveDefaultEngine: vi.fn(async () => 'anthropic'),
 }))
 vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(() => ({})),
@@ -296,8 +296,8 @@ describe('testMcpConnections telemetry', () => {
       const options = vi.mocked(query).mock.calls[0][0].options
       expect(options.apiCredentials).toBe(credentials)
       expect(options.credentialsGeneration).toBe('captured-a')
-      // The same CLI conversations run, not the SDK's default copy inside the archive.
-      expect(options.pathToClaudeCodeExecutable).toBe(sdk.resolveClaudeCodeCliPath())
+      expect(options.engineId).toBe('anthropic')
+      expect(options).not.toHaveProperty('pathToClaudeCodeExecutable')
     } finally {
       removeServerStatus('srv')
       vi.clearAllTimers()
@@ -331,7 +331,8 @@ describe('testMcpConnections telemetry', () => {
     expect(secondCall).toMatchObject({ success: false, error: 'Test already in progress' })
     expect(track).not.toHaveBeenCalled()
 
-    releaseFirstCall?.()
+    await vi.waitFor(() => expect(releaseFirstCall).toBeDefined())
+    releaseFirstCall!()
     await firstCall
   })
 })
@@ -369,12 +370,13 @@ describe('testMcpConnections environment', () => {
 
     await testMcpConnections()
 
-    expect(sdk.resolveCredentialsForSdk).toHaveBeenCalledWith(credentials)
+    expect(sdk.resolveCredentialsForSdk).toHaveBeenCalledWith(credentials, undefined, 'anthropic')
     expect(sdk.buildSdkEnv).toHaveBeenCalledWith({
       anthropicApiKey: 'encoded-a', anthropicBaseUrl: 'http://127.0.0.1:3457', delegatedRoutingHeader: undefined,
       capabilities: credentials.capabilities, sourceId: 'account-a',
     })
     const options = vi.mocked(query).mock.calls[0][0].options
+    expect(options.engineId).toBe('anthropic')
     expect(options.env).toBe(builtEnv)
     expect(options).toMatchObject({ apiKey: 'encoded-a', model: 'model-a', anthropicBaseUrl: 'http://127.0.0.1:3457' })
   })

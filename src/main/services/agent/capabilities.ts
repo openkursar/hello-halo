@@ -17,7 +17,8 @@
  * new fields is safe — renderer fallbacks tolerate missing flags.
  */
 
-export type EngineId = 'anthropic' | 'halo' | 'codex' | 'dsh'
+import type { EngineId } from '../../../shared/types/engine'
+export { ENGINE_IDS, isEngineId, type EngineId } from '../../../shared/types/engine'
 
 /**
  * Logical tool kinds Halo's UI knows how to render. The renderer maps tool

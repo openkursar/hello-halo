@@ -1,3 +1,4 @@
+import type { EngineId } from '../../../shared/types/engine'
 /**
  * Agent Module - Stream Processor
  *
@@ -233,6 +234,8 @@ export interface StreamCallbacks {
  * Contains all data needed by callers for post-stream handling.
  */
 export interface StreamResult {
+  /** Fixed by the session owner, never inferred from the current default. */
+  engineId?: EngineId
   /** Final text content (last text block or streaming fallback) */
   finalContent: string
   /** Whether finalContent carries real text (non-whitespace). False when the
@@ -271,6 +274,7 @@ export interface StreamResult {
  * All data needed to process a V2 SDK session stream.
  */
 export interface ProcessStreamParams {
+  engineId?: EngineId
   /** The V2 SDK session (already created by caller) */
   v2Session: any
   /** Session state (holds thoughts array — shared with session-manager) */
@@ -327,7 +331,8 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   params.abortController.signal.addEventListener('abort', settle)
   params.sessionSignal?.addEventListener('abort', settle)
   try {
-    return await consumeStream(params, deltas)
+    const result = await consumeStream(params, deltas)
+    return params.engineId ? { ...result, engineId: params.engineId } : result
   } finally {
     params.abortController.signal.removeEventListener('abort', settle)
     params.sessionSignal?.removeEventListener('abort', settle)
@@ -1052,7 +1057,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
     // Parse SDK message into Thought and send to renderer
     // Pass credentials.model to display the user's actual configured model
     const thought = parseSDKMessage(sdkMessage, displayModel)
-    if (thought?.type === 'error') thought.content = explainEngineError(thought.content)
+    if (thought?.type === 'error') thought.content = explainEngineError(thought.content, params.engineId)
 
     if (thought) {
       // Handle tool_result specially - merge into corresponding tool_use thought
@@ -1290,8 +1295,9 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
         const sdkSlashCommands = msg.slash_commands as string[] | undefined
         const sdkSkills = msg.skills as string[] | undefined
         const sdkAgents = msg.agents as string[] | undefined
-        if (sdkSlashCommands || sdkSkills || sdkAgents) {
+        if (params.engineId || sdkSlashCommands || sdkSkills || sdkAgents) {
           emitAgentEvent('agent:session-info', spaceId, conversationId, {
+            ...(params.engineId ? { engineId: params.engineId } : {}),
             slashCommands: sdkSlashCommands ?? [],
             skills: sdkSkills ?? [],
             agents: sdkAgents ?? []

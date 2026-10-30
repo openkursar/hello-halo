@@ -184,8 +184,11 @@ beforeEach(async () => {
   h.emitAgentEvent.mockClear()
 
   // The fake chat send: persists the turn input like the real one, then the turn runs.
-  h.sendChat.mockImplementation(async (params: { conversationId: string; message: string }) => {
-    h.state.chats.get(params.conversationId)!.messages.push({ id: `u-${h.state.nextId++}`, role: 'user', content: params.message, timestamp: 't' })
+  h.sendChat.mockImplementation(async (params: { conversationId: string; message: string }, internal?: { onUserMessageRecorded?: (messageId: string) => void }) => {
+    await Promise.resolve()
+    const messageId = `u-${h.state.nextId++}`
+    h.state.chats.get(params.conversationId)!.messages.push({ id: messageId, role: 'user', content: params.message, timestamp: 't' })
+    internal?.onUserMessageRecorded?.(messageId)
     h.state.chatBusy.add(params.conversationId)
   })
   // The fake digital-human send: the sink records what the caller says to keep (or the text itself), the turn runs.

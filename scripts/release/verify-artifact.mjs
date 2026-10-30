@@ -18,6 +18,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { load } from 'js-yaml'
+import engineRuntimes from '../engine-runtimes.cjs'
 import {
   c, log, loadManifest, sha256File, sha256Buffer, getByPath, isEmptyValue,
   asarList, asarRead, readRecord, writeRecord,
@@ -43,12 +44,7 @@ function parseArgs(argv) {
   return args
 }
 
-/** Engine id → npm package that carries it (kept in step with engine-runtimes.cjs). */
-const ENGINE_PACKAGES = {
-  anthropic: '@anthropic-ai/claude-agent-sdk',
-  halo: '@hello-halo/agent-sdk',
-  codex: '@openai/codex-sdk',
-}
+const { ENGINE_RUNTIMES, engineArtifactPaths } = engineRuntimes
 
 /** Platform key → packaged-app dir label produced by electron-builder. */
 const PLATFORM_APP_LABELS = {
@@ -110,9 +106,13 @@ function checkAsar(app, { manifest, record, problems }) {
 
   // engines physically present
   const unpackedRoot = app.asar + '.unpacked'
-  for (const engine of manifest.requiredEngines) {
-    const pkg = ENGINE_PACKAGES[engine]
-    const rel = `node_modules/${pkg}/package.json`
+  const required = new Set(['halo', ...manifest.requiredEngines])
+  for (const engine of required) {
+    if (!ENGINE_RUNTIMES[engine]) {
+      problems.push(`${app.label}: unknown bundled engine "${engine}"`)
+      continue
+    }
+    const { manifestPath: rel, label: pkg } = engineArtifactPaths(ENGINE_RUNTIMES[engine])
     const inAsar = listing.has(rel)
     const inUnpacked = fs.existsSync(path.join(unpackedRoot, rel))
     if (!inAsar && !inUnpacked) {

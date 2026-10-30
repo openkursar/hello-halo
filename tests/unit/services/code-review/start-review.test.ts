@@ -38,6 +38,8 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   openToolset: m.openToolset,
   closeToolset: m.closeToolset,
   getWorkingDir: () => '/space',
+  getActiveEngine: () => 'halo',
+  resolveDefaultEngine: async () => 'halo',
   sendMessage: m.sendMessage,
 }))
 vi.mock('../../../../src/main/services/git', () => ({
@@ -85,7 +87,7 @@ describe('startReview', () => {
   it('starts a quick review in a background conversation and records it', async () => {
     const result = await startReview(request())
 
-    expect(m.createConversation).toHaveBeenCalledWith('space-1', 'Review · Uncommitted changes · 1 file', undefined, { keepTitle: true })
+    expect(m.createConversation).toHaveBeenCalledWith('space-1', 'Review · Uncommitted changes · 1 file', undefined, { keepTitle: true, engineId: 'halo' })
     expect(m.closeToolset).toHaveBeenCalledWith({ spaceId: 'space-1', conversationId: 'review-1', workDir: '/space' }, 'halo-team', 'system')
     expect(m.openToolset).not.toHaveBeenCalled()
     expect(m.sendMessage).toHaveBeenCalledWith({

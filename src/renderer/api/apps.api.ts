@@ -12,7 +12,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
-import type { ActivityEntry, AutomationAppState, AvailableSkill, EscalationAnswerPayload, InstalledApp, PendingDecisionQuery } from '../../shared/apps/app-types'
+import type { ActivityEntry, AutomationAppState, AvailableSkill, EscalationAnswerPayload, InstalledApp, PendingDecisionQuery, AppChatEngineMetadata, AppChatTranscriptPage } from '../../shared/apps/app-types'
 import type { AppSpec } from '../../shared/apps/spec-types'
 import type { CapabilityInventory } from '../../shared/apps/capability-inventory'
 import type { AppSpaceChangePreview } from '../../shared/apps/app-environment'
@@ -22,7 +22,7 @@ import type { ContentReference } from '../../shared/types/content-reference'
 import type { ReasoningEffortLevel } from '../../shared/constants/reasoning-effort'
 import type { MemoryStatus } from '../../shared/types/memory'
 import type { ConversationReminderView } from '../../shared/apps/conversation-reminders'
-import type { Thought, TranscriptPage } from '../../shared/types/transcript'
+import type { Thought, TranscriptMessage } from '../../shared/types/transcript'
 import { ensureExtendedServicesReady } from './bootstrap-ready'
 
 export const appsApi = {
@@ -472,7 +472,7 @@ export const appsApi = {
     return httpRequest('GET', `/api/apps/${appId}/chat/status${qs}`)
   },
 
-  appChatMessages: async (appId: string, spaceId: string, conversationId?: string): Promise<ApiResponse> => {
+  appChatMessages: async (appId: string, spaceId: string, conversationId?: string): Promise<ApiResponse<TranscriptMessage[]> & AppChatEngineMetadata> => {
     if (isElectron()) {
       return window.halo.appChatMessages({ appId, spaceId, conversationId })
     }
@@ -481,7 +481,7 @@ export const appsApi = {
   },
 
   /** One page of the transcript, newest first; messages carry `thoughts: null` (see appChatMessageThoughts). */
-  appChatTranscript: async (input: { appId: string; spaceId: string; conversationId?: string; before?: string; limit?: number; through?: string }): Promise<ApiResponse<TranscriptPage>> => {
+  appChatTranscript: async (input: { appId: string; spaceId: string; conversationId?: string; before?: string; limit?: number; through?: string }): Promise<ApiResponse<AppChatTranscriptPage>> => {
     if (isElectron()) {
       return window.halo.appChatTranscript(input)
     }
@@ -539,7 +539,7 @@ export const appsApi = {
     return httpRequest('POST', `/api/apps/${appId}/chats/clear-all`)
   },
 
-  appImChatMessages: async (appId: string, spaceId: string, channel: string, chatType: 'direct' | 'group', chatId: string): Promise<ApiResponse> => {
+  appImChatMessages: async (appId: string, spaceId: string, channel: string, chatType: 'direct' | 'group', chatId: string): Promise<ApiResponse<TranscriptMessage[]> & AppChatEngineMetadata> => {
     if (isElectron()) {
       return window.halo.appImChatMessages({ appId, spaceId, channel, chatType, chatId })
     }

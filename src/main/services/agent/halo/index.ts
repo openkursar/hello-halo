@@ -1,8 +1,12 @@
 import { app } from 'electron'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type * as WorkerSdk from '@hello-halo/agent-sdk/worker'
 import type { Options } from '@hello-halo/agent-sdk'
+import { getBundledRipgrepPath } from './ripgrep'
+import { updateEnvPath } from '../../child-env'
+import { NativeSessionResumeError } from '../../../../shared/types/engine-session'
 
 /** Host lifecycle and opaque grouping; thread management belongs entirely to the SDK. */
 export function createHaloSdkModule(sdk: typeof WorkerSdk) {
@@ -12,12 +16,24 @@ export function createHaloSdkModule(sdk: typeof WorkerSdk) {
     // Leave room for the remaining services within the application's five-second quit budget.
     shutdownTimeoutMs: 3000,
   })
-  const setupModule = pathToFileURL(unpack(join(app.getAppPath(), 'out/main/worker/halo-setup.cjs'))).href
+  const appPath = app.getAppPath()
+  const builtSetup = join(appPath, 'worker/halo-setup.cjs')
+  const setupPath = !app.isPackaged && existsSync(builtSetup)
+    ? builtSetup
+    : join(appPath, 'out/main/worker/halo-setup.cjs')
+  const setupModule = pathToFileURL(unpack(setupPath)).href
   const prepare = (options: Record<string, any>) => {
     const { haloRequestIdentity, workerGroup, ...sessionOptions } = options
     if (haloRequestIdentity) delete sessionOptions.requestIdentity
     if (sessionOptions.env?.CLAUDE_CODE_GIT_BASH_PATH && !sessionOptions.env.AGENT_GIT_BASH_PATH) {
       sessionOptions.env = { ...sessionOptions.env, AGENT_GIT_BASH_PATH: sessionOptions.env.CLAUDE_CODE_GIT_BASH_PATH }
+    }
+    const ripgrepPath = getBundledRipgrepPath()
+    if (ripgrepPath && !sessionOptions.env?.AGENT_RIPGREP_PATH) {
+      const env = { ...sessionOptions.env, AGENT_RIPGREP_PATH: ripgrepPath }
+      // Last on the agent shell's PATH: `rg` works there too, and an rg of the user's own still wins.
+      updateEnvPath(env, current => current ? `${current}${delimiter}${dirname(ripgrepPath)}` : dirname(ripgrepPath))
+      sessionOptions.env = env
     }
     return {
       options: sessionOptions as Options,
@@ -31,9 +47,18 @@ export function createHaloSdkModule(sdk: typeof WorkerSdk) {
     initialize: () => runtime.initialize(),
     close: () => runtime.close(),
     diagnostics: () => runtime.diagnostics(),
-    createSession(options: Record<string, any>) {
+    async createSession(options: Record<string, any>) {
       const prepared = prepare(options)
-      return runtime.createSession(prepared.options, prepared.placement)
+      try {
+        return await runtime.createSession(prepared.options, prepared.placement)
+      } catch (error) {
+        // The SDK refused a strict resume: the host continues from its own transcript.
+        if (sdk.isResumeHistoryError(error) && typeof options.resume === 'string') {
+          console.warn(`[Agent][Halo] Stored session ${options.resume} not restorable as recorded: ${error.reason}`)
+          throw new NativeSessionResumeError('halo', options.resume, error)
+        }
+        throw error
+      }
     },
     query(params: { prompt: string; options?: Record<string, any> }) {
       const prepared = prepare(params.options ?? {})

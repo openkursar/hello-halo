@@ -22,6 +22,7 @@ import { GoalStatusIcon, goalStatusLabel } from './GoalStatus'
 import { saveGoal } from './goal-actions'
 import { useClearGoal } from './useClearGoal'
 import { useConversationRunning, useTimeAgo } from './hooks'
+import { useConversationEngineId } from '../../hooks/useConversationEngine'
 
 interface Row {
   id: number
@@ -96,7 +97,8 @@ const PRIMARY_BUTTON = `${BUTTON} bg-primary text-primary-foreground hover:bg-pr
 
 export function GoalEditor({ tab }: { tab: TabState }) {
   const target = tab.goal
-  const supported = useGoalSupported()
+  const engineId = useConversationEngineId(target?.conversationId, target?.spaceId)
+  const supported = useGoalSupported(engineId)
   if (!target || !supported) return <GoalUnavailable tabId={tab.id} />
   return <GoalEditorForm tab={tab} spaceId={target.spaceId} conversationId={target.conversationId} />
 }

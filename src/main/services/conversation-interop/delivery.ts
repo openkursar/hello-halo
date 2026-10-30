@@ -57,6 +57,7 @@ interface DeliveryJob {
   batch?: DeliveryJob[]
   /** Taken back after a person's stop: the target's transcript already holds its record. */
   inputRecorded?: boolean
+  recordedInputIds?: readonly string[]
   spaceId: string
   fromConversationId: string
   toConversationId: string
@@ -181,7 +182,10 @@ function tellWaitingSender(job: DeliveryJob, err: unknown): void {
 function jobsOf(job: DeliveryJob): DeliveryJob[] { return job.batch ?? [job] }
 
 function messageOf(job: DeliveryJob): DispatchedMessage {
-  return job.inputRecorded ? { ...renderedMessageOf(job), inputRecorded: true } : renderedMessageOf(job)
+  return job.inputRecorded ? {
+    ...renderedMessageOf(job), inputRecorded: true,
+    ...(job.recordedInputIds?.length ? { recordedInputIds: job.recordedInputIds } : {}),
+  } : renderedMessageOf(job)
 }
 
 function renderedMessageOf(job: DeliveryJob): DispatchedMessage {
@@ -244,10 +248,13 @@ function deliverMidTurn(conversationId: string, job: DeliveryJob): boolean {
   const jobs = jobsOf(job)
   for (const item of jobs) requireAdmitted(target, item)
   if (!target.deliverMidTurn) return false
-  const outcomes = target.deliverMidTurn(job.spaceId, conversationId, jobs.map(messageOf), () => {
+  const outcomes = target.deliverMidTurn(job.spaceId, conversationId, jobs.map(messageOf), (recordedInputIds) => {
     // Unread when a person stopped the turn: it waits for the conversation's next
     // turn, its record standing where it arrived.
-    const returned = jobs.map((item): DeliveryJob => ({ ...item, batch: undefined, inputRecorded: true }))
+    const returned = jobs.map((item, index): DeliveryJob => {
+      const ids = [...new Set([...(item.recordedInputIds ?? []), ...(recordedInputIds?.[index] ?? [])])]
+      return { ...item, batch: undefined, inputRecorded: true, ...(ids.length ? { recordedInputIds: ids } : {}) }
+    })
     turnGate.putBack(conversationId, [returned.length === 1 ? returned[0] : { ...returned[0], batch: returned }])
   })
   if (outcomes === false) return false
@@ -258,6 +265,12 @@ function deliverMidTurn(conversationId: string, job: DeliveryJob): boolean {
 /** A person stopped this conversation: what waits for it neither joins the stopping turn nor starts one. */
 export function holdConversationAfterStop(conversationId: string): void {
   turnGate.park(conversationId)
+}
+
+/** Inputs waiting in this recipient's mailbox must not enter a different entry's history handoff. */
+export function getPendingConversationInputIds(conversationId: string): readonly string[] {
+  return [...new Set(turnGate.bufferedJobs(conversationId).flatMap(job =>
+    (job.batch ?? [job]).flatMap(item => item.recordedInputIds ?? [])))]
 }
 
 function lookupMeta(spaceId: string, conversationId: string): SourceConversation | null {

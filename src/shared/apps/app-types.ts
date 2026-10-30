@@ -40,13 +40,15 @@ export type AppStatus = 'active' | 'paused' | 'error' | 'needs_login' | 'waiting
  */
 export type RunOutcome = 'useful' | 'noop' | 'error' | 'skipped'
 
-/**
- * Full representation of an installed App instance.
- *
- * Each installed App has a unique `id` (UUID). It may belong to a specific
- * `spaceId` or be global (`spaceId = null`), available across all spaces.
- * Stores a snapshot of the AppSpec at install time plus user configuration.
- */
+/** Engine ownership accompanying a history read, without starting that engine. */
+export interface AppChatEngineMetadata {
+  engineId?: import('../types/engine').EngineId
+  engineBinding?: import('../types/engine-session').EngineSessionBinding
+}
+
+export type AppChatTranscriptPage = import('../types/transcript').TranscriptPage & AppChatEngineMetadata
+
+/** Full installed instance, with its spec snapshot and user configuration. */
 export interface InstalledApp {
   dataPath?: string
   /** Unique installation ID (UUID v4) */
@@ -75,6 +77,8 @@ export interface InstalledApp {
 
   /** User overrides for tunable per-app settings */
   userOverrides: {
+    /** Explicit engine for this digital human. Unset, new sessions inherit Halo's default. */
+    engineId?: import('../types/engine').EngineId
     /** Notification level: 'all' | 'important' | 'none'. Defaults to 'important'. */
     notificationLevel?: 'all' | 'important' | 'none'
     /** Override AI source for this App. When set, uses this source instead of the global one. */

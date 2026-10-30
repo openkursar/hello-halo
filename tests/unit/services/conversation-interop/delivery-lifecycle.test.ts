@@ -38,10 +38,13 @@ const h = vi.hoisted(() => {
   const sendIntoLiveTurn = vi.fn((_id: string, _text: string, _images?: unknown, _options?: { onWithdrawn: () => void }) => false)
   let nextId = 0
   const state: { listener: EngineListener | null } = { listener: null }
-  const sendMessage = vi.fn(async (params: { spaceId: string; conversationId: string; message: string }) => {
+  const sendMessage = vi.fn(async (params: { spaceId: string; conversationId: string; message: string }, internal?: { onUserMessageRecorded?: (id: string) => void; excludedHistoryMessageIds?: readonly string[] }) => {
+    await Promise.resolve()
     const conv = store.get(params.conversationId)
     if (!conv) throw new Error('conversation not found')
-    conv.messages.push({ id: `m-${nextId++}`, role: 'user', content: params.message })
+    const id = `m-${nextId++}`
+    conv.messages.push({ id, role: 'user', content: params.message })
+    internal?.onUserMessageRecorded?.(id)
     busy.add(params.conversationId)
   })
   const hasLiveNativeSession = vi.fn((_id: string) => true)
@@ -206,8 +209,9 @@ describe('turn slot and mailbox', () => {
     seed('s1'); seed('s2'); seed('tgt')
 
     let finishFirstSend: () => void = () => {}
-    h.sendMessage.mockImplementationOnce(async (params: { conversationId: string; message: string }) => {
+    h.sendMessage.mockImplementationOnce(async (params: { conversationId: string; message: string }, internal) => {
       h.store.get(params.conversationId)!.messages.push({ id: 'first-msg', role: 'user', content: params.message })
+      internal?.onUserMessageRecorded?.('first-msg')
       // sendMessage swallowing its own failure: error + complete fire from
       // deep inside the still-unfinished call (after its first await).
       await Promise.resolve()

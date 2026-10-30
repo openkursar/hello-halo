@@ -1,12 +1,10 @@
 /**
- * `tool()` and `createSdkMcpServer()` for engines that do not ship the Claude
- * Agent SDK's own helpers.
+ * Executable MCP definitions shared by every engine.
  *
  * Halo builds its whole in-process tool set — AI Browser, memory, web search,
- * the Apps surface, notifications — through these two functions, before it
- * knows which engine will run them, so every engine must supply them. The
- * result matches the SDK's server contract, which is what lets the call sites
- * stay engine-agnostic and what `sdk-bridge.ts` serves over loopback.
+ * the Apps surface, notifications — before it knows which engine will run
+ * them. Halo's Worker serializes this server contract into callbacks, while
+ * external engines reach the same handlers through `sdk-bridge.ts`.
  *
  * Building descriptors without their handlers is not an option, however
  * unreachable a handler may look for a given engine: the bridge makes them all
@@ -16,17 +14,20 @@
 
 import { getParseErrorMessage, objectFromShape, safeParseAsync } from '@modelcontextprotocol/sdk/server/zod-compat.js'
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js'
+import type { z } from 'zod'
 import type {
   SdkMcpServerConfig,
   SdkMcpServerInstance,
   SdkMcpToolDefinition,
 } from './types'
 
-export function tool<Schema extends Record<string, any>>(
+type ToolInput<Schema extends Record<string, z.ZodTypeAny>> = { [K in keyof Schema]: z.infer<Schema[K]> }
+
+export function tool<Schema extends Record<string, z.ZodTypeAny>>(
   name: string,
   description: string,
   inputSchema: Schema,
-  handler: (args: any, extra: unknown) => Promise<any>,
+  handler: (args: ToolInput<Schema>, extra?: unknown) => Promise<any>,
   extras?: {
     annotations?: Record<string, unknown>
     searchHint?: string
@@ -61,7 +62,7 @@ export function createSdkMcpServer(options: {
   const instance: SdkMcpServerInstance = {
     name,
     version,
-    async callTool(toolName: string, args: Record<string, unknown>) {
+    async callTool(toolName: string, args: Record<string, unknown>, extra?: { signal?: AbortSignal }) {
       const registeredTool = registered.find((candidate) => candidate.definition.name === toolName)
       if (!registeredTool) return undefined
       const parsed = await safeParseAsync(registeredTool.schema, args)
@@ -69,7 +70,7 @@ export function createSdkMcpServer(options: {
         console.warn(`[Agent][mcp] tool arguments rejected server=${name} tool=${toolName}`)
         return { isError: true, content: [{ type: 'text', text: `Invalid arguments for ${toolName}: ${getParseErrorMessage(parsed.error)}` }] }
       }
-      return registeredTool.definition.handler(parsed.data, {})
+      return registeredTool.definition.handler(parsed.data, extra ?? {})
     },
     listTools() {
       return registered.map((registeredTool) => {
@@ -80,6 +81,7 @@ export function createSdkMcpServer(options: {
           description: definition.description,
           inputSchema: registeredTool.jsonSchema,
           annotations: definition.annotations,
+          _meta: definition._meta,
         }
       })
     },

@@ -69,6 +69,22 @@ function makeHooks(options: MakeHooksOptions = {}) {
 }
 
 describe('createTurnGate', () => {
+  it('projects only buffered jobs without changing the queue or retaining them after removal', async () => {
+    const { hooks, busy } = makeHooks()
+    const gate = createTurnGate<Job>(hooks)
+    busy.add('receiver')
+    await gate.deliver('receiver', { body: 'held input' })
+    const exclusive = gate.runExclusive('receiver', async () => 'exclusive').catch(() => undefined)
+    const snapshot = gate.bufferedJobs('receiver')
+    expect(snapshot).toEqual([{ body: 'held input' }])
+    expect(gate.bufferedJobs('other')).toEqual([])
+    ;(snapshot as Job[]).pop()
+    expect(gate.bufferedJobs('receiver')).toEqual([{ body: 'held input' }])
+    gate.discard(key => key === 'receiver', 'test cleanup')
+    await exclusive
+    expect(gate.bufferedJobs('receiver')).toEqual([])
+  })
+
   describe('deliver — dispositions', () => {
     it('dispatches immediately on an idle session', async () => {
       const { hooks, dispatched } = makeHooks()

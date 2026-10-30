@@ -77,7 +77,7 @@ jobs:
                   'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                  model: 'deepseek-v4-pro',
+                  model: 'deepseek-flash',
                   messages,
                   tools: [{
                     type: 'function',

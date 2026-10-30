@@ -29,6 +29,7 @@ function checkUpdateConfig(config) {
   }
 
   const { provider, owner, repo, url } = config.updateConfig;
+  if (provider === 'disabled') return null;
 
   if (!provider) {
     return 'updateConfig.provider is required ("github" or "generic")';

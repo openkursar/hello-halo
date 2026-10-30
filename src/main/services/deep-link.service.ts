@@ -22,9 +22,10 @@
 import { app } from 'electron'
 import { resolve } from 'path'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
+import { getDeepLinkScheme } from '../foundation/product-config'
 
 const LOG_TAG = '[DeepLink]'
-const PROTOCOL = 'halo'
+const PROTOCOL = getDeepLinkScheme()
 
 /** Renderer event channel carrying `{ link: string }`. */
 export const TEAM_INVITE_LINK_EVENT = 'team:invite-link'

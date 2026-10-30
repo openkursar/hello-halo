@@ -32,6 +32,13 @@ import { fetchModelsFromApi, validateApiConnection, normalizeApiUrl } from '../.
 import { getSdkApiCredentials } from '../../../src/main/services/agent/sdk-config'
 
 describe('validateApiConnection captured credentials', () => {
+  it('validates an explicit OpenAI model unchanged even if Anthropic retired that identifier', async () => {
+    ensureRouterMock.mockResolvedValue({ baseUrl: 'http://127.0.0.1:51234' })
+    createSessionMock.mockResolvedValue({ send: vi.fn(), close: vi.fn(), stream: async function* () { yield { type: 'result' } } })
+    const result = await validateApiConnection({ provider: 'openai', apiKey: 'selected-key', apiUrl: 'https://selected.example/v1', model: 'claude-mythos-preview' })
+    expect(result).toMatchObject({ valid: true, model: 'claude-mythos-preview' })
+    expect(createSessionMock.mock.calls.at(-1)![0]).toMatchObject({ engineId: 'halo', model: 'claude-mythos-preview', apiCredentials: { model: 'claude-mythos-preview' } })
+  })
   it.each(['anthropic', 'openai'] as const)('passes the explicit %s validation credentials to the engine', async provider => {
     ensureRouterMock.mockResolvedValue({ baseUrl: 'http://127.0.0.1:51234' })
     const close = vi.fn()
@@ -42,6 +49,8 @@ describe('validateApiConnection captured credentials', () => {
     const params = { provider, apiKey: 'test-validation-only', apiUrl: 'https://validation.example/v1', model: 'validation-model' }
     expect(await validateApiConnection(params)).toMatchObject({ valid: true, model: params.model })
     const options = createSessionMock.mock.calls.at(-1)![0]
+    expect(options.engineId).toBe('halo')
+    expect(options.model).toBe(params.model)
     expect(getSdkApiCredentials(options)).toEqual({
       provider, apiKey: params.apiKey, baseUrl: normalizeApiUrl(params.apiUrl, provider), model: params.model,
     })

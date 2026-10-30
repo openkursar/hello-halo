@@ -1,3 +1,4 @@
+import { isEngineId } from '../../../shared/types/engine'
 /**
  * Agent REST API routes (remote access).
  * Split from the monolithic routes/index.ts; mirrors the IPC API for this domain.
@@ -83,11 +84,16 @@ export function registerAgentRoutes(app: Express): void {
   // the IPC surface added in `ipc/agent.ts`. The controller is left for
   // a future commit; we read the SDK directly to avoid drag-along
   // refactors here.
-  app.get('/api/agent/engine-capabilities', async (_req: Request, res: Response) => {
+  app.get('/api/agent/engine-capabilities', async (req: Request, res: Response) => {
     try {
-      const { getEngineCapabilities, getActiveEngine } = await import('../../services/agent/resolved-sdk')
+      const { waitForSdkInitialization } = await import('../../services/agent')
+      await waitForSdkInitialization()
+      const { getEngineCapabilities, getActiveEngine, resolveDefaultEngine } = await import('../../services/agent/resolved-sdk')
       const { defaultCapabilitiesFor } = await import('../../services/agent/capabilities')
-      const caps = getEngineCapabilities() ?? defaultCapabilitiesFor(getActiveEngine() ?? 'anthropic')
+      const engineId = req.query.engineId
+      if (engineId === undefined) await resolveDefaultEngine()
+      if (engineId !== undefined && !isEngineId(engineId)) throw new Error('Unknown agent engine')
+      const caps = getEngineCapabilities(engineId) ?? defaultCapabilitiesFor(engineId ?? getActiveEngine() ?? 'halo')
       res.json({ success: true, data: caps })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -97,13 +103,17 @@ export function registerAgentRoutes(app: Express): void {
   // Engine availability — mirrors `agent:get-engine-availability` in ipc/agent.ts.
   app.get('/api/agent/engine-availability', async (_req: Request, res: Response) => {
     try {
-      const { getActiveEngine, getDegradedFromEngine } = await import('../../services/agent/resolved-sdk')
+      const { waitForSdkInitialization } = await import('../../services/agent')
+      await waitForSdkInitialization()
+      const { getActiveEngine, getDegradedFromEngine, resolveDefaultEngine } = await import('../../services/agent/resolved-sdk')
       const { getEngineAvailability } = await import('../../services/agent/engine-availability')
+      await resolveDefaultEngine()
       res.json({
         success: true,
         data: {
           engines: await getEngineAvailability(),
           activeEngine: getActiveEngine(),
+          defaultEngine: getActiveEngine(),
           degradedFrom: getDegradedFromEngine(),
         },
       })

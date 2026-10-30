@@ -29,6 +29,7 @@ import { session } from 'electron'
 import https from 'node:https'
 import http from 'node:http'
 import zlib from 'node:zlib'
+import { Readable } from 'node:stream'
 import { ProxyAgent } from 'proxy-agent'
 import { getConfig, onNetworkConfigChange } from '../foundation/config.service'
 import { isHttpLoggingEnabled, logHttpRequest, logHttpResponse, logHttpResponseBody } from '../foundation/logging'
@@ -314,7 +315,12 @@ function makeRequest(
 
     const nodeReq = (isHttps ? https : http).request(options, (res) => {
       // Handle redirects
-      if (res.statusCode && [301, 302, 303, 307, 308].includes(res.statusCode)) {
+      if (res.statusCode && [301, 302, 303, 307, 308].includes(res.statusCode) && init?.redirect !== 'manual') {
+        if (init?.redirect === 'error') {
+          res.destroy()
+          reject(new TypeError('[ProxyFetch] Redirect refused by request policy'))
+          return
+        }
         const location = res.headers['location']
         if (location) {
           res.resume() // drain and discard body
@@ -342,40 +348,35 @@ function makeRequest(
 
       // Auto-decompress gzip/deflate/br responses (node:http doesn't do this)
       // This makes proxied requests behave like globalThis.fetch (undici)
+      const statusCode = res.statusCode ?? 200
+      const nullBodyStatus = options.method === 'HEAD' || [101, 204, 205, 304].includes(statusCode)
       const contentEncoding = res.headers['content-encoding']?.toLowerCase()
-      let bodySource: NodeJS.ReadableStream = res
-      if (contentEncoding === 'gzip' || contentEncoding === 'x-gzip') {
+      let bodySource: Readable = res
+      if (!nullBodyStatus && (contentEncoding === 'gzip' || contentEncoding === 'x-gzip')) {
         bodySource = res.pipe(zlib.createGunzip())
         responseHeaders.delete('content-encoding')
         responseHeaders.delete('content-length') // length no longer valid after decompression
-      } else if (contentEncoding === 'deflate') {
+      } else if (!nullBodyStatus && contentEncoding === 'deflate') {
         bodySource = res.pipe(zlib.createInflate())
         responseHeaders.delete('content-encoding')
         responseHeaders.delete('content-length')
-      } else if (contentEncoding === 'br') {
+      } else if (!nullBodyStatus && contentEncoding === 'br') {
         bodySource = res.pipe(zlib.createBrotliDecompress())
         responseHeaders.delete('content-encoding')
         responseHeaders.delete('content-length')
       }
 
-      const statusCode = res.statusCode ?? 200
-      // 101, 204, 205, 304 are null body statuses per Fetch spec —
-      // Response constructor throws if body is non-null for these.
-      const nullBodyStatus = [101, 204, 205, 304].includes(statusCode)
-
       let body: ReadableStream | null = null
       if (!nullBodyStatus) {
-        // Stream response body so SSE / large responses work correctly
-        body = new ReadableStream({
-          start(controller) {
-            bodySource.on('data', (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)))
-            bodySource.on('end', () => controller.close())
-            bodySource.on('error', (err) => controller.error(err))
-          },
-          cancel() {
-            res.destroy()
-          },
-        })
+        if (bodySource !== res) {
+          // pipe() alone neither forwards source failures nor closes the socket
+          // when the consumer cancels the decoder's readable side.
+          res.on('error', error => bodySource.destroy(error))
+          bodySource.once('close', () => res.destroy())
+        }
+        body = Readable.toWeb(bodySource, {
+          strategy: { highWaterMark: 64 * 1024, size: (chunk: Buffer) => chunk.byteLength },
+        }) as ReadableStream<Uint8Array>
       } else {
         res.resume()
       }
@@ -419,6 +420,49 @@ function makeRequest(
       })
     })
   })
+}
+
+const MAX_RESPONSE_LOG_BYTES = 32 * 1024
+const RESPONSE_LOG_TIMEOUT_MS = 2000
+
+async function logResponsePreview(response: Response, method: string, url: string): Promise<void> {
+  const contentType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() || ''
+  const textual = contentType.startsWith('text/') || /\b(?:json|xml)$/.test(contentType)
+    || contentType === 'application/x-www-form-urlencoded'
+  const declaredBytes = Number(response.headers.get('content-length'))
+  if (!response.body || !textual || contentType === 'text/event-stream' || declaredBytes > MAX_RESPONSE_LOG_BYTES) {
+    logHttpResponseBody(method, url, '[Body omitted: binary, streaming, or larger than the diagnostic limit]')
+    return
+  }
+
+  const reader = response.clone().body!.getReader()
+  let timedOut = false
+  let complete = false
+  let receivedBytes = 0
+  const chunks: Uint8Array[] = []
+  const cancel = () => {
+    // A tee branch's cancellation promise waits for the real consumer; never
+    // await it or diagnostics could outlive a long-running response.
+    void reader.cancel().catch(() => logHttpResponseBody(method, url, '[Diagnostic preview cancellation failed]'))
+  }
+  const timeout = setTimeout(() => { timedOut = true; cancel() }, RESPONSE_LOG_TIMEOUT_MS)
+  timeout.unref()
+  try {
+    while (receivedBytes < MAX_RESPONSE_LOG_BYTES) {
+      const next = await reader.read()
+      if (next.done) { complete = !timedOut; break }
+      const slice = next.value.subarray(0, MAX_RESPONSE_LOG_BYTES - receivedBytes)
+      chunks.push(slice)
+      receivedBytes += slice.byteLength
+    }
+    const suffix = complete ? '' : timedOut ? '\n[Preview stopped after 2 seconds]' : '\n[Preview truncated at 32 KiB]'
+    logHttpResponseBody(method, url, Buffer.concat(chunks, receivedBytes).toString('utf8') + suffix)
+  } catch {
+    logHttpResponseBody(method, url, '[Diagnostic preview unavailable: response stream failed]')
+  } finally {
+    clearTimeout(timeout)
+    if (!complete && !timedOut) cancel()
+  }
 }
 
 // ============================================================================
@@ -488,13 +532,8 @@ export async function proxyFetch(
       headers: resHeaders,
     })
 
-    // Fire-and-forget: clone response and read body asynchronously.
-    // Does not block the return — consumer gets the response immediately.
-    // For SSE streams, logs the full concatenated body when stream ends.
-    const cloned = response.clone()
-    cloned.text()
-      .then(body => logHttpResponseBody(method, urlStr, body))
-      .catch(() => { /* non-fatal — body may be unreadable */ })
+    void logResponsePreview(response, method, urlStr)
+      .catch(() => logHttpResponseBody(method, urlStr, '[Diagnostic preview unavailable: body could not be opened]'))
   }
 
   return response

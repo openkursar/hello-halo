@@ -311,25 +311,28 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
       {/* The same quiet surface as a reply; color marks only a browser in use. */}
       <div className="relative rounded-lg border border-border-soft bg-card overflow-hidden">
 
-        {/* Header: title and step count, with the canvas link on the right like the team strip's. */}
-        <div className="flex items-center gap-2 px-4 pt-3 pb-1.5 text-xs">
-          {/* AI Browser icon */}
-          <div className={`relative ${ICON_COLUMN}`}>
-            <Globe
-              size={16}
-              className={isActive && hasRunningStep ? 'text-primary' : 'text-muted-foreground'}
-            />
-            {isActive && hasRunningStep && (
-              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-halo-success rounded-full" />
-            )}
+        {/* Header: title and step count, with the canvas link on the right like the team strip's;
+            on a narrow card the link wraps below rather than squeezing the title out. */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 pt-3 pb-1.5 text-xs">
+          <div className="flex min-w-0 items-center gap-2">
+            {/* AI Browser icon */}
+            <div className={`relative ${ICON_COLUMN}`}>
+              <Globe
+                size={16}
+                className={isActive && hasRunningStep ? 'text-primary' : 'text-muted-foreground'}
+              />
+              {isActive && hasRunningStep && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-halo-success rounded-full" />
+              )}
+            </div>
+            <span className="truncate font-semibold text-[13px]">
+              {isActive && hasRunningStep ? t('AI is operating the browser') : t('AI browser actions')}
+            </span>
+            <span className="text-muted-foreground">·</span>
+            <span className="shrink-0 text-muted-foreground">
+              {steps.filter(s => s.status === 'success').length}/{steps.length} {t('steps')}
+            </span>
           </div>
-          <span className="truncate font-semibold text-[13px]">
-            {isActive && hasRunningStep ? t('AI is operating the browser') : t('AI browser actions')}
-          </span>
-          <span className="text-muted-foreground">·</span>
-          <span className="shrink-0 text-muted-foreground">
-            {steps.filter(s => s.status === 'success').length}/{steps.length} {t('steps')}
-          </span>
 
           {/* Hidden in contexts without the Canvas browser (e.g. automation apps). Enabled only
               once the AI's live view id is known, so it always reveals the exact view the AI

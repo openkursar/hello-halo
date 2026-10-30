@@ -33,6 +33,7 @@ import {
   AutomationSpaceRequiredError,
 } from '../../../../src/main/apps/manager/errors'
 import type { AppSpec } from '../../../../src/main/apps/spec/schema'
+import * as configService from '../../../../src/main/foundation/config.service'
 import {
   _resetTlonRegistry,
   createKB,
@@ -134,6 +135,51 @@ describe('AppManager', () => {
   // ===========================================================================
   // Installation
   // ===========================================================================
+
+  describe('digital human engine preference', () => {
+    it('refuses a known incompatible engine/account pair but permits unrelated preferences', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      const source = { id: 'anthropic-account', name: 'Claude API', provider: 'anthropic', apiUrl: 'https://example.invalid', authType: 'api-key' as const, model: 'claude-test', availableModels: [], createdAt: '', updatedAt: '' }
+      const config = { ...configService.getConfig(), aiSources: { version: 2 as const, currentId: source.id, sources: [source] } }
+      const read = vi.spyOn(configService, 'getConfig').mockReturnValue(config)
+      try {
+        service.updateOverrides(appId, { engineId: 'halo', modelSourceId: source.id })
+        expect(() => service.updateOverrides(appId, { engineId: 'codex' })).toThrow('Codex supports OpenAI-compatible')
+        expect(service.getApp(appId)!.userOverrides.engineId).toBe('halo')
+        store.updateOverrides(appId, { engineId: 'codex', modelSourceId: source.id })
+        service.updateOverrides(appId, { notificationLevel: 'all' })
+        expect(service.getApp(appId)!.userOverrides.notificationLevel).toBe('all')
+      } finally { read.mockRestore() }
+    })
+
+    it('persists an explicit engine without changing status or the model selection', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      service.updateOverrides(appId, { modelSourceId: 'account', modelId: 'model', engineId: 'anthropic' })
+      expect(service.getApp(appId)).toMatchObject({ status: 'active', userOverrides: { engineId: 'anthropic', modelSourceId: 'account', modelId: 'model' } })
+      service.updateOverrides(appId, { engineId: 'halo' })
+      expect(service.getApp(appId)).toMatchObject({ status: 'active', userOverrides: { engineId: 'halo', modelSourceId: 'account', modelId: 'model' } })
+    })
+
+    it.each([undefined, null])('clears an explicit engine with %s while preserving other overrides', async value => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      service.updateOverrides(appId, { engineId: 'anthropic', notificationLevel: 'all' })
+      service.updateOverrides(appId, { engineId: value } as never)
+      expect(service.getApp(appId)!.userOverrides).toEqual({ notificationLevel: 'all' })
+    })
+
+    it('rejects unknown engines without replacing the saved preference', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      service.updateOverrides(appId, { engineId: 'halo' })
+      expect(() => service.updateOverrides(appId, { engineId: 'unknown' } as never)).toThrow('Invalid engineId')
+      expect(service.getApp(appId)!.userOverrides.engineId).toBe('halo')
+    })
+
+    it('does not attach agent engines to an MCP installation', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec({ type: 'mcp', mcp_server: { command: 'node', args: [] } } as never))
+      expect(() => service.updateOverrides(appId, { engineId: 'halo' })).toThrow('engineId applies to digital humans only')
+      expect(service.getApp(appId)!.userOverrides.engineId).toBeUndefined()
+    })
+  })
 
   describe('install', () => {
     it('should install an App and return a UUID', async () => {

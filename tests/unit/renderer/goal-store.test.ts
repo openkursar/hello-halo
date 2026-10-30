@@ -15,6 +15,7 @@ vi.mock('../../../src/renderer/api', () => ({ api }))
 
 const { useGoalStore } = await import('../../../src/renderer/stores/goal.store')
 const { useGoalUiStore } = await import('../../../src/renderer/stores/goal-ui.store')
+const { useEngineStore } = await import('../../../src/renderer/stores/engine.store')
 
 const goal = (objective: string, updatedBy: 'agent' | 'user' = 'user') => ({
   objective,
@@ -32,6 +33,12 @@ beforeEach(() => {
 })
 
 describe('goal store', () => {
+  it('loads a Halo conversation goal while the default engine has no goal feature', async () => {
+    useEngineStore.setState({ capabilities: { engineId: 'codex', features: { goal: false } } as never })
+    api.getGoal.mockResolvedValueOnce({ success: true, data: goal('Keep this conversation working') })
+    await state().load('s', 'halo-conversation')
+    expect(state().byConversation.get('halo-conversation')?.objective).toBe('Keep this conversation working')
+  })
   it('keeps a newer event over a load that was already in flight', async () => {
     let resolveLoad!: (v: unknown) => void
     api.getGoal.mockReturnValueOnce(new Promise((r) => { resolveLoad = r }))

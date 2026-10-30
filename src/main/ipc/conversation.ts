@@ -8,14 +8,14 @@ import {
   getConversation,
   getConversationFrom,
   withImageFiles,
-  updateConversation,
   deleteConversation,
   addMessage,
   updateLastMessage,
   getMessageThoughts,
   toggleStarConversation
 } from '../services/conversation.service'
-import { closeV2Session } from '../services/agent'
+import { closeV2Session, resolveDefaultEngine } from '../services/agent'
+import { updateConversation as updateConversationSettings } from '../controllers/conversation.controller'
 import { conversationRpc } from '../../shared/rpc/contracts/conversation.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -35,7 +35,7 @@ export function registerConversationHandlers(): void {
     // Create a new conversation
     createConversation: async (spaceId: string, title?: string, reasoningEffort?: unknown, options?: { ephemeral?: boolean }) => {
       try {
-        const conversation = createConversation(spaceId, title, reasoningEffort, { ephemeral: options?.ephemeral === true })
+        const conversation = createConversation(spaceId, title, reasoningEffort, { ephemeral: options?.ephemeral === true, engineId: await resolveDefaultEngine() })
         return { success: true, data: conversation }
       } catch (error: unknown) {
         const err = error as Error
@@ -61,8 +61,7 @@ export function registerConversationHandlers(): void {
     // Update a conversation
     updateConversation: async (spaceId: string, conversationId: string, updates: Record<string, unknown>) => {
       try {
-        const conversation = updateConversation(spaceId, conversationId, updates)
-        return { success: true, data: conversation }
+        return await updateConversationSettings(spaceId, conversationId, updates)
       } catch (error: unknown) {
         const err = error as Error
         return { success: false, error: err.message }

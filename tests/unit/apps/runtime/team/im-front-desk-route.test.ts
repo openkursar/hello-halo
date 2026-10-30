@@ -59,7 +59,7 @@ vi.mock('../../../../../src/main/apps/runtime/im-session-registry', () => ({
 }))
 
 // What a chat is told of a refused local connection is im-error-reply.test's.
-vi.mock('../../../../../src/main/services/agent', () => ({ isRefusedLocalConnection: () => false }))
+vi.mock('../../../../../src/main/services/agent', () => ({ isRefusedLocalConnection: () => false, isEngineSetupError: () => false }))
 
 vi.mock('../../../../../src/main/apps/runtime/app-chat', () => ({
   sendAppChatMessage: async (request: Record<string, unknown>) => {

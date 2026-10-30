@@ -249,6 +249,7 @@ interface SupplementEntry {
   identity: string
   /** Taken back after a stop: its record already stands where it first arrived. */
   inputRecorded?: boolean
+  recordedInputIds?: readonly string[]
 }
 
 const STOPPED_UNREAD = 'stopped before it was read'
@@ -266,6 +267,11 @@ function withoutStream(reply: ReplyHandle): ReplyHandle {
 
 const supplementBuffers = new Map<string, SupplementEntry[]>()
 const supplementDispatches = new Map<string, symbol>()
+
+/** Pending receiver-local records stay out of a replacement engine until their own delivery. */
+export function getPendingSupplementInputIds(conversationId: string): readonly string[] {
+  return (supplementBuffers.get(conversationId) ?? []).flatMap(entry => entry.recordedInputIds ?? [])
+}
 
 function forgetSupplements(conversationId: string, entries: readonly SupplementEntry[]): void {
   const removed = new Set(entries)
@@ -291,9 +297,9 @@ const supplementGate = createTurnGate<SupplementEntry[]>({
   deliverMidTurn: (conversationId, entries) => {
     if (entries[0].identity !== 'owner' && entries.some(entry => entry.msg.attachments?.length)) return false
     if (!injectIntoAppChatBatch(conversationId, entries.map(entry => ({
-      text: supplementText(entry), images: entry.msg.images, inputRecorded: entry.inputRecorded,
+      text: supplementText(entry), images: entry.msg.images, inputRecorded: entry.inputRecorded, recordedInputIds: entry.recordedInputIds,
       personal: entry.identity === 'owner',
-    })), indexes => returnSupplements(conversationId, indexes.map(index => entries[index]), true))) return false
+    })), (indexes, recordedInputIds) => returnSupplements(conversationId, indexes.map(index => entries[index]), true, indexes.map(index => recordedInputIds?.[index] ?? [])))) return false
     forgetSupplements(conversationId, entries)
     for (const entry of entries) {
       try { entry.reply.streaming?.dispose?.() } catch (error) {
@@ -347,8 +353,12 @@ export function holdSupplementsAfterStop(conversationId: string): void {
 }
 
 /** A guest's messages taken back from a stopped turn wait for the next turn of this chat, answered by a one-shot reply. */
-function returnSupplements(conversationId: string, entries: readonly SupplementEntry[], recorded: boolean): void {
-  const returned = entries.map(entry => ({ ...entry, inputRecorded: entry.inputRecorded || recorded, reply: withoutStream(entry.reply) }))
+function returnSupplements(conversationId: string, entries: readonly SupplementEntry[], recorded: boolean, recordedInputIds: readonly (readonly string[])[] = []): void {
+  const returned = entries.map((entry, index) => ({
+    ...entry, inputRecorded: entry.inputRecorded || recorded,
+    recordedInputIds: [...new Set([...entry.recordedInputIds ?? [], ...recordedInputIds[index] ?? []])],
+    reply: withoutStream(entry.reply),
+  }))
   supplementBuffers.set(conversationId, [...returned, ...(supplementBuffers.get(conversationId) ?? [])])
   supplementGate.putBack(conversationId, [returned])
 }
@@ -358,9 +368,15 @@ function returnSupplements(conversationId: string, entries: readonly SupplementE
  * was written for them meanwhile): the owner's own words are void, kept in the
  * record and marked; a guest's wait for the next turn of this chat.
  */
-function handBackSupplements(conversationId: string, entries: readonly SupplementEntry[], records: readonly TranscriptMessage[]): void {
+function handBackSupplements(conversationId: string, entries: readonly SupplementEntry[], records: readonly TranscriptMessage[], recordedInputIds: readonly (string | undefined)[] = []): void {
   if (entries[0]?.identity !== 'owner') {
-    returnSupplements(conversationId, entries, records.length > 0)
+    let at = 0
+    const ids = entries.map(entry => {
+      if (entry.inputRecorded) return []
+      const inputId = recordedInputIds[at++]
+      return inputId ? [inputId] : []
+    })
+    returnSupplements(conversationId, entries, records.length > 0, ids)
     return
   }
   keepStoppedInputs(conversationId, records, records.length ? [] : entries
@@ -590,7 +606,8 @@ async function dispatchSupplementBatch(conversationId: string, entries: Suppleme
     preBuiltSenderIdentity: senderIdentity,
     recordedMessages: entries.filter(entry => !entry.inputRecorded).map(entry => ({ content: supplementText(entry), images: entry.msg.images })),
     onSessionRetired,
-    onHeldBack: records => handBackSupplements(conversationId, entries, records),
+    recordedInputIds: entries.flatMap(entry => entry.recordedInputIds ?? []),
+    onHeldBack: (records, inputIds) => handBackSupplements(conversationId, entries, records, inputIds),
   }).catch((err) => {
     console.error(`${LOG_TAG} Supplement flush dispatch failed:`, err)
   })
@@ -606,9 +623,10 @@ interface DispatchOptions {
   preBuiltMessageText?: string
   preBuiltSenderIdentity?: { id: string; name: string }
   recordedMessages?: import('./app-chat').AppChatRequest['recordedMessages']
+  recordedInputIds?: readonly string[]
   onSessionRetired?: () => void
   /** The pre-merged messages' own handling when a person's stop holds them back on their way. */
-  onHeldBack?: (records: readonly TranscriptMessage[]) => void
+  onHeldBack?: (records: readonly TranscriptMessage[], recordedInputIds?: readonly (string | undefined)[]) => void
 }
 
 /**
@@ -1061,9 +1079,9 @@ export async function dispatchInboundMessage(
   if (processingNotice) pendingProcessingNotices.set(conversationId, settleProcessingNotice)
 
   // A person's stop held this message back before the engine got it.
-  const handBack = (records: readonly TranscriptMessage[]): void => {
-    if (options.onHeldBack) options.onHeldBack(records)
-    else handBackSupplements(conversationId, [{ msg, reply, appId, instanceId, identity: appChatMessageIdentity(imPermission) }], records)
+  const handBack = (records: readonly TranscriptMessage[], inputIds?: readonly (string | undefined)[]): void => {
+    if (options.onHeldBack) options.onHeldBack(records, inputIds)
+    else handBackSupplements(conversationId, [{ msg, reply, appId, instanceId, identity: appChatMessageIdentity(imPermission) }], records, inputIds)
   }
 
   // Listener startup may await; the existing hold keeps supplements and stop/clear safe.
@@ -1115,6 +1133,7 @@ export async function dispatchInboundMessage(
       message: messageText,
       recorded: { content: recordedMessage },
       recordedMessages: options.recordedMessages,
+      recordedInputIds: options.recordedInputIds,
       conversationId,
       images: msg.images,
       attachedFiles: msg.attachments?.map(a => a.localPath),

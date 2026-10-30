@@ -20,6 +20,10 @@ vi.mock('electron', () => ({
   },
 }))
 const handleDeepLinkUrl = vi.fn()
+let deepLinkScheme = 'halo'
+vi.mock('../../../src/main/foundation/product-config', () => ({
+  getDeepLinkScheme: () => deepLinkScheme,
+}))
 vi.mock('../../../src/main/services/deep-link.service', () => ({
   handleDeepLinkUrl: (url: string) => handleDeepLinkUrl(url),
 }))
@@ -30,6 +34,7 @@ import { classifyExternalLink, openExternalLink } from '../../../src/main/servic
 
 beforeEach(() => {
   vi.clearAllMocks()
+  deepLinkScheme = 'halo'
   showMessageBox.mockResolvedValue({ response: 1 })
 })
 
@@ -53,6 +58,12 @@ describe('classifyExternalLink', () => {
 
   it('handles Halo links itself', () => {
     expect(classifyExternalLink('halo://join?office=o&invite=i&server=https://s')).toEqual({ kind: 'deep-link' })
+  })
+
+  it('keeps experimental and stable app links separate', () => {
+    deepLinkScheme = 'halo-experimental'
+    expect(classifyExternalLink('halo-experimental://join?office=o')).toEqual({ kind: 'deep-link' })
+    expect(classifyExternalLink('halo://join?office=o')).toEqual({ kind: 'confirm' })
   })
 
   it('refuses code-running schemes and non-URLs', () => {

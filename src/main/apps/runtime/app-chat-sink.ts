@@ -30,9 +30,11 @@ import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import type { StreamResult } from '../../services/agent/stream-processor'
 import type { TurnSink } from '../../services/agent/turn-sink'
 import type { ImageAttachment } from '../../services/agent/types'
+import type { EngineId } from '../../../shared/types/engine'
+import type { EngineSessionState } from '../../../shared/types/engine-session'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { TranscriptMessage, TranscriptProvenance } from '../../../shared/types/transcript'
-import { roleForTranscriptSource } from '../../../shared/transcript'
+import { CONTINUITY_NOTICE_TEXT, roleForTranscriptSource } from '../../../shared/transcript'
 import { randomUUID } from 'crypto'
 import { emitAgentEvent } from '../../services/agent/events'
 import type { ContentReference } from '../../../shared/types/content-reference'
@@ -43,7 +45,7 @@ import { getActiveImChannelManager } from './im-channels'
 import { ReplyTextAccumulator } from './reply-accumulator'
 import { ProgressEventParser } from './progress-formatter'
 import { TurnCutPoint } from './escalation-cut'
-import { openSessionWriter, saveChatSessionId, type RecordedPush, type SessionWriter } from './session-store'
+import { openSessionWriter, saveChatSessionId, saveChatEngineBinding, type RecordedPush, type SessionWriter } from './session-store'
 import { AppChatTurnInterrupted, turnEndingOf, withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
 import { stopGeneration } from '../../services/agent/control'
 import { listResidentSessions, hasPendingSessionInput } from '../../services/agent'
@@ -324,6 +326,11 @@ class AppChatSink implements TurnSink {
     return record
   }
 
+  /** Preserves record order, including a failed write whose stable identity is unavailable. */
+  getRecordedInputIds(records: readonly TranscriptMessage[]): Array<string | undefined> {
+    return records.map(record => this.inputIds.get(record))
+  }
+
   /** A person's additions a stop left unread: marked in the record, and told to whoever shows this chat. */
   markInputsStopped(records: readonly TranscriptMessage[]): void {
     const stopped = records.map((record) => {
@@ -359,6 +366,10 @@ class AppChatSink implements TurnSink {
       id: `pending-live-${randomUUID()}`, role: 'assistant', source: 'push', content: push.text, timestamp: at,
       metadata: { pushVia: push.via, ...(push.by ? { pushedByAppId: push.by.appId, pushedByName: push.by.name } : {}) },
     }], this.turnRunning || hasPendingSessionInput(this.conversationId))
+  }
+
+  onContinuedFromRecord(): void {
+    this.announceLiveInputs([this.writeUserMessage(CONTINUITY_NOTICE_TEXT, undefined, undefined, { source: 'continuity-notice' })], false)
   }
 
   /** A message failed before the engine created a turn to checkpoint. */
@@ -687,7 +698,7 @@ class AppChatSink implements TurnSink {
 
   private persistSessionId(result: StreamResult): void {
     if (!result.capturedSessionId || !this.spacePath) return
-    saveChatSessionId(this.spacePath, this.appId, this.runId, result.capturedSessionId)
+    if (!result.engineId) saveChatSessionId(this.spacePath, this.appId, this.runId, result.capturedSessionId)
 
     // A local session created via "continue in client" carries a pending
     // resume-and-fork marker. The captured id is the NEW forked session, so the
@@ -806,6 +817,40 @@ export function getAppChatSink(params: {
  */
 export function peekAppChatSink(conversationId: string): AppChatSink | undefined {
   return sinks.get(conversationId)
+}
+
+/** Binding writes belong to the consumer being created, not the longer-lived chat sink. */
+export function bindAppChatEngine(sink: TurnSink, options: {
+  spacePath: string
+  appId: string
+  runId: string
+  engineId: EngineId
+  expected: EngineSessionState
+}): TurnSink {
+  let expected = options.expected
+  const persist = (result: StreamResult): StreamResult => {
+    const owned = { ...result, engineId: result.engineId ?? options.engineId }
+    if (!owned.capturedSessionId || !options.spacePath) return owned
+    if (owned.engineId !== options.engineId) {
+      console.warn('[AppChat] Session binding rejected a different consumer engine', { appId: options.appId, runId: options.runId, engineId: owned.engineId })
+      return { ...owned, capturedSessionId: undefined }
+    }
+    if (expected.binding?.engineId === owned.engineId && expected.binding.sessionId === owned.capturedSessionId) return owned
+    const binding = { version: 1 as const, engineId: owned.engineId, sessionId: owned.capturedSessionId }
+    if (!saveChatEngineBinding(options.spacePath, options.appId, options.runId, binding, expected)) {
+      return { ...owned, capturedSessionId: undefined }
+    }
+    expected = { sessionId: binding.sessionId, binding }
+    return owned
+  }
+  return {
+    onTurnStart: () => sink.onTurnStart?.(),
+    onRawMessage: message => sink.onRawMessage?.(message),
+    onTurnComplete: result => sink.onTurnComplete(persist(result)),
+    onTurnError: (error, started, partial) => sink.onTurnError?.(error, started, partial ? persist(partial) : undefined),
+    onConsumerStopped: partial => sink.onConsumerStopped?.(partial ? persist(partial) : undefined),
+    onContinuedFromRecord: () => sink.onContinuedFromRecord?.(),
+  }
 }
 
 /** Whether a conversation has a message awaiting its answer. */

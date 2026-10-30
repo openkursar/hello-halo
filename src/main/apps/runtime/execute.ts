@@ -15,7 +15,6 @@
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
-import { createSession, getEngineCapabilities } from '../../services/agent/resolved-sdk'
 import { getAppManager, type InstalledApp } from '../manager'
 import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
 import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
@@ -41,8 +40,6 @@ import { FileExportGate } from './file-export-gate'
 import { getImSessionRegistry } from './im-session-registry'
 import { autoSyncRunResult } from './im-auto-sync'
 import { getApiCredentialsForSelection, getHeadlessElectronPath, getMcpServersForRequires } from '../../services/agent/helpers'
-import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from '../../services/agent/sdk-config'
-import { toEngineSystemPrompt } from '../../services/agent/system-prompt'
 import {
   formatReferencesBlock,
   acquireV2Session,
@@ -50,6 +47,11 @@ import {
   registerActiveSession,
   unregisterActiveSession,
   explainEngineError,
+  createSession,
+  getEngineCapabilities,
+  resolveCredentialsForSdk,
+  buildUserSessionSdkOptions,
+  toEngineSystemPrompt,
   type V2SessionLease,
 } from '../../services/agent'
 import { applyReasoningEffort, pickReasoningEffort } from '../../services/agent/reasoning-effort'
@@ -64,7 +66,8 @@ import { createConversationCollabMcpServer, resolveConversationCollab } from './
 import { buildRunSenderKey } from '../../../shared/apps/im-keys'
 import { closeRunSender, openRunSender } from './run-conversation-source'
 import { getConfig, resolveClaudeConfigDir } from '../../foundation/config.service'
-import { openSessionWriter, type SessionWriter } from './session-store'
+import { openSessionWriter, loadChatEngineState, saveChatEngineBinding, saveChatEngineRouting, type SessionWriter } from './session-store'
+import { prepareAppEngineSession, resolveAppSessionEngine } from './engine-selection'
 import {
   prepareMemoryForTurn,
   finalizeMemoryAfterTurn,
@@ -78,6 +81,7 @@ import { registerActiveRun, unregisterActiveRun, notifyActiveRunReady, type RunS
 import { describeSelfInstance, formatInstanceTag } from './live-instances'
 import { stopEngineOnAbort } from './engine-stop'
 import { renderTriggerContext } from './event-input'
+import type { EngineId } from '../../../shared/types/engine'
 
 // ============================================
 // Types
@@ -325,13 +329,23 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //    (needed early: workDir feeds into system prompt,
     //     modelInfo feeds into base prompt's model display)
     const config = getConfig()
+    let engineState = loadChatEngineState(environment.spacePath, app.id, runId)
+    const legacySessionId = trigger.escalation?.sessionId ?? trigger.continue?.sessionId
+    const engineId = await resolveAppSessionEngine({
+      engineId: app.userOverrides?.engineId,
+      conversationId: sessionKey,
+      binding: engineState.binding,
+      routingEngine: engineState.routingEngine,
+      legacySessionId: engineState.sessionId ?? legacySessionId,
+    })
+    engineState = saveChatEngineRouting(environment.spacePath, app.id, runId, engineId, engineState)
     // Its own account and model, or the global selection when it has none or
     // its account was removed.
     const credentials = await getApiCredentialsForSelection(app.userOverrides)
     // The digital human's own thinking level, as in its chats; unset, the
     // model's configured effort decides.
     const pickedEffort = pickReasoningEffort(app.userOverrides?.chatReasoningEffort)
-    const resolvedCreds = await resolveCredentialsForSdk(credentials, pickedEffort)
+    const resolvedCreds = await resolveCredentialsForSdk(credentials, pickedEffort, engineId)
     const electronPath = getHeadlessElectronPath()
     const workDir = environment.workDir
 
@@ -393,6 +407,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const notifyAvail = resolveNotifyAvailability(app, config.notificationChannels, imSessions)
 
     const systemPrompt = buildAppSystemPrompt({
+      engineId,
       appId: app.id,
       appSpec,
       memoryInstructions,
@@ -537,6 +552,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const baseToolset = buildBaseToolset({ spaceId: app.spaceId!, exclude: ['halo-apps'] })
 
     const sdkOptions = await buildUserSessionSdkOptions({
+      engineId,
       selfApiAccess: usesHaloApi,
       credentials: resolvedCreds,
       workDir,
@@ -572,7 +588,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     })
 
     // Override SDK options for automation context
-    sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt)
+    sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt, engineId)
     // Token-level partials OFF: a run is headless and emits no renderer events,
     // so there is no live consumer for token frames. processStream persists one
     // aggregate block-level message (thinking / tool-call / tool-result / text) per
@@ -596,6 +612,10 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //   All other triggers → create a fresh session.
     const escalationResumeId = trigger.escalation?.sessionId
     const continueResumeId = trigger.continue?.sessionId
+    const sessionPlan = prepareAppEngineSession({ engineId, state: engineState, legacySessionId, spacePath: environment.spacePath, appId: app.id, runId, conversationId: sessionKey })
+    if (sessionPlan.engineHandoffContent) sdkOptions.engineHandoffContent = sessionPlan.engineHandoffContent
+    if (sessionPlan.strictNativeResume) sdkOptions.strictNativeResume = true
+    const resumeGates = sessionPlan.recoverNativeSession ? { recoverNativeSession: sessionPlan.recoverNativeSession } : undefined
 
     // No displayModel: automation runs drive their own processStream(), so they
     // must not start a persistent session consumer (that would fight over the
@@ -607,8 +627,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         app.spaceId!,
         sessionKey,
         sdkOptions,
-        escalationResumeId,
-        workDir
+        sessionPlan.resumeSessionId,
+        workDir,
+        undefined, undefined, undefined, undefined, resumeGates
       )
     } else if (trigger.type === 'continue_followup' && continueResumeId) {
       console.log(`[Runtime][${runTag}] Restoring session for user-initiated continue: ${continueResumeId}`)
@@ -616,8 +637,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         app.spaceId!,
         sessionKey,
         sdkOptions,
-        continueResumeId,
-        workDir
+        sessionPlan.resumeSessionId,
+        workDir,
+        undefined, undefined, undefined, undefined, resumeGates
       )
     } else {
       admitTransientSession(runTag)
@@ -630,7 +652,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       releaseEngineStop = stopEngineOnAbort(
         abortSignal,
         { interrupt: session.interrupt?.bind(session), close: closeSession },
-        { canInterrupt: getEngineCapabilities()?.features.interrupt ?? false, runTag },
+        { canInterrupt: getEngineCapabilities(engineId)?.features.interrupt ?? false, runTag },
       )
     }
     if (isResuming) {
@@ -678,6 +700,15 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     }
 
     // ── 6. Process stream (headless: persist JSONL + detect report_to_user) ──
+    let expectedEngineState = engineState
+    const persistEngineSession = (sessionId: string) => {
+      if (expectedEngineState.binding?.engineId === engineId && expectedEngineState.binding.sessionId === sessionId) return
+      const binding = { version: 1 as const, engineId, sessionId }
+      if (saveChatEngineBinding(environment.spacePath, app.id, runId, binding, expectedEngineState)) {
+        expectedEngineState = { sessionId, binding }
+        store.updateRunSessionId(runId, sessionId)
+      }
+    }
     streamResult = await processStream(
       session,
       formatReferencesBlock(followupReferences, workDir) + initialMessage,
@@ -686,7 +717,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       sessionWriter,
       hasUnansweredEscalation,
       runId,
-      options.onPendingInputAbandoned
+      options.onPendingInputAbandoned,
+      { engineId, onSessionId: persistEngineSession, send: sessionLease ? message => sessionLease!.send(message) : undefined }
     )
 
     // A free-text follow-up to an already-completed run (continue.interactive) is
@@ -726,7 +758,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         sessionWriter,
         hasUnansweredEscalation,
         runId,
-        options.onPendingInputAbandoned
+        options.onPendingInputAbandoned,
+        { engineId, onSessionId: persistEngineSession, send: sessionLease ? message => sessionLease!.send(message) : undefined }
       )
 
       // Merge results: accumulate text and tokens, take latest flags
@@ -1046,7 +1079,8 @@ async function processStream(
   writer?: SessionWriter,
   turnAskedUser?: () => boolean,
   runId?: string,
-  onPendingInputAbandoned?: () => void
+  onPendingInputAbandoned?: () => void,
+  engine?: { engineId: EngineId; onSessionId: (sessionId: string) => void; send?: (message: string) => unknown }
 ): Promise<StreamResult> {
   const result: StreamResult = {
     finalText: '',
@@ -1062,7 +1096,7 @@ async function processStream(
     return result
   }
 
-  session.send(message)
+  await (engine?.send ? engine.send(message) : session.send(message))
   if (runId) notifyActiveRunReady(runId)
 
   let messageCount = 0
@@ -1121,7 +1155,7 @@ async function processStream(
           if (m.is_error || m.error_during_execution) {
             result.aiReportedError = true
             if (typeof m.result === 'string' && m.result.length > 0) {
-              result.aiReportedErrorDetail = explainEngineError(m.result)
+              result.aiReportedErrorDetail = explainEngineError(m.result, engine?.engineId)
             }
             console.warn(`[Runtime][${runTag}] AI reported error in result message`)
           }
@@ -1130,6 +1164,7 @@ async function processStream(
         // Capture the CC session id so a user can later resume / continue this run.
         if (msgType === 'system' && (sdkMessage as any).subtype === 'init' && (sdkMessage as any).session_id) {
           result.sessionId = (sdkMessage as any).session_id
+          engine?.onSessionId(result.sessionId!)
         }
 
         // The run asked the user something: it is over, and the transcript the

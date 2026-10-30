@@ -17,8 +17,10 @@ import { GoalShelf } from './GoalShelf'
 import { notifyGoalUpdateFailed, pendingGoal, saveGoal } from './goal-actions'
 import { parseGoalDraft } from './parseGoalDraft'
 import type { GoalComposerConfig } from './types'
+import type { EngineId } from '../../../shared/types/engine'
 
 interface UseGoalComposerOptions {
+  engineId?: EngineId
   spaceId: string | null | undefined
   conversationId: string | null | undefined
   /** The composer's draft key; goal mode is remembered per draft. */
@@ -78,6 +80,7 @@ async function sendWithGoal(
 }
 
 export function useGoalComposer({
+  engineId,
   spaceId,
   conversationId,
   draftKey,
@@ -85,7 +88,7 @@ export function useGoalComposer({
   send,
 }: UseGoalComposerOptions): GoalComposerConfig | undefined {
   const { t } = useTranslation()
-  const supported = useGoalSupported()
+  const supported = useGoalSupported(engineId)
   const goal = useConversationGoal(conversationId)
   const modeKey = draftKey ?? conversationId ?? null
   const active = useGoalUiStore((s) => (modeKey ? s.composerGoalMode.has(modeKey) : false))

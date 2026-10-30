@@ -129,6 +129,7 @@ export {
   loadAppChatMessages,
   loadImChatMessages,
   loadChatMessagesForConversation,
+  loadChatEngineMetadata,
   loadChatTranscriptForConversation,
   loadChatMessageThoughts,
   getAppChatSessionState,

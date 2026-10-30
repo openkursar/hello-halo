@@ -22,7 +22,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
-  getActiveEngine: () => 'anthropic',
+  getDefaultEngine: () => 'anthropic', resolveDefaultEngine: async () => 'anthropic',
   getEngineCapabilities: () => ({ features: { hooks: true } }),
 }))
 

@@ -5,6 +5,7 @@
  * This file has no dependencies and is imported by all other agent modules.
  */
 
+import type { EngineId } from '../../../shared/types/engine'
 import type { ReasoningEffortLevel, ReasoningEffortSetting } from '../../../shared/constants/reasoning-effort'
 import type { Goal, GoalInput } from '../../../shared/types/goal'
 import type { ApiRetryState } from '../../../shared/types/api-retry'
@@ -296,6 +297,7 @@ export type V2SDKSession = {
  * so no toolset snapshot needs to be tracked here.
  */
 export interface V2SessionInfo {
+  engineId: EngineId
   session: V2SDKSession
   spaceId: string
   conversationId: string

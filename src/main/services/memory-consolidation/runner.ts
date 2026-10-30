@@ -18,10 +18,10 @@ import {
   type ConsolidationWorkspace,
   type MemoryOwnerKind,
 } from '../../platform/memory'
-import { query, tool, createSdkMcpServer, getEngineCapabilities } from '../agent/resolved-sdk'
-import { addSdkHooks } from '../agent'
-import { buildInternalTaskSdkOptions, type ResolvedSdkCredentials } from '../agent/sdk-config'
-import { getHeadlessElectronPath } from '../agent/helpers'
+import {
+  query, tool, createSdkMcpServer, getEngineCapabilities, addSdkHooks,
+  buildInternalTaskSdkOptions, getHeadlessElectronPath, type ResolvedSdkCredentials,
+} from '../agent'
 import { CONSOLIDATION_SYSTEM_PROMPT, buildConsolidationMessage, buildFollowUpMessage } from './prompt'
 
 const TOOLS = ['Read', 'Write', 'Edit', 'Glob', 'Grep']
@@ -112,6 +112,7 @@ async function buildOptions(
 ): Promise<Record<string, any>> {
   const { ws, tag } = input
   const sdkOptions = await buildInternalTaskSdkOptions({
+    engineId: input.credentials.engineId,
     credentials: input.credentials,
     workDir: ws.dir,
     electronPath: getHeadlessElectronPath(),
@@ -134,10 +135,10 @@ async function buildOptions(
   delete sdkOptions.canUseTool
   delete sdkOptions.disallowedTools
 
-  if (getEngineCapabilities()?.features.hooks) {
+  if (getEngineCapabilities(sdkOptions.engineId)?.features.hooks) {
     addSdkHooks(sdkOptions, confineToWorkspace(ws.dir, tag))
   } else {
-    console.warn(`[MemoryConsolidation][${tag}] Engine runs no hooks — workspace confinement is by instruction only`)
+    console.warn(`[MemoryConsolidation][${tag}] Engine ${sdkOptions.engineId} runs no hooks — workspace confinement is by instruction only`)
   }
   return sdkOptions
 }

@@ -111,10 +111,14 @@ export { deleteStoredSession, copyStoredSessions } from './stored-session'
 // A session's working directory is missing; the chat offers to choose another.
 // Once a space moves, no session starts in the folders it left.
 export { WorkingDirectoryUnavailableError, workingDirErrorDetail, retireWorkingDirs } from './working-dir'
+export { engineErrorDetail, isEngineSetupError } from './engine-error'
 
 // Conversation goal (engines with features.goal)
 export { getConversationGoal, setConversationGoal } from './goal'
-export { initializeSdkRuntime, closeSdkRuntime, getSdkDiagnostics } from './resolved-sdk'
+export { initializeSdkRuntime, closeSdkRuntime, getSdkDiagnostics, getActiveEngine, getDefaultEngine, resolveDefaultEngine, ensureEngineAvailable, getEngineCapabilities, createSession, query, tool, createSdkMcpServer } from './resolved-sdk'
+export { getSessionEngineId } from './session-manager'
+export { resolveCredentialsForSdk, buildUserSessionSdkOptions, buildInternalTaskSdkOptions } from './sdk-config'
+export { buildSystemPrompt, buildSystemPromptWithAIBrowser, toEngineSystemPrompt } from './system-prompt'
 
 // ============================================
 // MCP Management
@@ -142,7 +146,7 @@ export { listToolsets, openToolsetByUser, closeToolsetByUser } from './toolsets'
  */
 export { openToolset, closeToolset, getToolset } from './toolsets'
 export type { ToolsetStatus, ToolsetsChangedEvent } from './toolsets'
-export { getWorkingDir, getApiCredentials, getApiCredentialsForSelection } from './helpers'
+export { getWorkingDir, getApiCredentials, getApiCredentialsForSelection, getHeadlessElectronPath } from './helpers'
 /**
  * The one way to add engine hooks to session options: merges event by event,
  * so no concern that watches tool calls (the memory guard, a delegation audit,
@@ -184,3 +188,15 @@ export { broadcastMcpStatus } from './mcp-manager'
 
 /** Materialize accepted input images for the desktop event transport. */
 export { withInputImageFiles } from './image-attachments'
+
+/** Await the process-wide engine decision before caching a capability snapshot. */
+export { waitForSdkInitialization } from './initialization'
+
+export { getLegacyEngine, resolveConversationEngine } from './engine-routing'
+export type { ResolvedSdkCredentials } from './sdk-config'
+
+/** Engine-neutral context transfer; session owners retain their own persistence and permissions. */
+export { planEngineHandoff, serializeEngineHandoff, prependEngineHandoff } from './engine-handoff'
+export type { EngineHandoffPlan, EngineHandoffHistory, SerializedEngineHandoff } from './engine-handoff'
+/** Save-time account/protocol validation without a credential refresh or model request. */
+export { assertEngineSourceSelection } from './source-compatibility'

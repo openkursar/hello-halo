@@ -392,6 +392,25 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     notes: 'orcarouter/auto is a virtual router, not a model — it routes each request to the best upstream. Model list fetched dynamically'
   },
   {
+    id: 'cheaperinference',
+    name: 'Cheaper Inference',
+    authType: 'api-key',
+    apiUrl: 'https://api.cheaperinference.com/v1',
+    modelsUrl: 'https://api.cheaperinference.com/v1/models',
+    models: [
+      { id: 'gpt-5.4-mini', name: 'GPT-5.4 Mini' },
+      { id: 'gpt-5.4', name: 'GPT-5.4' },
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
+      { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview' },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }
+    ],
+    description: 'Cheaper Inference OpenAI-compatible LLM gateway',
+    website: 'https://cheaperinference.com/',
+    region: 'global',
+    icon: 'route',
+    notes: 'Model ids have no vendor prefix. Model list fetched dynamically'
+  },
+  {
     id: 'atlascloud',
     name: 'Atlas Cloud',
     authType: 'api-key',

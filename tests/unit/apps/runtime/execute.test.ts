@@ -64,7 +64,8 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
   // Echoes back the caller's `mcpServers` (built by execute.ts from declared
   // requires + always-on built-ins) instead of a fixed `{}` — that merge is
   // exactly what the MCP-wiring tests below observe.
-  buildUserSessionSdkOptions: vi.fn((opts: { mcpServers?: Record<string, unknown> }) => ({
+  buildUserSessionSdkOptions: vi.fn((opts: { mcpServers?: Record<string, unknown>; engineId?: string }) => ({
+    engineId: opts.engineId,
     model: 'test-model',
     cwd: '/tmp/test',
     maxTurns: 999,
@@ -147,6 +148,14 @@ vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
 
 // Keep the public surface limited to the runtime's references and session lifecycle.
 vi.mock('../../../../src/main/services/agent', async () => ({
+  ...(await import('../../../../src/main/services/agent/sdk-config')),
+  ...(await import('../../../../src/main/services/agent/resolved-sdk')),
+  ...(await vi.importActual('../../../../src/main/services/agent/engine-handoff')),
+  ensureEngineAvailable: vi.fn(async () => {}),
+  getLegacyEngine: () => 'halo',
+  hasLiveTurn: () => false,
+  resolveDefaultEngine: async () => 'halo',
+  toEngineSystemPrompt: (prompt: string) => prompt,
   formatReferencesBlock: (await vi.importActual<typeof import('../../../../src/main/services/agent/references')>(
     '../../../../src/main/services/agent/references',
   )).formatReferencesBlock,
@@ -154,6 +163,7 @@ vi.mock('../../../../src/main/services/agent', async () => ({
     '../../../../src/main/services/agent/local-connection',
   )).explainEngineError,
   ...(await import('../../../../src/main/services/agent/session-manager')),
+  getSessionEngineId: () => undefined,
 }))
 
 // The fake session used by createSession — swapped per test via nextSession.
@@ -221,6 +231,11 @@ vi.mock('../../../../src/main/apps/runtime/im-auto-sync', () => ({
 }))
 
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
+  saveChatEngineRouting: (_space: string, _app: string, _run: string, engineId: string, state: any = {}) => state.sessionId || state.binding || state.routingEngine ? state : { routingEngine: engineId },
+  loadChatEngineState: vi.fn(() => ({})),
+  saveChatEngineBinding: vi.fn(() => true),
+  resolveTranscriptPath: () => undefined,
+  readChatHandoffHistory: () => ({ messages: [], truncated: false }),
   openSessionWriter: vi.fn(() => ({
     writeTrigger: vi.fn(),
     writeEvent: vi.fn(),
@@ -258,7 +273,8 @@ import {
   closeV2Session,
 } from '../../../../src/main/services/agent/session-manager'
 import { missingConnections, resolveExecutionEnvironment } from '../../../../src/main/apps/runtime/execution-environment'
-import { openSessionWriter } from '../../../../src/main/apps/runtime/session-store'
+import { openSessionWriter, loadChatEngineState, saveChatEngineBinding } from '../../../../src/main/apps/runtime/session-store'
+import { ensureEngineAvailable } from '../../../../src/main/services/agent'
 import { createScopedBrowserContext } from '../../../../src/main/services/ai-browser'
 
 // ============================================
@@ -406,6 +422,45 @@ describe('executeRun — guards', () => {
   })
 })
 
+describe('executeRun — per-person engines', () => {
+  it.each(['halo', 'anthropic', 'codex', 'dsh'] as const)('uses %s for credentials, prompt and session creation', async engineId => {
+    nextSession = new FakeSession({ script: [systemInit('engine-session'), assistantReport()] })
+    vi.mocked(createSession).mockClear()
+    vi.mocked(resolveCredentialsForSdk).mockClear()
+    vi.mocked(saveChatEngineBinding).mockClear()
+    const result = await executeRun({ app: makeApp({ userOverrides: { engineId } }), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    expect(result.outcome).toBe('useful')
+    expect(resolveCredentialsForSdk).toHaveBeenCalledWith(expect.anything(), undefined, engineId)
+    expect(buildAppSystemPrompt).toHaveBeenLastCalledWith(expect.objectContaining({ engineId }))
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ engineId }))
+    expect(saveChatEngineBinding).toHaveBeenCalledWith('/tmp/space-1', 'app-1', result.runId, { version: 1, engineId, sessionId: 'engine-session' }, { routingEngine: engineId })
+  })
+
+  it('fails an unavailable explicit engine before credentials or a replacement session', async () => {
+    vi.mocked(createSession).mockClear()
+    vi.mocked(getApiCredentialsForSelection).mockClear()
+    vi.mocked(ensureEngineAvailable).mockRejectedValueOnce(new Error('Claude Code is unavailable'))
+    const result = await executeRun({ app: makeApp({ userOverrides: { engineId: 'anthropic' } }), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toContain('Claude Code is unavailable')
+    expect(createSession).not.toHaveBeenCalled()
+    expect(getApiCredentialsForSelection).not.toHaveBeenCalled()
+  })
+
+  it('continues an existing task with its bound engine after the default changes', async () => {
+    nextSession = new FakeSession({ script: [systemInit('saved-cc-session'), assistantReport()] })
+    vi.mocked(acquireV2Session).mockClear()
+    vi.mocked(acquireV2Session).mockResolvedValueOnce(managedLease(nextSession))
+    vi.mocked(loadChatEngineState).mockReturnValueOnce({ sessionId: 'saved-cc-session', binding: { version: 1, engineId: 'anthropic', sessionId: 'saved-cc-session' } })
+    const store = makeStore()
+    store.getRun.mockReturnValue({ environment: { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1' } })
+    const result = await executeRun({ app: makeApp(), trigger: { type: 'continue_followup', description: 'Continue', continue: { sessionId: 'saved-cc-session' } }, existingRunId: 'old-run', existingSessionKey: 'old-thread', store, memory: makeMemory() })
+    expect(result.outcome).toBe('useful')
+    expect(vi.mocked(acquireV2Session).mock.calls[0].slice(0, 5)).toEqual(['space-1', 'old-thread', expect.objectContaining({ engineId: 'anthropic', strictNativeResume: true }), 'saved-cc-session', '/tmp/space-1'])
+    expect(vi.mocked(acquireV2Session).mock.calls[0][9]).toMatchObject({ recoverNativeSession: expect.any(Function) })
+  })
+})
+
 describe('executeRun — browser pages', () => {
   it('opens the pages of a run started from the desktop where the user can watch them, under its run key', async () => {
     nextSession = new FakeSession({ script: [systemInit(), assistantReport()] })
@@ -497,7 +552,7 @@ describe('executeRun — completion branches', () => {
       script: [assistantReport(), { type: 'result', is_error: true, result: 'API Error: Unable to connect to API (EACCES)' }],
     })
 
-    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    const result = await executeRun({ app: makeApp({ userOverrides: { engineId: 'anthropic' } }), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
 
     expect(result.outcome).toBe('error')
     expect(result.errorMessage).toContain("Security software on this computer blocked Halo's internal connection")
@@ -1202,7 +1257,7 @@ describe('executeRun — original continuation context', () => {
     expect(result.outcome).toBe('useful')
     expect(result.runId).toBe('old-run')
     expect(result.sessionKey).toBe('old-thread')
-    expect(acquireV2Session).toHaveBeenCalledWith('old-space', 'old-thread', expect.any(Object), 'old-engine', environment.workDir)
+    expect(vi.mocked(acquireV2Session).mock.calls[0].slice(0, 5)).toEqual(['old-space', 'old-thread', expect.any(Object), 'old-engine', environment.workDir])
     expect(createSession).not.toHaveBeenCalled()
     expect(resolveExecutionEnvironment).not.toHaveBeenCalled()
     expect(store.insertRun).not.toHaveBeenCalled()

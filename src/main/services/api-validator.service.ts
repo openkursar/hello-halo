@@ -1,7 +1,7 @@
 /**
  * API Validator Service
  *
- * Validates API connections by sending a test message through the Claude Code SDK.
+ * Validates the selected API connection through Halo SDK, independently of the default engine.
  * This ensures the entire pipeline (router, SDK, upstream API) works correctly.
  *
  * Why use SDK instead of direct HTTP?
@@ -16,7 +16,7 @@ import { proxyFetch } from './proxy-fetch'
 import { createSession } from './agent/resolved-sdk'
 import { ensureOpenAICompatRouter, encodeBackendConfig, normalizeApiUrl } from '../openai-compat-router'
 import type { BackendConfig } from '../openai-compat-router'
-import { buildSdkEnv, resolveClaudeCodeCliPath } from './agent/sdk-config'
+import { buildSdkEnv } from './agent/sdk-config'
 import { getTempSpacePath } from '../foundation/config.service'
 import { DEFAULT_MODEL } from '../../shared/types/ai-sources'
 import {
@@ -204,6 +204,7 @@ export async function validateApiConnection(params: ValidateApiParams): Promise<
 
   try {
     const sdkOptions: Record<string, unknown> = {
+      engineId: 'halo',
       model: testModel,
       apiCredentials: { baseUrl: normalizedUrl, apiKey, model: testModel, provider },
       // Halo's own temp space, never the OS temp dir: on macOS the latter is the
@@ -219,9 +220,9 @@ export async function validateApiConnection(params: ValidateApiParams): Promise<
       }),
       systemPrompt: 'Reply with exactly: OK',
       maxTurns: 1,
+      tools: [],
       allowedTools: [],
       permissionMode: 'bypassPermissions' as const,
-      pathToClaudeCodeExecutable: resolveClaudeCodeCliPath(),
       executable: electronPath,
       executableArgs: ['--no-warnings'],
       extraArgs: {

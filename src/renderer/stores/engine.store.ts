@@ -1,74 +1,70 @@
-/**
- * Engine Capabilities Store
- *
- * Caches the active agent engine's capability descriptor so any UI component
- * can branch on flags without a per-render IPC call. Capabilities only change
- * when the user switches engines AND restarts (engine selection is process-
- * bound; see resolved-sdk.ts), so a single load on bootstrap is sufficient
- * for the lifetime of the renderer.
- *
- * Renderer code MUST NOT branch on `engineId` directly — branch on
- * capability flags. The badge component is the only allowed reader of the
- * raw engine string.
- */
-
+/** Capability descriptors are cached per engine; sessions never inherit another engine's flags. */
+import { useEffect } from 'react'
 import { create } from 'zustand'
 import { api } from '../api'
-import type { EngineCapabilities, EngineId } from '../types'
+import type { EngineCapabilities } from '../types'
+import { isEngineId, type EngineId } from '../../shared/types/engine'
 
 interface EngineStoreState {
   capabilities: EngineCapabilities | null
+  byEngine: Partial<Record<EngineId, EngineCapabilities>>
   loading: boolean
-  load: () => Promise<void>
-  /** Force a reload — used after Settings → engine switch + restart. */
-  reload: () => Promise<void>
+  load: (engineId?: EngineId) => Promise<void>
+  reload: (engineId?: EngineId) => Promise<void>
 }
 
-export const useEngineStore = create<EngineStoreState>((set, get) => ({
-  capabilities: null,
-  loading: false,
-  load: async () => {
-    if (get().capabilities || get().loading) return
-    set({ loading: true })
-    try {
-      const result = await api.getEngineCapabilities()
-      if (result?.success && result.data) {
-        set({ capabilities: result.data as EngineCapabilities, loading: false })
-      } else {
-        set({ loading: false })
-        console.warn('[engine.store] Failed to load engine capabilities:', result?.error)
-      }
-    } catch (err) {
-      set({ loading: false })
-      console.warn('[engine.store] getEngineCapabilities threw:', err)
+const requests = new Map<EngineId | 'default', Promise<void>>()
+const revisions = new Map<EngineId | 'default', number>()
+
+export const useEngineStore = create<EngineStoreState>((set, get) => {
+  const load = (engineId?: EngineId, force = false): Promise<void> => {
+    const key = engineId ?? 'default'
+    if (!force) {
+      if (engineId ? get().byEngine[engineId] : get().capabilities) return Promise.resolve()
+      if (requests.has(key)) return requests.get(key)!
     }
-  },
-  reload: async () => {
-    set({ capabilities: null, loading: false })
-    await get().load()
-  },
-}))
-
-/**
- * Hook returning the current engine capabilities, loading them on first use.
- * Returns `null` while loading (callers must guard or use a loading
- * sentinel — typically by rendering a neutral fallback).
- *
- * Components should treat `null` as "use CC defaults" rather than blocking
- * UI: every flag has a CC-shaped fallback and missing capabilities should
- * never break rendering.
- */
-export function useEngineCapabilities(): EngineCapabilities | null {
-  const caps = useEngineStore((s) => s.capabilities)
-  const load = useEngineStore((s) => s.load)
-  if (!caps) {
-    void load()
+    const revision = (revisions.get(key) ?? 0) + 1
+    revisions.set(key, revision)
+    if (!engineId) set({ loading: true })
+    const request = (async () => {
+      try {
+        const result = await api.getEngineCapabilities(engineId)
+        if (revisions.get(key) !== revision) return
+        const capabilities = result?.data as EngineCapabilities | undefined
+        if (!result?.success || !capabilities || !isEngineId(capabilities.engineId) || (engineId && capabilities.engineId !== engineId)) {
+          console.warn('[engine.store] Engine capabilities could not be loaded', { engineId: key, error: result?.error })
+          return
+        }
+        set(state => ({
+          byEngine: { ...state.byEngine, [capabilities.engineId]: capabilities },
+          ...(!engineId ? { capabilities } : {}),
+        }))
+      } catch (error) {
+        console.warn('[engine.store] Engine capabilities request failed', { engineId: key, error })
+      } finally {
+        if (revisions.get(key) === revision) {
+          requests.delete(key)
+          if (!engineId) set({ loading: false })
+        }
+      }
+    })()
+    requests.set(key, request)
+    return request
   }
-  return caps
+  return {
+    capabilities: null, byEngine: {}, loading: false,
+    load: engineId => load(engineId),
+    reload: engineId => load(engineId, true),
+  }
+})
+
+export function useEngineCapabilities(engineId?: EngineId): EngineCapabilities | null {
+  const capabilities = useEngineStore(state => engineId ? state.byEngine[engineId] ?? null : state.capabilities)
+  const load = useEngineStore(state => state.load)
+  useEffect(() => { void load(engineId) }, [engineId, load])
+  return capabilities
 }
 
-/** Read the engine id directly. Allowed only by EngineBadge / settings UI. */
-export function useEngineId(): EngineId | null {
-  const caps = useEngineCapabilities()
-  return caps?.engineId ?? null
+export function useEngineId(engineId?: EngineId): EngineId | null {
+  return useEngineCapabilities(engineId)?.engineId ?? engineId ?? null
 }

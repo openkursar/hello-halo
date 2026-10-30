@@ -7,8 +7,11 @@
  * here keeps the agent engine unaware of consolidation.
  */
 
-import { onAgentEvent, activeSessions, getApiCredentialsForSelection, getApiCredentials } from '../agent'
-import { resolveCredentialsForSdk } from '../agent/sdk-config'
+import {
+  onAgentEvent, activeSessions, getApiCredentialsForSelection, getApiCredentials,
+  resolveCredentialsForSdk, resolveConversationEngine, resolveDefaultEngine,
+  getSessionEngineId, isSessionBusy,
+} from '../agent'
 import { getConversation } from '../conversation.service'
 import { getSpace, getSpaceMemoryLayout, getSpaceMemorySettings } from '../space.service'
 import type { IDisposable } from '../../platform/event'
@@ -35,10 +38,14 @@ function spaceRequest(
     tag: `space:${spaceId.slice(0, 8)}`,
     resolveCredentials: async () => {
       // The conversation's own model when a turn triggered it; otherwise the global one.
+      const conversation = conversationId ? getConversation(spaceId, conversationId) : null
+      const engineId = conversationId
+        ? await resolveConversationEngine(conversation, getSessionEngineId(conversationId), isSessionBusy(conversationId))
+        : await resolveDefaultEngine()
       const credentials = conversationId
-        ? await getApiCredentialsForSelection(getConversation(spaceId, conversationId))
+        ? await getApiCredentialsForSelection(conversation)
         : await getApiCredentials()
-      return resolveCredentialsForSdk(credentials)
+      return resolveCredentialsForSdk(credentials, undefined, engineId)
     },
     isBusy: () => [...activeSessions.values()].some(
       s => s.spaceId === spaceId && s.conversationId !== conversationId

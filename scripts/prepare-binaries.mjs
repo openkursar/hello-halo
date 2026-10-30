@@ -25,6 +25,7 @@ import {
   CLOUDFLARED_VERSION,
 } from './lib/cloudflared.mjs'
 import deployment from './lib/macho-deployment-target.cjs'
+import ripgrep from './lib/ripgrep.cjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '..')
@@ -73,20 +74,6 @@ const CODEX_PACKAGES = {
   'mac-x64': { pkg: '@openai/codex-darwin-x64', targetTriple: 'x86_64-apple-darwin', binary: 'codex' },
   'win': { pkg: '@openai/codex-win32-x64', targetTriple: 'x86_64-pc-windows-msvc', binary: 'codex.exe' },
   'linux': { pkg: '@openai/codex-linux-x64', targetTriple: 'x86_64-unknown-linux-musl', binary: 'codex' }
-}
-
-// @img/sharp-* prebuilt binaries, used by the Claude engines to downscale
-// oversized images before sending them to a model. Declared as optional
-// dependencies of @anthropic-ai/claude-code, so npm installs the host's package
-// only and a cross-platform build would ship none — the app then fails on any
-// image wider than the model limit with "Unable to resize image".
-// Each package pulls its libvips sibling from its own optionalDependencies
-// (win32 has none: the DLLs are inside the package).
-const SHARP_PACKAGES = {
-  'mac-arm64': '@img/sharp-darwin-arm64',
-  'mac-x64': '@img/sharp-darwin-x64',
-  'win': '@img/sharp-win32-x64',
-  'linux': '@img/sharp-linux-x64'
 }
 
 /**
@@ -477,33 +464,27 @@ function installCodex(platform) {
   }
 }
 
-/**
- * Sharp release to install for every target platform, read from whichever
- * @img/sharp-* package npm resolved for this host. Pinning all platforms to the
- * host's version keeps one sharp release across the whole build matrix.
- */
-function getSharpVersion() {
-  const imgDir = path.join(PROJECT_ROOT, 'node_modules', '@img')
-  const hostPkg = fs.existsSync(imgDir)
-    ? fs.readdirSync(imgDir).find(name => name.startsWith('sharp-') && !name.startsWith('sharp-libvips-'))
-    : undefined
-
-  if (!hostPkg) {
-    throw new Error('No @img/sharp-* package in node_modules, run "npm install" first')
-  }
-  return JSON.parse(fs.readFileSync(path.join(imgDir, hostPkg, 'package.json'), 'utf8')).version
+function checkRipgrep(platform) {
+  const binaryPath = path.join(PROJECT_ROOT, 'node_modules', ripgrep.ripgrepBinaryPath(ripgrep.PREPARE_PLATFORM_KEYS[platform]))
+  if (!fs.existsSync(binaryPath)) return { exists: false }
+  const stats = fs.statSync(binaryPath)
+  return { exists: true, valid: stats.size > 1024 * 1024, size: stats.size }
 }
 
 /**
- * Download an npm package tarball straight into node_modules, bypassing the
- * host os/cpu checks that make npm refuse a foreign-platform package.
+ * Install the Halo SDK engine's ripgrep package for a target platform.
+ * Downloads the tarball directly from the npm registry to bypass host os/cpu checks.
  */
-function installFromRegistry(pkg, version) {
-  const shortName = pkg.split('/').pop()
+function installRipgrep(platform) {
+  const { packageName } = ripgrep.RIPGREP_TARGETS[ripgrep.PREPARE_PLATFORM_KEYS[platform]]
+  const version = ripgrep.pinnedRipgrepVersion(PROJECT_ROOT)
+  const unscoped = packageName.replace('@vscode/', '')
   const registry = execSync('npm config get registry', { encoding: 'utf8' }).trim().replace(/\/+$/, '')
-  const tarballUrl = `${registry}/${pkg}/-/${shortName}-${version}.tgz`
-  const destDir = path.join(PROJECT_ROOT, 'node_modules', ...pkg.split('/'))
-  const tmpTgz = path.join(PROJECT_ROOT, `node_modules/.${shortName}.tgz`)
+  const tarballUrl = `${registry}/${packageName}/-/${unscoped}-${version}.tgz`
+  const destDir = path.join(PROJECT_ROOT, 'node_modules', packageName)
+  const tmpTgz = path.join(PROJECT_ROOT, `node_modules/.${unscoped}.tgz`)
+
+  log.info(`Installing ${packageName}@${version} from registry...`)
 
   try {
     if (fs.existsSync(destDir)) {
@@ -514,66 +495,16 @@ function installFromRegistry(pkg, version) {
     curlDownload(tarballUrl, tmpTgz)
     execSync(`tar -xzf "${tmpTgz}" -C "${destDir}" --strip-components=1`, { stdio: 'pipe' })
     fs.unlinkSync(tmpTgz)
+
+    const status = checkRipgrep(platform)
+    if (!status.exists || !status.valid) {
+      throw new Error(`No valid ripgrep binary found in downloaded ${packageName}`)
+    }
+
+    log.success(`Installed ${packageName}@${version}`)
   } catch (err) {
     if (fs.existsSync(tmpTgz)) fs.unlinkSync(tmpTgz)
-    throw err
-  }
-
-  return destDir
-}
-
-function checkSharp(platform) {
-  const pkg = SHARP_PACKAGES[platform]
-  const pkgDir = path.join(PROJECT_ROOT, 'node_modules', ...pkg.split('/'))
-  const manifestPath = path.join(pkgDir, 'package.json')
-
-  if (!fs.existsSync(manifestPath)) {
-    return { exists: false }
-  }
-
-  const libDir = path.join(pkgDir, 'lib')
-  if (!fs.existsSync(libDir) || !fs.readdirSync(libDir).some(f => f.endsWith('.node'))) {
-    return { exists: true, valid: false }
-  }
-
-  // The libvips sibling carries the shared library the .node links against,
-  // so the package alone is not enough on platforms that declare one.
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
-  const siblings = Object.keys(manifest.optionalDependencies || {})
-  const valid = siblings.every(dep =>
-    fs.existsSync(path.join(PROJECT_ROOT, 'node_modules', ...dep.split('/'), 'package.json'))
-  )
-  return { exists: true, valid }
-}
-
-/**
- * Install the @img/sharp-* package for a target platform, plus the libvips
- * sibling it declares.
- */
-function installSharp(platform) {
-  const pkg = SHARP_PACKAGES[platform]
-  const version = getSharpVersion()
-
-  log.info(`Installing ${pkg}@${version} from registry...`)
-
-  try {
-    const destDir = installFromRegistry(pkg, version)
-
-    const manifest = JSON.parse(fs.readFileSync(path.join(destDir, 'package.json'), 'utf8'))
-    for (const [dep, range] of Object.entries(manifest.optionalDependencies || {})) {
-      const depVersion = range.replace(/^[^0-9]*/, '')
-      log.info(`Installing ${dep}@${depVersion} for ${pkg}...`)
-      installFromRegistry(dep, depVersion)
-    }
-
-    const status = checkSharp(platform)
-    if (!status.exists || !status.valid) {
-      throw new Error(`No valid sharp binary found in downloaded ${pkg}`)
-    }
-
-    log.success(`Installed ${pkg}@${version}`)
-  } catch (err) {
-    log.error(`Failed to install ${pkg}: ${err.message}`)
+    log.error(`Failed to install ${packageName}: ${err.message}`)
     throw err
   }
 }
@@ -615,12 +546,12 @@ function preparePlatform(platform) {
     log.success(`@openai/codex native package already exists for ${platform}`)
   }
 
-  // Check and install the @img/sharp-* prebuilt image resizer
-  const sharpStatus = checkSharp(platform)
-  if (!sharpStatus.exists || !sharpStatus.valid) {
-    installSharp(platform)
+  // ripgrep for the Halo SDK engine's Grep tool
+  const ripgrepStatus = checkRipgrep(platform)
+  if (!ripgrepStatus.exists || !ripgrepStatus.valid) {
+    installRipgrep(platform)
   } else {
-    log.success(`@img/sharp native package already exists for ${platform}`)
+    log.success(`ripgrep already exists for ${platform}`)
   }
 
   // Portable Git: bundled into the Windows build for offline Git Bash setup
@@ -642,8 +573,9 @@ function preparePlatform(platform) {
     const arch = platform === 'mac-arm64' ? 'arm64' : 'x64'
     const nativePaths = [
       `node_modules/${WATCHER_PACKAGES[platform]}`,
-      `node_modules/${CODEX_PACKAGES[platform].pkg}`, `node_modules/${SHARP_PACKAGES[platform]}`,
-      `node_modules/@img/sharp-libvips-darwin-${arch}`, `node_modules/node-pty/prebuilds/darwin-${arch}`,
+      `node_modules/${CODEX_PACKAGES[platform].pkg}`,
+      `node_modules/${ripgrep.ripgrepBinaryPath(ripgrep.PREPARE_PLATFORM_KEYS[platform])}`,
+      `node_modules/node-pty/prebuilds/darwin-${arch}`,
     ]
     let count = 0
     for (const relative of nativePaths) {

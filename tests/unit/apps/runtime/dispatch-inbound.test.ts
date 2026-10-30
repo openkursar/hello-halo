@@ -153,6 +153,7 @@ vi.mock('../../../../src/main/services/space.service', () => ({
 // a chat is then told is im-error-reply.test's, with the real check.
 vi.mock('../../../../src/main/services/agent', () => ({
   isRefusedLocalConnection: (error: string) => error.includes('Unable to connect to API (EACCES)'),
+  isEngineSetupError: () => false,
   onAgentEvent: () => ({ dispose: () => {} }),
 }))
 vi.mock('../../../../src/main/foundation/product-config', () => ({

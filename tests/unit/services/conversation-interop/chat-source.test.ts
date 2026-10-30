@@ -20,7 +20,7 @@ const h = vi.hoisted(() => {
   const addMessage = vi.fn()
   const updateMessageById = vi.fn()
   const sendMessage = vi.fn()
-  return { conversations, addMessage, updateMessageById, sendMessage, sendIntoLiveTurn: vi.fn(() => true), emitAgentEvent: vi.fn() }
+  return { conversations, addMessage, updateMessageById, sendMessage, sendIntoLiveTurn: vi.fn((..._args: unknown[]) => true), emitAgentEvent: vi.fn() }
 })
 
 vi.mock('../../../../src/main/services/conversation.service', () => ({
@@ -148,10 +148,63 @@ describe('chat conversation source', () => {
     expect(h.emitAgentEvent).not.toHaveBeenCalled()
   })
 
+  it('returns recipient record IDs for withdrawn live inputs and retains earlier IDs without recording them again', () => {
+    h.conversations.set('c1', { id: 'c1', title: 'One', updatedAt: 'x', messages: [] })
+    h.addMessage.mockImplementation((_space, _conversation, record) => ({ ...record, id: 'new-input', timestamp: 'now' }))
+    const withdrawn = vi.fn()
+    source.deliverMidTurn!('space-1', 'c1', [
+      { turnInput: 'same words', record: { content: 'same words', source: 'team-message', metadata: {} }, inputRecorded: true, recordedInputIds: ['old-input'] },
+      { turnInput: 'same words', record: { content: 'same words', source: 'cross-conversation', metadata: {} } },
+    ], withdrawn)
+    const options = h.sendIntoLiveTurn.mock.calls[0][3] as { onWithdrawn: () => void }
+    options.onWithdrawn()
+    expect(withdrawn).toHaveBeenCalledWith([['old-input'], ['new-input']])
+    expect(h.addMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('excludes existing redelivery and newly recorded batch IDs before the sender prepares its history', async () => {
+    const conv = { id: 'c1', title: 'One', updatedAt: 'x', messages: [message('old-input', 'system', 'same words')] }
+    h.conversations.set('c1', conv)
+    h.addMessage.mockImplementation((_space, _conversation, record) => {
+      const stored = message('last-input', record.role, record.content, record)
+      conv.messages.push(stored)
+      return stored
+    })
+    h.updateMessageById.mockImplementation((_space, _conversation, id, patch) => {
+      const stored = conv.messages.find(item => item.id === id)!
+      Object.assign(stored, patch)
+      return stored
+    })
+    h.sendMessage.mockImplementationOnce(async (params, options) => {
+      await Promise.resolve()
+      conv.messages.push(message('current-input', 'user', params.message))
+      options.onUserMessageRecorded('current-input')
+      expect(options.excludedHistoryMessageIds).toEqual(['old-input', 'current-input', 'last-input'])
+      expect(conv.messages.map(item => item.content)).toEqual(['same words', 'same words', 'third message'])
+    })
+    const outcomes = await source.dispatchBatch!('space-1', 'c1', [
+      { turnInput: 'framed same words', record: { content: 'same words', source: 'team-message', metadata: {} }, inputRecorded: true, recordedInputIds: ['old-input'] },
+      { turnInput: 'framed same words', record: { content: 'same words', source: 'team-message', metadata: {} } },
+      { turnInput: 'framed third message', record: { content: 'third message', source: 'cross-conversation', metadata: {} } },
+    ])
+    expect(outcomes).toEqual([{}, { messageId: 'current-input' }, { messageId: 'last-input' }])
+    expect(h.addMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not create another transcript opener for a batch containing only recorded inputs', async () => {
+    await expect(source.dispatchBatch!('space-1', 'c1', [{ turnInput: 'held input', record: { content: 'held input', source: 'team-message', metadata: {} }, inputRecorded: true, recordedInputIds: ['held-id'] }])).rejects.toThrow('must join an existing turn')
+    expect(h.sendMessage).not.toHaveBeenCalled()
+  })
+
   it('marks every record opening a batch as input to the following turn', async () => {
     const conv = { id: 'c1', title: 'One', updatedAt: 'x', messages: [] as FakeMessage[] }
     h.conversations.set('c1', conv)
-    h.sendMessage.mockImplementationOnce(async () => { conv.messages.push(message('opener', 'user', 'first\n\nsecond')) })
+    h.sendMessage.mockImplementationOnce(async (_params, options) => {
+      await Promise.resolve()
+      conv.messages.push(message('opener', 'user', 'first\n\nsecond'))
+      options.onUserMessageRecorded('opener')
+      expect(options.excludedHistoryMessageIds).toEqual(['opener', 'second'])
+    })
     h.addMessage.mockImplementation((_space, _conversation, record) => ({ ...record, id: 'second', timestamp: 'now' }))
     await source.dispatchBatch!('space-1', 'c1', ['first', 'second'].map(content => ({
       turnInput: content, record: { content, source: 'team-message', metadata: { teamId: 'team' } },
@@ -166,13 +219,15 @@ describe('chat conversation source', () => {
     it('runs the ordinary send with the framed text, then rewrites the persisted message into the recorded shape', async () => {
       const conv = { id: 'c1', title: 'One', updatedAt: 'x', messages: [message('a', 'user', 'earlier')] }
       h.conversations.set('c1', conv)
-      h.sendMessage.mockImplementationOnce(async () => {
+      h.sendMessage.mockImplementationOnce(async (_params, options) => {
+        await Promise.resolve()
         conv.messages.push(message('new', 'user', 'framed words', { metadata: { goal: 'keep' } }))
+        options.onUserMessageRecorded('new')
       })
 
       const outcome = await source.dispatch('space-1', 'c1', dispatched)
 
-      expect(h.sendMessage).toHaveBeenCalledWith({ spaceId: 'space-1', conversationId: 'c1', message: 'framed words' })
+      expect(h.sendMessage).toHaveBeenCalledWith({ spaceId: 'space-1', conversationId: 'c1', message: 'framed words' }, expect.objectContaining({ onUserMessageRecorded: expect.any(Function) }))
       expect(h.updateMessageById).toHaveBeenCalledWith('space-1', 'c1', 'new', {
         content: 'raw words',
         role: 'system',
@@ -182,16 +237,20 @@ describe('chat conversation source', () => {
       expect(outcome).toEqual({ messageId: 'new' })
     })
 
-    it('finds the delivered message even when the running turn appended something before it', async () => {
+    it('patches only the reported ID after awaited preparation, even beside an identical user input', async () => {
       const conv = { id: 'c1', title: 'One', updatedAt: 'x', messages: [] as FakeMessage[] }
       h.conversations.set('c1', conv)
-      h.sendMessage.mockImplementationOnce(async () => {
+      h.sendMessage.mockImplementationOnce(async (_params, options) => {
+        await Promise.resolve()
         conv.messages.push(message('early', 'assistant', 'streamed first'))
+        conv.messages.push(message('identical-other', 'user', 'framed words'))
         conv.messages.push(message('new', 'user', 'framed words'))
+        options.onUserMessageRecorded('new')
       })
 
       expect(await source.dispatch('space-1', 'c1', dispatched)).toEqual({ messageId: 'new' })
       expect(h.updateMessageById).toHaveBeenCalledWith('space-1', 'c1', 'new', expect.anything())
+      expect(h.updateMessageById).toHaveBeenCalledTimes(1)
     })
 
     it('never rewrites some other message when the delivered one cannot be found, and says so', async () => {
@@ -199,8 +258,9 @@ describe('chat conversation source', () => {
       try {
         const conv = { id: 'c1', title: 'One', updatedAt: 'x', messages: [] as FakeMessage[] }
         h.conversations.set('c1', conv)
-        h.sendMessage.mockImplementationOnce(async () => {
+        h.sendMessage.mockImplementationOnce(async (_params, options) => {
           conv.messages.push(message('other', 'user', 'a different user message'))
+          options.onUserMessageRecorded('missing-id')
         })
 
         expect(await source.dispatch('space-1', 'c1', dispatched)).toEqual({})

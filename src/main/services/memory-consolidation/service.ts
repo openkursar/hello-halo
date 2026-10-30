@@ -29,7 +29,7 @@ import {
   type MemoryOwnerKind,
 } from '../../platform/memory'
 import type { MemoryStatus, ResolvedMemorySettings } from '../../../shared/types/memory'
-import type { ResolvedSdkCredentials } from '../agent/sdk-config'
+import type { ResolvedSdkCredentials } from '../agent'
 import { createConsolidationAgent } from './runner'
 import { buildConflictFeedback, buildUnmergedFeedback, buildValidationFeedback, UNFINISHED_FEEDBACK } from './prompt'
 

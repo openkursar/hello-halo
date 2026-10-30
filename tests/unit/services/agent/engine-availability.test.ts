@@ -12,7 +12,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import path from 'path'
 
-const ANTHROPIC_PACKAGE = '@anthropic-ai/claude-agent-sdk'
+const runtime = vi.hoisted(() => ({ launch: null as any }))
+vi.mock('../../../../src/main/services/cc-runtime', () => ({ resolveCcRuntimeLaunch: async () => runtime.launch }))
 const HALO_PACKAGE = '@hello-halo/agent-sdk'
 
 function appNodeModules(): string {
@@ -54,6 +55,7 @@ async function probe(engineId: 'anthropic' | 'halo') {
 
 describe('engine availability', () => {
   beforeEach(() => {
+    runtime.launch = null
     fs.mkdirSync(appNodeModules(), { recursive: true })
   })
 
@@ -69,18 +71,12 @@ describe('engine availability', () => {
     expect(result.fingerprint).toBe('')
   })
 
-  it('reports an installed engine with its version and a fingerprint', async () => {
-    writePackage(
-      ANTHROPIC_PACKAGE,
-      { name: ANTHROPIC_PACKAGE, version: '0.2.89', main: 'sdk.mjs' },
-      { 'sdk.mjs': 'export const query = () => {}' },
-    )
-
-    const result = await probe('anthropic')
-
-    expect(result.available).toBe(true)
-    expect(result.version).toBe('0.2.89')
-    expect(result.fingerprint).toMatch(/^[0-9a-f]{12}$/)
+  it('reports a selected external CC and rechecks after its selection changes', async () => {
+    runtime.launch = { version: '2.1.89' }
+    const { getEngineAvailability } = await loadProbe()
+    expect((await getEngineAvailability(['anthropic']))[0]).toMatchObject({ available: true, version: '2.1.89' })
+    runtime.launch = null
+    expect((await getEngineAvailability(['anthropic']))[0].available).toBe(false)
   })
 
   it('treats a package with no entry file as unavailable', async () => {

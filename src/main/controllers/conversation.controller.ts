@@ -15,7 +15,8 @@ import {
   getMessageThoughts as serviceGetMessageThoughts,
   toggleStarConversation as serviceToggleStarConversation
 } from '../services/conversation.service'
-import { closeV2Session } from '../services/agent'
+import { closeV2Session, resolveDefaultEngine, ensureEngineAvailable, assertEngineSourceSelection, getLegacyEngine } from '../services/agent'
+import { isEngineId } from '../../shared/types/engine'
 import { getTaskStateService } from '../platform/task-state'
 
 export interface ControllerResponse<T = unknown> {
@@ -40,14 +41,14 @@ export function listConversations(spaceId: string): ControllerResponse {
 /**
  * Create a new conversation
  */
-export function createConversation(
+export async function createConversation(
   spaceId: string,
   title?: string,
   reasoningEffort?: unknown,
   options?: { ephemeral?: boolean }
-): ControllerResponse {
+): Promise<ControllerResponse> {
   try {
-    const conversation = serviceCreateConversation(spaceId, title, reasoningEffort, { ephemeral: options?.ephemeral === true })
+    const conversation = serviceCreateConversation(spaceId, title, reasoningEffort, { ephemeral: options?.ephemeral === true, engineId: await resolveDefaultEngine() })
     return { success: true, data: conversation }
   } catch (error: unknown) {
     const err = error as Error
@@ -76,13 +77,33 @@ export function getConversation(spaceId: string, conversationId: string, fromMes
 /**
  * Update a conversation
  */
-export function updateConversation(
+export async function updateConversation(
   spaceId: string,
   conversationId: string,
   updates: Record<string, unknown>
-): ControllerResponse {
+): Promise<ControllerResponse> {
   try {
-    const conversation = serviceUpdateConversation(spaceId, conversationId, updates)
+    let editable = updates
+    if (['engineOverride', 'modelSourceId', 'modelId'].some(key => key in updates)) {
+      const current = serviceGetConversation(spaceId, conversationId)
+      if (!current) return { success: false, error: 'Conversation not found' }
+      const snapshot = JSON.stringify([current.engineOverride, current.modelSourceId, current.modelId])
+      if ('engineOverride' in updates) {
+        const requested = updates.engineOverride
+        if (requested !== null && requested !== undefined && !isEngineId(requested)) throw new Error('Unknown agent engine')
+        if (isEngineId(requested)) await ensureEngineAvailable(requested)
+        editable = { ...updates, engineOverride: requested ?? undefined }
+      }
+      const selected = { ...current, ...editable }
+      const targetEngine = selected.engineOverride ?? selected.engineBinding?.engineId
+        ?? (selected.engineRoutingVersion === 1 && isEngineId(selected.engineId) ? selected.engineId : getLegacyEngine())
+      await assertEngineSourceSelection(targetEngine, selected)
+      const fresh = serviceGetConversation(spaceId, conversationId)
+      if (!fresh || snapshot !== JSON.stringify([fresh.engineOverride, fresh.modelSourceId, fresh.modelId])) {
+        throw new Error('The engine or model selection changed while saving. Please try again.')
+      }
+    }
+    const conversation = serviceUpdateConversation(spaceId, conversationId, editable)
     if (conversation) {
       return { success: true, data: conversation }
     }

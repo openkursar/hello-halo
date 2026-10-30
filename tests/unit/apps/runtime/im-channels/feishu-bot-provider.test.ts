@@ -1161,6 +1161,20 @@ describe('FeishuBotProvider — replies', () => {
     await expect(started.inbound[0].reply.send('answer')).rejects.toThrow(/send refused/)
   })
 
+  it('passes a delivery failure on by its message alone, never the SDK error with its request', async () => {
+    const started = await startInstance()
+    const token = 't-g1044aaaabbbbccccddddeeeeffff0000111122223333'
+    started.channel.send = async () => {
+      throw Object.assign(new Error('send refused'), { config: { headers: { Authorization: `Bearer ${token}` } }, cause: { token } })
+    }
+    await emitMessage(started, message())
+    const failure = await started.inbound[0].reply.send('answer').catch((err: unknown) => err)
+    expect(failure).toBeInstanceOf(Error)
+    expect((failure as Error).message).toBe('send refused')
+    expect(JSON.stringify(failure, Object.getOwnPropertyNames(failure))).not.toContain(token)
+    expect((failure as Error).cause).toBeUndefined()
+  })
+
   it('offers streaming, and a finish with no prior progress sends a plain message', async () => {
     const started = await startInstance()
     await emitMessage(started, message())
@@ -1284,5 +1298,98 @@ describe('FeishuBotProvider — text longer than one message', () => {
     await expect(started.inbound[0].reply.send(LONG_ANSWER)).rejects.toThrow(/rate limited/)
     expect(attempts).toBe(3)
     expect(sentMarkdown(started)[1]).toBe('回复的第 2 条发送失败，完整内容请在 Halo 里查看')
+  })
+})
+
+describe('FeishuBotProvider — SDK logs', () => {
+  const TENANT_TOKEN = 't-g1044aaaabbbbccccddddeeeeffff0000111122223333'
+  const APP_SECRET = 'appSecretValue0123456789abcdefABCD'
+
+  interface SdkLoggerLike {
+    error(...args: unknown[]): void
+    info(...args: unknown[]): void
+  }
+
+  /** A rejected call through the instance's own transport: a real axios error, request config and all. */
+  async function rejectedRequest(started: Started, config: Record<string, unknown>): Promise<unknown> {
+    const transport = started.channel.createOptions?.httpInstance as { request(c: Record<string, unknown>): Promise<unknown> }
+    return transport.request({
+      ...config,
+      adapter: async (requestConfig: Record<string, unknown>) => {
+        throw Object.assign(new Error('Request failed with status code 400'), {
+          isAxiosError: true,
+          code: 'ERR_BAD_REQUEST',
+          config: requestConfig,
+          response: { status: 400, data: { code: 99991663, msg: 'invalid access token' }, headers: {}, config: requestConfig },
+          toJSON: (): Record<string, unknown> => ({ message: 'Request failed with status code 400', config: requestConfig }),
+        })
+      },
+    }).then(() => undefined, (err: unknown) => err)
+  }
+
+  it('logs a failed request by its status, endpoint and platform code, never its credentials', async () => {
+    const started = await startInstance()
+    const logger = started.channel.createOptions?.logger as SdkLoggerLike
+    const lines: string[] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((line: unknown) => { lines.push(String(line)) })
+    try {
+      const tokenRequest = await rejectedRequest(started, {
+        method: 'post',
+        url: 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
+        data: { app_id: VALID_APP_ID, app_secret: APP_SECRET },
+      })
+      const apiCall = await rejectedRequest(started, {
+        method: 'get',
+        url: `https://open.feishu.cn/open-apis/im/v1/chats/oc_1?user_access_token=${TENANT_TOKEN}`,
+        headers: { Authorization: `Bearer ${TENANT_TOKEN}` },
+      })
+      // The SDK logs its errors wrapped in an array.
+      logger.error([tokenRequest])
+      logger.error([apiCall], { authorization: `Bearer ${TENANT_TOKEN}`, app_secret: APP_SECRET })
+    } finally {
+      spy.mockRestore()
+    }
+
+    const output = lines.join('\n')
+    expect(lines).toHaveLength(2)
+    expect(output).not.toContain(APP_SECRET)
+    expect(output).not.toContain(TENANT_TOKEN)
+    expect(output).not.toMatch(/user_access_token=/)
+    expect(lines[0]).toContain('event=sdk')
+    expect(lines[0]).toContain('status=400')
+    expect(lines[0]).toContain('request=POST https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal')
+    expect(lines[0]).toContain('platform=99991663:invalid access token')
+    expect(lines[1]).toContain('request=GET https://open.feishu.cn/open-apis/im/v1/chats/oc_1')
+    expect(lines[1]).toContain('[REDACTED]')
+  })
+
+  it('keeps an ordinary SDK line readable and bounded', async () => {
+    const started = await startInstance()
+    const logger = started.channel.createOptions?.logger as SdkLoggerLike
+    const lines: string[] = []
+    const spy = vi.spyOn(console, 'log').mockImplementation((line: unknown) => { lines.push(String(line)) })
+    try {
+      logger.info('[ws]', 'reconnect success', { attempt: 2 })
+      logger.info('x'.repeat(10_000))
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(lines[0]).toContain('[ws] reconnect success {\\"attempt\\":2}')
+    expect(lines[1].length).toBeLessThan(2_300)
+  })
+
+  it('redacts a token before cutting a long line, so no part of it is left at the cut', async () => {
+    const started = await startInstance()
+    const logger = started.channel.createOptions?.logger as SdkLoggerLike
+    const lines: string[] = []
+    const spy = vi.spyOn(console, 'log').mockImplementation((line: unknown) => { lines.push(String(line)) })
+    try {
+      // Long enough that the token straddles the 2048-character cut.
+      logger.info(`${'x'.repeat(2_030)} Bearer ${TENANT_TOKEN} tail`)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(lines[0]).not.toContain(TENANT_TOKEN.slice(0, 10))
   })
 })

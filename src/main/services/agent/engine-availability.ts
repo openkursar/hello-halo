@@ -1,42 +1,21 @@
 /**
- * Engine Availability — which agent SDK engines physically shipped in this build.
- *
- * Engine selection is user configuration (`config.agent.sdkEngine`), but whether
- * the selected engine's package is actually present is a property of the build.
- * The two can disagree: a build produced without `@hello-halo/agent-sdk` still
- * meets configs that select it, and the resulting import failure used to abort
- * the whole bootstrap. Probing here lets startup degrade to an engine this build
- * can run, and lets Settings offer only those engines.
- *
- * The probe never imports an engine module — it inspects packaged files
- * (package.json + entry file), so it is safe to call before initSdk().
- *
- * dsh is the one exception: it also needs an interpreter newer than the Node
- * this Electron bundles, and the only way to know whether one exists is to ask
- * `node --version`. Without it the engine reads as available and fails on the
- * user's first message instead of in Settings, which is where the fix is.
- * That spawn is why each engine is probed on first demand rather than all at
- * once: startup asks only for the engines it may load, so an experimental
- * engine nobody selected costs nothing until Settings lists it.
- *
- * `fingerprint` exists because package version is not a reliable identity for
- * every engine: `@hello-halo/agent-sdk` is a local path dependency whose version
- * is static across rebuilds, so two different SDK builds are indistinguishable by
- * version alone. Hashing the entry file makes any shipped build identifiable from
- * a log line alone.
+ * Runnable engine discovery without importing engine implementations. Bundled
+ * packages are immutable for the process lifetime; selected CC installations use
+ * cc-runtime's stamped compatibility cache. Startup probes candidates in order
+ * and stops at the first runnable engine, so default Halo never scans external tools.
  */
 
 import { createHash } from 'crypto'
 import { existsSync, readFileSync } from 'fs'
 import path from 'path'
 import { app } from 'electron'
-import type { EngineId } from './capabilities'
+import { ENGINE_IDS, type EngineId } from '../../../shared/types/engine'
 
 export interface EngineAvailability {
   engineId: EngineId
-  /** Whether the engine's module can be loaded in this build. */
+  /** Whether the engine has a runnable module or selected external installation. */
   available: boolean
-  /** Package version; empty string when the engine is absent. */
+  /** Runtime version; empty string when the engine is absent. */
   version: string
   /** Short content hash of the entry file; empty when unavailable or not hashable. */
   fingerprint: string
@@ -52,26 +31,26 @@ export interface EngineAvailability {
  * about whether the engine can run. Its real requirement is the platform-native
  * `codex` binary, probed separately via `resolveBundledCodexBinary()`.
  */
-const ENGINE_PACKAGES: Record<Exclude<EngineId, 'codex' | 'dsh'>, string> = {
-  anthropic: '@anthropic-ai/claude-agent-sdk',
+const ENGINE_PACKAGES: Record<Exclude<EngineId, 'codex' | 'dsh' | 'anthropic'>, string> = {
   halo: '@hello-halo/agent-sdk',
 }
 
 /** Package that carries the Codex version metadata (binary lives in its platform subpackage). */
 const CODEX_VERSION_PACKAGE = '@openai/codex-sdk'
 
-export const ALL_ENGINE_IDS: EngineId[] = ['anthropic', 'halo', 'codex', 'dsh']
+export const ALL_ENGINE_IDS: readonly EngineId[] = ENGINE_IDS
 
 const probes = new Map<EngineId, Promise<EngineAvailability>>()
 
 /**
- * Probe the given engines, every engine by default. Each result is cached for
- * the process lifetime — packaged files cannot change while the app runs.
+ * Probe the given engines, every engine by default. Bundled files are cached for
+ * the process lifetime; CC delegates cache invalidation to its runtime owner.
  */
 export async function getEngineAvailability(
   engineIds: readonly EngineId[] = ALL_ENGINE_IDS
 ): Promise<EngineAvailability[]> {
-  const fresh = engineIds.filter(id => !probes.has(id))
+  // External installations can change while running; cc-runtime owns its stamped cache.
+  const fresh = engineIds.filter(id => id === 'anthropic' || !probes.has(id))
   for (const engineId of fresh) probes.set(engineId, probeEngine(engineId))
 
   const results = await Promise.all(engineIds.map(id => probes.get(id)!))
@@ -87,6 +66,7 @@ export async function getEngineAvailability(
 }
 
 function probeEngine(engineId: EngineId): Promise<EngineAvailability> {
+  if (engineId === 'anthropic') return probeCc()
   if (engineId === 'codex') return probeCodex()
   if (engineId === 'dsh') return probeDsh()
   return Promise.resolve(probePackageEngine(engineId))
@@ -96,7 +76,7 @@ function probeEngine(engineId: EngineId): Promise<EngineAvailability> {
 // Probes
 // ============================================
 
-function probePackageEngine(engineId: Exclude<EngineId, 'codex' | 'dsh'>): EngineAvailability {
+function probePackageEngine(engineId: Exclude<EngineId, 'codex' | 'dsh' | 'anthropic'>): EngineAvailability {
   const absent: EngineAvailability = { engineId, available: false, version: '', fingerprint: '' }
 
   const pkgDir = findPackageDir(ENGINE_PACKAGES[engineId])
@@ -117,6 +97,18 @@ function probePackageEngine(engineId: Exclude<EngineId, 'codex' | 'dsh'>): Engin
     available: true,
     version: typeof manifest.version === 'string' ? manifest.version : '',
     fingerprint: fingerprintFile(engineId === 'halo' ? path.join(pkgDir, 'dist/worker/entry.js') : entry),
+  }
+}
+
+async function probeCc(): Promise<EngineAvailability> {
+  try {
+    const { resolveCcRuntimeLaunch } = await import('../cc-runtime')
+    const launch = await resolveCcRuntimeLaunch()
+    return { engineId: 'anthropic', available: launch !== null, version: launch?.version ?? '', fingerprint: '',
+      ...(launch ? {} : { reason: 'No compatible Claude Code installation is selected' }) }
+  } catch (error) {
+    console.warn('[SDK] Selected CC installation probe failed:', error)
+    return { engineId: 'anthropic', available: false, version: '', fingerprint: '', reason: 'The selected Claude Code installation could not be checked' }
   }
 }
 

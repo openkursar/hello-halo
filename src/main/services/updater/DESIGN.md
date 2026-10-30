@@ -32,6 +32,10 @@ Public surface is `index.ts`. Nothing outside the module imports `staged/*` or
 | cost at click | full NSIS install (~30 s) | directory rename + relaunch |
 | applies by | `autoUpdater.quitAndInstall` | native helper swaps directories |
 
+`updateConfig.provider: "disabled"` disables both paths without registering
+listeners or timers. Such products ship no `app-update.yml`; experimental builds
+use this to keep their installers independent from the stable release feed.
+
 Selection happens once at init from `updateConfig.windowsMode` and is cached.
 Re-deriving it per event would let one update start on one path and finish on
 the other.

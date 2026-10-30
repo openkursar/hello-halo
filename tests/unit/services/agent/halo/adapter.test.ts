@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createHaloSdkModule } from '../../../../../src/main/services/agent/halo'
+import { isNativeSessionResumeError } from '../../../../../src/shared/types/engine-session'
+import { app } from 'electron'
+import * as fs from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => '/application' } }))
 
@@ -7,11 +13,26 @@ function fixture() {
   const runtime = { initialize: vi.fn(async () => {}), close: vi.fn(async () => {}), diagnostics: vi.fn(() => ({ workers: [] })),
     createSession: vi.fn(async (_options: Record<string, unknown>, _placement?: unknown) => ({ sessionId: 'real' })), query: vi.fn(() => (async function* () {})()) }
   const sdk = { createWorkerRuntime: vi.fn(() => runtime), getWorkerEntryUrl: () => new URL('file:///sdk/dist/worker/entry.js'),
-    tool: vi.fn(), createSdkMcpServer: vi.fn(), setLogger: vi.fn() }
+    tool: vi.fn(), createSdkMcpServer: vi.fn(), setLogger: vi.fn(),
+    isResumeHistoryError: (error: unknown) => error instanceof Error && (error as { code?: unknown }).code === 'RESUME_HISTORY_UNAVAILABLE' }
   return { runtime, sdk, module: createHaloSdkModule(sdk as never) }
 }
 
 describe('Halo host worker adapter', () => {
+  it('finds setup beside a built unpackaged main entry', async () => {
+    const root = fs.mkdtempSync(join(tmpdir(), 'halo-adapter-'))
+    const main = join(root, 'out/main')
+    const setup = join(main, 'worker/halo-setup.cjs')
+    fs.mkdirSync(join(main, 'worker'), { recursive: true })
+    fs.writeFileSync(setup, '')
+    const appPath = vi.spyOn(app, 'getAppPath').mockReturnValue(main)
+    try {
+      const { module, runtime } = fixture()
+      await module.createSession({ haloRequestIdentity: { sessionId: 'conversation' } })
+      expect(runtime.createSession.mock.calls[0][1]).toMatchObject({ setup: { module: pathToFileURL(setup).href } })
+    } finally { appPath.mockRestore(); fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
   it('loads without starting a worker and exposes explicit startup and shutdown', async () => {
     const { runtime, module } = fixture()
     expect(runtime.initialize).not.toHaveBeenCalled()
@@ -45,5 +66,15 @@ describe('Halo host worker adapter', () => {
     expect(runtime.createSession.mock.calls[0][0]).toMatchObject({ env: { AGENT_GIT_BASH_PATH: 'C:\\portable\\bash.exe' } })
     await module.createSession({ env: { CLAUDE_CODE_GIT_BASH_PATH: 'C:\\portable\\bash.exe', AGENT_GIT_BASH_PATH: 'C:\\chosen\\bash.exe' } })
     expect(runtime.createSession.mock.calls[1][0]).toMatchObject({ env: { AGENT_GIT_BASH_PATH: 'C:\\chosen\\bash.exe' } })
+  })
+
+  it('reports a strict resume the SDK refused as a native resume failure the host recovers from', async () => {
+    const { runtime, module } = fixture()
+    runtime.createSession.mockRejectedValueOnce(Object.assign(new Error('history incomplete'), { code: 'RESUME_HISTORY_UNAVAILABLE', reason: 'incomplete' }))
+    const failure = await module.createSession({ resume: 'stored', strictResume: true }).catch(error => error)
+    expect(isNativeSessionResumeError(failure)).toBe(true)
+    expect(failure).toMatchObject({ engineId: 'halo', sessionId: 'stored' })
+    runtime.createSession.mockRejectedValueOnce(new Error('worker crashed'))
+    await expect(module.createSession({ resume: 'stored' })).rejects.toThrow('worker crashed')
   })
 })

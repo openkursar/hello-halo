@@ -1,3 +1,4 @@
+import { isEngineId, type EngineId } from '../../shared/types/engine'
 /**
  * Agent IPC Handlers
  *
@@ -21,12 +22,13 @@ import {
   setConversationGoal,
   onAgentEvent,
   onAgentBroadcast,
-  withInputImageFiles
+  withInputImageFiles,
+  waitForSdkInitialization
 } from '../services/agent'
 import type { GoalInput } from '../../shared/types/goal'
 import type { AgentInjectRequest, AgentSendRequest } from '../../shared/types/agent-send'
 import * as agentController from '../controllers/agent.controller'
-import { getEngineCapabilities, getActiveEngine, getDegradedFromEngine } from '../services/agent/resolved-sdk'
+import { getEngineCapabilities, getActiveEngine, getDegradedFromEngine, resolveDefaultEngine } from '../services/agent/resolved-sdk'
 import { getEngineAvailability } from '../services/agent/engine-availability'
 import { defaultCapabilitiesFor } from '../services/agent/capabilities'
 import { resolveCodexPendingQuestion } from '../services/agent/codex'
@@ -232,11 +234,14 @@ export function registerAgentHandlers(): void {
     // diff fallback). Falls back to the declarative default if the engine
     // module did not export its own descriptor — guarantees the renderer
     // always gets a usable shape.
-    getEngineCapabilities: async () => {
+    getEngineCapabilities: async (engineId?: EngineId) => {
       try {
-        const caps = getEngineCapabilities()
+        await waitForSdkInitialization()
+        if (engineId === undefined) await resolveDefaultEngine()
+        if (engineId !== undefined && !isEngineId(engineId)) throw new Error('Unknown agent engine')
+        const caps = getEngineCapabilities(engineId)
         if (caps) return { success: true, data: caps }
-        const engine = getActiveEngine() ?? 'anthropic'
+        const engine = engineId ?? getActiveEngine() ?? 'halo'
         return { success: true, data: defaultCapabilitiesFor(engine) }
       } catch (error: unknown) {
         const err = error as Error
@@ -249,11 +254,13 @@ export function registerAgentHandlers(): void {
     // it to offer only runnable engines and to explain a degradation.
     getEngineAvailability: async () => {
       try {
+        await resolveDefaultEngine()
         return {
           success: true,
           data: {
             engines: await getEngineAvailability(),
             activeEngine: getActiveEngine(),
+            defaultEngine: getActiveEngine(),
             degradedFrom: getDegradedFromEngine(),
           },
         }

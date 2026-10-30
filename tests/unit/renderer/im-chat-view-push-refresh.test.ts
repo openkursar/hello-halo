@@ -145,6 +145,15 @@ beforeEach(() => {
 })
 
 describe('opening an IM chat in Halo', () => {
+  it('reports the engine identity alongside the cold history it loaded', async () => {
+    const onEngineMetadata = vi.fn()
+    const engineBinding = { version: 1, engineId: 'anthropic', sessionId: 'native-cc' }
+    env.api.appImChatMessages.mockResolvedValueOnce({ success: true, data: [], engineId: 'anthropic', engineBinding } as never)
+    new Runner().render(() => ImChatView({ appId: 'dh', spaceId: 'space-1', session, onEngineMetadata }))
+    await settle()
+    expect(onEngineMetadata).toHaveBeenCalledWith('app-chat:dh:wecom-bot:group:ops-group', expect.objectContaining({ engineId: 'anthropic', engineBinding }))
+  })
+
   it('picks up the turn running in it, once per chat', async () => {
     const runner = new Runner()
     const view = () => ImChatView({ appId: 'dh', spaceId: 'space-1', session })
