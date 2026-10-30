@@ -21,7 +21,7 @@ import { load } from 'js-yaml'
 import engineRuntimes from '../engine-runtimes.cjs'
 import {
   c, log, loadManifest, sha256File, sha256Buffer, getByPath, isEmptyValue,
-  asarList, asarRead, readRecord, writeRecord,
+  asarEntryPath, asarList, asarRead, readRecord, writeRecord,
 } from './lib.mjs'
 
 function parseArgs(argv) {
@@ -113,7 +113,7 @@ function checkAsar(app, { manifest, record, problems }) {
       continue
     }
     const { manifestPath: rel, label: pkg } = engineArtifactPaths(ENGINE_RUNTIMES[engine])
-    const inAsar = listing.has(rel)
+    const inAsar = listing.has(asarEntryPath(rel))
     const inUnpacked = fs.existsSync(path.join(unpackedRoot, rel))
     if (!inAsar && !inUnpacked) {
       problems.push(`${app.label}: engine "${engine}" (${pkg}) missing from package`)

@@ -136,10 +136,15 @@ function asarModule() {
   return require('@electron/asar')
 }
 
+/** A path inside the package in the form asarList returns: '/'-separated, no leading slash. */
+export function asarEntryPath(relPath, sep = path.sep) {
+  return relPath.replace(/^[\\/]/, '').split(sep).join('/')
+}
+
 export function asarList(asarPath) {
   return asarModule()
     .listPackage(asarPath)
-    .map((e) => e.replace(/^[\\/]/, '').split(path.sep).join('/'))
+    .map((e) => asarEntryPath(e))
 }
 
 export function asarRead(asarPath, relPath) {
