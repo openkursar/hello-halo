@@ -2,6 +2,9 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { constants as fsConstants } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { hash, instanceKey, readJson, writeJson } from './catalog.mjs'
 import { sourceIdentity } from './source.mjs'
 import { makePlan, validateManifest } from './planner.mjs'
@@ -137,6 +140,37 @@ export function verifyLiveEvidence(cases, usage) {
   })
 }
 
+export async function terminalShellFailure({ platform = process.platform, environment = process.env,
+  access = fs.access.bind(fs), stat = fs.stat.bind(fs), run = promisify(execFile),
+} = {}) {
+  if (!['darwin', 'win32'].includes(platform)) return 'The interactive terminal requires macOS or Windows; this host is unsupported'
+  let executable = '/bin/bash'
+  const label = platform === 'darwin' ? 'The fixed macOS /bin/bash shell' : 'Windows PowerShell at the SystemRoot/WINDIR system path'
+  if (platform === 'win32') {
+    const systemRoot = environment.SystemRoot || environment.WINDIR
+    if (typeof systemRoot !== 'string' || !/^[a-z]:[\\/]/i.test(systemRoot) || /[\0\r\n]/.test(systemRoot)) {
+      return 'Windows terminal readiness requires an absolute local SystemRoot or WINDIR directory'
+    }
+    executable = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  }
+  try {
+    if (!(await stat(executable)).isFile()) return `${label} is not a regular executable file`
+    await access(executable, platform === 'darwin' ? fsConstants.X_OK : fsConstants.F_OK)
+    if (platform === 'win32') {
+      const receipt = 'HALO_ACCEPTANCE_POWERSHELL_READY'
+      const result = await run(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', `[Console]::Out.Write('${receipt}')`], {
+        timeout: 3000, maxBuffer: 4096, encoding: 'utf8', windowsHide: true, shell: false,
+      })
+      if (result.stdout.trim() !== receipt) return 'Windows PowerShell did not return its read-only startup receipt'
+    }
+    return null
+  } catch (error) {
+    const code = typeof error.code === 'string' && /^(?:E[A-Z0-9_]{1,40}|ERR_[A-Z0-9_]{1,60})$/.test(error.code)
+      ? error.code : Number.isInteger(error.code) ? `exit ${error.code}` : 'unavailable'
+    return `${label} is unavailable (${error.killed ? 'startup timeout' : code})`
+  }
+}
+
 export async function prerequisiteFailures(root, scenario, { liveReady = false } = {}) {
   const problems = []
   if (scenario.mode === 'live' && !liveReady) problems.push('Live execution requires an explicit, credentialed budget broker configuration')
@@ -156,6 +190,9 @@ export async function prerequisiteFailures(root, scenario, { liveReady = false }
       if (scenario.mode !== 'live') problems.push('Live model prerequisites require live execution mode')
     } else if (requirement === 'windows-tools') {
       if (process.platform !== 'win32') problems.push('This scenario requires actual Windows execution')
+    } else if (requirement === 'terminal-shell') {
+      const missing = await terminalShellFailure()
+      if (missing) problems.push(missing)
     } else if (requirement === 'chromium-browser') {
       try {
         const { chromium } = await import('playwright')
