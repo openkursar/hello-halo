@@ -16,7 +16,7 @@ interface LegacyConversation {
   messages: TranscriptMessage[]
 }
 
-// Frozen from the format before 573ebf03: 2dc0acec0b3678999cb5783a96211796d6f489fd,
+// Frozen from the unversioned format in 18da351e3cd215aff144213714a48e9be9250a66,
 // src/main/services/conversation.service.ts. It deliberately has no SDK session or format marker.
 const source = readFileSync(new URL('./data/conversation-v1.json', import.meta.url), 'utf8')
 
