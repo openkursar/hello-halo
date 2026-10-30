@@ -5,7 +5,7 @@ import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { fixture, evidence, source } from './fixtures/ci-application.mjs'
+import { fixture, evidence, source, finalizer } from './fixtures/ci-application.mjs'
 import { verifyEvidenceSource } from '../../../scripts/acceptance/lib/ci-evidence.mjs'
 import { archiveCi } from '../../../scripts/acceptance/ci-archive.mjs'
 
@@ -140,4 +140,92 @@ test('legacy metadata commands cannot write after the execution owner has regist
   assert.equal(fs.existsSync(path.join(selected.directory, 'summary.md')), false)
   assert.equal(selected.finalize('success').status, 0)
   verifyEvidenceSource(selected.root, { identity })
+})
+
+for (const state of ['missing', 'invalid']) test(`an early ${state} context produces a scoped job summary without mutating evidence`, t => {
+  const selected = fixture(t)
+  const contextFile = path.join(selected.directory, 'context.json')
+  if (state === 'missing') fs.unlinkSync(contextFile)
+  else fs.writeFileSync(contextFile, '{invalid-context')
+  const external = path.join(selected.root, 'external-evidence')
+  fs.writeFileSync(external, 'existing external bytes')
+  const payloadSummary = path.join(selected.directory, 'summary.md')
+  fs.symlinkSync(external, payloadSummary)
+  const before = fs.readdirSync(selected.directory).sort()
+  const summary = path.join(selected.root, 'job-summary.md')
+  const outputs = path.join(selected.root, 'job-outputs')
+  const result = spawnSync(process.execPath, [finalizer], { cwd: selected.root, encoding: 'utf8', env: {
+    ...selected.environment(), HALO_SOURCE_REPOSITORY: 'example/application', HALO_SOURCE_REF: 'main', HALO_ACCEPTANCE_PROFILE: 'regression',
+    HALO_CI_STAGE_OUTCOMES: JSON.stringify({ sdk: { outcome: 'failure' }, build: { outcome: 'skipped' }, execute: { outcome: 'skipped' } }), GITHUB_STEP_SUMMARY: summary, GITHUB_OUTPUT: outputs,
+  } })
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /context is unavailable or unreadable/)
+  const body = fs.readFileSync(summary, 'utf8')
+  assert.match(body, /example\/application.*main/)
+  assert.match(body, /\| sdk \| failure \|/)
+  assert.match(body, /\| execute \| skipped \|/)
+  assert.match(body, /No cases are claimed as passing/)
+  assert.match(body, /no freeze or baseline is eligible/)
+  assert.equal(fs.existsSync(outputs), false)
+  assert.deepEqual(fs.readdirSync(selected.directory).sort(), before)
+  assert.equal(fs.lstatSync(payloadSummary).isSymbolicLink(), true)
+  assert.equal(fs.readFileSync(external, 'utf8'), 'existing external bytes')
+  if (state === 'invalid') assert.equal(fs.readFileSync(contextFile, 'utf8'), '{invalid-context')
+  assert.equal(fs.existsSync(path.join(selected.root, 'tests/acceptance/output/ci-baseline')), false)
+})
+
+test('an unavailable context cannot redirect its job-summary fallback into the evidence payload', t => {
+  const selected = fixture(t)
+  fs.unlinkSync(path.join(selected.directory, 'context.json'))
+  const target = path.join(selected.directory, 'summary.md')
+  fs.writeFileSync(target, 'preserved partial evidence')
+  const result = spawnSync(process.execPath, [finalizer], { cwd: selected.root, encoding: 'utf8', env: { ...selected.environment(), GITHUB_STEP_SUMMARY: target } })
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /job summary must be separate/)
+  assert.equal(fs.readFileSync(target, 'utf8'), 'preserved partial evidence')
+  assert.deepEqual(fs.readdirSync(selected.directory), ['summary.md'])
+})
+
+test('a completed owner with malformed run bytes produces only an unreadable-evidence job summary', t => {
+  const selected = fixture(t)
+  const owner = spawnSync(process.execPath, [source], { cwd: selected.root, encoding: 'utf8', env: selected.environment(), timeout: 20000 })
+  assert.equal(owner.status, 0, owner.stderr)
+  const runFile = path.join(selected.directory, 'run/run.json')
+  fs.writeFileSync(runFile, '{incomplete-run')
+  const payloadSummary = path.join(selected.directory, 'summary.md')
+  fs.writeFileSync(payloadSummary, 'preserved partial summary')
+  const before = fs.readdirSync(selected.directory).sort()
+  const summary = path.join(selected.root, 'job-summary.md')
+  const result = spawnSync(process.execPath, [finalizer], { cwd: selected.root, encoding: 'utf8', env: { ...selected.environment(), GITHUB_STEP_SUMMARY: summary } })
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /completed run record is unreadable/)
+  const body = fs.readFileSync(summary, 'utf8')
+  assert.match(body, /Run evidence: \*\*unreadable\*\*/)
+  assert.match(body, /No cases are claimed as passing/)
+  assert.match(body, /no freeze or baseline is eligible/)
+  assert.equal(fs.readFileSync(runFile, 'utf8'), '{incomplete-run')
+  assert.equal(fs.readFileSync(payloadSummary, 'utf8'), 'preserved partial summary')
+  assert.deepEqual(fs.readdirSync(selected.directory).sort(), before)
+  assert.equal(evidence(selected).baseline, false)
+})
+
+test('a live writer with a temporarily passing run cannot contribute counts to the finalization summary', { skip: !posix, timeout: 15000 }, async t => {
+  const selected = runningFixture(t, { hangCommand: 'package' })
+  await until(() => fs.existsSync(path.join(selected.directory, 'stage-ready.json')))
+  const runFile = path.join(selected.directory, 'run/run.json')
+  fs.mkdirSync(path.dirname(runFile))
+  const record = JSON.stringify({ version: 1, status: 'passed', selectedCount: 7, summary: { passed: 7 } })
+  fs.writeFileSync(runFile, record)
+  const summary = path.join(selected.root, 'job-summary.md')
+  const result = spawnSync(process.execPath, [finalizer], { cwd: selected.root, encoding: 'utf8', env: { ...selected.environment(), GITHUB_STEP_SUMMARY: summary } })
+  assert.equal(result.status, 1)
+  const body = fs.readFileSync(summary, 'utf8')
+  assert.match(body, /Evidence finality: \*\*unconfirmed\*\*/)
+  assert.match(body, /No cases are claimed as passing/)
+  assert.doesNotMatch(body, /Result: \*\*passed\*\*|\| passed \| 7 \|/)
+  assert.equal(fs.readFileSync(runFile, 'utf8'), record)
+  assert.equal(fs.existsSync(path.join(selected.directory, 'summary.md')), false)
+  assert.equal(fs.existsSync(path.join(selected.directory, 'evidence-freeze.json')), false)
+  assert.equal(evidence(selected).baseline, false)
+  process.kill(read(path.join(selected.directory, 'stage-ready.json')).pid, 0)
 })

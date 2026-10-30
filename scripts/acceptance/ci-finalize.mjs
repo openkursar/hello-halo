@@ -8,6 +8,18 @@ import { stoppedEvidenceProducers, freezeEvidence, verifyEvidenceSource, writeEv
 const within = (parent, file) => { const relative = path.relative(parent, file); return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)) }
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
 
+function appendJobSummary(directory, file, summary) {
+  if (!file) return
+  const target = path.resolve(file)
+  const canonical = path.join(fs.realpathSync(path.dirname(target)), path.basename(target))
+  if (within(directory, target) || within(directory, canonical)) throw new Error('The job summary must be separate from the evidence payload')
+  const fd = fs.openSync(canonical, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0), 0o600)
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error('The job summary must be a regular file')
+    fs.writeFileSync(fd, summary)
+  } finally { fs.closeSync(fd) }
+}
+
 function collectDiagnostics(root, directory, producers) {
   const copied = [], unavailable = []
   for (const producer of producers) {
@@ -48,17 +60,37 @@ export function finalizeCi(root, { identity, stageOutcomes = {}, summaryFile } =
   const directory = path.join(root, 'tests/acceptance/output/ci')
   assertOwnedEvidencePath(root, directory)
   if (fs.existsSync(path.join(directory, 'evidence-freeze.json'))) throw new Error('Frozen CI evidence cannot be finalized again')
-  const context = readJson(path.join(directory, 'context.json'))
-  const runFile = path.join(directory, 'run/run.json')
-  const run = fs.existsSync(runFile) ? readJson(runFile) : null
+  let context
+  try {
+    context = readJson(path.join(directory, 'context.json'))
+    if (!context || typeof context !== 'object' || Array.isArray(context) || !/^[a-f0-9]{40}$/.test(context.revision ?? '')) throw new Error('Captured CI context has no fixed source identity')
+  } catch (error) {
+    const unavailable = { repository: process.env.HALO_SOURCE_REPOSITORY, ref: process.env.HALO_SOURCE_REF, profile: process.env.HALO_ACCEPTANCE_PROFILE, platform: process.platform, architecture: process.arch }
+    const summary = renderSummary(unavailable, null, stageOutcomes) + '\nSource context: **unavailable or unreadable**. Acceptance execution is not established by complete evidence. No cases are claimed as passing; no freeze or baseline is eligible. The evidence payload was not changed.\n'
+    appendJobSummary(directory, summaryFile, summary)
+    throw Object.assign(new Error('Captured CI context is unavailable or unreadable; evidence cannot be finalized', { cause: error }), { code: 'EVIDENCE_CONTEXT_UNAVAILABLE' })
+  }
   let state
   try {
     state = stoppedEvidenceProducers(root, { identity })
     if (git(['rev-parse', 'HEAD'], root) !== context.revision) throw new Error('The source checkout changed before evidence finalization')
   } catch (error) {
-    const summary = renderSummary(context, run, stageOutcomes) + '\nEvidence finality: **unconfirmed**. The owner or another registered evidence producer has not established completion. No baseline is eligible.\n'
-    if (summaryFile) fs.appendFileSync(summaryFile, summary)
+    const summary = renderSummary(context, null, stageOutcomes) + '\nEvidence finality: **unconfirmed**. The owner or another registered evidence producer has not established completion. No run results are claimed while writers are unconfirmed; no freeze or baseline is eligible.\n'
+    appendJobSummary(directory, summaryFile, summary)
     throw error
+  }
+  const runFile = path.join(directory, 'run/run.json')
+  let run = null
+  try {
+    if (fs.existsSync(runFile)) {
+      assertOwnedEvidencePath(root, runFile)
+      run = readJson(runFile)
+      if (!run || typeof run !== 'object' || Array.isArray(run)) throw new Error('The run record must be a JSON object')
+    }
+  } catch (error) {
+    const summary = renderSummary(context, null, stageOutcomes) + '\nRun evidence: **unreadable** after producer completion. No cases are claimed as passing; no freeze or baseline is eligible. The evidence payload was not changed.\n'
+    appendJobSummary(directory, summaryFile, summary)
+    throw Object.assign(new Error('The completed run record is unreadable; evidence cannot be finalized', { cause: error }), { code: 'EVIDENCE_RUN_UNREADABLE' })
   }
   const unavailable = collectDiagnostics(root, directory, state.producers)
   let baselineFailure
@@ -71,7 +103,7 @@ export function finalizeCi(root, { identity, stageOutcomes = {}, summaryFile } =
   }
   const summary = renderSummary(context, run, stageOutcomes) + `\nEvidence producers: **stopped**. CI owner outcome: **${state.owner.outcome}**.\n` + (baselineFailure ? `\nBaseline withheld: ${baselineFailure.message}\n` : '')
   writeEvidenceText(path.join(directory, 'summary.md'), summary, { mode: 0o640 })
-  if (summaryFile) fs.appendFileSync(summaryFile, summary)
+  appendJobSummary(directory, summaryFile, summary)
   const frozen = freezeEvidence(root, { identity: state.scope.identity })
   verifyEvidenceSource(root, { identity: state.scope.identity })
   if (baselineFailure) throw baselineFailure
