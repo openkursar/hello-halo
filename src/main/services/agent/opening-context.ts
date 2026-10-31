@@ -12,9 +12,9 @@ const ROOT_DIRECTORIES = new Set([
 
 /**
  * Whether the text opens with a slash command such as `/name args` or
- * `/plugin:name`. A path such as `/etc/hosts` or `/tmp` does not.
+ * `/plugin:name`, in any script. A path such as `/etc/hosts` or `/tmp` does not.
  */
 export function opensWithSlashCommand(text: string): boolean {
-  const name = /^\s*\/([A-Za-z0-9][\w.:-]*)(?:\s|$)/.exec(text)?.[1]
+  const name = /^\s*\/([^\s/]+)(?:\s|$)/.exec(text)?.[1]
   return name !== undefined && !ROOT_DIRECTORIES.has(name)
 }
