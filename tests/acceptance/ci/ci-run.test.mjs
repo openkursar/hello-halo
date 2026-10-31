@@ -44,7 +44,7 @@ test('selected Chromium requirements prepare the browser before the normal run w
 test('blocked or unbound Chromium cases do not prepare a browser', context => {
   for (const entry of [{ ...scenario(['chromium-browser']), blockedReason: 'Unsupported condition' }, { ...scenario(['chromium-browser']), testIds: [] }]) {
     const selected = fixture(context, { plan: { ...selection(['chromium-browser']), cases: [entry] }, runFailure: true })
-    assert.equal(selected.run().status, 1)
+    assert.equal(selected.run().status, 0)
     assert.equal(evidence(selected).calls.some(call => call.command === 'browser'), false)
   }
 })
@@ -66,7 +66,7 @@ test('blocked, unbound and mismatched-variant cases cannot trigger packaging', c
     { cases: [scenario(['packaged-app'])], tests: [{ id: 'bound-test', bindings: [{ ...binding, variant: { client: 'other' } }] }] },
   ]) {
     const selected = fixture(context, { plan, runFailure: true })
-    assert.equal(selected.run().status, 1)
+    assert.equal(selected.run().status, 0)
     const { calls, baseline } = evidence(selected)
     assert.equal(calls.some(call => call.command === 'package'), false)
     assert.equal(calls.find(call => call.command === 'run').packaged, null)
@@ -166,4 +166,70 @@ test('a previous host probe cannot be reused as current GUI readiness evidence',
   assert.match(result.stderr, /already contains host-readiness evidence/)
   assert.equal(evidence(selected).calls.some(call => call.command === 'run'), false)
   assert.equal(evidence(selected).baseline, false)
+})
+
+const summaryOf = selected => fs.readFileSync(path.join(selected.directory, 'summary.md'), 'utf8')
+const qualityOf = selected => JSON.parse(fs.readFileSync(path.join(selected.directory, 'quality.json'), 'utf8'))
+
+test('scenarios that fail are findings, not a failed pipeline: the stage finishes, the failure is new and the baseline still advances', context => {
+  const selected = fixture(context, { plan: selection([]), runOutcome: 'failed', previousStatus: 'passed', full: true })
+  const result = selected.run()
+  assert.equal(result.status, 0, result.stderr)
+  const { stages, baseline } = evidence(selected)
+  const execution = stages.find(stage => stage.stage === 'acceptance execution')
+  assert.equal(execution.status, 'completed')
+  assert.equal(execution.exitCode, 1)
+  const quality = qualityOf(selected)
+  assert.deepEqual(quality.newFailures.map(item => item.caseId), ['example.journey'])
+  assert.equal(quality.newFailures[0].reason, 'Error: the journey failed')
+  assert.equal(quality.stillFailing.length + quality.fixed.length, 0)
+  assert.match(summaryOf(selected), /\*\*1 new failure\*\*/)
+  assert.equal(baseline, true)
+})
+
+test('a failure that was already failing is reported as continuing, and its scenario is selected again with the change-based run', context => {
+  const selected = fixture(context, { plan: selection([]), runOutcome: 'failed', previousStatus: 'failed' })
+  const result = selected.run()
+  assert.equal(result.status, 0, result.stderr)
+  const { calls } = evidence(selected)
+  const plan = calls.find(call => call.command === 'plan')
+  assert.deepEqual(plan.args.filter((argument, index) => plan.args[index - 1] === '--rerun-case'), ['example.journey'])
+  assert(plan.args.includes('--base'))
+  const quality = qualityOf(selected)
+  assert.equal(quality.newFailures.length, 0)
+  assert.deepEqual(quality.stillFailing.map(item => item.caseId), ['example.journey'])
+  assert.match(summaryOf(selected), /No new failures\*\* · 0 fixed · 1 still failing/)
+})
+
+test('a scenario that passes again is reported as fixed', context => {
+  const selected = fixture(context, { plan: selection([]), previousStatus: 'failed' })
+  assert.equal(selected.run().status, 0)
+  assert.deepEqual(qualityOf(selected).fixed.map(item => item.caseId), ['example.journey'])
+  assert.equal(evidence(selected).baseline, true)
+})
+
+test('a run without earlier results lists what fails without calling anything new', context => {
+  const selected = fixture(context, { plan: selection([]), runOutcome: 'failed' })
+  assert.equal(selected.run().status, 0)
+  const quality = qualityOf(selected)
+  assert.equal(quality.comparedWith, null)
+  assert.deepEqual(quality.failingNow.map(item => item.caseId), ['example.journey'])
+  assert.equal(quality.newFailures.length, 0)
+  assert.match(summaryOf(selected), /No earlier result to compare with/)
+})
+
+test('a run that lost results fails its stage, says so, and advances nothing', context => {
+  const selected = fixture(context, { plan: selection([]), runOutcome: 'incomplete', previousStatus: 'passed', full: true })
+  assert.equal(selected.run().status, 1)
+  const { stages, baseline } = evidence(selected)
+  assert.equal(stages.find(stage => stage.stage === 'acceptance execution').status, 'failed')
+  assert.equal(baseline, false)
+  assert.match(summaryOf(selected), /This run is incomplete/)
+})
+
+test('a module or case selection reports findings but never advances the baseline', context => {
+  const selected = fixture(context, { plan: selection([]), runOutcome: 'failed', previousStatus: 'passed', full: true, scoped: true })
+  assert.equal(selected.run().status, 0)
+  assert.equal(evidence(selected).baseline, false)
+  assert.equal(qualityOf(selected).newFailures.length, 1)
 })

@@ -68,6 +68,8 @@ export function makePlan(catalog, manifest, options = {}) {
   for (const scenario of requestedCases) if (!catalog.cases.some(item => item.id === scenario)) throw new Error(`Unknown case ${scenario}`)
   const selection = requestedModules.length ? { modules: requestedModules, reason: 'Explicit module selection' } : selectModules(catalog, options.changed ?? null)
   const selectedModules = new Set(selection.modules)
+  // A scenario that failed last time is looked at again whatever the change touched; one the catalog no longer has is dropped.
+  const rerun = new Set((options.rerun ?? []).filter(id => catalog.cases.some(item => item.id === id)))
   const decisions = new Map()
   for (const decision of [...catalog.approvals ?? []].sort((a, b) => a.decidedAt.localeCompare(b.decidedAt))) {
     if (decision.current) decisions.set(decision.storyId, decision.decision)
@@ -75,7 +77,7 @@ export function makePlan(catalog, manifest, options = {}) {
   const cases = [], excluded = []
   for (const scenario of catalog.cases) {
     const explicit = requestedCases.includes(scenario.id)
-    const selected = requestedCases.length ? explicit : selectedModules.has(scenario.module) || (options.changed !== undefined && scenario.profiles.includes('fast'))
+    const selected = requestedCases.length ? explicit : selectedModules.has(scenario.module) || (options.changed !== undefined && scenario.profiles.includes('fast')) || rerun.has(scenario.id)
     let exclusion
     if (scenario.basis === 'proposed' && decisions.get(scenario.storyId) !== 'approved' && !options.includeProposed) exclusion = 'Unconfirmed product proposal'
     else if (!scenario.platforms.includes(platform)) exclusion = 'Different platform'
@@ -94,7 +96,7 @@ export function makePlan(catalog, manifest, options = {}) {
     }
   }
   return { version: 1, createdAt: new Date().toISOString(), catalogHash: catalog.hash, manifestHash: hash(manifest), revision: options.revision ?? manifest.revision, platform, profile,
-    selection: { modules: requestedModules, cases: requestedCases, changed: options.changed ?? null, includeCore: options.changed !== undefined, includeProposed: Boolean(options.includeProposed) },
+    selection: { modules: requestedModules, cases: requestedCases, rerun: [...rerun].sort(), changed: options.changed ?? null, includeCore: options.changed !== undefined, includeProposed: Boolean(options.includeProposed) },
     selectionReason: requestedCases.length ? 'Explicit scenario selection' : selection.reason, changed: options.changed ?? null,
     allowLive: Boolean(options.allowLive), allowExternal: Boolean(options.allowExternal), live: options.live ?? null, cases, excluded,
     tests: manifest.tests.filter(test => cases.some(scenario => scenario.testIds.includes(test.id))) }

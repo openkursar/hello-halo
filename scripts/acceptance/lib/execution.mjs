@@ -62,6 +62,22 @@ export function summarizeCases(cases) {
   return summary
 }
 
+/**
+ * Whether the run produced a trustworthy result for everything it executed.
+ * Scenarios it could not verify (no bound test, a missing environment, a person
+ * to run them) are reported as such and do not make a run incomplete.
+ */
+export function runCompletion({ cases, errors, runnerFailed }) {
+  const reasons = []
+  if (!cases.length) reasons.push('no scenario was selected')
+  if (errors.length) reasons.push('the run evidence failed its integrity checks')
+  if (runnerFailed) reasons.push('the test runner did not finish cleanly')
+  const missing = cases.filter(scenario => scenario.status === 'not-run').length
+  if (missing) reasons.push(`${missing} selected scenario${missing === 1 ? '' : 's'} produced no result`)
+  const executed = cases.filter(scenario => ['passed', 'failed', 'flaky'].includes(scenario.status)).length
+  return { complete: reasons.length === 0, executed, reasons }
+}
+
 export function executionBatches(tests, maximum = 8192) {
   const batches = []
   let batch = [], size = 0
@@ -382,7 +398,8 @@ export async function runPlan(root, catalog, plan, output, { timeoutMs = 1800000
   const end = events.findLast(event => event.type === 'end')
   const runnerFailed = selected.length && (execution.code !== 0 || !end || end.status !== 'passed')
   const status = summary.failed || errors.length ? 'failed' : !cases.length || summary.passed !== cases.length || runnerFailed ? 'incomplete' : 'passed'
-  const result = { ...baseRecord, buildIdentity, packageIdentity, executionBatches: batchRecords, evidenceIntegrity, live: plan.live ?? null, liveUsage, finishedAt: new Date().toISOString(), status, summary, cases, errors, runner: { code: execution.code, timedOut: execution.timedOut, status: end?.status ?? 'not-started' } }
+  const completion = runCompletion({ cases, errors, runnerFailed: Boolean(runnerFailed) })
+  const result = { ...baseRecord, buildIdentity, packageIdentity, executionBatches: batchRecords, evidenceIntegrity, live: plan.live ?? null, liveUsage, finishedAt: new Date().toISOString(), status, completion, summary, cases, errors, runner: { code: execution.code, timedOut: execution.timedOut, status: end?.status ?? 'not-started' } }
   await writeJson(path.join(output, 'run.json'), result, { exclusive: true })
   await fs.unlink(path.join(output, 'in-progress.json'))
   return result

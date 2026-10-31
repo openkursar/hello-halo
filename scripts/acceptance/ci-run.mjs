@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { execute as executeProcess } from './lib/process.mjs'
 import { createEvidenceScope, cancelEvidenceScope, finishEvidenceScope, evidenceScopeVariable, writeEvidenceJson } from './lib/ci-evidence.mjs'
 import { baselineReason, git, readJson } from './ci-state.mjs'
+import { failingCaseIds } from './lib/quality.mjs'
 import { browserEnvironment } from './ci-prepare.mjs'
 
 const root = fs.realpathSync(process.cwd())
@@ -26,7 +27,7 @@ function interrupt(signal) {
 const onInterrupt = () => interrupt('SIGINT')
 const onTerminate = () => interrupt('SIGTERM')
 
-async function execute(stage, args, { env = environment, verify, program = cli } = {}) {
+async function execute(stage, args, { env = environment, verify, program = cli, accept = [0] } = {}) {
   if (interruption) throw new Error('CI execution was cancelled; no additional stage was started.')
   console.log(`[Acceptance CI] Starting ${stage}.`)
   const record = { stage, startedAt: new Date().toISOString(), finishedAt: null, status: 'running', exitCode: null, signal: null }
@@ -35,14 +36,14 @@ async function execute(stage, args, { env = environment, verify, program = cli }
   let result, value, failure
   try {
     result = await executeProcess(root, [program, ...args], { environment: env, stdio: 'inherit', producerRole: 'ci-stage', timeoutMs: 1800000 })
-    if (!interruption && result.code === 0 && !result.timedOut && !result.cleanupFailed && verify) value = verify()
+    if (!interruption && accept.includes(result.code) && !result.timedOut && !result.cleanupFailed && verify) value = verify()
   } catch (error) { failure = error.message }
   record.finishedAt = new Date().toISOString()
   record.processExitCode = result && Object.hasOwn(result, 'processExitCode') ? result.processExitCode : result?.code ?? null
   record.exitCode = failure ? 1 : result?.code ?? null
   record.signal = result?.signal ?? null
   record.cleanupConfirmed = result ? !result.cleanupFailed : false
-  record.status = interruption ? 'cancelled' : failure || result?.code !== 0 || result?.timedOut || result?.cleanupFailed ? 'failed' : 'completed'
+  record.status = interruption ? 'cancelled' : failure || !accept.includes(result?.code) || result?.timedOut || result?.cleanupFailed ? 'failed' : 'completed'
   if (interruption) record.interruption = interruption
   if (failure) record.error = failure
   writeEvidenceJson(path.join(directory, 'stages.json'), stages, { mode: 0o640 })
@@ -52,6 +53,13 @@ async function execute(stage, args, { env = environment, verify, program = cli }
 
 const variantKey = variant => JSON.stringify(Object.entries(variant ?? {}).sort(([left], [right]) => left.localeCompare(right)))
 const inside = (parent, file) => { const relative = path.relative(parent, file); return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative) }
+
+// A scenario that fails is a finding about the product; a run that lost results is a fault of the pipeline.
+function completedRun(file) {
+  const run = readJson(file)
+  if (run.completion?.complete !== true) throw new Error(`The run did not complete: ${(run.completion?.reasons ?? ['no completion record']).join('; ')}.`)
+  return run
+}
 
 function needsRequirement(plan, requirement) {
   if (!Array.isArray(plan.cases) || !Array.isArray(plan.tests)) throw new Error('The generated plan has no case and executable-test records.')
@@ -98,17 +106,23 @@ try {
   const full = process.env.HALO_ACCEPTANCE_FULL === 'true' || (process.env.GITHUB_EVENT_NAME === 'schedule' && new Date().getUTCDay() === 0)
   const baselineFile = process.env.HALO_ACCEPTANCE_BASELINE
   let reason = full ? 'A complete scheduled or manual sweep was requested.' : 'No restored baseline was supplied.'
+  let rerun = []
   if (!full && !context.modules?.length && !context.cases?.length && baselineFile && fs.existsSync(baselineFile)) {
     try {
       const baseline = readJson(baselineFile)
       reason = baselineReason(baseline, context, (base, head) => {
         try { git(['merge-base', '--is-ancestor', base, head]); return true } catch { return false }
       })
-      if (!reason) args.push('--base', baseline.revision)
+      if (!reason) {
+        args.push('--base', baseline.revision)
+        rerun = failingCaseIds(baseline.results)
+        for (const id of rerun) args.push('--rerun-case', id)
+      }
     } catch (error) { reason = `Baseline could not be read: ${error.message}` }
   }
-  console.log(`[Acceptance CI] ${reason ?? 'Selecting changes since the last successful validation.'}`)
-  writeEvidenceJson(path.join(directory, 'selection.json'), { full: Boolean(reason), reason: reason ?? 'Changes since the last successful validation.' }, { exclusive: true, mode: 0o640 })
+  const described = reason ?? `Changes since the last baseline${rerun.length ? `, plus ${rerun.length} scenario${rerun.length === 1 ? '' : 's'} that failed last time` : ''}.`
+  console.log(`[Acceptance CI] ${described}`)
+  writeEvidenceJson(path.join(directory, 'selection.json'), { full: Boolean(reason), reason: described, rerun }, { exclusive: true, mode: 0o640 })
   await execute('test planning', args)
   const runEnvironment = { ...environment }
   const planned = readJson(plan)
@@ -129,7 +143,9 @@ try {
     },
   })
   runStarted = true
-  await execute('acceptance execution', ['run', '--plan', plan, '--output', path.join(directory, 'run'), '--timeout-ms', '1800000'], { env: runEnvironment })
+  await execute('acceptance execution', ['run', '--plan', plan, '--output', path.join(directory, 'run'), '--timeout-ms', '1800000'], {
+    env: runEnvironment, accept: [0, 1, 2], verify: () => completedRun(path.join(directory, 'run/run.json')),
+  })
   await execute('report generation', ['report', '--run', path.join(directory, 'run'), '--output', path.join(directory, 'report')])
   outcome = 'passed'
   console.log('[Acceptance CI] Execution finished; finalization must freeze evidence before any baseline can advance.')

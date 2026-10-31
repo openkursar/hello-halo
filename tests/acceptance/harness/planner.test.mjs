@@ -55,3 +55,15 @@ test('unconfirmed proposals stay outside existing-product regression until a cur
   assert.equal(makePlan({ ...proposed, approvals: [approval] }, manifest, { platform: 'darwin' }).cases.length, 2)
   assert.equal(makePlan({ ...proposed, approvals: [approval, { ...approval, decision: 'rejected', decidedAt: '2026-01-02T00:00:00Z' }] }, manifest, { platform: 'darwin' }).cases.length, 0)
 })
+
+test('scenarios that failed last time stay selected whatever the change touched, and removed ones are ignored', () => {
+  const second = { ...scenario, id: 'chat.send', storyId: 'chat.basic', module: 'chat', variants: {}, profiles: ['regression'] }
+  const wide = { ...catalog, cases: [{ ...scenario, profiles: ['regression'] }, second] }
+  const chatBinding = { caseId: second.id, evidence: 'app-e2e', mode: 'scripted', variant: {} }
+  const tests = { ...manifest, tests: [...manifest.tests, { id: 'test-b', file: 'tests/e2e/specs/b.spec.ts', title: 'Chat sends', bindings: [chatBinding] }] }
+  const unchanged = makePlan(wide, tests, { platform: 'darwin', profile: 'regression', changed: ['src/teams/panel.ts'] })
+  assert.equal(unchanged.cases.some(entry => entry.caseId === 'chat.send'), false)
+  const rerun = makePlan(wide, tests, { platform: 'darwin', profile: 'regression', changed: ['src/teams/panel.ts'], rerun: ['chat.send', 'removed.long.ago'] })
+  assert.equal(rerun.cases.some(entry => entry.caseId === 'chat.send'), true)
+  assert.deepEqual(rerun.selection.rerun, ['chat.send'])
+})

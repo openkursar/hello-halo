@@ -22,7 +22,7 @@ const { values } = parseArgs({ args: process.argv.slice(3), strict: true, option
   help: { type: 'boolean' }, json: { type: 'boolean' },
   output: { type: 'string' }, manifest: { type: 'string' }, plan: { type: 'string' }, run: { type: 'string' },
   profile: { type: 'string', default: 'fast' }, platform: { type: 'string', default: process.platform },
-  module: { type: 'string', multiple: true }, case: { type: 'string', multiple: true },
+  module: { type: 'string', multiple: true }, case: { type: 'string', multiple: true }, 'rerun-case': { type: 'string', multiple: true },
   base: { type: 'string' }, head: { type: 'string', default: 'HEAD' },
   'allow-live': { type: 'boolean' }, 'allow-external': { type: 'boolean' },
   'live-config': { type: 'string' },
@@ -46,7 +46,7 @@ async function plan(catalog) {
     catch (error) { console.error(`acceptance: baseline cannot be used; selecting full scope (${error.message.split('\n')[0]})`); changed = null }
   }
   const live = values['allow-live'] ? await loadLiveConfig(values['live-config'] ?? process.env.HALO_ACCEPTANCE_LIVE_CONFIG) : null
-  return makePlan(catalog, manifest, { profile: values.profile, platform: values.platform, modules: values.module, cases: values.case, changed, allowLive: values['allow-live'], allowExternal: values['allow-external'], includeProposed: values['include-proposed'], revision, live: live?.public })
+  return makePlan(catalog, manifest, { profile: values.profile, platform: values.platform, modules: values.module, cases: values.case, rerun: values['rerun-case'], changed, allowLive: values['allow-live'], allowExternal: values['allow-external'], includeProposed: values['include-proposed'], revision, live: live?.public })
 }
 
 async function doctor() {
@@ -78,7 +78,7 @@ async function doctor() {
 
 async function main() {
   if (command === 'help' || command === '--help' || values.help) {
-    output('Usage: npm run acceptance -- <validate|catalog|build|package|discover|plan|run|report|doctor|decide> [options]\nSelect --profile fast|regression|live|external, --module ID, --case ID, --base SHA --head SHA.\nLive and external execution require --allow-live / --allow-external.\nPlans, manifests and reports default to tests/acceptance/output. See tests/acceptance/README.md.')
+    output('Usage: npm run acceptance -- <validate|catalog|build|package|discover|plan|run|report|doctor|decide> [options]\nSelect --profile fast|regression|live|external, --module ID, --case ID, --base SHA --head SHA, --rerun-case ID.\nLive and external execution require --allow-live / --allow-external.\nPlans, manifests and reports default to tests/acceptance/output. See tests/acceptance/README.md.')
     return
   }
   if (command === 'doctor') return doctor()

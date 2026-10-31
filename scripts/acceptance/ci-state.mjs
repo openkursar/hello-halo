@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { assertOwnedEvidencePath, writeEvidenceJson, writeEvidenceText } from './lib/ci-evidence.mjs'
+import { nextResults, renderQuality } from './lib/quality.mjs'
 
 const hash = value => createHash('sha256').update(value).digest('hex')
 const shaPattern = /^[a-f0-9]{40}$/
@@ -71,12 +72,19 @@ export function contextFor({ root = process.cwd(), repository, ref = 'main', pro
 }
 
 export function baselineName(context) {
-  const scope = [context.repository, context.ref, context.profile, context.platform, context.architecture, context.sdk, context.modules ?? [], context.cases ?? []]
-  return `acceptance-baseline-v2-${hash(JSON.stringify(scope)).slice(0, 24)}`
+  const scope = [context.repository, context.ref, context.profile, context.platform, context.architecture]
+  return `acceptance-baseline-v3-${hash(JSON.stringify(scope)).slice(0, 24)}`
+}
+
+/** Lineages worth reading for this run: its own branch first, then the default branch. */
+export function baselineLineages(context, defaultRef) {
+  const names = [baselineName(context)]
+  if (defaultRef && defaultRef !== context.ref) names.push(baselineName({ ...context, ref: defaultRef }))
+  return names
 }
 
 export function baselineReason(baseline, context, isAncestor) {
-  if (!baseline || baseline.version !== 2 || !/^[a-f0-9]{64}$/.test(baseline.evidenceFreezeSha256 ?? '')) return 'No supported frozen successful baseline is available.'
+  if (!baseline || baseline.version !== 3 || !/^[a-f0-9]{64}$/.test(baseline.evidenceFreezeSha256 ?? '')) return 'No supported frozen baseline is available.'
   for (const key of ['repository', 'ref', 'profile', 'platform', 'architecture']) {
     if (baseline[key] !== context[key]) return `Baseline ${key} does not match this run.`
   }
@@ -88,12 +96,19 @@ export function baselineReason(baseline, context, isAncestor) {
   return null
 }
 
+/**
+ * Results of a scenario that the run could not verify (no test, a missing
+ * environment, a person to run it) do not hold the baseline back; only a run
+ * that lost results or never executed anything cannot stand as a reference.
+ */
 export function assertBaselineRun(context, run) {
   if (!run) throw new Error('A complete run record is required before the baseline advances.')
   if (context.dirty !== false) throw new Error('Source checkout must be clean before the baseline advances.')
-  if (run.version !== 1 || run.status !== 'passed' || !Number.isInteger(run.selectedCount) || run.selectedCount < 1) throw new Error('Only a nonempty passing run can advance the baseline.')
+  if (context.modules?.length || context.cases?.length) throw new Error('A module or case selection cannot advance the baseline.')
+  if (run.version !== 1 || !Number.isInteger(run.selectedCount) || run.selectedCount < 1) throw new Error('Only a nonempty run can advance the baseline.')
   if (run.evidenceIntegrity?.version !== 1 || run.evidenceIntegrity?.valid !== true || !Array.isArray(run.evidenceIntegrity.reasons) || run.evidenceIntegrity.reasons.length) throw new Error('Verified evidence integrity is required before the baseline advances.')
-  if (!Array.isArray(run.cases) || run.cases.length !== run.selectedCount || run.cases.some(item => item.status !== 'passed')) throw new Error('Every selected case instance must pass before the baseline advances.')
+  if (run.completion?.complete !== true || !(run.completion.executed > 0)) throw new Error('Only a complete run that executed at least one scenario can advance the baseline.')
+  if (!Array.isArray(run.cases) || run.cases.length !== run.selectedCount || run.cases.some(item => item.status === 'not-run')) throw new Error('Every selected case instance must reach a recorded result before the baseline advances.')
   if (run.revision?.commit !== context.revision || run.revision.dirty !== false || !run.revision.worktreeHash) throw new Error('Run revision must describe the same clean fixed source checkout.')
   for (const key of ['profile', 'platform']) {
     if (run[key] !== context[key]) throw new Error(`Run ${key} does not match the fixed CI context.`)
@@ -103,11 +118,23 @@ export function assertBaselineRun(context, run) {
   if (context.sdk.state === 'present' && (!context.sdk.revision || context.sdk.dirty !== false || !context.sdk.buildHash)) throw new Error('SDK source must have a clean known revision and a built distribution before the baseline advances.')
 }
 
-export function makeBaseline(context, run, frozen) {
+export function makeBaseline(context, run, frozen, previous = null) {
   assertBaselineRun(context, run)
   if (!frozen || !/^[a-f0-9]{64}$/.test(frozen.freezeSha256 ?? '') || frozen.receipt?.revision !== context.revision || frozen.receipt?.completion?.outcome !== 'passed' || !frozen.receipt?.payload?.files?.some(file => file.path === 'run/run.json')) throw new Error('Final frozen evidence is required before the baseline advances.')
   if (JSON.stringify(frozen.documents?.context) !== JSON.stringify(context) || JSON.stringify(frozen.documents?.run) !== JSON.stringify(run)) throw new Error('Baseline inputs must be the exact frozen context and run documents.')
-  return { ...context, version: 2, evidenceFreezeSha256: frozen.freezeSha256, sourceIdentity: run.revision, catalogHash: run.catalogHash, manifestHash: run.manifestHash, runId: run.id, completedAt: run.finishedAt }
+  return { ...context, version: 3, evidenceFreezeSha256: frozen.freezeSha256, sourceIdentity: run.revision, catalogHash: run.catalogHash, manifestHash: run.manifestHash, runId: run.id, completedAt: run.finishedAt, results: nextResults(previous?.results, run) }
+}
+
+/**
+ * Earlier results this run may be compared with: the same repository, profile
+ * and platform, from this branch or the default one. The SDK and the catalog may
+ * differ; selecting changes from the baseline is stricter than comparing results.
+ */
+export function comparableBaseline(baseline, context, defaultRef) {
+  if (!baseline || baseline.version !== 3 || !baseline.runId || !baseline.results || typeof baseline.results !== 'object' || Array.isArray(baseline.results)) return null
+  for (const key of ['repository', 'profile', 'platform', 'architecture']) if (baseline[key] !== context[key]) return null
+  if (baseline.ref !== context.ref && baseline.ref !== defaultRef) return null
+  return baseline
 }
 
 export async function findBaselineRun({ repository, artifactName, workflowPath, token, apiUrl = 'https://api.github.com', request = fetch }) {
@@ -130,17 +157,32 @@ export async function findBaselineRun({ repository, artifactName, workflowPath, 
   return null
 }
 
+export async function findBaselineLineage({ names, ...lookup }) {
+  for (const artifactName of names) {
+    const runId = await findBaselineRun({ ...lookup, artifactName })
+    if (runId) return { runId, artifactName }
+  }
+  return null
+}
+
 function output(name, value) {
   if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`)
 }
 
-export function renderSummary(context, run, stages = {}) {
+export function renderSummary(context, run, stages = {}, quality = null) {
   const escape = value => String(value ?? 'unavailable').replace(/[\r\n|`<>]/g, ' ')
   const lines = ['## Halo acceptance', '', `Source: ${escape(context.repository)} · ${escape(context.ref)} · \`${escape(context.revision)}\``, '',
-    `Profile: **${escape(context.profile)}** · Platform: ${escape(context.platform)} / ${escape(context.architecture)}`, '']
+    `Profile: **${escape(context.profile)}** · Platform: ${escape(context.platform)} / ${escape(context.architecture)}`]
+  if (context.sdk?.revision) lines.push('', `Halo SDK: \`${escape(context.sdk.revision)}\``)
+  lines.push('')
   if (context.dirty) lines.push('Source has local changes; it cannot advance the nightly baseline.', '')
   if (run) {
-    lines.push(`Result: **${escape(run.status)}** · Selected instances: ${escape(run.selectedCount)}`, '', '| Status | Instances |', '| --- | ---: |')
+    const complete = run.completion?.complete === true
+    if (quality) {
+      if (!complete) lines.push('This run is incomplete; the findings below are partial.', '')
+      lines.push(...renderQuality(quality), '')
+    }
+    lines.push(`Run: **${complete ? 'complete' : 'incomplete'}** · Selected instances: ${escape(run.selectedCount)}${complete ? '' : ` · ${escape((run.completion?.reasons ?? ['no completion record']).join('; '))}`}`, '', '| Status | Instances |', '| --- | ---: |')
     for (const [status, count] of Object.entries(run.summary ?? {})) lines.push(`| ${escape(status)} | ${escape(count)} |`)
   } else lines.push('Result: **blocked before a complete run record was produced**. No cases are claimed as passing.')
   if (Object.keys(stages).length) {
@@ -174,9 +216,9 @@ async function main() {
     const workflowPath = process.env.GITHUB_WORKFLOW_REF?.slice(repository.length + 1).split('@')[0]
     if (!workflowPath || !process.env.GH_TOKEN) throw new Error('Baseline lookup requires the controller workflow identity and an Actions read token.')
     try {
-      const runId = await findBaselineRun({ repository, artifactName: baselineName(context), workflowPath, token: process.env.GH_TOKEN, apiUrl: process.env.GITHUB_API_URL })
-      if (runId) output('run-id', runId)
-      console.log(runId ? `[Acceptance CI] Found successful baseline run ${runId}.` : '[Acceptance CI] No retained successful baseline; selecting full regression.')
+      const found = await findBaselineLineage({ names: baselineLineages(context, process.env.HALO_DEFAULT_SOURCE_REF), repository, workflowPath, token: process.env.GH_TOKEN, apiUrl: process.env.GITHUB_API_URL })
+      if (found) { output('run-id', found.runId); output('artifact-name', found.artifactName) }
+      console.log(found ? `[Acceptance CI] Found retained baseline run ${found.runId}.` : '[Acceptance CI] No retained baseline; selecting full regression.')
     } catch (error) {
       console.warn(`[Acceptance CI] ${error.message} Falling back to full selection.`)
     }
