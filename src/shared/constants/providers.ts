@@ -427,6 +427,25 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     icon: 'cloud'
   },
   {
+    id: 'runcrate',
+    name: 'Runcrate',
+    authType: 'api-key',
+    apiUrl: 'https://api.runcrate.ai/v1',
+    modelsUrl: 'https://api.runcrate.ai/v1/models',
+    models: [
+      { id: 'deepseek-ai/DeepSeek-V4.1-Flash', name: 'DeepSeek V4.1 Flash' },
+      { id: 'moonshotai/Kimi-K2.6', name: 'Kimi K2.6' },
+      { id: 'zai-org/GLM-5.3', name: 'GLM 5.3' },
+      { id: 'Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo', name: 'Qwen3 Coder 480B A35B' },
+      { id: 'openai/gpt-oss-120b', name: 'gpt-oss 120B' }
+    ],
+    description: 'Runcrate OpenAI-compatible API for open-weight models',
+    website: 'https://runcrate.ai/',
+    region: 'global',
+    icon: 'server',
+    notes: 'The /v1/models catalog also lists image, audio and video models. Model list fetched dynamically'
+  },
+  {
     id: 'requesty',
     name: 'Requesty',
     authType: 'api-key',
