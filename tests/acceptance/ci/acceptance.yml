@@ -7,7 +7,10 @@ on:
         description: Source owner/repository (blank uses repository variable)
         type: string
       source_ref:
-        description: Authorized source branch (blank uses repository variable or main)
+        description: Branch of the configured source repository (blank uses repository variable or main)
+        type: string
+      sdk_ref:
+        description: SDK branch or commit to test with (blank uses the repository variable)
         type: string
       profile:
         description: Acceptance profile
@@ -78,14 +81,13 @@ jobs:
       HALO_ACCEPTANCE_FULL: ${{ inputs.full || false }}
       HALO_ACCEPTANCE_MODULES: ${{ inputs.modules }}
       HALO_ACCEPTANCE_CASES: ${{ inputs.cases }}
-      HALO_SDK_REVISION: ${{ vars.HALO_SDK_REVISION }}
+      HALO_DEFAULT_SOURCE_REF: ${{ vars.HALO_SOURCE_REF || 'main' }}
     steps:
       - name: Resolve an authorized source branch
         id: source
         uses: actions/github-script@v7
         env:
           HALO_CONFIGURED_SOURCE: ${{ vars.HALO_SOURCE_REPOSITORY || github.repository }}
-          HALO_CONFIGURED_REF: ${{ vars.HALO_SOURCE_REF || 'main' }}
           HALO_ALLOWED_SOURCE_BRANCHES: ${{ vars.HALO_ALLOWED_SOURCE_BRANCHES }}
         with:
           github-token: ${{ secrets.HALO_SOURCE_READ_TOKEN || github.token }}
@@ -93,8 +95,9 @@ jobs:
             const repository = process.env.HALO_SOURCE_REPOSITORY;
             const ref = process.env.HALO_SOURCE_REF;
             if (repository !== process.env.HALO_CONFIGURED_SOURCE) throw new Error('This controller only executes its configured source repository.');
-            const branches = process.env.HALO_ALLOWED_SOURCE_BRANCHES ? JSON.parse(process.env.HALO_ALLOWED_SOURCE_BRANCHES) : [process.env.HALO_CONFIGURED_REF];
-            if (!Array.isArray(branches) || !branches.includes(ref)) throw new Error('The requested branch has not been authorized for this runner.');
+            if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(ref)) throw new Error('The requested branch name is not supported.');
+            const restricted = process.env.HALO_ALLOWED_SOURCE_BRANCHES ? JSON.parse(process.env.HALO_ALLOWED_SOURCE_BRANCHES) : null;
+            if (restricted !== null && (!Array.isArray(restricted) || !restricted.includes(ref))) throw new Error('The requested branch has not been authorized for this runner.');
             const [owner, repo] = repository.split('/');
             const branch = await github.rest.repos.getBranch({owner, repo, branch: ref});
             const sha = branch.data.commit.sha;
@@ -119,11 +122,44 @@ jobs:
         id: initial
         run: node scripts/acceptance/ci-state.mjs context
 
-      - name: Validate optional SDK selection
+      - name: Select the SDK source
+        id: sdk-select
         if: vars.HALO_SDK_REPOSITORY != ''
-        run: node -e 'if (!/^[a-f0-9]{40}$/.test(process.env.HALO_SDK_REVISION || "")) throw new Error("HALO_SDK_REVISION must be a fixed commit SHA")'
+        env:
+          SDK_REF_INPUT: ${{ inputs.sdk_ref }}
+          SDK_REF_VARIABLE: ${{ vars.HALO_SDK_REF }}
+          SDK_PIN: ${{ vars.HALO_SDK_REVISION }}
+        run: |
+          selected="${SDK_REF_INPUT:-${SDK_REF_VARIABLE:-$SDK_PIN}}"
+          if [ -z "$selected" ]; then echo "::error::Set HALO_SDK_REF to follow a branch or HALO_SDK_REVISION to pin a commit"; exit 1; fi
+          case "$selected" in -*|*[!A-Za-z0-9._/-]*) echo "::error::The SDK reference contains unsupported characters"; exit 1;; esac
+          echo "ref=$selected" >> "$GITHUB_OUTPUT"
 
-      - name: Install public application dependencies
+      - name: Check out optional SDK
+        if: vars.HALO_SDK_REPOSITORY != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.HALO_SDK_REPOSITORY }}
+          ref: ${{ steps.sdk-select.outputs.ref }}
+          path: halo/src/sdk/halo-sdk
+          persist-credentials: false
+          ssh-key: ${{ secrets.HALO_SDK_READ_SSH_KEY }}
+          token: ${{ secrets.HALO_SDK_READ_SSH_KEY != '' && github.token || secrets.HALO_SDK_READ_TOKEN || github.token }}
+
+      - name: Fix the SDK revision
+        if: vars.HALO_SDK_REPOSITORY != ''
+        run: |
+          revision="$(git -C src/sdk/halo-sdk rev-parse HEAD)"
+          case "$revision" in *[!a-f0-9]*|"") echo "::error::The SDK checkout did not resolve to a commit"; exit 1;; esac
+          if [ "${#revision}" -ne 40 ]; then echo "::error::The SDK checkout did not resolve to a full commit"; exit 1; fi
+          echo "HALO_SDK_REVISION=$revision" >> "$GITHUB_ENV"
+
+      - name: Build optional SDK
+        id: sdk
+        if: vars.HALO_SDK_REPOSITORY != ''
+        run: node scripts/acceptance/ci-prepare.mjs sdk
+
+      - name: Install application dependencies
         id: install
         run: node scripts/acceptance/ci-prepare.mjs install
 
@@ -131,23 +167,7 @@ jobs:
         id: gui
         run: node scripts/acceptance/cli.mjs doctor --level gui --json --output tests/acceptance/output/ci/host-readiness-install
 
-      - name: Check out optional SDK
-        if: vars.HALO_SDK_REPOSITORY != ''
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ vars.HALO_SDK_REPOSITORY }}
-          ref: ${{ vars.HALO_SDK_REVISION }}
-          path: halo/src/sdk/halo-sdk
-          persist-credentials: false
-          ssh-key: ${{ secrets.HALO_SDK_READ_SSH_KEY }}
-          token: ${{ secrets.HALO_SDK_READ_SSH_KEY != '' && github.token || secrets.HALO_SDK_READ_TOKEN || github.token }}
-
-      - name: Build optional SDK
-        id: sdk
-        if: vars.HALO_SDK_REPOSITORY != ''
-        run: node scripts/acceptance/ci-prepare.mjs sdk
-
-      - name: Bind the built SDK distribution
+      - name: Verify the SDK link
         id: bind
         if: vars.HALO_SDK_REPOSITORY != ''
         run: node scripts/acceptance/ci-prepare.mjs bind-sdk
@@ -172,7 +192,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
-          name: ${{ steps.context.outputs.artifact-name }}
+          name: ${{ steps.baseline.outputs.artifact-name }}
           run-id: ${{ steps.baseline.outputs.run-id }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/acceptance-baseline-${{ github.run_id }}
@@ -188,6 +208,7 @@ jobs:
         if: always() && steps.initial.outcome == 'success'
         env:
           HALO_CI_STAGE_OUTCOMES: ${{ toJSON(steps) }}
+          HALO_ACCEPTANCE_BASELINE: ${{ runner.temp }}/acceptance-baseline-${{ github.run_id }}/baseline.json
         run: exec node scripts/acceptance/ci-finalize.mjs
 
       - name: Archive acceptance evidence locally
@@ -196,6 +217,18 @@ jobs:
         env:
           HALO_ACCEPTANCE_ARCHIVE_ROOT: ${{ vars.HALO_ACCEPTANCE_ARCHIVE_ROOT }}
         run: exec node scripts/acceptance/ci-archive.mjs
+
+      - name: Publish the quality summary
+        if: always() && steps.archive.outputs.snapshot-directory != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.archive.outputs.snapshot-directory }}/ci/quality.json
+            ${{ steps.archive.outputs.snapshot-directory }}/ci/summary.md
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Preserve acceptance report and evidence
         if: always() && steps.archive.outputs.snapshot-directory != ''

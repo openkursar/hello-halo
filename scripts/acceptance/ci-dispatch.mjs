@@ -132,13 +132,13 @@ function lookupRuns(record, connection) {
 function main() {
   const { values } = parseArgs({ options: {
     repository: { type: 'string' }, workflow: { type: 'string' }, ref: { type: 'string' },
-    'source-ref': { type: 'string' }, 'source-repository': { type: 'string' }, profile: { type: 'string' },
+    'source-ref': { type: 'string' }, 'source-repository': { type: 'string' }, 'sdk-ref': { type: 'string' }, profile: { type: 'string' },
     module: { type: 'string', multiple: true }, case: { type: 'string', multiple: true },
     full: { type: 'boolean', default: false }, execute: { type: 'boolean', default: false },
     receipt: { type: 'string' }, reconcile: { type: 'boolean', default: false },
   } })
   if (values.receipt) {
-    if (values.execute || values.repository || values.workflow || values.ref || values['source-ref'] || values['source-repository'] || values.profile || values.module || values.case || values.full) throw new Error('Receipt lookup cannot be combined with dispatch options.')
+    if (values.execute || values.repository || values.workflow || values.ref || values['source-ref'] || values['source-repository'] || values['sdk-ref'] || values.profile || values.module || values.case || values.full) throw new Error('Receipt lookup cannot be combined with dispatch options.')
     const filename = path.resolve(values.receipt)
     const { record, serialized } = readReceipt(filename)
     const result = lookupRuns(record, githubEnvironment())
@@ -161,10 +161,12 @@ function main() {
   if (!values.ref || /[\r\n\0]/.test(values.ref)) throw new Error('--ref must be a nonempty single-line controller ref.')
   if (values['source-ref'] !== undefined && (!values['source-ref'] || /[\r\n\0]/.test(values['source-ref']))) throw new Error('--source-ref must be a nonempty single-line source ref.')
   if (values['source-repository'] && !repositoryPattern.test(values['source-repository'])) throw new Error('--source-repository must be owner/repository.')
+  if (values['sdk-ref'] !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(values['sdk-ref'])) throw new Error('--sdk-ref must be a branch name or a commit.')
   for (const value of [...values.module ?? [], ...values.case ?? []]) if (!/^[a-z][a-z0-9.-]*$/.test(value)) throw new Error('Module and case ids must use catalog identifiers.')
   const requestId = randomUUID()
   const inputs = { profile: values.profile, full: String(values.full), request_id: requestId }
   if (values['source-ref']) inputs.source_ref = values['source-ref']
+  if (values['sdk-ref']) inputs.sdk_ref = values['sdk-ref']
   if (values.module?.length) inputs.modules = [...new Set(values.module)].sort().join(',')
   if (values.case?.length) inputs.cases = [...new Set(values.case)].sort().join(',')
   if (values['source-repository']) inputs.source_repository = values['source-repository']

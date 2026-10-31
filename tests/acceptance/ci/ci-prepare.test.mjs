@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { parse } from 'yaml'
@@ -135,15 +135,11 @@ test('manifest or lock changes during installation hooks fail without resetting 
   }
 })
 
-test('public installation refuses existing SDK sources, shared dependencies and unrecognized generated content', context => {
+test('installation refuses an unverified SDK path, shared dependencies and unrecognized generated content', context => {
   const original = workspace(context)
   original.write('src/sdk/halo-sdk/package.json', 'existing SDK')
-  assert.throws(() => prepareDependencies(original.root, 'install', { run: () => assert.fail('installation must not start') }), /existing SDK paths/)
+  assert.throws(() => prepareDependencies(original.root, 'install', { run: () => assert.fail('installation must not start') }), /fixed 40-character HALO_SDK_REVISION/)
   assert.equal(fs.readFileSync(path.join(original.sdk, 'package.json'), 'utf8'), 'existing SDK')
-  const linked = workspace(context)
-  fs.mkdirSync(path.dirname(linked.sdk), { recursive: true })
-  linkDirectory(original.sdk, linked.sdk)
-  assert.throws(() => prepareDependencies(linked.root, 'install', { run: () => assert.fail('installation must not start') }), /existing SDK paths/)
   const shared = workspace(context)
   linkDirectory(original.root, path.join(shared.root, 'node_modules'))
   assert.throws(() => prepareDependencies(shared.root, 'install', { run: () => assert.fail('installation must not start') }), /shared symbolic link/)
@@ -190,33 +186,107 @@ test('SDK binding refuses a wrong commit, dirty source, absent runtime and an ex
   assert.equal(fs.readFileSync(path.join(link, 'package.json'), 'utf8'), 'installed SDK')
 })
 
-test('a prebuilt linked SDK is read-only: binding is allowed while installation and SDK rebuilding refuse it', context => {
+test('a prebuilt linked SDK is read-only: it can be installed against and bound but never rebuilt', context => {
   const external = checkout(context, { built: true })
   const fixture = workspace(context)
   fs.mkdirSync(path.dirname(fixture.sdk), { recursive: true })
   fs.mkdirSync(path.join(fixture.root, 'node_modules'), { recursive: true })
   linkDirectory(external.sdk, fixture.sdk)
   const run = () => assert.fail('shared SDK must not execute installation or build commands')
-  assert.throws(() => prepareDependencies(fixture.root, 'install', { run }), /existing SDK paths/)
   assert.throws(() => prepareDependencies(fixture.root, 'sdk', { environment: external.environment, run }), /shared or linked SDKs/)
   prepareDependencies(fixture.root, 'bind-sdk', { environment: external.environment, run })
   assert.equal(fs.realpathSync(fixture.link), external.sdk)
   assert.equal(external.git(['status', '--porcelain']), '')
 })
 
-test('the workflow installs public dependencies before SDK checkout, build and binding', () => {
+function lockWith(fixture, dependencies) {
+  fixture.write('package-lock.json', JSON.stringify({ lockfileVersion: 3, packages: { '': {}, 'src/sdk/halo-sdk': { name: '@hello-halo/agent-sdk', version: '1.0.0', ...(dependencies ? { dependencies } : {}) } } }))
+}
+
+test('installing with a built clean SDK checkout follows the release procedure: npm links the checkout and nothing is removed', context => {
+  const fixture = checkout(context, { built: true })
+  lockWith(fixture)
+  const calls = []
+  const result = prepareDependencies(fixture.root, 'install', { environment: fixture.environment, run(command, args, cwd) {
+    calls.push(args[0])
+    assert.equal(cwd, fixture.root)
+    if (args[0] === 'ci') {
+      assert.equal(fs.existsSync(path.join(fixture.sdk, 'dist/index.js')), true)
+      fs.mkdirSync(path.dirname(fixture.link), { recursive: true })
+      linkDirectory(fixture.sdk, fixture.link)
+    }
+  } })
+  assert.deepEqual(result, { command: 'install', sdk: 'linked', revision: fixture.revision })
+  assert.deepEqual(calls, ['ci', 'scripts/postinstall.mjs', 'run'])
+  assert.equal(fs.realpathSync(fixture.link), fixture.sdk)
+  assert.equal(fixture.git(['status', '--porcelain']), '')
+})
+
+test('installing with an SDK refuses a source that is not the clean, built, selected commit', context => {
+  const unbuilt = checkout(context)
+  assert.throws(() => prepareDependencies(unbuilt.root, 'install', { environment: unbuilt.environment, run: () => assert.fail('npm must not start') }), /runtime entry is missing/)
+  const dirty = checkout(context, { built: true })
+  dirty.write('src/sdk/halo-sdk/uncommitted.txt', 'dirty')
+  assert.throws(() => prepareDependencies(dirty.root, 'install', { environment: dirty.environment, run: () => assert.fail('npm must not start') }), /local changes/)
+  const other = checkout(context, { built: true })
+  assert.throws(() => prepareDependencies(other.root, 'install', { environment: { ...other.environment, HALO_SDK_REVISION: 'f'.repeat(40) }, run: () => assert.fail('npm must not start') }), /does not match/)
+})
+
+test('an SDK whose declared dependencies differ from the application lock is named before npm runs', context => {
+  const fixture = checkout(context, { built: true })
+  lockWith(fixture, { zod: '^3.0.0' })
+  assert.throws(() => prepareDependencies(fixture.root, 'install', { environment: fixture.environment, run: () => assert.fail('npm must not start') }),
+    new RegExp(`SDK at ${fixture.revision} declares dependencies that differ from the application lock \\(zod \\^3\\.0\\.0 -> absent\\)`))
+})
+
+test('an install that links something other than the selected SDK checkout is refused', context => {
+  const fixture = checkout(context, { built: true })
+  const elsewhere = workspace(context)
+  assert.throws(() => prepareDependencies(fixture.root, 'install', { environment: fixture.environment, run(command, args) {
+    if (args[0] === 'ci') {
+      fs.mkdirSync(path.dirname(fixture.link), { recursive: true })
+      linkDirectory(elsewhere.root, fixture.link)
+    }
+  } }), /did not link the selected SDK/)
+})
+
+test('the workflow selects, checks out and builds the SDK before installing against it, then verifies the link', () => {
   const workflow = parse(fs.readFileSync(path.join(repository, 'tests/acceptance/ci/acceptance.yml'), 'utf8'))
   const steps = workflow.jobs.acceptance.steps
   const index = command => steps.findIndex(step => step.run === command)
-  const install = index('node scripts/acceptance/ci-prepare.mjs install')
+  const select = steps.findIndex(step => step.id === 'sdk-select')
   const checkout = steps.findIndex(step => step.uses === 'actions/checkout@v4' && step.with.path === 'halo/src/sdk/halo-sdk')
+  const fix = steps.findIndex(step => step.name === 'Fix the SDK revision')
   const buildSdk = index('node scripts/acceptance/ci-prepare.mjs sdk')
+  const install = index('node scripts/acceptance/ci-prepare.mjs install')
   const bind = index('node scripts/acceptance/ci-prepare.mjs bind-sdk')
   const buildApplication = index('node scripts/acceptance/cli.mjs build')
-  assert(install >= 0 && install < checkout && checkout < buildSdk && buildSdk < bind && bind < buildApplication)
-  for (const i of [checkout, buildSdk, bind]) assert.equal(steps[i].if, "vars.HALO_SDK_REPOSITORY != ''")
+  assert(select >= 0 && select < checkout && checkout < fix && fix < buildSdk && buildSdk < install && install < bind && bind < buildApplication)
+  for (const i of [select, checkout, fix, buildSdk, bind]) assert.equal(steps[i].if, "vars.HALO_SDK_REPOSITORY != ''")
   assert.equal(steps[checkout].with['persist-credentials'], false)
-  assert.equal(steps[checkout].with.ref, '${{ vars.HALO_SDK_REVISION }}')
+  assert.equal(steps[checkout].with.ref, '${{ steps.sdk-select.outputs.ref }}')
   assert.equal(steps[checkout].with['ssh-key'], '${{ secrets.HALO_SDK_READ_SSH_KEY }}')
   assert.equal(steps[checkout].with.token, "${{ secrets.HALO_SDK_READ_SSH_KEY != '' && github.token || secrets.HALO_SDK_READ_TOKEN || github.token }}")
+  assert.equal(workflow.jobs.acceptance.env.HALO_SDK_REVISION, undefined)
+  assert.match(steps[fix].run, /rev-parse HEAD/)
+  assert.match(steps[fix].run, /GITHUB_ENV/)
+})
+
+test('the SDK follows a branch or an input, falls back to a pinned commit, and refuses to guess', () => {
+  const workflow = parse(fs.readFileSync(path.join(repository, 'tests/acceptance/ci/acceptance.yml'), 'utf8'))
+  const step = workflow.jobs.acceptance.steps.find(candidate => candidate.id === 'sdk-select')
+  assert.deepEqual(Object.keys(step.env).sort(), ['SDK_PIN', 'SDK_REF_INPUT', 'SDK_REF_VARIABLE'])
+  const choose = env => {
+    const output = path.join(os.tmpdir(), `sdk-select-${process.pid}-${Math.random().toString(16).slice(2)}`)
+    fs.writeFileSync(output, '')
+    try {
+      const result = spawnSync('bash', ['-ec', step.run], { env: { PATH: process.env.PATH, SDK_REF_INPUT: '', SDK_REF_VARIABLE: '', SDK_PIN: '', ...env, GITHUB_OUTPUT: output }, encoding: 'utf8' })
+      return { status: result.status, output: fs.readFileSync(output, 'utf8').trim(), error: result.stdout + result.stderr }
+    } finally { fs.rmSync(output, { force: true }) }
+  }
+  assert.equal(choose({ SDK_REF_INPUT: 'topic/work', SDK_REF_VARIABLE: 'release', SDK_PIN: 'c'.repeat(40) }).output, 'ref=topic/work')
+  assert.equal(choose({ SDK_REF_VARIABLE: 'release', SDK_PIN: 'c'.repeat(40) }).output, 'ref=release')
+  assert.equal(choose({ SDK_PIN: 'c'.repeat(40) }).output, `ref=${'c'.repeat(40)}`)
+  assert.match(choose({}).error, /Set HALO_SDK_REF/)
+  for (const unsafe of ['-bad', 'a b', 'x;y', '$(id)']) assert.notEqual(choose({ SDK_REF_INPUT: unsafe }).status, 0)
 })

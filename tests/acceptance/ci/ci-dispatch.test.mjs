@@ -91,6 +91,17 @@ test('dispatch preview performs no authenticated request and preserves the contr
   assert.equal(fs.existsSync(path.join(selected.root, 'tests/acceptance/output')), false)
 })
 
+test('a source branch and an SDK reference travel as workflow inputs, and an unsafe SDK reference is refused', context => {
+  const selected = fixture(context)
+  const preview = selected.execute(['--repository', 'example/controller', '--source-ref', 'feat/topic', '--sdk-ref', 'release_v3.2', '--module', 'chat'])
+  assert.equal(preview.status, 0, preview.stderr)
+  const body = JSON.parse(preview.stdout.slice(0, preview.stdout.indexOf('\nPreview only')))
+  assert.equal(body.body.inputs.source_ref, 'feat/topic')
+  assert.equal(body.body.inputs.sdk_ref, 'release_v3.2')
+  assert.equal(body.body.inputs.modules, 'chat')
+  for (const unsafe of ['-flag', 'a b', 'x;y']) assert.notEqual(selected.execute(['--repository', 'example/controller', '--sdk-ref', unsafe]).status, 0)
+})
+
 test('a local proxy applies only to authenticated child processes and records no credential or URL', context => {
   const proxy = 'http://proxy-user:proxy-password@proxy.invalid:8080'
   const token = 'private-fixture-token'
