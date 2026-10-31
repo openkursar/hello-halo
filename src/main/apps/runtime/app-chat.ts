@@ -54,6 +54,7 @@ import { createAIBrowserMcpServer } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { acquireChatBrowserContext, bindChatBrowserSession, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
+import { withOpeningContext } from '../../services/agent/opening-context'
 import { acquireV2Session, formatTurnAttachments, workingDirErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
@@ -1489,9 +1490,9 @@ async function runAppChatTurn(
 
     // With the non-vision fallback active, image blocks are replaced by the
     // injected attachment-paths block.
-    const messageText = memoryPreamble + formatCanvasContext(request.canvasContext)
+    const messageText = withOpeningContext(memoryPreamble, formatCanvasContext(request.canvasContext)
       + formatTurnAttachments({ references: request.references, workDir })
-      + (imageFallback?.contextBlock ?? '') + (restrictionNotice ? `${restrictionNotice}\n\n` : '') + message
+      + (imageFallback?.contextBlock ?? '') + (restrictionNotice ? `${restrictionNotice}\n\n` : '') + message)
     // A borrowed turn's message never runs as a command (turn-skills).
     const messageContent = buildMessageContent(
       applied?.enforced ? inertCommandText(messageText) : messageText,

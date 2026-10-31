@@ -6,10 +6,11 @@
  *
  * - Session setup: the memory instructions (system prompt) and the write guard.
  *   Stable per conversation, so a warmed session and the first real turn agree.
- * - First turn only: the memory itself, rendered ahead of the user's message.
- *   A resumed conversation already holds it in its transcript. memory.md is
- *   given its skeleton here if it has none, so the first thing a space ever
- *   records is an Edit, like everything after it.
+ * - First turn only: the memory itself, rendered ahead of the user's message
+ *   unless that message is a slash command, which the engine routes only while
+ *   it opens the text. A resumed conversation already holds it in its
+ *   transcript. memory.md is given its skeleton here if it has none, so the
+ *   first thing a space ever records is an Edit, like everything after it.
  *
  * Consolidation after turns is services/memory-consolidation's, triggered from
  * the turn-end event — not from here.

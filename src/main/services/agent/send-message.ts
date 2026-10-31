@@ -49,6 +49,7 @@ import {
   buildMessageContent,
 } from './message-utils'
 import { formatTurnAttachments } from './references'
+import { withOpeningContext } from './opening-context'
 import { prepareNonVisionImageFallback, OCR_TOOLSET_ID } from './image-attachments'
 import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from './sdk-config'
 import { resolveSpaceMemorySession, buildSpaceMemoryPreamble } from './space-memory'
@@ -382,7 +383,7 @@ export async function sendMessage(
       ? await buildSpaceMemoryPreamble(spaceMemory.layout, conversationId)
       : ''
     const attachments = formatTurnAttachments({ references, task, taskInstructions: request.taskInstructions, workDir })
-    const messageWithContext = memoryPreamble + canvasPrefix + attachments + (imageFallback?.contextBlock ?? '') + message
+    const messageWithContext = withOpeningContext(memoryPreamble, canvasPrefix + attachments + (imageFallback?.contextBlock ?? '') + message)
     const messageContent = buildMessageContent(messageWithContext, imageFallback ? undefined : images)
 
     // Dispatch transfers lease protection to awaiting-init before releasing it.
