@@ -118,7 +118,9 @@ export function renderQuality(quality, { limit = 40 } = {}) {
     if (quality.unstable.length) parts.push(`${quality.unstable.length} unstable`)
     parts.push(`${counts.uncovered} not covered`)
     lines.push(parts.join(' · '))
-    lines.push('', 'No earlier result to compare with, so failures are listed as they are; some may predate this run.')
+    lines.push('', quality.baselineUnavailable
+      ? 'The earlier result could not be retrieved (the connection to GitHub failed), so nothing is compared with this run; failures are listed as they are, and some may predate it.'
+      : 'No earlier result to compare with, so failures are listed as they are; some may predate this run.')
   }
   if (quality.newFailures.length) lines.push('', '#### New failures', '', ...list(quality.newFailures, limit))
   if (quality.failingNow.length) lines.push('', '#### Failing', '', ...list(quality.failingNow, limit))

@@ -88,7 +88,7 @@ fs.appendFileSync('tests/acceptance/output/ci/invocations.jsonl',JSON.stringify(
 if(configuration.browserFailure)process.exit(12);
 `)
   const environment = () => ({ ...process.env, GITHUB_REPOSITORY: 'example/controller', GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', HALO_E2E_PACKAGED_APP: path.join(root, 'unrelated-old-package'), PLAYWRIGHT_BROWSERS_PATH: path.join(root, 'unrelated-browser-data'), HALO_ACCEPTANCE_BASELINE: options.previousStatus ? path.join(root, 'previous/baseline.json') : '', HALO_ACCEPTANCE_FULL: String(options.full ?? !options.previousStatus), HALO_DEFAULT_SOURCE_REF: 'main' })
-  const finalize = outcome => spawnSync(process.execPath, [finalizer], { cwd: root, encoding: 'utf8', env: { ...environment(), HALO_CI_STAGE_OUTCOMES: JSON.stringify({ execute: { outcome } }) }, timeout: 20000 })
+  const finalize = outcome => spawnSync(process.execPath, [finalizer], { cwd: root, encoding: 'utf8', env: { ...environment(), HALO_CI_STAGE_OUTCOMES: JSON.stringify({ ...options.stages, execute: { outcome } }) }, timeout: 20000 })
   return { root, directory: path.join(root, 'tests/acceptance/output/ci'), environment, finalize, start() {
     return spawn(process.execPath, [source], { cwd: root, env: environment(), stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
   }, run() {

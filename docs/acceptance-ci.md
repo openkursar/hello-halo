@@ -284,6 +284,9 @@ a GitHub-hosted runner, looks only at the job record of a finished failed run,
 and starts the failed job again, at most twice, when job setup failed or a step
 never finished. A build that fails, a run that is incomplete, a cancelled run and
 a timeout are left alone. Without this workflow, start the run again yourself.
+A run that stays queued although its runner is online lost the job assignment
+while the connection dropped, and nothing can restart it from inside: cancel it
+and dispatch again.
 
 ## Baselines and honest outcomes
 
@@ -307,7 +310,10 @@ known result of every scenario instance. It serves two purposes:
   passed.
 - *Comparison.* The run is compared with the baseline of its own branch, or with
   the default branch when the branch has none, regardless of SDK or catalog
-  differences. Without any earlier result nothing is called new.
+  differences. Without any earlier result nothing is called new. The lookup
+  waits out a short loss of connection; if the earlier result still cannot be
+  fetched, the run selects the full profile and its findings say the earlier
+  result was unavailable, which is different from there being none.
 
 A run reports, against those earlier results: **new failures** (passed, was not
 covered or did not exist before), **fixed** scenarios, failures that **continue**,

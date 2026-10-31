@@ -108,6 +108,8 @@ export function finalizeCi(root, { identity, stageOutcomes = {}, summaryFile, ba
   let quality = null
   try { quality = run ? compareResults(run, previous) : null }
   catch (error) { console.warn(`[Acceptance CI] The quality findings could not be derived from the run record (${error.message}); the summary reports the raw counts only.`) }
+  // An earlier result that exists but could not be fetched or restored is not the same as there being none.
+  if (quality && !previous && (stageOutcomes.baseline?.outputs?.lookup === 'failed' || (stageOutcomes.baseline?.outputs?.['run-id'] && stageOutcomes.restore?.outcome !== 'success'))) quality.baselineUnavailable = true
   if (quality) writeEvidenceJson(path.join(directory, 'quality.json'), quality, { exclusive: true, mode: 0o640 })
   let baselineFailure
   const scoped = Boolean(context.modules?.length || context.cases?.length)

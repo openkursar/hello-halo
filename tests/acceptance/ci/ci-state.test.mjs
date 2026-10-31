@@ -117,6 +117,34 @@ test('artifact lookup ignores failed runs, other workflows and expired evidence'
   assert.equal(requests.some(url => url.endsWith('/5')), false)
 })
 
+test('a dropped connection is waited out before an earlier result is called missing', async () => {
+  const waits = []
+  const sleep = async milliseconds => { waits.push(milliseconds) }
+  const lookup = { repository: 'example/controller', artifactName: 'baseline', workflowPath: '.github/workflows/acceptance.yml', token: 'test-token', delays: [1, 2, 3], sleep }
+  const answer = url => ({ ok: true, json: async () => url.includes('/artifacts?') ? { artifacts: [{ id: 1, name: 'baseline', workflow_run: { id: 1 } }] } : { id: 1, status: 'completed', conclusion: 'success', path: '.github/workflows/acceptance.yml' } })
+  let failures = 2
+  const flaky = async url => { if (failures-- > 0) throw new TypeError('fetch failed'); return answer(url) }
+  assert.equal(await findBaselineRun({ ...lookup, request: flaky }), '1')
+  assert.deepEqual(waits, [1, 2])
+
+  waits.length = 0
+  let overloaded = 1
+  assert.equal(await findBaselineRun({ ...lookup, request: async url => overloaded-- > 0 ? { ok: false, status: 503 } : answer(url) }), '1')
+  assert.deepEqual(waits, [1])
+
+  waits.length = 0
+  let attempts = 0
+  await assert.rejects(findBaselineRun({ ...lookup, request: async () => { attempts++; throw new TypeError('fetch failed') } }), /fetch failed/)
+  assert.equal(attempts, 4)
+  assert.deepEqual(waits, [1, 2, 3])
+
+  waits.length = 0
+  attempts = 0
+  await assert.rejects(findBaselineRun({ ...lookup, request: async () => { attempts++; return { ok: false, status: 404 } } }), /HTTP 404/)
+  assert.equal(attempts, 1)
+  assert.deepEqual(waits, [])
+})
+
 test('the first lineage with a successful run supplies the baseline', async () => {
   const request = async url => {
     const name = decodeURIComponent(/name=([^&]+)/.exec(url)?.[1] ?? '')

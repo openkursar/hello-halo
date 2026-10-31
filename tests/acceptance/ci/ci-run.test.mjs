@@ -218,6 +218,20 @@ test('a run without earlier results lists what fails without calling anything ne
   assert.match(summaryOf(selected), /No earlier result to compare with/)
 })
 
+test('an earlier result that could not be retrieved is called unavailable, not absent', context => {
+  for (const stages of [{ baseline: { outputs: { lookup: 'failed' } } }, { baseline: { outputs: { lookup: 'found', 'run-id': '9' } }, restore: { outcome: 'failure' } }]) {
+    const selected = fixture(context, { plan: selection([]), runOutcome: 'failed', stages })
+    assert.equal(selected.run().status, 0)
+    assert.equal(qualityOf(selected).baselineUnavailable, true)
+    assert.match(summaryOf(selected), /could not be retrieved/)
+    assert.doesNotMatch(summaryOf(selected), /No earlier result to compare with/)
+  }
+  const none = fixture(context, { plan: selection([]), runOutcome: 'failed', stages: { baseline: { outputs: { lookup: 'none' } }, restore: { outcome: 'skipped' } } })
+  assert.equal(none.run().status, 0)
+  assert.equal(qualityOf(none).baselineUnavailable, undefined)
+  assert.match(summaryOf(none), /No earlier result to compare with/)
+})
+
 test('a run that lost results fails its stage, says so, and advances nothing', context => {
   const selected = fixture(context, { plan: selection([]), runOutcome: 'incomplete', previousStatus: 'passed', full: true })
   assert.equal(selected.run().status, 1)

@@ -137,15 +137,25 @@ export function comparableBaseline(baseline, context, defaultRef) {
   return baseline
 }
 
-export async function findBaselineRun({ repository, artifactName, workflowPath, token, apiUrl = 'https://api.github.com', request = fetch }) {
+// A dropped connection must not read as "no earlier result", so a lookup waits out short outages.
+const lookupDelays = [2000, 5000, 15000, 30000]
+
+export async function findBaselineRun({ repository, artifactName, workflowPath, token, apiUrl = 'https://api.github.com', request = fetch, delays = lookupDelays, sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)) }) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? '')) throw new Error('Controller repository must be owner/repository.')
   const get = async endpoint => {
-    const response = await request(`${apiUrl}/repos/${repository}/${endpoint}`, {
-      headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28' },
-      signal: AbortSignal.timeout(30000),
-    })
-    if (!response.ok) throw new Error(`Baseline lookup failed with GitHub HTTP ${response.status}.`)
-    return response.json()
+    for (let attempt = 0; ; attempt++) {
+      let failure
+      try {
+        const response = await request(`${apiUrl}/repos/${repository}/${endpoint}`, {
+          headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28' },
+          signal: AbortSignal.timeout(30000),
+        })
+        if (response.ok) return await response.json()
+        failure = Object.assign(new Error(`Baseline lookup failed with GitHub HTTP ${response.status}.`), { permanent: response.status !== 429 && response.status < 500 })
+      } catch (error) { failure = error }
+      if (failure.permanent || attempt >= delays.length) throw failure
+      await sleep(delays[attempt])
+    }
   }
   const data = await get(`actions/artifacts?name=${encodeURIComponent(artifactName)}&per_page=100`)
   const artifacts = (data.artifacts ?? []).filter(item => item.name === artifactName && !item.expired && item.workflow_run?.id)
@@ -218,8 +228,11 @@ async function main() {
     try {
       const found = await findBaselineLineage({ names: baselineLineages(context, process.env.HALO_DEFAULT_SOURCE_REF), repository, workflowPath, token: process.env.GH_TOKEN, apiUrl: process.env.GITHUB_API_URL })
       if (found) { output('run-id', found.runId); output('artifact-name', found.artifactName) }
+      output('lookup', found ? 'found' : 'none')
       console.log(found ? `[Acceptance CI] Found retained baseline run ${found.runId}.` : '[Acceptance CI] No retained baseline; selecting full regression.')
     } catch (error) {
+      output('lookup', 'failed')
+      console.log('::warning title=Earlier result unavailable::The earlier result could not be retrieved, so this run is not compared with one.')
       console.warn(`[Acceptance CI] ${error.message} Falling back to full selection.`)
     }
   } else if (command === 'summary') {
