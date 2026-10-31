@@ -251,8 +251,9 @@ test('a run record without its cases still gets a summary and a final freeze, bu
 })
 
 test('a module or case selection reports findings but never advances the baseline', context => {
-  const selected = fixture(context, { plan: selection([]), runOutcome: 'failed', previousStatus: 'passed', full: true, scoped: true })
+  const selected = fixture(context, { plan: selection([]), runOutcome: 'failed', previousStatus: 'passed', full: false, scoped: true })
   assert.equal(selected.run().status, 0)
   assert.equal(evidence(selected).baseline, false)
   assert.equal(qualityOf(selected).newFailures.length, 1)
+  assert.match(JSON.parse(fs.readFileSync(path.join(selected.directory, 'selection.json'), 'utf8')).reason, /explicit module or scenario selection/)
 })

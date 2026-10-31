@@ -105,9 +105,10 @@ try {
   for (const scenario of context.cases ?? []) args.push('--case', scenario)
   const full = process.env.HALO_ACCEPTANCE_FULL === 'true' || (process.env.GITHUB_EVENT_NAME === 'schedule' && new Date().getUTCDay() === 0)
   const baselineFile = process.env.HALO_ACCEPTANCE_BASELINE
-  let reason = full ? 'A complete scheduled or manual sweep was requested.' : 'No restored baseline was supplied.'
+  const scoped = Boolean(context.modules?.length || context.cases?.length)
+  let reason = full ? 'A complete scheduled or manual sweep was requested.' : scoped ? 'An explicit module or scenario selection was requested.' : 'No restored baseline was supplied.'
   let rerun = []
-  if (!full && !context.modules?.length && !context.cases?.length && baselineFile && fs.existsSync(baselineFile)) {
+  if (!full && !scoped && baselineFile && fs.existsSync(baselineFile)) {
     try {
       const baseline = readJson(baselineFile)
       reason = baselineReason(baseline, context, (base, head) => {
