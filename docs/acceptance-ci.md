@@ -272,6 +272,17 @@ on Sunday UTC requests a complete profile sweep regardless of the baseline;
 manual `full` does the same. An operator should check for missing runs, not just
 failed runs. See [GitHub schedule behavior](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
 
+A runner on a home or office network sometimes loses its connection to GitHub:
+the job cannot download its actions, or disappears in the middle of a step. That
+says nothing about the product, and GitHub then reports the run as failed, so no
+baseline is published from it. To start such runs again without anyone
+watching, copy [the retry template](../tests/acceptance/ci/acceptance-retry.yml)
+to `.github/workflows/acceptance-retry.yml` beside the main workflow. It runs on
+a GitHub-hosted runner, looks only at the job record of a finished failed run,
+and starts the failed job again, at most twice, when job setup failed or a step
+never finished. A build that fails, a run that is incomplete, a cancelled run and
+a timeout are left alone. Without this workflow, start the run again yourself.
+
 ## Baselines and honest outcomes
 
 Each run ends in one of two ways. It is **complete** when everything it executed
