@@ -1,11 +1,14 @@
-import { instanceKey } from './catalog.mjs'
-
+// CI finalizes evidence even when dependency installation failed, so this module
+// uses only Node built-ins; its key must stay equal to catalog's instanceKey.
 const failing = new Set(['failed', 'flaky'])
 const notCovered = new Set(['blocked', 'manual', 'skipped'])
 const ansi = /\u001b\[[0-9;]*m/g
 const localPath = /(?:\/(?:Users|home|Volumes|private|var|tmp)\/[^\s'"`)\]]+|[A-Za-z]:\\[^\s'"`)\]]+)/g
 
-export const resultKey = item => instanceKey(item.caseId, item.variant ?? {})
+const canonical = value => Array.isArray(value) ? value.map(canonical)
+  : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value
+
+export const resultKey = item => `${item.caseId}:${JSON.stringify(canonical(item.variant ?? {}))}`
 
 /** The scenario ids whose last known result is failing or unstable. */
 export function failingCaseIds(results) {

@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { compareResults, failingCaseIds, nextResults, renderQuality, resultKey } from '../../../scripts/acceptance/lib/quality.mjs'
 import { runCompletion } from '../../../scripts/acceptance/lib/execution.mjs'
+import { instanceKey } from '../../../scripts/acceptance/lib/catalog.mjs'
 
 const item = (caseId, status, extra = {}) => ({ caseId, module: caseId.split('.')[0], title: { en: `Title of ${caseId}`, zh: caseId }, variant: {}, status, ...extra })
 const earlier = results => ({ results, ref: 'main', revision: 'b'.repeat(40), runId: 'earlier', completedAt: '2026-10-30T19:23:00Z' })
@@ -95,4 +96,12 @@ test('a run that lost results, failed its integrity checks, never selected anyth
   assert.match(runCompletion({ cases: [], errors: [], runnerFailed: false }).reasons.join(), /no scenario/)
   assert.match(runCompletion({ cases: [{ status: 'passed' }], errors: [], runnerFailed: true }).reasons.join(), /runner/)
   for (const input of [{ cases: [{ status: 'not-run' }], errors: [], runnerFailed: false }, { cases: [], errors: [], runnerFailed: false }]) assert.equal(runCompletion(input).complete, false)
+})
+
+test('a result key is the catalog instance key, whatever the order of the variant fields', () => {
+  for (const variant of [{}, { member: 'lead' }, { platform: 'darwin', member: 'ordinary' }, { nested: { b: 1, a: [{ d: 1, c: 2 }] } }]) {
+    assert.equal(resultKey({ caseId: 'chat.a', variant }), instanceKey('chat.a', variant))
+  }
+  assert.equal(resultKey({ caseId: 'chat.a' }), instanceKey('chat.a', {}))
+  assert.equal(resultKey({ caseId: 'chat.a', variant: { b: 1, a: 2 } }), resultKey({ caseId: 'chat.a', variant: { a: 2, b: 1 } }))
 })
