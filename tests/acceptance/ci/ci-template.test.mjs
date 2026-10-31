@@ -70,7 +70,7 @@ test('GUI readiness fails fast after dependency installation and before the appl
 const sourceStep = workflow.jobs.acceptance.steps.find(step => step.id === 'source')
 const resolve = new AsyncFunction('github', 'core', 'process', sourceStep.with.script)
 
-async function resolveBranch(environment, branches = { 'release_v3.2': 'a'.repeat(40), 'feat/topic': 'b'.repeat(40) }) {
+async function resolveBranch(environment, branches = { 'release_v3.2': 'a'.repeat(40), 'feat/topic': 'b'.repeat(40) }, content = async () => ({})) {
   const outputs = {}
   const calls = []
   const github = { rest: { repos: {
@@ -79,7 +79,7 @@ async function resolveBranch(environment, branches = { 'release_v3.2': 'a'.repea
       if (!branches[branch]) throw Object.assign(new Error('Not Found'), { status: 404 })
       return { data: { commit: { sha: branches[branch] } } }
     },
-    getContent: async () => ({}),
+    getContent: content,
   } } }
   await resolve(github, { setOutput: (name, value) => { outputs[name] = value } }, { env: { HALO_SOURCE_REPOSITORY: 'example/source', HALO_CONFIGURED_SOURCE: 'example/source', ...environment } })
   return { outputs, calls }
@@ -90,6 +90,13 @@ test('any branch of the configured source repository can be tested unless the co
   assert.deepEqual((await resolveBranch({ HALO_SOURCE_REF: 'release_v3.2', HALO_ALLOWED_SOURCE_BRANCHES: '' })).outputs, { revision: 'a'.repeat(40) })
   assert.deepEqual((await resolveBranch({ HALO_SOURCE_REF: 'feat/topic', HALO_ALLOWED_SOURCE_BRANCHES: '["feat/topic"]' })).outputs, { revision: 'b'.repeat(40) })
   await assert.rejects(resolveBranch({ HALO_SOURCE_REF: 'feat/topic', HALO_ALLOWED_SOURCE_BRANCHES: '["release_v3.2"]' }), /not been authorized/)
+})
+
+test('a branch without the acceptance harness is named as such instead of failing obscurely', async () => {
+  const absent = async () => { throw Object.assign(new Error('Not Found'), { status: 404 }) }
+  await assert.rejects(resolveBranch({ HALO_SOURCE_REF: 'feat/topic' }, undefined, absent), /does not contain the acceptance harness/)
+  const broken = async () => { throw Object.assign(new Error('Server error'), { status: 500 }) }
+  await assert.rejects(resolveBranch({ HALO_SOURCE_REF: 'feat/topic' }, undefined, broken), /Server error/)
 })
 
 test('another repository, an unknown branch and an unsupported branch name never reach a checkout', async () => {
