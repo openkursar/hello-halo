@@ -54,7 +54,7 @@ import { createAIBrowserMcpServer } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { acquireChatBrowserContext, bindChatBrowserSession, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
-import { withOpeningContext } from '../../services/agent/opening-context'
+import { opensWithSlashCommand } from '../../services/agent/opening-context'
 import { acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
@@ -1478,8 +1478,14 @@ async function runAppChatTurn(
     // without being resent. Kept out of the JSONL trigger — the transcript shows
     // what was actually said, not our preamble. A disposable member has no
     // memory to open with (see `disposableMember`) — reading one would also
-    // teach it that it has a file to maintain.
-    const memoryPreamble = resumeSessionId || !memoryActive
+    // teach it that it has a file to maintain. A message that is a slash command
+    // goes without it: the engine routes a command only while it opens the text.
+    // With the non-vision fallback active, image blocks are replaced by the
+    // injected attachment-paths block.
+    const turnText = formatCanvasContext(request.canvasContext)
+      + formatTurnAttachments({ references: request.references, workDir })
+      + (imageFallback?.contextBlock ?? '') + (restrictionNotice ? `${restrictionNotice}\n\n` : '') + message
+    const memoryPreamble = resumeSessionId || !memoryActive || opensWithSlashCommand(turnText)
       ? ''
       : await buildSessionMemoryPreamble(
           memoryScope,
@@ -1489,11 +1495,7 @@ async function runAppChatTurn(
           })
         )
 
-    // With the non-vision fallback active, image blocks are replaced by the
-    // injected attachment-paths block.
-    const messageText = withOpeningContext(memoryPreamble, formatCanvasContext(request.canvasContext)
-      + formatTurnAttachments({ references: request.references, workDir })
-      + (imageFallback?.contextBlock ?? '') + (restrictionNotice ? `${restrictionNotice}\n\n` : '') + message)
+    const messageText = memoryPreamble + turnText
     // A borrowed turn's message never runs as a command (turn-skills).
     const messageContent = buildMessageContent(
       applied?.enforced ? inertCommandText(messageText) : messageText,

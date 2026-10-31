@@ -49,7 +49,7 @@ import {
   buildMessageContent,
 } from './message-utils'
 import { formatTurnAttachments } from './references'
-import { withOpeningContext } from './opening-context'
+import { opensWithSlashCommand } from './opening-context'
 import { prepareNonVisionImageFallback, OCR_TOOLSET_ID } from './image-attachments'
 import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from './sdk-config'
 import { resolveSpaceMemorySession, buildSpaceMemoryPreamble } from './space-memory'
@@ -380,11 +380,12 @@ export async function sendMessage(
     const canvasPrefix = formatCanvasContext(canvasContext)
     // The space's memory opens a new conversation only: a resumed one carries
     // it forward in its own transcript.
-    const memoryPreamble = spaceMemory && !sessionId
+    const attachments = formatTurnAttachments({ references, task, taskInstructions: request.taskInstructions, workDir })
+    const turnMessage = canvasPrefix + attachments + (imageFallback?.contextBlock ?? '') + message
+    const memoryPreamble = spaceMemory && !sessionId && !opensWithSlashCommand(turnMessage)
       ? await buildSpaceMemoryPreamble(spaceMemory.layout, conversationId)
       : ''
-    const attachments = formatTurnAttachments({ references, task, taskInstructions: request.taskInstructions, workDir })
-    const messageWithContext = withOpeningContext(memoryPreamble, canvasPrefix + attachments + (imageFallback?.contextBlock ?? '') + message)
+    const messageWithContext = memoryPreamble + turnMessage
     const messageContent = buildMessageContent(messageWithContext, imageFallback ? undefined : images)
 
     // Dispatch transfers lease protection to awaiting-init before releasing it.
