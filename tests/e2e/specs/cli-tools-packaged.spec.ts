@@ -87,7 +87,8 @@ async function startScriptedModel(workDir: string): Promise<ScriptedModel> {
       }
       const request = JSON.parse(body || '{}') as { stream?: boolean; tools?: Array<{ name: string; description?: string }>; messages?: Array<{ content: unknown }> }
       const messages = JSON.stringify(request.messages ?? [])
-      if (request.tools?.some(tool => tool.name === 'Agent' && tool.description?.includes(AGENT))) model.sawAgent = true
+      // Newer Claude Code lists available agents in a conversation reminder instead of the Agent tool's description.
+      if (request.tools?.some(tool => tool.name === 'Agent' && tool.description?.includes(AGENT)) || messages.includes(AGENT)) model.sawAgent = true
       if (messages.includes(COMMAND)) model.sawCommand = true
 
       for (const message of request.messages ?? []) {

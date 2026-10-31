@@ -23,8 +23,8 @@ function closure(entry) {
   return outside
 }
 
-// These run before dependencies are installed or after their installation failed; a package import would hide the failure behind a module error.
-for (const name of ['ci-state', 'ci-prepare', 'ci-run', 'ci-finalize', 'ci-archive']) {
+// These run before dependencies are installed, after their installation failed, or on a machine that only triggers runs; a package import would hide the failure behind a module error.
+for (const name of ['ci-state', 'ci-prepare', 'ci-run', 'ci-finalize', 'ci-archive', 'ci-dispatch']) {
   test(`${name} and everything it loads need no installed package`, () => {
     assert.deepEqual(closure(path.join(root, 'scripts/acceptance', `${name}.mjs`)), [])
   })

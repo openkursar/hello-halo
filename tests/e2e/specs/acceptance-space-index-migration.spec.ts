@@ -9,6 +9,8 @@ import { createMigrationCommand, installLegacySpaceIndex, migrationFileIdentity,
 
 test.setTimeout(120000)
 
+const shutdownTest = test.extend({ diagnoseShutdown: true })
+
 type InstalledInput = ReturnType<typeof installLegacySpaceIndex>
 
 function assertOriginalFiles(input: InstalledInput, hasNewWork: boolean) {
@@ -70,7 +72,7 @@ async function inspectLegacyData(page: Page, input: InstalledInput, added?: { sp
 }
 
 for (const dataset of ['space-index-v1', 'space-index-v2'] as const satisfies readonly SpaceIndexDataset[]) {
-  test(`${dataset} retains workspace identities, ordered history and the actual working directory`, {
+  shutdownTest(`${dataset} retains workspace identities, ordered history and the actual working directory`, {
     annotation: { type: 'acceptance', description: JSON.stringify({ caseId: 'lifecycle.install.migrate', evidence: 'integration', mode: 'scripted', variant: { dataset } }) },
   }, async ({ acceptanceApp, model }, info) => {
     const child = acceptanceApp.app.process()

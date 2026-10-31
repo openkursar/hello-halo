@@ -156,11 +156,16 @@ async function expectSavedTeam(page: Page, collab: Collaboration, saved: SavedTe
   expect(await readTasks(page, saved.teamId)).toEqual([])
 }
 
-async function openOriginalTask(page: Page, collab: Collaboration) {
+/** The conversation list shrinks to an icon rail while the canvas is open, so the canvas is collapsed first. */
+async function openOriginalConversation(page: Page, collab: Collaboration) {
   await navigateToChat(page)
-  await openManagedConversation(page, collab.source.title, collab.spaceId)
   const collapse = page.getByRole('button', { name: 'Collapse canvas', exact: true })
   if (await collapse.isVisible()) await collapse.click()
+  await openManagedConversation(page, collab.source.title, collab.spaceId)
+}
+
+async function openOriginalTask(page: Page, collab: Collaboration) {
+  await openOriginalConversation(page, collab)
   await openSourceRoom(page)
 }
 
@@ -275,9 +280,7 @@ test('keeping a collaboration leaves its original task, member histories and con
   }
   await expectOriginalIntact(reopened, collab, saved)
   await expectSavedTeam(reopened, collab, saved)
-  await openManagedConversation(reopened, collab.source.title, collab.spaceId)
-  const collapse = reopened.getByRole('button', { name: 'Collapse canvas', exact: true })
-  if (await collapse.isVisible()) await collapse.click()
+  await openOriginalConversation(reopened, collab)
   await expect(reopened.locator('.message-assistant [data-message-content]').filter({ hasText: readyMessage })).toHaveText(readyMessage)
   expect((await readAcceptanceConversation(reopened, collab.spaceId, collab.source.id)).messages).toEqual(collab.source.messages)
   await testInfo.attach('retained-member-contexts', { body: JSON.stringify({ before: Object.fromEntries(before), resumed }, null, 2), contentType: 'application/json' })
