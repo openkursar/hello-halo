@@ -87,6 +87,7 @@ test('dispatch preview performs no authenticated request and preserves the contr
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stdout, /Preview only/)
   assert.doesNotMatch(result.stdout, /source_ref/)
+  assert.doesNotMatch(result.stdout, /profile/)
   assert.equal(selected.calls().some(call => call.command === 'api' || call.command === 'auth'), false)
   assert.equal(fs.existsSync(path.join(selected.root, 'tests/acceptance/output')), false)
 })
@@ -100,6 +101,15 @@ test('a source branch and an SDK reference travel as workflow inputs, and an uns
   assert.equal(body.body.inputs.sdk_ref, 'release_v3.2')
   assert.equal(body.body.inputs.modules, 'chat')
   for (const unsafe of ['-flag', 'a b', 'x;y']) assert.notEqual(selected.execute(['--repository', 'example/controller', '--sdk-ref', unsafe]).status, 0)
+})
+
+test('a profile travels only when asked for, so a run is compared with the nightly baseline by default', context => {
+  const selected = fixture(context)
+  const inputs = args => JSON.parse((result => result.stdout.slice(0, result.stdout.indexOf('\nPreview only')))(selected.execute(['--repository', 'example/controller', ...args]))).body.inputs
+  assert.equal('profile' in inputs(['--module', 'chat']), false)
+  assert.equal(inputs(['--module', 'chat', '--profile', 'fast']).profile, 'fast')
+  assert.equal(inputs(['--profile', 'regression']).profile, 'regression')
+  assert.notEqual(selected.execute(['--repository', 'example/controller', '--profile', 'live']).status, 0)
 })
 
 test('a local proxy applies only to authenticated child processes and records no credential or URL', context => {

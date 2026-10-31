@@ -154,17 +154,18 @@ function main() {
   values.repository ??= process.env.HALO_ACCEPTANCE_CI_REPOSITORY || localSetting('halo.acceptanceRepository')
   values.workflow ??= 'acceptance.yml'
   values.ref ??= 'main'
-  values.profile ??= 'fast'
   if (!repositoryPattern.test(values.repository ?? '')) throw new Error('--repository must name the controller owner/repository.')
   if (!workflowPattern.test(values.workflow)) throw new Error('--workflow must be a workflow filename.')
-  if (!['fast', 'regression'].includes(values.profile)) throw new Error('--profile must be fast or regression.')
+  if (values.profile !== undefined && !['fast', 'regression'].includes(values.profile)) throw new Error('--profile must be fast or regression.')
   if (!values.ref || /[\r\n\0]/.test(values.ref)) throw new Error('--ref must be a nonempty single-line controller ref.')
   if (values['source-ref'] !== undefined && (!values['source-ref'] || /[\r\n\0]/.test(values['source-ref']))) throw new Error('--source-ref must be a nonempty single-line source ref.')
   if (values['source-repository'] && !repositoryPattern.test(values['source-repository'])) throw new Error('--source-repository must be owner/repository.')
   if (values['sdk-ref'] !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(values['sdk-ref'])) throw new Error('--sdk-ref must be a branch name or a commit.')
   for (const value of [...values.module ?? [], ...values.case ?? []]) if (!/^[a-z][a-z0-9.-]*$/.test(value)) throw new Error('Module and case ids must use catalog identifiers.')
   const requestId = randomUUID()
-  const inputs = { profile: values.profile, full: String(values.full), request_id: requestId }
+  // Without a profile the workflow's own default applies, the one the nightly baseline is recorded under.
+  const inputs = { full: String(values.full), request_id: requestId }
+  if (values.profile) inputs.profile = values.profile
   if (values['source-ref']) inputs.source_ref = values['source-ref']
   if (values['sdk-ref']) inputs.sdk_ref = values['sdk-ref']
   if (values.module?.length) inputs.modules = [...new Set(values.module)].sort().join(',')

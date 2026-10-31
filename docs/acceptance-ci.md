@@ -25,7 +25,7 @@ acceptance workflow, *Run workflow*, and fill what you need:
 | --- | --- |
 | `source_ref` | Branch of the source repository to test. Blank: the default branch |
 | `modules`, `cases` | Comma-separated module or scenario ids. Blank: select by impact, or everything |
-| `profile` | `fast` (a small core) or `regression` (everything applicable) |
+| `profile` | `regression` (everything applicable; the default, and the profile the nightly baseline is recorded under) or `fast` (a small core that keeps a baseline of its own) |
 | `full` | Ignore the baseline and select the whole profile |
 | `sdk_ref` | SDK branch or commit. Blank: the controller's default SDK branch |
 
@@ -608,10 +608,13 @@ does not cover them. See [Playwright's Electron boundary](https://playwright.dev
 Preview the request before dispatching an authorized workflow:
 
 ```bash
-node scripts/acceptance/ci-dispatch.mjs --repository owner/controller --source-ref main --profile fast
-node scripts/acceptance/ci-dispatch.mjs --repository owner/controller --source-ref main --profile fast --execute
-node scripts/acceptance/ci-dispatch.mjs --repository owner/controller --module teams --profile regression --execute
+node scripts/acceptance/ci-dispatch.mjs --repository owner/controller --source-ref main
+node scripts/acceptance/ci-dispatch.mjs --repository owner/controller --source-ref main --execute
+node scripts/acceptance/ci-dispatch.mjs --repository owner/controller --module teams --profile fast --execute
 ```
+
+Without `--profile` the workflow's default applies, so a run is compared with the
+nightly baseline; a `fast` run is compared only with earlier `fast` runs.
 
 `--ref` chooses the controller workflow ref; `--source-ref` chooses the source
 branch under test and `--sdk-ref` the SDK branch or commit. `--full` requests a
