@@ -61,8 +61,8 @@ Decided:
 
 Deferred, with the questions kept on their stories until someone decides:
 
-- **permissions.guidance**: Should denied guest operations offer a permission request to the owner, or explain the limitation without opening an approval workflow?
-- **terminal.python**: Should a Windows release provide an isolated Python runtime, or support Python only after a user-managed installation?
+- **permissions.guidance** ([#506](https://github.com/openkursar/hello-halo/issues/506)): Should denied guest operations offer a permission request to the owner, or explain the limitation without opening an approval workflow?
+- **terminal.python** ([#507](https://github.com/openkursar/hello-halo/issues/507)): Should a Windows release provide an isolated Python runtime, or support Python only after a user-managed installation?
 
 These questions identify actual product choices. Backups, fixture dimensions, test budgets and whether to rerun historical tests are not added as approval questions merely because the inventory did not previously describe them.
 

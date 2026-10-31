@@ -59,8 +59,10 @@ than a module run. On a machine that reaches GitHub through a proxy, add
    and `summary.md`:
 
    ```bash
-   gh run download <run-id> -R owner/controller -n quality-<run-id>-1
+   gh run download <run-id> -R owner/controller -n quality-<run-id>-<attempt>
    ```
+
+   `<attempt>` is 1 unless the run was started again.
 
 3. The full evidence, `acceptance-<run-id>-<attempt>`, with the HTML report at
    `ci/report/index.html`. It is large and private; it is also kept in the runner

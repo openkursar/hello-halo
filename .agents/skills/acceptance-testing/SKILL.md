@@ -79,8 +79,9 @@ done; this is the purpose of the system, and nobody needs to ask you to.
    say that acceptance was not run instead of implying coverage.
 3. Wait for the run and read its findings, not its color. The step succeeds when
    the run is complete, whatever scenarios failed:
-   `gh run download <run-id> -R <controller> -n quality-<run-id>-1` gives
-   `quality.json` and `summary.md`. A **new failure** is yours until its reason
+   `gh run download <run-id> -R <controller> -n quality-<run-id>-<attempt>` gives
+   `quality.json` and `summary.md` (`<attempt>` is 1 unless the run was started
+   again after its runner lost the connection). A **new failure** is yours until its reason
    shows an environment cause; fix it or report it with the evidence. **No longer
    verified** is lost coverage, treat it like a failure. **Still failing** and
    **not covered** are known backlog: do not hide them, do not count them as
