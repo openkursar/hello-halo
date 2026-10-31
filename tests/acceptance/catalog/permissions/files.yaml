@@ -1,0 +1,101 @@
+version: 1
+id: permissions.files
+module: permissions
+title:
+  en: Respect file and command boundaries
+  zh: 遵守文件与命令边界
+story:
+  en: I can grant limited useful work without granting access to unrelated files or commands.
+  zh: 我能允许有限但有用的工作，而不开放无关文件和命令。
+basis: documented
+references:
+  - src/shared/apps/capability-policy.ts
+  - src/main/apps/runtime/turn-file-access.ts
+  - src/main/foundation/path-containment.ts
+  - tests/e2e/specs/acceptance-guest.spec.ts
+promises:
+  path:
+    en: Allowed workspace paths cannot be escaped by traversal or an unintended link.
+    zh: 获准工作路径不能通过目录穿越或非预期链接绕过。
+  command:
+    en: A command allowlist narrows the granted command tool and does not open other command execution routes.
+    zh: 命令白名单限制已开放命令工具，不开放其他执行通道。
+  skill:
+    en: A granted skill does not bypass the caller’s tool permissions.
+    zh: 开放技能不绕过调用者的工具权限。
+scenarios:
+  - id: permissions.files.containment
+    title:
+      en: Refuse a file outside the allowed scope
+      zh: 拒绝范围外文件
+    verifies:
+      - path
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: A guest has access to a test work folder with an external symlink fixture.
+        zh: 访客可访问测试工作目录，其中有指向外部的符号链接。
+    steps:
+      - en: Try a normal file, a parent traversal and the external link.
+        zh: 读取普通文件，再尝试上级路径及外部链接。
+    expected:
+      - en: Only the authorized file is readable; outside contents are not returned.
+        zh: 只有授权文件可读，范围外内容不会返回。
+    requirements:
+      - halo-sdk
+      - file-symlinks
+    notes:
+      en: The WeCom service and model endpoint are local fixtures. Halo configuration UI, the real channel SDK, dispatch, permission enforcement, persistence and reply rendering remain active. This does not certify the real WeCom client or natural-model wording quality.
+      zh: 企业微信服务和模型端点使用本机替身；Halo 配置界面、真实通道 SDK、投递、权限执行、持久化和回复显示均保留。不据此证明真实企业微信客户端或真实模型的措辞质量。
+  - id: permissions.files.commands
+    title:
+      en: Reject mixed allowed and denied commands
+      zh: 拒绝夹带未授权命令
+    verifies:
+      - command
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A caller has a restricted command allowlist.
+        zh: 调用者有受限命令白名单。
+    steps:
+      - en: Run an allowed command, a denied command and a compound command containing both.
+        zh: 执行允许、拒绝及两者混合的复合命令。
+    expected:
+      - en: Only explicitly allowed execution succeeds; a terminal cannot bypass the same restriction.
+        zh: 仅明确允许执行成功，终端不能绕过同一限制。
+  - id: permissions.files.skill
+    title:
+      en: Keep restrictions when a skill is loaded
+      zh: 加载技能时仍保持限制
+    verifies:
+      - skill
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A permitted skill requests a tool the caller lacks.
+        zh: 允许的技能请求调用者未获准的工具。
+    steps:
+      - en: Load the skill and attempt its restricted operation.
+        zh: 加载技能并尝试受限操作。
+    expected:
+      - en: The skill does not grant the missing tool or its side effects.
+        zh: 技能不授予缺失工具及其副作用。

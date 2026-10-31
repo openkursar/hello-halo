@@ -34,7 +34,7 @@ import { getSdkApiCredentials } from '../../../src/main/services/agent/sdk-confi
 describe('validateApiConnection captured credentials', () => {
   it('validates an explicit OpenAI model unchanged even if Anthropic retired that identifier', async () => {
     ensureRouterMock.mockResolvedValue({ baseUrl: 'http://127.0.0.1:51234' })
-    createSessionMock.mockResolvedValue({ send: vi.fn(), close: vi.fn(), stream: async function* () { yield { type: 'result' } } })
+    createSessionMock.mockResolvedValue({ send: vi.fn(), close: vi.fn(), stream: async function* () { yield { type: 'result', subtype: 'success', is_error: false, result: 'OK' } } })
     const result = await validateApiConnection({ provider: 'openai', apiKey: 'selected-key', apiUrl: 'https://selected.example/v1', model: 'claude-mythos-preview' })
     expect(result).toMatchObject({ valid: true, model: 'claude-mythos-preview' })
     expect(createSessionMock.mock.calls.at(-1)![0]).toMatchObject({ engineId: 'halo', model: 'claude-mythos-preview', apiCredentials: { model: 'claude-mythos-preview' } })
@@ -44,7 +44,7 @@ describe('validateApiConnection captured credentials', () => {
     const close = vi.fn()
     createSessionMock.mockResolvedValue({
       send: vi.fn(), close,
-      stream: async function* () { yield { type: 'result' } },
+      stream: async function* () { yield { type: 'result', subtype: 'success', is_error: false, result: 'OK' } },
     })
     const params = { provider, apiKey: 'test-validation-only', apiUrl: 'https://validation.example/v1', model: 'validation-model' }
     expect(await validateApiConnection(params)).toMatchObject({ valid: true, model: params.model })

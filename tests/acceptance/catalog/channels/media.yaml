@@ -1,0 +1,92 @@
+version: 1
+id: channels.media
+module: channels
+title:
+  en: Exchange attachments through a channel
+  zh: 通过消息渠道交换附件
+story:
+  en: I can send material to the digital human and receive supported files back.
+  zh: 我能向数字人发送材料，并收回受支持的文件。
+basis: observed
+references:
+  - src/main/apps/runtime/im-channels/wecom-bot.provider.ts
+  - src/main/apps/runtime/im-channels/weixin-ilink.provider.ts
+  - src/main/apps/runtime/im-channels/feishu-bot.provider.ts
+  - src/main/apps/runtime/file-export-gate.ts
+promises:
+  media:
+    en: Supported inbound media is preserved as the intended attachment rather than an unusable identifier.
+    zh: 支持的入站媒体成为可用附件，而不是不可用的标识。
+  export:
+    en: File sending obeys destination permissions and does not export unrelated local files.
+    zh: 文件发送遵循目的地权限，不导出无关本地文件。
+  length:
+    en: Long responses follow provider limits without losing or reordering content.
+    zh: 长回复遵循平台限制，不丢失或打乱内容。
+scenarios:
+  - id: channels.media.receive
+    title:
+      en: Receive a supported image or document
+      zh: 接收支持的图片或文档
+    verifies:
+      - media
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A provider fixture supplies valid media and a controlled download URL.
+        zh: 平台测试数据提供有效媒体及受控下载地址。
+    steps:
+      - en: Deliver media and ask a scripted model to inspect it.
+        zh: 投递媒体并让脚本模型检查。
+    expected:
+      - en: The normalized message has usable content of the expected type.
+        zh: 标准化消息包含预期类型的可用内容。
+  - id: channels.media.export
+    title:
+      en: Send only an authorized generated file
+      zh: 只发送获准的生成文件
+    verifies:
+      - export
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A test chat is allowed to receive a generated workspace file.
+        zh: 测试聊天获准接收空间生成文件。
+    steps:
+      - en: Send that file, then attempt an unrelated protected file.
+        zh: 发送该文件，再尝试无关受保护文件。
+    expected:
+      - en: The authorized export succeeds and the unrelated export is refused without leaking contents.
+        zh: 获准导出成功，无关导出被拒绝且不泄漏内容。
+  - id: channels.media.long-reply
+    title:
+      en: Deliver a long reply in order
+      zh: 按序投递长回复
+    verifies:
+      - length
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A fixture provider enforces a short message length.
+        zh: 测试平台限制单条消息长度。
+    steps:
+      - en: Reply with uniquely ordered paragraphs exceeding the limit.
+        zh: 回复带顺序标记且超过限制的多段内容。
+    expected:
+      - en: Parts preserve full content and order, and a failed part does not pretend complete delivery.
+        zh: 分段保留全文与顺序，某段失败不伪装为全部送达。

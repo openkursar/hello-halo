@@ -1,0 +1,361 @@
+version: 1
+id: browser.recovery
+module: browser
+title:
+  en: Recover browser work after UI changes
+  zh: 界面变化后恢复浏览工作
+story:
+  en: I can keep browser work reachable when tabs close or the main view recovers.
+  zh: 关闭标签或主界面恢复时，浏览工作仍可找回。
+basis: documented
+references:
+  - src/main/services/ai-browser/DESIGN.md
+  - src/main/services/browser-host/DESIGN.md
+  - tests/e2e/specs/browser-view-frame.spec.ts
+  - tests/e2e/specs/browser-view-reveal.spec.ts
+promises:
+  reach:
+    en: Closing a viewing tab does not silently terminate the AI-owned page.
+    zh: 关闭查看标签不悄悄终止 AI 拥有的页面。
+  recover:
+    en: A crashed or reloaded renderer releases invalid attachments and can open a fresh working page.
+    zh: 渲染界面崩溃或重载后释放失效附着，并能打开新可用页面。
+  layout:
+    en: Browser surfaces respect overlays, fullscreen controls and display scaling.
+    zh: 浏览区域遵守弹层、全屏控件与缩放布局。
+scenarios:
+  - id: browser.recovery.close-view
+    title:
+      en: Close a view and reopen a live page
+      zh: 关闭视图后重开活动页面
+    verifies:
+      - reach
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    notes:
+      en: A real space conversation opens the target with production browser tools. Closing its borrowed canvas tab must keep the owned guest, nonce and user state; the real live-session tray reopens that view identity, and the next model step receives a production tool read of its retained state. The independent owned control page remains unchanged.
+      zh: 真实空间对话通过生产浏览器工具打开目标页。关闭借用的画布标签须保留原网页进程、文档标记及用户状态；真实活动会话托盘按原视图身份重开，下一模型步骤收到生产工具对保留状态的读取。独立自有对照页保持不变。
+    preconditions:
+      - en: An AI-owned page is visible in the canvas.
+        zh: AI 拥有的页面正在画布显示。
+    steps:
+      - en: Close its tab and reopen it from live sessions.
+        zh: 关闭标签后从活动会话入口重开。
+    expected:
+      - en: The page remains reachable with retained state.
+        zh: 页面仍可找到并保留状态。
+  - id: browser.recovery.renderer
+    title:
+      en: Recover after a renderer crash
+      zh: 渲染进程崩溃后恢复
+    verifies:
+      - recover
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A local page is mounted in the real application.
+        zh: 真实应用已挂载本地页面。
+    steps:
+      - en: Crash the test renderer, recover it and open a new page.
+        zh: 使测试渲染进程崩溃，恢复后打开新页面。
+    expected:
+      - en: Invalid old attachments are released and the recovered browser paints and accepts actions.
+        zh: 失效旧附着被释放，恢复后浏览器可绘制并接受操作。
+  - id: browser.recovery.overlay
+    title:
+      en: Operate narrow overlays above browser content
+      zh: 在浏览器上操作窄屏弹层
+    verifies:
+      - layout
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Browser content is open at 375px with non-default display scale.
+        zh: 375px 窄屏下打开浏览器并使用非默认缩放。
+    steps:
+      - en: Open a global modal and enter or leave fullscreen.
+        zh: 打开全局弹层并进入或退出全屏。
+    expected:
+      - en: Controls receive clicks above browser content and the viewport aligns without duplicate scaling.
+        zh: 控件在浏览内容上方接收点击，视口对齐且不重复缩放。
+  - id: browser.recovery.page-crash
+    title:
+      en: Reload a crashed page
+      zh: 重载崩溃网页
+    verifies:
+      - recover
+    platforms: &a2
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Crash a browser page renderer, inspect stopped state, reload and reveal it.
+        zh: 让网页渲染进程崩溃，查看停止状态，重载并显示。
+    expected:
+      - en: The page recovers with a new document while keeping the existing canvas page identity.
+        zh: 网页以新文档恢复，同时保留原画布页面身份。
+  - id: browser.recovery.header-overlay
+    title:
+      en: Operate a header menu above a web page
+      zh: 在网页上方操作顶部菜单
+    verifies:
+      - layout
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Open a real browser and the header menu, then activate its browser action.
+        zh: 打开真实浏览页和顶部菜单，再激活浏览操作。
+    expected:
+      - en: The menu paints above the page, accepts the click and leaves no blocking dismiss layer.
+        zh: 菜单绘制在网页上方并接受点击，不残留阻挡层。
+  - id: browser.recovery.dismiss-overlay
+    title:
+      en: Dismiss a menu without clicking through
+      zh: 关闭菜单时不误点底层网页
+    verifies:
+      - layout
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Dismiss the header menu through outside click, Escape and repeated trigger activation.
+        zh: 通过外部点击、Escape 和重复点击触发器关闭菜单。
+    expected:
+      - en: Dismissal closes the menu without forwarding the outside click as a webpage action.
+        zh: 菜单关闭，外部点击不误触网页操作。
+  - id: browser.recovery.resize
+    title:
+      en: Resize panels over a live web page
+      zh: 在活动网页上调整面板宽度
+    verifies:
+      - layout
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Drag chat and resource boundaries, release over the page and move the pointer again.
+        zh: 拖动对话与资源边界，在网页上释放，再移动指针。
+    expected:
+      - en: Dragging stops at release, widths persist and the page session remains unchanged.
+        zh: 释放后停止拖动，宽度保存，页面会话不变。
+  - id: browser.recovery.main-crash
+    title:
+      en: Recover the browser after the main UI crashes
+      zh: 主界面崩溃后恢复浏览器
+    verifies:
+      - recover
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Crash the main renderer while a page exists, then recover and open a new page.
+        zh: 页面存在时令主界面崩溃，再恢复并开新页面。
+    expected:
+      - en: Stale pages are released and the recovered browser displays a usable fresh page.
+        zh: 失效页面释放，恢复后的浏览器显示可用新页面。
+  - id: browser.recovery.page-budget
+    title:
+      en: Reopen a page retired by the browser budget
+      zh: 重新打开被浏览资源预算回收的页面
+    verifies:
+      - recover
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Open more pages than the declared live-page budget and reactivate the oldest hidden tab.
+        zh: 打开超过声明活动页面预算的网页，再激活最早隐藏标签。
+    expected:
+      - en: The hidden page is recreated on demand while the current survivor keeps its draft and live count stays bounded.
+        zh: 隐藏页面按需重建，当前保留页面草稿不丢，活动数量受控。
+  - id: browser.recovery.fullscreen-return
+    title:
+      en: Return from fullscreen without losing draft or page
+      zh: 全屏返回时不丢草稿及网页
+    verifies:
+      - layout
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Type a chat draft, enter browser fullscreen and click the return-to-chat control.
+        zh: 输入聊天草稿，进入浏览全屏并点击返回对话。
+    expected:
+      - en: The draft and page remain intact, and the control click does not reach the page beneath.
+        zh: 草稿及网页完整，控件点击不传到底层网页。
+  - id: browser.recovery.release-input
+    title:
+      en: Stop pending input when its context ends
+      zh: 上下文结束时停止待处理输入
+    verifies:
+      - recover
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Start page input and release the owning context before its frame is ready.
+        zh: 启动页面输入，在框架就绪前释放所属上下文。
+    expected:
+      - en: Input is refused and the closed page is not revived.
+        zh: 输入被拒绝，关闭页面不被复活。
+    notes:
+      en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
+      zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。
+  - id: browser.recovery.renderer-reload
+    title:
+      en: Open fresh browser work after a UI reload
+      zh: 界面重载后打开新浏览任务
+    verifies:
+      - recover
+    platforms: &a3
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Reload the main renderer while a page exists, then create and show a replacement page.
+        zh: 页面存在时重载主界面，再创建显示替代页面。
+    expected:
+      - en: The old page is released and the new page has valid independent state and pixels.
+        zh: 旧页面释放，新页面有有效独立状态及画面。
+  - id: browser.recovery.display-scaling
+    title:
+      en: Align browser content after display-size changes
+      zh: 显示大小改变后对齐浏览内容
+    verifies:
+      - layout
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Change host display zoom while a real page is shown in the canvas.
+        zh: 画布显示真实网页时改变宿主显示缩放。
+    expected:
+      - en: Browser bounds match the canvas and the webpage zoom is not applied a second time.
+        zh: 浏览边界匹配画布，网页缩放不被重复应用。
+  - id: browser.recovery.narrow-modal
+    title:
+      en: Use a global modal over a narrow browser canvas
+      zh: 在窄屏浏览画布上使用全局弹窗
+    verifies:
+      - layout
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Open browser canvas at mobile width, open resources and activate its global dialog.
+        zh: 在手机宽度打开浏览画布，打开资源并激活全局弹窗。
+    expected:
+      - en: Covered chat controls do not intercept input, and the modal displays and receives actions above the page.
+        zh: 被覆盖对话控件不抢输入，弹窗在网页上方显示并接受操作。
+  - id: browser.recovery.late-host
+    title:
+      en: Continue opening pages when the main view is delayed
+      zh: 主界面延迟时仍能打开页面
+    verifies:
+      - recover
+    platforms: *a3
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated app or browser-module fixture uses only local synthetic web content.
+        zh: 隔离应用或浏览模块测试壳仅使用本地合成网页。
+    steps:
+      - en: Delay main-view page attachment and create watchable browser work.
+        zh: 延迟主界面附着并创建可观看浏览任务。
+    expected:
+      - en: The page remains usable through the supported fallback and can be revealed after the host recovers.
+        zh: 页面通过支持的回退路径仍可用，宿主恢复后能显示。
+    notes:
+      en: The dedicated browser fixture invokes real production tools without a model or the full chat path.
+      zh: 专用浏览测试壳调用真实生产工具，不包含模型及完整聊天链路。

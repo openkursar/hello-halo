@@ -31,6 +31,15 @@ const TEST_MODEL = process.env.HALO_TEST_MODEL || ''
 const TEST_PROVIDER = process.env.HALO_TEST_PROVIDER || ''
 const TEST_OAUTH_SOURCE = process.env.HALO_TEST_OAUTH_SOURCE || ''
 const TEST_SDK_ENGINE = process.env.HALO_TEST_SDK_ENGINE || ''
+const ACCEPTANCE_MODE = process.env.HALO_ACCEPTANCE_MODE || ''
+
+if (ACCEPTANCE_MODE && TEST_OAUTH_SOURCE) throw new Error('Acceptance profiles cannot borrow a signed-in account')
+if (ACCEPTANCE_MODE === 'brokered-live') {
+  const endpoint = new URL(TEST_API_URL)
+  if (endpoint.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(endpoint.hostname) || !TEST_API_KEY.startsWith('acceptance-')) {
+    throw new Error('Live acceptance profiles must use the temporary local budget broker')
+  }
+}
 
 if (TEST_SDK_ENGINE && !['anthropic', 'halo', 'codex', 'dsh'].includes(TEST_SDK_ENGINE)) {
   throw new Error('HALO_TEST_SDK_ENGINE must name a supported SDK engine')
@@ -50,8 +59,11 @@ if (TEST_API_KEY && (!TEST_API_URL || !TEST_MODEL || !TEST_PROVIDER)) {
 }
 
 // Types for the fixture
+type TestSdkEngine = 'anthropic' | 'halo' | 'codex' | 'dsh'
+
 interface ElectronFixtures {
   appStoreRegistries: RegistrySource[] | undefined
+  sdkEngine: TestSdkEngine | undefined
   electronApp: ElectronApplication
   window: Page
 }
@@ -132,7 +144,8 @@ function ensureProductJson(projectRoot: string): void {
  * anything written to the SQLite/config files before the app opens them is
  * picked up on boot exactly like a real prior install.
  */
-export function createTestConfigDir(appPath: string, registries?: RegistrySource[]): string {
+export function createTestConfigDir(appPath: string, registries?: RegistrySource[], options: { sdkEngine?: TestSdkEngine } = {}): string {
+  const sdkEngine = options.sdkEngine ?? TEST_SDK_ENGINE
   const testDir = path.join(
     process.env.TMPDIR || '/tmp',
     `halo-e2e-test-${Date.now()}`
@@ -219,7 +232,11 @@ export function createTestConfigDir(appPath: string, registries?: RegistrySource
       completed: true  // Skip onboarding in tests
     },
     mcpServers: {},
-    ...(TEST_SDK_ENGINE ? { agent: { sdkEngine: TEST_SDK_ENGINE } } : {}),
+    ...(sdkEngine || ACCEPTANCE_MODE ? { agent: {
+      ...(sdkEngine ? { sdkEngine } : {}),
+      ...(ACCEPTANCE_MODE ? { configDirMode: 'custom', customConfigDir: path.join(testDir, 'engine-state') } : {})
+    } } : {}),
+    ...(ACCEPTANCE_MODE ? { imChannels: [], notificationChannels: [] } : {}),
     ...(registries ? { appStore: { registries, cacheTtlMs: 3600000, autoCheckUpdates: true } } : {}),
     isFirstLaunch: false  // Skip first launch flow
   }
@@ -228,6 +245,9 @@ export function createTestConfigDir(appPath: string, registries?: RegistrySource
     path.join(haloDir, 'config.json'),
     JSON.stringify(config, null, 2)
   )
+  if (ACCEPTANCE_MODE) {
+    base.info().annotations.push({ type: 'acceptance-isolation', description: ACCEPTANCE_MODE === 'brokered-live' ? 'brokered-fresh-profile' : 'fresh-profile' })
+  }
 
   // Create headless-electron symlink for Claude Agent SDK
   // SDK uses this to spawn child processes without Dock icon on macOS
@@ -355,10 +375,11 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
  */
 export const test = base.extend<ElectronFixtures>({
   appStoreRegistries: [undefined, { option: true }],
+  sdkEngine: [undefined, { option: true }],
   // Electron application instance
-  electronApp: async ({ appStoreRegistries }, use, testInfo) => {
+  electronApp: async ({ appStoreRegistries, sdkEngine }, use, testInfo) => {
     const appEntryPath = getAppEntryPath()
-    const testConfigDir = createTestConfigDir(appEntryPath, appStoreRegistries)
+    const testConfigDir = createTestConfigDir(appEntryPath, appStoreRegistries, { sdkEngine })
     const app = await launchElectronApp(appEntryPath, testConfigDir)
 
     // Use the app in tests

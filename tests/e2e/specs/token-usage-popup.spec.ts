@@ -23,7 +23,7 @@ async function settle(window: Page, ms = 250): Promise<void> {
   await window.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))))
 }
 
-test('token usage popup — follows its count, closes once the pointer is off it', async () => {
+test('token usage popup — follows its count, closes once the pointer is off it', { annotation: { type: 'acceptance', description: "{\"caseId\":\"chat.usage.popup\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async () => {
   test.setTimeout(120000)
   const appEntryPath = getAppEntryPath()
   const testConfigDir = createTestConfigDir(appEntryPath)

@@ -1,0 +1,114 @@
+version: 1
+id: channels.conversations
+module: channels
+title:
+  en: Keep messaging conversations separate
+  zh: 保持消息会话独立
+story:
+  en: I can talk to a digital human from a direct or group chat and receive the reply in the right place.
+  zh: 我能通过单聊或群聊与数字人交谈，并在正确位置收到回复。
+basis: documented
+references:
+  - .agents/skills/halo-dev/ARCHITECTURE.md
+  - src/main/apps/runtime/dispatch-inbound.ts
+  - src/shared/types/im-channel.ts
+promises:
+  route:
+    en: Sender, channel instance and chat identity determine the conversation and reply destination.
+    zh: 发送者、渠道实例和聊天身份决定对话及回复目的地。
+  clear:
+    en: Clearing a channel conversation starts fresh model context while retaining the documented history boundary.
+    zh: 清空渠道对话后使用新的模型上下文，并遵循约定的历史边界。
+  delivery:
+    en: Rapid or repeated inbound messages are handled once with their intended order and permissions.
+    zh: 快速或重复入站消息按预期顺序和权限处理，不重复执行。
+scenarios:
+  - id: channels.conversations.routes
+    title:
+      en: Route direct and group messages from two instances
+      zh: 路由两个实例的单聊与群聊
+    verifies:
+      - route
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Two test channel instances serve distinct chats with similar display names.
+        zh: 两个测试渠道实例服务不同聊天，显示名称相似。
+    steps:
+      - en: Send marked messages from each direct/group chat.
+        zh: 从每个单聊和群聊发送不同标记。
+    expected:
+      - en: Each reply returns only to the originating chat and correct stored transcript.
+        zh: 各回复仅回到来源聊天及正确保存记录。
+  - id: channels.conversations.rapid
+    title:
+      en: Receive rapid and repeated messages
+      zh: 接收连续及重复消息
+    verifies:
+      - delivery
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A test channel has an active owner turn.
+        zh: 测试渠道有正在运行的主人任务。
+    steps:
+      - en: Deliver two ordered supplements and repeat one provider message id.
+        zh: 按序投递两条补充，并重复其中一个平台消息标识。
+    expected:
+      - en: The AI receives intended input once and replies remain associated with the same chat.
+        zh: AI 只接收一次预期输入，回复仍关联原聊天。
+  - id: channels.conversations.clear
+    title:
+      en: Clear a channel conversation
+      zh: 清空渠道对话
+    verifies:
+      - clear
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A test chat has existing model context.
+        zh: 测试聊天已有模型上下文。
+    steps:
+      - en: Use its supported clear operation and send a new request.
+        zh: 执行支持的清空操作并发送新请求。
+    expected:
+      - en: The new request uses fresh context and the UI represents the correct history state.
+        zh: 新请求使用新上下文，界面呈现正确历史状态。
+  - id: channels.conversations.live-roundtrip
+    title:
+      en: Complete a real platform round trip
+      zh: 完成真实平台消息往返
+    verifies:
+      - route
+    platforms: *a1
+    profiles:
+      - external
+    evidence: external
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Authorized dedicated messaging test accounts are connected.
+        zh: 专用已授权消息测试账户已连接。
+    steps:
+      - en: Send a harmless unique marker from the real platform UI and inspect the returned message and Halo record.
+        zh: 从真实平台界面发送无副作用标记，查看回复与 Halo 记录。
+    expected:
+      - en: The real platform receives the correct reply once and Halo retains the same exchange.
+        zh: 真实平台只收到一次正确回复，Halo 保存同一交流。
+    requirements:
+      - external-im

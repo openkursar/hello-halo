@@ -70,7 +70,7 @@ async function sendAgentEvent(app: ElectronApplication, channel: string, data: R
 const STREAM_LINE = 'Streaming line with enough words to wrap and grow the live reply as it arrives. '
 
 for (const viewport of VIEWPORTS) {
-  test(`transcript scrolling — ${viewport.name}`, async () => {
+  test(`transcript scrolling — ${viewport.name}`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "conversations.read.scroll-states", evidence: "ui", mode: "none", variant: { viewport: viewport.name } }) } }, async () => {
     test.setTimeout(180000)
     const appEntryPath = getAppEntryPath()
     const testConfigDir = createTestConfigDir(appEntryPath)
@@ -291,7 +291,7 @@ for (const viewport of VIEWPORTS) {
 // opens on its newest page only, follows a live turn, pulls older history in as
 // the reader reaches the top without moving what is on screen, and a search hit
 // far back is loaded and centered.
-test('transcript scrolling — digital-human conversation, paged', async () => {
+test('transcript scrolling — digital-human conversation, paged', { annotation: { type: 'acceptance', description: "{\"caseId\":\"conversations.read.person-pagination\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async () => {
   test.setTimeout(180000)
   const TURNS = 150
   const appEntryPath = getAppEntryPath()
@@ -384,7 +384,7 @@ test('transcript scrolling — digital-human conversation, paged', async () => {
 // content stays in view through every key — growing, at its height cap, and
 // shrinking back. A reader just above the end keeps their place while typing.
 for (const viewport of [VIEWPORTS[0], VIEWPORTS[2]]) {
-  test(`transcript scrolling — typing in a growing composer — ${viewport.name}`, async () => {
+  test(`transcript scrolling — typing in a growing composer — ${viewport.name}`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "conversations.read.composer-growth", evidence: "ui", mode: "none", variant: { viewport: viewport.name } }) } }, async () => {
     test.setTimeout(180000)
     const appEntryPath = getAppEntryPath()
     const testConfigDir = createTestConfigDir(appEntryPath)

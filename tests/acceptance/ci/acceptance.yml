@@ -1,0 +1,216 @@
+name: Halo acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repository:
+        description: Source owner/repository (blank uses repository variable)
+        type: string
+      source_ref:
+        description: Authorized source branch (blank uses repository variable or main)
+        type: string
+      profile:
+        description: Acceptance profile
+        type: choice
+        options: [fast, regression]
+        default: regression
+      full:
+        description: Ignore baseline and select the full profile
+        type: boolean
+        default: false
+      modules:
+        description: Comma-separated module ids (blank selects by impact)
+        type: string
+      cases:
+        description: Comma-separated scenario ids (blank selects the profile)
+        type: string
+      request_id:
+        description: Correlation identifier supplied by the dispatch helper
+        type: string
+  schedule:
+    - cron: '23 19 * * *'
+
+permissions:
+  contents: read
+  actions: read
+
+run-name: Acceptance ${{ inputs.request_id || 'nightly' }} · ${{ inputs.source_ref || vars.HALO_SOURCE_REF || 'main' }}
+
+concurrency:
+  group: acceptance-${{ inputs.source_repository || vars.HALO_SOURCE_REPOSITORY || github.repository }}-${{ inputs.source_ref || vars.HALO_SOURCE_REF || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  controller:
+    name: Verify private controller
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require private repository visibility
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            let controller;
+            try {
+              const response = await github.rest.repos.get(context.repo);
+              controller = response.data;
+            } catch (error) {
+              const status = Number.isInteger(error.status) ? ` (HTTP ${error.status})` : '';
+              throw new Error(`Could not verify controller repository visibility${status}; acceptance has not started.`);
+            }
+            if (controller?.private !== true || controller.visibility !== 'private') {
+              throw new Error('This workflow requires a private controller repository. Complete SDK identity and execution evidence must not be published.');
+            }
+  acceptance:
+    needs: controller
+    runs-on: ${{ fromJSON(vars.HALO_ACCEPTANCE_RUNNER || '["self-hosted","acceptance","macOS"]') }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+        working-directory: halo
+    env:
+      HALO_SOURCE_REPOSITORY: ${{ inputs.source_repository || vars.HALO_SOURCE_REPOSITORY || github.repository }}
+      HALO_SOURCE_REF: ${{ inputs.source_ref || vars.HALO_SOURCE_REF || 'main' }}
+      HALO_ACCEPTANCE_PROFILE: ${{ inputs.profile || vars.HALO_ACCEPTANCE_PROFILE || 'regression' }}
+      HALO_ACCEPTANCE_FULL: ${{ inputs.full || false }}
+      HALO_ACCEPTANCE_MODULES: ${{ inputs.modules }}
+      HALO_ACCEPTANCE_CASES: ${{ inputs.cases }}
+      HALO_SDK_REVISION: ${{ vars.HALO_SDK_REVISION }}
+    steps:
+      - name: Resolve an authorized source branch
+        id: source
+        uses: actions/github-script@v7
+        env:
+          HALO_CONFIGURED_SOURCE: ${{ vars.HALO_SOURCE_REPOSITORY || github.repository }}
+          HALO_CONFIGURED_REF: ${{ vars.HALO_SOURCE_REF || 'main' }}
+          HALO_ALLOWED_SOURCE_BRANCHES: ${{ vars.HALO_ALLOWED_SOURCE_BRANCHES }}
+        with:
+          github-token: ${{ secrets.HALO_SOURCE_READ_TOKEN || github.token }}
+          script: |
+            const repository = process.env.HALO_SOURCE_REPOSITORY;
+            const ref = process.env.HALO_SOURCE_REF;
+            if (repository !== process.env.HALO_CONFIGURED_SOURCE) throw new Error('This controller only executes its configured source repository.');
+            const branches = process.env.HALO_ALLOWED_SOURCE_BRANCHES ? JSON.parse(process.env.HALO_ALLOWED_SOURCE_BRANCHES) : [process.env.HALO_CONFIGURED_REF];
+            if (!Array.isArray(branches) || !branches.includes(ref)) throw new Error('The requested branch has not been authorized for this runner.');
+            const [owner, repo] = repository.split('/');
+            const branch = await github.rest.repos.getBranch({owner, repo, branch: ref});
+            const sha = branch.data.commit.sha;
+            if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('The source branch did not resolve to a commit.');
+            await github.rest.repos.getContent({owner, repo, path: 'scripts/acceptance/cli.mjs', ref: sha});
+            core.setOutput('revision', sha);
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.HALO_SOURCE_REPOSITORY }}
+          ref: ${{ steps.source.outputs.revision }}
+          path: halo
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.HALO_SOURCE_READ_TOKEN || github.token }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Capture source identity
+        id: initial
+        run: node scripts/acceptance/ci-state.mjs context
+
+      - name: Validate optional SDK selection
+        if: vars.HALO_SDK_REPOSITORY != ''
+        run: node -e 'if (!/^[a-f0-9]{40}$/.test(process.env.HALO_SDK_REVISION || "")) throw new Error("HALO_SDK_REVISION must be a fixed commit SHA")'
+
+      - name: Install public application dependencies
+        id: install
+        run: node scripts/acceptance/ci-prepare.mjs install
+
+      - name: Check the runner graphical session
+        id: gui
+        run: node scripts/acceptance/cli.mjs doctor --level gui --json --output tests/acceptance/output/ci/host-readiness-install
+
+      - name: Check out optional SDK
+        if: vars.HALO_SDK_REPOSITORY != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.HALO_SDK_REPOSITORY }}
+          ref: ${{ vars.HALO_SDK_REVISION }}
+          path: halo/src/sdk/halo-sdk
+          persist-credentials: false
+          ssh-key: ${{ secrets.HALO_SDK_READ_SSH_KEY }}
+          token: ${{ secrets.HALO_SDK_READ_SSH_KEY != '' && github.token || secrets.HALO_SDK_READ_TOKEN || github.token }}
+
+      - name: Build optional SDK
+        id: sdk
+        if: vars.HALO_SDK_REPOSITORY != ''
+        run: node scripts/acceptance/ci-prepare.mjs sdk
+
+      - name: Bind the built SDK distribution
+        id: bind
+        if: vars.HALO_SDK_REPOSITORY != ''
+        run: node scripts/acceptance/ci-prepare.mjs bind-sdk
+
+      - name: Build application
+        id: build
+        run: node scripts/acceptance/cli.mjs build
+
+      - name: Capture complete runtime identity
+        id: context
+        run: node scripts/acceptance/ci-state.mjs context
+
+      - name: Find last successful validation
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/acceptance/ci-state.mjs find-baseline
+
+      - name: Restore baseline
+        id: restore
+        if: steps.baseline.outputs.run-id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.context.outputs.artifact-name }}
+          run-id: ${{ steps.baseline.outputs.run-id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/acceptance-baseline-${{ github.run_id }}
+
+      - name: Plan and execute acceptance
+        id: execute
+        env:
+          HALO_ACCEPTANCE_BASELINE: ${{ runner.temp }}/acceptance-baseline-${{ github.run_id }}/baseline.json
+        run: exec node scripts/acceptance/ci-run.mjs
+
+      - name: Finalize and freeze acceptance evidence
+        id: finalize
+        if: always() && steps.initial.outcome == 'success'
+        env:
+          HALO_CI_STAGE_OUTCOMES: ${{ toJSON(steps) }}
+        run: exec node scripts/acceptance/ci-finalize.mjs
+
+      - name: Archive acceptance evidence locally
+        id: archive
+        if: always() && steps.initial.outcome == 'success'
+        env:
+          HALO_ACCEPTANCE_ARCHIVE_ROOT: ${{ vars.HALO_ACCEPTANCE_ARCHIVE_ROOT }}
+        run: exec node scripts/acceptance/ci-archive.mjs
+
+      - name: Preserve acceptance report and evidence
+        if: always() && steps.archive.outputs.snapshot-directory != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.archive.outputs.snapshot-directory }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish successful baseline
+        if: success() && steps.execute.outcome == 'success' && steps.finalize.outputs.final == 'true' && steps.archive.outputs.source-final == 'true' && steps.finalize.outputs.baseline-file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.context.outputs.artifact-name }}
+          path: ${{ steps.finalize.outputs.baseline-file }}
+          if-no-files-found: error
+          retention-days: 90

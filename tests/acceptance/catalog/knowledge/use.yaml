@@ -1,0 +1,134 @@
+version: 1
+id: knowledge.use
+module: knowledge
+title:
+  en: Use and pause the right knowledge
+  zh: 使用并暂停指定知识
+story:
+  en: I can choose which knowledge my conversations and digital humans use.
+  zh: 我能选择对话与数字人使用哪些知识。
+basis: observed
+references:
+  - src/renderer/components/tlon/SettingsTab.tsx
+  - src/renderer/pages/TlonPage.tsx
+  - src/main/services/tlon/service.ts
+  - tests/e2e/specs/acceptance-knowledge.spec.ts
+  - tests/e2e/specs/acceptance-knowledge-pause.spec.ts
+promises:
+  scope:
+    en: Knowledge attachment and workspace connection determine where it is available.
+    zh: 知识绑定与空间连接决定可用范围。
+  pause:
+    en: Pausing a knowledge base stops automatically supplying its context to new work until it is re-enabled.
+    zh: 暂停知识库后，不再向新工作自动提供其上下文，恢复后才重新启用。
+  learning-pause:
+    en: Pausing a knowledge base stops automatic learning until it is re-enabled.
+    zh: 暂停知识库后停止自动学习，恢复后才重新启用。
+  watch:
+    en: Watched-folder changes can be learned without importing duplicate records.
+    zh: 监视目录中的变更可被学习，不重复导入条目。
+scenarios:
+  - id: knowledge.use.attach
+    title:
+      en: Use selected knowledge in a conversation
+      zh: 在对话中使用选定知识
+    verifies:
+      - scope
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    notes:
+      en: The selected knowledge is injected into the model context and real Grep/Read tool results produce the cited answer. An unselected knowledge base is not automatically shared; this is context selection, not an access-control boundary. Scripted model choices do not establish live-model retrieval quality.
+      zh: 选定知识进入模型上下文，由真实 Grep/Read 结果生成带来源的回答。未选知识库不被自动分享；这是上下文选择，不是权限边界。脚本模型的工具选择不证明真实模型检索质量。
+    preconditions:
+      - en: Two knowledge bases contain distinct synthetic facts.
+        zh: 两个知识库含不同合成事实。
+    steps:
+      - en: Attach one to a conversation and ask for its fact and source.
+        zh: 给对话绑定其中一个，询问事实及来源。
+    expected:
+      - en: The selected knowledge is available and the source citation opens the correct material.
+        zh: 选定知识可用，来源引用打开正确材料。
+  - id: knowledge.use.pause
+    title:
+      en: Pause and re-enable a knowledge base
+      zh: 暂停并恢复知识库
+    verifies:
+      - pause
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - packaged-app
+      - halo-sdk
+    variants:
+      entry:
+        - conversation
+        - person
+    preconditions:
+      - en: An active knowledge base is attached through the UI to the workspace or digital human being tested.
+        zh: 通过界面将活动知识库绑定到被测工作空间或数字人。
+    steps:
+      - en: Observe the knowledge context in a fresh conversation, pause learning in the UI, then start a different fresh conversation.
+        zh: 在新会话中观察知识上下文，在界面暂停学习后，再开始另一条新会话。
+      - en: Enable learning and start a third fresh conversation through the same entry point.
+        zh: 恢复学习，并通过同一入口开始第三条新会话。
+    expected:
+      - en: The new model request includes the index while active, omits it while paused and includes it after re-enabling; bindings stay saved throughout.
+        zh: 活动时模型新请求含知识索引，暂停时不含，恢复后重新包含；绑定始终保留。
+    notes:
+      en: The scripted model observes the actual system context and returns a fixed response; it does not perform retrieval. This checks regular conversations and native digital-human chats, not file-access isolation or forgetting content from old conversations. General watched-file learning pause remains a separate unbound scenario; old-cache automatic upgrades have separate executable cases.
+      zh: 脚本模型只记录真实系统上下文并返回固定回复，不执行检索。验证普通会话和数字人原生聊天，不把暂停当作文件访问隔离，也不要求旧会话遗忘已有内容。一般监视文件的学习暂停仍单独保留未绑定场景；旧缓存自动升级有单独的可执行用例。
+  - id: knowledge.use.pause-learning
+    title:
+      en: Pause automatic learning of changed source files
+      zh: 暂停变更源文件的自动学习
+    verifies:
+      - learning-pause
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A knowledge base has a learned source in a watched location.
+        zh: 知识库有位于监视位置的已学习源文件。
+    steps:
+      - en: Pause automatic learning, change the source, then resume through the UI.
+        zh: 暂停自动学习，修改源文件，再通过界面恢复。
+    expected:
+      - en: The paused source is not automatically re-extracted; resuming learns its changed contents through the existing watcher path.
+        zh: 暂停时不会自动重新提取该来源；恢复后通过既有监视流程学习变更内容。
+  - id: knowledge.use.watch
+    title:
+      en: Learn an edited watched file
+      zh: 学习监视目录的文件变更
+    verifies:
+      - watch
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A watched folder contains a known source file.
+        zh: 监视目录含已知源文件。
+    steps:
+      - en: Edit the file, observe learning, then remove the watch.
+        zh: 修改文件，观察学习，再移除监视。
+    expected:
+      - en: The existing source updates once and subsequent changes stop triggering after removal.
+        zh: 原来源更新一次，移除监视后变更不再触发。

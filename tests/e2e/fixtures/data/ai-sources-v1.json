@@ -1,0 +1,22 @@
+{
+  "api": {
+    "provider": "openai",
+    "apiKey": "local-only-historical-fixture",
+    "apiUrl": "http://127.0.0.1:1/v1/chat/completions",
+    "model": "gpt-4o-mini",
+    "availableModels": ["gpt-4o-mini", "gpt-4o"]
+  },
+  "aiSources": {
+    "current": "custom",
+    "custom": {
+      "id": "908af063-93f8-4e92-83ac-bfe00cbd2a61",
+      "name": "Archived local API account",
+      "type": "custom",
+      "provider": "openai",
+      "apiKey": "local-only-historical-fixture",
+      "apiUrl": "http://127.0.0.1:1/v1/chat/completions",
+      "model": "gpt-4o-mini",
+      "availableModels": ["gpt-4o-mini", "gpt-4o"]
+    }
+  }
+}

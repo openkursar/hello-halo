@@ -1,0 +1,206 @@
+version: 1
+id: conversations.organize
+module: conversations
+title:
+  en: Find and organize conversations
+  zh: 整理并找回对话
+story:
+  en: I can name and pin important conversations and keep different discussions separate.
+  zh: 我能命名并置顶重要对话，让不同讨论保持独立。
+basis: observed
+references:
+  - src/main/services/conversation.service.ts
+  - src/renderer/components/chat/ConversationList.tsx
+  - tests/e2e/specs/spaces.spec.ts
+  - tests/e2e/specs/acceptance-conversations.spec.ts
+  - tests/e2e/specs/acceptance-conversation-title.spec.ts
+  - tests/e2e/specs/acceptance-person-chat-entry.spec.ts
+promises:
+  identity:
+    en: A new conversation has independent history and a blank composer.
+    zh: 新对话拥有独立记录与空白输入框。
+  organize:
+    en: The conversation list and header reflect the current saved name; names and pinned state survive reopening.
+    zh: 对话列表和页眉反映当前保存的名称；名称与置顶状态在重新打开后保留。
+  delete:
+    en: Removing a selected conversation affects only its history; clearing a digital-human conversation requires its explicit confirmation.
+    zh: 移除选中对话只影响其历史；清空数字人对话需要明确确认。
+scenarios:
+  - id: conversations.organize.new
+    title:
+      en: Create independent conversations
+      zh: 创建独立对话
+    verifies:
+      - identity
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A conversation already contains messages.
+        zh: 现有对话已有消息。
+    steps:
+      - en: Create a new conversation and return to the original.
+        zh: 新建对话后再返回原对话。
+    expected:
+      - en: The new composer is blank and the old history remains in the original.
+        zh: 新输入框为空，旧记录仍属于原对话。
+  - id: conversations.organize.person-new
+    title:
+      en: Keep the requested person when opening consecutive new chats
+      zh: 连续新开聊天时保持选定数字人
+    verifies:
+      - identity
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A newly installed person belongs to an isolated workspace with no ordinary or person conversations.
+        zh: 新安装数字人属于隔离空间，该空间尚无普通对话或个人聊天。
+    steps:
+      - en: Open Chat from the person's details, send a message, return to their details and open Chat again.
+        zh: 从数字人详情打开聊天并发送消息，返回其详情后再次打开聊天。
+    expected:
+      - en: Both actions create a distinct empty chat addressed to the requested person; actual requests and saved replies retain those identities.
+        zh: 两次操作均创建面向所选数字人的独立空聊天，实际请求与保存回复保持对应身份。
+      - en: The earlier chat remains unchanged and no ordinary workspace conversation receives these person-chat messages.
+        zh: 先前聊天保持不变，普通空间对话不会收到这些数字人聊天消息。
+    notes:
+      en: The empty-workspace entry is deliberately retained as its own regression. Other fixtures may initialize an ordinary conversation as a precondition; doing so does not verify this direct details-to-chat route. Only the model endpoint is scripted, and no recipient or navigation handler is replaced.
+      zh: 空空间入口单独保留为回归；其他fixture可以先初始化普通对话，但那不代表已验证此详情直达聊天路径。仅脚本化模型端点，不替换接收者或导航处理器。
+  - id: conversations.organize.pin
+    title:
+      en: Rename and pin a conversation
+      zh: 重命名并置顶对话
+    verifies:
+      - organize
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Two conversations exist.
+        zh: 已有两个对话。
+    steps:
+      - en: Rename one, pin it, reload and unpin it.
+        zh: 重命名其中一个并置顶，刷新后取消置顶。
+    expected:
+      - en: Only that conversation changes name and pinned placement.
+        zh: 只有该对话改变名称和置顶位置。
+  - id: conversations.organize.auto-title
+    title:
+      en: Keep the first-question title current across navigation and restart
+      zh: 首问生成的标题在切换页面和重启后保持一致
+    verifies:
+      - organize
+      - identity
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A separate conversation remains untouched; a new conversation uses its default automatic naming.
+        zh: 保留一个不改动的对照会话；新对话使用默认自动命名。
+    steps:
+      - en: Send a short unique first question through the UI and wait for the real local provider response.
+        zh: 从界面发送简短且唯一的首问，等待真实本地服务回复。
+      - en: Immediately visit Settings and return without renaming the conversation or waiting for the index write.
+        zh: 立即进入设置后返回，不手动改名，也不等待索引落盘。
+      - en: Compare the saved conversation, list response, sidebar and header for the same conversation, then restart and reopen it.
+        zh: 对照同一会话的保存记录、列表返回、侧栏和页眉，再重启并重新打开。
+    expected:
+      - en: The first question becomes the same current title in storage and on screen; the original conversation identity and messages remain intact.
+        zh: 首问成为存储和界面中一致的当前标题；原会话身份与消息保持完整。
+      - en: The title and history survive restart, and the control conversation remains unchanged.
+        zh: 重启后标题和历史仍在，对照会话不受影响。
+    notes:
+      en: Index timing is diagnostic evidence, not a wall-clock performance assertion. A separate real-file service regression verifies reads during the pending-write window deterministically. Restart checks retained history and makes no model-context recovery claim.
+      zh: 索引时间仅作诊断，不以运行耗时作为性能断言。另有真实文件服务回归确定性验证待落盘窗口内的读取；重启只检查已存历史，不代表模型上下文恢复已通过。
+  - id: conversations.organize.delete
+    title:
+      en: Cancel then confirm clearing
+      zh: 取消后确认清空
+    verifies:
+      - delete
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use disposable history and keep another conversation untouched.
+        zh: 使用可丢弃历史，并保留另一对话作对照。
+    steps:
+      - en: Cancel the clearing action, then confirm it for the selected history.
+        zh: 先取消清空，再确认清空选定记录。
+    expected:
+      - en: Cancellation preserves messages; confirmation clears only the chosen history.
+        zh: 取消后消息仍在；确认仅清空选定历史。
+  - id: conversations.organize.persisted-new
+    title:
+      en: Create a persisted blank conversation
+      zh: 创建已保存的空白对话
+    verifies:
+      - identity
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Create a new conversation from the workspace UI and read its conversation list.
+        zh: 从空间界面创建新对话并读取对话列表。
+    expected:
+      - en: A distinct conversation record exists and the new composer is blank.
+        zh: 存在独立对话记录，新输入框为空。
+  - id: conversations.organize.delete-space
+    title:
+      en: Delete a space conversation and keep unrelated history
+      zh: 删除空间对话并保留无关历史
+    verifies:
+      - delete
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Two isolated space conversations have distinct messages.
+        zh: 两个隔离的空间对话包含不同消息。
+    steps:
+      - en: Use the selected conversation’s Delete menu action, inspect the other conversation and restart.
+        zh: 使用选定对话菜单中的删除操作，查看另一个对话并重启。
+    expected:
+      - en: Only the chosen history is removed; it stays absent after restart while the other messages remain intact.
+        zh: 仅选中历史移除；重启后仍不存在，另一对话消息保持完整。
+    notes:
+      en: Current space-conversation Delete is immediate. The separate digital-human Clear chat path has Cancel/Confirm; this scenario does not invent a confirmation dialog.
+      zh: 当前空间对话删除立即生效；数字人的清空聊天另有取消与确认。本场景不虚构确认弹窗。

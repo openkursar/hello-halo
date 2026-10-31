@@ -1,0 +1,224 @@
+version: 1
+id: channels.connect
+module: channels
+title:
+  en: Connect and reassign a bot
+  zh: 连接并重新分配机器人
+story:
+  en: I can connect a messaging account to the intended digital human without accidentally taking over another binding.
+  zh: 我能把消息账户连接到指定数字人，不会误抢其他绑定。
+basis: observed
+references:
+  - src/renderer/components/settings/WecomScanAuthDialog.tsx
+  - src/renderer/components/settings/WeixinIlinkScanDialog.tsx
+  - src/renderer/components/settings/FeishuScanAuthDialog.tsx
+  - tests/e2e/specs/people-settings.spec.ts
+promises:
+  binding:
+    en: Existing bot ownership is visible and reassignment requires confirmation.
+    zh: 现有机器人归属可见，转移前需确认。
+  fresh:
+    en: An outdated transfer confirmation cannot overwrite a newer binding.
+    zh: 过期转移确认不能覆盖后来建立的绑定。
+  login:
+    en: Login success, cancellation and expiry leave a truthful connection state.
+    zh: 登录成功、取消及过期均留下真实连接状态。
+scenarios:
+  - id: channels.connect.transfer
+    title:
+      en: Confirm before transferring a bot
+      zh: 转移机器人前确认
+    verifies:
+      - binding
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A test bot is already bound to person A.
+        zh: 测试机器人已绑定数字人 A。
+    steps:
+      - en: Choose person B, inspect the transfer confirmation, cancel then confirm.
+        zh: 选择 B，查看转移确认，先取消再确认。
+    expected:
+      - en: Cancel keeps A; confirm rebinds to B consistently in both settings views.
+        zh: 取消仍归 A，确认后两处设置均显示归 B。
+  - id: channels.connect.stale
+    title:
+      en: Reject a stale transfer confirmation
+      zh: 拒绝过期的转移确认
+    verifies:
+      - fresh
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A transfer dialog is open while another operation changes the bot binding.
+        zh: 转移弹窗打开时，另一操作修改了机器人绑定。
+    steps:
+      - en: Confirm the stale dialog.
+        zh: 确认旧弹窗。
+    expected:
+      - en: The latest binding is preserved and the user is asked to refresh or reconsider.
+        zh: 最新绑定保留，用户需刷新或重新确认。
+  - id: channels.connect.qr-consent
+    title:
+      en: Approve a real platform login
+      zh: 完成真实平台登录授权
+    verifies:
+      - login
+    platforms: *a1
+    profiles:
+      - external
+    evidence: manual
+    mode: none
+    automation: manual
+    preconditions:
+      - en: A human owns a dedicated external messaging test account.
+        zh: 真人拥有专用外部消息测试账户。
+    steps:
+      - en: Open the platform QR login, have that human scan and approve, then inspect connection state.
+        zh: 打开平台扫码登录，由该真人扫码授权，再检查连接状态。
+    expected:
+      - en: The intended test account connects; rejected or expired scans do not appear connected.
+        zh: 目标测试账户连接；拒绝或过期扫码不显示为已连接。
+    requirements:
+      - external-im
+    reason:
+      en: The external platform requires the account holder to approve login on their own trusted device. This record covers that consent step only; surrounding connection handling remains automatable.
+      zh: 外部平台要求账户主人在自己的可信设备上批准登录。仅此授权步骤需人工，前后的连接处理仍可自动化。
+  - id: channels.connect.expire
+    title:
+      en: Recover an expired channel session
+      zh: 恢复过期的渠道会话
+    verifies:
+      - login
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A simulated provider reports expired credentials after connection.
+        zh: 模拟服务在连接后报告凭证过期。
+    steps:
+      - en: Observe status, reconnect with new test credentials and send a message.
+        zh: 查看状态，用新测试凭证重连并发送消息。
+    expected:
+      - en: Status explains reconnection needs and a restored session routes messages once.
+        zh: 状态说明需要重连，恢复后消息只路由一次。
+  - id: channels.connect.scan-navigation
+    title:
+      en: Open and dismiss the scan flow safely
+      zh: 正常打开并关闭扫码流程
+    verifies:
+      - login
+    platforms: &a2
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated seeded data and the production UI with the fixture boundary stated below.
+        zh: 使用隔离预置数据及真实界面，测试替换边界见说明。
+    steps:
+      - en: Open the scan menu, dismiss outside and with Escape, then enter and close the scan dialog.
+        zh: 打开扫码菜单，点外部及 Escape 关闭，再进入并关闭扫码弹窗。
+    expected:
+      - en: The menu does not remain over the dialog and all controls fit each width.
+        zh: 菜单不残留遮挡弹窗，各宽度控件均适配。
+    variants:
+      width:
+        - "1280"
+        - "375"
+    notes:
+      en: The scan-start IPC handler returns a controlled failure; this proves navigation only, never real platform login.
+      zh: 扫码启动 IPC 返回受控失败；仅证明导航，不证明真实平台登录。
+  - id: channels.connect.person-transfer
+    title:
+      en: Confirm a bot transfer from a person’s settings
+      zh: 从个人设置确认机器人转移
+    verifies:
+      - binding
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated seeded data and the production UI with the fixture boundary stated below.
+        zh: 使用隔离预置数据及真实界面，测试替换边界见说明。
+    steps:
+      - en: Choose a bound bot, cancel both confirmation paths, then rebind it and bind an unused bot.
+        zh: 选择已绑定机器人，取消两种确认路径，再转绑并绑定空闲机器人。
+    expected:
+      - en: Stable bot labels and actual owner records agree; cancellation keeps the owner and confirmed changes persist.
+        zh: 机器人标识与实际归属一致；取消保留主人，确认后的变更保存。
+    variants:
+      width:
+        - "1280"
+        - "375"
+  - id: channels.connect.stale-transfer
+    title:
+      en: Refuse a stale transfer from person settings
+      zh: 拒绝个人设置中的过期转移
+    verifies:
+      - fresh
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated seeded data and the production UI with the fixture boundary stated below.
+        zh: 使用隔离预置数据及真实界面，测试替换边界见说明。
+    steps:
+      - en: Open transfer confirmation, change the bot binding externally, then submit the old confirmation.
+        zh: 打开转移确认，从外部改变绑定，再提交旧确认。
+    expected:
+      - en: The new binding is preserved and refresh/reconfirmation guidance appears.
+        zh: 新绑定保留，并出现刷新或重新确认提示。
+    variants:
+      width:
+        - "1280"
+        - "375"
+  - id: channels.connect.global-transfer
+    title:
+      en: Confirm a bot transfer from global settings
+      zh: 从全局设置确认机器人转移
+    verifies:
+      - binding
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated seeded data and the production UI with the fixture boundary stated below.
+        zh: 使用隔离预置数据及真实界面，测试替换边界见说明。
+    steps:
+      - en: Change the bound person in global channel settings, cancel, then confirm.
+        zh: 在全局渠道设置修改绑定数字人，先取消再确认。
+    expected:
+      - en: Cancellation restores the original choice; confirmation updates the actual binding.
+        zh: 取消恢复原选择，确认修改真实绑定。
+    variants:
+      width:
+        - "1280"
+        - "375"

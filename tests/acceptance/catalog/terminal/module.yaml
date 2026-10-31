@@ -1,0 +1,25 @@
+version: 1
+id: terminal
+title:
+  en: Commands and execution environment
+  zh: 命令与执行环境
+description:
+  en: Run commands with the correct working folder, environment and session lifetime.
+  zh: 用正确目录、环境及会话生命周期执行命令。
+paths:
+  - src/main/services/ai-terminal/**
+  - src/worker/pty-host/**
+  - src/main/services/git-bash/**
+  - src/main/services/agent/sdk-config.ts
+  - src/renderer/components/canvas/viewers/TerminalViewer.tsx
+  - src/renderer/pages/GitBashSetupPage.tsx
+  - runtimes/**
+  - scripts/prepare-binaries.mjs
+  - src/main/services/office-runtime/**
+dependsOn:
+  - workspaces
+  - chat
+  - permissions
+scope:
+  en: Shell tools on supported desktop platforms; the optional interactive terminal is currently macOS/Windows only and is explicitly refused on Linux. Packaged tools, Windows PowerShell/Git Bash prerequisites, environment injection and process cleanup are separate obligations.
+  zh: 受支持桌面平台的 Shell 工具；可选交互终端当前只支持 macOS/Windows，在 Linux 明确拒绝。打包工具、Windows PowerShell/Git Bash 依赖、环境注入及进程清理分别验证。

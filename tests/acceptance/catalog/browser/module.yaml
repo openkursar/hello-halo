@@ -1,0 +1,22 @@
+version: 1
+id: browser
+title:
+  en: AI browser
+  zh: AI 浏览器
+description:
+  en: Let AI browse while preserving the user’s ability to inspect and intervene.
+  zh: 让 AI 浏览，同时保留用户查看和接手能力。
+paths:
+  - src/main/services/ai-browser/**
+  - src/main/services/browser-host/**
+  - src/main/services/browser-input/**
+  - src/renderer/browser-host/**
+  - src/renderer/components/canvas/viewers/BrowserViewer.tsx
+  - src/renderer/stores/ai-browser.store.ts
+dependsOn:
+  - chat
+  - files
+  - permissions
+scope:
+  en: Interactive and automation browser contexts, visible/hidden/server mode, native input and downloads; local sites for deterministic runs, external login separately.
+  zh: 交互与自动化浏览上下文、可见/隐藏/服务端模式、原生输入与下载；确定性测试使用本地网页，外部登录另记。

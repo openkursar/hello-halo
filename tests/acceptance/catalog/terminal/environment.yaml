@@ -1,0 +1,176 @@
+version: 1
+id: terminal.environment
+module: terminal
+title:
+  en: Execute using the intended environment
+  zh: 使用预期环境执行
+story:
+  en: I can ask for supported command work without relying on my development shell to make Halo function.
+  zh: 我请求受支持命令任务时，Halo 不依赖开发者终端的隐藏配置。
+basis: documented
+references:
+  - src/main/services/ai-terminal/DESIGN.md
+  - tests/e2e/specs/cli-tools-packaged.spec.ts
+  - src/renderer/pages/GitBashSetupPage.tsx
+  - tests/e2e/specs/browser-view-frame.spec.ts
+  - tests/e2e/specs/acceptance-terminal.spec.ts
+promises:
+  environment:
+    en: Commands use the selected workspace and assembled application environment.
+    zh: 命令使用选定空间及应用组装的环境。
+  packaged:
+    en: A packaged application can resolve its declared bundled tools and runtime libraries.
+    zh: 打包应用能找到声明附带的工具及运行库。
+  windows:
+    en: Windows terminal defaults and command prerequisites are represented distinctly.
+    zh: Windows 默认终端与其他命令前置依赖被分别处理。
+scenarios:
+  - id: terminal.environment.packaged-tools
+    title:
+      en: Use packaged search and document tools with Claude Code
+      zh: 使用 Claude Code 执行打包搜索与文档工具
+    verifies:
+      - packaged
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: Launch a packaged application in an isolated profile explicitly requesting the Claude Code engine, with a system-only initial command path.
+        zh: 在隔离资料中启动打包应用，明确请求 Claude Code 引擎，启动命令路径仅含系统目录。
+    steps:
+      - en: Record the active engine and verify that Claude Code is running without fallback.
+        zh: 记录实际引擎并确认 Claude Code 正在运行且未降级。
+      - en: Use real tool calls for file search, the bundled search executable, Office libraries and a large image.
+        zh: 用真实工具执行文件搜索、附带搜索程序、Office 库及大图读取。
+      - en: Observe the main process command resolution before and after work, and verify the search command, Office executable and loaded libraries come from this package or its isolated generated shim.
+        zh: 在工作前后观察主进程命令解析，并核实搜索程序、Office 执行程序及实际加载库来自当前包或其隔离生成的入口脚本。
+      - en: Verify that project agents and commands are advertised to the model.
+        zh: 确认项目代理和命令已提供给模型。
+    expected:
+      - en: Each tool returns a successful result from the packaged runtime.
+        zh: 每个工具从打包运行时返回成功结果。
+    requirements:
+      - packaged-app
+    notes:
+      en: This case establishes only Claude Code behavior, including its project .claude/agents discovery. The fixture excludes inherited developer command paths without adding bundle paths itself; production runtime initialization remains active. External rg resolution invalidates the host-command exclusion claim. Available system node is diagnostic only; the actual Office executable and library origins establish whether it was used. Main PATH observation and Bash command receipts are separate from an internal Grep spawn trace. Earlier results lacking these engine and command-origin observations do not retroactively establish them.
+      zh: 本场景仅验证 Claude Code 行为，包括项目 .claude/agents 发现。测试排除继承的开发工具路径，不自行添加包路径，保留产品运行时初始化。主进程解析到外部 rg 时，不能声称已排除宿主命令。系统 node 可用性仅作诊断，是否借用由实际 Office 执行程序及库来源判断。主进程 PATH 观测和 Bash 命令回执不等于内部 Grep 进程跟踪。缺少这些引擎与命令来源观测的旧结果不能被追认为已满足。
+  - id: terminal.environment.packaged-tools-halo
+    title:
+      en: Use packaged search and document tools with Halo SDK
+      zh: 使用 Halo SDK 执行打包搜索与文档工具
+    verifies:
+      - packaged
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: Launch a packaged application containing Halo SDK in an isolated profile explicitly requesting that engine, with a system-only initial command path.
+        zh: 在隔离资料中启动包含 Halo SDK 的打包应用，明确请求该引擎，启动命令路径仅含系统目录。
+    steps:
+      - en: Record the active engine and verify that Halo SDK is running without fallback.
+        zh: 记录实际引擎并确认 Halo SDK 正在运行且未降级。
+      - en: Use real tool calls for file search, the bundled search executable, Office libraries and a large image.
+        zh: 用真实工具执行文件搜索、附带搜索程序、Office 库及大图读取。
+      - en: Observe the main process command resolution before and after work, and verify the search command, Office executable and loaded libraries come from this package or its isolated generated shim.
+        zh: 在工作前后观察主进程命令解析，并核实搜索程序、Office 执行程序及实际加载库来自当前包或其隔离生成的入口脚本。
+      - en: Verify that project commands are advertised to the model.
+        zh: 确认项目命令已提供给模型。
+    expected:
+      - en: Each tool returns a successful result from the packaged runtime while Halo SDK remains the active engine.
+        zh: Halo SDK 为实际引擎时，每个工具从打包运行时返回成功结果。
+    requirements:
+      - packaged-app
+      - halo-sdk
+    notes:
+      en: A Claude Code pass or a fallback engine is not evidence for this case. Project command discovery is covered; automatic .claude/agents discovery is not asserted for Halo SDK. The fixture supplies only system command directories and does not install tools or add package vendor paths. External rg resolution invalidates host-command exclusion; system node availability alone is not a failure when the actual Office executable and libraries are package-owned. Command origins are retained before and after work, with no claim that Bash provenance alone identifies an internal Grep spawn. Earlier host-assisted results remain historical evidence of their original environment.
+      zh: Claude Code 通过或降级引擎不能作为本场景证据。覆盖项目命令发现，不对 Halo SDK 断言自动发现 .claude/agents。测试只提供系统命令目录，不安装工具或补入包内 vendor 路径。解析到外部 rg 时不能声称排除了宿主命令；实际 Office 执行程序及库属于当前包时，不仅因系统 node 可用而判失败。保留工作前后来源记录，不用 Bash 来源代替内部 Grep 启动证明。旧的宿主辅助运行结果只保留其原环境的历史证据。
+  - id: terminal.environment.windows-shell
+    title:
+      en: Open the Windows terminal without MSYS assumptions
+      zh: 打开 Windows 终端且不依赖 MSYS 假设
+    verifies:
+      - windows
+    platforms:
+      - win32
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A Windows test machine has its normal system tools.
+        zh: Windows 测试机器具备标准系统工具。
+    steps:
+      - en: Open the default terminal and explicitly choose Git Bash only when installed and requested.
+        zh: 打开默认终端，仅在安装且明确选择时使用 Git Bash。
+    expected:
+      - en: The default is the documented native shell and missing optional prerequisites are explained.
+        zh: 默认是文档声明的原生 Shell，缺失可选依赖时有说明。
+    requirements:
+      - windows-tools
+  - id: terminal.environment.user-vars
+    title:
+      en: Carry the selected working directory and non-secret environment into a command
+      zh: 把选定工作目录及非敏感环境传入命令
+    verifies:
+      - environment
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: Launch an isolated application with a unique non-secret environment marker and a workspace path containing spaces.
+        zh: 以唯一非敏感环境标记及含空格的空间路径启动隔离应用。
+    steps:
+      - en: Ask a real command tool to write its working directory and the selected marker to a fixture output file.
+        zh: 让真实命令工具把当前目录及所选标记写入测试产物。
+    expected:
+      - en: The command receives the exact selected workspace and marker without relying on shell startup files.
+        zh: 命令收到准确的选定空间及标记，不依赖 Shell 启动文件。
+    requirements:
+      - halo-sdk
+    notes:
+      en: The fixture supplies a known command executable to test environment propagation; this does not certify bundled Python, Windows PATH repair, or another host platform.
+      zh: 测试提供已知命令程序来验证环境传递，不据此证明附带 Python、Windows PATH 修复或其他主机平台可用。
+  - id: terminal.environment.platform-availability
+    title:
+      en: Respect native terminal platform availability
+      zh: 遵循原生终端的平台可用范围
+    verifies:
+      - windows
+      - environment
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated representative data for the selected product surface.
+        zh: 为选定功能使用隔离的代表性数据。
+    steps:
+      - en: Select a local fixture file, then open a terminal where supported or inspect its unsupported-platform refusal.
+        zh: 选择本地测试文件，在支持平台打开终端，或检查不支持平台的拒绝。
+    expected:
+      - en: The selected native path is exact; macOS/Windows execute the terminal marker, while Linux hides and refuses this optional terminal.
+        zh: 原生路径准确；macOS/Windows 执行终端标记，Linux 隐藏并拒绝此可选终端。

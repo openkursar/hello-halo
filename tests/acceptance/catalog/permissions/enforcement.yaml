@@ -1,0 +1,168 @@
+version: 1
+id: permissions.enforcement
+module: permissions
+title:
+  en: Apply permissions at every entry
+  zh: 在各入口执行权限限制
+story:
+  en: I can choose what another person may ask my digital human to do and trust the same limits across entry points.
+  zh: 我能决定别人可让我的数字人做什么，并相信各入口使用同样限制。
+basis: documented
+references:
+  - src/shared/apps/capability-policy.ts
+  - src/main/apps/runtime/capability-policy.ts
+  - src/main/services/agent/DESIGN.md
+  - src/main/apps/runtime/im-channels/im-prompt.ts
+  - src/main/apps/runtime/im-channels/wecom-bot.provider.ts
+  - src/renderer/components/settings/ImInstancePermissionSection.tsx
+  - tests/e2e/specs/acceptance-guest.spec.ts
+  - src/main/apps/runtime/im-channels/binding.ts
+promises:
+  restrict:
+    en: A policy can narrow existing permissions but cannot grant a disabled underlying capability.
+    zh: 策略可收窄权限，不能重新授予底层已禁用能力。
+  isolate:
+    en: Restricted guest input cannot join the owner’s privileged running turn.
+    zh: 受限访客消息不能进入主人高权限的运行轮次。
+  engine:
+    en: An engine lacking required enforcement refuses restricted execution rather than silently allowing it.
+    zh: 引擎缺少必要权限执行能力时拒绝受限任务，而不是悄悄放行。
+  grant:
+    en: An explicitly granted guest capability can be used within the underlying app’s permissions, and the model’s permission facts agree with that grant.
+    zh: 访客可在数字人底层权限范围内使用明确开放的能力，模型收到的权限事实与该授权一致。
+  revoke:
+    en: Revoking guest access takes effect on subsequent tool attempts, including an already known tool and a restarted application.
+    zh: 撤销访客权限会作用于之后的工具尝试，包括先前已知的工具和应用重启后的调用。
+scenarios:
+  - id: permissions.enforcement.tool-denied
+    title:
+      en: Refuse a withheld tool
+      zh: 拒绝未开放工具
+    verifies:
+      - restrict
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: An isolated bot has an explicitly configured owner and a registered owner contact; guest notifications are withheld.
+        zh: 隔离机器人已明确配置主人并登记主人联系人；访客通知未开放。
+    steps:
+      - en: Configure the owner and guest controls through Halo, deliver a guest notification request through the local channel, then ask an ordinary question.
+        zh: 通过 Halo 配置主人和访客开关，从本机通道投递访客通知请求，再询问普通问题。
+    expected:
+      - en: The actual guest model context has guest standing and no notification or automation-report tool; no notification reaches the owner, a final reply is delivered once, and ordinary chat remains usable in the channel and Halo history.
+        zh: 实际访客模型上下文包含访客身份且没有通知或自动任务报告工具；主人未收到通知，最终回复只投递一次，通道及 Halo 历史中的普通聊天仍可用。
+    requirements:
+      - halo-sdk
+    notes: &a2
+      en: The WeCom service and model endpoint are local fixtures. Halo configuration UI, the real channel SDK, dispatch, permission enforcement, persistence and reply rendering remain active. This does not certify the real WeCom client or natural-model wording quality.
+      zh: 企业微信服务和模型端点使用本机替身；Halo 配置界面、真实通道 SDK、投递、权限执行、持久化和回复显示均保留。不据此证明真实企业微信客户端或真实模型的措辞质量。
+  - id: permissions.enforcement.live-isolation
+    title:
+      en: Receive guest input during owner work
+      zh: 主人工作时收到访客输入
+    verifies:
+      - isolate
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: The owner has created a real file and its model stream is still running in one group conversation.
+        zh: 主人已通过真实工具创建文件，同一群会话中的模型流仍在运行。
+    steps:
+      - en: Deliver another sender’s guest request to that same group while the owner turn is held, then release the owner and let the guest attempt its file operation.
+        zh: 主人的轮次等待时向同一群投递另一发送者的访客请求，再释放主人轮次并让访客尝试文件操作。
+    expected:
+      - en: The guest does not enter the owner’s model context or inherit its tools; the guest’s actual write is refused, only the authorized owner file exists, and the guest reply is delivered and persisted.
+        zh: 访客不进入主人的模型上下文或继承其工具权限；访客的真实写入被拒绝，只有主人授权的文件存在，访客回复得到投递和保存。
+    requirements:
+      - halo-sdk
+    notes: *a2
+  - id: permissions.enforcement.unsupported-engine
+    title:
+      en: Refuse unsupported enforcement
+      zh: 拒绝无法执行权限限制的引擎
+    verifies:
+      - engine
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Select an engine whose advertised capability cannot enforce the required restricted policy.
+        zh: 选择不具备所需权限限制能力的引擎。
+    steps:
+      - en: Attempt a guest or external member request.
+        zh: 发起访客或外部成员请求。
+    expected:
+      - en: The request is refused before native execution with a capability explanation.
+        zh: 原生执行前拒绝，并说明能力不支持。
+  - id: permissions.enforcement.notify-granted
+    title:
+      en: Use an explicitly granted guest notification capability
+      zh: 使用明确开放的访客通知能力
+    verifies:
+      - grant
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: The owner and recipient are synthetic identities on the local channel service.
+        zh: 主人及收件人均为本机通道服务中的合成身份。
+    steps:
+      - en: Enable Guest Notifications in Halo and let the guest model call the real notification tool for the registered owner contact.
+        zh: 在 Halo 开放访客通知，并让访客模型为已登记的主人联系人调用真实通知工具。
+    expected:
+      - en: Exactly one notification reaches the selected local recipient, a completion reply is rendered and persisted, and current prompt facts do not falsely describe the granted capability as forbidden.
+        zh: 指定本机收件人只收到一次通知，完成回复得到显示和保存，当前提示事实不会把已授权能力错误描述为禁止。
+    notes: *a2
+  - id: permissions.enforcement.revoke
+    title:
+      en: Revoke a previously usable guest tool without retaining cached authority
+      zh: 撤销先前可用的访客工具且不残留缓存授权
+    verifies:
+      - restrict
+      - revoke
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: The guest has already delivered one permitted notification to a synthetic registered contact.
+        zh: 访客已向合成的已登记联系人完成一次获准通知。
+    steps:
+      - en: Turn off Notifications through Halo, make the model explicitly attempt the previously accepted tool, restart and attempt it again, then continue ordinary chat.
+        zh: 通过 Halo 关闭通知，让模型明确尝试先前成功的工具，重启后再尝试一次，随后继续普通聊天。
+    expected:
+      - en: Both old-tool attempts are refused by the real SDK or permission gate; the local recipient receives no revoked notification, saved access remains off, and normal replies still work.
+        zh: 两次旧工具尝试均被真实 SDK 或权限执行层拒绝；本机收件人未收到已撤权通知，保存权限仍关闭，普通回复仍可用。
+    notes: *a2

@@ -1,0 +1,95 @@
+version: 1
+id: workspaces.retention
+module: workspaces
+title:
+  en: Remove a workspace deliberately
+  zh: 明确地移除空间
+story:
+  en: I can distinguish forgetting a project from deleting its Halo data.
+  zh: 我能分清移除项目入口和删除 Halo 数据。
+basis: observed
+references:
+  - src/main/services/space.service.ts
+  - src/renderer/components/space/EditSpaceDialog.tsx
+  - tests/e2e/specs/acceptance-workspaces.spec.ts
+promises:
+  edit:
+    en: Workspace names, icons and order can be changed without moving project contents.
+    zh: 修改名称、图标和顺序不搬动项目文件。
+  remove:
+    en: Workspace removal follows the selected removal action and its confirmation.
+    zh: 移除空间按选择的操作及确认范围执行。
+scenarios:
+  - id: workspaces.retention.rename
+    title:
+      en: Rename and reorder workspaces
+      zh: 重命名并排序空间
+    verifies:
+      - edit
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Two dedicated workspaces exist.
+        zh: 已有两个独立空间。
+    steps:
+      - en: Rename and reorder them, then restart.
+        zh: 重命名并调整顺序，然后重启。
+    expected:
+      - en: The names and order persist without changing the project files.
+        zh: 名称与顺序保留，项目文件未改变。
+  - id: workspaces.retention.remove
+    title:
+      en: Cancel and confirm workspace removal
+      zh: 取消与确认移除空间
+    verifies:
+      - remove
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A disposable workspace contains fixture files.
+        zh: 可丢弃空间中有测试文件。
+    steps:
+      - en: Inspect the removal choices, cancel once, then confirm the chosen action.
+        zh: 查看移除选项，先取消，再确认指定操作。
+    expected:
+      - en: Cancellation preserves the workspace; confirmed removal affects only the stated scope.
+        zh: 取消保留空间；确认后只影响提示所说明的范围。
+    variants:
+      kind:
+        - central
+        - project
+  - id: workspaces.retention.forget
+    title:
+      en: Forget an unavailable workspace without deleting its data
+      zh: 移除不可用空间入口且不删除数据
+    verifies:
+      - remove
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A disposable workspace directory becomes unavailable while its data remains in an isolated offline location.
+        zh: 可丢弃空间目录变得不可用，但数据保留于隔离离线位置。
+    steps:
+      - en: Cancel then confirm Remove from list, restore the original directory and restart Halo.
+        zh: 先取消再确认从列表移除，恢复原目录并重启 Halo。
+    expected:
+      - en: Cancellation keeps the entry; confirmed forgetting preserves files and does not automatically restore the old entry when its folder returns.
+        zh: 取消保留入口；确认移除保留文件，目录恢复后旧入口不会自动重新出现。

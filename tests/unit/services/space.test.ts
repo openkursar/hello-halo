@@ -29,7 +29,9 @@ import {
   listSpaces,
   createSpace,
   getSpace,
+  getSpaceWithPreferences,
   getSpaceDir,
+  setSpaceWorkingDir,
   deleteSpace,
   getAllSpacePaths,
   touchSpaceActivity,
@@ -241,6 +243,89 @@ describe('Space Service', () => {
       expect(listSpaces().map(s => s.id)).toContain(space.id)
 
       expect(await deleteSpace(space.id)).toBe(true)
+    })
+  })
+
+  describe('deletion impact', () => {
+    function registerLegacyProject(projectDir: string) {
+      const id = 'legacy-project'
+      const entry = {
+        path: projectDir, name: 'Legacy project', icon: 'folder', sortOrder: 0,
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      }
+      fs.mkdirSync(path.join(projectDir, '.halo'), { recursive: true })
+      fs.writeFileSync(path.join(projectDir, '.halo', 'meta.json'), JSON.stringify({ id, ...entry }))
+      fs.writeFileSync(path.join(getHaloDir(), 'spaces-index.json'), JSON.stringify({ version: 3, spaces: { [id]: entry } }))
+      _resetSpaceRegistry()
+      return id
+    }
+
+    it('reports and removes the working files of a default centralized space', async () => {
+      const space = await createSpace({ name: 'Centralized project', icon: 'folder' })
+      const file = path.join(space.path, 'work.txt')
+      fs.writeFileSync(file, 'Centralized working file')
+
+      expect(getSpaceWithPreferences(space.id)?.deletionEffect).toBe('workspace-files')
+      expect(getSpace(space.id)?.deletionEffect).toBeUndefined()
+      expect(fs.readFileSync(path.join(getHaloDir(), 'spaces-index.json'), 'utf8')).not.toContain('deletionEffect')
+      expect(fs.readFileSync(path.join(space.path, '.halo', 'meta.json'), 'utf8')).not.toContain('deletionEffect')
+      expect(await deleteSpace(space.id)).toBe(true)
+      expect(fs.existsSync(space.path)).toBe(false)
+      expect(fs.existsSync(file)).toBe(false)
+    })
+
+    it('reports data-only deletion when centralized records point to an external project', async () => {
+      const projectDir = path.join(globalThis.__HALO_TEST_DIR__, 'external-project')
+      fs.mkdirSync(projectDir, { recursive: true })
+      const file = path.join(projectDir, 'work.txt')
+      fs.writeFileSync(file, 'External working file')
+      const space = await createSpace({ name: 'External project', icon: 'folder', customPath: projectDir })
+      const storedFile = path.join(space.path, 'previous-work.txt')
+      fs.writeFileSync(storedFile, 'A file retained with the workspace data')
+
+      expect(getSpaceWithPreferences(space.id)?.deletionEffect).toBe('halo-data-only')
+      expect(await deleteSpace(space.id)).toBe(true)
+      expect(fs.existsSync(space.path)).toBe(false)
+      expect(fs.existsSync(storedFile)).toBe(false)
+      expect(fs.readFileSync(file, 'utf8')).toBe('External working file')
+    })
+
+    it('preserves a legacy project without a workingDir field while removing its Halo data', async () => {
+      const projectDir = path.join(globalThis.__HALO_TEST_DIR__, 'legacy-project')
+      const id = registerLegacyProject(projectDir)
+      const file = path.join(projectDir, 'work.txt')
+      fs.writeFileSync(file, 'Legacy working file')
+
+      expect(getSpace(id)?.workingDir).toBeUndefined()
+      expect(getSpaceWithPreferences(id)?.deletionEffect).toBe('halo-data-only')
+      expect(await deleteSpace(id)).toBe(true)
+      expect(fs.existsSync(path.join(projectDir, '.halo'))).toBe(false)
+      expect(fs.readFileSync(file, 'utf8')).toBe('Legacy working file')
+    })
+
+    it('reports working-file deletion when workingDir points back to the centralized data directory', async () => {
+      const space = await createSpace({ name: 'Own working folder', icon: 'folder' })
+      const file = path.join(space.path, 'work.txt')
+      fs.writeFileSync(file, 'Working file in the data directory')
+      const updated = await setSpaceWorkingDir(space.id, space.path)
+
+      expect(updated?.workingDir).toBe(space.path)
+      expect(updated?.deletionEffect).toBe('workspace-files')
+      expect(getSpaceWithPreferences(space.id)?.deletionEffect).toBe('workspace-files')
+      expect(await deleteSpace(space.id)).toBe(true)
+      expect(fs.existsSync(file)).toBe(false)
+    })
+
+    it('does not treat an external directory sharing the spaces prefix as centralized storage', async () => {
+      const projectDir = `${getSpacesDir()}-archive`
+      const id = registerLegacyProject(projectDir)
+      const file = path.join(projectDir, 'work.txt')
+      fs.writeFileSync(file, 'Prefix-sibling working file')
+
+      expect(getSpaceWithPreferences(id)?.deletionEffect).toBe('halo-data-only')
+      expect(await deleteSpace(id)).toBe(true)
+      expect(fs.existsSync(path.join(projectDir, '.halo'))).toBe(false)
+      expect(fs.readFileSync(file, 'utf8')).toBe('Prefix-sibling working file')
     })
   })
 

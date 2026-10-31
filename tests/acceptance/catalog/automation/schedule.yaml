@@ -1,0 +1,158 @@
+version: 1
+id: automation.schedule
+module: automation
+title:
+  en: Run recurring work when intended
+  zh: 按约定周期执行工作
+story:
+  en: I can schedule work and pause it without losing its configuration.
+  zh: 我能安排周期工作，并暂停它而不丢配置。
+basis: documented
+references:
+  - src/main/apps/runtime/DESIGN.md
+  - src/main/platform/scheduler/DESIGN.md
+  - src/renderer/components/apps/AppConfigPanel.tsx
+  - tests/e2e/specs/people-settings.spec.ts
+  - tests/e2e/specs/digital-human-lifecycle.spec.ts
+  - tests/e2e/specs/acceptance-automation.spec.ts
+promises:
+  trigger:
+    en: A valid enabled trigger starts the configured digital human and records the outcome.
+    zh: 有效且启用的触发条件启动指定数字人并记录结果。
+  pause:
+    en: Paused work does not accept new automatic triggers until resumed.
+    zh: 暂停后不接收新的自动触发，直到恢复。
+  calendar:
+    en: Working-day restrictions follow the selected calendar and remain reversible.
+    zh: 工作日限制使用选定日历，并可恢复原设置。
+scenarios:
+  - id: automation.schedule.fire
+    title:
+      en: Execute a due schedule
+      zh: 执行到期日程
+    verifies:
+      - trigger
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A disposable person has a due scheduled trigger and a scripted model.
+        zh: 测试数字人有到期日程和脚本化模型。
+    steps:
+      - en: Enable the saved schedule and wait across its actual next due time without manually triggering a run.
+        zh: 启用保存的计划，等待跨过真实的下次到期时间，不手动触发执行。
+    expected:
+      - en: One intended run and its result appear with the trigger identity.
+        zh: 出现一次预期执行与结果，并显示对应触发来源。
+  - id: automation.schedule.pause
+    title:
+      en: Pause and resume a schedule
+      zh: 暂停和恢复日程
+    verifies:
+      - pause
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A repeating schedule is enabled.
+        zh: 周期日程已启用。
+    steps:
+      - en: Pause it across a due time, resume and reach the next due time.
+        zh: 暂停跨过到期时间，恢复后到达下一次到期。
+    expected:
+      - en: No paused trigger runs; resumed scheduling uses the saved configuration.
+        zh: 暂停期间不执行，恢复后仍使用保存的配置。
+    notes:
+      en: The executable waits across real runtime due times using a local scripted provider. It does not change the system clock or replace the scheduler.
+      zh: 测试使用本地脚本供应商并等待真实运行时到期时间，不修改系统时钟或替换调度器。
+  - id: automation.schedule.working-days
+    title:
+      en: Change working-day restrictions
+      zh: 修改工作日限制
+    verifies:
+      - calendar
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A person has a supported working-day calendar configuration.
+        zh: 数字人有受支持的工作日历配置。
+    steps:
+      - en: Toggle working-days, choose the supported region and revert.
+        zh: 开关工作日限制，选择支持地区后再恢复。
+    expected:
+      - en: The setting remains reversible and the stated calendar controls eligibility.
+        zh: 设置可逆，实际执行资格由显示的日历决定。
+  - id: automation.schedule.calendar-toggle
+    title:
+      en: Reverse a working-day restriction outside its region
+      zh: 在地区外恢复工作日限制开关
+    verifies:
+      - calendar
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use isolated seeded data and the production UI with the fixture boundary stated below.
+        zh: 使用隔离预置数据及真实界面，测试替换边界见说明。
+    steps:
+      - en: Open a seeded China-working-day schedule under a Europe timezone, toggle it repeatedly and reload.
+        zh: 在欧洲时区打开预置中国工作日计划，反复开关后重载。
+    expected:
+      - en: The saved restriction matches each choice and can be switched off without trapping the user.
+        zh: 保存限制符合每次选择，可以关闭而不困住用户。
+    variants:
+      width:
+        - "1280"
+        - "375"
+    notes:
+      en: This verifies setting persistence and regional UI reversibility, not whether a specific calendar date fires the scheduler.
+      zh: 验证设置持久与地区外界面可逆，不证明具体日期是否触发日程。
+  - id: automation.schedule.live-interval
+    title:
+      en: Observe a scheduled run without clicking Run
+      zh: 不点击运行也能观察定时执行
+    verifies:
+      - trigger
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: live-model
+    mode: live
+    automation: automated
+    preconditions:
+      - en: The seeded profile has a runnable person and no preexisting completed run.
+        zh: 预置资料包含可运行数字人，没有既有完成任务。
+    steps:
+      - en: Start an isolated person with a short schedule and a configured live model, then wait without manual triggering.
+        zh: 启动带短周期计划和真实模型的隔离数字人，不手动触发而等待。
+    expected:
+      - en: A completed activity becomes visible from the scheduler’s own execution.
+        zh: 日程自身执行后出现完成活动。
+    requirements:
+      - live-model

@@ -7110,7 +7110,7 @@ sanitize-filename@^1.6.3:
   dependencies:
     truncate-utf8-bytes "^1.0.0"
 
-sax@^1.2.4, sax@>=0.6.0:
+sax@1.4.3, sax@^1.2.4, sax@>=0.6.0:
   version "1.4.3"
   resolved "https://registry.npmmirror.com/sax/-/sax-1.4.3.tgz"
   integrity sha512-yqYn1JhPczigF94DMS+shiDMjDowYO6y9+wB/4WgO0Y19jWYk0lQ4tuG5KI7kj4FTp1wxPj5IFfcrz/s1c3jjQ==
@@ -8522,7 +8522,7 @@ zlibjs@^0.3.1:
   resolved "https://registry.npmmirror.com/zlibjs/-/zlibjs-0.3.1.tgz"
   integrity sha512-+J9RrgTKOmlxFSDHo0pI1xM6BLVUv+o0ZT9ANtCxGkjIVCCUdx9alUF8Gm+dGLKbkkkidWIHFDZHDMpfITt4+w==
 
-zod-to-json-schema@^3.25.1:
+zod-to-json-schema@^3.25.1, zod-to-json-schema@^3.25.2:
   version "3.25.2"
   resolved "https://registry.npmmirror.com/zod-to-json-schema/-/zod-to-json-schema-3.25.2.tgz"
   integrity sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA==

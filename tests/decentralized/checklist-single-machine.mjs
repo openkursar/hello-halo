@@ -9,7 +9,16 @@
  * Run: node tests/decentralized/checklist-single-machine.mjs
  */
 
-import { clusterStart, clusterStop, apiOk, api, pollUntil, sleep, Reporter } from './_lib.mjs'
+import { PROJECT_ROOT, clusterStart, clusterStop, apiOk, api, pollUntil, sleep, Reporter } from './_lib.mjs'
+import { checkedRunPath, declareClusterCases, isMain, startAcceptanceRun, requiredNativeIds } from './_acceptance.mjs'
+
+export const acceptanceCases = declareClusterCases('single', import.meta.url, [
+  { nativeId: '1.1.1', caseId: 'teams.cluster.create-team', title: 'A confirmed team appears with an assigned lead', nodes: 1 },
+  { nativeId: '1.1.2', caseId: 'teams.cluster.reuse-member', title: 'An existing member can be reused without duplication', nodes: 1, requires: ['1.1.1'] },
+  { nativeId: '1.1.3', caseId: 'teams.cluster.lead-and-roles', title: 'A created team has one usable lead and named roles', nodes: 1, requires: ['1.1.1'] },
+  { nativeId: '1.1.4', caseId: 'teams.cluster.creation-boundaries', title: 'Unusual creation inputs neither crash the host nor create duplicate member names', nodes: 1 },
+  { nativeId: '1.1.5', caseId: 'teams.cluster.multiple-teams', title: 'Multiple created teams retain separate member sets', nodes: 1 },
+])
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a)
 const report = new Reporter()
@@ -20,8 +29,7 @@ if (process.argv.includes('--protocol-only')) {
     : Promise.resolve(report.skip(id, 'Not selected: this run covers creation and assembly only'))
 }
 
-const manifest = clusterStart({ nodes: 1, basePort: 3560, fresh: true, clusterDir: '.cluster-single' })
-const node = manifest.nodes[0]
+let node
 
 const NO_ASK_SUFFIX =
   ' Never ask the user anything, never escalate for clarification — work only with what you are given, ' +
@@ -76,7 +84,24 @@ async function waitRunning(teamId, timeoutMs = 30_000) {
   )
 }
 
-try {
+async function main() {
+  const value = name => process.argv.includes(name) ? process.argv[process.argv.indexOf(name) + 1] : undefined
+  if (process.argv.includes('--list')) { console.log(JSON.stringify(acceptanceCases)); return }
+  const clusterDir = value('--cluster') ?? '.cluster-single'
+  const acceptance = startAcceptanceRun({ root: PROJECT_ROOT, cases: acceptanceCases, selectionFile: value('--acceptance-selection'), eventFile: value('--acceptance-events') })
+  if (acceptance) checkedRunPath(PROJECT_ROOT, clusterDir)
+  const requested = value('--only')?.split(',').filter(Boolean)
+    ?? (process.argv.includes('--protocol-only') ? acceptanceCases.map(test => test.cluster.nativeId) : null)
+  const selected = acceptance?.nativeIds ?? (requested ? requiredNativeIds(acceptanceCases, requested) : null)
+  if (acceptance && (!requested || JSON.stringify([...requested].sort()) !== JSON.stringify([...selected].sort()))) throw new Error('Native cluster selection differs from its acceptance declaration')
+  if (selected) {
+    const run = report.run.bind(report)
+    report.run = (id, body) => selected.includes(id) ? run(id, body) : Promise.resolve()
+  }
+  let failure
+  try {
+  const manifest = clusterStart({ nodes: 1, basePort: 3560, fresh: true, clusterDir })
+  node = manifest.nodes[0]
   // ── 1.1 Creation & assembly ─────────────────────────────────────────────────────────
   let t111
   await report.run('1.1.1', async (mark) => {
@@ -573,6 +598,12 @@ try {
   const tally = report.tally()
   log(`\n=== §1 single-machine: ${tally.PASS}/${tally.total} PASS, ${tally.FAIL} FAIL, ${tally.PARTIAL} PARTIAL, ${tally.SKIP} SKIP ===`)
   if (tally.FAIL > 0) process.exitCode = 1
-} finally {
-  clusterStop('.cluster-single')
+  } catch (error) { failure = error; throw error }
+  finally {
+    try { clusterStop(clusterDir) }
+    catch (error) { failure ??= error; throw error }
+    finally { acceptance?.finish(report.records, failure) }
+  }
 }
+
+if (isMain(import.meta.url)) main().catch(error => { console.error('[single-machine] FATAL:', error.stack ?? error.message); process.exitCode = 1 })

@@ -19,6 +19,7 @@ vi.mock('../../../src/main/services/space.service', () => {
     ? { id, path: `${env.root}/temp`, isTemp: true }
     : { id, path: `${env.root}/spaces/${id}`, isTemp: false })
   return {
+    hasSpace: (id: string) => ['halo-temp', 'space-1'].includes(id),
     getSpace: (id: string) => (['halo-temp', 'space-1'].includes(id) ? space(id) : null),
     getHaloSpace: () => space('halo-temp'),
     listSpaces: () => [space('space-1')],

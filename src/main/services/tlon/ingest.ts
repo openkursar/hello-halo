@@ -12,6 +12,7 @@
  */
 
 import { join, sep } from 'path'
+import { setImmediate as yieldToMain } from 'node:timers/promises'
 import {
   readFileSync,
   writeFileSync,
@@ -21,6 +22,7 @@ import {
   openSync,
   readSync,
   closeSync,
+  lstatSync,
 } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
 import { sendToRenderer } from '../../foundation/window.service'
@@ -48,6 +50,8 @@ import {
 } from './service'
 import { extractText } from './extract'
 import { DEFAULT_INDEX_MD } from './defaults'
+import { extractionRevision, ownedTextPath } from './extraction-revision'
+import { upgradeXlsxSource } from './xlsx-upgrade'
 
 // ============================================================================
 // State
@@ -96,17 +100,23 @@ export function getIngestProgress(kbId: string): IngestProgressEvent {
  */
 export function enqueueFiles(
   kbId: string,
-  entries: Array<{ sourcePath: string; absolutePath: string; sourceType: 'raw' | 'linked' }>
+  entries: Array<{ sourcePath: string; absolutePath: string; sourceType: 'raw' | 'linked' }>,
+  options: { automatic?: boolean } = {}
 ): void {
   const queue = queues.get(kbId) || []
   for (const e of entries) {
-    if (queue.some(j => j.sourcePath === e.sourcePath)) continue
+    const existing = queue.find(j => j.sourcePath === e.sourcePath)
+    if (existing) {
+      if (!options.automatic) existing.automatic = false
+      continue
+    }
     queue.push({
       id: uuidv4(),
       kbId,
       sourcePath: e.sourcePath,
       absolutePath: e.absolutePath,
       sourceType: e.sourceType,
+      automatic: options.automatic === true,
       status: 'pending',
     })
   }
@@ -173,9 +183,14 @@ export async function clearAndRelearn(kbId: string): Promise<void> {
  */
 export async function migrateKBsToTextIndex(): Promise<void> {
   for (const kb of listKBs()) {
+    await yieldToMain()
+    const current = getKB(kb.id)
+    if (!current || current.status === 'paused') continue
     try {
-      if (collectIngestCandidates(kb.id).length > 0) {
-        await triggerFullIngest(kb.id)
+      const candidates = collectIngestCandidates(kb.id)
+      if (candidates.length > 0) {
+        enqueueFiles(kb.id, candidates, { automatic: true })
+        await processQueue(kb.id)
       }
     } catch (error) {
       console.error(`[Tlon] Text-index migration failed for ${kb.id}:`, error)
@@ -199,6 +214,7 @@ export async function processQueue(kbId: string): Promise<void> {
 
   processing.add(kbId)
   let completed = 0
+  let pausedJobs = 0
   const errors: Array<{ file: string; message: string }> = []
 
   emitProgress({
@@ -215,7 +231,10 @@ export async function processQueue(kbId: string): Promise<void> {
     while (queue.length > 0) {
       const job = queue.shift() as IngestJob
       try {
-        await extractSource(kbId, job)
+        if (job.automatic && getKB(kbId)?.status === 'paused') {
+          job.status = 'skipped'
+          pausedJobs++
+        } else await extractSource(kbId, job)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         console.error(`[Tlon] Extract failed for ${job.sourcePath}:`, message)
@@ -225,6 +244,7 @@ export async function processQueue(kbId: string): Promise<void> {
         job.error = message
         errors.push({ file: fileName(job.sourcePath), message })
       }
+      if (!getKB(kbId)) break
       completed++
       emitProgress({
         kbId,
@@ -239,6 +259,9 @@ export async function processQueue(kbId: string): Promise<void> {
     processing.delete(kbId)
     queues.delete(kbId)
   }
+
+  if (!getKB(kbId)) return
+  if (pausedJobs) console.log(`[Tlon] Deferred ${pausedJobs} automatic source(s) while knowledge base ${kbId} is paused`)
 
   // Rebuild the document map once per batch (not per file) — O(n), not O(n^2).
   rebuildIndexMd(kbId)
@@ -270,6 +293,10 @@ function textFileName(sourcePath: string): string {
 async function extractSource(kbId: string, job: IngestJob): Promise<void> {
   job.status = 'running'
   job.startedAt = new Date().toISOString()
+  const textPath = textFileName(job.sourcePath)
+  if (await upgradeXlsxSource(job, textPath, () => appendLog(job, textPath))) return
+  const revision = extractionRevision(job.absolutePath)
+  const version = revision === undefined ? {} : { extractorRevision: revision }
 
   let buf: Buffer
   try {
@@ -291,7 +318,7 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     const hashes: IngestHashesV1 = readHashes(kbId)
-    hashes.files[job.sourcePath] = { hash: contentHash, ingestedAt: new Date().toISOString(), lastError: message }
+    hashes.files[job.sourcePath] = { hash: contentHash, ingestedAt: new Date().toISOString(), lastError: message, ...version }
     writeHashes(kbId, hashes)
     throw error
   }
@@ -300,7 +327,7 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
     // Record the attempt so a text-less source (e.g. an image with no text) is
     // not re-extracted on every launch; it retries only when its bytes change.
     const hashes: IngestHashesV1 = readHashes(kbId)
-    hashes.files[job.sourcePath] = { hash: contentHash, ingestedAt: new Date().toISOString(), empty: true }
+    hashes.files[job.sourcePath] = { hash: contentHash, ingestedAt: new Date().toISOString(), empty: true, ...version }
     writeHashes(kbId, hashes)
     job.status = 'skipped'
     return
@@ -308,7 +335,6 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
 
   const textDir = getKBTextDir(kbId)
   if (!existsSync(textDir)) mkdirSync(textDir, { recursive: true })
-  const textPath = textFileName(job.sourcePath)
   writeFileSync(
     join(textDir, textPath),
     `<!-- source: ${job.sourcePath} -->\n\n${fileContent}`,
@@ -322,6 +348,7 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
     hash: contentHash,
     ingestedAt: new Date().toISOString(),
     textPath,
+    ...version,
   }
   writeHashes(kbId, hashes)
 
@@ -344,15 +371,23 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
 export function rebuildIndexMd(kbId: string): void {
   const kb = getKB(kbId)
   if (!kb) return
+  const indexPath = getKBIndexMdPath(kbId)
+  try {
+    if (lstatSync(indexPath).isSymbolicLink()) {
+      console.warn(`[Tlon] Preserved a linked knowledge index: ${kbId}`)
+      return
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
   const textDir = getKBTextDir(kbId)
   const hashes = readHashes(kbId)
 
   const docs = Object.entries(hashes.files)
-    .filter(([, info]) => info.textPath && existsSync(join(textDir, info.textPath)))
-    .map(([sourcePath, info]) => ({
-      name: sourcePath.split(/[\\/]/).pop() || sourcePath,
-      absPath: join(textDir, info.textPath as string),
-    }))
+    .flatMap(([sourcePath, info]) => {
+      const absPath = info.textPath ? ownedTextPath(textDir, info.textPath) : null
+      return absPath ? [{ name: sourcePath.split(/[\\/]/).pop() || sourcePath, absPath }] : []
+    })
     .sort((a, b) => a.name.localeCompare(b.name))
 
   if (docs.length === 0) {

@@ -3,6 +3,7 @@ import { join } from 'node:path'
 
 vi.mock('../../../src/main/services/space.service', () => ({
   getSpace: (id: string) => ({ id, path: join(globalThis.__HALO_TEST_DIR__, id), isTemp: false }),
+  hasSpace: () => true,
   touchSpaceActivity: () => undefined,
 }))
 vi.mock('../../../src/main/services/tlon', () => ({ getSeedKBIds: () => [] }))

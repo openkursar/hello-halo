@@ -14,7 +14,7 @@
  * - No autocomplete, no linting (not needed for viewing)
  */
 
-import { EditorState, Extension, Compartment, Transaction } from '@codemirror/state'
+import { EditorState, Extension, Compartment, Transaction, Annotation } from '@codemirror/state'
 import {
   EditorView,
   lineNumbers,
@@ -477,6 +477,9 @@ export function getContent(view: EditorView): string {
   return view.state.doc.toString()
 }
 
+/** Identifies outside replacements so listeners do not report them as new edits. */
+export const externalContentChange = Annotation.define<boolean>()
+
 /**
  * Replace the entire document with content that came from outside the editor
  * (a disk refresh, a revert). The replacement is not an edit the user made, so
@@ -490,7 +493,7 @@ export function setContent(view: EditorView, content: string): void {
       to: view.state.doc.length,
       insert: content,
     },
-    annotations: Transaction.addToHistory.of(false),
+    annotations: [Transaction.addToHistory.of(false), externalContentChange.of(true)],
   })
 }
 

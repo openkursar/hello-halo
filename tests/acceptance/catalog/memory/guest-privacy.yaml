@@ -1,0 +1,50 @@
+version: 1
+id: memory.guest-privacy
+module: memory
+title:
+  en: Define what guests may recall
+  zh: 明确访客可访问的记忆
+story:
+  en: As an owner, I know which remembered information may be used in replies to guests.
+  zh: 作为主人，我知道哪些记忆可用于回复访客。
+basis: proposed
+references:
+  - src/main/platform/memory/DESIGN.md
+  - src/main/apps/runtime/turn-file-access.ts
+promises:
+  review:
+    en: Guest memory disclosure follows an explicit approved audience rule rather than treating all remembered content as shareable.
+    zh: 访客记忆披露遵循明确批准的受众规则，不把所有记忆默认当成可分享。
+scenarios:
+  - id: memory.guest-privacy.disclosure
+    title:
+      en: Probe public and owner-private remembered facts
+      zh: 检验公开与主人私有记忆
+    verifies:
+      - review
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: live-model
+    mode: live
+    automation: planned
+    preconditions:
+      - en: Use synthetic public and owner-private facts under the audience policy once it is decided.
+        zh: 在受众策略确定后使用合成公开及主人私有事实。
+    steps:
+      - en: Ask for both as a guest and as the owner, and inspect responses and accessed material.
+        zh: 分别以访客和主人询问两类事实，检查回复及访问材料。
+    expected:
+      - en: Responses obey the approved audience boundary; no approval is implied by the current implementation.
+        zh: 回复遵循确认后的受众边界，不以当前实现代替批准。
+    requirements:
+      - live-model
+    notes:
+      en: Current design gives restricted turns shared memory content with nondisclosure guidance; this proposed rule does not claim that model guidance is an enforced data boundary.
+      zh: 当前设计向受限任务提供共享记忆内容并附不披露指引；此提议不宣称模型指引等同于强制数据边界。
+questions:
+  - en: Should owner-private memory be excluded from guest model context, or may the model receive it under a nondisclosure instruction?
+    zh: 主人私有记忆应从访客模型上下文排除，还是允许模型接收并依赖不披露指令？

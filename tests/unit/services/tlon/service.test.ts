@@ -8,8 +8,14 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
+import { readFileSync as observedReadFileSync } from 'fs'
 import path from 'path'
 import { getTestDir } from '../../setup'
+
+vi.mock('fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('fs')>()
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) }
+})
 
 // The service lazily imports ./watcher (native @parcel/watcher) on createKB
 // and deleteKB; stub it so no real filesystem watchers are created.
@@ -553,28 +559,36 @@ describe('Tlon Service', () => {
   })
 
   describe('hashFileCached', () => {
-    it('memoizes by mtime+size and re-hashes after reset or size change', () => {
+    it('memoizes unchanged files and invalidates rewritten bytes even when size and mtime are restored', () => {
       const scratch = makeScratchDir()
       const p = writeScratchFile(scratch, 'memo.txt', 'aaaa')
       // Whole-second mtime so utimesSync can restore it exactly below.
       const mtime = new Date('2026-01-01T00:00:00Z')
       fs.utimesSync(p, mtime, mtime)
+      const reads = vi.mocked(observedReadFileSync)
+      reads.mockClear()
+      const readCount = () => reads.mock.calls.filter(([file]) => String(file) === p).length
       const first = hashFileCached(p)
       expect(first.hash).toBe(sha256('aaaa'))
       expect(first.binary).toBe(false)
+      expect(readCount()).toBe(1)
+      expect(hashFileCached(p).hash).toBe(first.hash)
+      expect(readCount()).toBe(1)
 
-      // Same size + same mtime: the (stale) memo is served without a read.
       fs.writeFileSync(p, 'bbbb', 'utf-8')
       fs.utimesSync(p, mtime, mtime)
-      expect(hashFileCached(p).hash).toBe(sha256('aaaa'))
+      expect(hashFileCached(p).hash).toBe(sha256('bbbb'))
+      expect(readCount()).toBe(2)
 
       // Reset drops the memo and the new bytes are hashed.
       _resetTlonHashCache()
       expect(hashFileCached(p).hash).toBe(sha256('bbbb'))
+      expect(readCount()).toBe(3)
 
       // A size change invalidates without any reset.
       fs.writeFileSync(p, 'cc', 'utf-8')
       expect(hashFileCached(p).hash).toBe(sha256('cc'))
+      expect(readCount()).toBe(4)
     })
 
     it('reports binary content and throws on missing files', () => {
@@ -587,17 +601,10 @@ describe('Tlon Service', () => {
 
     it('evicts least-recently-used entries, not least-recently-inserted ones', () => {
       const scratch = makeScratchDir()
-      // Whole-second mtimes so utimesSync below restores them exactly (Date
-      // truncates sub-millisecond precision, which a raw statSync().mtimeMs
-      // would otherwise still carry, breaking the memo comparison).
-      const mtime = new Date('2026-01-01T00:00:00Z')
-      const setMtime = (f: string) => fs.utimesSync(f, mtime, mtime)
-
       // Matches HASH_CACHE_MAX in service.ts. Fills the cache to capacity so
       // the next insert forces exactly one eviction.
       const cacheMax = 4096
       const files = Array.from({ length: cacheMax }, (_, i) => writeScratchFile(scratch, `f${i}.txt`, `${i}`))
-      files.forEach(setMtime)
       for (const f of files) hashFileCached(f)
 
       // Re-read the first (oldest-inserted) file: a cache hit should mark it
@@ -610,20 +617,12 @@ describe('Tlon Service', () => {
       // insertion) is evicted instead.
       hashFileCached(writeScratchFile(scratch, 'overflow.txt', 'new'))
 
-      // Mutate without changing size, so a surviving memo (same mtime + size)
-      // is indistinguishable from a real change except by presence in the
-      // cache — isolating what this test is actually checking.
-      //
-      // files[0]'s memo must have survived: the stale cached hash is served.
-      fs.writeFileSync(files[0], 'a')
-      setMtime(files[0])
+      const reads = vi.mocked(observedReadFileSync)
+      reads.mockClear()
       expect(hashFileCached(files[0]).hash).toBe(hitBeforeHash)
-
-      // files[1]'s memo must be gone: the same kind of mutation is picked up
-      // as a fresh read rather than served from a surviving cache entry.
-      fs.writeFileSync(files[1], 'b')
-      setMtime(files[1])
-      expect(hashFileCached(files[1]).hash).toBe(sha256('b'))
+      expect(reads.mock.calls.filter(([file]) => String(file) === files[0])).toHaveLength(0)
+      expect(hashFileCached(files[1]).hash).toBe(sha256('1'))
+      expect(reads.mock.calls.filter(([file]) => String(file) === files[1])).toHaveLength(1)
     })
   })
 

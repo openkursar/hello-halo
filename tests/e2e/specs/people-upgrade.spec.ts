@@ -3,7 +3,7 @@ import { navigateToApps, setTheme } from '../fixtures/helpers'
 
 test.setTimeout(60000)
 
-test('directory search, bounded pages, return state and dedicated coordinator settings use real persisted data', async ({ window }) => {
+test('directory search, bounded pages, return state and dedicated coordinator settings use real persisted data', { annotation: { type: 'acceptance', description: '{"caseId":"people.directory.browse","evidence":"app-e2e","mode":"none","variant":{}}' } }, async ({ window }) => {
   await navigateToApps(window)
   const search = window.getByRole('textbox', { name: 'Search digital humans' })
   await expect(search).toBeVisible()
@@ -22,12 +22,20 @@ test('directory search, bounded pages, return state and dedicated coordinator se
   await window.getByRole('button', { name: 'All digital humans', exact: true }).click()
   await expect(search).toHaveValue('Evidence team')
   await search.fill('')
-  await window.getByRole('button', { name: 'Next', exact: true }).click()
+  await expect(window.getByText('Page 1 of 3', { exact: true })).toBeVisible()
   await expect(window.locator('article')).toHaveCount(24)
+  const firstPage = await window.locator('article').getByRole('heading', { level: 2 }).allTextContents()
+  await window.getByRole('button', { name: 'Next page', exact: true }).click()
+  await expect(window.getByText('Page 2 of 3', { exact: true })).toBeVisible()
+  await expect(window.locator('article')).toHaveCount(24)
+  await expect.poll(async () => {
+    const names = await window.locator('article').getByRole('heading', { level: 2 }).allTextContents()
+    return names.length === 24 && names.every(name => !firstPage.includes(name))
+  }).toBe(true)
   await window.screenshot({ path: 'tests/e2e/results/people-directory-list.png' })
 })
 
-test('inbox includes dedicated coordinators, pages requests, and retains unsent decision drafts', async ({ window }) => {
+test('inbox includes dedicated coordinators, pages requests, and retains unsent decision drafts', { annotation: { type: 'acceptance', description: '{"caseId":"people.decisions.draft","evidence":"app-e2e","mode":"none","variant":{}}' } }, async ({ window }) => {
   await navigateToApps(window)
   await window.getByRole('button', { name: /^Handle all/ }).click()
   await expect(window.locator('article')).toHaveCount(30)
@@ -45,7 +53,7 @@ test('inbox includes dedicated coordinators, pages requests, and retains unsent 
 
 test.describe('large directory and responsive detail', () => {
   test.use({ peopleCount: 200 })
-  test('200 people and 34 requests remain bounded across themes and 320/375px', async ({ window }) => {
+  test('200 people and 34 requests remain bounded across themes and 320/375px', { annotation: { type: 'acceptance', description: "{\"caseId\":\"people.directory.scale\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     const errors: string[] = []
     window.on('pageerror', error => errors.push(error.message))
     await navigateToApps(window)

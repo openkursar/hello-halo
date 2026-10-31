@@ -1,0 +1,67 @@
+version: 1
+id: automation.events
+module: automation
+title:
+  en: Handle events without duplicate work
+  zh: 处理事件且避免重复任务
+story:
+  en: I can let a digital human react to files or incoming events without accidental duplicate runs.
+  zh: 我能让数字人响应文件或外部事件，不被重复事件误触发多次。
+basis: documented
+references:
+  - src/main/apps/runtime/DESIGN.md
+  - src/main/platform/event/index.ts
+  - src/main/apps/runtime/sources/file-watcher.source.ts
+promises:
+  dedup:
+    en: Repeated delivery of an event is handled under the documented deduplication rules.
+    zh: 重复投递遵循已定义的去重规则。
+  busy:
+    en: New work arriving while busy follows its supported delivery or queue policy and remains observable.
+    zh: 忙碌时到达的新任务按支持的投递或排队规则处理，并可观察。
+scenarios:
+  - id: automation.events.repeat
+    title:
+      en: Deliver a repeated event
+      zh: 重复投递同一事件
+    verifies:
+      - dedup
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A person subscribes to a disposable event source.
+        zh: 数字人订阅可丢弃事件源。
+    steps:
+      - en: Deliver the same identified event twice.
+        zh: 投递同一标识事件两次。
+    expected:
+      - en: Only the intended work is created and the duplicate does not cause a second result.
+        zh: 只创建预期任务，重复事件不造成第二份结果。
+  - id: automation.events.busy
+    title:
+      en: Deliver an event during active work
+      zh: 工作时收到新事件
+    verifies:
+      - busy
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A person is already executing a controlled task.
+        zh: 数字人已在执行受控任务。
+    steps:
+      - en: Deliver a second eligible event and inspect activity until settled.
+        zh: 投递第二个符合条件事件并持续查看到结束。
+    expected:
+      - en: No event silently vanishes and execution follows the stated concurrency behavior.
+        zh: 事件不会静默消失，执行符合声明的并发行为。

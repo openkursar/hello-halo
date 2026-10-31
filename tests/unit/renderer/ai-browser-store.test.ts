@@ -9,7 +9,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 let activeHandler: ((e: unknown) => void) | null = null
 let goneHandler: ((e: unknown) => void) | null = null
 let releasedHandler: ((e: unknown) => void) | null = null
-const unsub = { active: vi.fn(), gone: vi.fn(), released: vi.fn() }
+let metadataHandler: ((e: unknown) => void) | null = null
+const unsub = { active: vi.fn(), gone: vi.fn(), released: vi.fn(), metadata: vi.fn() }
 const listActive = vi.fn()
 
 vi.mock('../../../src/renderer/api', () => ({
@@ -17,11 +18,18 @@ vi.mock('../../../src/renderer/api', () => ({
     onAIBrowserActiveViewChanged: (cb: (e: unknown) => void) => { activeHandler = cb; return unsub.active },
     onAIBrowserViewGone: (cb: (e: unknown) => void) => { goneHandler = cb; return unsub.gone },
     onAIBrowserConversationReleased: (cb: (e: unknown) => void) => { releasedHandler = cb; return unsub.released },
+    onBrowserStateChange: (cb: (e: unknown) => void) => { metadataHandler = cb; return unsub.metadata },
     listAIBrowserLivePages: (...args: unknown[]) => listActive(...args),
   },
 }))
 const closeTabsOfGoneView = vi.fn()
-vi.mock('../../../src/renderer/services/canvas-lifecycle', () => ({ canvasLifecycle: { closeTabsOfGoneView: (...a: unknown[]) => closeTabsOfGoneView(...a) } }))
+const attachBrowserView = vi.fn()
+const setCanvasOpen = vi.fn()
+vi.mock('../../../src/renderer/services/canvas-lifecycle', () => ({ canvasLifecycle: {
+  closeTabsOfGoneView: (...a: unknown[]) => closeTabsOfGoneView(...a),
+  attachAIBrowserView: (...a: unknown[]) => attachBrowserView(...a),
+  setOpen: (...a: unknown[]) => setCanvasOpen(...a),
+} }))
 vi.mock('../../../src/renderer/stores/chat.store', () => ({ useChatStore: vi.fn() }))
 vi.mock('../../../src/renderer/stores/chat/active', () => ({ selectActiveConversationId: vi.fn() }))
 
@@ -245,5 +253,124 @@ describe('store listeners', () => {
     await flush()
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
+  })
+})
+
+describe('browser page metadata', () => {
+  beforeEach(() => {
+    useAIBrowserStore.setState({ views: {}, pages: {}, operating: {} })
+    metadataHandler = null
+    listActive.mockReset()
+    listActive.mockResolvedValue([])
+    for (const stop of Object.values(unsub)) stop.mockClear()
+    attachBrowserView.mockClear()
+    setCanvasOpen.mockClear()
+  })
+
+  it('updates both loaded page titles without selecting an inactive page or changing activity and operating state', () => {
+    const dispose = initAIBrowserStoreListeners()
+    activeHandler!({ ...view('owner', 'control'), title: 'New Tab' })
+    activeHandler!({ ...view('owner', 'target'), title: 'New Tab' })
+    useAIBrowserStore.getState().setOperating('owner', true)
+    const before = useAIBrowserStore.getState()
+    metadataHandler?.({ viewId: 'control', state: { title: 'Loaded control', url: 'http://127.0.0.1/control' } })
+    const inactive = useAIBrowserStore.getState()
+    expect(inactive.pages.control).toEqual({ ...before.pages.control, title: 'Loaded control', url: 'http://127.0.0.1/control' })
+    expect(inactive.views).toBe(before.views)
+    expect(inactive.pages.target).toBe(before.pages.target)
+    expect(inactive.operating).toBe(before.operating)
+    metadataHandler?.({ viewId: 'target', state: { title: 'Loaded target', url: 'http://127.0.0.1/target' } })
+    const after = useAIBrowserStore.getState()
+    expect(after.pages.target).toEqual({ ...before.pages.target, title: 'Loaded target', url: 'http://127.0.0.1/target' })
+    expect(after.views.owner).toEqual({ ...before.views.owner, title: 'Loaded target', url: 'http://127.0.0.1/target' })
+    expect(after.pages.control).toBe(inactive.pages.control)
+    expect(attachBrowserView).not.toHaveBeenCalled()
+    expect(setCanvasOpen).not.toHaveBeenCalled()
+    dispose()
+    expect(unsub.metadata).toHaveBeenCalledTimes(1)
+  })
+
+  it('updates every existing reference to a shared page while preserving ownership and unrelated views', () => {
+    const dispose = initAIBrowserStoreListeners()
+    activeHandler!(view('owner', 'shared'))
+    activeHandler!(view('viewer', 'shared', 'https://x.test/shared', false))
+    activeHandler!(view('other', 'unrelated'))
+    const before = useAIBrowserStore.getState()
+    metadataHandler?.({ viewId: 'shared', state: { title: 'Asynchronous title' } })
+    const after = useAIBrowserStore.getState()
+    expect(after.pages.shared).toEqual({ ...before.pages.shared, title: 'Asynchronous title' })
+    expect(after.views.owner).toEqual({ ...before.views.owner, title: 'Asynchronous title' })
+    expect(after.views.viewer).toEqual({ ...before.views.viewer, title: 'Asynchronous title' })
+    expect(after.views.other).toBe(before.views.other)
+    expect(after.pages.unrelated).toBe(before.pages.unrelated)
+    expect(after.operating).toBe(before.operating)
+    dispose()
+  })
+
+  it('keeps selected user pages unowned while updating their existing references', () => {
+    const dispose = initAIBrowserStoreListeners()
+    activeHandler!(view('viewer', 'user-page', 'https://x.test/user-page', false))
+    const before = useAIBrowserStore.getState()
+    metadataHandler?.({ viewId: 'user-page', state: { title: 'Selected page title' } })
+    const after = useAIBrowserStore.getState()
+    expect(after.pages).toBe(before.pages)
+    expect(after.views.viewer).toEqual({ ...before.views.viewer, title: 'Selected page title' })
+    dispose()
+  })
+
+  it('preserves the state object for unchanged metadata, unrelated state fields and unknown or released pages', () => {
+    const dispose = initAIBrowserStoreListeners()
+    activeHandler!(view('owner', 'target'))
+    const before = useAIBrowserStore.getState()
+    for (const event of [
+      { viewId: 'target', state: { title: 'target', url: 'https://x.test/target' } },
+      { viewId: 'target', state: { isLoading: true, favicon: 'data:image/png;base64,fixture' } },
+      ...['unknown', '__proto__', 'constructor', 'toString'].map(viewId => ({ viewId, state: { title: 'Never owned', url: 'https://x.test/unowned' } })),
+    ]) {
+      metadataHandler?.(event)
+      expect(useAIBrowserStore.getState()).toBe(before)
+    }
+    goneHandler!({ viewId: 'target' })
+    const gone = useAIBrowserStore.getState()
+    metadataHandler?.({ viewId: 'target', state: { title: 'Late title' } })
+    expect(useAIBrowserStore.getState()).toBe(gone)
+    activeHandler!(view('owner', 'replacement'))
+    releasedHandler!({ conversationId: 'owner' })
+    const released = useAIBrowserStore.getState()
+    metadataHandler?.({ viewId: 'replacement', state: { title: 'Late released title' } })
+    expect(useAIBrowserStore.getState()).toBe(released)
+    dispose()
+  })
+
+  it('allows an empty title without clearing an omitted URL or changing activity time', () => {
+    const dispose = initAIBrowserStoreListeners()
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+    try {
+      activeHandler!(view('owner', 'target'))
+      now.mockReturnValue(2000)
+      const before = useAIBrowserStore.getState()
+      metadataHandler?.({ viewId: 'target', state: { title: '' } })
+      const after = useAIBrowserStore.getState()
+      expect(after.pages.target).toEqual({ ...before.pages.target, title: '' })
+      expect(after.views.owner).toEqual({ ...before.views.owner, title: '' })
+      expect(after.pages.target.lastActivityAt).toBe(1000)
+      expect(after.views.owner.lastActivityAt).toBe(1000)
+    } finally { now.mockRestore(); dispose() }
+  })
+
+  it('subscribes before taking the initial snapshot and retains newer metadata when that snapshot resolves', async () => {
+    let resolveList!: (value: unknown[]) => void
+    listActive.mockImplementation(() => {
+      expect(metadataHandler).toBeTypeOf('function')
+      return new Promise(resolve => { resolveList = resolve })
+    })
+    const dispose = initAIBrowserStoreListeners()
+    activeHandler!(view('owner', 'target'))
+    metadataHandler?.({ viewId: 'target', state: { title: 'Newest title' } })
+    resolveList([{ ...page('owner', 'target', true), title: 'Old snapshot title' }])
+    await flush()
+    expect(useAIBrowserStore.getState().pages.target.title).toBe('Newest title')
+    expect(useAIBrowserStore.getState().views.owner.title).toBe('Newest title')
+    dispose()
   })
 })

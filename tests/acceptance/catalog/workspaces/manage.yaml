@@ -1,0 +1,117 @@
+version: 1
+id: workspaces.manage
+module: workspaces
+title:
+  en: Create and reopen a workspace
+  zh: 创建和重新打开空间
+story:
+  en: I can give a project its own workspace and return to it later.
+  zh: 我能为项目创建独立空间，以后再进入。
+basis: observed
+references:
+  - src/renderer/components/space/CreateSpaceForm.tsx
+  - src/renderer/pages/SpacesPage.tsx
+  - tests/e2e/specs/spaces.spec.ts
+  - tests/e2e/specs/acceptance-workspaces.spec.ts
+promises:
+  create:
+    en: A created workspace appears in the workspace list and opens a chat.
+    zh: 创建成功的空间出现在列表中，并能打开对话。
+  cancel:
+    en: Cancelling creation does not leave a workspace behind.
+    zh: 取消创建不会留下多余空间。
+  search:
+    en: Workspace search changes the visible matches without changing stored workspace records.
+    zh: 空间搜索只改变可见匹配结果，不修改保存的空间记录。
+scenarios:
+  - id: workspaces.manage.create
+    title:
+      en: Create a dedicated workspace
+      zh: 创建独立空间
+    verifies:
+      - create
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - fast
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: The workspace list is open.
+        zh: 已打开空间列表。
+    steps:
+      - en: Create a uniquely named workspace and return to the list.
+        zh: 创建唯一名称的空间并返回列表。
+    expected:
+      - en: The named workspace is visible in the list.
+        zh: 列表中可找到该空间。
+  - id: workspaces.manage.reopen
+    title:
+      en: Reopen from a workspace card
+      zh: 从卡片重新进入
+    verifies:
+      - create
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A dedicated workspace exists.
+        zh: 已有独立空间。
+    steps:
+      - en: Leave it and open its workspace card.
+        zh: 离开后点击该空间卡片。
+    expected:
+      - en: The workspace name and chat composer belong to the chosen space.
+        zh: 显示选中的空间名称及其对话输入框。
+  - id: workspaces.manage.cancel
+    title:
+      en: Cancel creation
+      zh: 取消创建
+    verifies:
+      - cancel
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Record the existing workspace list.
+        zh: 记录现有空间列表。
+    steps:
+      - en: Enter a new workspace name and cancel.
+        zh: 输入新空间名称后取消。
+    expected:
+      - en: The list is unchanged and no new workspace appears.
+        zh: 列表不变，没有新空间。
+  - id: workspaces.manage.search
+    title:
+      en: Find a workspace by name and restore the full list
+      zh: 按名称查找空间并恢复完整列表
+    verifies:
+      - search
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Two workspaces have distinct names with a shared suffix.
+        zh: 两个空间名称不同但后缀相同。
+    steps:
+      - en: Search with whitespace and different letter case, try an unmatched name and clear the query.
+        zh: 以含空格及不同大小写查询，尝试不匹配名称后清空查询。
+    expected:
+      - en: Only matching dedicated workspaces appear; clearing restores both and their stored identities are unchanged.
+        zh: 只显示匹配的独立空间，清空后两者恢复，保存身份不变。

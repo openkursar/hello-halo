@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
+import * as XLSX from 'xlsx'
 
 import {
   fileExtension,
@@ -24,6 +25,21 @@ async function zipBuffer(files: Record<string, string>): Promise<Buffer> {
     zip.file(name, content)
   }
   return zip.generateAsync({ type: 'nodebuffer' })
+}
+
+async function workbookBuffer(sheets: Array<{ name: string; rows: string; dimension?: string }>, shared?: string, extra: Record<string, string> = {}): Promise<Buffer> {
+  const relationship = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  const spreadsheet = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+  const files: Record<string, string> = {
+    '[Content_Types].xml': `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheets.map(sheet => `<Override PartName="/xl/worksheets/${sheet.name}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}${shared === undefined ? '' : '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'}</Types>`,
+    '_rels/.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="workbook" Type="${relationship}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+    'xl/workbook.xml': `<workbook xmlns="${spreadsheet}" xmlns:r="${relationship}"><sheets>${sheets.map((_sheet, index) => `<sheet name="Sheet ${index + 1}" sheetId="${index + 1}" r:id="sheet${index}"/>`).join('')}</sheets></workbook>`,
+    'xl/_rels/workbook.xml.rels': `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((sheet, index) => `<Relationship Id="sheet${index}" Type="${relationship}/worksheet" Target="worksheets/${sheet.name}"/>`).join('')}${shared === undefined ? '' : `<Relationship Id="strings" Type="${relationship}/sharedStrings" Target="sharedStrings.xml"/>`}</Relationships>`,
+    ...extra,
+  }
+  for (const sheet of sheets) files[`xl/worksheets/${sheet.name}`] = `<worksheet xmlns="${spreadsheet}">${sheet.dimension ? `<dimension ref="${sheet.dimension}"/>` : ''}<sheetData>${sheet.rows}</sheetData></worksheet>`
+  if (shared !== undefined) files['xl/sharedStrings.xml'] = `<sst xmlns="${spreadsheet}">${shared}</sst>`
+  return zipBuffer(files)
 }
 
 describe('Tlon Extract', () => {
@@ -170,22 +186,79 @@ describe('Tlon Extract', () => {
   })
 
   describe('xlsx', () => {
-    it('extracts the shared string table, one entry per line', async () => {
-      const buf = await zipBuffer({
-        'xl/sharedStrings.xml':
-          '<sst count="3" uniqueCount="3">' +
+    it('extracts referenced shared strings in worksheet order', async () => {
+      const buf = await workbookBuffer([{ name: 'sheet1.xml', rows: [0, 1, 2].map((index) => `<row r="${index + 1}"><c r="A${index + 1}" t="s"><v>${index}</v></c></row>`).join('') }],
           '<si><t>Header</t></si>' +
           '<si><t xml:space="preserve">Cell &amp; value</t></si>' +
-          '<si><r><t>Rich</t></r></si>' +
-          '</sst>',
-      })
+          '<si><r><t>Rich</t></r></si>')
       const text = await extractText('/tmp/book.xlsx', buf)
       expect(text).toBe('Header\nCell & value\nRich')
     })
 
     it('returns empty string when there is no shared string table', async () => {
-      const buf = await zipBuffer({ 'xl/workbook.xml': '<workbook/>' })
+      const buf = await workbookBuffer([{ name: 'sheet1.xml', rows: '' }])
       expect(await extractText('/tmp/book.xlsx', buf)).toBe('')
+    })
+
+    it.each([true, false])('reads text and numeric cells from a real workbook with bookSST=%s', async (bookSST) => {
+      const workbook = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Reference', 'Cedar record'], ['Quantity', 87261345.25]]), 'Reference')
+      const buf = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx', bookSST })
+      expect(await extractText('/tmp/book.xlsx', buf)).toBe('Reference\tCedar record\nQuantity\t87261345.25')
+    })
+
+    it('reads rich inline strings, XML entities and stored numeric values without a shared table', async () => {
+      const buf = await workbookBuffer([{ name: 'sheet1.xml', rows: '<row r="1"><c r="A1" t="inlineStr"><is><r><t>Alpha &amp; </t></r><r><t>Beta &#x4e2d;</t></r><rPh sb="0" eb="1"><t>phonetic hint</t></rPh></is></c><c r="B1"><v>-12.5</v></c><c r="C1" t="b"><v>1</v></c></row>' }])
+      expect(await extractText('/tmp/book.xlsx', buf)).toBe('Alpha & Beta 中\t-12.5\t1')
+    })
+
+    it('preserves shared-string indexes and rich text without indexing unused entries', async () => {
+      const buf = await workbookBuffer([{ name: 'sheet1.xml', rows: '<row r="1"><c r="A1" t="s"><v>2</v></c><c r="B1" t="s"><v>0</v></c><c r="C1" t="str"><v>Tail</v></c></row>' }], '<si><t></t></si><si><t>Unused ghost content</t></si><si><r><t>Rich </t></r><r><t>text</t></r><rPh sb="0" eb="1"><t>phonetic hint</t></rPh></si>')
+      expect(await extractText('/tmp/book.xlsx', buf)).toBe('Rich text\t\tTail')
+    })
+
+    it('uses workbook relationships for sheet order and ignores unreferenced worksheet parts', async () => {
+      const buf = await workbookBuffer([
+        { name: 'later-name.xml', rows: '<row r="1"><c r="A1" t="str"><v>First tab</v></c></row>' },
+        { name: 'earlier-name.xml', rows: '<row r="1"><c r="A1" t="str"><v>Second tab</v></c></row>' },
+      ], undefined, { 'xl/worksheets/ghost.xml': '<worksheet><sheetData><row><c t="str"><v>Unreferenced part</v></c></row></sheetData></worksheet>' })
+      expect(await extractText('/tmp/book.xlsx', buf)).toBe('First tab\n\nSecond tab')
+    })
+
+    it('reads cached formula results without indexing formulas or external-link content', async () => {
+      const buf = await workbookBuffer([{ name: 'sheet1.xml', rows: '<row r="1"><c r="A1"><f>WEBSERVICE("https://example.invalid/private")</f><v>19.5</v></c><c r="B1" t="str"><f>ExternalName</f><v>Cached result</v></c><c r="C1"><f>1+2</f></c></row>' }], undefined, { 'xl/externalLinks/externalLink1.xml': '<externalLink>External content must not be read</externalLink>' })
+      expect(await extractText('/tmp/book.xlsx', buf)).toBe('19.5\tCached result')
+    })
+
+    it('does not expand a sparse worksheet dimension into empty cells', async () => {
+      const buf = await workbookBuffer([{ name: 'sheet1.xml', dimension: 'A1:XFD1048576', rows: '<row r="1048576"><c r="XFD1048576"><v>42</v></c></row>' }])
+      expect(await extractText('/tmp/book.xlsx', buf)).toBe('42')
+    })
+
+    it('preserves text across decompression and XML parser chunk boundaries', async () => {
+      const text = 'Cedar 中 & '.repeat(9000)
+      const buf = await workbookBuffer([{ name: 'sheet1.xml', rows: `<row r="1"><c r="A1" t="inlineStr"><is><t>${text.replaceAll('&', '&amp;')}</t></is></c></row>` }])
+      expect(await extractText('/tmp/book.xlsx', buf)).toBe(text.trim())
+    })
+
+    it('rejects missing referenced shared strings and malformed sheet XML', async () => {
+      const missing = await workbookBuffer([{ name: 'sheet1.xml', rows: '<row><c t="s"><v>8</v></c></row>' }], '<si><t>Only entry</t></si>')
+      await expect(extractText('/tmp/book.xlsx', missing)).rejects.toThrow('shared string 8 is missing')
+      const malformed = await workbookBuffer([{ name: 'sheet1.xml', rows: '<row><c><v>12</c></row>' }])
+      await expect(extractText('/tmp/book.xlsx', malformed)).rejects.toThrow()
+    })
+
+    it.each(['"Hidden entity text"', 'SYSTEM "file:///acceptance-nonexistent-entity"'])('does not expand a declared XML entity (%s)', async (entity) => {
+      const buf = await workbookBuffer([{ name: 'sheet1.xml', rows: '<row><c t="inlineStr"><is><t>&external;</t></is></c></row>' }])
+      const zip = await JSZip.loadAsync(buf)
+      const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+      zip.file('xl/worksheets/sheet1.xml', `<!DOCTYPE worksheet [<!ENTITY external ${entity}>]>${sheet}`)
+      await expect(extractText('/tmp/book.xlsx', await zip.generateAsync({ type: 'nodebuffer' }))).rejects.toThrow('Invalid character entity')
+    })
+
+    it('does not treat an orphan shared-string table as workbook content', async () => {
+      const buf = await zipBuffer({ 'xl/sharedStrings.xml': '<sst><si><t>Ghost content</t></si></sst>' })
+      await expect(extractText('/tmp/book.xlsx', buf)).rejects.toThrow('Spreadsheet part is missing')
     })
   })
 

@@ -1,0 +1,71 @@
+version: 1
+id: automation.reminders
+module: automation
+title:
+  en: Follow up at the requested time
+  zh: 在约定时间跟进
+story:
+  en: I can ask for a reminder or follow-up and cancel it before it happens.
+  zh: 我能要求提醒或后续跟进，并在发生前取消。
+basis: observed
+references:
+  - src/main/apps/runtime/reminders/tool.ts
+  - src/main/apps/runtime/reminders/delivery.ts
+  - src/main/apps/runtime/reminders/view.ts
+promises:
+  target:
+    en: A reminder returns to its intended conversation with the setter’s current permissions.
+    zh: 提醒回到预期对话，并使用设置者当前权限。
+  cancel:
+    en: Cancellation prevents a pending reminder from being delivered.
+    zh: 取消会阻止未投递提醒。
+  active:
+    en: A compatible reminder can join active work at the normal next-step boundary.
+    zh: 权限兼容提醒可在正常下一步边界加入活动任务。
+scenarios:
+  - id: automation.reminders.deliver
+    title:
+      en: Deliver a reminder to its originating work
+      zh: 把提醒送回原工作
+    verifies:
+      - target
+      - active
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A test reminder targets an active controlled conversation.
+        zh: 测试提醒指向活动的受控对话。
+    steps:
+      - en: Reach its due time while a tool is running and then release the tool.
+        zh: 工具运行时到达提醒时间，再释放工具。
+    expected:
+      - en: The reminder reaches only that conversation with current valid authority.
+        zh: 提醒仅送达该对话，并使用当前有效权限。
+  - id: automation.reminders.cancel
+    title:
+      en: Cancel a pending reminder
+      zh: 取消未到期提醒
+    verifies:
+      - cancel
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A pending reminder has not fired.
+        zh: 提醒尚未触发。
+    steps:
+      - en: Cancel, cross its due time and inspect delivery records.
+        zh: 取消后跨过到期时间并检查投递记录。
+    expected:
+      - en: The cancelled reminder never reaches the conversation.
+        zh: 取消的提醒未送达对话。

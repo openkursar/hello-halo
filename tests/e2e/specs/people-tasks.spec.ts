@@ -9,7 +9,7 @@ import { waitForHomePage } from '../fixtures/helpers'
 test.setTimeout(60000)
 test.use({ peopleCount: 2 })
 
-test('a team waiting for the user appears in the task panel and opens its workbench', async ({ window }) => {
+test('a team waiting for the user appears in the task panel and opens its workbench', { annotation: { type: 'acceptance', description: '{"caseId":"notifications.attention.team","evidence":"app-e2e","mode":"none","variant":{}}' } }, async ({ window }) => {
   await waitForHomePage(window)
   await window.getByRole('button', { name: /^Tasks/ }).click()
 

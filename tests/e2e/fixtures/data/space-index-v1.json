@@ -1,0 +1,70 @@
+{
+  "dataset": "space-index-v1",
+  "historicalProducer": "284439ce0298071d8afaa005b7de187a4de53479",
+  "index": { "customPaths": ["$PROFILE/legacy-project"] },
+  "expectedOrder": ["10000000-0000-4000-8000-000000000003", "10000000-0000-4000-8000-000000000002", "10000000-0000-4000-8000-000000000001"],
+  "workSpaceId": "10000000-0000-4000-8000-000000000003",
+  "spaces": [
+    {
+      "path": "$PROFILE/.halo/spaces/Legacy Default",
+      "registered": true,
+      "meta": {
+        "id": "10000000-0000-4000-8000-000000000001", "name": "Legacy Default", "icon": "folder",
+        "createdAt": "2025-01-01T10:00:00.000Z", "updatedAt": "2025-02-01T10:00:00.000Z",
+        "preferences": { "layout": { "artifactRailExpanded": false, "chatWidth": 360 } }
+      },
+      "conversations": [
+        {
+          "id": "11000000-0000-4000-8000-000000000001", "spaceId": "10000000-0000-4000-8000-000000000001", "title": "Default archive", "createdAt": "2025-01-02T10:00:00.000Z", "updatedAt": "2025-01-02T10:01:00.000Z", "messageCount": 2, "preview": "The default archive answer remains intact.",
+          "messages": [
+            { "id": "11100000-0000-4000-8000-000000000001", "role": "user", "content": "Keep the default workspace question.", "timestamp": "2025-01-02T10:00:00.000Z" },
+            { "id": "11100000-0000-4000-8000-000000000002", "role": "assistant", "content": "The default archive answer remains intact.", "timestamp": "2025-01-02T10:01:00.000Z" }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "$PROFILE/.halo/spaces/Legacy Control",
+      "registered": true,
+      "meta": {
+        "id": "10000000-0000-4000-8000-000000000002", "name": "Legacy Control", "icon": "star",
+        "createdAt": "2025-01-03T10:00:00.000Z", "updatedAt": "2025-03-01T10:00:00.000Z",
+        "preferences": { "layout": { "artifactRailExpanded": true, "chatWidth": 420 } }
+      },
+      "conversations": [
+        {
+          "id": "12000000-0000-4000-8000-000000000001", "spaceId": "10000000-0000-4000-8000-000000000002", "title": "Control archive", "createdAt": "2025-01-04T10:00:00.000Z", "updatedAt": "2025-01-04T10:01:00.000Z", "messageCount": 2, "preview": "The separate control answer remains intact.",
+          "messages": [
+            { "id": "12100000-0000-4000-8000-000000000001", "role": "user", "content": "Do not change this separate workspace.", "timestamp": "2025-01-04T10:00:00.000Z" },
+            { "id": "12100000-0000-4000-8000-000000000002", "role": "assistant", "content": "The separate control answer remains intact.", "timestamp": "2025-01-04T10:01:00.000Z" }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "$PROFILE/legacy-project",
+      "registered": true,
+      "meta": {
+        "id": "10000000-0000-4000-8000-000000000003", "name": "Legacy External Project", "icon": "code",
+        "createdAt": "2025-01-05T10:00:00.000Z", "updatedAt": "2025-04-01T10:00:00.000Z",
+        "preferences": { "layout": { "artifactRailExpanded": true, "chatWidth": 480 } }
+      },
+      "conversations": [
+        {
+          "id": "13000000-0000-4000-8000-000000000002", "spaceId": "10000000-0000-4000-8000-000000000003", "title": "Recent project archive", "createdAt": "2025-01-07T10:00:00.000Z", "updatedAt": "2025-01-07T10:01:00.000Z", "messageCount": 2, "preview": "The recent project answer remains intact.",
+          "messages": [
+            { "id": "13200000-0000-4000-8000-000000000001", "role": "user", "content": "Retain this recent project question.\n保留项目记录。", "timestamp": "2025-01-07T10:00:00.000Z" },
+            { "id": "13200000-0000-4000-8000-000000000002", "role": "assistant", "content": "The recent project answer remains intact.", "timestamp": "2025-01-07T10:01:00.000Z" }
+          ]
+        },
+        {
+          "id": "13000000-0000-4000-8000-000000000001", "spaceId": "10000000-0000-4000-8000-000000000003", "title": "Earlier project archive", "createdAt": "2025-01-06T10:00:00.000Z", "updatedAt": "2025-01-06T10:01:00.000Z", "messageCount": 2, "preview": "The earlier project answer remains intact.",
+          "messages": [
+            { "id": "13100000-0000-4000-8000-000000000001", "role": "user", "content": "Retain this earlier project question.", "timestamp": "2025-01-06T10:00:00.000Z" },
+            { "id": "13100000-0000-4000-8000-000000000002", "role": "assistant", "content": "The earlier project answer remains intact.", "timestamp": "2025-01-06T10:01:00.000Z" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+version: 1
+id: files.navigation
+module: files
+title:
+  en: Manage the canvas while continuing chat
+  zh: 一边管理画布一边聊天
+story:
+  en: I can switch file tabs, resize the canvas and return to my conversation.
+  zh: 我能切换文件标签、调整画布并返回对话。
+basis: observed
+references:
+  - src/renderer/components/canvas/CanvasTabs.tsx
+  - src/renderer/components/canvas/ContentCanvas.tsx
+  - src/renderer/hooks/useLayoutPreferences.ts
+  - tests/e2e/specs/acceptance-file-navigation.spec.ts
+promises:
+  tabs:
+    en: Tab selection and canvas collapse do not silently discard the current content state.
+    zh: 切换标签和折叠画布不会悄悄丢失内容状态。
+  layout:
+    en: Narrow and fullscreen layouts keep chat and exit controls reachable.
+    zh: 窄屏和全屏布局仍能找到聊天及退出入口。
+scenarios:
+  - id: files.navigation.tabs
+    title:
+      en: Switch tabs and collapse the canvas
+      zh: 切换标签并折叠画布
+    verifies:
+      - tabs
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    notes:
+      en: Two unchanged 600-line text files are scrolled through real wheel input to different positions. The visible line, its viewport offset and the actual editor scroll position are checked after tab switches and collapse/expand. A stored conversation, its unsent draft and an unrelated stored conversation remain intact. This does not exercise dirty-tab closing or other viewers' reading-state policies.
+      zh: 两个保持原字节的 600 行文本文件通过真实滚轮移动到不同位置，切换标签及折叠展开后核对可见行、视口偏移与编辑器实际滚动位置；原对话、未发草稿和另一保存对话保持不变。不据此声称未保存标签关闭或其他查看器的阅读状态规则已验证。
+    preconditions:
+      - en: Several file tabs are open with known reading positions.
+        zh: 多个文件标签打开并有已知阅读位置。
+    steps:
+      - en: Switch tabs, collapse the canvas and reopen it.
+        zh: 切换标签，折叠后重开画布。
+    expected:
+      - en: The selected content and supported reading state are retained.
+        zh: 选定内容及支持的阅读状态保留。
+  - id: files.navigation.narrow
+    title:
+      en: Use canvas at mobile width
+      zh: 窄屏使用画布
+    verifies:
+      - layout
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    notes:
+      en: The owned desktop window is resized to a real 375px content width and the renderer width is verified. The file is opened through the mobile resource sheet, which is closed through its own UI before checking the canvas overlay and Return to conversation action. Desktop canvas fullscreen/exit is also checked. File bytes, saved message identities and the unsent draft must survive; this is not a mobile operating-system or virtual-keyboard test.
+      zh: 自有桌面窗口实际缩至 375px 内容宽度，并核对界面宽度；从窄屏资源抽屉打开文件，通过其真实按钮关闭抽屉后检查画布覆盖层和返回对话操作，同时检查桌面画布全屏及退出。文件字节、保存消息身份与未发草稿必须保留；本例不代表移动操作系统或虚拟键盘测试。
+    preconditions:
+      - en: A file and chat are open.
+        zh: 已打开文件及对话。
+    steps:
+      - en: Resize to 375px, open fullscreen canvas, then return to chat.
+        zh: 改为 375px，打开全屏画布再返回对话。
+    expected:
+      - en: Content fits the viewport and return controls remain operable.
+        zh: 内容适配视口，返回控件可操作。

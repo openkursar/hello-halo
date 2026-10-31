@@ -1,0 +1,22 @@
+version: 1
+id: quality
+title:
+  en: Usability, responsiveness and resource limits
+  zh: 可用性、响应与资源限制
+description:
+  en: Cross-cutting user-visible quality requirements and explicit coverage dimensions.
+  zh: 跨功能的用户可见质量要求及明确覆盖维度。
+paths:
+  - src/shared/**
+  - src/main/foundation/**
+  - src/renderer/lib/**
+  - src/renderer/assets/styles/**
+  - tests/perf/**
+  - scripts/perf-gate/**
+  - package.json
+  - package-lock.json
+  - electron.vite.config.ts
+dependsOn: []
+scope:
+  en: Shared requirements apply to named surfaces and workloads; mobile-width UI is separate from native mobile; performance evidence records the actual build, machine and workload.
+  zh: 共享要求适用于明确页面及负载；窄屏界面与原生移动端分开；性能证据记录实际构建、机器及负载。

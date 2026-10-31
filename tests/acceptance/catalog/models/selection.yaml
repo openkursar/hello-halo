@@ -1,0 +1,88 @@
+version: 1
+id: models.selection
+module: models
+title:
+  en: Choose a model for each conversation
+  zh: 为各对话选择模型
+story:
+  en: I can select a model without unexpectedly changing other conversations.
+  zh: 我选择模型时，不会意外改掉其他对话。
+basis: documented
+references:
+  - src/main/services/agent/DESIGN.md
+  - src/renderer/components/ai-config/ModelSelector.tsx
+  - src/shared/types/ai-sources.ts
+  - tests/e2e/specs/acceptance-model-selection.spec.ts
+promises:
+  pinned:
+    en: A conversation retains its selected account and model.
+    zh: 对话保留选定的账户与模型。
+  missing:
+    en: A removed account and an existing but unauthenticated account have distinct recovery behavior.
+    zh: 账户被移除与账户仍在但未认证具有不同恢复行为。
+scenarios:
+  - id: models.selection.per-chat
+    title:
+      en: Keep different models in different chats
+      zh: 不同对话保留不同模型
+    verifies:
+      - pinned
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: Two accounts with different selected models pass a real connection check against isolated local providers.
+        zh: 两个账户分别选择不同模型，并通过隔离的本地服务完成真实连接测试。
+    steps:
+      - en: Create two conversations through the UI, select a different account and model in each, and alternate completed turns.
+        zh: 通过界面新建两个对话，各选不同账户与模型，交替完成多轮交流。
+      - en: Restart the application, reopen both conversations and send another message in each.
+        zh: 重启应用后重新打开两个对话，各发送一条新消息。
+    expected:
+      - en: Each conversation shows its selected account and model, preserves its stored pin and history, and sends every observed inference request to that account with that model.
+        zh: 各对话显示原选账户与模型，保留已存选择及历史；每次实际推理请求均使用对应账户与模型。
+    notes:
+      en: The local provider scripts response content. This verifies routing and persistence, not model quality or successful recovery of prior model context.
+      zh: 本地服务脚本化返回内容；此场景验证路由与持久化，不代表模型质量或旧模型上下文已成功恢复。
+  - id: models.selection.account-gone
+    variants:
+      state:
+        - removed
+        - invalid
+    title:
+      en: Recover differently from a removed account and invalid credentials
+      zh: 区分账户已移除与凭据失效的恢复行为
+    verifies:
+      - missing
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A conversation has completed a real turn using account A; valid account B is then selected as the global default.
+        zh: 一个对话已用账户 A 完成真实交流，再将有效的账户 B 设为全局默认。
+    steps:
+      - en: Through settings, remove A or retain A with an invalid API key in separate isolated runs.
+        zh: 在独立隔离运行中，通过设置移除 A，或保留 A 并将其 API 凭据改为无效值。
+      - en: Send from the original conversation before and after restarting the application.
+        zh: 重启应用前后，均从原对话发送请求。
+    expected:
+      - en: When A is removed, the displayed choice and actual requests use B and its global model while the original stored pin and history remain intact.
+        zh: A 被移除时，界面与实际请求使用 B 及其全局模型，原存选择和历史保持完整。
+      - en: When A still exists but rejects authentication, the error is visible and retained in history; the original request is not sent to B and the pin is not silently changed.
+        zh: A 仍存在但认证被拒时，错误明确显示并保留在历史中；原请求不会发送给 B，已选账户不会被静默更换。
+    notes:
+      en: API-key rejection is verified at an isolated local provider boundary. This does not establish third-party OAuth expiry or refresh behavior.
+      zh: API 凭据拒绝通过隔离的本地服务边界验证，不代表已覆盖第三方 OAuth 过期或刷新行为。

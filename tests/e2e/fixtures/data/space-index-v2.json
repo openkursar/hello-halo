@@ -1,0 +1,87 @@
+{
+  "dataset": "space-index-v2",
+  "historicalProducer": "d773d060c5190a667f089b1a1afe9d58b76d5b10",
+  "index": {
+    "version": 2,
+    "spaces": {
+      "20000000-0000-4000-8000-000000000001": { "path": "$PROFILE/.halo/spaces/20000000-0000-4000-8000-000000000001" },
+      "20000000-0000-4000-8000-000000000002": { "path": "$PROFILE/retained-external-project" },
+      "20000000-0000-4000-8000-000000000003": { "path": "$PROFILE/.halo/spaces/20000000-0000-4000-8000-000000000003" }
+    }
+  },
+  "expectedOrder": ["20000000-0000-4000-8000-000000000003", "20000000-0000-4000-8000-000000000002", "20000000-0000-4000-8000-000000000001"],
+  "workSpaceId": "20000000-0000-4000-8000-000000000003",
+  "spaces": [
+    {
+      "path": "$PROFILE/.halo/spaces/20000000-0000-4000-8000-000000000001",
+      "registered": true,
+      "meta": {
+        "id": "20000000-0000-4000-8000-000000000001", "name": "Indexed Default", "icon": "folder",
+        "createdAt": "2025-01-01T10:00:00.000Z", "updatedAt": "2025-02-01T10:00:00.000Z",
+        "preferences": { "layout": { "artifactRailExpanded": false, "chatWidth": 360 } }
+      },
+      "conversations": [
+        {
+          "version": 2, "id": "21000000-0000-4000-8000-000000000001", "spaceId": "20000000-0000-4000-8000-000000000001", "title": "Indexed default archive", "createdAt": "2025-01-02T10:00:00.000Z", "updatedAt": "2025-01-02T10:01:00.000Z", "messageCount": 2, "preview": "The indexed default answer remains intact.",
+          "messages": [
+            { "id": "21100000-0000-4000-8000-000000000001", "role": "user", "content": "Keep the indexed default question.", "timestamp": "2025-01-02T10:00:00.000Z" },
+            { "id": "21100000-0000-4000-8000-000000000002", "role": "assistant", "content": "The indexed default answer remains intact.", "timestamp": "2025-01-02T10:01:00.000Z" }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "$PROFILE/retained-external-project",
+      "registered": true,
+      "meta": {
+        "id": "20000000-0000-4000-8000-000000000002", "name": "Indexed External Control", "icon": "star",
+        "createdAt": "2025-01-03T10:00:00.000Z", "updatedAt": "2025-03-01T10:00:00.000Z",
+        "preferences": { "layout": { "artifactRailExpanded": true, "chatWidth": 420 } }
+      },
+      "conversations": [
+        {
+          "version": 2, "id": "22000000-0000-4000-8000-000000000001", "spaceId": "20000000-0000-4000-8000-000000000002", "title": "Indexed external archive", "createdAt": "2025-01-04T10:00:00.000Z", "updatedAt": "2025-01-04T10:01:00.000Z", "messageCount": 2, "preview": "The indexed external answer remains intact.",
+          "messages": [
+            { "id": "22100000-0000-4000-8000-000000000001", "role": "user", "content": "Keep the registered external project.", "timestamp": "2025-01-04T10:00:00.000Z" },
+            { "id": "22100000-0000-4000-8000-000000000002", "role": "assistant", "content": "The indexed external answer remains intact.", "timestamp": "2025-01-04T10:01:00.000Z" }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "$PROFILE/.halo/spaces/20000000-0000-4000-8000-000000000003",
+      "registered": true,
+      "meta": {
+        "id": "20000000-0000-4000-8000-000000000003", "name": "Indexed Working Project", "icon": "code",
+        "createdAt": "2025-01-05T10:00:00.000Z", "updatedAt": "2025-04-01T10:00:00.000Z",
+        "workingDir": "$PROFILE/projects/Legacy Working Directory",
+        "preferences": { "layout": { "artifactRailExpanded": true, "chatWidth": 480 } }
+      },
+      "conversations": [
+        {
+          "version": 2, "id": "23000000-0000-4000-8000-000000000002", "spaceId": "20000000-0000-4000-8000-000000000003", "title": "Recent indexed project archive", "createdAt": "2025-01-07T10:00:00.000Z", "updatedAt": "2025-01-07T10:01:00.000Z", "messageCount": 2, "preview": "The recent indexed answer remains intact.",
+          "messages": [
+            { "id": "23200000-0000-4000-8000-000000000001", "role": "user", "content": "Retain the newer indexed question.\n索引与目录分别保留。", "timestamp": "2025-01-07T10:00:00.000Z" },
+            { "id": "23200000-0000-4000-8000-000000000002", "role": "assistant", "content": "The recent indexed answer remains intact.", "timestamp": "2025-01-07T10:01:00.000Z" }
+          ]
+        },
+        {
+          "version": 2, "id": "23000000-0000-4000-8000-000000000001", "spaceId": "20000000-0000-4000-8000-000000000003", "title": "Earlier indexed project archive", "createdAt": "2025-01-06T10:00:00.000Z", "updatedAt": "2025-01-06T10:01:00.000Z", "messageCount": 2, "preview": "The earlier indexed answer remains intact.",
+          "messages": [
+            { "id": "23100000-0000-4000-8000-000000000001", "role": "user", "content": "Retain the older indexed question.", "timestamp": "2025-01-06T10:00:00.000Z" },
+            { "id": "23100000-0000-4000-8000-000000000002", "role": "assistant", "content": "The earlier indexed answer remains intact.", "timestamp": "2025-01-06T10:01:00.000Z" }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "$PROFILE/.halo/spaces/Unregistered Control",
+      "registered": false,
+      "meta": {
+        "id": "20000000-0000-4000-8000-000000000004", "name": "Unregistered Control", "icon": "folder",
+        "createdAt": "2025-01-01T10:00:00.000Z", "updatedAt": "2025-05-01T10:00:00.000Z"
+      },
+      "conversations": []
+    }
+  ]
+}

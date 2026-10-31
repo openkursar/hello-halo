@@ -1,0 +1,98 @@
+version: 1
+id: settings.preferences
+module: settings
+title:
+  en: Use a comfortable readable interface
+  zh: 使用舒适清晰的界面
+story:
+  en: I can change language, theme, size and send-key behavior without losing my work.
+  zh: 我能改语言、主题、大小及发送按键，不丢当前工作。
+basis: observed
+references:
+  - src/renderer/components/settings/AppearanceSection.tsx
+  - tests/e2e/specs/settings.spec.ts
+  - tests/e2e/specs/acceptance-settings.spec.ts
+  - tests/e2e/specs/acceptance-input.spec.ts
+promises:
+  appearance:
+    en: Theme, language and display size apply and persist as supported preferences.
+    zh: 主题、语言及显示大小按支持的偏好应用并保留。
+  send:
+    en: The chosen send key distinguishes sending from entering a newline.
+    zh: 选定的发送键能区分发送与换行。
+scenarios:
+  - id: settings.preferences.appearance
+    title:
+      en: Change appearance and reopen
+      zh: 修改外观后重新打开
+    verifies:
+      - appearance
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A conversation with a draft is open.
+        zh: 对话中有未发送草稿。
+    steps:
+      - en: Change theme, language and display scale, return and restart.
+        zh: 修改主题、语言及缩放，返回并重启。
+    expected:
+      - en: Preferences persist; content remains legible and in-app navigation preserves the draft.
+        zh: 偏好保留，内容清晰，应用内导航保留草稿。
+  - id: settings.preferences.send-key
+    title:
+      en: Use both send-key configurations
+      zh: 使用两种发送键配置
+    verifies:
+      - send
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: A local scripted model is available.
+        zh: 有本地脚本模型。
+    steps:
+      - en: For each send-key mode, enter a newline and submit intentionally.
+        zh: 在每种发送键模式下输入换行，再主动提交。
+    expected:
+      - en: Newline remains in the draft and only the configured submit action sends.
+        zh: 换行留在草稿，只有配置的提交动作会发送。
+    variants:
+      key:
+        - enter
+        - ctrl-enter
+    requirements:
+      - halo-sdk
+  - id: settings.preferences.theme-toggle
+    title:
+      en: Apply and remember the selected theme
+      zh: 应用并记住所选主题
+    verifies:
+      - appearance
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Choose Light and then Dark in Appearance settings.
+        zh: 在外观设置中依次选择浅色和深色。
+    expected:
+      - en: The document theme changes and the final choice is saved locally.
+        zh: 页面主题改变，最终选择保存到本地。

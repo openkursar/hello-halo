@@ -1,0 +1,83 @@
+version: 1
+id: remote.mobile
+module: remote
+title:
+  en: Connect and return from a mobile device
+  zh: 连接移动设备并再次进入
+story:
+  en: I can save my desktop connection on a mobile client and recover after it goes offline.
+  zh: 我能在移动客户端保存桌面连接，离线后再恢复。
+basis: observed
+references:
+  - src/renderer/pages/ServerListPage.tsx
+  - src/renderer/components/setup/ServerConnect.tsx
+  - src/renderer/api/safe-area.ts
+promises:
+  device:
+    en: Saved devices show connection state and removal requires confirmation.
+    zh: 保存设备显示连接状态，移除需确认。
+  resume:
+    en: A native client can reconnect after backgrounding and keeps the chosen desktop identity.
+    zh: 原生客户端后台返回后能重连，并保留选定桌面身份。
+  camera:
+    en: Camera refusal leaves manual server-address entry available.
+    zh: 相机授权被拒绝后，仍可手动输入服务地址。
+scenarios:
+  - id: remote.mobile.device
+    title:
+      en: Save, reconnect and remove a native mobile device
+      zh: 保存、重连和移除原生移动设备
+    verifies:
+      - device
+      - resume
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - external
+    evidence: external
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A dedicated native client and authenticated test desktop are available.
+        zh: 有专用原生客户端及已认证测试桌面。
+    steps:
+      - en: Add a device, background the client, disconnect/reconnect and cancel then confirm removal.
+        zh: 添加设备、切到后台、断线重连，并先取消后确认移除。
+    expected:
+      - en: The same host is recovered; cancellation keeps the saved device and confirmation removes it.
+        zh: 恢复同一主机，取消保留设备，确认才移除。
+    requirements:
+      - mobile-device
+    variants:
+      client:
+        - android
+        - ios
+  - id: remote.mobile.camera
+    title:
+      en: Decline camera access and connect manually
+      zh: 拒绝相机授权后手动连接
+    verifies:
+      - camera
+    platforms: *a1
+    profiles:
+      - external
+    evidence: external
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A native client has no camera permission.
+        zh: 原生客户端尚无相机权限。
+    steps:
+      - en: Start QR scanning, deny camera access and use manual address entry.
+        zh: 启动扫码并拒绝相机，再手动输入地址。
+    expected:
+      - en: The camera error is clear and manual authentication remains usable.
+        zh: 相机错误明确，手动认证仍可用。
+    requirements:
+      - mobile-device
+    variants:
+      client:
+        - android
+        - ios

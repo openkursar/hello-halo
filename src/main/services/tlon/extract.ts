@@ -3,8 +3,8 @@
  *
  * Plain-text files are decoded with encoding detection (UTF-8/UTF-16 first,
  * then common legacy CJK/Latin codepages); PDFs are parsed with unpdf (pdf.js);
- * the OOXML formats (pptx / docx / xlsx) are unzipped and their text runs scraped
- * from the slide/document/sharedStrings XML; images are OCR'd locally (see ocr.ts).
+ * PPTX/DOCX text runs are read from their XML; XLSX reads actual stored cells
+ * through a streaming parser. Images are OCR'd locally (see ocr.ts).
  * Scanned PDFs (no text layer) currently yield no text — OCR of rendered pages
  * would need a native canvas dependency and is deferred.
  *
@@ -55,7 +55,7 @@ export async function extractText(absPath: string, buf: Buffer): Promise<string>
     case '.pdf': return extractPdf(buf)
     case '.pptx': return extractOoxml(buf, 'pptx')
     case '.docx': return extractOoxml(buf, 'docx')
-    case '.xlsx': return extractOoxml(buf, 'xlsx')
+    case '.xlsx': return (await import('./extract-xlsx')).extractXlsx(buf)
     default: return decodeTextBuffer(buf)
   }
 }
@@ -147,7 +147,7 @@ async function extractPdf(buf: Buffer): Promise<string> {
   return (Array.isArray(text) ? text.join('\n') : text).trim()
 }
 
-async function extractOoxml(buf: Buffer, kind: 'pptx' | 'docx' | 'xlsx'): Promise<string> {
+async function extractOoxml(buf: Buffer, kind: 'pptx' | 'docx'): Promise<string> {
   const JSZip = (await import('jszip')).default
   const zip = await JSZip.loadAsync(buf)
   const read = (name: string) => zip.file(name)?.async('string') ?? Promise.resolve('')
@@ -164,20 +164,14 @@ async function extractOoxml(buf: Buffer, kind: 'pptx' | 'docx' | 'xlsx'): Promis
     return out.join('\n\n').trim()
   }
 
-  if (kind === 'docx') {
-    const doc = await read('word/document.xml')
-    // One line per paragraph (<w:p>), runs (<w:t>) concatenated within it.
-    return doc
-      .split(/<\/w:p>/)
-      .map(p => xmlTexts(p, 'w:t').join(''))
-      .filter(Boolean)
-      .join('\n')
-      .trim()
-  }
-
-  // xlsx: the shared string table holds the bulk of human text.
-  const shared = await read('xl/sharedStrings.xml')
-  return xmlTexts(shared, 't').join('\n').trim()
+  const doc = await read('word/document.xml')
+  // One line per paragraph (<w:p>), runs (<w:t>) concatenated within it.
+  return doc
+    .split(/<\/w:p>/)
+    .map(p => xmlTexts(p, 'w:t').join(''))
+    .filter(Boolean)
+    .join('\n')
+    .trim()
 }
 
 /** Extract the inner text of every `<tag …>…</tag>` occurrence (XML-decoded). */

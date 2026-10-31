@@ -1,0 +1,76 @@
+version: 1
+id: marketplace.sources
+module: marketplace
+title:
+  en: Control the catalog sources
+  zh: 管理商店来源
+story:
+  en: I can control which sources contribute catalog entries without losing resources I already installed.
+  zh: 我能控制哪些来源提供商店条目，并保留已安装的资源。
+basis: observed
+references:
+  - src/main/store/registry.service.ts
+  - src/renderer/components/settings/RegistrySection.tsx
+  - tests/e2e/specs/acceptance-marketplace.spec.ts
+promises:
+  manage:
+    en: Disabling or removing a source changes the catalog and persists across restart without uninstalling existing resources.
+    zh: 禁用或移除来源改变目录且重启后保留设置，不会卸载已有资源。
+  validation:
+    en: Invalid and explicitly disallowed source addresses produce an error before registration or network probing.
+    zh: 无效或明确禁止的来源地址在注册及网络探测前返回错误。
+scenarios:
+  - id: marketplace.sources.manage
+    title:
+      en: Disable, restore and remove a source while retaining installations
+      zh: 禁用、恢复和移除来源并保留安装
+    verifies:
+      - manage
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Two trusted local fixture sources are configured and one resource is installed.
+        zh: 已配置两个可信本地测试来源，且已安装一个资源。
+    steps:
+      - en: Disable its source, restart, enable it again, remove it and restart.
+        zh: 禁用所属来源并重启，再启用、移除并重启。
+    expected:
+      - en: Only enabled-source entries are listed; source choices persist and the installed resource remains manageable with the same identity.
+        zh: 只列出已启用来源条目；来源设置持久化，已安装资源仍可管理且身份不变。
+    notes:
+      en: Uses the built, unpackaged app and local HTTP source fixtures; no provider credentials or live model are exercised.
+      zh: 使用构建后的未打包应用与本机 HTTP 来源；不涉及供应商凭证或真实模型。
+  - id: marketplace.sources.validation
+    title:
+      en: Reject invalid and loopback addresses in Add Registry
+      zh: 在添加来源时拒绝无效与回环地址
+    verifies:
+      - validation
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Settings are open with an isolated source list.
+        zh: 设置已打开并使用隔离来源列表。
+    steps:
+      - en: Try adding malformed text, then a loopback HTTP address; inspect errors and cancel.
+        zh: 先尝试格式错误文本，再尝试回环 HTTP 地址，查看错误后取消。
+    expected:
+      - en: Neither attempt changes the source list or requests the rejected address.
+        zh: 两次尝试均不改变来源列表，也不请求被拒绝的地址。
+    notes:
+      en: Uses the built, unpackaged app and local HTTP source fixtures; no provider credentials or live model are exercised.
+      zh: 使用构建后的未打包应用与本机 HTTP 来源；不涉及供应商凭证或真实模型。

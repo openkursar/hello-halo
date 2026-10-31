@@ -118,7 +118,7 @@ import {
 } from './delegation-gate'
 import { grantedSkillFolders, inertCommandText, turnSkillAccess, type TurnSkillAccess } from './turn-skills'
 import { listLoadableSkillCopies } from '../skill-discovery'
-import { allowsBuiltin, colleagueReach, intersectPolicies, SKILL_TOOL } from '../../../shared/apps/capability-policy'
+import { allowsBuiltin, allowsCapability, colleagueReach, intersectPolicies, SKILL_TOOL } from '../../../shared/apps/capability-policy'
 import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
 import type { TeamRequestOrigin, TeamTriggerContext } from '../../../shared/apps/team-types'
 import type { AvailableSkill } from '../../../shared/apps/app-types'
@@ -820,9 +820,10 @@ async function runAppChatTurn(
       ? [...buildTeamConstraints(teamPromptCtx), ...buildImConstraints(imSession, permCtx?.ownerIds)]
       : buildTeamConstraints(teamPromptCtx)
   } else if (imSession) {
+    const notificationsAllowed = permCtx?.isOwner !== false || allowsCapability(permCtx.guestPolicy, 'allowNotify', 'strict')
     entry = buildImEntry(imSession, permCtx?.ownerIds, {
-      channelsConfigured: notifyAvail.channelsConfigured,
-      notifyBotAvailable: notifyAvail.notifyBotAvailable,
+      channelsConfigured: notificationsAllowed && notifyAvail.channelsConfigured,
+      notifyBotAvailable: notificationsAllowed && notifyAvail.notifyBotAvailable,
     })
     constraints = buildImConstraints(imSession, permCtx?.ownerIds)
   } else {

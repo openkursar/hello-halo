@@ -1,75 +1,84 @@
-# Halo Test Suite
+# Halo test suite
 
-This directory contains the automated test infrastructure for Halo.
+Halo uses complementary verification layers. The behavioral acceptance catalog
+connects user-visible promises to these layers without replacing their runners.
+Start at [acceptance/README.md](acceptance/README.md) to browse the product scope,
+select a module and understand what a result actually proves.
 
-## Test Layers
+| Layer | Location | Purpose | Entry |
+|---|---|---|---|
+| Package and resource checks | `check/` | Binary, platform, signing and shipped-runtime prerequisites | `npm run test:check` and the related `test:check:*` scripts |
+| Unit and in-process integration | `unit/` | Domain behavior, architecture guards, protocol/state failures and selected renderer logic | `npm run test:unit -- <test-path>` |
+| UI and application acceptance | `e2e/` | Real Electron UI, scripted-model application journeys, browser integration and optional live tests | `npm run test:e2e -- --project=<project>` |
+| Digital-team cluster regression | `decentralized/` | Real isolated nodes, persistence, HTTP/WS, failures and selected model turns | `npm run test:team -- <suite>` |
+| Performance and resource regression | `perf/` | Named workloads with build, fixture and measurement evidence | `npm run test:perf` and `test:perf:release` |
+| Product behavior catalog | `acceptance/` | User stories, applicability, executable bindings, selection and evidence reports | `npm run acceptance -- <command>` |
 
-| Layer | Tool | Purpose | Run Command |
-|-------|------|---------|-------------|
-| Pre-build Check | Shell/Node | Verify binary dependencies before packaging | `npm run test:check` |
-| Unit Tests | Vitest | Test core service logic without Electron | `npm run test:unit` |
-| E2E Smoke Tests | Playwright | Verify app launches and core flows work | `npm run test:e2e` |
+`npm test` runs the configured package/resource checks and unit suite. It does
+**not** run all Electron, cluster, performance or paid live-model tests. The
+Playwright configuration contains both ordinary application projects and specialist
+performance projects, so use an explicit project or an acceptance plan when the
+intended scope is narrower than everything.
 
-## Directory Structure
+## Common workflows
 
-```
-tests/
-├── check/                    # Pre-build verification scripts
-│   └── binaries.mjs          # Binary dependency checker
-├── unit/                     # Unit tests (Vitest)
-│   └── services/             # Service layer tests
-│       ├── config.test.ts    # Config service tests
-│       └── space.test.ts     # Space service tests
-├── e2e/                      # E2E tests (Playwright + Electron)
-│   ├── specs/                # Test specifications
-│   │   └── smoke.spec.ts     # Smoke tests
-│   └── fixtures/             # Test fixtures and helpers
-│       └── electron.ts       # Electron app fixture
-├── vitest.config.ts          # Vitest configuration
-├── playwright.config.ts      # Playwright configuration
-└── README.md                 # This file
-```
-
-## Running Tests
-
-### All Tests (Recommended before release)
 ```bash
-npm run test
+# Inspect the catalog without starting Electron or calling a model.
+npm run acceptance -- validate
+npm run acceptance -- report --locale zh
+
+# Focused unit verification.
+npm run test:unit -- tests/unit/apps/manager/manager.test.ts
+
+# Build once before application or cluster execution.
+npm run acceptance -- build
+npm run test:e2e:smoke
+npm run acceptance -- plan --profile regression --module workspaces --module chat
+npm run acceptance -- run --plan tests/acceptance/output/plan.json
+
+# See tests/decentralized/README.md before selecting a cluster suite.
+npm run test:team -- single --protocol-only
 ```
 
-### Individual Test Layers
-```bash
-# Pre-build checks only
-npm run test:check
+The `fast` acceptance profile is a bounded set of registered user journeys. The
+`regression` profile includes applicable deterministic module scenarios and keeps
+missing automation visible. Live models and external systems have separate opt-in
+profiles and prerequisites. A skipped test, absent credential, missing platform or
+undiscovered binding is not successful acceptance.
 
-# Unit tests only
-npm run test:unit
+Never run heavy Electron, cluster and performance suites concurrently on the same
+host: resource contention can create timeout-shaped false failures. Use disposable
+profiles, local deterministic services and explicit fixture data. Real model tests
+must use approved test credentials and bounded spend, not whichever production
+account happens to be installed on the developer's machine.
 
-# E2E tests only (requires built app)
-npm run test:e2e
-```
+## Add tests where their responsibility belongs
 
-## Pre-release Checklist
+- Domain and architecture checks belong under the corresponding `unit/` module.
+- Actual desktop interactions belong in `e2e/specs/` with reusable fixtures.
+- Multi-process office consistency stays in `decentralized/`; an HTTP-driven
+  cluster result does not also prove that the UI presented it correctly.
+- Named performance workloads stay under `perf/`; preserve build and fixture
+  identity and the exact measured duration.
+- The associated user story and scenario live in `acceptance/catalog/`. Existing
+  tests declare stable scenario IDs in executable metadata. Discovery generates
+  the manifest; there is no separate hand-edited list of test bindings.
 
-The release deploy script automatically runs:
-1. `test:check` - Verify binary dependencies
-2. `test:unit` - Run unit tests
-3. Build the application
-4. `test:e2e:smoke` - Run smoke tests on built app
+For application tests, state which boundary was substituted. A seeded initial
+profile can support a real application journey. Replacing application IPC handlers
+limits evidence to UI behavior. Replacing only the model endpoint can still test
+real application orchestration, tools and persistence without paid model calls.
 
-## Writing Tests
+## CI and specialist acceptance
 
-### Unit Tests
-- Place in `tests/unit/services/`
-- Use `.test.ts` extension
-- Mock Electron APIs when needed
+[The current CI workflow](../.github/workflows/ci-test.yml) runs the changed-file
+precommit gate on pull requests and configured pushes. It is not a complete
+cross-platform nightly UI regression. The acceptance CI template and operational
+checks live in [acceptance/ci/](acceptance/ci/); deploying its dedicated runners and
+graphical sessions is a separate operation.
 
-### E2E Tests
-- Place in `tests/e2e/specs/`
-- Use `.spec.ts` extension
-- Use the `electronApp` fixture for launching the app
-
-## CI Integration
-
-Tests are designed to run locally on the build machine (M4 Mac).
-Future: GitHub Actions integration for automated testing.
+Paid model acceptance requires the explicit broker configuration and budget
+described in [the acceptance guide](acceptance/README.md). [Cluster regression](decentralized/README.md) and
+[performance measurement](perf/docs/README.md) also have distinct prerequisites.
+Their historical reports are evidence for those recorded runs, not current passing
+results for a changed build or behavior catalog.

@@ -1,0 +1,22 @@
+version: 1
+id: capabilities
+title:
+  en: Skills and tool connections
+  zh: 技能与工具连接
+description:
+  en: Install instructions, configure MCP connections and control their availability.
+  zh: 安装技能、配置 MCP 并控制可用范围。
+paths:
+  - src/renderer/components/apps/Skill*.tsx
+  - src/renderer/components/apps/Mcp*.tsx
+  - src/renderer/components/apps/ManualAddDialog.tsx
+  - src/renderer/components/capability/**
+  - src/main/services/agent/toolsets/**
+  - src/main/services/agent/mcp-manager.ts
+  - src/main/apps/manager/skill-sync.ts
+  - src/main/platform/memory/**
+dependsOn:
+  - people
+scope:
+  en: Workspace, global and person scopes; manual skills and MCP stdio/HTTP/SSE; saved settings, enablement, reconnect and dependency sharing.
+  zh: 空间、全局及个人范围；手动技能及 MCP stdio/HTTP/SSE；保存、启用、重连和共享依赖。

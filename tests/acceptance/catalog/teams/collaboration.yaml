@@ -1,0 +1,126 @@
+version: 1
+id: teams.collaboration
+module: teams
+title:
+  en: Work in a temporary collaboration and keep its team
+  zh: 在临时协作中工作并保留团队
+story:
+  en: I can follow a collaboration in its source conversation and keep that team for later access.
+  zh: 我能在源对话中跟进协作，并保留这个团队以便之后访问。
+basis: documented
+references:
+  - src/main/apps/team/DESIGN.md
+  - src/renderer/components/team/workbench/DESIGN.md
+  - tests/e2e/specs/team-collab.spec.ts
+  - tests/e2e/specs/team-render.spec.ts
+  - tests/e2e/specs/acceptance-kept-collaboration.spec.ts
+promises:
+  room:
+    en: A temporary collaboration has one source task and keeps its members reachable.
+    zh: 临时协作只有一个源任务，其成员始终可访问。
+  keep:
+    en: Keeping the collaboration retains the same team and its original conversation association.
+    zh: 保留协作会保存同一团队及其原对话关联。
+  history:
+    en: Keeping a collaboration does not discard its existing task history.
+    zh: 保留协作不会丢弃已有任务历史。
+scenarios:
+  - id: teams.collaboration.single-room
+    title:
+      en: Keep temporary collaboration in its source room
+      zh: 让临时协作停留在原任务中
+    verifies:
+      - room
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use the isolated fixture described by the referenced executable test.
+        zh: 使用引用测试中定义的隔离测试资料。
+    steps:
+      - en: Open a seeded temporary collaboration and resize to a narrow screen.
+        zh: 打开预置临时协作并切到窄屏。
+    expected:
+      - en: The one room and members are accessible, without controls that create unrelated tasks in the temporary collaboration.
+        zh: 唯一任务及成员可访问，不出现会在临时协作里创建无关任务的控件。
+  - id: teams.collaboration.keep-existing
+    title:
+      en: Keep the current collaboration team
+      zh: 保留当前协作团队
+    verifies:
+      - keep
+      - room
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: Use a fresh isolated profile and a local scripted model endpoint with the real application engine.
+        zh: 使用全新隔离资料及本地脚本模型端点，应用仍运行真实引擎。
+    steps:
+      - en: Enable collaboration in space chat and create two reviewers through the real collaboration tool.
+        zh: 在空间聊天启用协作，通过真实协作工具创建两名评审成员。
+      - en: Keep the team from its source conversation, open its original task on the Teams page and restart the application.
+        zh: 从源对话保留团队，在团队页打开原任务，然后重启应用。
+      - en: Reopen that task and send a distinct message to every installed member through the member selector.
+        zh: 重新打开该任务，通过成员选择入口向每位已安装成员发送不同消息。
+    expected:
+      - en: The original team becomes persistent with the same team identity and source conversation association.
+        zh: 原团队变为持久团队，团队身份及源对话关联保持不变。
+      - en: The original task and member identities remain unchanged; each installed member replies in its own persisted transcript.
+        zh: 原任务及成员身份不变；每位已安装成员在各自持久保存的记录中回复。
+    notes:
+      en: The source conversation remains the coordinator. This case does not claim that keeping immediately provisions a separate lead or creates a new task.
+      zh: 源对话仍负责协调。本例不宣称保留后立即创建独立负责人或新任务。
+  - id: teams.collaboration.keep-history
+    title:
+      en: Read the original task after keeping the team
+      zh: 保留团队后阅读原任务
+    verifies:
+      - history
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: Use a fresh isolated profile and a local scripted model endpoint with the real application engine.
+        zh: 使用全新隔离资料及本地脚本模型端点，应用仍运行真实引擎。
+      - en: Give the references only in one-to-one conversations; neither member sends them to a teammate or publishes them to the team's shared records or files.
+        zh: 参考信息仅出现在一对一聊天中；两位成员都不将其发送给队友，也不发布到团队共享记录或文件中。
+    steps:
+      - en: Create a collaboration in space chat and give each installed member a different reference through the task room.
+        zh: 在空间聊天创建协作，通过任务室向每位已安装成员提供不同参考信息。
+      - en: Keep the team, restart the application and reopen its original task and every member conversation.
+        zh: 保留团队，重启应用，重新打开原任务及每位成员的对话。
+      - en: Continue each member conversation without repeating the reference, then reopen the source space conversation.
+        zh: 不重复参考信息，继续与每位成员聊天，然后重新打开源空间对话。
+    expected:
+      - en: The same recorded messages remain readable in their originating task.
+        zh: 同样的消息记录仍可在其原任务中阅读。
+      - en: Each continuation receives that member's earlier context. References that were not shared with the team do not enter from another member's one-to-one history; new messages append to the same original transcript.
+        zh: 每次续聊都接收到该成员之前的上下文。未向团队共享的参考信息不会从其他成员的一对一历史中混入；新消息追加到原记录中。
+      - en: The source space messages, original task identity and team association survive keeping and restart.
+        zh: 源空间消息、原任务身份及团队关联在保留和重启后仍然存在。
+    notes:
+      en: This checks restoration of one-to-one history without automatic mixing. Explicit team messages and shared blackboard or file content remain legitimate collaboration context. Scripted responses prove routing, persistence and context delivery; they do not assess the quality of a live model's answer.
+      zh: 本例验证一对一历史恢复且不自动混入其他成员记录。显式团队消息、共享黑板及文件内容仍可作为合法协作上下文。脚本回复验证消息路由、持久化及上下文传递，不评估真实模型的回答质量。

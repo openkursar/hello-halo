@@ -1,0 +1,275 @@
+version: 1
+id: models.accounts
+module: models
+title:
+  en: Manage an AI account
+  zh: 管理 AI 账户
+story:
+  en: I can connect an account, test it and correct a failed configuration.
+  zh: 我能连接账户、测试配置，并修正失败配置。
+basis: observed
+references:
+  - src/renderer/components/settings/AISourcesSection.tsx
+  - src/renderer/components/settings/OAuthAccountEditor.tsx
+  - src/main/services/ai-sources/manager.ts
+  - src/renderer/components/settings/ProviderSelector.tsx
+  - src/main/services/api-validator.service.ts
+  - tests/e2e/specs/acceptance-model-settings.spec.ts
+promises:
+  save:
+    en: Saved endpoint, model and authentication settings are used by the account’s requests.
+    zh: 请求使用该账户保存的端点、模型和认证设置。
+  auth:
+    en: Expired or rejected authentication is surfaced with a route to reconnect.
+    zh: 认证过期或被拒绝时有提示及重新连接入口。
+  isolation:
+    en: Changing one account does not interrupt unrelated accounts’ active work.
+    zh: 修改一个账户不打断其他账户正在运行的任务。
+  visibility:
+    en: The account editor conceals credentials by default and reveals them only through an explicit visibility action.
+    zh: 账户编辑器默认隐藏凭证，仅通过明确的显隐操作展示。
+  drafts:
+    en: Cancelling account creation, editing or deletion leaves the saved account configuration unchanged.
+    zh: 取消新增、编辑或删除账户时，已保存的账户配置保持不变。
+  current:
+    en: Switching the default account preserves each account’s model; removing the current account selects a remaining account when one exists.
+    zh: 切换默认账户保留各账户的模型；移除当前账户后，仍有其他账户时切换到剩余账户。
+  availability:
+    en: A rejected model choice produces a visible failure and can be corrected in the account editor.
+    zh: 模型选择被拒绝时显示失败，并可在账户编辑器中修正。
+scenarios:
+  - id: models.accounts.custom
+    title:
+      en: Configure a custom API endpoint
+      zh: 配置自定义 API 端点
+    verifies:
+      - save
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: A local provider supports the selected wire protocol.
+        zh: 本地模型服务支持所选协议。
+    steps:
+      - en: Add a local OpenAI-compatible account through Settings, fetch models, choose a model and test the connection.
+        zh: 在设置中添加本地 OpenAI 兼容账户，获取模型、选择模型并测试连接。
+      - en: Save the account, restart the application and send a message through the normal conversation UI.
+        zh: 保存账户、重启应用，再通过正常对话界面发送消息。
+    expected:
+      - en: Connection testing and the restarted conversation send the saved model and valid authentication to the saved local endpoint.
+        zh: 连接测试和重启后的对话均向保存的本地端点发送已选模型及正确认证。
+      - en: The assistant response appears in the conversation and is present in the real stored history.
+        zh: 助手回复出现在对话中，并保存到真实历史记录。
+    requirements:
+      - halo-sdk
+  - id: models.accounts.expired
+    title:
+      en: Recover expired login
+      zh: 恢复过期登录
+    verifies:
+      - auth
+    platforms: *a1
+    profiles:
+      - external
+    evidence: external
+    mode: live
+    automation: planned
+    preconditions:
+      - en: A disposable test account has an expired credential.
+        zh: 可丢弃测试账户凭证过期。
+    steps:
+      - en: Attempt a request and reconnect through the offered account action.
+        zh: 发起请求，再通过账户入口重新连接。
+    expected:
+      - en: The failure is visible and restored credentials allow another request.
+        zh: 失败可见，恢复凭证后可再次请求。
+    requirements:
+      - test-provider-account
+  - id: models.accounts.unrelated
+    title:
+      en: Change one of two active accounts
+      zh: 修改两个活动账户中的一个
+    verifies:
+      - isolation
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Two conversations use different local test accounts.
+        zh: 两个对话使用不同本地测试账户。
+    steps:
+      - en: Change account A while B is streaming.
+        zh: B 输出时修改 A。
+    expected:
+      - en: B completes on B’s account without credential or transcript crossover.
+        zh: B 仍使用自己的账户完成，无凭证或记录混用。
+  - id: models.accounts.edit
+    title:
+      en: Edit and rotate a saved provider
+      zh: 编辑并更换已保存的服务配置
+    verifies:
+      - save
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: A disposable account uses the first local endpoint.
+        zh: 可丢弃账户使用第一个本地端点。
+    steps:
+      - en: Through the account editor, change its name, endpoint, API key and model, then update it.
+        zh: 通过账户编辑器修改名称、端点、API Key 和模型，再保存更新。
+      - en: Restart, reopen that account and test the stored connection.
+        zh: 重启后重新打开该账户，测试保存的连接。
+    expected:
+      - en: The account keeps its original identity without duplication, and requests use the new endpoint, credential and model after restart.
+        zh: 账户保持原有标识且不重复，重启后的请求使用新端点、凭证与模型。
+    requirements:
+      - halo-sdk
+  - id: models.accounts.credentials
+    title:
+      en: Conceal the API key in account settings
+      zh: 在账户设置中隐藏 API Key
+    verifies:
+      - visibility
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use only a generated local-fixture credential.
+        zh: 仅使用本地测试生成的凭证。
+    steps:
+      - en: Enter an API key, reveal and hide it explicitly, save the account, restart and reopen its editor.
+        zh: 输入 API Key，主动显示和隐藏后保存账户，重启并重新打开编辑器。
+    expected:
+      - en: The input starts concealed, follows the explicit visibility action and is concealed again when reopened; account cards do not display the key.
+        zh: 输入框初始隐藏凭证，按主动操作显隐，重开时再次隐藏；账户卡片不显示密钥。
+  - id: models.accounts.rejected-key
+    title:
+      en: Correct a rejected local API key
+      zh: 修正被拒绝的本地 API Key
+    verifies:
+      - auth
+      - save
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: The local endpoint rejects an incorrect key with HTTP 401.
+        zh: 本地端点对错误密钥返回 HTTP 401。
+    steps:
+      - en: Attempt model fetching and connection testing with the incorrect key.
+        zh: 用错误密钥获取模型并测试连接。
+      - en: Correct the key in the same form, test again and save.
+        zh: 在原表单中修正密钥，重新测试并保存。
+    expected:
+      - en: Both failures are visible and cannot appear as successful connections; no account is added before Save, and the corrected credential succeeds.
+        zh: 两次失败均可见且不能显示为连接成功；点击保存前不新增账户，修正后的凭证可以连接成功。
+    requirements:
+      - halo-sdk
+  - id: models.accounts.unavailable-model
+    title:
+      en: Recover from an unavailable custom model
+      zh: 从不可用的自定义模型恢复
+    verifies:
+      - availability
+      - save
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: The local endpoint rejects an unknown model with a deterministic model-unavailable error.
+        zh: 本地端点对未知模型返回确定的模型不可用错误。
+    steps:
+      - en: Test an unavailable custom model ID, then replace it with an available ID and test again.
+        zh: 测试不可用的自定义模型 ID，再换成有效 ID 重新测试。
+    expected:
+      - en: The rejected model is reported as a failed connection; the corrected model succeeds and is the one saved.
+        zh: 被拒绝的模型显示连接失败；修正后的模型测试成功，并保存正确的模型。
+    requirements:
+      - halo-sdk
+  - id: models.accounts.cancel
+    title:
+      en: Cancel account changes without persisting them
+      zh: 取消账户变更而不写入配置
+    verifies:
+      - drafts
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated profile can add and edit local API-key accounts.
+        zh: 隔离资料可以新增和编辑本地 API Key 账户。
+    steps:
+      - en: Cancel a new account form; then create an account, cancel an edited form and cancel its deletion confirmation.
+        zh: 取消新账户表单；再创建账户，分别取消编辑和删除确认。
+      - en: Restart and inspect the saved account.
+        zh: 重启并检查已保存账户。
+    expected:
+      - en: Cancelled creation adds no account, and cancelled edits or deletion preserve all original account settings after restart.
+        zh: 取消新增不产生账户；取消编辑或删除后，重启仍保留原账户全部设置。
+  - id: models.accounts.current-fallback
+    title:
+      en: Switch the default account and remove it safely
+      zh: 切换默认账户并安全移除
+    verifies:
+      - current
+      - save
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: Two local accounts offer different selected models.
+        zh: 两个本地账户选择了不同模型。
+    steps:
+      - en: Fetch and choose each account’s model, switch the current account through Settings, then delete the selected second account.
+        zh: 获取并选择各账户模型，在设置中切换当前账户，再删除选中的第二个账户。
+      - en: Restart and inspect the remaining selected account and its model.
+        zh: 重启并检查剩余账户的选中状态与模型。
+    expected:
+      - en: The first account becomes current again, retaining its own selected model; the deleted account is absent after restart.
+        zh: 第一个账户重新成为当前账户，保留自己的模型；被删账户在重启后不再出现。

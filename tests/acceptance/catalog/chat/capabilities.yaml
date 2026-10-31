@@ -1,0 +1,49 @@
+version: 1
+id: chat.capabilities
+module: chat
+title:
+  en: Approve optional AI capabilities
+  zh: 授权可选 AI 能力
+story:
+  en: I can decide whether a conversation may use an optional capability, and the AI cannot silently enable it for itself.
+  zh: 我能决定对话是否使用可选能力，AI 不会自行悄悄开启。
+basis: observed
+references:
+  - src/main/services/agent/toolsets/DESIGN.md
+  - src/renderer/components/chat/InputArea.tsx
+  - tests/e2e/specs/acceptance-capabilities.spec.ts
+promises:
+  request:
+    en: Requesting a disabled capability shows the user’s enablement action without granting the tool.
+    zh: 请求已禁用能力仅显示用户开启入口，不直接授予工具。
+  enable:
+    en: The user’s explicit enablement makes the capability available on the supported next turn.
+    zh: 用户明确开启后，能力在支持的下一轮可用。
+scenarios:
+  - id: chat.capabilities.user-enable
+    title:
+      en: Ask for and explicitly enable team collaboration
+      zh: 请求并明确开启团队协作
+    verifies:
+      - request
+      - enable
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: Team collaboration is disabled in the current space conversation.
+        zh: 当前空间对话已关闭团队协作。
+    steps:
+      - en: Ask the scripted model to request it, inspect the unchanged switch, enable it manually and send another message.
+        zh: 让脚本模型申请，检查开关未变，手动开启后再发消息。
+    expected:
+      - en: No team operation occurs before user action; the next turn can execute the real team tool.
+        zh: 用户操作前无团队操作，下一轮可调用真实团队工具。
+    requirements:
+      - halo-sdk

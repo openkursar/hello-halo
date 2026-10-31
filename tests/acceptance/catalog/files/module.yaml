@@ -1,0 +1,19 @@
+version: 1
+id: files
+title:
+  en: Files and content canvas
+  zh: 文件与内容画布
+description:
+  en: Browse generated files, preview formats, edit text and manage tabs.
+  zh: 浏览生成文件、预览格式、编辑文本及管理标签页。
+paths:
+  - src/main/services/artifact*.ts
+  - src/renderer/components/artifact/**
+  - src/renderer/components/canvas/**
+  - src/renderer/stores/canvas.store.ts
+  - src/renderer/services/canvas-lifecycle.ts
+dependsOn:
+  - workspaces
+scope:
+  en: Workspace-owned files and explicit references; desktop and remote previews, read-only/unsupported formats, saved and dirty text tabs, live browser/terminal tab policies.
+  zh: 空间文件和明确引用；桌面及远程预览、只读/不支持格式、已保存和未保存文本标签、浏览器与终端标签策略。

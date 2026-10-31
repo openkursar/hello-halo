@@ -1,0 +1,80 @@
+version: 1
+id: models.engines
+module: models
+title:
+  en: Select an installed application engine
+  zh: 选择已安装的应用执行引擎
+story:
+  en: I can choose an available engine, understand the required restart and recognize fallback when a configured engine is missing.
+  zh: 我能选择可用引擎，理解何时需要重启，并识别配置引擎缺失时的回退。
+basis: documented
+references:
+  - src/main/services/agent/resolved-sdk.ts
+  - src/main/services/agent/engine-availability.ts
+  - src/renderer/components/settings/AdvancedSection.tsx
+  - tests/e2e/specs/acceptance-engine-selection.spec.ts
+promises:
+  selection:
+    en: An engine change is saved with a restart notice rather than silently changing the already initialized engine.
+    zh: 引擎切换会保存并提示重启，不会悄悄替换已经初始化的引擎。
+  fallback:
+    en: A missing configured engine is distinguished from the engine actually running, and its saved choice is retained.
+    zh: 配置引擎缺失时，显示实际运行引擎与回退情况，并保留原配置选择。
+scenarios:
+  - id: models.engines.global-selection
+    title:
+      en: Apply an application engine choice after restart
+      zh: 重启后应用引擎选择
+    verifies:
+      - selection
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: An isolated application starts on Halo, and both Halo and Claude Code are physically available in the controlled build.
+        zh: 隔离应用以 Halo 启动，受控构建中 Halo 与 Claude Code 两个引擎均实际可用。
+    steps:
+      - en: Complete a real local-model turn, select Claude Code through Settings, inspect the saved choice and restart notice, and complete another turn before restarting.
+        zh: 完成一次真实本地模型请求，从设置选择 Claude Code，检查保存选择与重启提示，并在重启前再完成一轮。
+      - en: Close and reopen the owned application process, create fresh work on the requested engine, then repeat the transition back to Halo.
+        zh: 关闭并重新打开自有应用进程，在所选引擎上新建工作，再重复切回 Halo。
+    expected:
+      - en: The configured selection is saved; before restart the current engine remains, and fresh work after restart uses the selected available engine.
+        zh: 配置选择已保存；重启前仍使用当前引擎，重启后的新工作使用所选可用引擎。
+      - en: Actual engine reports match the requested engine after each restart with no fallback; each new conversation stores that engine identity and its real model reply.
+        zh: 每次重启后的实际引擎报告与所选引擎一致且无回退，新对话保存对应引擎身份及真实模型回复。
+    notes:
+      en: This exercises the Halo and Claude Code pair with a local scripted model. The restart notice is verified through the UI; restarts use the fixture's owned-process lifecycle rather than testing the in-app relaunch launcher. Codex, DSH and missing-runtime fallback remain separate unverified obligations, and a fallback cannot count as execution of the requested engine.
+      zh: 本例使用本地脚本模型验证 Halo 与 Claude Code 这对引擎。界面重启提示会被核对，实际重启通过 fixture 的自有进程生命周期完成，不代表已验证应用内重启启动器。Codex、DSH 与缺失运行时回退仍是独立未验证义务，回退不能算所选引擎已执行。
+  - id: models.engines.unavailable
+    title:
+      en: Explain fallback from a missing engine
+      zh: 说明缺失引擎的回退
+    verifies:
+      - fallback
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Use isolated application data and supported installed engines.
+        zh: 使用隔离应用数据及受支持的已安装引擎。
+    steps:
+      - en: Start a disposable build configured for an absent engine with another supported engine installed.
+        zh: 启动一个配置引擎缺失、但装有其他受支持引擎的可丢弃构建。
+    expected:
+      - en: The application remains usable and identifies both the unavailable choice and actual fallback without rewriting the saved preference.
+        zh: 应用仍可使用，说明不可用选择与实际回退，不改写保存偏好。

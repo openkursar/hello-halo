@@ -1,0 +1,70 @@
+version: 1
+id: changes.manage
+module: changes
+title:
+  en: Commit only the intended work
+  zh: 只提交预期工作
+story:
+  en: I can stage, discard and commit changes with visible consequences.
+  zh: 我能暂存、放弃和提交修改，并看到操作结果。
+basis: documented
+references:
+  - src/main/services/git/DESIGN.md
+  - tests/e2e/specs/changes-view.spec.ts
+promises:
+  local:
+    en: Stage, unstage and commit operate on the selected repository and files.
+    zh: 暂存、取消暂存和提交针对选定仓库及文件。
+  discard:
+    en: Discarding work requires the offered confirmation and cancellation keeps it.
+    zh: 放弃修改需相应确认，取消会保留。
+  network:
+    en: Sync failures remain visible and do not pretend local work has been published.
+    zh: 同步失败有提示，不把本地工作伪装成已发布。
+scenarios:
+  - id: changes.manage.local-commit
+    title:
+      en: Stage, unstage, discard and commit
+      zh: 暂存、取消暂存、放弃及提交
+    verifies:
+      - local
+      - discard
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use an isolated disposable Git repository.
+        zh: 使用隔离且可丢弃 Git 仓库。
+    steps:
+      - en: Stage and unstage a file, cancel then confirm discard on another, and commit the selected staged change.
+        zh: 暂存再取消暂存文件，对另一文件先取消再确认放弃，提交选定的已暂存修改。
+    expected:
+      - en: The resulting index, files and commit match the requested operations.
+        zh: 索引、文件与提交结果符合请求。
+  - id: changes.manage.sync
+    title:
+      en: Sync with a controlled remote
+      zh: 与受控远端同步
+    verifies:
+      - network
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A disposable repository has a local test remote.
+        zh: 可丢弃仓库使用本地测试远端。
+    steps:
+      - en: Push/sync successfully, then simulate denied access or divergence.
+        zh: 成功推送或同步，再模拟权限拒绝或分叉。
+    expected:
+      - en: Success and failure are distinct and unpushed local commits remain intact.
+        zh: 成功失败区分明确，未推送本地提交保持完整。

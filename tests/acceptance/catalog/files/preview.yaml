@@ -1,0 +1,194 @@
+version: 1
+id: files.preview
+module: files
+title:
+  en: Open the file the AI produced
+  zh: 打开 AI 交付的文件
+story:
+  en: I can find a generated file and inspect it in the right viewer.
+  zh: 我能找到生成文件，并在合适的查看器中检查。
+basis: observed
+references:
+  - src/renderer/components/artifact/ArtifactFilesTab.tsx
+  - src/renderer/components/canvas/ContentCanvas.tsx
+  - src/renderer/components/canvas/viewers/OfficeFallback.tsx
+  - tests/e2e/specs/acceptance-artifacts.spec.ts
+  - tests/e2e/specs/browser-view-frame.spec.ts
+  - tests/e2e/specs/acceptance-preview-formats.spec.ts
+  - tests/e2e/specs/acceptance-preview-recovery.spec.ts
+questions:
+  - en: Should PowerPoint slides render inside Halo, or should the existing explicit unsupported notice remain the product boundary? PptxViewer currently offers external-open and download actions without rendering slide content. The pptx content-preview variant remains unbound until this expectation is decided and implemented.
+    zh: PowerPoint 幻灯片应在 Halo 内渲染，还是保留当前明确的不支持提示作为产品边界？PptxViewer 当前仅提供外部打开和下载操作，不渲染幻灯片内容；pptx 内容预览变体保留未绑定，等待预期确认及实现。
+promises:
+  open:
+    en: A selected file opens the appropriate viewer for its supported format.
+    zh: 选中文件后使用支持该格式的查看器。
+  updates:
+    en: Generated and changed files appear in the correct workspace.
+    zh: 新增及变更文件出现在正确空间。
+  failure:
+    en: Unreadable or unsupported content has an actionable state instead of a blank successful preview.
+    zh: 不可读或不支持内容有可处理状态，不以空白伪装成功预览。
+scenarios:
+  - id: files.preview.formats
+    title:
+      en: Preview supported formats
+      zh: 预览支持格式
+    verifies:
+      - open
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    notes:
+      en: Nine formats have executable desktop viewer checks using synthetic local files and no model calls. Text, HTML, Word and table cases inspect actual rendered text and numbers; the image checks its displayed pixels; the native PDF guest must reproduce the fixture's complete encoded color pattern. The pptx content-preview variant remains a visible gap because the current product only shows an unsupported notice. These cases do not establish remote-browser PDF rendering, arbitrary format features or external application handoff.
+      zh: 九种格式已有可执行桌面查看器测试，使用本地合成文件且不调用模型。文本、HTML、Word 和表格检查实际渲染的文字及数字，图片核对显示像素，原生 PDF 查看器必须完整绘出文件中的编码色彩图案。pptx 内容预览仍保留明确缺口，因为当前产品只显示不支持提示；这些用例不代表远程浏览器 PDF 渲染、格式所有特性或外部应用交接已验证。
+    preconditions:
+      - en: The current workspace contains safe fixture files.
+        zh: 当前空间中有安全测试文件。
+    steps:
+      - en: Open each selected format from the file rail.
+        zh: 从文件栏打开各选定格式。
+    expected:
+      - en: Recognizable fixture content appears in the matching viewer without changing the file.
+        zh: 对应查看器显示可识别测试内容，不修改文件。
+    variants:
+      format:
+        - markdown
+        - code
+        - html
+        - image
+        - json
+        - csv
+        - pdf
+        - docx
+        - xlsx
+        - pptx
+  - id: files.preview.unsupported-presentation
+    title:
+      en: Understand the unsupported presentation preview
+      zh: 理解演示文稿暂不支持预览
+    verifies:
+      - failure
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: The isolated workspace contains a valid synthetic PowerPoint file.
+        zh: 隔离空间中有合法的合成 PowerPoint 文件。
+    steps:
+      - en: Open the file from the rail and inspect the offered fallback.
+        zh: 从文件栏打开文件并查看提供的替代操作。
+    expected:
+      - en: Halo clearly states that presentation preview is unsupported, exposes external-open and download actions, and leaves the source file unchanged.
+        zh: Halo 明确说明不支持演示文稿预览，显示外部打开和下载操作，并保持原文件不变。
+    notes:
+      en: The test does not activate either action or claim that an external application opened the presentation. It does not satisfy the separate pptx content-preview obligation.
+      zh: 本例不触发这些操作，也不声称外部应用已打开演示文稿，不能替代独立的 pptx 内容预览要求。
+  - id: files.preview.watcher
+    title:
+      en: Find newly generated and renamed files
+      zh: 找到新生成和重命名文件
+    verifies:
+      - updates
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    notes:
+      en: Real filesystem operations create, rename and remove a root-level Markdown file while its workspace rail stays open. A second workspace starts with the same filename but different content and must retain its own listing and bytes. No refresh or application change-event handler is called by the test; generated and renamed content is opened through the rail. Nested directories, network drives and sleep recovery are outside this fixture.
+      zh: 在空间文件栏保持打开时，通过真实文件系统操作创建、重命名并删除根目录 Markdown 文件；另一空间预存同名但内容不同的文件，必须保留自身列表和字节。测试不调用刷新或应用变更事件处理器，新增及改名内容均从文件栏打开；本例不代表嵌套目录、网络盘或休眠恢复已验证。
+    preconditions:
+      - en: The workspace rail is open.
+        zh: 空间文件栏已打开。
+    steps:
+      - en: Create, rename and remove a fixture file while the UI is running.
+        zh: 界面运行时创建、重命名和移除测试文件。
+    expected:
+      - en: The rail follows the actual filesystem changes in that workspace only.
+        zh: 文件栏仅跟随该空间真实文件变更。
+  - id: files.preview.corrupt
+    title:
+      en: Recover from an unreadable preview
+      zh: 从不可读预览恢复
+    verifies:
+      - failure
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    notes:
+      en: A valid generated DOCX is copied and its ZIP bytes truncated. An independent ZIP/XML reader validates the original and rejects the truncated copy. The real viewer must show the failed-preview explanation and available external-open/download actions, then render a separate valid DOCX's text and number in the same application. No external action is invoked, and neither source nor the unrelated control file may change.
+      zh: 从合法生成的 DOCX 复制并截断 ZIP 字节，独立 ZIP/XML 读取器验证原件并拒绝截断副本。真实查看器必须显示预览失败原因及可用的外部打开、下载操作，随后在同一应用渲染另一份有效 DOCX 的文字和数字；不触发外部操作，两个源文件及无关控制文件都不得改变。
+    preconditions:
+      - en: A corrupt supported-format fixture exists.
+        zh: 有一个支持格式的损坏文件。
+    steps:
+      - en: Open it, then open a valid file without restarting the app.
+        zh: 打开损坏文件，再不重启应用打开有效文件。
+    expected:
+      - en: The failed preview does not crash the app or prevent the valid preview.
+        zh: 失败预览不导致应用崩溃，也不阻止有效预览。
+  - id: files.preview.tool-preview
+    title:
+      en: Open a file created and updated by real tools
+      zh: 打开真实工具创建并修改的文件
+    verifies:
+      - open
+      - updates
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: An isolated workspace uses a scripted model and real file tools.
+        zh: 隔离空间使用脚本模型及真实文件工具。
+    steps:
+      - en: Ask through chat to write Markdown, open the file from the rail, let a real edit update it, then restart.
+        zh: 通过对话要求写 Markdown，从文件栏打开，再用真实编辑更新并重启。
+    expected:
+      - en: The canvas shows real written and edited content; the disk file and conversation remain after restart.
+        zh: 画布显示真实创建及编辑内容；重启后磁盘文件与对话均保留。
+  - id: files.preview.pdf-canvas
+    title:
+      en: Read a local PDF and return to it
+      zh: 阅读本地 PDF 并返回
+    verifies:
+      - open
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Open a PDF from the workspace file rail, switch away and reopen its tab.
+        zh: 从空间文件栏打开 PDF，切走后重开其标签。
+    expected:
+      - en: The PDF paints actual content and its browser-backed view survives supported switching.
+        zh: PDF 绘制真实内容，其浏览查看器在支持的切换中保留。

@@ -137,6 +137,43 @@ export interface ValidateApiResult {
   normalizedUrl: string
 }
 
+interface ValidationFrame {
+  type?: string
+  subtype?: string
+  is_error?: boolean
+  error?: unknown
+  errors?: unknown
+  result?: unknown
+  message?: { content?: Array<{ type?: string; text?: unknown }> }
+}
+
+interface ValidationSession {
+  send(message: string): void | Promise<void>
+  stream(): AsyncIterable<ValidationFrame>
+  close(): void
+}
+
+function validationFailureMessage(error: unknown, timedOut: boolean): string {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  const name = error instanceof Error ? error.name : ''
+  if (timedOut || name === 'AbortError' || /aborted|timeout|timed out/i.test(message)) return 'Connection timeout - server may be slow or unreachable'
+  if (/\b401\b|unauthorized|authentication_failed|invalid api key/i.test(message)) return 'Invalid API key'
+  if (/\b403\b|forbidden|permission_denied/i.test(message)) return 'Access denied - check API key permissions'
+  if (/model.{0,80}(?:not found|not available|unavailable|does not exist)|(?:unknown|invalid) model|model_not_found/i.test(message)) return 'Requested model is not available'
+  if (/\b404\b|not found/i.test(message)) return 'API endpoint not found - check URL'
+  if (/\b429\b|rate.?limit/i.test(message)) return 'Rate limited - try again later'
+  if (/ECONNREFUSED|ENOTFOUND|ECONNRESET|fetch failed/i.test(message)) return 'Cannot connect to API server - check URL'
+  return 'Connection failed'
+}
+
+function validationFrameError(frame: ValidationFrame): Error {
+  const details = [frame.error, ...(Array.isArray(frame.errors) ? frame.errors : []), frame.result]
+  if (frame.type === 'assistant' && frame.error) {
+    details.push(...(frame.message?.content ?? []).filter(block => block.type === 'text').map(block => block.text))
+  }
+  return new Error(details.filter((value): value is string => typeof value === 'string').map(value => value.slice(0, 2000)).join('\n') || 'Connection failed')
+}
+
 /**
  * Validate API connection by sending a test message through SDK
  *
@@ -197,10 +234,28 @@ export async function validateApiConnection(params: ValidateApiParams): Promise<
   // Step 5: Create temporary SDK session with same pattern as session-manager.ts
   const abortController = new AbortController()
 
-  // Set timeout for validation (15 seconds)
-  const timeoutId = setTimeout(() => {
-    abortController.abort()
-  }, 15000)
+  let session: ValidationSession | undefined
+  let sessionClosed = false
+  let cleanupFailed = false
+  let timedOut = false
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const closeSession = () => {
+    if (!session || sessionClosed) return
+    sessionClosed = true
+    try { session.close() }
+    catch {
+      cleanupFailed = true
+      console.warn('[API Validator] Temporary validation session close failed; cleanup may be incomplete')
+    }
+  }
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true
+      abortController.abort()
+      reject(new Error('Connection timeout'))
+    }, 15000)
+  })
+  let outcome: ValidateApiResult
 
   try {
     const sdkOptions: Record<string, unknown> = {
@@ -230,95 +285,40 @@ export async function validateApiConnection(params: ValidateApiParams): Promise<
       }
     }
 
-    console.log('[API Validator] Creating SDK session for validation...')
-    const session = await createSession(sdkOptions) as any
-
-    // Step 6: Send test message using correct SDK pattern: send() + stream()
-    console.log('[API Validator] Sending test message...')
-    session.send('test')
-
-    // Step 7: Stream response and check for valid reply
-    let hasResponse = false
-    let responseContent = ''
-
-    for await (const msg of session.stream()) {
-      // Check for abort
+    const validate = async () => {
+      session = await createSession(sdkOptions) as ValidationSession
       if (abortController.signal.aborted) {
-        break
+        // Creation can finish after the deadline even when the adapter ignores cancellation.
+        closeSession()
+        throw new Error('Connection timeout')
       }
-
-      // Look for assistant message or result
-      if (msg.type === 'assistant') {
-        hasResponse = true
-        const content = (msg as any).message?.content
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block.type === 'text') {
-              responseContent += block.text || ''
-            }
+      await session.send('test')
+      if (abortController.signal.aborted) throw new Error('Connection timeout')
+      for await (const msg of session.stream()) {
+        if (abortController.signal.aborted) throw new Error('Connection timeout')
+        if (msg.type === 'error' || (msg.type === 'assistant' && msg.error)) throw validationFrameError(msg)
+        if (msg.type === 'result') {
+          if (msg.subtype !== 'success' || msg.is_error !== false || (Array.isArray(msg.errors) && msg.errors.length > 0)) {
+            throw validationFrameError(msg)
           }
+          return true
         }
-      } else if (msg.type === 'result') {
-        hasResponse = true
-        break
       }
+      return false
     }
-
-    // Step 8: Close session
-    clearTimeout(timeoutId)
-    try {
-      session.close()
-    } catch {
-      // Ignore close errors
-    }
-
-    console.log(`[API Validator] Validation complete: hasResponse=${hasResponse}, content="${responseContent.substring(0, 50)}"`)
-
-    if (hasResponse) {
-      return {
-        valid: true,
-        normalizedUrl,
-        model: testModel,
-        message: 'Connection successful'
-      }
-    } else {
-      return {
-        valid: false,
-        normalizedUrl,
-        message: 'No response received from API'
-      }
-    }
+    const valid = await Promise.race([validate(), timeout])
+    outcome = valid
+      ? { valid: true, normalizedUrl, model: testModel, message: 'Connection successful' }
+      : { valid: false, normalizedUrl, message: 'No response received from API' }
   } catch (error) {
+    outcome = { valid: false, normalizedUrl, message: validationFailureMessage(error, timedOut) }
+  } finally {
     clearTimeout(timeoutId)
-
-    const err = error as Error
-    const errorMessage = err.message || 'Connection failed'
-
-    console.error('[API Validator] Validation error:', errorMessage)
-
-    // Parse common error patterns for better user feedback
-    let userFriendlyMessage = errorMessage
-
-    if (err.name === 'AbortError' || errorMessage.includes('aborted')) {
-      userFriendlyMessage = 'Connection timeout - server may be slow or unreachable'
-    } else if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
-      userFriendlyMessage = 'Invalid API key'
-    } else if (errorMessage.includes('403') || errorMessage.includes('Forbidden')) {
-      userFriendlyMessage = 'Access denied - check API key permissions'
-    } else if (errorMessage.includes('404') || errorMessage.includes('Not Found')) {
-      userFriendlyMessage = 'API endpoint not found - check URL'
-    } else if (errorMessage.includes('429') || errorMessage.includes('rate limit')) {
-      userFriendlyMessage = 'Rate limited - try again later'
-    } else if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ENOTFOUND')) {
-      userFriendlyMessage = 'Cannot connect to API server - check URL'
-    } else if (errorMessage.includes('timeout')) {
-      userFriendlyMessage = 'Connection timeout - server may be slow or unreachable'
-    }
-
-    return {
-      valid: false,
-      normalizedUrl,
-      message: userFriendlyMessage
-    }
+    abortController.abort()
+    closeSession()
   }
+  if (cleanupFailed) outcome = { valid: false, normalizedUrl, message: 'Connection failed' }
+  const log = outcome.valid ? console.log : console.warn
+  log('[API Validator] Validation complete:', { valid: outcome.valid, message: outcome.message })
+  return outcome
 }

@@ -1,0 +1,93 @@
+version: 1
+id: people.create
+module: people
+title:
+  en: Create or import a digital human
+  zh: 创建或导入数字人
+story:
+  en: I can create a digital human from a form or a resource package and understand validation failures.
+  zh: 我能通过表单或资源包创建数字人，并理解校验失败。
+basis: observed
+references:
+  - src/renderer/components/apps/AppInstallDialog.tsx
+  - src/main/apps/spec/validate.ts
+  - src/main/apps/manager/service.ts
+  - tests/e2e/specs/acceptance-people.spec.ts
+promises:
+  create:
+    en: A valid person definition creates a person in the selected workspace with its chosen instructions and schedule.
+    zh: 有效定义在选定空间创建数字人，并保留所选指令和日程。
+  preview:
+    en: Imported definitions and bundles are previewed before installation, with failures or partial results distinguished.
+    zh: 导入定义及资源包先预览再安装，并区分失败或部分结果。
+scenarios:
+  - id: people.create.form
+    title:
+      en: Create from the visual form
+      zh: 通过可视表单创建
+    verifies:
+      - create
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A disposable workspace and no existing person with this name.
+        zh: 可丢弃空间中没有同名数字人。
+    steps:
+      - en: Open Create Digital Human, fill identity and instructions, choose a schedule and create.
+        zh: 打开创建数字人，填写身份与指令，选择日程并创建。
+    expected:
+      - en: The new person appears in the chosen workspace and settings retain the submitted definition.
+        zh: 新数字人出现在所选空间，设置保留提交的定义。
+  - id: people.create.import
+    title:
+      en: Preview and import a package
+      zh: 预览并导入资源包
+    verifies:
+      - preview
+      - create
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A synthetic valid package and an invalid package are available.
+        zh: 有一个有效合成资源包及一个无效包。
+    steps:
+      - en: Preview each import, confirm the valid one and inspect the invalid result.
+        zh: 预览两种导入，确认有效包并检查无效包结果。
+    expected:
+      - en: Only the valid intended resources install, while invalid or partial outcomes remain explicit.
+        zh: 仅有效预期资源被安装，无效或部分结果有明确说明。
+  - id: people.create.partial-import
+    title:
+      en: Distinguish partial bundle installation from complete success
+      zh: 区分资源包部分安装与全部成功
+    verifies:
+      - preview
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A valid bundle contains multiple resources and one resource encounters a real controlled installation failure.
+        zh: 有效资源包含多个资源，其中一个遭遇真实受控安装失败。
+    steps:
+      - en: Install the bundle through its preview and inspect the result for each resource.
+        zh: 通过预览安装资源包并检查各资源结果。
+    expected:
+      - en: The UI identifies installed and failed resources without labelling the whole bundle completely successful.
+        zh: 界面明确已安装及失败资源，不把整个资源包标为全部成功。

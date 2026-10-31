@@ -1,0 +1,18 @@
+version: 1
+id: workspaces
+title:
+  en: Workspaces
+  zh: 工作空间
+description:
+  en: Separate project folders, conversations and working context.
+  zh: 隔离项目目录、对话和工作上下文。
+paths:
+  - src/main/services/space.service.ts
+  - src/renderer/pages/SpacesPage.tsx
+  - src/renderer/components/space/**
+  - src/renderer/stores/space.store.ts
+dependsOn:
+  - startup
+scope:
+  en: Desktop owner manages default and dedicated workspaces; remote users observe desktop-only folder limits; missing folders and switching are included.
+  zh: 主人管理默认和独立空间；远程用户受到桌面目录操作限制；包括目录失效和空间切换。

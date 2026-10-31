@@ -55,6 +55,7 @@ import { fileURLToPath } from 'url'
 import crypto from 'crypto'
 import path from 'path'
 import fs from 'fs'
+import { clusterDetached } from '../../tests/decentralized/_acceptance.mjs'
 
 const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -98,6 +99,7 @@ function parseArgs(argv) {
  * and blanks are skipped. Single-quoted JSON values (e.g. OAuth blobs) survive.
  */
 function loadEnvLocal() {
+  if (process.env.HALO_ACCEPTANCE_CLUSTER_RUN === '1') return
   const envPath = path.join(PROJECT_ROOT, '.env.local')
   if (!fs.existsSync(envPath)) return
   const content = fs.readFileSync(envPath, 'utf-8')
@@ -292,6 +294,7 @@ function seedNodeConfig(nodeDir, index, port, model, gatewayUrl) {
     agent: {
       maxTurns: 999, promptProfile: 'halo', sdkEngine: model.sdkEngine,
       ...(process.env.HALO_TEST_CC_PATH ? { ccRuntime: { selectedPath: path.resolve(process.env.HALO_TEST_CC_PATH), discoveryCompleted: true } } : {}),
+      ...(process.env.HALO_ACCEPTANCE_CLUSTER_RUN === '1' ? { configDirMode: 'custom', customConfigDir: path.join(haloDir, 'engine-state') } : {}),
     },
     // Remote access pre-enabled: the extended-init idle task auto-restores the
     // HTTP server on this port using the plaintext PIN below as the token.
@@ -332,7 +335,7 @@ function spawnNode(appEntry, nodeDir, logFile) {
   const electronArgs = process.env.HALO_TEST_NO_PROXY === '1' ? ['--no-proxy-server', appEntry] : [appEntry]
   const child = spawn(electronBinary, electronArgs, {
     cwd: PROJECT_ROOT,
-    detached: true,
+    detached: clusterDetached(),
     stdio: ['ignore', out, out],
     env: {
       ...cleanEnv,
@@ -660,7 +663,9 @@ async function cmdStart(args) {
 
   LOG(`Wrote ${nodesFilePath(dir)}`)
   // Emit the manifest as the last stdout block so a driver can parse it.
-  console.log(JSON.stringify(manifest, null, 2))
+  console.log(JSON.stringify(process.env.HALO_ACCEPTANCE_CLUSTER_RUN === '1'
+    ? { ...manifest, nodes: nodes.map(({ token: _token, ...node }) => node) }
+    : manifest, null, 2))
 
   const failed = nodes.filter((n) => !n.ready)
   if (failed.length > 0) {
@@ -670,7 +675,7 @@ async function cmdStart(args) {
   LOG('All nodes ready. Drive them over HTTP; run "stop" to terminate.')
 }
 
-function cmdStop(args) {
+async function cmdStop(args) {
   const dir = clusterDir(args)
   const file = nodesFilePath(dir)
   if (!fs.existsSync(file)) FAIL(`No cluster manifest at ${file}`)
@@ -684,6 +689,23 @@ function cmdStop(args) {
       WARN(`node-${node.index} (pid ${node.pid}) not running: ${err.message}`)
     }
   }
+  if (process.env.HALO_ACCEPTANCE_CLUSTER_RUN === '1') {
+    const alive = pid => {
+      try { process.kill(pid, 0) } catch (error) { if (error.code === 'ESRCH') return false; throw error }
+      if (process.platform !== 'win32') {
+        const state = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' })
+        if (state.status === 0 && state.stdout.trim().startsWith('Z')) return false
+      }
+      return true
+    }
+    const pids = manifest.nodes.map(node => node.pid).filter(Boolean)
+    const deadline = Date.now() + 10000
+    while (pids.some(alive) && Date.now() < deadline) await new Promise(done => setTimeout(done, 100))
+    const remaining = pids.filter(alive)
+    for (const pid of remaining) { WARN(`Forcing acceptance node shutdown (pid ${pid})`); process.kill(pid, 'SIGKILL') }
+    if (remaining.length) await new Promise(done => setTimeout(done, 100))
+    if (pids.some(alive)) throw new Error('Acceptance cluster nodes did not stop')
+  }
   LOG('Cluster stopped. Node data dirs are preserved; delete the cluster dir to reset.')
 }
 
@@ -696,7 +718,7 @@ async function main() {
   if (cmd === 'start') {
     await cmdStart(args)
   } else if (cmd === 'stop') {
-    cmdStop(args)
+    await cmdStop(args)
   } else {
     FAIL(`Unknown command "${cmd}". Use "start" or "stop".`)
   }

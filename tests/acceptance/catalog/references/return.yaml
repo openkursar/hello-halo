@@ -1,0 +1,87 @@
+version: 1
+id: references.return
+module: references
+title:
+  en: Return to a source from a message
+  zh: 从消息返回原文
+story:
+  en: I can follow a file link or reference back to what the answer discusses.
+  zh: 我能从文件链接或引用返回回复正在讨论的内容。
+basis: observed
+references:
+  - tests/e2e/specs/references.spec.ts
+  - src/shared/types/content-reference.ts
+promises:
+  navigate:
+    en: A reference or file link opens the intended file and supported location.
+    zh: 引用或文件链接打开目标文件及支持的位置。
+  stale:
+    en: A changed or missing source is not silently replaced by a different file.
+    zh: 来源变更或丢失时不悄悄跳到其他文件。
+scenarios:
+  - id: references.return.links
+    title:
+      en: Open relative and absolute file links
+      zh: 打开相对及绝对文件链接
+    verifies:
+      - navigate
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A reply contains named relative and permitted absolute fixture paths.
+        zh: 回复含命名的相对及允许的绝对测试路径。
+    steps:
+      - en: Activate links by click and keyboard at desktop and narrow widths.
+        zh: 在桌面及窄屏下通过点击和键盘激活链接。
+    expected:
+      - en: The correct files open in the canvas.
+        zh: 画布打开正确文件。
+  - id: references.return.replaced-editor
+    title:
+      en: Return to a diff comment after switching files
+      zh: 切换文件后返回差异评论
+    verifies:
+      - navigate
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A large diff contains a comment on a known file.
+        zh: 大差异中某已知文件有评论。
+    steps:
+      - en: Select another file, then activate the reference card.
+        zh: 选择其他文件，再激活引用卡片。
+    expected:
+      - en: The original file and commented location return even after its previous editor unmounted.
+        zh: 即使旧编辑器已卸载，也返回原文件及评论位置。
+  - id: references.return.missing
+    title:
+      en: Open a reference whose source disappeared
+      zh: 打开来源已消失的引用
+    verifies:
+      - stale
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A referenced fixture file has been removed.
+        zh: 已引用测试文件被移除。
+    steps:
+      - en: Activate its reference.
+        zh: 激活引用。
+    expected:
+      - en: The user sees the unavailable source and no unrelated file is shown as a match.
+        zh: 用户看到来源不可用，不将无关文件显示为匹配。

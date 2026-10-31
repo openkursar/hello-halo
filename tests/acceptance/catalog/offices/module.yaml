@@ -1,0 +1,20 @@
+version: 1
+id: offices
+title:
+  en: Cross-machine offices
+  zh: 跨机器办公室
+description:
+  en: Join shared teams and recover from disconnected peers.
+  zh: 加入共享团队并从断线恢复。
+paths:
+  - src/main/apps/federation/**
+  - src/main/apps/runtime/federation/**
+  - src/renderer/components/team/TeamJoinDialog.tsx
+  - src/renderer/components/team/TeamInviteDialog.tsx
+  - src/renderer/components/team/MemberPresenceChip.tsx
+dependsOn:
+  - teams
+  - permissions
+scope:
+  en: Two or more isolated nodes through LAN or relay; owner identities, invited peers, version mismatch, disconnect/rejoin, takeover and history. True device/network evidence stays distinct from loopback clusters.
+  zh: 通过局域网或中继连接多个节点；身份、邀请、版本不兼容、断线重连、接管及历史。真实设备网络证据与本机集群证据分开。

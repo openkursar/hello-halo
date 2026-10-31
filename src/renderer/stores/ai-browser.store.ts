@@ -46,6 +46,8 @@ interface AIBrowserState {
 
   /** Apply an active-view event from the main process. */
   applyActiveView: (event: AIBrowserActiveView) => void
+  /** Refresh known page metadata without selecting, revealing or reordering it. */
+  applyPageMetadata: (viewId: string, metadata: Partial<Pick<AIBrowserView, 'url' | 'title'>>) => void
   /** Seed from the main process's snapshot; anything already known is newer and kept. */
   applySnapshot: (pages: AIBrowserLivePage[]) => void
   /** An AI-driven view was destroyed; drop every entry pointing at it. */
@@ -75,6 +77,31 @@ export const useAIBrowserStore = create<AIBrowserState>()((set) => ({
         ? { ...state.pages, [viewId]: { viewId, conversationId, spaceId, url, title, lastActivityAt } }
         : state.pages,
     }))
+  },
+
+  applyPageMetadata: (viewId, metadata) => {
+    set(state => {
+      if (metadata.url === undefined && metadata.title === undefined) return state
+      const update = <T extends Pick<AIBrowserView, 'url' | 'title'>>(current: T): T => {
+        const url = metadata.url === undefined ? current.url : metadata.url
+        const title = metadata.title === undefined ? current.title : metadata.title
+        return current.url === url && current.title === title ? current : { ...current, url, title }
+      }
+      let pages = state.pages
+      if (Object.hasOwn(pages, viewId)) {
+        const page = update(pages[viewId])
+        if (page !== pages[viewId]) pages = { ...pages, [viewId]: page }
+      }
+      let views = state.views
+      for (const [conversationId, current] of Object.entries(state.views)) {
+        if (current.viewId !== viewId) continue
+        const view = update(current)
+        if (view === current) continue
+        if (views === state.views) views = { ...views }
+        views[conversationId] = view
+      }
+      return pages === state.pages && views === state.views ? state : { pages, views }
+    })
   },
 
   applySnapshot: (snapshot) => {
@@ -177,6 +204,11 @@ export function initAIBrowserStoreListeners(): () => void {
     useAIBrowserStore.getState().applyActiveView(data)
   })
 
+  const unsubMetadata = api.onBrowserStateChange((data: unknown) => {
+    const event = data as { viewId: string; state: Partial<Pick<AIBrowserView, 'url' | 'title'>> }
+    useAIBrowserStore.getState().applyPageMetadata(event.viewId, event.state)
+  })
+
   const unsubGone = api.onAIBrowserViewGone((data) => {
     useAIBrowserStore.getState().handleViewGone(data.viewId)
     // Its session ended (chat deleted, app uninstalled, tray stop): a tab left
@@ -198,6 +230,7 @@ export function initAIBrowserStoreListeners(): () => void {
   return () => {
     disposed = true
     unsubActive()
+    unsubMetadata()
     unsubGone()
     unsubReleased()
   }

@@ -1,0 +1,23 @@
+version: 1
+id: models
+title:
+  en: AI accounts and engines
+  zh: AI 账户与执行引擎
+description:
+  en: Configure accounts and choose compatible models and execution engines.
+  zh: 配置账户，选择兼容的模型与执行引擎。
+paths:
+  - src/renderer/components/ai-config/**
+  - src/renderer/components/settings/AISourcesSection.tsx
+  - src/renderer/components/settings/ModelConfigPanel.tsx
+  - src/main/services/ai-sources/**
+  - src/main/openai-compat-router/**
+  - src/renderer/components/settings/AdvancedSection.tsx
+  - src/renderer/components/settings/ProviderSelector.tsx
+  - src/main/services/api-validator.service.ts
+  - src/renderer/utils/model-fetch-error.ts
+dependsOn:
+  - startup
+scope:
+  en: API-key, OAuth and delegated-login accounts; installed Claude Code SDK, optional Halo SDK, Codex and dsh engines; application-wide engine selection requires restart.
+  zh: API Key、OAuth 与委托登录账户；已安装的 Claude Code SDK、可选 Halo SDK、Codex 及 dsh 引擎；应用级引擎选择需要重启。

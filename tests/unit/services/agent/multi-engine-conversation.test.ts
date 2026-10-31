@@ -27,7 +27,7 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
   resolveClaudeConfigDir: () => join(globalThis.__HALO_TEST_DIR__, '.halo', 'claude-config'),
 }))
 vi.mock('../../../../src/main/services/space.service', () => ({
-  getSpace: (id: string) => ({ id, path: join(globalThis.__HALO_TEST_DIR__, id), isTemp: false }), touchSpaceActivity: () => {},
+  getSpace: (id: string) => ({ id, path: join(globalThis.__HALO_TEST_DIR__, id), isTemp: false }), hasSpace: () => true, touchSpaceActivity: () => {},
 }))
 vi.mock('../../../../src/main/services/tlon', () => ({ getSeedKBIds: () => [], getKBChatContext: () => null, resolveSourcesForReadPaths: () => [] }))
 vi.mock('../../../../src/main/services/conversation-interop', () => ({ getPendingConversationInputIds: (id: string) => { m.pendingHistoryReads++; return m.pendingHistoryIds.get(id) ?? [] } }))

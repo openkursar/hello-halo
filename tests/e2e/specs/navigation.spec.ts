@@ -8,7 +8,7 @@ import {
 } from '../fixtures/helpers'
 
 test.describe('App shell', () => {
-  test('renders the persistent navigation destinations', async ({ window }) => {
+  test('renders the persistent navigation destinations', { annotation: { type: 'acceptance', description: "{\"caseId\":\"startup.navigation.rail\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await waitForHomePage(window)
 
     for (const name of ['Conversation', 'Digital Humans', 'Knowledge Base', 'Store', 'Tasks', 'Settings']) {
@@ -46,7 +46,7 @@ test.describe('Page Navigation', () => {
     await window.screenshot({ path: 'tests/e2e/results/nav-settings.png' })
   })
 
-  test('can navigate to Digital Humans and its capability library', async ({ window }) => {
+  test('can navigate to Digital Humans and its capability library', { annotation: { type: 'acceptance', description: "{\"caseId\":\"startup.navigation.people-library\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await navigateToApps(window)
 
     for (const name of ['My Digital Humans', 'Teams', 'Capability library']) {
@@ -57,7 +57,7 @@ test.describe('Page Navigation', () => {
     await window.screenshot({ path: 'tests/e2e/results/nav-apps-page.png' })
   })
 
-  test('can open workspace management and return to the Halo workspace', async ({ window }) => {
+  test('can open workspace management and return to the Halo workspace', { annotation: { type: 'acceptance', description: "{\"caseId\":\"startup.navigation.workspace-return\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await navigateToChat(window)
     await navigateToWorkspaces(window)
 

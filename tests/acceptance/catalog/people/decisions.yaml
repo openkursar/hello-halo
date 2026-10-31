@@ -1,0 +1,102 @@
+version: 1
+id: people.decisions
+module: people
+title:
+  en: Answer the right pending question
+  zh: 回答正确的待决问题
+story:
+  en: I can answer my digital human’s questions without losing drafts or answering for another owner.
+  zh: 我能回答自己数字人的问题，不丢草稿，也不会代替别人授权。
+basis: documented
+references:
+  - .agents/skills/product-principles/SKILL.md
+  - src/renderer/components/apps/PeopleInbox.tsx
+  - src/main/apps/runtime/service.ts
+  - tests/e2e/specs/people-upgrade.spec.ts
+  - src/main/apps/runtime/DESIGN.md
+  - tests/e2e/specs/acceptance-decisions.spec.ts
+promises:
+  draft:
+    en: Unsent answers survive navigation between inbox and person detail.
+    zh: 待发送回答在收件箱和个人详情切换时保留。
+  identity:
+    en: An answer is applied once to the question it addresses and only by an authorized person.
+    zh: 回答仅由有权限的人应用到对应问题，且只生效一次。
+  natural:
+    en: The owner can respond in ordinary language without memorizing internal request identifiers.
+    zh: 主人可用自然语言回答，无需记内部请求编号。
+scenarios:
+  - id: people.decisions.draft
+    title:
+      en: Keep a decision draft while inspecting its person
+      zh: 查看数字人时保留回答草稿
+    verifies:
+      - draft
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: There are enough requests for multiple inbox pages.
+        zh: 待决请求数量超过一页。
+    steps:
+      - en: Load more, type an answer, open the person and return.
+        zh: 加载更多，输入回答，查看数字人后返回。
+    expected:
+      - en: The same pending question retains the unsent answer.
+        zh: 同一待决问题保留未发送回答。
+  - id: people.decisions.answer-once
+    title:
+      en: Answer two independent questions and retry one
+      zh: 回答两个独立问题并重试其中一个
+    verifies:
+      - identity
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: One isolated digital human creates two independent manual runs and asks a distinct question from each through the real report tool.
+        zh: 同一隔离数字人创建两个独立手动任务，各通过真实报告工具提出不同问题。
+    steps:
+      - en: Answer the later question first using a repeated submit gesture, verify its answered card no longer offers submission, and reopen that card after its work completes.
+        zh: 先通过重复提交操作回答后提出的问题，确认已回答卡片不再提供提交入口，并在该任务完成后重新查看卡片。
+      - en: Answer the remaining question and inspect both real continuations and persisted run records.
+        zh: 回答另一问题，检查两次真实续跑及保存的任务记录。
+    expected:
+      - en: Each task resumes with only its own answer and duplicate submission does not resume twice.
+        zh: 各任务只使用自己的回答，重复提交不造成重复恢复。
+    notes:
+      en: Local owner UI actions, actual decision records, one continuation attempt per question and the next model inputs establish routing. The scripted model records those inputs without judging the user's decision. This does not claim cross-client duplicate-RPC coverage, other-owner authorization or complete recovery of earlier model history.
+      zh: 通过本地主人界面操作、真实决策记录、每题一次续跑计数及下一模型输入验证路由。脚本模型只记录输入，不评判用户决策。不据此宣称跨客户端重复 RPC、其他主人授权或此前完整模型历史恢复已覆盖。
+  - id: people.decisions.natural
+    title:
+      en: Reply naturally through a connected channel
+      zh: 通过消息渠道自然回答
+    verifies:
+      - natural
+      - identity
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: An owner receives a pending decision in a test channel.
+        zh: 主人在测试消息渠道收到待决问题。
+    steps:
+      - en: Send an ordinary-language answer, then an ambiguous answer with two open requests.
+        zh: 发送自然语言回答，再在两项待决请求时发送含糊回答。
+    expected:
+      - en: A clear answer reaches its question; an ambiguous answer asks for clarification instead of guessing.
+        zh: 明确回答送达对应问题，含糊回答会澄清而不猜测。

@@ -1,0 +1,73 @@
+version: 1
+id: permissions.guidance
+module: permissions
+title:
+  en: Explain a denied request helpfully
+  zh: 清楚解释无权限请求
+story:
+  en: As a guest, I understand what cannot be done and how to proceed without seeing internal failures.
+  zh: 作为访客，我能理解什么不能做及下一步，而不是看到内部错误。
+basis: proposed
+references:
+  - src/renderer/components/capability/CapabilityPolicyFields.tsx
+  - src/main/apps/runtime/delegation-gate.ts
+promises:
+  plain:
+    en: A denied operation explains the missing capability in ordinary language without exposing private owner data.
+    zh: 被拒绝的操作用普通语言说明缺少能力，不暴露主人的私有信息。
+  settle:
+    en: A denied request settles once; normal chat remains usable and no repeated failing tool loop is presented as progress.
+    zh: 拒绝请求结束一次；普通聊天仍可用，不将重复失败调用展示为进展。
+scenarios:
+  - id: permissions.guidance.guest
+    title:
+      en: Explain unavailable notifications to a guest
+      zh: 向访客解释通知能力未开放
+    verifies:
+      - plain
+      - settle
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A guest can chat but cannot send notifications.
+        zh: 访客可聊天但不能发送通知。
+    steps:
+      - en: Ask for a notification, inspect the reply, then send a normal question.
+        zh: 请求通知，查看回复，再问普通问题。
+    expected:
+      - en: The operation is refused clearly, no notification is sent, and the next normal question works.
+        zh: 操作被清楚拒绝，未发送通知，之后普通提问可用。
+  - id: permissions.guidance.real-model
+    title:
+      en: Assess a real model’s denial explanation
+      zh: 评估真实模型的拒绝说明
+    verifies:
+      - plain
+      - settle
+    platforms: *a1
+    profiles:
+      - live
+    evidence: live-model
+    mode: live
+    automation: planned
+    preconditions:
+      - en: A controlled guest conversation uses a real supported model.
+        zh: 受控访客对话使用真实支持模型。
+    steps:
+      - en: Request a withheld capability and assess the response against the approved explanation rubric.
+        zh: 请求未开放能力，按已确认说明标准检查回复。
+    expected:
+      - en: The response communicates the actual limit without fabricating owner approval or endlessly retrying.
+        zh: 回复说明真实限制，不虚构主人授权，也不无限重试。
+    requirements:
+      - live-model
+questions:
+  - en: Should denied guest operations offer a permission request to the owner, or explain the limitation without opening an approval workflow?
+    zh: 访客操作被拒绝时，应允许向主人申请权限，还是只解释限制而不启动审批流程？

@@ -209,6 +209,14 @@ renderer that starts late (reload) seeds itself with the request
 `ai-browser:list-live-pages` (`listLivePages()`: every owned or active page of a
 UI context, `active` marking the one it acts on).
 
+Page titles and URLs keep changing after creation, including on inactive pages.
+The existing desktop `browser:state-change` stream carries those updates by
+`viewId`; the AI browser store patches only pages and active references it already
+knows. This does not establish ownership, select a page, change activity time or
+reveal Canvas. Unknown and released pages stay unknown. Canvas consumes that same
+stream independently for its tab metadata; neither consumer calls the other to
+refresh titles. Lifecycle events remain responsible for ownership and selection.
+
 **Live-session tray.** Lists every live AI page of the CURRENT space that a
 conversation OPENED ITSELF (`owned` in the event/snapshot), one row each,
 labelled "owner · page" (digital human name — for its native chats and for a

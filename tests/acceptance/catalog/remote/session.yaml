@@ -1,0 +1,108 @@
+version: 1
+id: remote.session
+module: remote
+title:
+  en: Continue work from a remote client
+  zh: 从远程客户端继续工作
+story:
+  en: I can chat and inspect results remotely, including after a temporary disconnect.
+  zh: 我能远程聊天和查看结果，短暂断线后仍可继续。
+basis: observed
+references:
+  - src/renderer/api/transport.ts
+  - src/renderer/hooks/useWsRecovery.ts
+  - src/renderer/components/setup/ServerConnect.tsx
+  - tests/e2e/specs/acceptance-remote.spec.ts
+  - tests/e2e/specs/acceptance-remote-desktop.spec.ts
+  - tests/e2e/specs/browser-carrier-packaged.spec.ts
+promises:
+  chat:
+    en: Authenticated remote messages and streaming replies use the same authoritative conversation as desktop.
+    zh: 认证后的远程消息与流式回复使用与桌面相同的权威对话。
+  reconnect:
+    en: Reconnect restores current state and allows new messages without lost or duplicate history.
+    zh: 重连恢复当前状态，允许继续发消息，不丢失或重复历史。
+  limits:
+    en: Desktop-only folder operations clearly direct the user to desktop instead of pretending success remotely.
+    zh: 桌面专有目录操作明确引导用户回桌面，而非远程假装成功。
+scenarios:
+  - id: remote.session.chat-reconnect
+    title:
+      en: Chat through a real browser and reconnect
+      zh: 通过真实浏览器聊天并重连
+    verifies:
+      - chat
+      - reconnect
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: A real test desktop exposes authenticated HTTP and WebSocket routes.
+        zh: 真实测试桌面开放认证 HTTP 与 WebSocket。
+    steps:
+      - en: Sign in through browser UI, send a streaming request, interrupt the connection, reconnect and send again.
+        zh: 通过浏览器界面登录并发送流式请求，中断连接后重连并再次发消息。
+    expected:
+      - en: The same conversation remains readable and new messages complete without duplicate prior content.
+        zh: 同一对话仍可读，新消息完成且旧内容不重复。
+    requirements:
+      - halo-sdk
+      - chromium-browser
+  - id: remote.session.desktop-only
+    title:
+      en: Use a desktop-only action remotely
+      zh: 远程执行桌面专有操作
+    verifies:
+      - limits
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A real browser signs in to the isolated Halo HTTP server over loopback, with an existing workspace and unchanged control files.
+        zh: 真实浏览器通过本机回环地址登录隔离 Halo HTTP 服务，已有空间和需要保留的对照文件。
+    steps:
+      - en: Inspect and try the Custom Folder choice when creating a workspace, cancel, then inspect Change folder for the existing workspace and cancel.
+        zh: 新建空间时检查并尝试自定义目录选项后取消，再检查已有空间的更改目录操作并取消。
+    expected:
+      - en: Both surfaces explain the desktop requirement and disable folder selection; Browse is absent remotely and no folder-change success is claimed. The workspace registry, working directory and control files remain unchanged, with no workspace mutation request from these interactions.
+        zh: 两处界面均说明需要桌面操作并禁用目录选择；远程不显示浏览按钮，也不声称目录已更改。空间注册记录、工作目录和对照文件不变，这些交互不发出空间修改请求。
+    notes:
+      en: Real application authentication, HTTP/IPC handlers and the built renderer remain intact. A test-only socket binding guard in the owned Electron process constrains the remote service's wildcard listener to 127.0.0.1 and verifies the actual address; it is restored after that server stops. This is loopback remote-UI evidence, not native product loopback configuration, LAN connectivity, a native folder dialog or a host console test. The existing LAN obligation stays separate.
+      zh: 使用真实应用认证、HTTP/IPC 处理器和原样构建界面。测试仅在自有 Electron 进程中把远程服务的通配监听约束到 127.0.0.1 并核对实际地址，服务停止后恢复。它证明回环远程界面行为，不证明产品原生回环配置、局域网连通、原生目录弹窗或主机控制台；已有 LAN 验证义务仍独立保留。
+    requirements:
+      - chromium-browser
+  - id: remote.session.packaged-login
+    title:
+      en: Authenticate the remote UI of an installed app
+      zh: 认证安装包的远程界面
+    verifies:
+      - chat
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Use a local test website and isolated Electron data.
+        zh: 使用本地测试网站及隔离 Electron 数据。
+    steps:
+      - en: Enable the packaged HTTP server and enter its current access code in a separate browser window.
+        zh: 启用安装包 HTTP 服务，在独立浏览窗口输入当前访问码。
+    expected:
+      - en: The shared remote shell and chat composer load without the desktop preload API.
+        zh: 共享远程主界面及输入框可用，不依赖桌面预加载 API。
+    requirements:
+      - packaged-app

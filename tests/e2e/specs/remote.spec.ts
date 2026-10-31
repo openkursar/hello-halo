@@ -34,7 +34,7 @@ test.describe('Remote Access', () => {
     await window.screenshot({ path: testInfo.outputPath('remote-tunnel-enabled.png') })
   })
 
-  test('shows and hides the access password', async ({ window }, testInfo) => {
+  test('shows and hides the access password', { annotation: { type: 'acceptance', description: "{\"caseId\":\"remote.access.mask\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }, testInfo) => {
     await navigateToRemoteSettings(window)
     await clickRemoteToggle(window)
     const remote = window.locator('#remote')
@@ -60,7 +60,7 @@ test.describe('Remote Access', () => {
     await window.screenshot({ path: testInfo.outputPath('remote-disabled.png') })
   })
 
-  test('keeps the public QR code hidden while LAN access has no running tunnel', async ({ window }, testInfo) => {
+  test('keeps the public QR code hidden while LAN access has no running tunnel', { annotation: { type: 'acceptance', description: "{\"caseId\":\"remote.access.qr-scope\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }, testInfo) => {
     await navigateToRemoteSettings(window)
     await clickRemoteToggle(window)
     const remote = window.locator('#remote')

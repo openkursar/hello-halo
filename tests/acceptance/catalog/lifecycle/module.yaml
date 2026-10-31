@@ -1,0 +1,26 @@
+version: 1
+id: lifecycle
+title:
+  en: Installation, updates and recovery
+  zh: 安装、更新与恢复
+description:
+  en: Keep the application and existing work usable through closure, upgrades and faults.
+  zh: 关闭、升级及故障后仍能使用应用及已有工作。
+paths:
+  - src/main/index.ts
+  - src/main/services/lifecycle.ts
+  - src/main/services/updater/**
+  - src/main/services/health/**
+  - src/main/platform/background/**
+  - src/main/platform/store/**
+  - src/renderer/components/updater/**
+  - scripts/release/**
+  - scripts/build-*.cjs
+  - electron-builder.cjs
+dependsOn:
+  - startup
+  - workspaces
+  - chat
+scope:
+  en: Packaged supported platforms, fresh installation and existing profiles; OS-specific close/quit, signed updates, migrations, diagnostics and renderer/process failure.
+  zh: 受支持平台的打包应用、首次安装及旧资料；各系统的关闭/退出、签名更新、迁移、诊断及界面或进程故障。

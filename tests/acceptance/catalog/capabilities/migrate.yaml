@@ -1,0 +1,140 @@
+version: 1
+id: capabilities.migrate
+module: capabilities
+title:
+  en: Bring existing CLI resources into Halo
+  zh: 把已有 CLI 资源迁入 Halo
+story:
+  en: I can copy existing skills or tool connections without losing either side’s configuration by accident.
+  zh: 我能复制已有技能或工具连接，不意外丢失任一边配置。
+basis: observed
+references:
+  - src/renderer/components/settings/CLIConfigSection.tsx
+  - src/renderer/hooks/useMigration.ts
+  - src/main/ipc/cli-config.ts
+  - tests/e2e/specs/acceptance-cli-migration.spec.ts
+promises:
+  preview:
+    en: A scan shows existing resources and collision choices before migration.
+    zh: 迁移前扫描显示已有资源及冲突处理选项。
+  selected:
+    en: Only selected resources are copied or overwritten according to each chosen action.
+    zh: 只按各自所选操作复制或覆盖指定资源。
+  directory:
+    en: Sharing the CLI configuration requires the offered explicit warning; custom paths show the effective directory.
+    zh: 共享 CLI 配置需明确警告确认，自定义路径显示实际目录。
+scenarios:
+  - id: capabilities.migrate.skills
+    title:
+      en: Migrate skills with a naming collision
+      zh: 迁移名称冲突的技能
+    verifies:
+      - preview
+      - selected
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    variants:
+      action: [skip, overwrite, rename]
+    preconditions:
+      - en: Isolated source and destination skill folders contain one colliding name.
+        zh: 隔离源与目标技能目录有一个重名项。
+    steps:
+      - en: Scan, choose skip/overwrite/rename on separate fixtures and execute migration.
+        zh: 扫描，在不同测试资料中选择跳过、覆盖或重命名并迁移。
+    expected:
+      - en: Each result follows its selected action and unrelated skills remain unchanged.
+        zh: 结果符合所选操作，无关技能不变。
+    notes:
+      en: Each action runs in a fresh profile. The real application resolves HOME and every CLI directory inside that profile before scanning. UI scans and migration copy real text, nested resources and binary bytes; an occupied rename suffix and unselected resources remain intact, including after restart. No skill invocation or model request is made.
+      zh: 每种操作使用独立资料目录；扫描前核对真实应用解析的 HOME 和所有 CLI 目录均在该目录内。界面扫描和迁移实际文本、嵌套资源及二进制文件；已有重命名后缀与未选资源保留，并验证重启。此项不调用技能或模型。
+  - id: capabilities.migrate.mcp
+    title:
+      en: Import selected MCP definitions
+      zh: 导入选定 MCP 配置
+    verifies:
+      - preview
+      - selected
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: An isolated CLI config has multiple synthetic MCP entries.
+        zh: 隔离 CLI 配置有多个合成 MCP 项。
+    steps:
+      - en: Scan, select one entry, cancel once and then import it.
+        zh: 扫描后选一项，先取消再导入。
+    expected:
+      - en: Cancellation changes nothing and only the selected entry is imported.
+        zh: 取消不改变配置，最终只导入选定项。
+    notes:
+      en: All definitions use an owned loopback HTTP MCP endpoint. Existing connection controls are installed through the real application API; scan, cancel, selection and import use the UI. The test checks persisted App Manager definitions, headers, settings and identities across restart, plus unchanged source bytes. It does not claim tool invocation or stdio command availability.
+      zh: 全部定义使用测试自有的本机 HTTP MCP 端点；已有连接对照通过真实应用 API 安装，扫描、取消、选择和导入走界面。验证重启后的连接定义、请求头、配置、身份及源文件字节，不宣称工具调用或 stdio 命令可用性。
+  - id: capabilities.migrate.mcp-overwrite
+    title:
+      en: Overwrite a selected colliding MCP definition
+      zh: 覆盖选定的同名 MCP 定义
+    verifies:
+      - preview
+      - selected
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A synthetic CLI definition and an installed global connection have the same name but different headers and settings; an unrelated connection is installed too.
+        zh: 合成 CLI 定义与已安装的全局连接同名，但请求头及配置不同；另有无关连接作为对照。
+    steps:
+      - en: Scan and skip the collision, verify no change, then scan again and explicitly choose Overwrite for that definition only.
+        zh: 扫描并跳过冲突项，验证未改变，再次扫描并仅对该定义明确选择覆盖。
+      - en: Restart and read back the imported definition and the unrelated connection.
+        zh: 重启并读回已导入定义及无关连接。
+    expected:
+      - en: The selected connection contains the imported definition; skipped connections and source bytes remain unchanged, and the replacement persists after restart.
+        zh: 选定连接包含导入的定义；跳过的连接与源文件字节不变，替换结果在重启后保留。
+    notes:
+      en: The binding retains a strict replacement assertion for the UI's Overwrite choice. A skipped result or an unchanged installed definition does not satisfy it. The endpoint is owned loopback HTTP, with no model call or external connection.
+      zh: 绑定严格验证界面覆盖操作确实替换定义；跳过结果或已安装定义未改变均不满足要求。端点为测试自有本机 HTTP，不调用模型或连接外部服务。
+  - id: capabilities.migrate.config-directory
+    title:
+      en: Confirm a shared config directory
+      zh: 确认共享配置目录
+    verifies:
+      - directory
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A disposable CLI configuration directory is available.
+        zh: 存在可丢弃 CLI 配置目录。
+    steps:
+      - en: Choose shared mode, cancel then confirm its warning, and inspect a custom-path selection.
+        zh: 选择共享模式，先取消再确认警告，并检查自定义路径选择。
+    expected:
+      - en: Unconfirmed sharing is not applied and the effective selected directory is visible.
+        zh: 未确认的共享不生效，实际选定目录可见。
+    notes:
+      en: The current desktop UI provides a text input for custom paths. The test types an owned path, checks invalid-path rejection, and applies it through the real UI; no native picker is replaced. Shared-mode cancellation and confirmation are checked separately from Apply, and each applied mode is read back after restart. Synthetic source settings and unrelated file bytes must remain unchanged. Future conversation engine behavior is outside this path-selection case.
+      zh: 当前桌面界面的自定义路径为文本输入框；测试真实输入自有路径、验证无效路径拒绝并通过界面应用，不替换原生选择器。分别验证共享警告的取消、确认和应用步骤，并在重启后读回已应用模式；合成源设置及无关文件字节须保持不变。未来会话的引擎行为不属于本路径选择用例。

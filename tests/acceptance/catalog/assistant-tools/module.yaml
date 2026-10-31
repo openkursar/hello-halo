@@ -1,0 +1,22 @@
+version: 1
+id: assistant-tools
+title:
+  en: Search, email and extraction tools
+  zh: 搜索、邮件与文字提取
+description:
+  en: Use optional AI capabilities with observable outcomes and clear prerequisites.
+  zh: 使用可选 AI 能力，结果与前置条件清晰。
+paths:
+  - src/main/services/web-search/**
+  - src/main/services/email-mcp/**
+  - src/main/services/ocr/**
+  - src/main/services/api-ref/**
+  - src/main/services/official-docs-mcp/**
+  - src/main/services/conversation-interop/**
+dependsOn:
+  - chat
+  - capabilities
+  - permissions
+scope:
+  en: Configured search engines, test email/CalDAV accounts, local OCR and official guidance; no external message sending is authorized by merely running a general regression profile.
+  zh: 已配置搜索引擎、测试邮箱/CalDAV、本地 OCR 与官方指引；普通回归不因此获准向外部发送消息。

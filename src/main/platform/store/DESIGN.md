@@ -106,6 +106,37 @@ _migrations table:
 **Idempotency**: Migrations check current version and only run unapplied ones.
 The entire migration sequence for a namespace runs in a single transaction.
 
+**Referenced-table rebuilds.** A migration that rebuilds a table referenced by
+other tables declares `foreignKeys: 'rebuild'`. SQLite's `DROP TABLE` performs
+an implicit delete with foreign keys enabled, so an otherwise successful table
+copy can cascade-delete another module's records. Deferring constraint checks
+does not prevent those actions. The marker changes execution policy, not the
+historical migration SQL: adding it to an unapplied old step protects that step
+before data is lost; a later schema version cannot restore deleted rows.
+
+Only a pending marked step selects this path for its namespace batch. The store
+refuses an existing transaction, takes its normal pre-migration snapshot, saves
+the connection's foreign-key setting, and disables enforcement before starting
+an immediate transaction. It checks foreign-key violations before the batch and
+after the version write, before commit. New violations abort the entire batch;
+unchanged older violations may remain for their owning module's later cleanup.
+Violation identity includes the child row, primary-key values, constraint
+definition and referenced values, rather than just a count. An existing violation
+whose row cannot be identified safely (including a `WITHOUT ROWID` child) is
+rejected without migrating. Field values never enter migration diagnostics.
+
+The original foreign-key setting is restored and verified after commit or
+rollback. A failed restoration closes and evicts the unsafe connection and
+throws; any execution, restoration and close errors are retained together.
+Unknown execution markers are rejected. Ordinary migrations keep
+enforcement enabled as configured; an up-to-date namespace performs no additional
+foreign-key checks or setting changes. Marked upgrades pay for two integrity
+scans once; checks stream their results and retain only existing violation
+identities, but this remains synchronous startup work.
+
+This follows SQLite's [foreign-key rules for table removal](https://www.sqlite.org/foreignkeys.html#fk_schemacommands)
+and [transaction boundary for foreign_keys](https://www.sqlite.org/pragma.html#pragma_foreign_keys).
+
 ### 3.2 Database path strategy
 
 | Database | Path | V1 Status |
@@ -213,6 +244,7 @@ Applied on every connection open:
 interface Migration {
   version: number
   description: string
+  foreignKeys?: 'rebuild'
   up(db: BetterSqlite3.Database): void
 }
 

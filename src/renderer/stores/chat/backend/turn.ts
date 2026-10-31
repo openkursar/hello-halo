@@ -33,11 +33,13 @@ export function endTurnWithError(session: SessionState | undefined, error: strin
 /**
  * The session once its turn is persisted and the transcript re-read. An
  * `interrupted` error arrives after `agent:complete` through its own event, so
- * it may already be on the session by now and must survive; any other error is
- * persisted in the message and cleared here.
+ * it may already be on the session by now and must survive. Directory recovery
+ * actions also live in the session; persisted error text cannot replace them.
+ * Other errors are already in the message and cleared here.
  */
 export function finishedTurnState(session: SessionState): SessionState {
   const keepError = session.errorType === 'interrupted'
+    || (session.errorType === 'working_dir_unavailable' && !!session.workDirIssue)
   return {
     ...session,
     isGenerating: false,

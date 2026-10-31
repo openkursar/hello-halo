@@ -1,0 +1,20 @@
+version: 1
+id: people
+title:
+  en: Digital humans
+  zh: 数字人
+description:
+  en: Find, configure, chat with and retire persistent digital humans.
+  zh: 查找、配置、聊天及停用长期数字人。
+paths:
+  - src/renderer/pages/AppsPage.tsx
+  - src/renderer/components/apps/**
+  - src/renderer/stores/apps.store.ts
+  - src/renderer/stores/people-view.store.ts
+  - src/main/apps/manager/**
+dependsOn:
+  - models
+  - workspaces
+scope:
+  en: Owner-managed local people and visible teammate profiles; individual chat, settings, decisions and workspace retention; installation sources live in marketplace.
+  zh: 主人管理的本地数字人与可查看的队友资料；独立聊天、设置、决策和工作空间保留；安装来源归市场模块。

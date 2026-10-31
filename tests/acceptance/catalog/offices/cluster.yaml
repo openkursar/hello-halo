@@ -1,0 +1,1187 @@
+version: 1
+id: offices.cluster
+module: offices
+title:
+  en: Keep a shared office consistent across devices
+  zh: 让共享办公室在设备间保持一致
+story:
+  en: When my teammates work on other devices, our office membership, tasks and conversations remain
+    coherent.
+  zh: 当队友在其他设备上工作时，我们的办公室成员、任务和对话仍然一致。
+basis: documented
+references:
+  - tests/decentralized/README.md
+  - tests/decentralized/SCENARIOS.md
+  - tests/decentralized/run-scenarios.mjs
+promises:
+  identity:
+    en: Each device keeps an independent identity and data directory, and retains its identity after
+      restart.
+    zh: 每台设备保留独立身份和数据目录，重启后仍使用原身份。
+  membership:
+    en: Authorized joins, roster changes, exits and dissolution converge across the affected office
+      members.
+    zh: 获得授权的加入、成员变更、退出和解散会在相关办公室成员之间同步。
+  availability:
+    en: The office reports unavailable members, restores membership after restart and does not invent
+      authority without quorum.
+    zh: 办公室能反映成员不可用，在重启后恢复成员关系，且不会在不足法定多数时自行确立主机。
+  records:
+    en: Task identities, names, activity and accessible conversation history agree across participating
+      devices.
+    zh: 参与设备看到一致的任务身份、名称、活动记录与有权读取的对话历史。
+  delivery:
+    en: An authorized cross-device request reaches its recipient and produces an observable receipt or a
+      persisted real reply according to the scenario.
+    zh: 获得授权的跨设备请求能到达接收者，并按场景产生可观察的接收回执或持久化真实回复。
+  isolation:
+    en: Different offices and their members retain separate identities and access boundaries.
+    zh: 不同办公室及其成员保留各自身份和访问边界。
+scenarios:
+  - id: offices.cluster.independent-identities
+    title:
+      en: Independent nodes expose distinct identities and working endpoints
+      zh: 各节点具有独立身份和可用入口
+    verifies:
+      - identity
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Independent nodes expose distinct identities and working endpoints
+        zh: 各节点具有独立身份和可用入口
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.identity-restart
+    title:
+      en: A restarted node retains its identity
+      zh: 重启后保留原节点身份
+    verifies:
+      - identity
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A restarted node retains its identity
+        zh: 重启后保留原节点身份
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.profile-isolation
+    title:
+      en: Node ports and data directories remain isolated
+      zh: 节点端口和数据目录相互隔离
+    verifies:
+      - identity
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Node ports and data directories remain isolated
+        zh: 节点端口和数据目录相互隔离
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.join-roster
+    title:
+      en: An invited member joins a roster shared by both nodes
+      zh: 邀请成员加入后双方看到同一成员名单
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: An invited member joins a roster shared by both nodes
+        zh: 邀请成员加入后双方看到同一成员名单
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.stable-invite
+    title:
+      en: Repeated invitation creation retains the same invitation
+      zh: 重复创建邀请保留同一个邀请
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Repeated invitation creation retains the same invitation
+        zh: 重复创建邀请保留同一个邀请
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.revoked-invite
+    title:
+      en: Revoking an invite blocks new joins without removing seated members
+      zh: 撤销邀请阻止新加入且不移除已在场成员
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Revoking an invite blocks new joins without removing seated members
+        zh: 撤销邀请阻止新加入且不移除已在场成员
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.five-node-roster
+    title:
+      en: Five joined nodes converge on the same roster
+      zh: 五个节点的成员名单一致
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 5 isolated built Halo processes run on one computer.
+        zh: 5 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Five joined nodes converge on the same roster
+        zh: 五个节点的成员名单一致
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.invalid-dotted-credential
+    title:
+      en: An invalid dotted credential is rejected without blocking the host
+      zh: 拒绝带点号的无效凭证且主机仍可用
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: An invalid dotted credential is rejected without blocking the host
+        zh: 拒绝带点号的无效凭证且主机仍可用
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.member-offline
+    title:
+      en: A killed member owner is marked offline
+      zh: 成员所在进程停止后被标为离线
+    verifies:
+      - availability
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A killed member owner is marked offline
+        zh: 成员所在进程停止后被标为离线
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.member-rejoin
+    title:
+      en: A restarted member owner rejoins its office
+      zh: 成员所在进程重启后重新加入办公室
+    verifies:
+      - availability
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A restarted member owner rejoins its office
+        zh: 成员所在进程重启后重新加入办公室
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.host-restart
+    title:
+      en: A restarted host restores its office
+      zh: 主机重启后恢复办公室
+    verifies:
+      - availability
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A restarted host restores its office
+        zh: 主机重启后恢复办公室
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.minority-pauses
+    title:
+      en: A survivor without quorum does not appoint itself authority
+      zh: 不足法定多数的幸存节点不自行成为主机
+    verifies:
+      - availability
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 2 isolated built Halo processes run on one computer.
+        zh: 2 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A survivor without quorum does not appoint itself authority
+        zh: 不足法定多数的幸存节点不自行成为主机
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.lead-propagation
+    title:
+      en: Changing the lead propagates to joined nodes
+      zh: 更换负责人后各节点保持一致
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Changing the lead propagates to joined nodes
+        zh: 更换负责人后各节点保持一致
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.member-addition
+    title:
+      en: Adding a member propagates to joined nodes
+      zh: 新增成员同步到其他节点
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Adding a member propagates to joined nodes
+        zh: 新增成员同步到其他节点
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.member-removal
+    title:
+      en: Removing a member propagates to joined nodes
+      zh: 移除成员同步到其他节点
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Removing a member propagates to joined nodes
+        zh: 移除成员同步到其他节点
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.reporting-lines
+    title:
+      en: Reporting lines converge across nodes
+      zh: 成员之间的汇报关系保持一致
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Reporting lines converge across nodes
+        zh: 成员之间的汇报关系保持一致
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.concurrent-roster
+    title:
+      en: Concurrent lead and reporting-line changes both converge
+      zh: 同时更改负责人和汇报关系均能同步
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Concurrent lead and reporting-line changes both converge
+        zh: 同时更改负责人和汇报关系均能同步
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.shared-run
+    title:
+      en: Starting work shares the active run identity
+      zh: 开始工作后各节点使用同一次执行记录
+    verifies:
+      - records
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: integration
+    mode: live
+    automation: automated
+    requirements:
+      - halo-sdk
+      - live-model
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Starting work shares the active run identity
+        zh: 开始工作后各节点使用同一次执行记录
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.shared-activity
+    title:
+      en: Run activity is visible consistently across nodes
+      zh: 工作活动记录在各节点保持一致
+    verifies:
+      - records
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: integration
+    mode: live
+    automation: automated
+    requirements:
+      - halo-sdk
+      - live-model
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Run activity is visible consistently across nodes
+        zh: 工作活动记录在各节点保持一致
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.run-settles
+    title:
+      en: Completing a run clears working state across nodes
+      zh: 工作完成后各节点清除工作中状态
+    verifies:
+      - records
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: integration
+    mode: live
+    automation: automated
+    requirements:
+      - halo-sdk
+      - live-model
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Completing a run clears working state across nodes
+        zh: 工作完成后各节点清除工作中状态
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.board-replication
+    title:
+      en: Work records converge without duplicate task identities
+      zh: 工作记录同步且不出现重复任务身份
+    verifies:
+      - records
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: integration
+    mode: live
+    automation: automated
+    requirements:
+      - halo-sdk
+      - live-model
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Work records converge without duplicate task identities
+        zh: 工作记录同步且不出现重复任务身份
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.owner-history
+    title:
+      en: Every participating node can read a remote member transcript
+      zh: 各节点能读取远端成员的对话记录
+    verifies:
+      - records
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: integration
+    mode: live
+    automation: automated
+    requirements:
+      - halo-sdk
+      - live-model
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Every participating node can read a remote member transcript
+        zh: 各节点能读取远端成员的对话记录
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.reply-persistence
+    title:
+      en: A newly delivered message and real reply persist consistently
+      zh: 新消息和真实回复持久化并保持一致
+    verifies:
+      - records
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: integration
+    mode: live
+    automation: automated
+    requirements:
+      - halo-sdk
+      - live-model
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A newly delivered message and real reply persist consistently
+        zh: 新消息和真实回复持久化并保持一致
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.offline-history
+    title:
+      en: An offline history owner produces a prompt readable result or unavailable response
+      zh: 历史拥有者离线时及时返回已有记录或明确不可用
+    verifies:
+      - records
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: An offline history owner produces a prompt readable result or unavailable response
+        zh: 历史拥有者离线时及时返回已有记录或明确不可用
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.history-isolation
+    title:
+      en: A nonmember transcript request is refused
+      zh: 拒绝读取办公室外成员的历史
+    verifies:
+      - isolation
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A nonmember transcript request is refused
+        zh: 拒绝读取办公室外成员的历史
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.host-to-member
+    title:
+      en: A host request reaches a remote member and returns a consistent reply
+      zh: 主机发出的请求到达远端成员并返回一致回复
+    verifies:
+      - delivery
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: integration
+    mode: live
+    automation: automated
+    requirements:
+      - halo-sdk
+      - live-model
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A host request reaches a remote member and returns a consistent reply
+        zh: 主机发出的请求到达远端成员并返回一致回复
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.member-to-host
+    title:
+      en: A joined node can contact a host-owned member
+      zh: 加入节点能联系主机拥有的成员
+    verifies:
+      - delivery
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: integration
+    mode: live
+    automation: automated
+    requirements:
+      - halo-sdk
+      - live-model
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A joined node can contact a host-owned member
+        zh: 加入节点能联系主机拥有的成员
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.member-to-member
+    title:
+      en: A joined node can contact another joined node member
+      zh: 不同加入节点的成员能够互相联系
+    verifies:
+      - delivery
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: integration
+    mode: live
+    automation: automated
+    requirements:
+      - halo-sdk
+      - live-model
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A joined node can contact another joined node member
+        zh: 不同加入节点的成员能够互相联系
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.contact-after-completion
+    title:
+      en: A member remains contactable after the previous run completes
+      zh: 上一轮工作完成后仍能联系成员
+    verifies:
+      - delivery
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: integration
+    mode: live
+    automation: automated
+    requirements:
+      - halo-sdk
+      - live-model
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A member remains contactable after the previous run completes
+        zh: 上一轮工作完成后仍能联系成员
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.own-history
+    title:
+      en: A joined node reads its own member transcript
+      zh: 加入节点能读取自己的成员对话
+    verifies:
+      - delivery
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: integration
+    mode: live
+    automation: automated
+    requirements:
+      - halo-sdk
+      - live-model
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A joined node reads its own member transcript
+        zh: 加入节点能读取自己的成员对话
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.dispatch-receipt
+    title:
+      en: A remote send receives a bounded backend acknowledgement
+      zh: 向远端成员发送消息及时得到后台接收回执
+    verifies:
+      - delivery
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: integration
+    mode: live
+    automation: automated
+    requirements:
+      - halo-sdk
+      - live-model
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A remote send receives a bounded backend acknowledgement
+        zh: 向远端成员发送消息及时得到后台接收回执
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.kick-member
+    title:
+      en: Removing a remote member converges in the host roster
+      zh: 移除远端成员后主机成员名单更新
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Removing a remote member converges in the host roster
+        zh: 移除远端成员后主机成员名单更新
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.leave-office
+    title:
+      en: Leaving an office removes the joined membership
+      zh: 退出办公室会移除加入关系
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Leaving an office removes the joined membership
+        zh: 退出办公室会移除加入关系
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.dissolve-office
+    title:
+      en: Dissolving an office removes its joined copies
+      zh: 解散办公室会移除各加入节点的副本
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Dissolving an office removes its joined copies
+        zh: 解散办公室会移除各加入节点的副本
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.dissolve-keeps-local
+    title:
+      en: Dissolving an office preserves the joined node local teams
+      zh: 解散办公室保留加入节点原有的本地团队
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Dissolving an office preserves the joined node local teams
+        zh: 解散办公室保留加入节点原有的本地团队
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.concurrent-dispatch
+    title:
+      en: Concurrent requests produce distinct consistent replies
+      zh: 并发请求产生各自一致的真实回复
+    verifies:
+      - delivery
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - live
+    evidence: integration
+    mode: live
+    automation: automated
+    requirements:
+      - halo-sdk
+      - live-model
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Concurrent requests produce distinct consistent replies
+        zh: 并发请求产生各自一致的真实回复
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.five-node-consistency
+    title:
+      en: A five-node office retains a consistent roster
+      zh: 五节点办公室保持一致成员名单
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 5 isolated built Halo processes run on one computer.
+        zh: 5 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A five-node office retains a consistent roster
+        zh: 五节点办公室保持一致成员名单
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.office-isolation
+    title:
+      en: Separate offices do not share member identities
+      zh: 不同办公室不混用成员身份
+    verifies:
+      - isolation
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Separate offices do not share member identities
+        zh: 不同办公室不混用成员身份
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.multiple-offices
+    title:
+      en: Multiple offices on one host keep distinct replicas
+      zh: 同一主机上的多个办公室保留各自副本
+    verifies:
+      - isolation
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: Multiple offices on one host keep distinct replicas
+        zh: 同一主机上的多个办公室保留各自副本
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.remote-lead
+    title:
+      en: A remote member can become lead consistently
+      zh: 远端成员成为负责人后各节点保持一致
+    verifies:
+      - membership
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A remote member can become lead consistently
+        zh: 远端成员成为负责人后各节点保持一致
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.task-creation
+    title:
+      en: A task created by a joined node is replicated office-wide
+      zh: 加入节点创建的任务同步到整个办公室
+    verifies:
+      - records
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A task created by a joined node is replicated office-wide
+        zh: 加入节点创建的任务同步到整个办公室
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。
+  - id: offices.cluster.task-rename
+    title:
+      en: A task rename converges across nodes
+      zh: 任务改名同步到其他节点
+    verifies:
+      - records
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: 3 isolated built Halo processes run on one computer.
+        zh: 3 个已构建且数据隔离的 Halo 进程运行在同一台电脑上。
+    expected:
+      - en: A task rename converges across nodes
+        zh: 任务改名同步到其他节点
+    notes:
+      en: The driver uses real HTTP, WebSocket, SQLite and process lifecycle. This evidence does not
+        verify renderer interactions or physical cross-machine network behavior.
+      zh: 驱动使用真实 HTTP、WebSocket、SQLite 和进程生命周期；此证据不验证界面交互或真实跨机器网络行为。

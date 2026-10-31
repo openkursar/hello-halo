@@ -1,0 +1,119 @@
+{
+  "$ref": "#/definitions/module",
+  "definitions": {
+    "module": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number",
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "properties": {
+                "en": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "zh": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "en"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "properties": {
+                "en": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "zh": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "en"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+          },
+          "default": []
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "properties": {
+                "en": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "zh": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "en"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "id",
+        "title",
+        "description",
+        "paths",
+        "scope"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -47,7 +47,7 @@ test.describe('changes view', () => {
     expect(pageErrors).toEqual([])
   })
 
-  test('opens with Ctrl+Shift+G, lists every change with its state, and switches scopes', async ({ window }) => {
+  test('opens with Ctrl+Shift+G, lists every change with its state, and switches scopes', { annotation: { type: 'acceptance', description: '{"caseId":"changes.inspect.scopes","evidence":"app-e2e","mode":"none","variant":{}}' } }, async ({ window }) => {
     await openChangesWithShortcut(window)
     await ensureFilePanel(window)
 
@@ -102,7 +102,7 @@ test.describe('changes view', () => {
     await expect.poll(() => window.locator('[data-file-key="src/prompts/system-prompt.ts"]').evaluate((card, saved) => Math.abs(card.closest('[data-diff-scroll]')!.getBoundingClientRect().top - card.getBoundingClientRect().top - saved), offset)).toBeLessThan(3)
   })
 
-  test('navigates changed chunks across mounted files without replacing editors', async ({ window }) => {
+  test('navigates changed chunks across mounted files without replacing editors', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.chunk-navigation\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await openChangesWithShortcut(window)
     await ensureFilePanel(window)
     // Folders come before files in the tree, so src/app.ts follows src/router/.
@@ -117,7 +117,7 @@ test.describe('changes view', () => {
     await expect(window.locator('section[data-file-key]')).toHaveCount(8)
   })
 
-  test('lays the diffs out in the order the file list shows them, Tree or List', async ({ window, workspace }) => {
+  test('lays the diffs out in the order the file list shows them, Tree or List', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.file-order\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, workspace }) => {
     await openChangesWithShortcut(window)
     await ensureFilePanel(window)
     // Card paths against the panel's file rows (a file in two groups listed once), both read afresh on every poll.
@@ -144,7 +144,7 @@ test.describe('changes view', () => {
     await expect(window.getByText('3 of 12', { exact: true })).toBeVisible()
   })
 
-  test('decides all files or one again for another compare scope', async ({ window, workspace }) => {
+  test('decides all files or one again for another compare scope', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.scope-budget\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, workspace }) => {
     // Small in the index, huge in the working tree: only the uncommitted scope is over the text budget.
     workspace.git('add', 'src/router/provider-adapters.ts')
     fs.appendFileSync(path.join(workspace.repoRoot, 'src', 'router', 'provider-adapters.ts'), `// ${'context '.repeat(40000)}\n`)
@@ -162,7 +162,7 @@ test.describe('changes view', () => {
     await expect(window.getByText('Large diff · Showing one file at a time')).toBeVisible()
   })
 
-  test('shows the file whose Load diff tipped the text budget', async ({ window, workspace }) => {
+  test('shows the file whose Load diff tipped the text budget', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.explicit-load\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, workspace }) => {
     // Only the untracked note and a lockfile with one huge line are left.
     workspace.git('reset', '-q', '--hard')
     fs.appendFileSync(path.join(workspace.repoRoot, 'package-lock.json'), `${'lockfile '.repeat(35000)}\n`)
@@ -176,7 +176,7 @@ test.describe('changes view', () => {
     await expect(diffCard(window, 'package-lock.json').locator('.cm-editor').first()).toBeVisible()
   })
 
-  test('keeps deep file names readable and clickable at the narrowest file list', async ({ window, workspace }) => {
+  test('keeps deep file names readable and clickable at the narrowest file list', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.deep-paths\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, workspace }) => {
     // Every folder holds a file and a subfolder, so no folder chain is compacted.
     const levels = Array.from({ length: 10 }, (_, level) => `level${level}`)
     for (let depth = 1; depth <= levels.length; depth++) {
@@ -205,7 +205,7 @@ test.describe('changes view', () => {
     await expect.poll(() => diffCardPaths(window)).toEqual([deepest])
   })
 
-  test('browses large changes one file at a time and restores the selection', async ({ window, workspace }) => {
+  test('browses large changes one file at a time and restores the selection', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.large-selection\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, workspace }) => {
     const folder = path.join(workspace.repoRoot, 'src', 'bulk')
     fs.mkdirSync(folder, { recursive: true })
     for (let i = 0; i < 24; i++) fs.writeFileSync(path.join(folder, `item-${String(i).padStart(2, '0')}.ts`), `export const item${i} = ${i}\n`)
@@ -228,7 +228,7 @@ test.describe('changes view', () => {
     await expect(window.locator('section[data-file-key]')).toHaveCount(1)
   })
 
-  test('hands focus to a different large-diff file selected from the narrow drawer', async ({ window, workspace }) => {
+  test('hands focus to a different large-diff file selected from the narrow drawer', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.narrow-selection\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, workspace }) => {
     const folder = path.join(workspace.repoRoot, 'src', 'bulk')
     fs.mkdirSync(folder, { recursive: true })
     for (let i = 0; i < 12; i++) fs.writeFileSync(path.join(folder, `item-${i}.ts`), `export const item${i} = ${i}\n`)
@@ -246,7 +246,8 @@ test.describe('changes view', () => {
     await expect(diffCard(window, 'notes/todo.md').locator('.cm-editor')).toHaveCount(1)
   })
 
-  test('keeps a large file at the reading position when its list is filtered or refreshed', async ({ window, workspace }) => {
+  test('keeps a large file at the reading position when its list is filtered or refreshed', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.reading-anchor\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, workspace }) => {
+    await window.setViewportSize({ width: 1600, height: 720 })
     const folder = path.join(workspace.repoRoot, 'src', 'bulk')
     fs.mkdirSync(folder, { recursive: true })
     for (let i = 0; i < 12; i++) fs.writeFileSync(path.join(folder, `item-${i}.ts`), `export const item${i} = ${i}\n`)
@@ -260,6 +261,7 @@ test.describe('changes view', () => {
     await expect.poll(() => diffCardPaths(window)).toEqual(['src/prompts/system-prompt.ts'])
     const scroller = window.locator('[data-diff-scroll]')
     await expect(scroller.locator('.cm-editor').first()).toBeVisible()
+    await expect.poll(() => scroller.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(160)
     await scroller.hover()
     await window.mouse.wheel(0, 160)
     await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(100)
@@ -290,7 +292,7 @@ test.describe('changes view', () => {
     await expect(window.locator('section[data-file-key]')).toHaveCount(1)
   })
 
-  test('nests sibling folders under one parent and collapses descendants together', async ({ window }) => {
+  test('nests sibling folders under one parent and collapses descendants together', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.tree-folders\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await openChangesWithShortcut(window)
     await ensureFilePanel(window)
     const panel = filePanel(window)
@@ -322,7 +324,7 @@ test.describe('changes view', () => {
     await expect(fileRow(window, 'src/router/provider-adapters.ts')).toHaveCount(0)
   })
 
-  test('resizes the file list without rebuilding editors until release', async ({ window }) => {
+  test('resizes the file list without rebuilding editors until release', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.panel-width\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await openChangesWithShortcut(window)
     await ensureFilePanel(window)
     const panel = filePanel(window)
@@ -372,7 +374,7 @@ test.describe('changes view', () => {
     await expect.poll(async () => (await panel.boundingBox())!.width).toBeCloseTo(preferred!, 0)
   })
 
-  test('keeps split and inline diffs readable in both themes and opens the narrow file drawer', async ({ window }, testInfo) => {
+  test('keeps split and inline diffs readable in both themes and opens the narrow file drawer', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.contrast-layout\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }, testInfo) => {
     await window.setViewportSize({ width: 1920, height: 1080 })
     await openChangesWithShortcut(window)
     await ensureFilePanel(window)
@@ -450,7 +452,7 @@ test.describe('changes view', () => {
     await expect(fileRow(window, 'src/app.ts')).toBeVisible()
   })
 
-  test('stages and unstages a file, discards one after confirming, and commits', async ({ window, workspace }) => {
+  test('stages and unstages a file, discards one after confirming, and commits', { annotation: { type: 'acceptance', description: '{"caseId":"changes.manage.local-commit","evidence":"app-e2e","mode":"none","variant":{}}' } }, async ({ window, workspace }) => {
     await openChangesWithShortcut(window)
     await ensureFilePanel(window)
     await expect(fileRow(window, 'src/app.ts')).toBeVisible()
@@ -482,7 +484,7 @@ test.describe('changes view', () => {
     expect(workspace.git('diff', '--cached', '--name-only').trim()).toBe('')
   })
 
-  test('walks into a folder from the overview and back out with Esc', async ({ window }) => {
+  test('walks into a folder from the overview and back out with Esc', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.overview-folder\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await openChangesWithShortcut(window)
     await window.getByRole('tab', { name: /Overview & review/ }).click()
 
@@ -502,7 +504,7 @@ test.describe('changes view', () => {
     await expect(window.getByRole('tab', { name: /Overview & review/ })).toBeVisible()
   })
 
-  test('keeps the page switch in place across pages, and the file list toggle on screen when narrow', async ({ window }) => {
+  test('keeps the page switch in place across pages, and the file list toggle on screen when narrow', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.page-controls\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await openChangesWithShortcut(window)
     // The totals beside the pickers arrive with the list; measure once they are in.
     await expect(window.locator('section[data-file-key]').first()).toBeVisible()
@@ -541,7 +543,8 @@ test.describe('changes view', () => {
   test.describe('many reply edits', () => {
     test.use({ replyEditCount: 25 })
 
-    test('pages fragments, navigates across them and restores the page after switching tabs', async ({ window }) => {
+    test('pages fragments, navigates across them and restores the page after switching tabs', { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.reply-pagination\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
+      await window.setViewportSize({ width: 1600, height: 720 })
       await window.getByRole('button', { name: /View changes/ }).click()
       await expect(window.getByText('Large diff · Showing one file at a time')).toBeVisible()
       // The file list puts notes/ before src/, and so do the diffs.
@@ -579,6 +582,7 @@ test.describe('changes view', () => {
       await window.getByRole('button', { name: 'Next file', exact: true }).click()
       await expect(window.getByText('Edits 13–24 of 25', { exact: true })).toBeVisible()
       const scroller = window.locator('[data-diff-scroll]')
+      await expect.poll(() => scroller.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(100)
       await scroller.hover()
       await window.mouse.wheel(0, 100)
       await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(50)
@@ -605,7 +609,7 @@ test.describe('changes view', () => {
     })
   })
 
-  test("opens a reply's edits from View changes, read-only", async ({ window }) => {
+  test("opens a reply's edits from View changes, read-only", { annotation: { type: 'acceptance', description: "{\"caseId\":\"changes.inspect.reply-readonly\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await window.getByRole('button', { name: /View changes/ }).click()
 
     await expect(window.getByText('2 files edited in this reply · Read-only')).toBeVisible({ timeout: 20000 })

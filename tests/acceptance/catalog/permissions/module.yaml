@@ -1,0 +1,26 @@
+version: 1
+id: permissions
+title:
+  en: Authority and permissions
+  zh: 身份与权限
+description:
+  en: Enforce who may request a capability and how denied requests are explained.
+  zh: 约束谁可请求哪些能力，以及拒绝时如何说明。
+paths:
+  - src/shared/apps/capability-policy.ts
+  - src/main/apps/runtime/capability-policy.ts
+  - src/main/apps/runtime/delegation-gate.ts
+  - src/main/apps/runtime/turn-file-access.ts
+  - src/renderer/components/capability/**
+  - src/renderer/components/settings/ImInstancePermissionSection.tsx
+  - src/main/apps/runtime/im-sender-standing.ts
+  - src/main/apps/runtime/im-permission-registry.ts
+  - src/main/apps/runtime/im-channels/im-prompt.ts
+  - src/main/apps/runtime/app-chat.ts
+  - src/main/apps/runtime/dispatch-inbound.ts
+  - src/main/apps/runtime/im-channels/binding.ts
+dependsOn:
+  - startup
+scope:
+  en: Owner, IM guest and cross-machine delegated requests; tools, skills, file paths, shell rules and incompatible engine capabilities. Denial behavior is separated from desired explanation copy.
+  zh: 主人、IM 访客和跨机器委托请求；工具、技能、路径、命令规则和引擎能力限制。权限阻止与期望提示分别记录。

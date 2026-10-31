@@ -1,0 +1,19 @@
+version: 1
+id: knowledge
+title:
+  en: Knowledge bases
+  zh: 知识库
+description:
+  en: Import sources, learn changes and use selected knowledge in work.
+  zh: 导入资料、学习变更并在工作中使用选定知识。
+paths:
+  - src/main/services/tlon/**
+  - src/renderer/pages/TlonPage.tsx
+  - src/renderer/components/tlon/**
+  - src/renderer/stores/tlon.store.ts
+dependsOn:
+  - workspaces
+  - chat
+scope:
+  en: Desktop source ingestion and remote reading; direct files, recursive folders and watched folders; paused/default knowledge bases, citations and extraction failures.
+  zh: 桌面导入与远程阅读；文件、递归目录及监视目录；暂停、默认知识库、引用和提取失败。

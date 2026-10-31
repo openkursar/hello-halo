@@ -162,7 +162,7 @@ test.describe('Team render — §2 automatable subset', () => {
 test.describe('Task workbench interaction', () => {
   test.setTimeout(60000)
 
-  test('bounded collaboration previews preserve task and member boundaries', async ({ electronApp, window }) => {
+  test('bounded collaboration previews preserve task and member boundaries', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.decisions.preview-scope\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window)
     const room = window.getByRole('region', { name: 'Task room' })
     const segment = room.locator('details').filter({ hasText: '100 collaboration messages' })
@@ -194,7 +194,7 @@ test.describe('Task workbench interaction', () => {
     await window.screenshot({ path: 'tests/e2e/results/team-workbench-desktop-light.png' })
   })
 
-  test('malformed collaboration timestamps preserve the conversation and complete activity', async ({ electronApp, window }) => {
+  test('malformed collaboration timestamps preserve the conversation and complete activity', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.decisions.unknown-time\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     const pageErrors: string[] = []
     window.on('pageerror', error => pageErrors.push(error.message))
     await openTeamWorkbench(electronApp, window, { timestampAnomalies: true })
@@ -231,7 +231,7 @@ test.describe('Task workbench interaction', () => {
     await expect(room.locator('textarea')).toBeVisible()
   })
 
-  test('system input stays out of human bubbles while the requested answer remains visible', async ({ electronApp, window }) => {
+  test('system input stays out of human bubbles while the requested answer remains visible', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.decisions.audience\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window, { provenanceMessages: true })
     const room = window.getByRole('region', { name: 'Task room' })
     await expect(room.getByText('[System] A teammate stopped its work. Internal notification.', { exact: true })).toHaveCount(0)
@@ -261,7 +261,7 @@ test.describe('Task workbench interaction', () => {
     await expect(dialog.getByText('[System] This older human message has no origin metadata.', { exact: true })).toHaveCount(0)
   })
 
-  test('delegated answers return to the requester without exposing another member’s prior internal results', async ({ electronApp, window }) => {
+  test('delegated answers return to the requester without exposing another member’s prior internal results', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.decisions.delegated-audience\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window, { collaborationJourney: true })
     const room = window.getByRole('region', { name: 'Task room' })
     const picker = room.getByRole('combobox', { name: 'Choose which of your digital humans to talk to' })
@@ -317,7 +317,7 @@ test.describe('Task workbench interaction', () => {
     await window.screenshot({ path: 'tests/e2e/results/team-workbench-single-member.png' })
   })
 
-  test('a teammate digital human opens the full task view read-only and keeps member details separate', async ({ electronApp, window }) => {
+  test('a teammate digital human opens the full task view read-only and keeps member details separate', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.tasks.readonly\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window)
     const room = window.getByRole('region', { name: 'Task room' })
     await window.getByRole('button', { name: 'View Remote Analyst’s work in this task', exact: true }).click()
@@ -329,7 +329,7 @@ test.describe('Task workbench interaction', () => {
     await expect(window.getByRole('dialog', { name: 'Member details', exact: true })).toBeVisible()
   })
 
-  test('a teammate decision is visible in context without becoming my action item', async ({ electronApp, window }) => {
+  test('a teammate decision is visible in context without becoming my action item', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.decisions.teammate-question\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window, { remoteDecision: true })
     const room = window.getByRole('region', { name: 'Task room' })
     await expect(window.getByRole('navigation', { name: 'Tasks', exact: true }).getByText('Waiting for Taylor’s decision', { exact: true })).toBeVisible()
@@ -339,7 +339,7 @@ test.describe('Task workbench interaction', () => {
     await expect(room.getByRole('button', { name: /Approve/ })).toHaveCount(0)
   })
 
-  test('task selection changes both conversation and activity without losing drafts', async ({ electronApp, window }) => {
+  test('task selection changes both conversation and activity without losing drafts', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.tasks.task-switch\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window)
     const room = window.getByRole('region', { name: 'Task room' })
     const sidebar = window.getByRole('navigation', { name: 'Tasks', exact: true })
@@ -357,7 +357,7 @@ test.describe('Task workbench interaction', () => {
     await expect(room.locator('textarea')).toHaveValue('Unsent product question')
   })
 
-  test('a decision links back to its single answering surface', async ({ electronApp, window }) => {
+  test('a decision links back to its single answering surface', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.decisions.answer-location\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window, { withDecision: true })
     const room = window.getByRole('region', { name: 'Task room' })
     await room.getByRole('button', { name: /^Task activity/ }).click()
@@ -370,7 +370,7 @@ test.describe('Task workbench interaction', () => {
     await expect(room.getByText('Approve the research scope?', { exact: true })).toHaveCount(0)
   })
 
-  test('a rejected send restores the draft after switching members', async ({ electronApp, window }) => {
+  test('a rejected send restores the draft after switching members', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.tasks.send-rejected\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window, { sendFailure: true })
     const room = window.getByRole('region', { name: 'Task room' })
     const picker = room.getByRole('combobox', { name: 'Choose which of your digital humans to talk to' })
@@ -383,7 +383,7 @@ test.describe('Task workbench interaction', () => {
     await expect(room.locator('textarea')).toHaveValue('Keep this message if delivery fails')
   })
 
-  test('a rejection refreshes the composer when returning before the send settles', async ({ electronApp, window }) => {
+  test('a rejection refreshes the composer when returning before the send settles', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.tasks.pending-rejection\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window, { sendFailure: true, sendFailureDelay: 1500 })
     const room = window.getByRole('region', { name: 'Task room' })
     const picker = room.getByRole('combobox', { name: 'Choose which of your digital humans to talk to' })
@@ -395,7 +395,7 @@ test.describe('Task workbench interaction', () => {
     await expect(room.locator('textarea')).toHaveValue('Restore this after a quick round trip')
   })
 
-  test('a draft creates exactly one task on its first send', async ({ electronApp, window }) => {
+  test('a draft creates exactly one task on its first send', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.tasks.first-send\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window, { allowCreate: true })
     const sidebar = window.getByRole('navigation', { name: 'Tasks', exact: true })
     const room = window.getByRole('region', { name: 'Task room' })
@@ -408,7 +408,7 @@ test.describe('Task workbench interaction', () => {
     await expect(room.getByText('Prepare a launch checklist', { exact: true })).toHaveCount(2)
   })
 
-  test('a rejected first message remains recoverable in the newly created task', async ({ electronApp, window }) => {
+  test('a rejected first message remains recoverable in the newly created task', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.tasks.first-send-rejected\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window, { allowCreate: true, sendFailure: true })
     const sidebar = window.getByRole('navigation', { name: 'Tasks', exact: true })
     const room = window.getByRole('region', { name: 'Task room' })
@@ -422,7 +422,7 @@ test.describe('Task workbench interaction', () => {
     await expect(room.locator('textarea')).toHaveValue('Draft requiring a retry')
   })
 
-  test('renaming supports cancel and updates the room and task list together', async ({ electronApp, window }) => {
+  test('renaming supports cancel and updates the room and task list together', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.tasks.rename\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window)
     const room = window.getByRole('region', { name: 'Task room' })
     await room.getByRole('button', { name: 'Rename task', exact: true }).click()
@@ -436,7 +436,7 @@ test.describe('Task workbench interaction', () => {
     await expect(window.getByRole('navigation', { name: 'Tasks', exact: true }).getByRole('button', { name: /Research brief/ })).toBeVisible()
   })
 
-  test('history failure is distinguishable from empty and can recover', async ({ electronApp, window }) => {
+  test('history failure is distinguishable from empty and can recover', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.decisions.history-retry\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window, { historyFailure: true })
     const room = window.getByRole('region', { name: 'Task room' })
     await expect(room.getByText('Couldn’t load the chat history right now.', { exact: true })).toBeVisible()
@@ -446,7 +446,7 @@ test.describe('Task workbench interaction', () => {
   })
 
   for (const kind of ['im', 'run'] as const) {
-    test(`${kind} history is readable without an editable composer`, async ({ electronApp, window }) => {
+    test(`${kind} history is readable without an editable composer`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId: "teams.tasks.readonly-kind", evidence: "ui", mode: "none", variant: { kind } }) } }, async ({ electronApp, window }) => {
       await openTeamWorkbench(electronApp, window, { readonlyKind: kind })
       const room = window.getByRole('region', { name: 'Task room' })
       await expect(room.locator('textarea')).toHaveCount(0)
@@ -457,7 +457,7 @@ test.describe('Task workbench interaction', () => {
     })
   }
 
-  test('a viewer without owned members can inspect teammate work but cannot send', async ({ electronApp, window }) => {
+  test('a viewer without owned members can inspect teammate work but cannot send', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.tasks.observer-only\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window, { ownCount: 0 })
     const room = window.getByRole('region', { name: 'Task room' })
     await expect(room.locator('textarea')).toHaveCount(0)
@@ -467,7 +467,7 @@ test.describe('Task workbench interaction', () => {
     await expect(window.getByRole('dialog', { name: 'Task activity' })).toBeVisible()
   })
 
-  test('mobile drawers, composer and expanded previews fit in both themes', async ({ electronApp, window }) => {
+  test('mobile drawers, composer and expanded previews fit in both themes', { annotation: { type: 'acceptance', description: "{\"caseId\":\"teams.tasks.narrow-drawers\",\"evidence\":\"ui\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window)
     await window.setViewportSize({ width: 375, height: 812 })
     const room = window.getByRole('region', { name: 'Task room' })

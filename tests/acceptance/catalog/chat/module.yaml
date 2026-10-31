@@ -1,0 +1,20 @@
+version: 1
+id: chat
+title:
+  en: Working with AI
+  zh: 与 AI 一起工作
+description:
+  en: Messages, supplements, attachments, stopping and model failures.
+  zh: 消息、补充、附件、停止及模型错误。
+paths:
+  - src/renderer/components/chat/**
+  - src/main/services/agent/**
+  - src/main/ipc/agent.ts
+  - src/main/http/routes/agent.routes.ts
+dependsOn:
+  - conversations
+  - models
+  - capabilities
+scope:
+  en: Owner chat in spaces, digital humans and team tasks; desktop/remote and configured engines; permissions retain their own stricter contract.
+  zh: 主人在空间、数字人与团队任务中聊天；覆盖桌面、远程及已配置引擎；权限另有更严格约定。

@@ -1,0 +1,72 @@
+version: 1
+id: settings.execution
+module: settings
+title:
+  en: Set execution and resource limits
+  zh: 设置执行与资源限制
+story:
+  en: I can bound AI work and resume stored context after idle resources are released.
+  zh: 我能限制 AI 工作，并在空闲资源释放后恢复保存上下文。
+basis: observed
+references:
+  - src/renderer/components/settings/AdvancedSection.tsx
+  - src/main/services/agent/DESIGN.md
+  - src/main/apps/runtime/session-budget.ts
+promises:
+  limits:
+    en: Turn, timeout and concurrency settings apply at the documented boundaries without silently claiming limited work complete.
+    zh: 轮次、超时及并发设置在约定边界生效，不把达到限制的工作伪装为完成。
+  resident:
+    en: An idle conversation evicted by the resident limit can resume from stored context when used again.
+    zh: 因常驻限制被回收的空闲对话，再次使用时能从保存上下文恢复。
+scenarios:
+  - id: settings.execution.limit
+    title:
+      en: Reach configured work limits
+      zh: 到达配置工作限制
+    verifies:
+      - limits
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Configure small safe limits for disposable work.
+        zh: 给可丢弃工作配置较小安全限制。
+    steps:
+      - en: Run controlled tasks up to turn, duration or concurrency limits.
+        zh: 运行受控任务直到轮次、时长或并发限制。
+    expected:
+      - en: Execution follows the selected limit and the visible result distinguishes a limit stop from completion.
+        zh: 执行遵循所选限制，界面区分限额停止与完成。
+    variants:
+      limit:
+        - turns
+        - duration
+        - concurrency
+  - id: settings.execution.resume-idle
+    title:
+      en: Resume an evicted idle conversation
+      zh: 恢复被回收的空闲对话
+    verifies:
+      - resident
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A low resident limit and two conversations with known context are configured.
+        zh: 配置较低常驻限制及两段已知上下文对话。
+    steps:
+      - en: Use another conversation to evict an idle one, then return and continue.
+        zh: 用另一对话触发空闲回收，再返回继续。
+    expected:
+      - en: The earlier conversation resumes its stored context without claiming its old process survived.
+        zh: 原对话恢复保存上下文，不声称旧进程仍存活。

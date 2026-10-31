@@ -43,7 +43,7 @@ function scheduleScan(kbId: string): void {
     if (!kb || kb.status !== 'active') return
     const candidates = collectIngestCandidates(kbId)
     if (candidates.length === 0) return
-    enqueueFiles(kbId, candidates)
+    enqueueFiles(kbId, candidates, { automatic: true })
     processQueue(kbId).catch(err =>
       console.error(`[Tlon] processQueue failed for ${kbId}:`, err)
     )

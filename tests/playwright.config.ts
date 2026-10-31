@@ -13,7 +13,9 @@ import dotenv from 'dotenv'
 // Load .env.local from project root (same pattern as translate-i18n.mjs / deploy_local_M4.sh)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-dotenv.config({ path: path.resolve(__dirname, '..', '.env.local') })
+if (!process.env.HALO_ACCEPTANCE_MODE) {
+  dotenv.config({ path: path.resolve(__dirname, '..', '.env.local') })
+}
 
 // Determine the app path based on platform
 function getAppPath(): string {
@@ -77,6 +79,12 @@ export default defineConfig({
 
   // Projects - different test configurations
   projects: [
+    {
+      name: 'acceptance',
+      testMatch: '**/acceptance-*.spec.ts',
+      timeout: 90000,
+      use: { actionTimeout: 15000 }
+    },
     {
       // The canvas changes view and reference cards on a seeded git workspace
       // (fixtures/git-workspace.ts). Each test seeds a fresh repository and

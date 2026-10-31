@@ -16,7 +16,7 @@ import {
 test.describe('production webview carrier', () => {
   test.setTimeout(90000)
 
-  test('keeps the guest, draft, scroll and painted surface through repeated hide/show', async ({ electronApp, window, browserSite }) => {
+  test('keeps the guest, draft, scroll and painted surface through repeated hide/show', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.hide-show\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const viewId = 'carrier-retention'
     const url = browserSite.pageUrl(viewId)
     await createBrowser(window, viewId, url)
@@ -39,7 +39,7 @@ test.describe('production webview carrier', () => {
     expect(await electronApp.evaluate(({ webContents }, id) => !!webContents.fromId(id), id)).toBe(false)
   })
 
-  test('switches pages without reparenting or recreating either guest', async ({ electronApp, window, browserSite }) => {
+  test('switches pages without reparenting or recreating either guest', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.page-switch\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const pages = ['carrier-switch-a', 'carrier-switch-b'].map(viewId => ({ viewId, url: browserSite.pageUrl(viewId) }))
     const identities: number[] = []
     const nonces: unknown[] = []
@@ -60,7 +60,7 @@ test.describe('production webview carrier', () => {
     for (const page of pages) await destroyBrowser(window, page.viewId)
   })
 
-  test('an immediate capture waits for presentation to produce a real frame', async ({ electronApp, window, browserSite }) => {
+  test('an immediate capture waits for presentation to produce a real frame', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.first-frame\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const viewId = 'carrier-immediate-capture'
     await createBrowser(window, viewId, browserSite.pageUrl(viewId))
     const shown = await window.evaluate(async viewId => (window as unknown as { halo: HaloAPI }).halo.showBrowserView(viewId, { x: 240, y: 100, width: 640, height: 480 }), viewId)
@@ -69,7 +69,7 @@ test.describe('production webview carrier', () => {
     await destroyBrowser(window, viewId)
   })
 
-  test('a fresh page does not expose the internal attachment document in navigation history', async ({ window, browserSite }) => {
+  test('a fresh page does not expose the internal attachment document in navigation history', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.first-navigation\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window, browserSite }) => {
     const viewId = 'carrier-history'
     await createBrowser(window, viewId, browserSite.pageUrl(viewId))
     const state = await window.evaluate(async viewId => (window as unknown as { halo: HaloAPI }).halo.getBrowserState(viewId), viewId)
@@ -77,7 +77,7 @@ test.describe('production webview carrier', () => {
     await destroyBrowser(window, viewId)
   })
 
-  test('a guest renderer crash can be reloaded without losing its canvas page identity', async ({ electronApp, window, browserSite }) => {
+  test('a guest renderer crash can be reloaded without losing its canvas page identity', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.page-crash\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const viewId = 'carrier-crash'
     const url = browserSite.pageUrl(viewId)
     await createBrowser(window, viewId, url)
@@ -95,7 +95,7 @@ test.describe('production webview carrier', () => {
     await destroyBrowser(window, viewId)
   })
 
-  test('keeps timers, accessibility and fresh screenshots alive while parked, minimized and hidden', async ({ browserSite }, testInfo) => {
+  test('keeps timers, accessibility and fresh screenshots alive while parked, minimized and hidden', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.native-hidden\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ browserSite }, testInfo) => {
     const result = await runNativeBrowserVisibility(browserSite.pageUrl('carrier-native-visibility'))
     const { diagnostics, ...evidence } = result
     await testInfo.attach('native-window-visibility', { body: Buffer.from(JSON.stringify(evidence, null, 2)), contentType: 'application/json' })
@@ -111,7 +111,7 @@ test.describe('production webview carrier', () => {
     expect(result.cleanup?.viewState).toBeNull()
   })
 
-  test('the real header popover paints above the guest and receives clicks without leaking them', async ({ electronApp, window, browserSite }, testInfo) => {
+  test('the real header popover paints above the guest and receives clicks without leaking them', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.header-overlay\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }, testInfo) => {
     await navigateToChat(window)
     const trigger = window.getByTitle('More', { exact: true }).first()
     await trigger.click()
@@ -163,7 +163,7 @@ test.describe('production webview carrier', () => {
     await destroyBrowser(window, viewId)
   })
 
-  test('header dismissal consumes the guest click and closes on Escape and repeated trigger clicks', async ({ electronApp, window, browserSite }) => {
+  test('header dismissal consumes the guest click and closes on Escape and repeated trigger clicks', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.dismiss-overlay\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     await navigateToChat(window)
     const viewId = 'carrier-menu-dismiss'
     const url = browserSite.pageUrl(viewId)
@@ -208,7 +208,7 @@ test.describe('production webview carrier', () => {
     await destroyBrowser(window, viewId)
   })
 
-  test('chat and resource rail drags stop after releasing over a real guest and persist the final width', async ({ electronApp, window, browserSite }) => {
+  test('chat and resource rail drags stop after releasing over a real guest and persist the final width', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.resize\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     await navigateToChat(window)
     await openFromHeaderMenu(window, 'Open browser')
     const url = browserSite.pageUrl('carrier-resize')
@@ -264,7 +264,7 @@ test.describe('production webview carrier', () => {
     expect(await executeBrowser(window, viewId!, '({nonce:carrierNonce,url:location.href,history:history.length})')).toEqual(before)
   })
 
-  test('shares login storage while keeping guest privileges isolated', async ({ electronApp, window, browserSite }) => {
+  test('shares login storage while keeping guest privileges isolated', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.boundaries.login-isolation\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     await navigateToChat(window)
     expect(await window.evaluate(() => ({ require: typeof (globalThis as unknown as { require?: unknown }).require,
       process: typeof (globalThis as unknown as { process?: unknown }).process,
@@ -293,7 +293,7 @@ test.describe('production webview carrier', () => {
     await destroyBrowser(window, viewId)
   })
 
-  test('retains navigation, zoom, mobile emulation and native keyboard input', async ({ electronApp, window, browserSite }) => {
+  test('retains navigation, zoom, mobile emulation and native keyboard input', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.navigation-modes\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const viewId = 'carrier-input'
     const firstUrl = browserSite.pageUrl(viewId)
     await createBrowser(window, viewId, firstUrl)
@@ -328,7 +328,7 @@ test.describe('production webview carrier', () => {
     await destroyBrowser(window, viewId)
   })
 
-  test('cleans up guests after the main renderer reloads and accepts a fresh page', async ({ electronApp, window, browserSite }) => {
+  test('cleans up guests after the main renderer reloads and accepts a fresh page', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.renderer-reload\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const viewId = 'carrier-reload'
     const url = browserSite.pageUrl(viewId)
     await createBrowser(window, viewId, url)
@@ -345,7 +345,7 @@ test.describe('production webview carrier', () => {
     await destroyBrowser(window, viewId)
   })
 
-  test('a real main renderer crash releases its pages and the recovered UI can create a fresh guest', async ({ electronApp, window, browserSite }, testInfo) => {
+  test('a real main renderer crash releases its pages and the recovered UI can create a fresh guest', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.main-crash\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }, testInfo) => {
     const viewId = 'carrier-main-crash'
     const url = browserSite.pageUrl(viewId)
     await createBrowser(window, viewId, url)
@@ -395,12 +395,11 @@ test.describe('production webview carrier', () => {
     await expect.poll(() => electronApp.evaluate(({ webContents }, freshId) => !!webContents.fromId(freshId), freshId)).toBe(false)
   })
 
-  test('the actual live browser budget releases the oldest hidden guest and recreates it only on activation', async ({ electronApp, window, browserSite }, testInfo) => {
+  test('the actual live browser budget releases the oldest hidden guest and recreates it only on activation', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.page-budget\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }, testInfo) => {
     await navigateToChat(window)
     const pages: Array<{ url: string; id: number; viewId: string; nonce: unknown }> = []
     for (let index = 0; index <= MAX_LIVE_BROWSER_VIEWS; index++) {
       await openFromHeaderMenu(window, 'Open browser')
-      await window.keyboard.press('Escape')
       const url = browserSite.pageUrl(`live-budget-${index}`)
       const address = window.getByPlaceholder(/Enter URL or search Bing/)
       await address.fill(url)
@@ -437,12 +436,11 @@ test.describe('production webview carrier', () => {
     await testInfo.attach('actual-browser-budget', { body: Buffer.from(JSON.stringify({ limit: MAX_LIVE_BROWSER_VIEWS, evicted: pages[0].id, recreated, remaining: await live() })), contentType: 'application/json' })
   })
 
-  test('the themed fullscreen chat capsule receives the real click and returns with the chat draft and guest intact', async ({ electronApp, window, browserSite }, testInfo) => {
+  test('the themed fullscreen chat capsule receives the real click and returns with the chat draft and guest intact', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.fullscreen-return\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }, testInfo) => {
     await navigateToChat(window)
     const draft = 'fullscreen chat draft 中文🙂'
     await window.locator('textarea').fill(draft)
     await openFromHeaderMenu(window, 'Open browser')
-    await window.keyboard.press('Escape')
     const url = browserSite.pageUrl('fullscreen-capsule')
     const address = window.getByPlaceholder(/Enter URL or search Bing/)
     await address.fill(url)
@@ -481,10 +479,9 @@ test.describe('production webview carrier', () => {
     await assertBrowserFrame(electronApp, window, viewId)
   })
 
-  test('real canvas tab switching, collapse, page navigation and fullscreen retain the page', async ({ electronApp, window, browserSite }, testInfo) => {
+  test('real canvas tab switching, collapse, page navigation and fullscreen retain the page', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.canvas-navigation\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }, testInfo) => {
     await navigateToChat(window)
     await openFromHeaderMenu(window, 'Open browser')
-    await window.keyboard.press('Escape')
     const firstUrl = browserSite.pageUrl('canvas-first')
     const address = window.getByPlaceholder(/Enter URL or search Bing/)
     await address.fill(firstUrl)
@@ -497,7 +494,6 @@ test.describe('production webview carrier', () => {
     }, id)
     const nonce = await executeBrowser(window, viewId, `document.querySelector('#draft').value = 'canvas draft'; carrierNonce`)
     await openFromHeaderMenu(window, 'Open browser')
-    await window.keyboard.press('Escape')
     const secondUrl = browserSite.pageUrl('canvas-second')
     await address.fill(secondUrl)
     await address.press('Enter')
@@ -513,7 +509,6 @@ test.describe('production webview carrier', () => {
     await window.keyboard.press('Escape')
     await expect(address).toBeHidden()
     await openFromHeaderMenu(window, 'Open browser')
-    await window.keyboard.press('Escape')
     await window.locator('.canvas-tab').nth(0).click()
     await expect(address).toBeVisible()
     await window.getByRole('button', { name: 'Settings', exact: true }).first().click()
@@ -530,10 +525,9 @@ test.describe('production webview carrier', () => {
     await expect.poll(() => electronApp.evaluate(({ webContents }, id) => !!webContents.fromId(id), id)).toBe(false)
   })
 
-  test('display scaling aligns the guest with the real canvas surface without duplicating page zoom', async ({ electronApp, window, browserSite }, testInfo) => {
+  test('display scaling aligns the guest with the real canvas surface without duplicating page zoom', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.display-scaling\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }, testInfo) => {
     await navigateToChat(window)
     await openFromHeaderMenu(window, 'Open browser')
-    await window.keyboard.press('Escape')
     const url = browserSite.pageUrl('display-scale')
     const address = window.getByPlaceholder(/Enter URL or search Bing/)
     await address.fill(url)
@@ -578,7 +572,7 @@ test.describe('production webview carrier', () => {
     }
   })
 
-  test('a parked page can fill and capture without taking focus from the composer', async ({ electronApp, window, browserSite }) => {
+  test('a parked page can fill and capture without taking focus from the composer', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.work.composer-focus\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     await navigateToChat(window)
     const viewId = 'carrier-focus'
     await createBrowser(window, viewId, browserSite.pageUrl(viewId))
@@ -595,7 +589,7 @@ test.describe('production webview carrier', () => {
     await destroyBrowser(window, viewId)
   })
 
-  test('the mobile canvas covers chat controls and the resource sheet opens a working global modal above the guest', async ({ browserSite }, testInfo) => {
+  test('the mobile canvas covers chat controls and the resource sheet opens a working global modal above the guest', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.recovery.narrow-modal\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ browserSite }, testInfo) => {
     const entry = getAppEntryPath()
     const profile = createTestConfigDir(entry)
     seedLongConversation(profile, { messageCount: 120, title: 'Mobile carrier transcript', variety: 'mixed' })
@@ -686,7 +680,7 @@ test.describe('production webview carrier', () => {
     }
   })
 
-  test('a local PDF opened from the file rail paints in a guest and survives switching away', async ({ electronApp, window, browserSite }, testInfo) => {
+  test('a local PDF opened from the file rail paints in a guest and survives switching away', { annotation: { type: 'acceptance', description: "{\"caseId\":\"files.preview.pdf-canvas\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }, testInfo) => {
     const dataDirectory = await electronApp.evaluate(() => process.env.HALO_DATA_DIR!)
     const file = path.join(dataDirectory, 'temp', 'artifacts', 'carrier-regression.pdf')
     fs.writeFileSync(file, browserPdfFixture())
@@ -732,7 +726,6 @@ test.describe('production webview carrier', () => {
     expect(frame.paperWidth).toBeGreaterThan(100)
     await testInfo.attach('local-pdf-webview', { body: await window.screenshot(), contentType: 'image/png' })
     await openFromHeaderMenu(window, 'Open browser')
-    await window.keyboard.press('Escape')
     const address = window.getByPlaceholder(/Enter URL or search Bing/)
     await address.fill(browserSite.pageUrl('pdf-second-tab'))
     await address.press('Enter')
@@ -742,7 +735,7 @@ test.describe('production webview carrier', () => {
     await expect.poll(() => electronApp.evaluate(({ webContents }, id) => !!webContents.fromId(id), id)).toBe(false)
   })
 
-  test('rejects unsolicited and replayed guest attachments in the running application', async ({ electronApp, window, browserSite }) => {
+  test('rejects unsolicited and replayed guest attachments in the running application', { annotation: { type: 'acceptance', description: "{\"caseId\":\"browser.boundaries.rogue-page\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ electronApp, window, browserSite }) => {
     const viewId = 'carrier-trust'
     const url = browserSite.pageUrl(viewId)
     await createBrowser(window, viewId, url)
@@ -769,7 +762,7 @@ test.describe('production webview carrier', () => {
     await destroyBrowser(window, viewId)
   })
 
-  test('native terminal availability and local file paths preserve platform behavior', async ({ window }, testInfo) => {
+  test('native terminal availability and local file paths preserve platform behavior', { annotation: { type: 'acceptance', description: "{\"caseId\":\"terminal.environment.platform-availability\",\"evidence\":\"integration\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }, testInfo) => {
     await navigateToChat(window)
     const localFile = testInfo.outputPath('native-file.txt')
     fs.writeFileSync(localFile, 'Native file path fixture\n')

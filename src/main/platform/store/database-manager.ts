@@ -30,6 +30,73 @@ const CREATE_MIGRATIONS_TABLE_SQL = `
   )
 `
 
+interface ForeignKeyViolation {
+  table: string
+  rowid: bigint | null
+  parent: string
+  fkid: bigint
+}
+
+interface ForeignKeyColumn {
+  id: number
+  seq: number
+  table: string
+  from: string
+  to: string | null
+  on_update: string
+  on_delete: string
+  match: string
+}
+
+function quotedIdentifier(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`
+}
+
+function foreignKeyValue(value: unknown): [string, string?] {
+  if (value === null) return ['null']
+  if (typeof value === 'bigint') return ['integer', value.toString()]
+  if (typeof value === 'number') return ['real', String(value)]
+  if (typeof value === 'string') return ['text', value]
+  if (Buffer.isBuffer(value)) return ['blob', value.toString('base64')]
+  throw new Error('[Store] Foreign-key verification encountered an unsupported SQLite value')
+}
+
+function* foreignKeyViolations(db: Database.Database) {
+  const readers = new Map<string, { definition: unknown[]; columns: string[]; row: Database.Statement }>()
+  const check = db.prepare('PRAGMA main.foreign_key_check').safeIntegers()
+  for (const violation of check.iterate() as IterableIterator<ForeignKeyViolation>) {
+    if (violation.rowid === null) {
+      throw new Error(`[Store] Foreign-key verification cannot identify a violating row in "${violation.table}" without rowid`)
+    }
+    const constraint = JSON.stringify([violation.table, violation.fkid.toString()])
+    let reader = readers.get(constraint)
+    if (!reader) {
+      const table = quotedIdentifier(violation.table)
+      const columns = db.prepare('SELECT name, pk FROM pragma_table_info(?, ?)').all(violation.table, 'main') as Array<{ name: string; pk: number }>
+      const names = new Set(columns.map(column => column.name.toLowerCase()))
+      const rowid = ['_rowid_', 'rowid', 'oid'].find(name => !names.has(name))
+      if (!rowid) throw new Error(`[Store] Foreign-key verification cannot address the row identity in "${violation.table}"`)
+      const foreignKey = (db.prepare('SELECT * FROM pragma_foreign_key_list(?, ?)').all(violation.table, 'main') as ForeignKeyColumn[])
+        .filter(column => BigInt(column.id) === violation.fkid).sort((a, b) => a.seq - b.seq)
+      if (foreignKey.length === 0) throw new Error(`[Store] Foreign-key verification cannot resolve a constraint in "${violation.table}"`)
+      const selected = [...columns.filter(column => column.pk > 0).sort((a, b) => a.pk - b.pk).map(column => column.name), ...foreignKey.map(column => column.from)]
+      reader = {
+        definition: foreignKey.map(column => [column.from, column.to, column.on_update, column.on_delete, column.match]),
+        columns: selected,
+        row: db.prepare(`SELECT ${selected.map(quotedIdentifier).join(', ')} FROM main.${table} WHERE ${rowid} = ?`).raw().safeIntegers(),
+      }
+      readers.set(constraint, reader)
+    }
+    const values = reader.row.get(violation.rowid) as unknown[] | undefined
+    if (!values) throw new Error(`[Store] Foreign-key verification cannot read the violating row in "${violation.table}"`)
+    yield {
+      table: violation.table,
+      parent: violation.parent,
+      key: JSON.stringify([constraint, violation.rowid.toString(), violation.parent, reader.definition, reader.columns, values.map(foreignKeyValue)]),
+    }
+  }
+}
+
 /**
  * Apply performance and safety PRAGMAs to a newly opened database.
  *
@@ -265,17 +332,32 @@ export function createDatabaseManager(appDbPath: string): DatabaseManager {
             `[Store] Duplicate migration version ${m.version} in namespace "${namespace}".`
           )
         }
+        if (m.foreignKeys !== undefined && m.foreignKeys !== 'rebuild') {
+          throw new Error(`[Store] Unsupported foreign-key migration mode in namespace "${namespace}" at version ${m.version}`)
+        }
         versionSet.add(m.version)
       }
 
       // Sort migrations by version ascending
       const sorted = [...migrations].sort((a, b) => a.version - b.version)
 
+      let transactionVersion: number | undefined
+      if (db.inTransaction && sorted.some(migration => migration.foreignKeys === 'rebuild')) {
+        const metadata = db.prepare('SELECT 1 FROM main.sqlite_schema WHERE type = ? AND name = ?').get('table', MIGRATIONS_TABLE)
+        const storedVersion = metadata ? getCurrentVersion(db, namespace) : 0
+        transactionVersion = storedVersion
+        if (sorted.some(migration => migration.version > storedVersion && migration.foreignKeys === 'rebuild')) {
+          const message = `[Store] Migration refused for namespace "${namespace}" at version ${storedVersion}: Referenced-table rebuild requires no external transaction or savepoint`
+          console.error(message)
+          throw new Error(message)
+        }
+      }
+
       // Ensure the migrations meta-table exists
       ensureMigrationsTable(db)
 
       // Get current version for this namespace
-      const currentVersion = getCurrentVersion(db, namespace)
+      const currentVersion = transactionVersion ?? getCurrentVersion(db, namespace)
 
       // The newest migration this build carries IS its statement of what it
       // understands, so this check cannot drift from the code the way a
@@ -290,14 +372,6 @@ export function createDatabaseManager(appDbPath: string): DatabaseManager {
 
       if (pending.length === 0) {
         return // Already up to date
-      }
-
-      // Snapshot before the schema changes shape. A migration that succeeds
-      // still cannot be undone, and the user may need to go back to the build
-      // that wrote this data.
-      if (currentVersion > 0 && !db.memory && !snapshotted.has(db.name)) {
-        snapshotted.add(db.name)
-        snapshotBeforeMigration(db, db.name, BACKUP_SUFFIX, MAX_BACKUPS)
       }
 
       // Verify no gaps in the migration sequence from current
@@ -315,7 +389,13 @@ export function createDatabaseManager(appDbPath: string): DatabaseManager {
       }
 
       // Run all pending migrations in a single transaction
+      const rebuilding = pending.some(migration => migration.foreignKeys === 'rebuild')
+      let checked: { before: number; after: number } | undefined
       const runMigrationsBatch = db.transaction(() => {
+        const baseline = rebuilding ? new Set<string>() : undefined
+        if (baseline) {
+          for (const violation of foreignKeyViolations(db)) baseline.add(violation.key)
+        }
         for (const migration of pending) {
           console.log(
             `[Store] Running migration "${namespace}" v${migration.version}: ${migration.description}`
@@ -326,14 +406,57 @@ export function createDatabaseManager(appDbPath: string): DatabaseManager {
         // Record the final version
         const finalVersion = pending[pending.length - 1].version
         setVersion(db, namespace, finalVersion)
+        if (baseline) {
+          let remaining = 0
+          for (const violation of foreignKeyViolations(db)) {
+            if (!baseline.has(violation.key)) {
+              throw new Error(`[Store] Foreign-key verification found a new violation in "${violation.table}" referencing "${violation.parent}"`)
+            }
+            remaining++
+          }
+          checked = { before: baseline.size, after: remaining }
+        }
       })
 
       try {
-        runMigrationsBatch()
+        // Snapshot before the schema changes shape, with the original FK setting.
+        if (currentVersion > 0 && !db.memory && !snapshotted.has(db.name)) {
+          snapshotted.add(db.name)
+          snapshotBeforeMigration(db, db.name, BACKUP_SUFFIX, MAX_BACKUPS)
+        }
+        if (rebuilding) {
+          const originalForeignKeys = db.pragma('foreign_keys', { simple: true })
+          if (originalForeignKeys !== 0 && originalForeignKeys !== 1) throw new Error('[Store] Cannot read the foreign-key enforcement setting')
+          let executionError: unknown
+          try {
+            db.pragma('foreign_keys = OFF')
+            if (db.pragma('foreign_keys', { simple: true }) !== 0) throw new Error('[Store] Cannot suspend foreign-key actions for the referenced-table rebuild')
+            runMigrationsBatch.immediate()
+          } catch (error) {
+            executionError = error
+            throw error
+          } finally {
+            try {
+              db.pragma(`foreign_keys = ${originalForeignKeys}`)
+              if (db.pragma('foreign_keys', { simple: true }) !== originalForeignKeys) throw new Error('Foreign-key enforcement did not return to its original setting')
+            } catch (restoreError) {
+              const errors = executionError === undefined ? [restoreError] : [executionError, restoreError]
+              for (const [path, connection] of connections) {
+                if (connection === db) connections.delete(path)
+              }
+              let closeFailed = false
+              try { if (db.open) db.close() } catch (closeError) { closeFailed = true; errors.push(closeError) }
+              throw new AggregateError(errors, `[Store] Foreign-key restoration failed; connection removed from cache; close ${closeFailed ? 'failed' : 'succeeded'}`)
+            }
+          }
+        } else {
+          runMigrationsBatch()
+        }
         console.log(
           `[Store] Migrations complete for "${namespace}": ` +
           `v${currentVersion} -> v${pending[pending.length - 1].version} ` +
-          `(${pending.length} migration${pending.length === 1 ? '' : 's'} applied)`
+          `(${pending.length} migration${pending.length === 1 ? '' : 's'} applied)` +
+          (checked ? `; existing foreign-key violations: ${checked.before} -> ${checked.after}` : '')
         )
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)

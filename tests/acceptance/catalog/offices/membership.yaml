@@ -1,0 +1,93 @@
+version: 1
+id: offices.membership
+module: offices
+title:
+  en: Join and leave a shared office
+  zh: 加入和离开共享办公室
+story:
+  en: I can invite trusted peers and understand why a join was refused.
+  zh: 我能邀请可信队友，并理解加入为何被拒绝。
+basis: documented
+references:
+  - src/main/apps/runtime/federation/DESIGN.md
+  - tests/decentralized/SCENARIOS.md
+promises:
+  join:
+    en: A valid invitation joins the intended office with authenticated identity and roster.
+    zh: 有效邀请以认证身份加入目标办公室并显示成员。
+  refuse:
+    en: Invalid credentials and incompatible versions are refused with a distinguishable reason.
+    zh: 无效凭证和不兼容版本有可区分的拒绝原因。
+  leave:
+    en: Leaving an office removes this device’s current participation without misattributing history.
+    zh: 离开办公室会结束本设备的参与，但不错误归属历史。
+scenarios:
+  - id: offices.membership.join
+    title:
+      en: Join with a valid invitation
+      zh: 使用有效邀请加入
+    verifies:
+      - join
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Two disposable Halo nodes have compatible versions.
+        zh: 两个可丢弃节点版本兼容。
+    steps:
+      - en: Create an invitation and join from the other node.
+        zh: 创建邀请并从另一节点加入。
+    expected:
+      - en: Both nodes show the intended team and correct member ownership.
+        zh: 双方显示目标团队及正确成员所有权。
+    requirements: []
+  - id: offices.membership.refuse
+    title:
+      en: Refuse invalid or incompatible joins
+      zh: 拒绝无效或不兼容加入
+    verifies:
+      - refuse
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Prepare an invalid credential and a mismatched-protocol node.
+        zh: 准备无效凭证和协议不兼容节点。
+    steps:
+      - en: Attempt each join.
+        zh: 分别尝试加入。
+    expected:
+      - en: Neither joins; each failure explains the corresponding condition.
+        zh: 均未加入，各自说明相应原因。
+    requirements: []
+  - id: offices.membership.leave
+    title:
+      en: Leave and inspect past work
+      zh: 离开后查看过去工作
+    verifies:
+      - leave
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: integration
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A joined member has contributed to a task.
+        zh: 已加入成员曾参与任务。
+    steps:
+      - en: Leave the office and inspect remaining members and stored history.
+        zh: 离开办公室并检查其余成员与保存历史。
+    expected:
+      - en: Presence changes; past contribution identity remains accurate.
+        zh: 在线参与状态改变，历史贡献身份仍准确。
+    requirements: []

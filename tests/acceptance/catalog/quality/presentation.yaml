@@ -1,0 +1,22 @@
+version: 1
+id: quality.presentation
+module: quality
+title:
+  en: Read and operate every main surface
+  zh: 阅读和操作主要界面
+story:
+  en: I can use Halo at a narrow width, in either theme and with its keyboard controls.
+  zh: 我能在窄屏、不同主题和键盘操作下使用 Halo。
+basis: documented
+references:
+  - .agents/skills/halo-dev/quick.md
+  - .agents/skills/product-principles/SKILL.md
+  - src/renderer/components/layout/NavRail.tsx
+promises: {}
+scenarios: []
+uses:
+  - contract: readable-surface
+    scenarios:
+      - narrow
+      - themes
+      - keyboard

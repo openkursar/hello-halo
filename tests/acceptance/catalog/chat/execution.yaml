@@ -1,0 +1,99 @@
+version: 1
+id: chat.execution
+module: chat
+title:
+  en: Stop and recover a reply
+  zh: 停止回复并恢复对话
+story:
+  en: I can stop work and continue afterwards, and failures leave a usable conversation.
+  zh: 我能停止工作并继续，失败后对话仍可用。
+basis: documented
+references:
+  - src/main/services/agent/DESIGN.md
+  - src/renderer/components/chat/ChatView.tsx
+  - tests/e2e/specs/chat.spec.ts
+  - tests/e2e/specs/acceptance-chat-recovery.spec.ts
+promises:
+  stop:
+    en: Stopping settles the active reply and permits a later turn.
+    zh: 停止会结束当前回复状态，并允许下一轮。
+  failure:
+    en: A failed model request is distinguishable from a completed answer.
+    zh: 模型请求失败能与正常完成区分。
+  budget:
+    en: Context and output limits are presented without inventing a successful result.
+    zh: 遇到上下文或输出限制时，不会虚构已成功完成。
+scenarios:
+  - id: chat.execution.stop-resume
+    title:
+      en: Stop output and send another message
+      zh: 停止输出后再次发送
+    verifies:
+      - stop
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    preconditions:
+      - en: A scripted endpoint is streaming a long response.
+        zh: 脚本端点正在持续输出。
+    steps:
+      - en: Click Stop, wait for the settled UI and send a new request.
+        zh: 点击停止，等待界面结束运行状态，再发新请求。
+    expected:
+      - en: The old reply stops and the new turn succeeds without duplicate completion.
+        zh: 旧回复停止，新一轮正常完成且不重复结束。
+    requirements:
+      - halo-sdk
+  - id: chat.execution.provider-error
+    title:
+      en: Recover after provider failure
+      zh: 模型服务失败后恢复
+    verifies:
+      - failure
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    notes:
+      en: A deliberate HTTP 401 response verifies visible provider failure and a manual resend after recovery. Automatic retries, every provider error type and reconnecting a changed account remain separate behavior.
+      zh: 明确返回 HTTP 401，验证服务错误可见及恢复后的手动重发；不代表已覆盖自动重试、全部错误类型或账号变更重连。
+    preconditions:
+      - en: A local endpoint rejects the initial turn and is restored before the user resends it.
+        zh: 本地模型端点拒绝初次请求，在用户重发前恢复。
+    steps:
+      - en: Submit a message, inspect the failure, then retry.
+        zh: 发送消息，查看错误，再重试。
+    expected:
+      - en: The failure is visible; the draft/history is recoverable and a successful answer is not duplicated.
+        zh: 错误可见；草稿或记录可恢复，成功回复不重复。
+  - id: chat.execution.limit
+    title:
+      en: Reach a declared context or turn limit
+      zh: 到达明确的上下文或轮次限制
+    verifies:
+      - budget
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: Use a deterministic response that reports a supported limit outcome.
+        zh: 用确定性响应触发受支持的限制结果。
+    steps:
+      - en: Run until the limit is reached and inspect continuation controls.
+        zh: 运行至限制并查看继续操作。
+    expected:
+      - en: The UI explains the limit and retains previous work for the supported continuation.
+        zh: 界面说明限制，并为支持的继续方式保留之前工作。

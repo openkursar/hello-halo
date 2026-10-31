@@ -1,0 +1,19 @@
+version: 1
+id: startup
+title:
+  en: Start using Halo
+  zh: 开始使用 Halo
+description:
+  en: First launch, deferred setup and entry navigation.
+  zh: 首次启动、稍后配置和主要入口。
+paths:
+  - src/renderer/pages/SetupPage.tsx
+  - src/renderer/components/setup/**
+  - src/renderer/components/onboarding/**
+  - src/renderer/components/layout/**
+  - src/renderer/stores/app.store.ts
+  - src/main/bootstrap/**
+dependsOn: []
+scope:
+  en: Desktop owner on macOS, Windows and Linux; fresh or configured profile; startup failure and navigation recovery. Mobile connection setup belongs to remote.
+  zh: macOS、Windows、Linux 桌面主人；首次或已配置启动；启动失败与导航恢复。手机连接配置归远程访问。

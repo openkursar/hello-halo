@@ -34,6 +34,7 @@ import {
   getContent,
   setContent,
   hasChanges,
+  externalContentChange,
 } from '../../../lib/codemirror-setup'
 import { useViewerResources } from '../viewer-resources'
 
@@ -48,7 +49,7 @@ export interface CodeMirrorEditorProps {
   language?: string
   /** Read-only mode (default: true) */
   readOnly?: boolean
-  /** Called when content changes (only in edit mode) */
+  /** Reports edits, not outside replacements of the document. */
   onChange?: (content: string) => void
   /** Called when scroll position changes */
   onScroll?: (position: number) => void
@@ -125,7 +126,10 @@ export const CodeMirrorEditor = memo(
       () => [
         // Update listener for content changes
         EditorView.updateListener.of((update) => {
-          if (update.docChanged && onChangeRef.current) {
+          if (
+            update.docChanged && onChangeRef.current &&
+            update.transactions.some(transaction => transaction.docChanged && !transaction.annotation(externalContentChange))
+          ) {
             onChangeRef.current(update.state.doc.toString())
           }
         }),

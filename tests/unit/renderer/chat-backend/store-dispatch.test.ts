@@ -1137,3 +1137,123 @@ describe('settling a finished space turn', () => {
     expect(store.getState().sessions.get('c1')!.isGenerating).toBe(true)
   })
 })
+
+describe('a working-directory failure through completion and reading', () => {
+  const id = 'directory-conversation'
+  const issue = { spaceId: SPACE, workDir: '/isolated/project' }
+  const error = 'Working directory does not exist'
+  const persisted = {
+    id, spaceId: SPACE, title: 'Directory check', createdAt: '2026-09-01T10:00:00.000Z', updatedAt: '2026-09-01T10:00:01.000Z',
+    messages: [m('directory-user', 'user', 'Use the selected project'), m('directory-error', 'assistant', '', { error })],
+  }
+
+  function failedStore() {
+    const store = makeStore()
+    store.setState({
+      visibleConversationId: id,
+      spaceStates: new Map([[SPACE, { conversations: [{ ...persisted, messageCount: 0 }], currentConversationId: id }]]),
+      conversationCache: new Map([[id, { ...persisted, messageCount: 0, messages: [] } as Conversation]]),
+      sessions: new Map([[id, { ...createEmptySessionState(), isGenerating: true, turnId: 1 }]]),
+    })
+    apiMock.getConversation.mockResolvedValue({ success: true, data: persisted })
+    store.getState().handleAgentError({ spaceId: SPACE, conversationId: id, error, errorType: 'working_dir_unavailable', workDirIssue: issue })
+    return store
+  }
+
+  it('retains the actionable folder after the persisted error has replaced the streamed turn', async () => {
+    const store = failedStore()
+    await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: id })
+
+    expect(store.getState().sessions.get(id)).toMatchObject({ isGenerating: false, error, errorType: 'working_dir_unavailable', workDirIssue: issue, errorSeen: false })
+    expect(store.getState().conversationCache.get(id)!.messages).toEqual(persisted.messages)
+    expect(store.getState().unseenCompletions.size).toBe(0)
+  })
+
+  it('requires explicit reading, then keeps the folder action without repeatedly marking the task read', async () => {
+    const store = failedStore()
+    store.setState({ visibleConversationId: null })
+    await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: id })
+    store.getState().setVisibleConversation(id)
+    expect(store.getState().unseenCompletions.has(id)).toBe(true)
+    expect(apiMock.taskMarkRead).not.toHaveBeenCalled()
+
+    await store.getState().selectConversation(id)
+    const read = store.getState().pulseReadAt.get(id)
+    expect(read).toMatchObject({ originalStatus: 'error', spaceId: SPACE, title: 'Directory check' })
+    expect(store.getState().sessions.get(id)).toMatchObject({ error, errorType: 'working_dir_unavailable', workDirIssue: issue, errorSeen: true })
+    expect(store.getState().unseenCompletions.has(id)).toBe(false)
+    await store.getState().selectConversation(id)
+    expect(store.getState().pulseReadAt.get(id)).toBe(read)
+    expect(apiMock.taskMarkRead).toHaveBeenCalledTimes(1)
+    expect(apiMock.taskMarkRead).toHaveBeenCalledWith(id, SPACE, 'Directory check', 'error')
+  })
+
+  it('does not discard the folder action when the error is read before completion settles', async () => {
+    const store = failedStore()
+    let finishRead!: (value: unknown) => void
+    apiMock.getConversation.mockReturnValueOnce(new Promise(resolve => { finishRead = resolve }))
+    const completing = store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: id })
+    await store.getState().selectConversation(id)
+    expect(store.getState().sessions.get(id)).toMatchObject({ errorSeen: true, error, workDirIssue: issue })
+    finishRead({ success: true, data: persisted })
+    await completing
+    expect(store.getState().sessions.get(id)).toMatchObject({ errorSeen: true, error, errorType: 'working_dir_unavailable', workDirIssue: issue })
+    expect(apiMock.taskMarkRead).toHaveBeenCalledTimes(1)
+  })
+
+  it('starts a user retry without the old action and keeps the original failure only in history', async () => {
+    const store = failedStore()
+    await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: id })
+    await store.getState().selectConversation(id)
+    const previousTurn = store.getState().sessions.get(id)!.turnId
+    apiMock.sendMessage.mockImplementationOnce(async () => {
+      const current = store.getState().sessions.get(id)!
+      expect(current).toMatchObject({ isGenerating: true, error: null, errorType: null })
+      expect(current.workDirIssue).toBeUndefined()
+      expect(current.errorSeen).toBeUndefined()
+      expect(current.turnId).toBeGreaterThan(previousTurn)
+      return { success: true }
+    })
+    await store.getState().sendMessage('Try the restored folder')
+    const messages = [...persisted.messages, m('retry-user', 'user', 'Try the restored folder'), m('retry-answer', 'assistant', 'Completed in the selected folder')]
+    apiMock.getConversation.mockResolvedValueOnce({ success: true, data: { ...persisted, messages } })
+    await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: id })
+
+    expect(store.getState().sessions.get(id)).toMatchObject({ isGenerating: false, error: null, errorType: null })
+    expect(store.getState().sessions.get(id)!.workDirIssue).toBeUndefined()
+    expect(store.getState().conversationCache.get(id)!.messages.filter(message => message.error)).toEqual([persisted.messages[1]])
+  })
+
+  it('does not let a delayed old completion restore its folder error over a new turn', async () => {
+    const store = failedStore()
+    let finishRead!: (value: unknown) => void
+    apiMock.getConversation.mockReturnValueOnce(new Promise(resolve => { finishRead = resolve }))
+    const completing = store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: id })
+    store.getState().handleAgentTurnStart({ spaceId: SPACE, conversationId: id })
+    store.getState().handleAgentMessage({ spaceId: SPACE, conversationId: id, content: 'Working in the restored folder', isComplete: false } as never)
+    const current = store.getState().sessions.get(id)
+    finishRead({ success: true, data: persisted })
+    await completing
+
+    expect(store.getState().sessions.get(id)).toBe(current)
+    expect(current).toMatchObject({ isGenerating: true, error: null, errorType: null, streamingContent: 'Working in the restored folder' })
+    expect(current!.workDirIssue).toBeUndefined()
+  })
+
+  it.each([undefined, 'working_dir_unavailable'] as const)('deduplicates a persisted error without actionable directory details (%s)', async errorType => {
+    const store = failedStore()
+    store.getState().handleAgentError({ spaceId: SPACE, conversationId: id, error, errorType })
+    await store.getState().handleAgentComplete({ spaceId: SPACE, conversationId: id })
+    expect(store.getState().sessions.get(id)).toMatchObject({ error: null, errorType: null })
+    expect(store.getState().conversationCache.get(id)!.messages.filter(message => message.error)).toEqual([persisted.messages[1]])
+  })
+
+  it('continues to retire a generic space error on explicit read before completion', async () => {
+    const store = failedStore()
+    store.getState().handleAgentError({ spaceId: SPACE, conversationId: id, error: 'Ordinary provider failure' })
+    await store.getState().selectConversation(id)
+    expect(store.getState().sessions.get(id)).toMatchObject({ error: null, errorType: null })
+    expect(apiMock.taskMarkRead).toHaveBeenCalledTimes(1)
+    expect(store.getState().pulseReadAt.get(id)?.originalStatus).toBe('error')
+  })
+})

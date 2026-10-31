@@ -1,0 +1,236 @@
+version: 1
+id: knowledge.sources
+module: knowledge
+title:
+  en: Build a knowledge base from source files
+  zh: 用源文件建立知识库
+story:
+  en: I can add source material and know which files were learned, skipped or failed.
+  zh: 我能添加材料，并知道哪些已学习、跳过或失败。
+basis: observed
+references:
+  - src/renderer/components/tlon/CreateKBDialog.tsx
+  - src/renderer/components/tlon/RawFilesTab.tsx
+  - src/main/services/tlon/extract.ts
+  - tests/e2e/specs/acceptance-knowledge.spec.ts
+  - tests/e2e/specs/acceptance-knowledge-image.spec.ts
+  - tests/e2e/specs/acceptance-knowledge-upgrade.spec.ts
+  - src/main/services/tlon/xlsx-upgrade.ts
+promises:
+  import:
+    en: Supported sources are registered with a visible learning state.
+    zh: 支持的资料被登记并显示学习状态。
+  failure:
+    en: Unreadable and textless sources are distinguished from successful learning.
+    zh: 不可读与无文字资料能与学习成功区分。
+  remove:
+    en: Removing a knowledge-base entry does not silently delete the original file.
+    zh: 移除知识库条目不悄悄删除原始文件。
+  upgrade:
+    en: Improved extraction can repair earlier generated results while preserving source files and owner-maintained content.
+    zh: 提取能力改善后可修复旧的系统生成结果，同时保留源文件及用户维护的内容。
+  upgrade-control:
+    en: Automatic upgrades respect paused learning and do not repeatedly rewrite completed or protected results.
+    zh: 自动升级遵守学习暂停设置，不反复改写已完成或已保护的结果。
+scenarios:
+  - id: knowledge.sources.import
+    title:
+      en: Import supported document types
+      zh: 导入支持的文档类型
+    verifies:
+      - import
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    notes:
+      en: All listed format variants have executable import, local extraction and restart checks. Text, Markdown and PNG also check the source preview. XLSX exercises shared-string and cell-stored text encodings with numeric cells; missing content remains a failure. The image case requires readable packaged OCR resources and strictly checks clear English words and digits from a PNG without model calls; it does not establish Chinese accuracy, every image encoding or scanned-PDF OCR. File delivery uses Chromium's real-file drag protocol; the operating-system picker is not exercised.
+      zh: 所列格式变体均已绑定导入、本地提取及重启检查。文本、Markdown 和 PNG 另验证源文件预览。XLSX 验证共享字符串及单元格内存储文字两种编码，并包含数值单元格，内容缺失仍判失败。图片用例要求包内 OCR 资源可读，严格检查清晰 PNG 中的英文词与数字且不调用模型；不证明中文精度、所有图片编码或扫描 PDF 的 OCR。文件交接使用 Chromium 的真实文件拖放协议，不验证操作系统原生挑选器。
+    preconditions:
+      - en: Prepare synthetic text-bearing source documents.
+        zh: 准备包含文字的合成文档。
+    steps:
+      - en: Create a knowledge base, import each supported format and run learning.
+        zh: 创建知识库，导入各支持格式并执行学习。
+    expected:
+      - en: Each source is listed and successfully extracted content is usable.
+        zh: 各来源出现在列表中，成功提取的内容可用。
+    variants:
+      format:
+        - text
+        - markdown
+        - pdf
+        - docx
+        - xlsx
+        - csv
+        - html
+        - image
+    requirements:
+      - packaged-app
+      - halo-sdk
+  - id: knowledge.sources.failures
+    title:
+      en: Import corrupt and textless documents
+      zh: 导入损坏及无文字文档
+    verifies:
+      - failure
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: Prepare a corrupt document and a PDF without readable text.
+        zh: 准备损坏文档及无可读文字的 PDF。
+    steps:
+      - en: Import and learn them alongside a valid text file.
+        zh: 与有效文本一起导入学习。
+    expected:
+      - en: Failures and skipped items are labelled distinctly while the valid file remains usable.
+        zh: 失败与跳过有不同标记，有效文件仍可用。
+  - id: knowledge.sources.remove
+    title:
+      en: Remove imported records and keep originals
+      zh: 移除导入条目并保留源文件
+    verifies:
+      - remove
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A source file was imported from outside the knowledge-base store.
+        zh: 从知识库之外导入了源文件。
+    steps:
+      - en: Cancel removal, then confirm removal for that entry.
+        zh: 取消一次移除，再确认移除该条目。
+    expected:
+      - en: Cancellation retains it; confirmed removal leaves the original source on disk.
+        zh: 取消保留条目，确认后原始磁盘文件仍在。
+  - id: knowledge.sources.upgrade
+    title:
+      en: Repair an earlier spreadsheet extraction after startup
+      zh: 启动后修复旧的表格提取结果
+    verifies:
+      - upgrade
+      - upgrade-control
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements:
+      - packaged-app
+      - halo-sdk
+    variants:
+      state:
+        - learned
+        - no-text
+    preconditions:
+      - en: An active knowledge base contains a real UI-imported spreadsheet with a known earlier extraction record.
+        zh: 活动知识库包含通过真实界面导入的表格，以及已知的旧版提取记录。
+    steps:
+      - en: Start the application with the earlier record and wait for background learning to complete.
+        zh: 从旧记录启动应用，并等待后台学习完成。
+      - en: Read the repaired text, inspect the visible file state and restart again.
+        zh: 检查修复后的文字、可见文件状态，再次重启。
+    expected:
+      - en: Text and numbers become available; the original, imported copy and curated notes remain unchanged.
+        zh: 表格文字和数字恢复可用，原件、导入副本及整理笔记保持不变。
+      - en: The next startup keeps the repaired extraction and its record unchanged.
+        zh: 下一次启动不再改写修复后的提取文件及记录。
+    notes:
+      en: A controlled closed-profile fixture represents the previous on-disk format after real UI import. This does not test installing an older release or the auto-updater. A separate active knowledge base witnesses completion of the startup sweep.
+      zh: 真实界面导入后，在关闭的隔离资料中设置旧版磁盘格式作为前置；不验证旧版本安装器或自动更新器。独立活动知识库用于确认启动扫描已执行到相应位置。
+  - id: knowledge.sources.upgrade-preserve
+    title:
+      en: Preserve owner-edited text during an extraction upgrade
+      zh: 提取升级时保留用户修改的文字
+    verifies:
+      - upgrade
+      - upgrade-control
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements:
+      - packaged-app
+      - halo-sdk
+    preconditions:
+      - en: Earlier extracted text has been edited and differs from both known generated versions.
+        zh: 旧提取文字已被修改，与两种已知系统生成结果都不同。
+    steps:
+      - en: Start the application, inspect the preservation explanation, and restart once more.
+        zh: 启动应用，检查保留说明，再次重启。
+    expected:
+      - en: The maintained text, source files and notes remain intact; a visible preservation explanation is retained.
+        zh: 用户维护的文字、源文件及笔记完整保留，并保存可见的保护说明。
+      - en: A second startup does not rewrite the text or its protection record, or claim it was generated by the new extractor.
+        zh: 第二次启动不改写文字或保护记录，也不把它标成新版提取器生成的结果。
+  - id: knowledge.sources.upgrade-paused
+    title:
+      en: Resume a pending extraction upgrade through the learning setting
+      zh: 通过学习设置恢复待执行的提取升级
+    verifies:
+      - upgrade
+      - upgrade-control
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements:
+      - packaged-app
+      - halo-sdk
+    preconditions:
+      - en: Learning was paused in the UI before the application was closed with an earlier extraction record.
+        zh: 在界面暂停学习后关闭应用，并保留旧版提取记录。
+    steps:
+      - en: Start the application and let another active knowledge base complete its automatic upgrade.
+        zh: 启动应用，让另一个活动知识库完成自动升级。
+      - en: Enable Keep learning in the paused knowledge base's settings and inspect its repaired result.
+        zh: 在暂停知识库的设置中启用持续学习，检查修复结果。
+    expected:
+      - en: Paused text and metadata stay unchanged until the user enables learning; then the existing background scan repairs them automatically.
+        zh: 暂停时文字和元数据保持不变；用户恢复学习后，既有后台扫描自动完成修复。
+  - id: knowledge.sources.upgrade-current
+    title:
+      en: Recognize current text without rewriting it
+      zh: 识别已有的当前文字而不重写文件
+    verifies:
+      - upgrade
+      - upgrade-control
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements:
+      - packaged-app
+      - halo-sdk
+    preconditions:
+      - en: Stored text already matches the current extractor but its record has no extractor revision.
+        zh: 已保存文字与当前提取器结果一致，但记录缺少提取修订号。
+    steps:
+      - en: Start the application, inspect the recognized revision and restart again.
+        zh: 启动应用，检查识别出的修订状态，再次重启。
+    expected:
+      - en: Metadata is updated while the text bytes, file identity and modification time remain unchanged; the next startup does no further rewrite.
+        zh: 只更新元数据，文字字节、文件身份及修改时间不变；下一次启动不再改写。

@@ -170,6 +170,13 @@ Interrupting an in-flight turn is a separate and explicitly manual concern —
 **Rationale**: Consistent with the test example in `database-manager.test.ts` which already
 uses `'app_manager'` as a namespace. Follows the underscore convention used by other modules.
 
+Version 3 rebuilds `installed_apps`, a parent of runtime and other modules' records.
+Its historical SQL is unchanged, but its execution metadata declares
+`foreignKeys: 'rebuild'` so the store suppresses cascading deletion during the
+atomic copy/drop/rename and rejects newly broken references before commit.
+This protects profiles that have not crossed version 3; it cannot recreate records
+already deleted by an earlier build without restoring a retained backup.
+
 ### 2.8 App Work Directory Structure
 
 Automation identity storage is pinned in `installed_apps.data_path` before a
@@ -232,6 +239,23 @@ surface a clear message asking the user to uninstall or rename first.
 **Uninstalled records** continue to follow the existing "soft-deleted →
 reinstall on next install" path for both skills and apps — that branch
 predates this decision and is unchanged.
+
+An explicit import of an MCP connection is different from another `install()`.
+`importMcpConnection(spaceId, spec, userConfig)` takes a normalized MCP spec and
+owns the scope/name conflict decision. A name occupied by another app type is
+an error; a missing or previously uninstalled MCP follows `install()`. For an
+installed MCP it replaces only the complete `mcp_server` object and complete
+user configuration. CLI import forwards the user's **Overwrite** choice to
+this command; transport does not choose between installation and update.
+
+For an installed MCP, the manager validates the resulting spec and applies the
+same command policy as `updateSpec`. One SQLite statement writes both JSON columns, then one
+existing `updated` notification lets consumers read the complete new pair.
+A failed write emits no notification and leaves both values intact. The edit
+preserves identity, scope, status (including paused), permissions, overrides,
+other spec fields, the author's original and associated records. It does not
+uninstall, reinstall or change the duplicate-install policy. User configuration
+retains its existing replacement semantics without new schema validation.
 
 ### 2.11 Built-in Apps (VSCode-style bundled digital humans)
 
@@ -490,6 +514,7 @@ interface AppManagerService {
   pause(appId: string): void
   resume(appId: string): void
   updateConfig(appId: string, config: Record<string, unknown>): void
+  importMcpConnection(spaceId: string | null, spec: McpSpec, userConfig: Record<string, unknown>): Promise<string>
   updateFrequency(appId: string, subscriptionId: string, frequency: string): void
   updateSpec(appId: string, specPatch: Record<string, unknown>): void          // user and AI edits
   upgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome          // author's new version (2.13)

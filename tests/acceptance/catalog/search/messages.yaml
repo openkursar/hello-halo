@@ -1,0 +1,91 @@
+version: 1
+id: search.messages
+module: search
+title:
+  en: Find a message in the intended scope
+  zh: 在指定范围查找消息
+story:
+  en: I can find an old message and return to its conversation and location.
+  zh: 我能找到旧消息并回到它所在的对话及位置。
+basis: observed
+references:
+  - src/renderer/components/search/SearchPanel.tsx
+  - src/main/services/search.service.ts
+  - tests/e2e/specs/acceptance-conversations.spec.ts
+promises:
+  scope:
+    en: Search respects the selected conversation/workspace/global scope.
+    zh: 搜索遵循所选对话、空间或全局范围。
+  location:
+    en: Opening a result reaches the correct conversation and highlights the matching content.
+    zh: 打开结果到达正确对话并高亮匹配内容。
+  cancel:
+    en: Cancellation stops the current search without replacing a newer search’s results.
+    zh: 取消停止当前搜索，不覆盖之后新搜索的结果。
+scenarios:
+  - id: search.messages.scope
+    title:
+      en: Search the same marker at different scopes
+      zh: 在不同范围搜索同一标记
+    verifies:
+      - scope
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Two workspaces contain distinct conversations with controlled shared search terms.
+        zh: 两个空间中不同对话含受控共同检索词。
+    steps:
+      - en: Search in conversation, workspace and global scopes.
+        zh: 分别在对话、空间及全局范围检索。
+    expected:
+      - en: Each result set contains only the selected scope’s matches.
+        zh: 各结果集合仅包含所选范围匹配项。
+  - id: search.messages.open
+    title:
+      en: Open a match in older history
+      zh: 打开旧历史中的匹配项
+    verifies:
+      - location
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An old message matches a known phrase.
+        zh: 一条旧消息匹配已知短语。
+    steps:
+      - en: Open its search result and move among highlighted matches.
+        zh: 打开搜索结果并在高亮匹配项间移动。
+    expected:
+      - en: The selected conversation and matching historical passage are visible.
+        zh: 可见目标对话及匹配历史段落。
+  - id: search.messages.cancel
+    title:
+      en: Cancel and replace a long search
+      zh: 取消并替换长搜索
+    verifies:
+      - cancel
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A controlled large fixture makes search progress observable.
+        zh: 受控大数据使搜索进度可观察。
+    steps:
+      - en: Start a search, cancel, then issue a different query.
+        zh: 开始搜索后取消，再发起不同查询。
+    expected:
+      - en: Cancelled work cannot overwrite the newer query’s results or loading state.
+        zh: 被取消工作不能覆盖新查询结果或加载状态。

@@ -1,0 +1,22 @@
+version: 1
+id: notifications
+title:
+  en: Attention and notifications
+  zh: 待办关注与通知
+description:
+  en: Find waiting work and receive configured completion notices.
+  zh: 找到等待处理的工作，并接收配置的完成通知。
+paths:
+  - src/main/services/notification.service.ts
+  - src/renderer/components/notification/**
+  - src/renderer/components/layout/TaskPanel.tsx
+  - src/renderer/components/pulse/**
+  - src/renderer/stores/task.store.ts
+  - src/main/apps/runtime/report-tool.ts
+  - src/main/apps/runtime/notify-*.ts
+dependsOn:
+  - people
+  - teams
+scope:
+  en: Task panel, pending decisions, local toasts/system notices and configured outbound channels; foreground/background and permission denial.
+  zh: 任务面板、待决问题、本地提示/系统通知及配置的外发渠道；包括前后台及权限拒绝。

@@ -66,6 +66,7 @@ export const migrations: Migration[] = [
   {
     version: 3,
     description: 'Make space_id nullable for global apps (MCP/Skill) and add partial unique indexes',
+    foreignKeys: 'rebuild',
     up(db) {
       // SQLite does not support ALTER COLUMN to change NOT NULL → nullable.
       // Recreate the table with space_id TEXT (nullable), migrate data,

@@ -1,0 +1,19 @@
+version: 1
+id: memory
+title:
+  en: Long-term memory
+  zh: 长期记忆
+description:
+  en: Control retained working knowledge and its consolidation.
+  zh: 管理保留的工作记忆及整理。
+paths:
+  - src/main/platform/memory/**
+  - src/main/services/memory-consolidation/**
+  - src/renderer/components/memory/**
+dependsOn:
+  - workspaces
+  - people
+  - chat
+scope:
+  en: Workspace and digital-human memory, settings and consolidation; reserved user-wide memory is not counted as a delivered feature. Guest disclosure policy remains an explicit question.
+  zh: 空间与数字人记忆、设置和整理；预留的全用户记忆不计为已交付功能。访客披露策略保留为明确待决事项。

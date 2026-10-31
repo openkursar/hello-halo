@@ -79,7 +79,7 @@ test.describe('Real Chat Flow', () => {
   // Increase timeout for real API calls
   test.setTimeout(60000)
 
-  test('can send message and receive response', async ({ window, electronApp }, testInfo) => {
+  test('can send message and receive response', { annotation: { type: 'acceptance', description: "{\"caseId\":\"chat.messages.live-reply\",\"evidence\":\"live-model\",\"mode\":\"live\",\"variant\":{}}" } }, async ({ window, electronApp }, testInfo) => {
     // Navigate to chat interface
     await navigateToChat(window)
 
@@ -273,7 +273,7 @@ test.describe('Real Chat Flow', () => {
     await expect(window.locator('.streaming-cursor')).toHaveCount(0)
   })
 
-  test('can send multiple messages in sequence', async ({ window }) => {
+  test('can send multiple messages in sequence', { annotation: { type: 'acceptance', description: "{\"caseId\":\"chat.messages.live-sequence\",\"evidence\":\"live-model\",\"mode\":\"live\",\"variant\":{}}" } }, async ({ window }) => {
     await navigateToChat(window)
 
     const chatInput = window.locator('textarea')
@@ -444,7 +444,7 @@ function readOwnedProcesses(mainPid: number, knownPids: Set<number>) {
 test.describe('Active response shutdown', () => {
   test.use({ appStoreRegistries: [{ id: 'claude-skills', name: 'Claude Skills Registry', url: 'https://majiayu000.github.io/claude-skill-registry-core', sourceType: 'claude-skills', enabled: false }] })
 
-  test('quits normally while an actual SDK response is streaming', async ({ window, electronApp }, testInfo) => {
+  test('quits normally while an actual SDK response is streaming', { annotation: { type: 'acceptance', description: "{\"caseId\":\"lifecycle.background.active-stream-quit\",\"evidence\":\"app-e2e\",\"mode\":\"scripted\",\"variant\":{}}" } }, async ({ window, electronApp }, testInfo) => {
     const report: Record<string, unknown> = { requests: 0, closeSucceeded: false }
     const responses = new Set<ServerResponse>()
     const origin = createServer(async (request, response) => {

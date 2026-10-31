@@ -26,6 +26,7 @@ import {
   renameSync,
   copyFileSync,
   type Dirent,
+  lstatSync,
 } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
 import type {
@@ -61,6 +62,7 @@ import {
   DEFAULT_LOG_MD,
 } from './defaults'
 import { isExtractable } from './extract'
+import { isExtractionCurrent, ownedTextPath, unchangedProtection } from './extraction-revision'
 import { CPP_LEVEL_IGNORE_DIRS } from '../../../shared/constants/ignore-patterns'
 import { isDiskRoot } from '../../../shared/disk-paths'
 
@@ -161,7 +163,7 @@ export function sha256(buf: Buffer | string): string {
 /**
  * Content-hash memo keyed by absolute path. Learned-status pulls and ingest
  * scans re-hash every source repeatedly (per progress pull, per boot); an
- * unchanged mtime+size reuses the digest instead of re-reading the bytes.
+ * unchanged filesystem stamp reuses the digest instead of re-reading bytes.
  * Bounded, LRU eviction: Map iteration order tracks insertion order, and a
  * hit re-inserts its entry so the oldest key is always the least recently
  * used one — without this, a KB with more files than the cap would evict
@@ -169,25 +171,25 @@ export function sha256(buf: Buffer | string): string {
  * back to full re-reads.
  */
 const HASH_CACHE_MAX = 4096
-const hashCache = new Map<string, { mtimeMs: number; size: number; hash: string; binary: boolean }>()
+const hashCache = new Map<string, { mtimeMs: number; ctimeMs: number; ino: number; dev: number; size: number; hash: string; binary: boolean }>()
 
 /** For testing only — drop memoized digests so rewritten files re-hash. */
 export function _resetTlonHashCache(): void {
   hashCache.clear()
 }
 
-/** Hash a file's content, reusing the cached digest when mtime+size match. Throws on IO errors. */
+/** Hash a file's content, reusing the digest while its filesystem identity is unchanged. */
 export function hashFileCached(absolutePath: string): { hash: string; size: number; binary: boolean } {
   const st = statSync(absolutePath)
   const cached = hashCache.get(absolutePath)
-  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+  if (cached && cached.mtimeMs === st.mtimeMs && cached.ctimeMs === st.ctimeMs && cached.ino === st.ino && cached.dev === st.dev && cached.size === st.size) {
     hashCache.delete(absolutePath)
     hashCache.set(absolutePath, cached)
     return cached
   }
 
   const buf = readFileSync(absolutePath)
-  const entry = { mtimeMs: st.mtimeMs, size: st.size, hash: sha256(buf), binary: looksBinary(buf) }
+  const entry = { mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, ino: st.ino, dev: st.dev, size: st.size, hash: sha256(buf), binary: looksBinary(buf) }
   hashCache.delete(absolutePath)
   hashCache.set(absolutePath, entry)
   if (hashCache.size > HASH_CACHE_MAX) {
@@ -1162,7 +1164,8 @@ export function refreshStats(kbId: string): KBStats {
       } catch { /* ignore */ }
     }
   }
-  const textWalk = walkKbDir(textDir)
+  const textDirectory = existsSync(textDir) ? lstatSync(textDir) : null
+  const textWalk = textDirectory?.isDirectory() && !textDirectory.isSymbolicLink() ? walkKbDir(textDir) : { files: [] }
   const indexedCount = textWalk.files.filter(r => r.toLowerCase().endsWith('.txt')).length
   // An over-cap watched folder contributes 0 above, but text extracted from it
   // earlier still counts here — floor the total so indexedCount never exceeds it.
@@ -1214,7 +1217,7 @@ export function clearWikiAndHashes(kbId: string): boolean {
 
 /**
  * Live learned-status for all raw files. A file is `learned` IFF hashes.json
- * has an entry whose stored hash equals the current content hash. The refined
+ * has a current extractor revision and matching source content. The refined
  * `state` distinguishes text-less sources and failed extractions (both facts
  * come from the same hashes.json entry, valid only while the hash matches).
  */
@@ -1225,8 +1228,8 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
   const hashes = readHashes(kbId)
   const result: RawFileStatus[] = []
 
-  // A source is learned IFF hashes.json records the current content hash with an
-  // existing textPath; the same entry (valid only while the hash matches) also
+  // A source is learned when hashes.json records the current revision and hash
+  // with an owned textPath; the same entry (valid while the hash matches) also
   // carries the 'no-text'/'failed' refinements. `recordedKey` matches how ingest
   // keys a source: raw-relative for raw/, absolute for watched (linked) folders.
   const derive = (recordedKey: string, abs: string): { size: number; state: RawFileStatus['state']; error?: string } => {
@@ -1236,9 +1239,13 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
     try {
       size = statSync(abs).size
       const recorded = hashes.files[recordedKey]
-      if (recorded && recorded.hash === hashFileCached(abs).hash) {
-        if (recorded.textPath && existsSync(join(textDir, recorded.textPath))) state = 'learned'
-        else if (recorded.empty) state = 'no-text'
+      const currentHash = hashFileCached(abs).hash
+      if (recorded?.protection?.sourceHash === currentHash) {
+        state = 'failed'
+        error = recorded.protection.reason
+      } else if (recorded && recorded.hash === currentHash) {
+        if (isExtractionCurrent(abs, recorded) && recorded.textPath && ownedTextPath(textDir, recorded.textPath)) state = 'learned'
+        else if (isExtractionCurrent(abs, recorded) && recorded.empty) state = 'no-text'
         else if (recorded.lastError) {
           state = 'failed'
           error = recorded.lastError
@@ -1331,10 +1338,11 @@ export function collectIngestCandidates(kbId: string): Array<{
       current = info.hash
     } catch { return }
     const recorded = hashes.files[sourcePath]
-    // Skip when the bytes are unchanged and we've already handled them: either
+    if (recorded && unchangedProtection(absolutePath, current, recorded, textDir)) return
+    // Skip when the revision and bytes are current and already handled: either
     // the extracted text still exists, or extraction was attempted and yielded
     // nothing (`empty`). A legacy entry (neither field) still re-extracts.
-    if (recorded && recorded.hash === current
+    if (recorded && recorded.hash === current && isExtractionCurrent(absolutePath, recorded)
         && ((recorded.textPath && existsSync(join(textDir, recorded.textPath))) || recorded.empty)) return
     candidates.push({ sourcePath, absolutePath, sourceType })
   }

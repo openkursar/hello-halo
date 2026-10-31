@@ -23,6 +23,8 @@ export interface Migration {
   version: number
   /** Human-readable description of what this migration does. */
   description: string
+  /** Rebuilds a referenced table: suspend FK actions for the atomic batch and reject new violations before commit. */
+  foreignKeys?: 'rebuild'
   /** Execute the migration. Called with the database instance inside a transaction. */
   up(db: Database.Database): void
 }
@@ -76,6 +78,8 @@ export interface DatabaseManager {
    *
    * If any migration throws, the entire batch is rolled back and the
    * namespace stays at its previous version.
+   * Pending referenced-table rebuilds cannot run inside an external transaction;
+   * their batch temporarily disables FK actions and restores the original setting.
    *
    * @param db - The database to migrate (from getAppDatabase or getSpaceDatabase).
    * @param namespace - Unique identifier for the module (e.g., "scheduler").

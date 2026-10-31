@@ -36,7 +36,7 @@ async function conversationIds(window: Page) {
 test.describe('Workspace Management', () => {
   test.setTimeout(30000)
 
-  test('can create a dedicated workspace and find it in workspace management', async ({ window }) => {
+  test('can create a dedicated workspace and find it in workspace management', { annotation: { type: 'acceptance', description: '{"caseId":"workspaces.manage.create","evidence":"app-e2e","mode":"none","variant":{}}' } }, async ({ window }) => {
     await createWorkspace(window, 'E2E Test Space')
     await navigateToWorkspaces(window)
 
@@ -44,7 +44,7 @@ test.describe('Workspace Management', () => {
     await window.screenshot({ path: 'tests/e2e/results/spaces-created.png' })
   })
 
-  test('can reopen a dedicated workspace from its card and see chat', async ({ window }) => {
+  test('can reopen a dedicated workspace from its card and see chat', { annotation: { type: 'acceptance', description: '{"caseId":"workspaces.manage.reopen","evidence":"app-e2e","mode":"none","variant":{}}' } }, async ({ window }) => {
     await createWorkspace(window, 'E2E Enter Space')
     await navigateToWorkspaces(window)
 
@@ -59,7 +59,7 @@ test.describe('Workspace Management', () => {
     await window.screenshot({ path: 'tests/e2e/results/spaces-entered.png' })
   })
 
-  test('a workspace keeps its open files and unsaved edits while another one is in use', async ({ electronApp, window }) => {
+  test('a workspace keeps its open files and unsaved edits while another one is in use', { annotation: { type: 'acceptance', description: '{"caseId":"workspaces.context.keep-edit","evidence":"app-e2e","mode":"none","variant":{}}' } }, async ({ electronApp, window }) => {
     const dataDirectory = await electronApp.evaluate(() => process.env.HALO_DATA_DIR!)
     const file = path.join(dataDirectory, 'temp', 'artifacts', 'kept-across-switch.ts')
     fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -88,7 +88,7 @@ test.describe('Workspace Management', () => {
     await expect(window.locator('.canvas-tab')).toHaveCount(0)
   })
 
-  test('a workspace\'s own terminal keeps running while another one is in use', async ({ window }) => {
+  test('a workspace\'s own terminal keeps running while another one is in use', { annotation: { type: 'acceptance', description: "{\"caseId\":\"workspaces.context.terminal-session\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     test.skip(process.platform === 'linux', 'terminals are not available on Linux')
     const terminals = () => window.evaluate(async () => {
       const result = await (globalThis.window as unknown as { halo: HaloAPI }).halo.listTerminals()
@@ -116,7 +116,7 @@ test.describe('Workspace Management', () => {
     await window.evaluate(sessionId => (globalThis.window as unknown as { halo: HaloAPI }).halo.killTerminal({ sessionId }), id)
   })
 
-  test('can create a new persisted conversation in the Halo workspace', async ({ window }) => {
+  test('can create a new persisted conversation in the Halo workspace', { annotation: { type: 'acceptance', description: "{\"caseId\":\"conversations.organize.persisted-new\",\"evidence\":\"app-e2e\",\"mode\":\"none\",\"variant\":{}}" } }, async ({ window }) => {
     await navigateToChat(window)
     const before = await conversationIds(window)
     await window.getByRole('button', { name: 'New', exact: true }).first().click()
@@ -127,7 +127,7 @@ test.describe('Workspace Management', () => {
     await window.screenshot({ path: 'tests/e2e/results/spaces-new-conv.png' })
   })
 
-  test('cancelling workspace creation leaves the workspace list unchanged', async ({ window }) => {
+  test('cancelling workspace creation leaves the workspace list unchanged', { annotation: { type: 'acceptance', description: '{"caseId":"workspaces.manage.cancel","evidence":"app-e2e","mode":"none","variant":{}}' } }, async ({ window }) => {
     await navigateToWorkspaces(window)
     await expect(window.getByRole('heading', { name: 'Halo Workspace', exact: true, level: 3 })).toBeVisible()
     const cards = window.getByRole('heading', { level: 3 })
