@@ -48,13 +48,13 @@ scenarios:
         zh: 记录实际引擎并确认 Claude Code 正在运行且未降级。
       - en: Use real tool calls for file search, the bundled search executable, Office libraries and a large image.
         zh: 用真实工具执行文件搜索、附带搜索程序、Office 库及大图读取。
-      - en: Observe the main process command resolution before and after work, and verify the search command, Office executable and loaded libraries come from this package or its isolated generated shim.
-        zh: 在工作前后观察主进程命令解析，并核实搜索程序、Office 执行程序及实际加载库来自当前包或其隔离生成的入口脚本。
+      - en: Observe the main process command resolution before and after work, and verify the Office executable and loaded libraries come from this package or its isolated generated shim. The search command comes from the external Claude Code installation, which this package does not ship.
+        zh: 在工作前后观察主进程命令解析，并核实 Office 执行程序及实际加载库来自当前包或其隔离生成的入口脚本。搜索程序由外部 Claude Code 安装提供，本包并不附带。
       - en: Verify that project agents and commands are advertised to the model.
         zh: 确认项目代理和命令已提供给模型。
     expected:
-      - en: Each tool returns a successful result from the packaged runtime.
-        zh: 每个工具从打包运行时返回成功结果。
+      - en: Each tool returns a successful result; the Office tools run from the packaged runtime.
+        zh: 每个工具返回成功结果；Office 工具来自打包运行时。
     requirements:
       - packaged-app
     notes:

@@ -241,7 +241,8 @@ for (const [sdkEngine, caseId] of [
         expect.soft(result('toolu_office').isError, 'The Office shell command must exit successfully, even if it printed valid output first').toBe(false)
         expect.soft(result('toolu_office').text, 'halo-node with the Office libraries').toContain('office-runtime-ok')
         toolOrigins = inspectPackagedToolOrigins(result('toolu_rg').text, result('toolu_office').text, before.runtime)
-        expect.soft(toolOrigins.rg.origin, 'The Bash rg command must resolve inside this application package').toBe('package')
+        // Claude Code is an external install that brings its own ripgrep; only the engine this package ships must resolve it from the package.
+        if (sdkEngine === 'halo') expect.soft(toolOrigins.rg.origin, 'The Bash rg command must resolve inside this application package').toBe('package')
         expect.soft(toolOrigins.office.shim.origin, 'halo-node must be packaged or an application-generated shim in the isolated profile').toMatch(/^(package|generated-shim)$/)
         expect.soft(toolOrigins.office.executable.origin, 'The Office command must run this package’s Electron executable, not a host Node.js').toBe('package')
         expect.soft(toolOrigins.office.libraries.exceljs.origin, 'exceljs must load from this package’s Office runtime').toBe('package')

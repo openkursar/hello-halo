@@ -89,7 +89,14 @@ test.describe('narrow browser overlays with persistent UI scaling', () => {
           main.setFullScreen(false)
         })
       }
-      main.unmaximize()
+      if (main.isMaximized()) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => { main.removeListener('unmaximize', restored); reject(new Error('The maximized window did not restore')) }, 6000)
+          const restored = () => { clearTimeout(timer); resolve() }
+          main.once('unmaximize', restored)
+          main.unmaximize()
+        })
+      }
       main.setMinimumSize(320, 480)
       const scale = main.webContents.getZoomFactor()
       main.setContentSize(Math.round(375 * scale), Math.round(844 * scale))

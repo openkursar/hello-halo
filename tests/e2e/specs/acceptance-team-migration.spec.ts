@@ -53,7 +53,8 @@ async function inspectHistory(page: Page, ids: TeamMigrationIdentity, original: 
     const current = await detail(page, duplicate.id)
     expect(current.team).toMatchObject({ id: duplicate.id, name: duplicate.name, ephemeral: true,
       coordinatorConversationId: duplicate.id === teamHistory.duplicates[1].id ? ids.conversationId : null })
-    expect(current.members.map(member => member.appId).sort()).toEqual([ids.memberId, `space-conv-${ids.conversationId}`].sort())
+    // The temporary collaboration's coordinator is internal; only its real members are in the visible roster.
+    expect(current.members.map(member => member.appId)).toEqual([ids.memberId])
     const archived = await board(page, duplicate.id, `${duplicate.id}-epoch`)
     expect(archived.epoch).toMatchObject({ endReason: 'completed', workItem: { status: 'completed' } })
     expect(archived.findings).toHaveLength(1)

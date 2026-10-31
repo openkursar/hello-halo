@@ -36,7 +36,7 @@ function scriptCollaboration(model: AcceptanceModel) {
     }
     const remember = request.lastUserText.match(/Remember my private reference, (Analyst|Reviewer): ([a-z]+-\d+)\./)
     if (remember) return { text: `${remember[1]} recorded ${remember[2]} for this task.` }
-    const introduction = request.lastUserText.match(/Confirm you are reachable after restart, (Analyst|Reviewer)\./)
+    const introduction = request.lastUserText.match(/Confirm you are reachable after restart, ([^.]+)\./)
     if (introduction) return { text: `${introduction[1]} is reachable in the retained task.` }
     if (request.text.includes(startMessage)) {
       const receipt = request.toolResults.find(result => result.id === 'create-retained-collaboration')
@@ -72,13 +72,15 @@ async function readTasks(page: Page, teamId: string): Promise<TeamConversation[]
   }, teamId)
 }
 
-async function memberHistory(page: Page, collab: Collaboration, member: TeamMember): Promise<StoredMessage[]> {
+async function taskHistory(page: Page, task: { teamId: string; epochId: string; spaceId: string }, member: { appId: string }): Promise<StoredMessage[]> {
   const result = await page.evaluate(input => (globalThis as unknown as { halo: HaloAPI }).halo.teamChatMessages(input), {
-    teamId: collab.detail.team.id, epochId: collab.task.epochId, appId: member.appId, spaceId: collab.spaceId,
+    teamId: task.teamId, epochId: task.epochId, appId: member.appId, spaceId: task.spaceId,
   })
   expect(result.success, 'Read the real member transcript without replacing its storage').toBe(true)
   return (result.data as StoredMessage[]).map(({ id, role, content }) => ({ id, role, content }))
 }
+
+const memberHistory = (page: Page, collab: Collaboration, member: TeamMember) => taskHistory(page, { teamId: collab.detail.team.id, epochId: collab.task.epochId, spaceId: collab.spaceId }, member)
 
 function teamHeader(page: Page) {
   return page.getByRole('heading', { name: teamName, exact: true, level: 1 }).locator('xpath=ancestor::header')
@@ -120,35 +122,56 @@ async function prepareCollaboration(page: Page): Promise<Collaboration> {
   return { detail, members, task: tasks[0], source, spaceId: turn.spaceId }
 }
 
-async function keepCollaboration(page: Page, collab: Collaboration) {
+interface SavedTeam { teamId: string; detail: TeamDetail }
+
+async function keepCollaboration(page: Page, collab: Collaboration): Promise<SavedTeam> {
   await teamHeader(page).getByRole('button', { name: 'Keep this team', exact: true }).click()
-  await expect.poll(async () => (await readDetail(page, collab.detail.team.id)).team.ephemeral).toBe(false)
+  await expect(teamHeader(page).getByRole('button', { name: 'Open saved team', exact: true })).toBeVisible()
   await expect(teamHeader(page).getByRole('button', { name: 'Keep this team', exact: true })).toHaveCount(0)
-  await expectSameCollaboration(page, collab)
+  const original = await readDetail(page, collab.detail.team.id)
+  expect(original.team.savedTeamId, 'Keeping must link the saved team to its collaboration').toBeTruthy()
+  return { teamId: original.team.savedTeamId!, detail: await readDetail(page, original.team.savedTeamId!) }
 }
 
-async function expectSameCollaboration(page: Page, collab: Collaboration) {
+async function expectOriginalIntact(page: Page, collab: Collaboration, saved: SavedTeam) {
   const current = await readDetail(page, collab.detail.team.id)
-  expect(current.team).toMatchObject({ id: collab.detail.team.id, ephemeral: false, coordinatorConversationId: collab.source.id, leadAppId: collab.detail.team.leadAppId })
+  expect(current.team).toMatchObject({ id: collab.detail.team.id, ephemeral: true, coordinatorConversationId: collab.source.id, leadAppId: collab.detail.team.leadAppId, savedTeamId: saved.teamId })
   expect(current.members.map(member => member.appId).sort()).toEqual(collab.detail.members.map(member => member.appId).sort())
   const tasks = await readTasks(page, collab.detail.team.id)
   expect(tasks).toHaveLength(1)
   expect(tasks[0]).toMatchObject({ epochId: collab.task.epochId, kind: 'collab', readonly: false })
   const association = await page.evaluate(id => (globalThis as unknown as { halo: HaloAPI }).halo.teamCollabForConversation(id), collab.source.id)
-  expect(association).toMatchObject({ success: true, data: { teamId: collab.detail.team.id, epochId: collab.task.epochId, saved: true } })
+  expect(association).toMatchObject({ success: true, data: { teamId: collab.detail.team.id, epochId: collab.task.epochId, saved: true, savedTeamId: saved.teamId } })
 }
 
-async function openKeptTask(page: Page, collab: Collaboration) {
+/** The saved team holds the same members under a real lead of its own, and none of the collaboration's work. */
+async function expectSavedTeam(page: Page, collab: Collaboration, saved: SavedTeam) {
+  const current = await readDetail(page, saved.teamId)
+  expect(current.team).toMatchObject({ id: saved.teamId, ephemeral: false })
+  expect(current.team.id).not.toBe(collab.detail.team.id)
+  expect(current.team.leadAppId).not.toBe(collab.detail.team.leadAppId)
+  const roster = current.members.map(member => member.appId)
+  for (const member of collab.members) expect(roster).toContain(member.appId)
+  expect(roster, 'The collaboration coordinator never joins the saved team').not.toContain(collab.detail.team.leadAppId)
+  expect(await readTasks(page, saved.teamId)).toEqual([])
+}
+
+async function openOriginalTask(page: Page, collab: Collaboration) {
+  await navigateToChat(page)
+  await openManagedConversation(page, collab.source.title, collab.spaceId)
+  const collapse = page.getByRole('button', { name: 'Collapse canvas', exact: true })
+  if (await collapse.isVisible()) await collapse.click()
+  await openSourceRoom(page)
+}
+
+async function openSavedTeam(page: Page) {
   await navigateToApps(page)
   await page.getByRole('button', { name: 'Teams', exact: true }).click()
   const card = page.getByRole('button').filter({ has: page.getByRole('heading', { name: teamName, exact: true, level: 2 }) })
-  await expect(card).toHaveCount(1)
+  await expect(card, 'Only the saved team is listed; the temporary collaboration stays out of the Teams page').toHaveCount(1)
   await card.click()
   await expect(teamHeader(page)).toBeVisible()
-  const tasks = page.getByRole('navigation', { name: 'Tasks', exact: true })
-  if (!await tasks.isVisible()) await teamHeader(page).getByRole('button', { name: 'Tasks', exact: true }).click()
-  await tasks.getByTitle(collab.task.label, { exact: true }).click()
-  await expect(page.getByRole('region', { name: 'Task room', exact: true }).getByRole('heading', { name: collab.task.label, exact: true, level: 2 })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Task room', exact: true })).toBeVisible()
 }
 
 async function selectMember(page: Page, member: TeamMember): Promise<Locator> {
@@ -161,6 +184,19 @@ async function selectMember(page: Page, member: TeamMember): Promise<Locator> {
   if (await target.count()) await expect(target).toHaveValue(member.appId)
   else await expect(room.getByTitle(member.memberName, { exact: true })).toBeVisible()
   return room
+}
+
+async function sendInNewTask(page: Page, member: TeamMember, message: string, response: string) {
+  const room = page.getByRole('region', { name: 'Task room', exact: true })
+  const target = room.getByRole('combobox', { name: 'Choose which of your digital humans to talk to', exact: true })
+  await expect(room.locator('textarea')).toBeVisible()
+  await target.selectOption(member.appId)
+  await expect(target).toHaveValue(member.appId)
+  await room.locator('textarea').fill(message)
+  await room.locator('textarea').press('Enter')
+  const reply = room.locator('.message-assistant [data-message-content]').filter({ hasText: response })
+  await expect(reply).toHaveCount(1, { timeout: 30000 })
+  await expect(reply).toBeVisible()
 }
 
 async function sendToMember(page: Page, collab: Collaboration, member: TeamMember, message: string, response: string) {
@@ -182,28 +218,36 @@ async function sendToMember(page: Page, collab: Collaboration, member: TeamMembe
   await expect.poll(async () => (await memberHistory(page, collab, member)).filter(item => item.role === 'assistant' && item.content === response).length).toBe(1)
 }
 
-test('keeping a collaboration preserves its identity and every real member can chat in the original task after restart', acceptance('teams.collaboration.keep-existing'), async ({ model, acceptanceApp, window }, testInfo) => {
-  test.setTimeout(180000)
+test('keeping a collaboration saves its members as a separate team, leaves the collaboration as it was, and every member of the saved team can chat on a new task after restart', acceptance('teams.collaboration.keep-existing'), async ({ model, acceptanceApp, window }, testInfo) => {
+  test.setTimeout(240000)
   scriptCollaboration(model)
   const collab = await prepareCollaboration(window)
-  await keepCollaboration(window, collab)
-  await openKeptTask(window, collab)
+  const saved = await keepCollaboration(window, collab)
+  await expectOriginalIntact(window, collab, saved)
+  await expectSavedTeam(window, collab, saved)
   const reopened = await acceptanceApp.restart()
-  await openKeptTask(reopened, collab)
-  await expectSameCollaboration(reopened, collab)
-  for (const member of collab.members) {
-    await sendToMember(reopened, collab, member, `Confirm you are reachable after restart, ${member.memberName}.`, `${member.memberName} is reachable in the retained task.`)
-    const history = await memberHistory(reopened, collab, member)
-    const other = collab.members.find(candidate => candidate.appId !== member.appId)!
-    expect(history.filter(item => item.role === 'user').map(item => item.content)).toEqual([`Confirm you are reachable after restart, ${member.memberName}.`])
-    expect(JSON.stringify(history)).not.toContain(`${other.memberName} is reachable in the retained task.`)
+  await expectOriginalIntact(reopened, collab, saved)
+  await expectSavedTeam(reopened, collab, saved)
+  await openSavedTeam(reopened)
+  const roster = (await readDetail(reopened, saved.teamId)).members
+  const participants = roster.filter(member => member.appId === saved.detail.team.leadAppId || collab.members.some(candidate => candidate.appId === member.appId))
+  expect(participants.length).toBe(collab.members.length + 1)
+  for (const member of participants) {
+    await sendInNewTask(reopened, member, `Confirm you are reachable after restart, ${member.memberName}.`, `${member.memberName} is reachable in the retained task.`)
   }
-  await expectSameCollaboration(reopened, collab)
-  await testInfo.attach('retained-collaboration', { body: JSON.stringify({ detail: await readDetail(reopened, collab.detail.team.id), tasks: await readTasks(reopened, collab.detail.team.id) }, null, 2), contentType: 'application/json' })
+  const tasks = await readTasks(reopened, saved.teamId)
+  expect(tasks).toHaveLength(1)
+  for (const member of participants) {
+    const history = await taskHistory(reopened, { teamId: saved.teamId, epochId: tasks[0].epochId, spaceId: collab.spaceId }, member)
+    expect(history.filter(item => item.role === 'user').map(item => item.content)).toEqual([`Confirm you are reachable after restart, ${member.memberName}.`])
+  }
+  await expectOriginalIntact(reopened, collab, saved)
+  for (const member of collab.members) expect(JSON.stringify(await memberHistory(reopened, collab, member))).not.toContain('reachable after restart')
+  await testInfo.attach('saved-team', { body: JSON.stringify({ saved: await readDetail(reopened, saved.teamId), tasks, original: await readDetail(reopened, collab.detail.team.id) }, null, 2), contentType: 'application/json' })
 })
 
-test('keeping and reopening a collaboration retains original source and member histories and resumes each member context', acceptance('teams.collaboration.keep-history'), async ({ model, acceptanceApp, window }, testInfo) => {
-  test.setTimeout(180000)
+test('keeping a collaboration leaves its original task, member histories and context readable and continuing after restart, and gives the saved team none of them', acceptance('teams.collaboration.keep-history'), async ({ model, acceptanceApp, window }, testInfo) => {
+  test.setTimeout(240000)
   const resumed = scriptCollaboration(model)
   const collab = await prepareCollaboration(window)
   const before = new Map<string, StoredMessage[]>()
@@ -212,11 +256,10 @@ test('keeping and reopening a collaboration retains original source and member h
     await sendToMember(window, collab, member, `Remember my private reference, ${member.memberName}: ${fact}.`, `${member.memberName} recorded ${fact} for this task.`)
     before.set(member.appId, await memberHistory(window, collab, member))
   }
-  await keepCollaboration(window, collab)
-  await openKeptTask(window, collab)
+  const saved = await keepCollaboration(window, collab)
   const reopened = await acceptanceApp.restart()
-  await openKeptTask(reopened, collab)
-  await expectSameCollaboration(reopened, collab)
+  await openOriginalTask(reopened, collab)
+  await expectOriginalIntact(reopened, collab, saved)
   for (const member of collab.members) {
     expect(await memberHistory(reopened, collab, member)).toEqual(before.get(member.appId))
     const room = await selectMember(reopened, member)
@@ -230,7 +273,8 @@ test('keeping and reopening a collaboration retains original source and member h
     expect(after.length).toBeGreaterThan(before.get(member.appId)!.length)
     expect(JSON.stringify(after)).not.toContain(facts[other])
   }
-  await expectSameCollaboration(reopened, collab)
+  await expectOriginalIntact(reopened, collab, saved)
+  await expectSavedTeam(reopened, collab, saved)
   await openManagedConversation(reopened, collab.source.title, collab.spaceId)
   const collapse = reopened.getByRole('button', { name: 'Collapse canvas', exact: true })
   if (await collapse.isVisible()) await collapse.click()

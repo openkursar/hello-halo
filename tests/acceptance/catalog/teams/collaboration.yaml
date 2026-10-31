@@ -19,11 +19,11 @@ promises:
     en: A temporary collaboration has one source task and keeps its members reachable.
     zh: 临时协作只有一个源任务，其成员始终可访问。
   keep:
-    en: Keeping the collaboration retains the same team and its original conversation association.
-    zh: 保留协作会保存同一团队及其原对话关联。
+    en: Keeping a collaboration saves its members as a separate team under a lead of its own and leaves the temporary collaboration and its task as they were.
+    zh: 保留协作会把其成员保存为拥有独立负责人的另一支团队，临时协作及其任务保持原样。
   history:
-    en: Keeping a collaboration does not discard its existing task history.
-    zh: 保留协作不会丢弃已有任务历史。
+    en: Keeping copies no task history. The original task and each member's own conversation stay readable and continue in the collaboration, and the saved team starts with no tasks.
+    zh: 保留不复制任务历史。原任务及各成员各自的对话仍可在原协作中阅读并继续，保存的团队没有任何任务。
 scenarios:
   - id: teams.collaboration.single-room
     title:
@@ -51,8 +51,8 @@ scenarios:
         zh: 唯一任务及成员可访问，不出现会在临时协作里创建无关任务的控件。
   - id: teams.collaboration.keep-existing
     title:
-      en: Keep the current collaboration team
-      zh: 保留当前协作团队
+      en: Keep the collaboration as a separate saved team
+      zh: 把协作保留为独立的已保存团队
     verifies:
       - keep
       - room
@@ -73,22 +73,22 @@ scenarios:
     steps:
       - en: Enable collaboration in space chat and create two reviewers through the real collaboration tool.
         zh: 在空间聊天启用协作，通过真实协作工具创建两名评审成员。
-      - en: Keep the team from its source conversation, open its original task on the Teams page and restart the application.
-        zh: 从源对话保留团队，在团队页打开原任务，然后重启应用。
-      - en: Reopen that task and send a distinct message to every installed member through the member selector.
-        zh: 重新打开该任务，通过成员选择入口向每位已安装成员发送不同消息。
+      - en: Keep the team from its source conversation, restart the application and open the saved team from the Teams page.
+        zh: 从源对话保留团队，重启应用，然后在团队页打开已保存的团队。
+      - en: On a new task in the saved team, send a distinct message to its lead and to every member through the digital-human selector.
+        zh: 在已保存团队的新任务中，通过数字人选择入口向其负责人及每位成员发送不同消息。
     expected:
-      - en: The original team becomes persistent with the same team identity and source conversation association.
-        zh: 原团队变为持久团队，团队身份及源对话关联保持不变。
-      - en: The original task and member identities remain unchanged; each installed member replies in its own persisted transcript.
-        zh: 原任务及成员身份不变；每位已安装成员在各自持久保存的记录中回复。
+      - en: A separate persistent team exists with the same members and a lead of its own, without the collaboration's coordinator, and with no tasks until the user starts one.
+        zh: 出现一支独立的持久团队，成员相同并有自己的负责人，不含协作的协调者，在用户发起前没有任何任务。
+      - en: The temporary collaboration keeps its identity, source conversation association and single task; the saved team's lead and every member reply in their own persisted transcripts of the new task, and nothing from them enters the collaboration.
+        zh: 临时协作的身份、源对话关联及唯一任务保持不变；已保存团队的负责人及每位成员在新任务各自持久保存的记录中回复，且不会写入原协作。
     notes:
-      en: The source conversation remains the coordinator. This case does not claim that keeping immediately provisions a separate lead or creates a new task.
-      zh: 源对话仍负责协调。本例不宣称保留后立即创建独立负责人或新任务。
+      en: Saving snapshots configuration only; epochs, messages, checks, findings and current work are never copied. Scripted responses prove routing and persistence, not the quality of a live model's answer.
+      zh: 保存只复制配置，从不复制任务周期、消息、检查、发现及当前工作。脚本回复验证消息路由与持久化，不评估真实模型回答的质量。
   - id: teams.collaboration.keep-history
     title:
-      en: Read the original task after keeping the team
-      zh: 保留团队后阅读原任务
+      en: Keep the original task and member context after keeping the team
+      zh: 保留团队后原任务及成员上下文不变
     verifies:
       - history
     platforms:
@@ -110,8 +110,8 @@ scenarios:
     steps:
       - en: Create a collaboration in space chat and give each installed member a different reference through the task room.
         zh: 在空间聊天创建协作，通过任务室向每位已安装成员提供不同参考信息。
-      - en: Keep the team, restart the application and reopen its original task and every member conversation.
-        zh: 保留团队，重启应用，重新打开原任务及每位成员的对话。
+      - en: Keep the team, restart the application and reopen the collaboration from its source conversation, then every member conversation in its task.
+        zh: 保留团队，重启应用，从源对话重新打开协作，再打开其任务中每位成员的对话。
       - en: Continue each member conversation without repeating the reference, then reopen the source space conversation.
         zh: 不重复参考信息，继续与每位成员聊天，然后重新打开源空间对话。
     expected:
@@ -119,8 +119,8 @@ scenarios:
         zh: 同样的消息记录仍可在其原任务中阅读。
       - en: Each continuation receives that member's earlier context. References that were not shared with the team do not enter from another member's one-to-one history; new messages append to the same original transcript.
         zh: 每次续聊都接收到该成员之前的上下文。未向团队共享的参考信息不会从其他成员的一对一历史中混入；新消息追加到原记录中。
-      - en: The source space messages, original task identity and team association survive keeping and restart.
-        zh: 源空间消息、原任务身份及团队关联在保留和重启后仍然存在。
+      - en: The source space messages, original task identity and team association survive keeping and restart, and the saved team has no tasks.
+        zh: 源空间消息、原任务身份及团队关联在保留和重启后仍然存在，已保存的团队没有任何任务。
     notes:
       en: This checks restoration of one-to-one history without automatic mixing. Explicit team messages and shared blackboard or file content remain legitimate collaboration context. Scripted responses prove routing, persistence and context delivery; they do not assess the quality of a live model's answer.
       zh: 本例验证一对一历史恢复且不自动混入其他成员记录。显式团队消息、共享黑板及文件内容仍可作为合法协作上下文。脚本回复验证消息路由、持久化及上下文传递，不评估真实模型的回答质量。
