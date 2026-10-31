@@ -16,9 +16,11 @@ interface Props {
   onScan: () => Promise<CcScanResult | undefined>
   onProbe: (path: string) => Promise<CcInstallation | undefined>
   onSelect: (item: CcInstallation) => void
+  /** Increments when another panel asks for a scan; the panel opens and scans. */
+  scanRequest?: number
 }
 
-export function CcLocalPanel({ busy, busyPath, selectedPath, knownPaths, onScan, onProbe, onSelect }: Props) {
+export function CcLocalPanel({ busy, busyPath, selectedPath, knownPaths, onScan, onProbe, onSelect, scanRequest }: Props) {
   const { t } = useTranslation()
   const messages = useCcRuntimeMessages()
   const [path, setPath] = useState('')
@@ -74,10 +76,18 @@ export function CcLocalPanel({ busy, busyPath, selectedPath, knownPaths, onScan,
     if (result && mounted.current) { setFound(result.installations); setScanned(true); setTruncated(result.truncated) }
   })
 
+  const panel = useRef<HTMLDetailsElement>(null)
+  useEffect(() => {
+    if (!scanRequest || !panel.current) return
+    panel.current.open = true
+    panel.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    void scan()
+  }, [scanRequest])
+
   const candidates = found.filter(item => !knownPaths.includes(item.path))
   const blocked = busy || operation !== null
 
-  return <details className="group/local border-t border-border pt-3">
+  return <details ref={panel} className="group/local border-t border-border pt-3">
     <summary className="flex cursor-pointer list-none items-center gap-2 rounded py-1 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
       <FolderOpen aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />{t('Connect local installation')}
       <ChevronRight aria-hidden="true" className="ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open/local:rotate-90" />

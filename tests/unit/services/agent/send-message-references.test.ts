@@ -166,7 +166,8 @@ describe('space memory session context', () => {
       expect(options.memoryGuard).toMatchObject({ writable: [memoryLayout] })
     }
     expect(m.acquireV2Session.mock.calls.at(-1)?.[3]).toBe('saved-session')
-    expect(m.acquireV2Session.mock.calls.at(-1)?.[9]).toEqual({ creationContext: `space-memory:${memoryLayout.file}` })
+    // A resumed conversation can always continue from its transcript if its stored session is lost.
+    expect(m.acquireV2Session.mock.calls.at(-1)?.[9]).toEqual({ creationContext: `space-memory:${memoryLayout.file}`, recoverNativeSession: expect.any(Function) })
   })
 
   it('resuming another transcript uses the destination conversation author without repeating the snapshot', async () => {

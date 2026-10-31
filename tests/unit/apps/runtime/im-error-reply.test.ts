@@ -19,13 +19,17 @@ vi.mock('../../../../src/main/services/agent', async () => {
   const actual = await vi.importActual<typeof import('../../../../src/main/services/agent/local-connection')>(
     '../../../../src/main/services/agent/local-connection'
   )
-  return { isRefusedLocalConnection: actual.isRefusedLocalConnection, explainEngineError: actual.explainEngineError }
+  const engineErrors = await vi.importActual<typeof import('../../../../src/main/services/agent/engine-error')>(
+    '../../../../src/main/services/agent/engine-error'
+  )
+  return { isRefusedLocalConnection: actual.isRefusedLocalConnection, explainEngineError: actual.explainEngineError, isEngineSetupError: engineErrors.isEngineSetupError }
 })
 
 import { imErrorReply } from '../../../../src/main/apps/runtime/im-error-reply'
 import { WorkingDirectoryChangedError, WorkingDirectoryUnavailableError } from '../../../../src/main/services/agent/working-dir'
 import { AppChatTurnInterrupted, withTurnEndingNote } from '../../../../src/main/apps/runtime/turn-ending'
 import { explainEngineError } from '../../../../src/main/services/agent'
+import { EngineSourceCompatibilityError } from '../../../../src/shared/engine-source'
 
 describe('what an IM chat is told when its turn failed', () => {
   it('a turn cut off before writing anything: that it was, and how to carry on', () => {
@@ -86,5 +90,11 @@ describe('what an IM chat is told when its turn failed', () => {
   it('an error with nothing to say', () => {
     expect(imErrorReply(new Error(''))).toBe('⚠️ Error: Unknown error')
     expect(imErrorReply(undefined)).toBe('⚠️ Error: Unknown error')
+  })
+
+  it('tells the person asking only to try later when the engine or account cannot run here', () => {
+    const missing = Object.assign(new Error('Engine "anthropic" is unavailable: The runtime is not installed'), { name: 'EngineUnavailableError', engineId: 'anthropic' })
+    expect(imErrorReply(missing)).toBe('⚠️ 暂时无法回复，请稍后再试。')
+    expect(imErrorReply(new EngineSourceCompatibilityError('halo', 'delegated-requires-cc', 'This account requires Claude Code.'))).toBe('⚠️ 暂时无法回复，请稍后再试。')
   })
 })

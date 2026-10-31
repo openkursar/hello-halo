@@ -26,6 +26,8 @@ interface AppState {
   // own fallback (e.g. `navigate(returnTo || 'space')`).
   view: AppView
   returnTo: AppView | null
+  /** A place in Settings to open on its next visit; consumed there. */
+  settingsFocus: 'claude-code' | null
   isLoading: boolean
   error: string | null
 
@@ -50,6 +52,9 @@ interface AppState {
   // and, unlike navigate(), consumes returnTo so a later back doesn't loop
   // back to where "back" itself was pressed from.
   navigateBack: (fallback: AppView) => void
+  /** Settings, opened at Claude Code's setup. */
+  openClaudeCodeSettings: () => void
+  clearSettingsFocus: () => void
   // Land in the main app experience: resolves which space to open via
   // space.store's own selection rule (space.store.ts:selectDefaultSpace —
   // kept there since it depends on space-domain knowledge this store has
@@ -89,6 +94,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Initial state
   view: 'splash',
   returnTo: null,
+  settingsFocus: null,
   isLoading: true,
   error: null,
   config: null,
@@ -118,6 +124,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   navigateBack: (fallback) => {
     set({ view: get().returnTo || fallback, returnTo: null })
   },
+
+  openClaudeCodeSettings: () => {
+    set({ settingsFocus: 'claude-code' })
+    get().navigate('settings')
+  },
+
+  clearSettingsFocus: () => set({ settingsFocus: null }),
 
   enterApp: async () => {
     const spaceStore = useSpaceStore.getState()

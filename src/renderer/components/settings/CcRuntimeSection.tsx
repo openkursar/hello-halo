@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Loader2, X } from 'lucide-react'
 import { isElectron } from '../../api/transport'
 import { useTranslation } from '../../i18n'
@@ -26,6 +27,7 @@ function DesktopCcRuntimeSection({ id, onUse, onClose, configured }: Props) {
   const messages = useCcRuntimeMessages()
   const runtime = useCcRuntime(onUse)
   const { status, operation, installing } = runtime
+  const [localScanRequest, setLocalScanRequest] = useState(0)
   const progress = status?.install
   const percent = progress?.totalBytes ? Math.min(100, Math.round(progress.downloadedBytes / progress.totalBytes * 100)) : undefined
   const progressText = progress?.phase === 'downloading'
@@ -62,8 +64,8 @@ function DesktopCcRuntimeSection({ id, onUse, onClose, configured }: Props) {
       {runtime.notice && <p role="status" className="text-xs text-muted-foreground">{runtime.notice === 'preserved'
         ? t('Claude Code is ready. Your newer engine selection has been kept.')
         : t('Claude Code is ready for new conversations. Existing conversations and running work keep their engine.')}</p>}
-      <CcDownloadPanel status={status} installing={installing} busy={Boolean(operation)} onInstall={runtime.install} onSelect={item => void runtime.select(item)} onRefresh={runtime.refresh} />
-      <CcLocalPanel busy={Boolean(operation)} busyPath={operation?.path} selectedPath={status.selectedPath} knownPaths={status.installations.map(item => item.path)} onScan={runtime.scan} onProbe={runtime.probe} onSelect={item => void runtime.select(item)} />
+      <CcDownloadPanel status={status} installing={installing} busy={Boolean(operation)} onInstall={runtime.install} onSelect={item => void runtime.select(item)} onRefresh={runtime.refresh} onFindLocal={() => setLocalScanRequest(count => count + 1)} />
+      <CcLocalPanel busy={Boolean(operation)} busyPath={operation?.path} selectedPath={status.selectedPath} knownPaths={status.installations.map(item => item.path)} onScan={runtime.scan} onProbe={runtime.probe} onSelect={item => void runtime.select(item)} scanRequest={localScanRequest} />
     </>}
   </section>
 }

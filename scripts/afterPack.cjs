@@ -31,6 +31,7 @@ const {
   allNativeCompanions,
   nativeCompanionsFor,
 } = require('../runtimes/dsh/manifest.cjs');
+const { RIPGREP_TARGETS, ripgrepBinaryPath } = require('./lib/ripgrep.cjs');
 const { signLocalApp } = require('./lib/mac-local-signing.cjs');
 const { assertMacOSDeploymentTargets } = require('./lib/macho-deployment-target.cjs');
 
@@ -424,6 +425,43 @@ function cleanAndValidateCodexNativePackage(context) {
     console.log(`[afterPack] ${key}: removed ${removed.length} non-target Codex package(s): ${removed.join(', ')}`);
   }
   console.log(`[afterPack] ${key}: keeping @openai/${target.packageName}`);
+}
+
+/**
+ * Keep only the target's ripgrep package — the Halo SDK engine's Grep tool runs
+ * it — and fail when it is missing: without it every search fails on machines
+ * that have no ripgrep of their own.
+ */
+function cleanAndValidateRipgrepPackage(context) {
+  const key = `${context.electronPlatformName}-${ARCH_NAMES[context.arch] || String(context.arch)}`;
+  const target = RIPGREP_TARGETS[key];
+  if (!target) {
+    console.warn(`[afterPack] No ripgrep package mapping for ${key}, skipping`);
+    return;
+  }
+
+  const modulesDir = path.join(getUnpackedDir(context), 'node_modules');
+  const binary = path.join(modulesDir, ripgrepBinaryPath(key));
+  if (!fs.existsSync(binary)) {
+    throw new Error(
+      `[afterPack] ${key}: missing ripgrep for the Halo SDK engine: ${binary}. ` +
+      'Run "npm run prepare:all" before cross-platform/cross-arch packaging, and check that ' +
+      'asarUnpack covers "node_modules/@vscode/ripgrep-*/**/*".'
+    );
+  }
+
+  const removed = [];
+  for (const { packageName } of Object.values(RIPGREP_TARGETS)) {
+    if (packageName === target.packageName) continue;
+    const dir = path.join(modulesDir, ...packageName.split('/'));
+    if (!fs.existsSync(dir)) continue;
+    fs.rmSync(dir, { recursive: true });
+    removed.push(packageName);
+  }
+  if (removed.length > 0) {
+    console.log(`[afterPack] ${key}: removed ${removed.length} non-target ripgrep package(s): ${removed.join(', ')}`);
+  }
+  console.log(`[afterPack] ${key}: keeping ${target.packageName}`);
 }
 
 /**
@@ -919,6 +957,7 @@ module.exports = async function(context) {
 
   // Ensure the packaged app contains the Codex native binary for this arch.
   cleanAndValidateCodexNativePackage(context);
+  cleanAndValidateRipgrepPackage(context);
 
   // Install the target cloudflared binary under its runtime name.
   const cloudflaredBinary = installCloudflaredBinary(context);

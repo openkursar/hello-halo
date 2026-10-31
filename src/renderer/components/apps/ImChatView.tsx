@@ -40,6 +40,8 @@ interface ImChatViewProps {
   clearKey?: number
   /** Rendered at the right edge of the read-only bar — the one action that applies to this conversation (fork to client). */
   footerAction?: React.ReactNode
+  /** Why this conversation's engine or account cannot run, shown above the read-only bar. */
+  engineNotice?: React.ReactNode
   onEngineMetadata?: (conversationId: string, metadata: AppChatEngineMetadata) => void
 }
 
@@ -65,7 +67,7 @@ function sessionApi(appId: string, spaceId: string, session: ImSessionRecord) {
   }
 }
 
-export function ImChatView({ appId, spaceId, session, clearKey, footerAction, onEngineMetadata }: ImChatViewProps) {
+export function ImChatView({ appId, spaceId, session, clearKey, footerAction, engineNotice, onEngineMetadata }: ImChatViewProps) {
   const { t } = useTranslation()
 
   const conversationId = buildImSessionKey(appId, session.channel, session.chatType, session.chatId)
@@ -363,6 +365,7 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction, on
               compactInfo={compactInfo}
               error={error}
               errorType={errorType}
+              engineNoticeShown={Boolean(engineNotice)}
               textBlockVersion={textBlockVersion}
               onStop={() => setShowStopConfirm(true)}
               onAtBottomStateChange={handleAtBottomStateChange}
@@ -377,6 +380,8 @@ export function ImChatView({ appId, spaceId, session, clearKey, footerAction, on
           onClick={() => messageListRef.current?.scrollToBottom('auto')}
         />
       </div>
+
+      {engineNotice}
 
       {/* Styled like a disabled composer so it occupies the input slot.
           footerAction is the one action that applies to this conversation

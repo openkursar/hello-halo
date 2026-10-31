@@ -55,7 +55,7 @@ import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable 
 import { acquireChatBrowserContext, bindChatBrowserSession, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
 import { withOpeningContext } from '../../services/agent/opening-context'
-import { acquireV2Session, formatTurnAttachments, workingDirErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
+import { acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
@@ -556,7 +556,7 @@ async function startAppChatMessage(request: AppChatRequest): Promise<void> {
     if (!turnContext.failureHandled) {
       console.error(`[AppChat][${request.appId}] Chat could not start: ${message}`)
       emitAgentEvent('agent:error', request.spaceId, conversationId, {
-        type: 'error', error: message, ...workingDirErrorDetail(error, request.spaceId),
+        type: 'error', error: message, ...workingDirErrorDetail(error, request.spaceId), ...engineErrorDetail(error),
       })
     }
     throw error
@@ -1354,7 +1354,7 @@ async function runAppChatTurn(
     const err = error as Error
     console.error(`[AppChat][${appId}] Error:`, error)
     emitAgentEvent('agent:error', spaceId, conversationId, {
-      type: 'error', error: err.message || 'Unknown error during app chat', ...workingDirErrorDetail(error, spaceId),
+      type: 'error', error: err.message || 'Unknown error during app chat', ...workingDirErrorDetail(error, spaceId), ...engineErrorDetail(error),
     })
   }
   const reportPreInitFailure = (error: Error): void => {
@@ -1385,6 +1385,7 @@ async function runAppChatTurn(
     })
     const savedSessionId = sessionPlan.resumeSessionId
     if (sessionPlan.engineHandoffContent) sdkOptions.engineHandoffContent = sessionPlan.engineHandoffContent
+    if (sessionPlan.engineHandoffRecovered) sdkOptions.engineHandoffRecovered = true
     if (sessionPlan.strictNativeResume) sdkOptions.strictNativeResume = true
 
     // Fork-on-first-message: a local session created via "continue in client"

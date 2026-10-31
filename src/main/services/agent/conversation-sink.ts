@@ -24,6 +24,8 @@ import {
   getConversation
 } from '../conversation.service'
 import { notifyTaskComplete } from '../notification.service'
+import { emitAgentEvent } from './events'
+import { CONTINUITY_NOTICE_TEXT } from '../../../shared/transcript'
 import { type FileChangesSummary, extractFileChangesSummaryFromThoughts } from '../../../shared/file-changes'
 import { resolveSourcesForReadPaths } from '../tlon'
 import type { KBSource } from '../../../shared/types/tlon'
@@ -52,6 +54,11 @@ export function createConversationSink(spaceId: string, conversationId: string, 
         content: '',
         toolCalls: [],
       })
+    },
+
+    onContinuedFromRecord() {
+      const notice = addMessage(spaceId, conversationId, { role: 'system', content: CONTINUITY_NOTICE_TEXT, source: 'continuity-notice' })
+      emitAgentEvent('agent:input-arrived', spaceId, conversationId, { messages: [notice], live: false })
     },
 
     onTurnComplete(result: StreamResult) {

@@ -12,6 +12,7 @@ import { CLIConfigSection } from './CLIConfigSection'
 import { CcRuntimeSection } from './CcRuntimeSection'
 import { Switch, switchRowHover } from '../ui/Switch'
 import { useEngineStore } from '../../stores/engine.store'
+import { useAppStore } from '../../stores/app.store'
 import { DEFAULT_DISABLED_TOOLS } from '../../../shared/constants/disabled-tools'
 import { DEFAULT_MAX_TURNS } from '../../../shared/constants/agent-limits'
 import {
@@ -154,7 +155,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   )
   const [capsPanelOpen, setCapsPanelOpen] = useState(false)
   const [engineAvailability, setEngineAvailability] = useState<EngineAvailabilityReport | null>(null)
-  const [ccOpen, setCcOpen] = useState(config?.agent?.sdkEngine === 'anthropic')
+  const [ccOpen, setCcOpen] = useState(config?.agent?.sdkEngine === 'anthropic' || useAppStore.getState().settingsFocus === 'claude-code')
   const engineChoice = useRef(0)
   const ccPanelId = useId()
   const ccDisclosure = useRef<HTMLButtonElement>(null)

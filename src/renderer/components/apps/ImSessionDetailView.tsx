@@ -12,12 +12,15 @@
 
 import { useState, useCallback, useRef } from 'react'
 import { ArrowRightToLine, Loader2 } from 'lucide-react'
-import { useTranslation } from '../../i18n'
+import { getCurrentLanguage, useTranslation } from '../../i18n'
 import { useEngineCapabilities } from '../../stores/engine.store'
 import { useAppsStore } from '../../stores/apps.store'
+import { useChatStore } from '../../stores/chat.store'
 import { useConversationEngineId } from '../../hooks/useConversationEngine'
 import { api } from '../../api'
 import { ImChatView } from './ImChatView'
+import { EngineRecoveryNotice } from '../settings/EngineRecoveryNotice'
+import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { navigateToAppChat } from '../../utils/conversation-navigation'
 import { buildImSessionKey } from '../../../shared/apps/im-keys'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
@@ -42,7 +45,12 @@ export function ImSessionDetailView({ appId, spaceId, session }: ImSessionDetail
     setReportedEngine(previous => previous?.conversationId === sourceConversationId && previous.engineId === engineId
       ? previous : { conversationId: sourceConversationId, engineId })
   }, [])
-  const preferredEngine = useAppsStore(state => state.apps.find(app => app.id === appId)?.userOverrides.engineId)
+  const app = useAppsStore(state => state.apps.find(item => item.id === appId))
+  const engineFailure = useChatStore(state => {
+    const live = state.sessions.get(conversationId)
+    return live?.errorType === 'engine_unavailable' ? live.error : null
+  })
+  const preferredEngine = app?.userOverrides.engineId
   const engineId = useConversationEngineId(conversationId, spaceId, reportedEngine?.conversationId === conversationId ? reportedEngine.engineId ?? preferredEngine : preferredEngine)
   const capabilities = useEngineCapabilities(engineId)
   const canFork = !!capabilities?.features.sessionFork
@@ -71,6 +79,10 @@ export function ImSessionDetailView({ appId, spaceId, session }: ImSessionDetail
       spaceId={spaceId}
       session={session}
       onEngineMetadata={acceptEngineMetadata}
+      engineNotice={app && <EngineRecoveryNotice engineId={engineId} failure={engineFailure} target={{
+        kind: 'digital-human', appId, appName: resolveSpecI18n(app.spec, getCurrentLanguage()).name || appId,
+        modelSourceId: app.userOverrides.modelSourceId, modelId: app.userOverrides.modelId,
+      }} />}
       footerAction={canFork && (
         <button
           onClick={handleFork}

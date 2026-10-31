@@ -39,7 +39,7 @@ export function prepareAppEngineSession(options: {
   excludeInputIds?: readonly string[]
   readPendingInputIds?: () => readonly string[]
   conversationId?: string
-}): { resumeSessionId?: string; engineHandoffContent?: string; strictNativeResume?: boolean; recoverNativeSession?: () => string } {
+}): { resumeSessionId?: string; engineHandoffContent?: string; engineHandoffRecovered?: boolean; strictNativeResume?: boolean; recoverNativeSession?: () => string } {
   const legacySessionId = options.state.sessionId ?? options.legacySessionId
   if (options.conversationId && getSessionEngineId(options.conversationId) === options.engineId && isSessionBusy(options.conversationId) && options.state.binding?.engineId !== options.engineId) {
     return { resumeSessionId: legacySessionId }
@@ -52,21 +52,28 @@ export function prepareAppEngineSession(options: {
     sourceEngine: options.state.binding?.engineId ?? options.state.routingEngine ?? (legacySessionId ? getLegacyEngine() : undefined),
     hasHistory: Boolean(legacySessionId || options.state.binding || resolveTranscriptPath(options.spacePath, options.appId, options.runId)),
   })
-  const recoverNativeSession = () => {
+  const readHandoff = () => {
     const history = readChatHandoffHistory(options.spacePath, options.appId, options.runId, { excludeInputIds: [...options.excludeInputIds ?? [], ...options.readPendingInputIds?.() ?? []] })
     if (!history.transcriptPath || (history.messages.length === 0 && (legacySessionId || options.state.binding))) {
       console.warn('[AppRuntime] Engine handoff refused without its prior transcript', { appId: options.appId, runId: options.runId, engineId: options.engineId, reason: history.transcriptPath ? 'empty-record' : 'missing-record' })
       throw new Error('The previous conversation record is unavailable. Restore it or start a new conversation before continuing.')
     }
-    return serializeEngineHandoff({
-      messages: history.messages,
-      targetEngine: options.engineId,
-      sourceEngine: plan.sourceEngine,
-      transcriptPath: history.transcriptPath,
-      historyTruncated: history.truncated,
-    }).text
+    return {
+      text: serializeEngineHandoff({
+        messages: history.messages,
+        targetEngine: options.engineId,
+        sourceEngine: plan.sourceEngine,
+        transcriptPath: history.transcriptPath,
+        historyTruncated: history.truncated,
+      }).text,
+      answered: history.messages.some(message => message.role === 'assistant' && message.source !== 'push'),
+    }
   }
+  const recoverNativeSession = () => readHandoff().text
   if (plan.kind === 'resume' && options.state.binding) return { resumeSessionId: plan.resumeSessionId, strictNativeResume: true, recoverNativeSession }
-  if (plan.kind !== 'handoff') return { resumeSessionId: plan.resumeSessionId }
-  return { engineHandoffContent: recoverNativeSession() }
+  if (plan.kind !== 'handoff') return { resumeSessionId: plan.resumeSessionId, ...(plan.resumeSessionId ? { recoverNativeSession } : {}) }
+  const handoff = readHandoff()
+  // No record of which session holds a chat that was already answered: that record was lost.
+  const lost = plan.reason === 'unbound-session' && !legacySessionId && handoff.answered
+  return { engineHandoffContent: handoff.text, ...(lost ? { engineHandoffRecovered: true } : {}) }
 }

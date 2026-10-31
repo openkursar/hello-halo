@@ -18,7 +18,7 @@ export function useCcRuntimeMessages() {
       case 'install-busy': return t('An installation is already in progress.')
       case 'invalid-source': return t('Enter an HTTP or HTTPS download source without embedded credentials.')
       case 'invalid-version': return t('Enter a version number such as 2.1.310, or use stable or latest.')
-      case 'version-not-found': return t('This download source does not provide that version. Check the version number or choose another source.')
+      case 'version-not-found': return t('This download source does not provide that version. Install it on this computer yourself and find the local installation, or use the recommended version.')
       case 'source-unreachable': return t('The download source could not be reached. Check your connection, proxy or source address, then retry.')
       case 'source-timeout': return t('The download source took too long to respond. Try again or choose another source.')
       case 'source-unauthorized': return t('The download source denied access. Check access with your administrator or choose another source.')

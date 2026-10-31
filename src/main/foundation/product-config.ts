@@ -267,6 +267,13 @@ export interface ProductConfig {
    */
   workdayCalendarUrl?: string
   /**
+   * Where this build installs Claude Code from by default (optional): a mirror
+   * with the official release layout. Offered beside the official source and
+   * preselected; a source the user picks still wins. Omitted: the official
+   * source only.
+   */
+  claudeCodeDownloadSource?: { name?: string; baseUrl: string }
+  /**
    * Official AI-guide host (optional; falls back to the public docs host).
    */
   officialContent?: OfficialContentProductConfig
@@ -624,6 +631,17 @@ export function getWorkdayCalendarUrl(): string | undefined {
   const configured = loadProductConfig().workdayCalendarUrl
   if (configured === undefined) return DEFAULT_WORKDAY_CALENDAR_URL
   return configured.trim() || undefined
+}
+
+/** This build's default Claude Code download source; undefined when it has none. */
+export function getClaudeCodeDownloadSource(): { name?: string; baseUrl: string } | undefined {
+  const source: unknown = loadProductConfig().claudeCodeDownloadSource
+  if (!source || typeof source !== 'object') return undefined
+  const { name, baseUrl } = source as { name?: unknown; baseUrl?: unknown }
+  // A value that is not text is an invalid declaration; the source reader reports it.
+  const url = typeof baseUrl === 'string' ? baseUrl.trim() : baseUrl === undefined ? '' : String(baseUrl)
+  const label = typeof name === 'string' ? name.trim() : ''
+  return url ? { ...(label ? { name: label } : {}), baseUrl: url } : undefined
 }
 
 /**

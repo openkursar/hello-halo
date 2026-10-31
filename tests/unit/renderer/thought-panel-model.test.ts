@@ -61,6 +61,19 @@ describe('thought panel model', () => {
     expect(next.latestTodo).toBe(todos)
   })
 
+  it('keeps the shown task list while a new TodoWrite is still streaming its input', () => {
+    const shown = step({ type: 'tool_use', toolName: 'TodoWrite', toolInput: { todos: [{ content: 'a', status: 'in_progress' }] } })
+    const streaming = step({ type: 'tool_use', toolName: 'TodoWrite', toolInput: {}, isStreaming: true, isReady: false })
+    const first = nextThoughtPanelModel(fresh([shown]), [shown, streaming])
+    expect(first.latestTodo).toBe(shown)
+
+    const landed = { ...streaming, toolInput: { todos: [{ content: 'a', status: 'completed' }] }, isStreaming: false, isReady: true }
+    const after = [shown, landed]
+    const next = nextThoughtPanelModel(first, after)
+    expectSameModel(next, after)
+    expect(next.latestTodo).toBe(landed)
+  })
+
   it('appends new steps to the lists they belong to', () => {
     const task = step({ type: 'tool_use', toolName: 'Task' })
     const first = fresh([task])

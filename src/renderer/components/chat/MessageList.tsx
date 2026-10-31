@@ -17,9 +17,10 @@
  * - Creates a clean, focused reading experience
  */
 
-import { useRef, useMemo, useCallback, forwardRef, useImperativeHandle } from 'react'
+import { useRef, useMemo, useCallback, useState, forwardRef, useImperativeHandle } from 'react'
 import type { ReactNode } from 'react'
 import { MessageRow } from './MessageRow'
+import { isTeamMessage, type OpenerReveal, type TeamRunPosition } from './team-collab'
 import { StreamingSection } from './StreamingSection'
 import { withoutLiveInputs } from '../../utils/live-inputs'
 import type { LiveInput } from '../../types'
@@ -27,7 +28,7 @@ import { useBrowserToolCalls, type BrowserToolCall } from './useBrowserToolCalls
 import { useTerminalToolCalls, type TerminalToolCall } from './useTerminalToolCalls'
 import { CompactNotice } from './CompactNotice'
 import { InterruptedBubble } from './InterruptedBubble'
-import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, nextTranscriptRows, liveArrivals, type ScrollMotion, type TranscriptRows } from './transcript'
+import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, nextTranscriptRows, openerOwner, liveArrivals, type ScrollMotion, type TranscriptRows } from './transcript'
 import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion, WorkDirIssue } from '../../types'
 import { WorkingDirUnavailableNotice } from './WorkingDirUnavailableNotice'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
@@ -56,6 +57,8 @@ export interface MessageListProps {
   errorType?: AgentErrorType | null  // Special error type for custom UI handling
   /** The folder a turn could not start in; offers to change it where the surface passes it. */
   workDirIssue?: WorkDirIssue | null
+  /** This surface shows the engine note below the transcript, so an engine failure may point at it. */
+  engineNoticeShown?: boolean
   onContinue?: () => void  // Callback to continue after interrupt (for InterruptedBubble)
   /** Stops the running turn; offered on the live retry notice. */
   onStop?: () => void
@@ -137,6 +140,8 @@ function StreamingFooter({
   onStop,
   senderName,
   arrivals,
+  openers,
+  openerReveal,
 }: {
   conversationId: string
   streamingContent: string
@@ -153,6 +158,8 @@ function StreamingFooter({
   onStop?: () => void
   senderName?: string
   arrivals: Message[]
+  openers: readonly Message[]
+  openerReveal?: OpenerReveal
 }) {
   const queuedMessages = useChatStore(s => s.sessions.get(conversationId)?.queuedMessages)
   const liveInputs = useChatStore(s => s.sessions.get(conversationId)?.liveInputs)
@@ -174,6 +181,8 @@ function StreamingFooter({
       queuedMessages={queuedMessages ?? EMPTY_QUEUE}
       liveInputs={liveInputs ?? EMPTY_LIVE_INPUTS}
       arrivals={arrivals}
+      openers={openers}
+      openerReveal={openerReveal}
       senderName={senderName}
       apiRetry={apiRetry}
       onStop={onStop}
@@ -184,6 +193,16 @@ function StreamingFooter({
 const EMPTY_QUEUE: never[] = []
 const EMPTY_LIVE_INPUTS: LiveInput[] = []
 const EMPTY_ARRIVALS: Message[] = []
+
+function teamRunPosition(messages: readonly Message[], index: number): TeamRunPosition | undefined {
+  const message = messages[index]
+  if (!isTeamMessage(message)) return undefined
+  const sameTeam = (other: Message | undefined) =>
+    !!other && isTeamMessage(other) && other.metadata?.teamId === message.metadata?.teamId
+  const prev = sameTeam(messages[index - 1])
+  const next = sameTeam(messages[index + 1])
+  return prev ? (next ? 'middle' : 'last') : (next ? 'first' : 'single')
+}
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList({
   conversationId = '',
@@ -197,6 +216,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   error = null,
   errorType = null,
   workDirIssue = null,
+  engineNoticeShown = false,
   onContinue,
   onStop,
   isCompact = false,
@@ -250,7 +270,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     transcriptRef.current = next
     return next
   }, [shownMessages, isGenerating])
-  const { messages: displayMessages, keys: rowKeys, previousCosts, injections, arrivals } = transcript
+  const { messages: displayMessages, keys: rowKeys, previousCosts, injections, arrivals, openers, liveOpeners } = transcript
 
   const follower = useStickToBottom({ onAtBottomChange: onAtBottomStateChange, live: isGenerating })
   const history = useHistoryWindow(rowKeys, follower.scroller, { onReachStart: onLoadEarlier })
@@ -263,11 +283,25 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   const displayMessagesRef = useRef(displayMessages)
   displayMessagesRef.current = displayMessages
+  const [openerReveal, setOpenerReveal] = useState<OpenerReveal | null>(null)
 
   useImperativeHandle(ref, () => ({
     scrollToMessage: (messageId: string, behavior: ScrollMotion = 'smooth') => {
-      const index = displayMessagesRef.current.findIndex(m => m.id === messageId)
-      if (index < 0 || !scroller) return false
+      if (!scroller) return false
+      const rows = transcriptRef.current
+      let index = displayMessagesRef.current.findIndex(m => m.id === messageId)
+      if (index < 0 && rows) {
+        // A teammate's delivery is drawn on the reply it opened, not as a row of its own.
+        if (rows.liveOpeners.some(m => m.id === messageId)) {
+          setOpenerReveal({ messageId })
+          scrollToBottom(behavior)
+          return true
+        }
+        const owner = openerOwner(rows, messageId)
+        if (owner) index = displayMessagesRef.current.findIndex(m => m.id === owner)
+        if (index >= 0) setOpenerReveal({ messageId })
+      }
+      if (index < 0) return false
       detach()
       reveal(index, el => revealRowInView(scroller, el, behavior))
       return true
@@ -299,6 +333,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   const { start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef } = history
   const rows = useMemo(() => {
     const out: ReactNode[] = []
+    const latestReply = displayMessages.findLastIndex(message => message.role === 'assistant')
     for (let index = start; index < displayMessages.length; index++) {
       const message = displayMessages[index]
       const key = rowKeys[index]
@@ -328,15 +363,19 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             allowViewChanges={allowViewChanges}
             injectionMessages={injections.get(message.id)}
             arrivals={arrivals.get(message.id)}
+            openers={openers.get(message.id)}
+            openerReveal={openerReveal && openers.get(message.id)?.some(m => m.id === openerReveal.messageId) ? openerReveal : undefined}
+            actionsOnHover={index !== latestReply}
             className={contentWidthClass}
             senderName={message.role === 'assistant' ? senderName : undefined}
+            teamRunPosition={teamRunPosition(displayMessages, index)}
           />
         </div>
       )
     }
     if (liveStart >= displayMessages.length) out.push(<div key="history-start" ref={sentinelRef} aria-hidden="true" />)
     return out
-  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCosts, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, allowViewChanges, rowKeys, injections, arrivals, contentWidthClass, senderName])
+  }, [displayMessages, start, liveStart, liveEnd, placeholderHeight, sentinelRef, endSentinelRef, previousCosts, defaultThoughtsExpanded, defaultThoughtsMaximized, hasThoughtsLoader, handleLoadThoughts, hideBrowserLiveView, hideTerminalOpen, allowViewChanges, rowKeys, injections, arrivals, openers, openerReveal, contentWidthClass, senderName])
 
   // Keep the footer mounted for an active question independently of isGenerating:
   // a recovered question can be paused on the answer with isGenerating false, and
@@ -371,6 +410,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               onStop={onStop}
               senderName={senderName}
               arrivals={activeArrivals}
+              openers={liveOpeners}
+              openerReveal={openerReveal && liveOpeners.some(m => m.id === openerReveal.messageId) ? openerReveal : undefined}
             />
           )}
 
@@ -400,6 +441,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                     <span className="text-sm font-medium">{t('Something went wrong')}</span>
                   </div>
                   <p className="mt-2 text-sm text-destructive/80">{error}</p>
+                  {errorType === 'engine_unavailable' && engineNoticeShown && (
+                    <p className="mt-1 text-sm text-destructive/80">{t('The note below says what to do.')}</p>
+                  )}
                 </div>
               </div>
             </div>

@@ -650,7 +650,8 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
   // No title: the rail's selected tab already names this as Files. The folder
   // itself sits on the left, actions on its contents on the right.
   const toolbar = (actions: React.ReactNode) => (
-    <div className="group/toolbar flex-shrink-0 bg-secondary/60 px-1.5 py-1 flex items-center justify-between">
+    // No fill and no rule: on the rail's own surface, the spacing below sets it apart from the tree.
+    <div className="group/toolbar flex-shrink-0 px-1.5 pt-1 pb-1.5 flex items-center justify-between">
       {openFolderButton}
       <div className="flex flex-shrink-0 gap-0.5">{actions}</div>
     </div>

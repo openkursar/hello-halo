@@ -264,9 +264,9 @@ function MenuRow({ item, index, active, onHover, onActivate }: MenuRowProps) {
 }
 
 /**
- * The row is the control; this only shows its state. Kept in the panel's own
- * gray scale, never the brand color or full contrast: switches that are on by
- * default would otherwise be the loudest thing every time the panel opens.
+ * The row is the control; this only shows its state. On uses the brand color,
+ * the app's one "enabled" signal, softened and smaller than a settings switch so
+ * the switches that are on by default do not outshine the menu.
  */
 function SwitchMark({ checked }: { checked: boolean }) {
   return (
@@ -274,13 +274,13 @@ function SwitchMark({ checked }: { checked: boolean }) {
       aria-hidden
       className={`relative shrink-0 inline-flex h-4 w-[26px] rounded-full transition-colors duration-150
         ${checked
-          ? 'bg-foreground/25 [.light_&]:bg-foreground/60'
+          ? 'bg-primary/85'
           : 'bg-foreground/[0.08] [.light_&]:bg-foreground/[0.12]'}`}
     >
       <span
         className={`absolute top-[2px] h-3 w-3 rounded-full transition-[transform,background-color] duration-150 ease-halo
-          [.light_&]:bg-background [.light_&]:shadow-sm
-          ${checked ? 'translate-x-3 bg-foreground/85' : 'translate-x-[2px] bg-foreground/35'}`}
+          [.light_&]:shadow-sm
+          ${checked ? 'translate-x-3 bg-primary-foreground' : 'translate-x-[2px] bg-foreground/35 [.light_&]:bg-background'}`}
       />
     </span>
   )

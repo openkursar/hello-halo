@@ -34,7 +34,7 @@ import type { EngineId } from '../../../shared/types/engine'
 import type { EngineSessionState } from '../../../shared/types/engine-session'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { TranscriptMessage, TranscriptProvenance } from '../../../shared/types/transcript'
-import { roleForTranscriptSource } from '../../../shared/transcript'
+import { CONTINUITY_NOTICE_TEXT, roleForTranscriptSource } from '../../../shared/transcript'
 import { randomUUID } from 'crypto'
 import { emitAgentEvent } from '../../services/agent/events'
 import type { ContentReference } from '../../../shared/types/content-reference'
@@ -366,6 +366,10 @@ class AppChatSink implements TurnSink {
       id: `pending-live-${randomUUID()}`, role: 'assistant', source: 'push', content: push.text, timestamp: at,
       metadata: { pushVia: push.via, ...(push.by ? { pushedByAppId: push.by.appId, pushedByName: push.by.name } : {}) },
     }], this.turnRunning || hasPendingSessionInput(this.conversationId))
+  }
+
+  onContinuedFromRecord(): void {
+    this.announceLiveInputs([this.writeUserMessage(CONTINUITY_NOTICE_TEXT, undefined, undefined, { source: 'continuity-notice' })], false)
   }
 
   /** A message failed before the engine created a turn to checkpoint. */
@@ -845,6 +849,7 @@ export function bindAppChatEngine(sink: TurnSink, options: {
     onTurnComplete: result => sink.onTurnComplete(persist(result)),
     onTurnError: (error, started, partial) => sink.onTurnError?.(error, started, partial ? persist(partial) : undefined),
     onConsumerStopped: partial => sink.onConsumerStopped?.(partial ? persist(partial) : undefined),
+    onContinuedFromRecord: () => sink.onContinuedFromRecord?.(),
   }
 }
 

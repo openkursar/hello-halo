@@ -101,7 +101,7 @@ export const ThoughtProcess = memo(function ThoughtProcess({ thoughts, isThinkin
 
   return (
     <ThoughtPanel
-      className="animate-fade-in mb-4"
+      className="animate-fade-in mb-2"
       model={model}
       todos={todos}
       isThinking={isThinking}

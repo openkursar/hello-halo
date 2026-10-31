@@ -6,10 +6,9 @@
  * and quick access to show the main window, toggle online/offline, and quit.
  */
 
-import { Tray, Menu, nativeImage, nativeTheme } from 'electron'
+import { Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import { getTrayIconDir } from '../../foundation/product-config'
-import { readWindowsTaskbarIsDark } from './taskbar-theme'
 import type { BackgroundStatus, TrayNotice } from './types'
 
 /**
@@ -32,16 +31,14 @@ export interface TrayCallbacks {
  * Platform differences:
  * - macOS: Uses template images that auto-adapt to light/dark menu bar.
  *   The tray icon appears in the top menu bar.
- * - Windows: A white or black glyph matching the macOS one, picked to
- *   contrast with the taskbar and swapped when the system theme changes.
+ * - Windows: The full-color app icon, like other apps in the notification
+ *   area; it reads on light and dark taskbars alike.
  * - Linux: A brand-blue glyph; panel themes vary too much to pick black or white.
  */
 export class TrayManager {
   private tray: Tray | null = null
   private callbacks: TrayCallbacks | null = null
   private notice: TrayNotice | null = null
-  private readonly onThemeUpdated = (): void => this.refreshWindowsIcon()
-  private themeReadSeq = 0
 
   /**
    * Initialize the tray icon and menu.
@@ -73,11 +70,6 @@ export class TrayManager {
       this.tray.on('click', () => {
         this.callbacks?.onShowWindow()
       })
-    }
-
-    if (process.platform === 'win32') {
-      this.refreshWindowsIcon()
-      nativeTheme.on('updated', this.onThemeUpdated)
     }
 
     this.updateMenu()
@@ -181,7 +173,6 @@ export class TrayManager {
    * Destroy the tray icon. Called during shutdown.
    */
   destroy(): void {
-    nativeTheme.off('updated', this.onThemeUpdated)
     if (this.tray) {
       this.tray.destroy()
       this.tray = null
@@ -212,9 +203,14 @@ export class TrayManager {
     }
 
     if (process.platform === 'win32') {
-      // Until the taskbar theme is read, guess from the app theme.
-      const icon = createWindowsGlyph(resourcesPath, nativeTheme.shouldUseDarkColors)
-      if (icon) return icon
+      // An .ico, since Windows builds the tray icon from an image's 1x bitmap
+      // only and loads the other DPI sizes only from an .ico. A brand icon set
+      // without it falls back to the brand-blue glyph rather than a blank slot.
+      const iconPath = join(resourcesPath, 'tray-win-color.ico')
+      const icon = nativeImage.createFromPath(iconPath)
+      if (!icon.isEmpty()) return icon
+      // A pre-color brand icon set would otherwise downgrade with no trace.
+      console.warn(`[Tray] ${iconPath} is missing or unreadable; falling back to the brand-blue glyph`)
     }
 
     // Brand-blue glyph: reads on light and dark panels alike. `tray-16.png` is
@@ -222,26 +218,4 @@ export class TrayManager {
     const colored = nativeImage.createFromPath(join(resourcesPath, 'tray-color.png'))
     return colored.isEmpty() ? nativeImage.createFromPath(join(resourcesPath, 'tray-16.png')) : colored
   }
-
-  private refreshWindowsIcon(): void {
-    const seq = ++this.themeReadSeq
-    readWindowsTaskbarIsDark().then((isDark) => {
-      // A later read may have finished first; only the newest applies.
-      if (!this.tray || isDark === null || seq !== this.themeReadSeq) return
-      const icon = createWindowsGlyph(getTrayIconDir(), isDark)
-      if (icon) this.tray.setImage(icon)
-    })
-  }
-}
-
-/**
- * White glyph for a dark taskbar, black for a light one. An .ico, since
- * Windows builds the tray icon from the image's 1x bitmap only and loads other
- * sizes only from an .ico. Null when the icon set predates these files (a
- * brand `trayIconDir`), so the caller falls back to the brand-blue icon instead
- * of showing a blank slot.
- */
-function createWindowsGlyph(resourcesPath: string, taskbarIsDark: boolean): Electron.NativeImage | null {
-  const icon = nativeImage.createFromPath(join(resourcesPath, taskbarIsDark ? 'tray-win-white.ico' : 'tray-win-black.ico'))
-  return icon.isEmpty() ? null : icon
 }

@@ -3,9 +3,7 @@ import { ChevronRight, Loader2 } from 'lucide-react'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { useAppStore } from '../../stores/app.store'
-import { useChatStore } from '../../stores/chat.store'
-import { useEngineStore } from '../../stores/engine.store'
-import { useConversationEngineId } from '../../hooks/useConversationEngine'
+import { saveConversationEngineOverride, useConversationEngineId } from '../../hooks/useConversationEngine'
 import { resolveModelSelection, type Conversation, type EngineAvailabilityReport } from '../../types'
 import { ENGINE_IDS, isEngineId, type EngineId } from '../../../shared/types/engine'
 import { getEngineSourceCompatibility } from '../../../shared/engine-source'
@@ -70,24 +68,8 @@ export function ConversationEngineSelector({ conversation, spaceId }: { conversa
     setError(null)
     const conversationId = conversation.id
     try {
-      const response = await api.updateConversation(spaceId, conversationId, { engineOverride: engine || null })
-      if (!response.success) {
-        console.warn('[ConversationEngineSelector] Engine preference rejected', { conversationId, reason: response.error?.slice(0, 300) })
-        if (mounted.current) setError(t(response.error || 'The engine selection could not be saved. Please try again.'))
-        return
-      }
-      const saved = response.data as Conversation | undefined
-      if (!saved || (saved.engineOverride ?? '') !== engine) throw new Error('Engine preference was not persisted')
-      useChatStore.setState(state => {
-        const cache = new Map(state.conversationCache)
-        const cached = cache.get(conversationId)
-        if (cached) cache.set(conversationId, { ...cached, engineOverride: engine || undefined })
-        const spaces = new Map(state.spaceStates)
-        const space = spaces.get(spaceId)
-        if (space) spaces.set(spaceId, { ...space, conversations: space.conversations.map(item => item.id === conversationId ? { ...item, engineOverride: engine || undefined } : item) })
-        return { conversationCache: cache, spaceStates: spaces }
-      })
-      if (engine) void useEngineStore.getState().load(engine)
+      const refused = await saveConversationEngineOverride(spaceId, conversationId, engine || null)
+      if (refused && mounted.current) setError(t(refused))
     } catch (cause) {
       console.warn('[ConversationEngineSelector] Engine preference could not be saved', { conversationId, reason: cause instanceof Error ? cause.message.slice(0, 300) : 'Unknown error' })
       if (mounted.current) setError(t('The engine selection could not be saved. Please try again.'))

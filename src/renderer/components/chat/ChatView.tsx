@@ -541,7 +541,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
 
   const inputArea = (
     <>
-    <EngineRecoveryNotice engineId={composerEngineId} />
+    <EngineRecoveryNotice engineId={composerEngineId} spaceId={currentSpaceId} failure={errorType === 'engine_unavailable' ? error : null} />
     <InputArea
       key={activeConversationId ?? 'none'}
       onSend={handleSend}
@@ -641,6 +641,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
                 error={error}
                 errorType={errorType}
                 workDirIssue={workDirIssue}
+                engineNoticeShown
                 onContinue={activeConversationId ? () => continueAfterInterrupt(activeConversationId) : undefined}
                 onStop={handleStop}
                 isCompact={isCompact}

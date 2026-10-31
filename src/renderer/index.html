@@ -23,7 +23,7 @@
         --boot-foreground: var(--foreground, 223 17% 92%);
         --boot-muted-foreground: var(--muted-foreground, 217 12% 75%);
         --boot-primary: var(--primary, 217 91% 60%);
-        --boot-glow: var(--halo-glow, 217 91% 60%);
+        --boot-border: var(--border, 220 10% 26%);
         position: fixed;
         inset: 0;
         z-index: 2147483646;
@@ -44,36 +44,10 @@
         --boot-foreground: var(--foreground, 222 16% 11%);
         --boot-muted-foreground: var(--muted-foreground, 218 9% 39%);
         --boot-primary: var(--primary, 217 91% 55%);
-        --boot-glow: var(--halo-glow, 217 91% 55%);
+        --boot-border: var(--border, 220 12% 89%);
       }
       #boot-splash *, #boot-splash *::before, #boot-splash *::after { box-sizing: border-box; }
-      .boot-splash-logo { position: relative; width: 96px; height: 96px; }
-      .boot-splash-glow {
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
-        background-color: hsl(var(--boot-primary) / 0.2);
-        filter: blur(24px);
-        animation: boot-splash-breathe 3s ease-in-out infinite;
-      }
-      .boot-splash-ring {
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
-        border: 4px solid hsl(var(--boot-primary) / 0.6);
-        box-shadow: 0 0 30px hsl(var(--boot-glow) / 0.4);
-      }
-      .boot-splash-ring-inner {
-        position: absolute;
-        inset: 8px;
-        border-radius: 50%;
-        background-image: linear-gradient(to bottom right, hsl(var(--boot-primary) / 0.3), transparent);
-      }
-      /* Transform/opacity animations only: they keep running while the page's
-         main thread is busy loading the app. */
-      .boot-splash-arc { position: absolute; inset: 0; animation: boot-splash-spin 2s linear infinite; }
-      .boot-splash-arc img { display: block; width: 100%; height: 100%; transform: rotate(-90deg); }
-      html:not(.light) .boot-splash-arc-light, html.light .boot-splash-arc-dark { display: none; }
+      .boot-splash-logo { display: block; width: 96px; height: 96px; }
       .boot-splash-name {
         margin-top: 32px;
         font-size: 36px;
@@ -88,16 +62,35 @@
         line-height: 20px;
         color: hsl(var(--boot-muted-foreground));
       }
-      @keyframes boot-splash-breathe {
-        0%, 100% { opacity: 0.6; transform: scale(1); }
-        50% { opacity: 1; transform: scale(1.05); }
+      /* A quick start never shows the loading line; a slow one shows it is
+         still working. Transform/opacity animations only: they keep running
+         while the page's main thread is busy loading the app. */
+      .boot-splash-loading {
+        margin-top: 28px;
+        width: 80px;
+        height: 2px;
+        border-radius: 9999px;
+        background-color: hsl(var(--boot-border));
+        overflow: hidden;
+        opacity: 0;
+        animation: boot-splash-reveal 300ms ease-out 500ms forwards;
       }
-      @keyframes boot-splash-spin {
-        from { transform: rotate(0deg); }
-        to { transform: rotate(360deg); }
+      .boot-splash-loading-bar {
+        width: 40%;
+        height: 100%;
+        border-radius: 9999px;
+        background-color: hsl(var(--boot-primary));
+        animation: boot-splash-slide 1.1s ease-in-out infinite;
+      }
+      @keyframes boot-splash-reveal {
+        to { opacity: 1; }
+      }
+      @keyframes boot-splash-slide {
+        from { transform: translateX(-100%); }
+        to { transform: translateX(250%); }
       }
       @media (prefers-reduced-motion: reduce) {
-        .boot-splash-glow, .boot-splash-arc { animation: none; }
+        .boot-splash-loading-bar { animation: none; width: 100%; opacity: 0.5; }
       }
     </style>
     <script>
@@ -156,22 +149,13 @@
     <div id="root"></div>
 
     <div id="boot-splash" aria-hidden="true">
-      <div class="boot-splash-logo">
-        <div class="boot-splash-glow"></div>
-        <div class="boot-splash-ring">
-          <div class="boot-splash-ring-inner"></div>
-          <!-- The arc in both themes' primary colors; the theme picks one. -->
-          <div class="boot-splash-arc">
-            <img class="boot-splash-arc-dark" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='45' fill='none' stroke='%233c83f6' stroke-width='3' stroke-linecap='round' stroke-dasharray='70 200'/%3E%3C/svg%3E">
-            <img class="boot-splash-arc-light" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='45' fill='none' stroke='%232474f5' stroke-width='3' stroke-linecap='round' stroke-dasharray='70 200'/%3E%3C/svg%3E">
-          </div>
-        </div>
-      </div>
+      <img class="boot-splash-logo" alt="" width="96" height="96" src="./assets/brand/halo-mark-animated.svg">
       <div class="boot-splash-name">Halo</div>
       <div class="boot-splash-tagline" id="boot-splash-tagline"></div>
+      <div class="boot-splash-loading"><div class="boot-splash-loading-bar"></div></div>
       <!-- Shows the window with this splash in its first frame: Electron reveals
            it once Chromium counts the page as having content, and any laid-out
-           canvas counts at every zoom (the arc image counts only at 100%).
+           canvas counts at every zoom (the logo image counts only at 100%).
            Without it the window waits for the app's script. Never put it under
            display:none. -->
       <canvas width="0" height="0"></canvas>
@@ -190,14 +174,7 @@
       overflow: auto;
     ">
       <div style="max-width: 600px; margin: 0 auto;">
-        <div style="
-          width: 48px;
-          height: 48px;
-          border-radius: 50%;
-          border: 2px solid #6366f1;
-          opacity: 0.6;
-          margin-bottom: 24px;
-        "></div>
+        <img src="./assets/brand/halo-mark-animated.svg" alt="" width="48" height="48" style="display: block; margin-bottom: 24px;">
         <h1 style="font-size: 20px; font-weight: 500; margin: 0 0 8px 0;">
           Halo failed to start
         </h1>

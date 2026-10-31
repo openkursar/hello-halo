@@ -6,7 +6,7 @@ import { discoverInstallations } from './discovery'
 import { CcRuntimeError, issueFromError } from './errors'
 import { downloadAndPublish } from './installer'
 import { checkInstallation, launchForInstallation, readKnownInstallation, shutdownProbes } from './probe'
-import { getSources, isInstallVersion, validatePreferences } from './sources'
+import { getEffectiveSourceId, getSources, isInstallVersion, validatePreferences } from './sources'
 import { RECOMMENDED_RANGE, RECOMMENDED_VERSION, getVerifiedVersionsForPlatform } from './policy'
 import { clearReleaseCache, lookupRelease } from './releases'
 import { reuseManagedInstallation } from './reuse'
@@ -38,7 +38,7 @@ export async function getCcRuntimeStatus(): Promise<CcRuntimeStatus> {
     selectedPath: config.selectedPath,
     selected: config.selectedPath ? installations.find(item => item.path === config.selectedPath) ?? readKnownInstallation(config.selectedPath) : null,
     installations, catalogTruncated: catalog.truncated,
-    sources: getSources(config), sourceId: config.sourceId || 'official',
+    sources: getSources(config), sourceId: getEffectiveSourceId(config),
     installVersion: config.installVersion || RECOMMENDED_VERSION,
     recommendedVersion: RECOMMENDED_VERSION,
     recommendedRange: RECOMMENDED_RANGE, verifiedVersions: getVerifiedVersionsForPlatform(),
@@ -72,7 +72,7 @@ export async function probeCcInstallation(path: string): Promise<CcInstallation>
 
 export async function lookupCcRelease(request: CcInstallRequest = {}): Promise<CcReleaseInfo> {
   const config = readConfig()
-  const source = getSources(config).find(item => item.id === (request.sourceId || config.sourceId || 'official'))
+  const source = getSources(config).find(item => item.id === (request.sourceId || getEffectiveSourceId(config)))
   if (!source) throw new CcRuntimeError('invalid-source')
   try {
     const release = await lookupRelease(source, request.version ?? config.installVersion ?? RECOMMENDED_VERSION)
@@ -182,7 +182,7 @@ export async function discoverAndSelectCcRuntime(options: { deadlineMs?: number;
 export async function installCcRuntime(request: CcInstallRequest = {}): Promise<CcInstallation> {
   if (installController) throw new CcRuntimeError('install-busy')
   const config = readConfig()
-  const source = getSources(config).find(item => item.id === (request.sourceId || config.sourceId || 'official'))
+  const source = getSources(config).find(item => item.id === (request.sourceId || getEffectiveSourceId(config)))
   if (!source) throw new CcRuntimeError('invalid-source')
   const version = request.version ?? config.installVersion ?? RECOMMENDED_VERSION
   if (!isInstallVersion(version)) throw new CcRuntimeError('invalid-version')
