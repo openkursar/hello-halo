@@ -51,6 +51,42 @@ SHAs with `plan --base <sha> --head <sha>`. Unknown mappings and shared changes
 expand selection. AI reasoning may add cases; it must not silently remove the
 mandatory selection or claim an unexecuted case passed.
 
+## Verifying your change
+
+When a change affects what a user can see or do, check it before reporting it
+done; this is the purpose of the system, and nobody needs to ask you to.
+
+1. Name the affected modules: the stories under `tests/acceptance/catalog/` whose
+   promises the change touches, and the modules that depend on them.
+2. Run them where they cause no disturbance. The build host that CI uses owns a
+   graphical session for this; running Electron locally opens windows on whoever
+   is working at the desk, so do that only when asked. Commit to a branch, publish
+   it under the `gh-publish` rules, then dispatch the modules:
+
+   ```bash
+   node scripts/acceptance/ci-dispatch.mjs --source-ref <branch> --module <id> --module <id>
+   node scripts/acceptance/ci-dispatch.mjs --source-ref <branch> --module <id> --module <id> --execute
+   ```
+
+   Dispatching a module-scoped run for your own finished work is authorized and
+   reaches only the private controller; it needs `halo.acceptanceRepository` and
+   `halo.acceptanceAccount` in the local Git config (see
+   [the CI guide](../../../docs/acceptance-ci.md#triggering-a-run-and-reading-its-result)).
+   If a receipt already exists for the request, query it; never send the same
+   request twice. If dispatch is not configured or the branch cannot be published,
+   say that acceptance was not run instead of implying coverage.
+3. Wait for the run and read its findings, not its color. The step succeeds when
+   the run is complete, whatever scenarios failed:
+   `gh run download <run-id> -R <controller> -n quality-<run-id>-1` gives
+   `quality.json` and `summary.md`. A **new failure** is yours until its reason
+   shows an environment cause; fix it or report it with the evidence. **No longer
+   verified** is lost coverage, treat it like a failure. **Still failing** and
+   **not covered** are known backlog: do not hide them, do not count them as
+   regressions of your change. An incomplete run says nothing about the product;
+   repair the failing stage or report it.
+4. Report in product terms: what a user would now notice, which scenarios ran,
+   which failed and why, and what stayed unverified.
+
 ## Execution and interpretation
 
 Run `doctor --level catalog --json` for catalog-only work, or
@@ -73,8 +109,11 @@ external-service work requires an explicit authorized scope and budget, plus
 than an exact sentence. Missing credentials, unavailable GUI sessions, missing
 engines and human-only steps remain blocked/manual evidence, never passing skips.
 
-Report the fixed source revision, selected modules and variants, actual evidence,
-failed/incomplete/flaky cases, and unresolved product questions. Treat a test that
+Report the fixed source revision, the SDK commit that was tested, selected
+modules and variants, actual evidence, the quality findings against the earlier
+results (new, fixed, continuing, no longer verified, not covered), and unresolved
+product questions. A scenario with no runnable test is not covered; it is neither
+a failure nor a pass, and it stays visible. Treat a test that
 passes only after retry as flaky. Fix the cause or retain the uncertainty; do not
 increase retries to erase it. Build failures and an empty test result are failures
 of validation, not proof that no regression exists.

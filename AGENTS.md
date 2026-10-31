@@ -33,3 +33,4 @@ This project is 100% AI-generated, so humans may not necessarily know more than 
 - Before changing user-visible behavior or planning regression coverage, read `.agents/skills/acceptance-testing/SKILL.md` and the affected stories under `tests/acceptance/catalog/`.
 - Preserve the distinction between product expectations, executable coverage and actual evidence. Missing environments, skipped tests and partial UI checks never establish a complete user journey.
 - Keep product changes, scenario bindings and verification records aligned. Existing documented behavior can be tested directly; new product choices require explicit human direction.
+- After changing user-visible behavior, run the affected modules through the acceptance system and read its findings before reporting the work done; the skill describes how, and what to say when a run is not possible.

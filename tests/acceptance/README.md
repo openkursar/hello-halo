@@ -100,6 +100,14 @@ selection conservatively. This mapping is selection guidance, not proof that oth
 modules cannot regress. Scheduled rotation and complete applicable regressions
 remain necessary.
 
+A result is read as a quality change, not a verdict: new failures, fixed
+scenarios, failures that continue, behavior that is no longer verified and what is
+not covered yet, against the last known results of the branch (or the default
+branch). Scenarios without a runnable test are not covered, which is neither a
+failure nor a pass. See [the CI guide](../../docs/acceptance-ci.md) for triggering
+runs and reading the findings; `--rerun-case ID` selects a scenario in addition to
+the change-based selection, as CI does for scenarios that failed last time.
+
 A saved plan is rejected if its catalog, test manifest, source identity or execution
 platform changed. Regenerate it after changes. Each run has its own directory and
 records actual attempts; rerunning does not replace the previous evidence.

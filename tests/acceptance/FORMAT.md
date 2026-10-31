@@ -96,6 +96,13 @@ retained for diagnosis. A report requires a valid integrity record without reaso
 or run-level errors before counting a case as verified. Older runs lacking this
 record remain readable but cannot supply current verification.
 
+The run's `completion` record has `complete`, `executed` and `reasons`. A run is
+complete when everything it executed produced a trustworthy result, whatever
+those results are; it is incomplete when it lost results (`not-run`), failed its
+integrity checks, selected nothing or broke the runner. Scenarios it could not
+verify (`blocked`, `manual`, `skipped`) are reported as not covered and do not
+make a run incomplete. `executed` counts passed, failed and flaky instances.
+
 Human approval and verification are independent. Approval stores the story id,
 the exact semantic hash, decision, timestamp and human-supplied reviewer name.
 Approvals are created only by an explicit human action. Changes to promises,
@@ -108,8 +115,9 @@ The harness exposes `validate`, `catalog`, `build`, `package`, `discover`, `plan
 `run`, `report`, `doctor` and `decide`. Plans accept a profile, modules, explicit
 cases or a Git change range.
 Unmapped changes and shared infrastructure changes expand selection conservatively.
-Nightly plans use the previous successful validation baseline and a resolved target
-commit. A branch name alone is not a build identity. Live-model and external runs
+Nightly plans use the previous baseline and a resolved target commit, and select
+again every scenario that failed last time (`plan --rerun-case`). A branch name
+alone is not a build identity. Live-model and external runs
 are opt-in and bounded; missing prerequisites remain visible in the report.
 
 CI evidence finality is separate from case status. The execution owner registers
@@ -120,7 +128,13 @@ the final summary and publishes `evidence-freeze.json` with the full payload has
 inventory and controller run/attempt identity. Unknown writers or a killed owner
 leave non-final diagnostic snapshots, not a successful empty run. An archive
 completion record verifies that frozen copy; it does not imply passing cases.
-Only verified final successful evidence can advance a version 2 CI baseline.
+Only verified final evidence of a complete, unscoped run that executed something
+can advance a version 3 CI baseline. The baseline holds the run's identity and
+the last known result of each scenario instance; a run is compared with it, and
+its findings are written to `quality.json` in the frozen payload: `newFailures`,
+`stillFailing`, `fixed`, `unstable`, `lostCoverage`, `notRun`, `failingNow` (when
+there is nothing to compare with), `counts`, `uncoveredByModule` and
+`comparedWith`.
 
 Application runs require a controlled `build`: it records product inputs before
 and after the real build, compiled artifacts and the independently installed SDK.

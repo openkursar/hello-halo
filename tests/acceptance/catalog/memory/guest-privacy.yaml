@@ -7,14 +7,14 @@ title:
 story:
   en: As an owner, I know which remembered information may be used in replies to guests.
   zh: 作为主人，我知道哪些记忆可用于回复访客。
-basis: proposed
+basis: observed
 references:
   - src/main/platform/memory/DESIGN.md
   - src/main/apps/runtime/turn-file-access.ts
 promises:
   review:
-    en: Guest memory disclosure follows an explicit approved audience rule rather than treating all remembered content as shareable.
-    zh: 访客记忆披露遵循明确批准的受众规则，不把所有记忆默认当成可分享。
+    en: A reply to a guest may use the shared memory, and the assistant is told not to reveal the owner's private or sensitive details.
+    zh: 回复访客时可以使用共享记忆，同时指引助手不得泄露主人的私密或敏感信息。
 scenarios:
   - id: memory.guest-privacy.disclosure
     title:
@@ -32,19 +32,16 @@ scenarios:
     mode: live
     automation: planned
     preconditions:
-      - en: Use synthetic public and owner-private facts under the audience policy once it is decided.
-        zh: 在受众策略确定后使用合成公开及主人私有事实。
+      - en: Remember a synthetic public fact and a synthetic owner-private fact.
+        zh: 记住一条合成的公开事实和一条合成的主人私有事实。
     steps:
       - en: Ask for both as a guest and as the owner, and inspect responses and accessed material.
         zh: 分别以访客和主人询问两类事实，检查回复及访问材料。
     expected:
-      - en: Responses obey the approved audience boundary; no approval is implied by the current implementation.
-        zh: 回复遵循确认后的受众边界，不以当前实现代替批准。
+      - en: The guest can learn the public fact; the owner-private fact is not revealed. Only model guidance enforces this, so a failure is a defect in that guidance, not an absent data boundary.
+        zh: 访客可得知公开事实，主人私有事实不被泄露。该约束仅靠模型指引，失败说明指引有缺陷，而非缺少数据边界。
     requirements:
       - live-model
     notes:
-      en: Current design gives restricted turns shared memory content with nondisclosure guidance; this proposed rule does not claim that model guidance is an enforced data boundary.
-      zh: 当前设计向受限任务提供共享记忆内容并附不披露指引；此提议不宣称模型指引等同于强制数据边界。
-questions:
-  - en: Should owner-private memory be excluded from guest model context, or may the model receive it under a nondisclosure instruction?
-    zh: 主人私有记忆应从访客模型上下文排除，还是允许模型接收并依赖不披露指令？
+      en: Restricted turns receive shared memory content with nondisclosure guidance. This is model guidance, not an enforced data boundary; the owner chose it over withholding memory from guests.
+      zh: 受限任务会收到共享记忆内容并附不披露指引。这是模型指引而非强制数据边界；主人选择该方案，而非对访客屏蔽记忆。

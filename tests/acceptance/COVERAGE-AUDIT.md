@@ -53,9 +53,14 @@ Story basis: 35 documented, 45 observed and 3 proposed. Historical documented/ob
 - Windows command behavior requires an actual Windows host. The optional interactive terminal is explicitly disabled on Linux by `src/main/services/ai-terminal/available.ts`; Linux shell-tool work is a different capability. Desktop viewport emulation does not certify native Android/iOS clients.
 - The sole manual classification is third-party account-holder consent on their trusted device. Missing machines, service accounts, signing material, packages and automation adapters remain environment/implementation gaps, not permanent manual exclusions.
 
-## Product decisions that remain open
+## Product decisions
 
-- **memory.guest-privacy**: Should owner-private memory be excluded from guest model context, or may the model receive it under a nondisclosure instruction?
+Decided:
+
+- **memory.guest-privacy**: a reply to a guest may use the shared memory, with host guidance telling the assistant not to reveal the owner's private details. This is model guidance, not an enforced data boundary.
+
+Deferred, with the questions kept on their stories until someone decides:
+
 - **permissions.guidance**: Should denied guest operations offer a permission request to the owner, or explain the limitation without opening an approval workflow?
 - **terminal.python**: Should a Windows release provide an isolated Python runtime, or support Python only after a user-managed installation?
 
