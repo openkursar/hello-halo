@@ -227,6 +227,15 @@ test('a run that lost results fails its stage, says so, and advances nothing', c
   assert.match(summaryOf(selected), /This run is incomplete/)
 })
 
+test('a run record without its cases still gets a summary and a final freeze, but no findings and no baseline', context => {
+  const selected = fixture(context, { plan: selection([]), omitCases: true })
+  assert.equal(selected.run().status, 1)
+  assert.match(summaryOf(selected), /Baseline withheld/)
+  assert.equal(fs.existsSync(path.join(selected.directory, 'quality.json')), false)
+  assert.equal(fs.existsSync(path.join(selected.directory, 'evidence-freeze.json')), true)
+  assert.equal(evidence(selected).baseline, false)
+})
+
 test('a module or case selection reports findings but never advances the baseline', context => {
   const selected = fixture(context, { plan: selection([]), runOutcome: 'failed', previousStatus: 'passed', full: true, scoped: true })
   assert.equal(selected.run().status, 0)

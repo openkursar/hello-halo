@@ -51,7 +51,7 @@ test('baseline lineages belong to a repository, branch, profile and platform; th
   for (const key of ['repository', 'ref', 'profile', 'platform', 'architecture']) {
     const other = { ...context, [key]: 'different' }
     assert.notEqual(baselineName(context), baselineName(other))
-    assert.match(baselineReason(record, other, () => true), /does not match/)
+    assert.match(baselineReason(record, other, () => true), key === 'ref' ? /no baseline of its own/ : /does not match/)
   }
   assert.equal(baselineName(context), baselineName({ ...context, sdk: { state: 'present', revision }, modules: ['teams'], cases: ['example.case'] }))
   assert.match(baselineReason(record, context, () => false), /not an ancestor/)
@@ -72,7 +72,7 @@ test('earlier results are comparable across the SDK and catalog, but not across 
   assert.equal(comparableBaseline(record, { ...context, ref: 'topic' }, 'main'), record)
   assert.equal(comparableBaseline(record, { ...context, ref: 'topic' }, 'release'), null)
   for (const key of ['repository', 'profile', 'platform', 'architecture']) assert.equal(comparableBaseline(record, { ...context, [key]: 'different' }, 'main'), null)
-  for (const unusable of [null, { ...record, version: 2 }, { ...record, results: undefined }, { ...record, results: [] }, { ...record, runId: undefined }]) {
+  for (const unusable of [null, { ...record, version: 2 }, { ...record, results: undefined }, { ...record, results: [] }, { ...record, results: {} }, { ...record, runId: undefined }]) {
     assert.equal(comparableBaseline(unusable, context, 'main'), null)
   }
 })

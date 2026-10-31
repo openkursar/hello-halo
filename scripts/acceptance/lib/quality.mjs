@@ -3,27 +3,30 @@
 const failing = new Set(['failed', 'flaky'])
 const notCovered = new Set(['blocked', 'manual', 'skipped'])
 const ansi = /\u001b\[[0-9;]*m/g
-const localPath = /(?:\/(?:Users|home|Volumes|private|var|tmp)\/[^\s'"`)\]]+|[A-Za-z]:\\[^\s'"`)\]]+)/g
+const localPath = /(?<=^|[\s'"`(=[])(?:\/(?:Users|home|Volumes|private|var|tmp|opt|etc|root|Applications)\/[^\s'"`)\]]+|[A-Za-z]:\\[^\s'"`)\]]+)/g
 
 const canonical = value => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value
 
 export const resultKey = item => `${item.caseId}:${JSON.stringify(canonical(item.variant ?? {}))}`
 
-/** The scenario ids whose last known result is failing or unstable. */
 export function failingCaseIds(results) {
-  return [...new Set(Object.entries(results ?? {}).filter(([, status]) => failing.has(status)).map(([key]) => key.slice(0, key.indexOf(':'))))].sort()
+  return [...new Set(Object.entries(results ?? {}).filter(([, status]) => failing.has(status)).map(([key]) => key.slice(0, key.indexOf(':'))))]
+    .filter(id => /^[a-z][a-z0-9.-]*$/.test(id)).sort()
 }
 
 /**
- * Last known result per scenario instance after this run. Instances the run did
- * not select keep their earlier result while their scenario still exists.
+ * Last known result per scenario instance after this run. A scenario the run
+ * selected is replaced as a whole, including variants it no longer has; one it
+ * did not select keeps its earlier results while it still exists in the catalog.
  */
 export function nextResults(previous, run) {
-  const known = new Set([...run.cases.map(item => item.caseId), ...(run.excluded ?? []).map(item => item.caseId)])
+  const selected = new Set(run.cases.map(item => item.caseId))
+  const known = new Set([...selected, ...(run.excluded ?? []).map(item => item.caseId)])
   const results = {}
   for (const [key, status] of Object.entries(previous ?? {})) {
-    if (known.has(key.slice(0, key.indexOf(':')))) results[key] = status
+    const id = key.slice(0, key.indexOf(':'))
+    if (known.has(id) && !selected.has(id)) results[key] = status
   }
   for (const item of run.cases) results[resultKey(item)] = item.status
   return results
@@ -49,12 +52,7 @@ function entry(item, was) {
   }
 }
 
-/**
- * What this run says about quality relative to the last known results: new
- * failures, fixes, failures that persist, verified behavior that stopped being
- * verified, and how much remains uncovered. Without earlier results nothing can
- * be called new, so failures are reported as they are.
- */
+// Without earlier results nothing can be called new, so failures are reported as they are.
 export function compareResults(run, previous) {
   const before = previous?.results ?? null
   const groups = { newFailures: [], stillFailing: [], fixed: [], unstable: [], lostCoverage: [], notRun: [], failingNow: [] }
@@ -78,7 +76,7 @@ export function compareResults(run, previous) {
       else if (before && was !== 'passed') counts.newlyCovered++
     } else if (notCovered.has(status)) {
       uncovered[item.module] = (uncovered[item.module] ?? 0) + 1
-      if (before && (was === 'passed' || was === 'flaky')) groups.lostCoverage.push(entry(item, was))
+      if (before && (was === 'passed' || was === 'flaky' || was === 'failed')) groups.lostCoverage.push(entry(item, was))
     } else if (status === 'not-run') groups.notRun.push(entry(item, was))
   }
   const comparedWith = previous ? { ref: previous.ref, revision: previous.revision, runId: previous.runId, completedAt: previous.completedAt } : null
@@ -104,7 +102,6 @@ function details(title, items, limit) {
   return items.length ? ['', `<details><summary>${title} (${items.length})</summary>`, '', ...list(items, limit), '', '</details>'] : []
 }
 
-/** Markdown for the CI job summary; the complete lists stay in quality.json. */
 export function renderQuality(quality, { limit = 40 } = {}) {
   const { counts, comparedWith } = quality
   const lines = ['### Quality', '']

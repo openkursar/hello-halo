@@ -122,6 +122,10 @@ jobs:
         id: initial
         run: node scripts/acceptance/ci-state.mjs context
 
+      - name: Refuse an SDK reference without an SDK repository
+        if: vars.HALO_SDK_REPOSITORY == '' && inputs.sdk_ref != ''
+        run: echo "::error::sdk_ref was given but this controller has no HALO_SDK_REPOSITORY"; exit 1
+
       - name: Select the SDK source
         id: sdk-select
         if: vars.HALO_SDK_REPOSITORY != ''
@@ -132,7 +136,7 @@ jobs:
         run: |
           selected="${SDK_REF_INPUT:-${SDK_REF_VARIABLE:-$SDK_PIN}}"
           if [ -z "$selected" ]; then echo "::error::Set HALO_SDK_REF to follow a branch or HALO_SDK_REVISION to pin a commit"; exit 1; fi
-          case "$selected" in -*|*[!A-Za-z0-9._/-]*) echo "::error::The SDK reference contains unsupported characters"; exit 1;; esac
+          case "$selected" in -*|refs/*|*[!A-Za-z0-9._/-]*) echo "::error::The SDK reference must be a branch name or a commit"; exit 1;; esac
           echo "ref=$selected" >> "$GITHUB_OUTPUT"
 
       - name: Check out optional SDK

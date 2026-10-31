@@ -288,5 +288,5 @@ test('the SDK follows a branch or an input, falls back to a pinned commit, and r
   assert.equal(choose({ SDK_REF_VARIABLE: 'release', SDK_PIN: 'c'.repeat(40) }).output, 'ref=release')
   assert.equal(choose({ SDK_PIN: 'c'.repeat(40) }).output, `ref=${'c'.repeat(40)}`)
   assert.match(choose({}).error, /Set HALO_SDK_REF/)
-  for (const unsafe of ['-bad', 'a b', 'x;y', '$(id)']) assert.notEqual(choose({ SDK_REF_INPUT: unsafe }).status, 0)
+  for (const unsafe of ['-bad', 'a b', 'x;y', '$(id)', 'refs/pull/7/head', 'refs/heads/main']) assert.notEqual(choose({ SDK_REF_INPUT: unsafe }).status, 0)
 })

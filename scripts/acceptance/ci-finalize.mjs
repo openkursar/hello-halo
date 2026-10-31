@@ -105,7 +105,9 @@ export function finalizeCi(root, { identity, stageOutcomes = {}, summaryFile, ba
   }
   const unavailable = collectDiagnostics(root, directory, state.producers)
   const previous = earlierResults(context, baselineFile, defaultRef)
-  const quality = run ? compareResults(run, previous) : null
+  let quality = null
+  try { quality = run ? compareResults(run, previous) : null }
+  catch (error) { console.warn(`[Acceptance CI] The quality findings could not be derived from the run record (${error.message}); the summary reports the raw counts only.`) }
   if (quality) writeEvidenceJson(path.join(directory, 'quality.json'), quality, { exclusive: true, mode: 0o640 })
   let baselineFailure
   const scoped = Boolean(context.modules?.length || context.cases?.length)

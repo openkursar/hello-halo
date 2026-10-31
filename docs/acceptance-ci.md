@@ -248,14 +248,21 @@ repository, an unsupported branch name, a branch that does not exist and, when
 out any source code. Only branches of the configured repository are admitted;
 pull-request refs and forks are not, so write access to that repository is the
 trust boundary. With `HALO_SDK_REPOSITORY` set the SDK follows `HALO_SDK_REF`
-(or the manual `sdk_ref`) and the commit actually checked out is what the result
-records; without a branch the pinned `HALO_SDK_REVISION` is used, and without
-either the run stops rather than guess.
+(or the manual `sdk_ref`, which must be a branch name or a commit of that
+repository, never a `refs/` path) and the commit actually checked out is what
+the result records; without a branch the pinned `HALO_SDK_REVISION` is used, and
+without either the run stops rather than guess. An `sdk_ref` on a controller
+that has no SDK repository stops the run instead of being ignored. Whoever can
+dispatch can run any branch's scripts on the build host, and a branch's own
+scripts name the baseline it publishes, so dispatch permission is itself a
+trust grant.
 The checked-out source is resolved to a full SHA before preparation and that SHA
 is used for planning and results. The source working tree is separate from a
 developer's active checkout. A concurrency group serializes runs of the same
 source/ref; an individual runner executes one job at a time, so runs started
-for different branches wait for each other. Do not register
+for different branches wait for each other. GitHub keeps one waiting run per
+group: a third dispatch for a branch that has a run executing and one waiting
+replaces the waiting one, so do not queue several runs for one branch at once. Do not register
 multiple runners in the same GUI session when their tests share OS resources.
 
 The sample schedule is 19:23 UTC daily. Adjust it for the intended operating
@@ -363,16 +370,6 @@ missing binaries stop execution and baseline publication. Runtime-file readiness
 does not establish that the host's system dependencies or browser interactions
 work; the selected scenarios still provide that evidence. Selections without
 this requirement do not prepare or download Chromium.
-
-Only a nonempty run from a clean source checkout whose selected instances all
-passed, whose evidence producers stopped and whose final snapshot was verified
-can publish a new baseline. Failed, flaky, skipped, blocked, not-run and manual results cannot
-advance it. The restore lookup also checks the enclosing workflow's final
-conclusion, so an artifact created before a later workflow failure is ignored.
-Job summaries and report/evidence artifacts are attempted even after failure.
-Dependency/build failures have a blocked summary rather than an empty passing
-run. Artifact retention is 30 days for evidence and 90 for baselines; loss of an
-old baseline safely increases the next selection.
 
 ## Cancellation and evidence completion
 

@@ -86,7 +86,7 @@ export function baselineLineages(context, defaultRef) {
 export function baselineReason(baseline, context, isAncestor) {
   if (!baseline || baseline.version !== 3 || !/^[a-f0-9]{64}$/.test(baseline.evidenceFreezeSha256 ?? '')) return 'No supported frozen baseline is available.'
   for (const key of ['repository', 'ref', 'profile', 'platform', 'architecture']) {
-    if (baseline[key] !== context[key]) return `Baseline ${key} does not match this run.`
+    if (baseline[key] !== context[key]) return key === 'ref' ? 'This branch has no baseline of its own yet; the full profile runs.' : `Baseline ${key} does not match this run.`
   }
   if (JSON.stringify(baseline.sdk) !== JSON.stringify(context.sdk)) return 'SDK identity changed.'
   if (JSON.stringify(baseline.modules ?? []) !== JSON.stringify(context.modules ?? []) || JSON.stringify(baseline.cases ?? []) !== JSON.stringify(context.cases ?? [])) return 'Baseline module or case scope changed.'
@@ -131,7 +131,7 @@ export function makeBaseline(context, run, frozen, previous = null) {
  * differ; selecting changes from the baseline is stricter than comparing results.
  */
 export function comparableBaseline(baseline, context, defaultRef) {
-  if (!baseline || baseline.version !== 3 || !baseline.runId || !baseline.results || typeof baseline.results !== 'object' || Array.isArray(baseline.results)) return null
+  if (!baseline || baseline.version !== 3 || !baseline.runId || !baseline.results || typeof baseline.results !== 'object' || Array.isArray(baseline.results) || !Object.keys(baseline.results).length) return null
   for (const key of ['repository', 'profile', 'platform', 'architecture']) if (baseline[key] !== context[key]) return null
   if (baseline.ref !== context.ref && baseline.ref !== defaultRef) return null
   return baseline

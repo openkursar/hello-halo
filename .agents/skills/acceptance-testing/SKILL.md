@@ -60,16 +60,18 @@ done; this is the purpose of the system, and nobody needs to ask you to.
    promises the change touches, and the modules that depend on them.
 2. Run them where they cause no disturbance. The build host that CI uses owns a
    graphical session for this; running Electron locally opens windows on whoever
-   is working at the desk, so do that only when asked. Commit to a branch, publish
-   it under the `gh-publish` rules, then dispatch the modules:
+   is working at the desk, so do that only when asked. CI tests a branch that
+   exists on the source repository. Committing and publishing one still follow the
+   `code-commit` and `gh-publish` rules and need the human's trigger or
+   authorization. Once the branch is there, dispatch the modules:
 
    ```bash
    node scripts/acceptance/ci-dispatch.mjs --source-ref <branch> --module <id> --module <id>
    node scripts/acceptance/ci-dispatch.mjs --source-ref <branch> --module <id> --module <id> --execute
    ```
 
-   Dispatching a module-scoped run for your own finished work is authorized and
-   reaches only the private controller; it needs `halo.acceptanceRepository` and
+   Dispatching a module-scoped run for a branch of your own finished work is
+   authorized without asking again and reaches only the private controller; it needs `halo.acceptanceRepository` and
    `halo.acceptanceAccount` in the local Git config (see
    [the CI guide](../../../docs/acceptance-ci.md#triggering-a-run-and-reading-its-result)).
    If a receipt already exists for the request, query it; never send the same

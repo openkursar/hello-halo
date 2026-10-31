@@ -45,6 +45,8 @@ test('failure reasons are one line without colors or local paths', () => {
   const error = '\u001b[31mError: expected /Users/someone/project/file.ts to exist\u001b[39m\n  at somewhere'
   const quality = compareResults(run(item('chat.a', 'failed', { attempts: [{ errors: [] }, { errors: [error, 'later'] }] })), null)
   assert.equal(quality.failingNow[0].reason, 'Error: expected <path> to exist')
+  assert.equal(compareResults(run(item('chat.a', 'failed', { attempts: [{ errors: ['fetch https://example.invalid/home/user/x failed; see /opt/app/log (C:\\Temp\\a.txt)'] }] })), null).failingNow[0].reason,
+    'fetch https://example.invalid/home/user/x failed; see <path> (<path>)')
   assert.match(compareResults(run(item('chat.a', 'failed', { attempts: [{ errors: ['x'.repeat(500)] }] })), null).failingNow[0].reason, /^x{197}\.\.\.$/)
 })
 
@@ -54,6 +56,23 @@ test('results carry forward only for scenarios that still exist, and previously 
   assert.deepEqual(next, { [resultKey(item('chat.a'))]: 'failed', [resultKey(item('teams.b'))]: 'flaky', [resultKey(item('teams.c'))]: 'passed', [resultKey(item('chat.d'))]: 'passed' })
   assert.deepEqual(failingCaseIds(next), ['chat.a', 'teams.b'])
   assert.deepEqual(failingCaseIds(undefined), [])
+})
+
+test('a selected scenario replaces all of its earlier results, so a variant it no longer has cannot keep failing forever', () => {
+  const previous = { 'chat.a:{"x":"1"}': 'failed', 'chat.a:{"x":"2"}': 'passed', 'chat.b:{}': 'failed' }
+  const next = nextResults(previous, { cases: [item('chat.a', 'passed', { variant: { x: '2' } })], excluded: [{ caseId: 'chat.b' }] })
+  assert.deepEqual(next, { 'chat.a:{"x":"2"}': 'passed', 'chat.b:{}': 'failed' })
+  assert.deepEqual(failingCaseIds(next), ['chat.b'])
+})
+
+test('only well-formed scenario ids from a baseline are ever selected again', () => {
+  assert.deepEqual(failingCaseIds({ '--flag:{}': 'failed', 'Bad Id:{}': 'failed', 'chat.a:{}': 'failed', 'x;y:{}': 'flaky' }), ['chat.a'])
+})
+
+test('a failing scenario that is no longer executed is called out instead of vanishing', () => {
+  const quality = compareResults(run(item('chat.a', 'blocked'), item('chat.b', 'manual')), earlier({ [resultKey(item('chat.a'))]: 'failed', [resultKey(item('chat.b'))]: 'passed' }))
+  assert.deepEqual(quality.lostCoverage.map(entry => [entry.caseId, entry.previous]), [['chat.a', 'failed'], ['chat.b', 'passed']])
+  assert.match(renderQuality(quality).join('\n'), /#### No longer verified[\s\S]*chat\.a[\s\S]*was failed/)
 })
 
 test('the summary names new failures first and keeps long lists short', () => {

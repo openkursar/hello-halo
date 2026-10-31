@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 import { parse } from 'yaml'
+import { spawnSync } from 'node:child_process'
 
 const workflow = parse(fs.readFileSync(new URL('./acceptance.yml', import.meta.url), 'utf8'))
 const controller = workflow.jobs.controller
@@ -98,6 +99,14 @@ test('another repository, an unknown branch and an unsupported branch name never
     const attempt = await resolveBranch({ HALO_SOURCE_REF: ref }).then(() => 'resolved', error => error.message)
     assert.match(attempt, /not supported/, JSON.stringify(ref))
   }
+})
+
+test('an SDK reference is refused when the controller has no SDK repository', () => {
+  const steps = workflow.jobs.acceptance.steps
+  const guard = steps.find(step => step.name === 'Refuse an SDK reference without an SDK repository')
+  assert.equal(guard.if, "vars.HALO_SDK_REPOSITORY == '' && inputs.sdk_ref != ''")
+  assert(steps.indexOf(guard) < steps.findIndex(step => step.id === 'sdk-select') && steps.indexOf(guard) < steps.findIndex(step => step.id === 'install'))
+  assert.equal(spawnSync('bash', ['-c', guard.run], { encoding: 'utf8' }).status, 1)
 })
 
 test('the findings are published as a small artifact apart from the heavy evidence, even when the heavy upload fails', () => {
