@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { compareResults, failingCaseIds, nextResults, renderQuality, resultKey } from '../../../scripts/acceptance/lib/quality.mjs'
-import { runCompletion } from '../../../scripts/acceptance/lib/execution.mjs'
+import { runCompletion, runnerFailure } from '../../../scripts/acceptance/lib/execution.mjs'
 import { instanceKey } from '../../../scripts/acceptance/lib/catalog.mjs'
 
 const item = (caseId, status, extra = {}) => ({ caseId, module: caseId.split('.')[0], title: { en: `Title of ${caseId}`, zh: caseId }, variant: {}, status, ...extra })
@@ -104,4 +104,18 @@ test('a result key is the catalog instance key, whatever the order of the varian
   }
   assert.equal(resultKey({ caseId: 'chat.a' }), instanceKey('chat.a', {}))
   assert.equal(resultKey({ caseId: 'chat.a', variant: { b: 1, a: 2 } }), resultKey({ caseId: 'chat.a', variant: { a: 2, b: 1 } }))
+})
+
+test('a runner that reports failing tests finished normally; one that was cut short did not', () => {
+  const batch = (overrides = {}) => ({ status: 'failed', exitCode: 1, outcome: 'failed', ...overrides })
+  assert.equal(runnerFailure([batch(), batch({ status: 'completed', exitCode: 0, outcome: 'passed' })], { timedOut: false }), false)
+  assert.equal(runnerFailure([batch({ status: 'not-run', outcome: undefined })], { timedOut: false }), false)
+  assert.equal(runnerFailure([batch({ outcome: null })], { timedOut: false }), true)
+  assert.equal(runnerFailure([batch({ outcome: 'interrupted' })], { timedOut: false }), true)
+  assert.equal(runnerFailure([batch({ outcome: 'timedout' })], { timedOut: false }), true)
+  assert.equal(runnerFailure([batch({ timedOut: true })], { timedOut: false }), true)
+  assert.equal(runnerFailure([batch({ cleanupFailed: true, outcome: 'passed', status: 'completed' })], { timedOut: false }), true)
+  assert.equal(runnerFailure([batch({ status: 'running', outcome: undefined })], { timedOut: false }), true)
+  assert.equal(runnerFailure([batch()], { timedOut: true }), true)
+  assert.equal(runnerFailure([], { timedOut: false }), false)
 })

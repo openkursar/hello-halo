@@ -82,7 +82,9 @@ results cannot be reused against changed expectations or silently overwritten.
 
 Run version 1 may also include `executionBatches`. Each batch identifies its
 selected test ids, executor, model mode, execution configuration, timestamps and
-terminal state. Its `executionHost` names `source`, `packaged` or `cluster`, the
+terminal state, including the `outcome` the test runner itself reported (`passed`
+or `failed` for a runner that finished, anything else or none for one that was cut
+short). Its `executionHost` names `source`, `packaged` or `cluster`, the
 controlled `buildId`, and an optional supplied `packageId`. Attempts carry the
 same configuration and `batchId`. These fields record what the runner supplied,
 not what an application actually launched; app and engine observations remain

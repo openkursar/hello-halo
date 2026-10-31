@@ -63,6 +63,17 @@ export function summarizeCases(cases) {
 }
 
 /**
+ * Whether a runner that started failed to reach its own terminal report: it was
+ * killed, timed out, was interrupted or did not clean up. A runner that reports
+ * failing tests has finished normally, even though it exits non-zero.
+ */
+export function runnerFailure(batchRecords, execution) {
+  if (execution.timedOut) return true
+  return batchRecords.some(record => ['running', 'completed', 'failed'].includes(record.status)
+    && (record.timedOut || record.cleanupFailed || !['passed', 'failed'].includes(record.outcome)))
+}
+
+/**
  * Whether the run produced a trustworthy result for everything it executed.
  * Scenarios it could not verify (no bound test, a missing environment, a person
  * to run them) are reported as such and do not make a run incomplete.
@@ -347,6 +358,7 @@ export async function runPlan(root, catalog, plan, output, { timeoutMs = 1800000
           record.cleanupFailed = Boolean(invocation.cleanupFailed)
           record.status = invocation.code === 0 ? 'completed' : 'failed'
           const added = await captureBatchEvents(record)
+          record.outcome = added.findLast(event => event.type === 'end')?.status ?? null
           if (invocation.code === 0 && (!added.some(event => event.type === 'begin') || added.findLast(event => event.type === 'end')?.status !== 'passed')) {
             invocation.code = 1
             record.status = 'failed'
@@ -398,7 +410,7 @@ export async function runPlan(root, catalog, plan, output, { timeoutMs = 1800000
   const end = events.findLast(event => event.type === 'end')
   const runnerFailed = selected.length && (execution.code !== 0 || !end || end.status !== 'passed')
   const status = summary.failed || errors.length ? 'failed' : !cases.length || summary.passed !== cases.length || runnerFailed ? 'incomplete' : 'passed'
-  const completion = runCompletion({ cases, errors, runnerFailed: Boolean(runnerFailed) })
+  const completion = runCompletion({ cases, errors, runnerFailed: Boolean(selected.length) && runnerFailure(batchRecords, execution) })
   const result = { ...baseRecord, buildIdentity, packageIdentity, executionBatches: batchRecords, evidenceIntegrity, live: plan.live ?? null, liveUsage, finishedAt: new Date().toISOString(), status, completion, summary, cases, errors, runner: { code: execution.code, timedOut: execution.timedOut, status: end?.status ?? 'not-started' } }
   await writeJson(path.join(output, 'run.json'), result, { exclusive: true })
   await fs.unlink(path.join(output, 'in-progress.json'))
