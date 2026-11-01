@@ -272,6 +272,9 @@ export function SpacePage() {
       if (pendingNav) {
         useChatStore.setState({ pendingPulseNavigation: null })
         useChatStore.getState().selectConversation(pendingNav)
+      } else if (spaceState.selectedAppChat) {
+        // Same-space links select the digital human before this page mounts.
+        return
       } else if (spaceState.conversations.length > 0) {
         // If no conversation selected, select the first one
         if (!spaceState.currentConversationId) {

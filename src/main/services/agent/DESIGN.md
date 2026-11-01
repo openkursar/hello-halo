@@ -125,6 +125,11 @@ existing transcript. Codex and dsh keep their own resumption behavior.
 
 ### Halo SDK adapter
 
+The optional Halo SDK engine receives its own bundled ripgrep through
+`AGENT_RIPGREP_PATH`. Its adapter resolves the unpacked platform binary lazily;
+the default engine does not initialize this runtime. Packaging verifies the
+binary and excludes SDK source maps and development documents.
+
 `halo/index.ts` consumes the independent SDK's public `/worker` entry and exposes
 the common engine interface. It maps spaces to opaque affinity keys and bridges
 host permissions, hooks and tools. Pooling, scheduling and their defaults belong

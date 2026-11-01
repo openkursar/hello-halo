@@ -406,7 +406,8 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
   const pendingComposerInput = useChatStore(state => state.pendingComposerInput)
   const currentSpaceId = useChatStore(state => state.currentSpaceId)
   useEffect(() => {
-    if (!pendingComposerInput || pendingComposerInput.spaceId !== currentSpaceId) return
+    // A new space briefly mounts a composer before its conversation is created.
+    if (!draftKey || !pendingComposerInput || pendingComposerInput.spaceId !== currentSpaceId) return
     const text = pendingComposerInput.text
     const slashPreview = pendingComposerInput.slashPreview
     useChatStore.setState({ pendingComposerInput: null })
@@ -439,7 +440,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
       ta.focus()
       ta.setSelectionRange(ta.value.length, ta.value.length)
     })
-  }, [pendingComposerInput, currentSpaceId])
+  }, [pendingComposerInput, currentSpaceId, draftKey])
 
   // Auto-clear error after 3 seconds
   useEffect(() => {

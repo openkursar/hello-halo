@@ -1,8 +1,10 @@
 import { app } from 'electron'
-import { join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type * as WorkerSdk from '@hello-halo/agent-sdk/worker'
 import type { Options } from '@hello-halo/agent-sdk'
+import { getBundledRipgrepPath } from './ripgrep'
+import { updateEnvPath } from '../../child-env'
 
 /** Host lifecycle and opaque grouping; thread management belongs entirely to the SDK. */
 export function createHaloSdkModule(sdk: typeof WorkerSdk) {
@@ -18,6 +20,13 @@ export function createHaloSdkModule(sdk: typeof WorkerSdk) {
     if (haloRequestIdentity) delete sessionOptions.requestIdentity
     if (sessionOptions.env?.CLAUDE_CODE_GIT_BASH_PATH && !sessionOptions.env.AGENT_GIT_BASH_PATH) {
       sessionOptions.env = { ...sessionOptions.env, AGENT_GIT_BASH_PATH: sessionOptions.env.CLAUDE_CODE_GIT_BASH_PATH }
+    }
+    const ripgrepPath = getBundledRipgrepPath()
+    if (ripgrepPath && !sessionOptions.env?.AGENT_RIPGREP_PATH) {
+      const env = { ...sessionOptions.env, AGENT_RIPGREP_PATH: ripgrepPath }
+      // Last on the agent shell's PATH: `rg` works there too, and an rg of the user's own still wins.
+      updateEnvPath(env, current => current ? `${current}${delimiter}${dirname(ripgrepPath)}` : dirname(ripgrepPath))
+      sessionOptions.env = env
     }
     return {
       options: sessionOptions as Options,

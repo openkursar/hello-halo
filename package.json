@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "3.0.5-rc.15",
+  "version": "3.0.5",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.cjs",
@@ -225,7 +225,11 @@
     "@parcel/watcher-darwin-arm64": "^2.5.6",
     "@parcel/watcher-darwin-x64": "^2.5.6",
     "@parcel/watcher-linux-x64-glibc": "^2.5.6",
-    "@parcel/watcher-win32-x64": "^2.5.6"
+    "@parcel/watcher-win32-x64": "^2.5.6",
+    "@vscode/ripgrep-darwin-arm64": "1.18.0",
+    "@vscode/ripgrep-darwin-x64": "1.18.0",
+    "@vscode/ripgrep-linux-x64": "1.18.0",
+    "@vscode/ripgrep-win32-x64": "1.18.0"
   },
   "build": {
     "npmRebuild": false,
@@ -251,6 +255,9 @@
       "!node_modules/@hello-halo/agent-sdk/scripts/**",
       "!node_modules/@hello-halo/agent-sdk/.github/**",
       "!node_modules/@hello-halo/agent-sdk/**/*.ts",
+      "!node_modules/@hello-halo/agent-sdk/**/*.map",
+      "!node_modules/@hello-halo/agent-sdk/**/DESIGN.md",
+      "!node_modules/@hello-halo/agent-sdk/**/VALIDATION.md",
       "!node_modules/@hello-halo/agent-sdk/**/*.test.*",
       "!node_modules/@hello-halo/agent-sdk/**/*.spec.*"
     ],
@@ -284,7 +291,8 @@
       "node_modules/node-pty/prebuilds/**",
       "node_modules/@img/**/*",
       "node_modules/tesseract.js/**",
-      "node_modules/tesseract.js-core/**"
+      "node_modules/tesseract.js-core/**",
+      "node_modules/@vscode/ripgrep-*/**/*"
     ],
     "mac": {
       "minimumSystemVersion": "12.0.0",
