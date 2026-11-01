@@ -66,6 +66,27 @@ test('new nonignored untracked harness bytes cannot escape the root hash', async
   assert.throws(() => compareSnapshots(before, after), /harness content changed/)
 }))
 
+test('build dependencies follow syntax rather than import-looking strings and comments', async () => withFixture(async ({ root, write }) => {
+  write('electron-builder.cjs', String.raw`
+const sample = "import '../not-a-module.cjs';";
+// require('./not-a-module.cjs')
+const expression = /from '.\/also-not-a-module'/;
+require('./build-helper.cjs');
+import('./dynamic-helper.mjs');
+export { value } from './export-helper.mjs';
+`)
+  write('build-helper.cjs', "require.resolve('./nested-helper.cjs');\n")
+  write('nested-helper.cjs', 'module.exports = 1;\n')
+  write('dynamic-helper.mjs', 'export const value = 1;\n')
+  write('export-helper.mjs', 'export const value = 1;\n')
+  const snapshot = await snapshotContent(root)
+  for (const name of ['build-helper.cjs', 'nested-helper.cjs', 'dynamic-helper.mjs', 'export-helper.mjs']) {
+    assert.ok(snapshot.inputs.files.some(file => file.path === name && file.role === 'build-tooling'))
+  }
+  rmSync(join(root, 'nested-helper.cjs'))
+  await assert.rejects(snapshotContent(root), /Production build dependency cannot be resolved.*nested-helper/)
+}))
+
 test('artifact tampering is rejected even when its mtime is preserved', async () => withFixture(async ({ root }) => {
   const before = await snapshotContent(root)
   const file = join(root, 'out/main/index.cjs')

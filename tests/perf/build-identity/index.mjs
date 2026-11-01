@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import ts from 'typescript'
 
 export const SCHEMA_VERSION = 2
 export const SIDECAR_NAME = '.build-identity.json'
@@ -101,6 +102,26 @@ async function projectManifest(root, files) {
   return manifestFromFiles(entries)
 }
 
+function relativeModuleReferences(file, source) {
+  const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true)
+  const references = new Set()
+  const add = node => {
+    if (node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && node.text.startsWith('.')) references.add(node.text)
+  }
+  const visit = node => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) add(node.moduleSpecifier)
+    else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) add(node.moduleReference.expression)
+    else if (ts.isCallExpression(node)) {
+      const callee = node.expression
+      if (callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === 'require')
+        || (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'require' && callee.name.text === 'resolve')) add(node.arguments[0])
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(parsed)
+  return references
+}
+
 function buildInputPaths(root) {
   const required = BUILD_FILES.map(file => [join(root, file), 'build-input'])
   const packageData = json(join(root, 'package.json'))
@@ -126,11 +147,11 @@ function buildInputPaths(root) {
     requireValue(existsSync(file), `Production build entry/dependency is missing: ${relative(root, file)}`)
     buildCode.add(file)
     const source = readFileSync(file, 'utf8')
-    for (const match of source.matchAll(/(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s*)['"](\.[^'"]+)['"]/g)) {
-      const target = resolve(dirname(file), match[1])
+    for (const specifier of relativeModuleReferences(file, source)) {
+      const target = resolve(dirname(file), specifier)
       const candidates = [target, target.replace(/\.js$/, '.ts'), `${target}.mjs`, `${target}.cjs`, `${target}.js`, `${target}.ts`, join(target, 'index.mjs'), join(target, 'index.ts')]
       const dependency = candidates.find(candidate => existsSync(candidate) && statSync(candidate).isFile())
-      requireValue(dependency, `Production build dependency cannot be resolved: ${relative(root, file)} -> ${match[1]}`)
+      requireValue(dependency, `Production build dependency cannot be resolved: ${relative(root, file)} -> ${specifier}`)
       pending.push(dependency)
     }
     const runtimeRelative = posix(relative(root, file))

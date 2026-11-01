@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createHaloSdkModule } from '../../../../../src/main/services/agent/halo'
 
-vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => '/application' } }))
+const paths = vi.hoisted(() => ({ builtSetup: false, packaged: false }))
+vi.mock('electron', () => ({ app: { get isPackaged() { return paths.packaged }, getAppPath: () => '/application' } }))
+vi.mock('node:fs', async original => ({
+  ...await original<typeof import('node:fs')>(),
+  existsSync: (file: string) => paths.builtSetup && file === '/application/worker/halo-setup.cjs',
+}))
 
 function fixture() {
   const runtime = { initialize: vi.fn(async () => {}), close: vi.fn(async () => {}), diagnostics: vi.fn(() => ({ workers: [] })),
@@ -12,6 +17,22 @@ function fixture() {
 }
 
 describe('Halo host worker adapter', () => {
+  it('resolves the setup when Electron starts from the compiled entry directory', async () => {
+    paths.builtSetup = true
+    try {
+      const { runtime, module } = fixture()
+      await module.createSession({ haloRequestIdentity: {} })
+      expect(runtime.createSession.mock.calls[0][1]).toMatchObject({ setup: { module: 'file:///application/worker/halo-setup.cjs' } })
+      paths.packaged = true
+      const packaged = fixture()
+      await packaged.module.createSession({ haloRequestIdentity: {} })
+      expect(packaged.runtime.createSession.mock.calls[0][1]).toMatchObject({ setup: { module: 'file:///application/out/main/worker/halo-setup.cjs' } })
+    } finally {
+      paths.builtSetup = false
+      paths.packaged = false
+    }
+  })
+
   it('loads without starting a worker and exposes explicit startup and shutdown', async () => {
     const { runtime, module } = fixture()
     expect(runtime.initialize).not.toHaveBeenCalled()
