@@ -169,8 +169,9 @@ try {
     }, { timeoutMs: 60_000, intervalMs: 1000 })
     const postVersion = readMigrationVersion('app_runtime')
     const afterActivity = upgraded ? await apiOk(node, 'GET', `/api/apps/${appId}/activity?limit=20`) : []
-    const dataIntact = afterActivity.length === beforeActivity.length &&
-      JSON.stringify(afterActivity.map((e) => e.id).sort()) === JSON.stringify(beforeActivity.map((e) => e.id).sort())
+    // Restart may append a terminal entry for the interrupted pre-upgrade run.
+    const afterIds = new Set(afterActivity.map((entry) => entry.id))
+    const dataIntact = beforeActivity.every((entry) => afterIds.has(entry.id))
     const orphanDropped = countActivity(ORPHAN_APP_ID) === 0
     mark(preVersion >= 4 && downgradedVersion === 3 && postVersion === preVersion && upgraded && dataIntact && orphanDropped ? 'PASS' : 'FAIL',
       `pre=${preVersion} downgraded=${downgradedVersion} post=${postVersion} bootedOk=${!!upgraded} dataIntact=${dataIntact} orphanDropped=${orphanDropped} (before=${beforeActivity.length} after=${afterActivity.length})`)
