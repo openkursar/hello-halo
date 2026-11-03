@@ -3059,7 +3059,7 @@
   "The file may be corrupt or in an unsupported format.": "该文件可能已损坏，或格式不受支持。",
   "The folder can only be changed in the desktop app.": "文件夹只能在桌面应用中更改。",
   "The folder is still unavailable. Connect the drive or network location it is on, then retry.": "该文件夹仍不可用。请连接其所在的驱动器或网络位置，然后重试。",
-  "The global skill of the same name runs instead": "实际运行的是同名的全局技能",
+  "Overridden in this workspace": "已在此工作区中覆盖",
   "The holiday calendar does not cover today, so this scheduled run was skipped. Run it manually if needed.": "节假日日历未涵盖今天，因此本次计划运行已被跳过。如有需要，请手动运行。",
   "The installation or settings could not be saved. Check available disk space and permissions.": "无法保存安装文件或设置。请检查可用磁盘空间和权限。",
   "The instruction it was checking for is not saved anywhere else — stopping it cannot be undone.": "它所检查的指令并未保存在其他任何地方——停止后将无法撤销。",

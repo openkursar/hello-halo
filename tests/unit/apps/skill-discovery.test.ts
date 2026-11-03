@@ -18,7 +18,7 @@ vi.mock('../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() }
 }))
 
-import { mkdirSync, writeFileSync, symlinkSync } from 'fs'
+import { mkdirSync, writeFileSync, symlinkSync, truncateSync } from 'fs'
 import { join } from 'path'
 import {
   findLoadableSkill,
@@ -92,15 +92,15 @@ describe('listAvailableSkills', () => {
     expect(skills[0].description).toBe('')
   })
 
-  it('keeps the global skill over a space skill with the same dirName, as the engine does', () => {
-    writeSkill(globalSkillsDir(), 'dup', '---\nname: Global Dup\n---\nglobal')
+  it.each(['dup', 'DUP'])('keeps the space skill over global %s, as Halo SDK does', globalName => {
+    writeSkill(globalSkillsDir(), globalName, '---\nname: Global Dup\n---\nglobal')
     writeSkill(spaceSkillsDir(), 'dup', '---\nname: Space Dup\n---\nspace')
 
     const skills = listAvailableSkills(SPACE_ID)
 
     expect(skills).toHaveLength(1)
-    expect(skills[0].name).toBe('Global Dup')
-    expect(skills[0].scope).toBe('global')
+    expect(skills[0].name).toBe('Space Dup')
+    expect(skills[0].scope).toBe('space')
   })
 
   it('includes symlinked skill directories', () => {
@@ -167,20 +167,21 @@ describe('loadable skills and the dependencies that name them', () => {
     mkdirSync(join(spaceSkillsDir(), 'not-a-skill'), { recursive: true })
   })
 
-  it('lists each loadable folder once, global before space, with its installed app', () => {
+  it('lists each loadable folder once, space before global, with its installed app', () => {
     const skills = listLoadableSkills(SPACE_ID, manager)
-    // The global report-builder wins over the space's hand-placed copy of that name.
     expect(skills.map(s => [s.folder, s.app?.id ?? null])).toEqual([
-      ['report-builder', 'app-report-global'],
-      ['xlsx', 'app-xlsx'],
       ['Image_Gen', 'app-image'],
+      ['report-builder', null],
+      ['xlsx', 'app-xlsx'],
     ])
-    expect(skills[0].path).toBe(join(globalSkillsDir(), 'report-builder'))
+    const report = findLoadableSkill(skills, 'report-builder')!
+    expect(report.path).toBe(join(spaceSkillsDir(), 'report-builder'))
+    expect(readLoadableSkillFiles(report)).toEqual({ 'SKILL.md': 'Body' })
     expect(listLoadableSkills(null, manager).map(s => s.folder).sort()).toEqual(['report-builder', 'xlsx'])
     expect(listLoadableSkills(null, manager).find(s => s.folder === 'report-builder')?.app?.id).toBe('app-report-global')
   })
 
-  it('pairs the winning global folder with its global app when the space installed the same skill too', () => {
+  it('pairs the winning space folder with its space app when global installed the same skill too', () => {
     skillApps.push(
       { id: 'app-dup-global', spaceId: null, specId: 'dup', status: 'active', spec: { type: 'skill', store: { slug: 'acme/dup', install_source: 'store' } } },
       { id: 'app-dup-space', spaceId: SPACE_ID, specId: 'dup', status: 'active', spec: { type: 'skill', store: { slug: 'acme/dup', install_source: 'store' } } },
@@ -190,8 +191,8 @@ describe('loadable skills and the dependencies that name them', () => {
       writeSkill(spaceSkillsDir(), 'dup', 'Space dup')
       const skills = listLoadableSkills(SPACE_ID, manager)
       const dup = skills.find(skill => skill.folder === 'dup')!
-      expect(dup.app?.id).toBe('app-dup-global')
-      expect(dup.path).toBe(join(globalSkillsDir(), 'dup'))
+      expect(dup.app?.id).toBe('app-dup-space')
+      expect(dup.path).toBe(join(spaceSkillsDir(), 'dup'))
       expect(findLoadableSkill(skills, 'acme/dup')?.folder).toBe('dup')
       expect(normalizeSkillDependencies(['dup'], skills)).toEqual(['acme/dup'])
       expect(findUndeclaredSkills(dh('use dup', ['acme/dup']), skills)).toEqual([])
@@ -251,10 +252,57 @@ describe('loadable skills and the dependencies that name them', () => {
     writeFileSync(join(dir, '__pycache__', 'x.pyc'), 'c', 'utf-8')
     symlinkSync(join(dir, 'scripts', 'run.js'), join(dir, 'linked.js'))
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const skill = findLoadableSkill(listLoadableSkills(SPACE_ID, manager), 'report-builder')!
+    const skill = { folder: 'report-builder', path: dir, app: null }
     expect(readLoadableSkillFiles(skill)).toEqual({ 'SKILL.md': 'Global copy', 'scripts/run.js': 'x()' })
     expect(hasPackageableSkillMd(skill)).toBe(true)
     writeFileSync(join(dir, 'SKILL.md'), Buffer.from([0x23, 0x00]))
     expect(hasPackageableSkillMd(skill)).toBe(false)
+  })
+})
+
+describe('skill packaging byte limits', () => {
+  it('skips a sparse file larger than 2 GiB without losing the skill or small scripts', () => {
+    const folder = 'sparse-skill'
+    writeSkill(globalSkillsDir(), folder, 'Small skill')
+    const dir = join(globalSkillsDir(), folder)
+    mkdirSync(join(dir, 'scripts'))
+    writeFileSync(join(dir, 'scripts', 'run.js'), 'run()')
+    const oversized = join(dir, 'huge.txt')
+    writeFileSync(oversized, '')
+    truncateSync(oversized, 3 * 1024 * 1024 * 1024)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(readLoadableSkillFiles({ folder, path: dir, app: null })).toEqual({
+        'SKILL.md': 'Small skill',
+        'scripts/run.js': 'run()',
+      })
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn).toHaveBeenCalledWith(
+        `[SkillDiscovery] Not packaging ${folder}/huge.txt: binary or larger than 1048576 bytes`,
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('rejects the whole skill before reading a file above the remaining 50 MiB budget', () => {
+    const folder = 'budget-skill'
+    writeSkill(globalSkillsDir(), folder, 'Skill')
+    const dir = join(globalSkillsDir(), folder)
+    const content = 'a'.repeat(1024 * 1024)
+    for (let index = 0; index < 50; index++) {
+      writeFileSync(join(dir, `part-${String(index).padStart(2, '0')}.txt`), content)
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(readLoadableSkillFiles({ folder, path: dir, app: null })).toBeNull()
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn).toHaveBeenCalledWith(
+        `[SkillDiscovery] Cannot read skill folder ${folder} for packaging:`,
+        expect.stringContaining('exceeds remaining packaging budget'),
+      )
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

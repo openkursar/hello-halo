@@ -313,8 +313,8 @@ function declareBundledSkillFiles(spec: AppSpec, files: Record<string, string>, 
  * here, so the reference doesn't silently produce a broken package for every
  * installer, whether or not the author declared it `bundled`.
  *
- * Skills are looked up as the engine loads them (a global folder winning a
- * name the space also holds), so a skill installed in global scope satisfies
+ * Skills are looked up as Halo SDK loads them (a space folder winning a
+ * name the global scope also holds), so a skill installed in global scope satisfies
  * the dependency, and a skill folder placed by hand is read from disk. A dependency that resolves nowhere —
  * not in a registry, not loadable locally — is returned in
  * `missingSkillIds`; the caller must fail rather than ship a package that can

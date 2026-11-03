@@ -243,6 +243,23 @@ describe('store/collectFiles — which copy of a skill travels', () => {
     expect(inspectSkillDeps(spec, fakeManager([pdf as never]), 'space-1').map(d => d.id)).toEqual(['report-builder'])
   })
 
+  it('keeps a product-specific builtin skill in the exported package and dependency list', async () => {
+    const app = { id: 'app-private', specId: 'private-helper', spec: { ...skillSpec(), name: 'private-helper', store: { install_source: 'builtin' } } }
+    loadableSkills.mockReturnValue([{ folder: 'private-helper', path: '/skills/private-helper', app } as unknown as LoadableSkill])
+    const spec = dhSpec({ skills: [{ id: 'private-helper', bundled: true }] })
+    const manager = fakeManager([app as never])
+    const { files, missingSkillIds, packagedSpec } = collectFiles(spec, manager, 'space-1')
+    expect(missingSkillIds).toEqual([])
+    expect(files['skills/private-helper/SKILL.md']).toBe('# skill\n')
+    expect(packagedSpec.requires?.skills).toEqual([
+      { id: 'private-helper', bundled: true, files: ['SKILL.md', 'scripts/run.js'] },
+    ])
+    expect(inspectSkillDeps(spec, manager, 'space-1')[0]).toMatchObject({ id: 'private-helper', installed: true })
+    const restored = await unpack(await pack(packagedSpec, files))
+    expect(restored.spec.requires?.skills).toEqual(packagedSpec.requires?.skills)
+    expect(restored.files['skills/private-helper/scripts/run.js'].toString('utf8')).toBe('x()')
+  })
+
   it('reports a folder that reads back without its SKILL.md as missing, in the dialog too', () => {
     loadableSkills.mockReturnValue([handPlaced('report-builder')])
     diskFiles.mockReturnValue({ 'scripts/run.js': 'x()' })

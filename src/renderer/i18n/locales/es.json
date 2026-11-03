@@ -3180,7 +3180,7 @@
   "The file may be corrupt or in an unsupported format.": "El archivo puede estar dañado o tener un formato no compatible.",
   "The folder can only be changed in the desktop app.": "La carpeta solo se puede cambiar en la aplicación de escritorio.",
   "The folder is still unavailable. Connect the drive or network location it is on, then retry.": "La carpeta aún no está disponible. Conecta la unidad o la ubicación de red en la que se encuentra y vuelve a intentarlo.",
-  "The global skill of the same name runs instead": "Se ejecuta en su lugar la habilidad global con el mismo nombre",
+  "Overridden in this workspace": "Sobrescrito en este espacio de trabajo",
   "The holiday calendar does not cover today, so this scheduled run was skipped. Run it manually if needed.": "El calendario de festivos no cubre hoy, así que esta ejecución programada se omitió. Ejecútala manualmente si es necesario.",
   "The installation or settings could not be saved. Check available disk space and permissions.": "No se pudo guardar la instalación o la configuración. Comprueba el espacio disponible en disco y los permisos.",
   "The instruction it was checking for is not saved anywhere else — stopping it cannot be undone.": "La instrucción que estaba vigilando no está guardada en ningún otro lugar: detener esta comprobación no se puede deshacer.",

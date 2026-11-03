@@ -609,7 +609,7 @@ export const BUILTIN_SKILL_SLUG_PREFIX = 'halo-builtin-skills/'
 
 /** A skill every Halo install already has, so a digital human never declares or packages it. */
 export function isHaloShippedSkill(app: Pick<InstalledApp, 'spec'>): boolean {
-  return isBuiltinApp(app) || (app.spec.store?.slug ?? '').startsWith(BUILTIN_SKILL_SLUG_PREFIX)
+  return app.spec.type === 'skill' && (app.spec.store?.slug ?? '').startsWith(BUILTIN_SKILL_SLUG_PREFIX)
 }
 
 /**

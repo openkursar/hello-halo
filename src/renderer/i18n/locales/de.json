@@ -3059,7 +3059,7 @@
   "The file may be corrupt or in an unsupported format.": "Die Datei ist möglicherweise beschädigt oder liegt in einem nicht unterstützten Format vor.",
   "The folder can only be changed in the desktop app.": "Der Ordner kann nur in der Desktop-App geändert werden.",
   "The folder is still unavailable. Connect the drive or network location it is on, then retry.": "Der Ordner ist weiterhin nicht verfügbar. Verbinden Sie das Laufwerk oder den Netzwerkspeicherort, auf dem er sich befindet, und versuchen Sie es dann erneut.",
-  "The global skill of the same name runs instead": "Stattdessen läuft der globale Skill mit demselben Namen",
+  "Overridden in this workspace": "In diesem Arbeitsbereich überschrieben",
   "The holiday calendar does not cover today, so this scheduled run was skipped. Run it manually if needed.": "Der Feiertagskalender deckt den heutigen Tag nicht ab, daher wurde dieser geplante Lauf übersprungen. Führen Sie ihn bei Bedarf manuell aus.",
   "The installation or settings could not be saved. Check available disk space and permissions.": "Die Installation oder die Einstellungen konnten nicht gespeichert werden. Prüfen Sie den verfügbaren Speicherplatz und die Berechtigungen.",
   "The instruction it was checking for is not saved anywhere else — stopping it cannot be undone.": "Die Anweisung, nach der geprüft wurde, ist nirgendwo sonst gespeichert — das Beenden kann nicht rückgängig gemacht werden.",

@@ -3059,7 +3059,7 @@
   "The file may be corrupt or in an unsupported format.": "The file may be corrupt or in an unsupported format.",
   "The folder can only be changed in the desktop app.": "The folder can only be changed in the desktop app.",
   "The folder is still unavailable. Connect the drive or network location it is on, then retry.": "The folder is still unavailable. Connect the drive or network location it is on, then retry.",
-  "The global skill of the same name runs instead": "The global skill of the same name runs instead",
+  "Overridden in this workspace": "Overridden in this workspace",
   "The holiday calendar does not cover today, so this scheduled run was skipped. Run it manually if needed.": "The holiday calendar does not cover today, so this scheduled run was skipped. Run it manually if needed.",
   "The installation or settings could not be saved. Check available disk space and permissions.": "The installation or settings could not be saved. Check available disk space and permissions.",
   "The instruction it was checking for is not saved anywhere else — stopping it cannot be undone.": "The instruction it was checking for is not saved anywhere else — stopping it cannot be undone.",

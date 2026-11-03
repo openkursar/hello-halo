@@ -3059,7 +3059,7 @@
   "The file may be corrupt or in an unsupported format.": "ファイルが破損しているか、サポートされていない形式の可能性があります。",
   "The folder can only be changed in the desktop app.": "フォルダーはデスクトップアプリでのみ変更できます。",
   "The folder is still unavailable. Connect the drive or network location it is on, then retry.": "フォルダーはまだ利用できません。そのフォルダーがあるドライブまたはネットワークの場所に接続してから、再試行してください。",
-  "The global skill of the same name runs instead": "同名のグローバルスキルが代わりに実行されます",
+  "Overridden in this workspace": "このワークスペースでオーバーライドされています",
   "The holiday calendar does not cover today, so this scheduled run was skipped. Run it manually if needed.": "祝日カレンダーが今日をカバーしていないため、このスケジュール実行はスキップされました。必要に応じて手動で実行してください。",
   "The installation or settings could not be saved. Check available disk space and permissions.": "インストールまたは設定を保存できませんでした。ディスクの空き容量とアクセス権を確認してください。",
   "The instruction it was checking for is not saved anywhere else — stopping it cannot be undone.": "確認対象となっていた指示は他のどこにも保存されていないため、停止すると元に戻すことはできません。",

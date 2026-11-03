@@ -86,9 +86,8 @@ function skillDirsOf(spaceId: string): { globalDir: string; spaceDir: string } {
 
 /**
  * List the skills a digital human in the given space can load at runtime.
- * When a global and a space skill share a directory name the global one is
- * kept: the engine resolves a name to the first match and reads user (global)
- * skills before project (space) ones.
+ * Space skills take precedence over global skills with the same name,
+ * matching Halo SDK's project-first, case-insensitive lookup.
  */
 export function listAvailableSkills(spaceId: string): AvailableSkill[] {
   const { globalDir, spaceDir } = skillDirsOf(spaceId)
@@ -96,11 +95,13 @@ export function listAvailableSkills(spaceId: string): AvailableSkill[] {
   const globalSkills = scanSkillsDir(globalDir, 'global')
   const spaceSkills = scanSkillsDir(spaceDir, 'space')
 
-  const globalNames = new Set(globalSkills.map(s => s.dirName))
-  const merged = [
-    ...globalSkills,
-    ...spaceSkills.filter(s => !globalNames.has(s.dirName)),
-  ]
+  const seen = new Set<string>()
+  const merged = [...spaceSkills, ...globalSkills].filter(skill => {
+    const key = skill.dirName.toLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
   merged.sort((a, b) => a.name.localeCompare(b.name))
 
   console.log(
@@ -144,28 +145,28 @@ function skillFolders(dir: string): string[] {
 
 /**
  * The skills that may load in a space (global only when `spaceId` is null),
- * the global folder winning a name both scopes hold, as in the engine (see
- * listAvailableSkills). Folders placed by hand have no installed app and are
+ * the space folder winning a name both scopes hold (see listAvailableSkills).
+ * Folders placed by hand have no installed app and are
  * included all the same; a folder is only matched to an app installed in its
  * own scope.
  */
 export function listLoadableSkills(spaceId: string | null, manager: SkillAppSource): LoadableSkill[] {
-  // Per scope, not the space-over-global effective view: the global folder
-  // wins a shared name, so it must still find the global app behind it.
+  // Match the winning folder to its own scope, including hand-placed skills.
   const apps = [
     ...manager.listApps({ spaceId: null, type: 'skill' }),
     ...(spaceId ? manager.listApps({ spaceId, type: 'skill' }) : []),
   ].filter(app => app.status !== 'uninstalled')
   const scopes = [
-    { dir: resolveGlobalSkillsDir(), spaceId: null },
     ...(spaceId ? [{ dir: skillDirsOf(spaceId).spaceDir, spaceId }] : []),
+    { dir: resolveGlobalSkillsDir(), spaceId: null },
   ]
   const skills: LoadableSkill[] = []
   const seen = new Set<string>()
   for (const scope of scopes) {
     for (const folder of skillFolders(scope.dir)) {
-      if (seen.has(folder)) continue
-      seen.add(folder)
+      const key = folder.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
       const app = apps.find(candidate => candidate.spaceId === scope.spaceId && toSkillDirName(candidate.specId) === folder) ?? null
       skills.push({ folder, path: join(scope.dir, folder), app })
     }
@@ -210,6 +211,7 @@ export function normalizeSkillDependencies(deps: readonly SkillDependency[], ski
 
 /** Packages carry text only; a file past this is not skill content. */
 const MAX_PACKAGED_FILE_BYTES = 1024 * 1024
+const MAX_PACKAGED_SKILL_BYTES = 50 * 1024 * 1024
 const SKIPPED_PACKAGE_DIRS = new Set(CPP_LEVEL_IGNORE_DIRS)
 
 /**
@@ -234,6 +236,7 @@ export function hasPackageableSkillMd(skill: LoadableSkill): boolean {
  */
 export function readLoadableSkillFiles(skill: LoadableSkill): Record<string, string> | null {
   const files: Record<string, string> = {}
+  let totalBytes = 0
   const walk = (dir: string, relative: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.name.startsWith('.') || SKIPPED_PACKAGE_DIRS.has(entry.name)) continue
@@ -243,7 +246,24 @@ export function readLoadableSkillFiles(skill: LoadableSkill): Record<string, str
       } else if (entry.isDirectory()) {
         walk(join(dir, entry.name), path)
       } else if (entry.isFile()) {
-        const content = readFileSync(join(dir, entry.name))
+        const filePath = join(dir, entry.name)
+        const stat = lstatSync(filePath)
+        if (!stat.isFile()) {
+          console.warn(`[SkillDiscovery] Not packaging ${skill.folder}/${path}: not a regular file`)
+          continue
+        }
+        if (stat.size > MAX_PACKAGED_FILE_BYTES) {
+          console.warn(`[SkillDiscovery] Not packaging ${skill.folder}/${path}: binary or larger than ${MAX_PACKAGED_FILE_BYTES} bytes`)
+          continue
+        }
+        if (stat.size > MAX_PACKAGED_SKILL_BYTES - totalBytes) {
+          throw new Error(`${path} exceeds remaining packaging budget (${totalBytes}/${MAX_PACKAGED_SKILL_BYTES} bytes read)`)
+        }
+        const content = readFileSync(filePath)
+        totalBytes += content.length
+        if (totalBytes > MAX_PACKAGED_SKILL_BYTES) {
+          throw new Error(`${path} exceeds packaging budget (${totalBytes}/${MAX_PACKAGED_SKILL_BYTES} bytes read)`)
+        }
         if (content.length > MAX_PACKAGED_FILE_BYTES || content.includes(0)) {
           console.warn(`[SkillDiscovery] Not packaging ${skill.folder}/${path}: binary or larger than ${MAX_PACKAGED_FILE_BYTES} bytes`)
           continue
