@@ -138,11 +138,11 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
       onMouseDown={onClose}
     >
       <div
-        className="relative w-full max-w-md bg-background border border-border rounded-xl shadow-xl flex flex-col"
+        className="relative w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-hidden bg-background border border-border rounded-xl shadow-xl flex flex-col"
         onMouseDown={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <div className="flex shrink-0 items-center justify-between px-4 py-3 border-b border-border">
           <div className="flex items-center gap-2 min-w-0">
             <Share2 className="w-4 h-4 text-primary flex-shrink-0" />
             <h2 className="text-sm font-semibold truncate">{t('Share')}</h2>
@@ -157,7 +157,7 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
         </div>
 
         {/* Body */}
-        <div className="px-4 py-4 space-y-3">
+        <div className="min-h-0 overflow-y-auto px-4 py-4 space-y-3">
           <div className="flex items-start gap-3 p-3 bg-secondary/60 rounded-lg border border-border">
             <Icon className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
             <div className="min-w-0 flex-1">
@@ -198,7 +198,7 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border">
+        <div className="flex shrink-0 items-center justify-end gap-2 px-4 py-3 border-t border-border">
           {isElectron() && (
             <button
               onClick={handleExport}
