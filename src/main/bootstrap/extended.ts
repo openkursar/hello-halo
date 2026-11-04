@@ -340,7 +340,7 @@ async function initPlatformAndApps(): Promise<void> {
      * host→joiners only, so they have to go up the other way. No-op off a
      * federated office.
      */
-    const publishMemberProfile = (teamId: string, appId: string) => {
+    const publishMemberProfile = (teamId: string, appId: string, renamed = false) => {
       const member = teamStore.getMember(teamId, appId)
       if (!member) return
       getFederationManager()?.routeOfficeStateWrite(teamId, 'member_profile', {
@@ -349,6 +349,9 @@ async function initPlatformAndApps(): Promise<void> {
         duty: member.duty ?? null,
         acceptsChecks: member.acceptsChecks !== false,
         awaitingDecision: member.awaitingDecision === true,
+        // Only on a rename: a joined copy may hold a disambiguated name the
+        // authority must not be asked to undo on every duty edit.
+        ...(renamed ? { memberName: member.memberName } : {}),
       })
     }
 
@@ -415,8 +418,14 @@ async function initPlatformAndApps(): Promise<void> {
               duty?: string | null
               acceptsChecks?: boolean
               awaitingDecision?: boolean
+              memberName?: string
             }
             if (!p.teamId || !p.appId) return
+            // Names on a joined copy come from the roster alone; a replayed or
+            // re-resolved name here would diverge from the authority's choice.
+            if (typeof p.memberName === 'string' && getFederationManager()?.servesOffice(p.teamId)) {
+              getTeamService()?.applyMemberRename(p.teamId, p.appId, p.memberName)
+            }
             teamStore.updateMemberFields(p.teamId, p.appId, {
               duty: p.duty ?? null,
               acceptsChecks: p.acceptsChecks !== false,
@@ -1249,6 +1258,7 @@ async function initPlatformAndApps(): Promise<void> {
       // its owner, but read by the whole office — on a joined office the roster
       // only travels host→joiners, so the edit has to go up the other way.
       onMemberProfileChanged: (teamId, appId) => publishMemberProfile(teamId, appId),
+      onMemberRenamed: (teamId, appId) => publishMemberProfile(teamId, appId, true),
       onMemberRemoved: (teamId, appId) => {
         const mgr = getFederationManager()
         mgr?.projectMemberRemoved(teamId, appId)

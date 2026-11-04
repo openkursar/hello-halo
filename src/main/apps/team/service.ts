@@ -114,6 +114,8 @@ export interface TeamServiceDeps {
    * other way. Absent (not federated / hosted here) → the roster hook suffices.
    */
   onMemberProfileChanged?: (teamId: string, appId: string) => void
+  /** An owner renamed one of its members → carry the new name to the office like a profile edit. */
+  onMemberRenamed?: (teamId: string, appId: string) => void
   /**
    * A run started or stopped → push the live run-state (team status + the active
    * epoch) to joiners so a remote status board goes live the instant the host
@@ -205,6 +207,19 @@ function buildRefArtifact(path: string, ref: string, spaceId: string | null, cre
  * `owner` stays null when the name has not been advertised yet; `sameMachine` is
  * the unambiguous test.
  */
+/**
+ * Whether a member name was derived from the app name — as is, or made unique
+ * with a "-N" suffix or a "·owner" tag — rather than chosen for the team.
+ */
+export function memberNameFollowsApp(memberName: string, appName: string): boolean {
+  const base = appName.trim()
+  if (!base) return false
+  if (memberName === base) return true
+  if (!memberName.startsWith(base)) return false
+  const rest = memberName.slice(base.length)
+  return /^-\d+$/.test(rest) || rest.startsWith('·')
+}
+
 function projectOwnership(member: TeamMember): Pick<RosterMember, 'owner' | 'sameMachine'> {
   const remote = isRemoteMember(member)
   return {
@@ -254,6 +269,14 @@ export interface TeamService {
    * their duty, not rewrite it.
    */
   updateMember(teamId: string, appId: string, input: UpdateTeamMemberInput): TeamMember
+  /**
+   * A digital human of this computer was renamed: every team where its member
+   * name still follows the app name takes the new one. A name chosen for the
+   * team stays.
+   */
+  followAppRename(appId: string, previousName: string, name: string): void
+  /** Apply a rename the member's owner sent from another computer. */
+  applyMemberRename(teamId: string, appId: string, preferredName: string): void
   removeMember(teamId: string, appId: string): Promise<void>
   /** Stop one periodic check outright, without going through an agent. */
   cancelCheck(teamId: string, checkId: string): void
@@ -399,12 +422,16 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   // ── Member-name uniqueness ──
 
-  function uniqueMemberName(teamId: string, preferred: string): string {
+  function uniqueMemberName(teamId: string, preferred: string, selfAppId?: string): string {
     const base = (preferred || 'member').trim() || 'member'
-    if (!store.getMemberByName(teamId, base)) return base
+    const taken = (name: string) => {
+      const holder = store.getMemberByName(teamId, name)
+      return !!holder && holder.appId !== selfAppId
+    }
+    if (!taken(base)) return base
     for (let i = 2; i < 1000; i++) {
       const candidate = `${base}-${i}`
-      if (!store.getMemberByName(teamId, candidate)) return candidate
+      if (!taken(candidate)) return candidate
     }
     return `${base}-${randomUUID().slice(0, 8)}`
   }
@@ -1308,6 +1335,33 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     return updated
   }
 
+  function renameMemberLocally(teamId: string, appId: string, preferredName: string): boolean {
+    const name = uniqueMemberName(teamId, preferredName, appId)
+    if (!store.renameMember(teamId, appId, name)) return false
+    console.log(`${LOG_TAG} member renamed: team=${teamId} app=${appId}`)
+    emitUpdated(teamId, { team: requireTeam(teamId) })
+    deps.onRosterMutated?.(teamId)
+    return true
+  }
+
+  function followAppRename(appId: string, previousName: string, name: string): void {
+    for (const member of store.listMembersByAppId(appId)) {
+      if (isRemoteMember(member) || member.isSystemCoordinator) continue
+      if (!memberNameFollowsApp(member.memberName, previousName)) continue
+      try {
+        if (renameMemberLocally(member.teamId, appId, name)) deps.onMemberRenamed?.(member.teamId, appId)
+      } catch (err) {
+        console.error(`${LOG_TAG} member rename failed: team=${member.teamId} app=${appId}`, err)
+      }
+    }
+  }
+
+  function applyMemberRename(teamId: string, appId: string, preferredName: string): void {
+    const name = preferredName.trim()
+    if (!name || !store.getMember(teamId, appId)) return
+    renameMemberLocally(teamId, appId, name)
+  }
+
   function cancelCheck(teamId: string, checkId: string): void {
     requireTeam(teamId)
     const check = store.getCheckById(checkId)
@@ -1930,6 +1984,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     updateTeam,
     addMember,
     updateMember,
+    followAppRename,
+    applyMemberRename,
     removeMember,
     cancelCheck,
     setEdges,

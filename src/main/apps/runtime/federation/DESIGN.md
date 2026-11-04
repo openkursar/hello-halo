@@ -428,10 +428,10 @@ Shared per-node state (all keyed by officeId): `hosted`, `joined`,
   still shown for members already on their way out); when nothing would stay it
   sends nothing and answers `last-members`, and the caller leaves instead, so no
   node is left in an office with no member of its own. It sends nothing while
-  this node's join is refused, while the authority is confirmed offline, and
-  once the office has had an election (authority term > 0, whoever serves): an
-  elected authority applies a member-leave to its own copy only (Known gaps), so
-  the rest of the office would keep listing the member. `signalLeave` names
+  this node's join is refused or while the authority is confirmed offline. A
+  node that serves the office itself (elected after the first host was lost)
+  applies the member-leave locally instead of sending it, for a withdraw and a
+  whole leave alike, and projects it like any authority. `signalLeave` names
   every member the roster has as this node's, `departed` included: a removal may
   never have arrived. `departed` also rides into `materializeJoinedOffice`, so a
   roster that still lists a member that left neither gives back its kept duty
@@ -503,7 +503,22 @@ Shared per-node state (all keyed by officeId): `hosted`, `joined`,
   wakes satisfy wake admission unchanged (same correlation id, exact team-session
   key). Teammates on mixed builds keep working together.
 - **Roster egress** — `broadcastRosterFor` (immediate) / `scheduleRosterRefresh`
-  (coalesced during a run) / `projectMemberRemoved` / `projectOfficeDissolved`.
+  (coalesced during a run) / `projectMemberRemoved` / `projectOfficeDissolved`,
+  and the liveness re-projection. All follow `servedFederation` (public as
+  `servesOffice`): an office this node hosts and still holds the authority of,
+  or a joined office it was elected authority of (not refused). Office-state
+  and admitted member writes are captured into the log by the same rule
+  (`routeSharedWrite`, `routeAuthorityWrite`). An
+  elected node projects from its own copy of the team through the joined
+  coordinator, whose snapshot already maps `SELF_NODE_ID` to this node's id, and
+  over the joined link's router (inbound peer sessions, legs, a claimed room).
+  The frames are the first host's (`roster`, `member-status`, `member-removed`),
+  so a peer on an earlier build reads them; its roster version line starts anew,
+  so each joiner asks for the full roster once. A joiner acts on
+  `member-removed` / `office-dissolved` only from its believed authority, as it
+  already did for `roster` / `member-status`; one at a higher term is first
+  observed like an `authority-announce` (best effort, so it may be the first
+  this node hears of the new authority).
 - **Transport re-form seam** — after a host loss the authority moves to a peer;
   `repointLink` swaps a link's outbound sender in place (a JOINED office swaps
   only the **upstream** leg inside its router, so the ctrl shim and per-peer
@@ -591,43 +606,12 @@ interprets payloads beyond `kind`.
 
 ## Known gaps
 
-### Roster projection after an election
+### After the elected authority itself leaves
 
-An authority elected after the first host is lost projects no roster: no full
-roster, no `member-status`, no `member-removed`, no liveness re-baseline.
-`broadcastRosterFor`, `scheduleRosterRefresh` and `projectMemberRemoved` are
-gated on a hosted office, and the elected node stays a joined office. Run state
-and membership changes then reach joiners only through board replication, so a
-roster card can show a stale run state. This predates the current traffic
-rules; live streams after an election do follow them (`fanOutStream`). Because
-a membership change stays on the elected node, taking one member out is refused
-once the office has had an election (`withdrawMembers` → `elected-authority`);
-a whole leave from such an office is not, and has the same limit.
-
-Intended fix (not implemented):
-- **Promote on win, demote on handover.** Replace the hosted-only gates with one
-  predicate, "this node serves the office" (hosted, or joined and
-  `isAuthoritySelf()`). Route the roster refresh, full roster, `roster-request`
-  answers and `member-removed` through the office's own link, as
-  `fanOutStream` does for streams. On step-down, clear the timers and the
-  version state.
-- **Project from the replica.** `buildRosterSnapshot` reads the host's team
-  rows. On a joiner those are shadow rows with owner ids relative to that node,
-  so the promoted projection needs a joined-office source that maps
-  `SELF_NODE_ID` back to this node's id.
-- **Version continuity.** The new authority starts a new roster version line.
-  Every joiner mismatches once and asks for the full roster: one burst per
-  election.
-
-Size: roughly 300–500 lines across `manager.ts` and `coordinator.ts`, plus a sim
-scenario (elect, churn run state, assert `member-status` reaches the joiners)
-and coordinator tests for the remapped snapshot. Risks:
-- a wrong owner-id remap misattributes members and breaks write and stream
-  admission;
-- during a flap two nodes may project for one office, so joiners must ignore a
-  roster from a node that is not their believed authority;
-- it touches the election and re-form paths, so it needs a full
-  `test:team -- federation` pass.
+It removes its own members and replicates its departure before it goes, so the
+others drop its members and ledger row. In the in-process simulation the
+remaining nodes then do not elect a new authority (also true before roster
+egress followed the elected node); not yet investigated on real processes.
 
 ## Tests
 

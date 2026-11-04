@@ -32,6 +32,7 @@ import type {
   AppInstalledHandler,
   AppUninstalledHandler,
   SpecUpgradedHandler,
+  AppRenamedHandler,
   AppUninstallReason,
   Unsubscribe,
   UninstallOptions,
@@ -192,6 +193,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
   const appInstalledHandlers: AppInstalledHandler[] = []
   const appUninstalledHandlers: AppUninstalledHandler[] = []
   const specUpgradedHandlers: SpecUpgradedHandler[] = []
+  const appRenamedHandlers: AppRenamedHandler[] = []
 
   /**
    * Notify all registered status change handlers.
@@ -236,6 +238,17 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         handler(appId, outcome)
       } catch (error) {
         console.error('[AppManager] Spec upgrade handler error:', error)
+      }
+    }
+  }
+
+  function notifyRenamed(appId: string, previousName: string, name: string): void {
+    if (previousName === name) return
+    for (const handler of appRenamedHandlers) {
+      try {
+        handler(appId, previousName, name)
+      } catch (error) {
+        console.error('[AppManager] Rename handler error:', error)
       }
     }
   }
@@ -945,6 +958,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       }
 
       store.updateSpec(appId, validatedSpec)
+      notifyRenamed(appId, app.spec.name, validatedSpec.name)
 
       // MCP server definition may have changed (command/args/env/etc.):
       // invalidate affected sessions so they reconnect with the new config.
@@ -981,6 +995,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         skills.update(app, next as unknown as Record<string, unknown>, true)
       } else if (merged) {
         store.updateSpecAndAuthorSpec(appId, merged, next)
+        notifyRenamed(appId, app.spec.name, merged.name)
         const keptNote = outcome.kept.length > 0
           ? ` keeping ${outcome.editsKnown ? 'edited' : 'undetermined'} fields: ${outcome.kept.join(', ')}`
           : ''
@@ -1295,6 +1310,14 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         if (index > -1) {
           specUpgradedHandlers.splice(index, 1)
         }
+      }
+    },
+
+    onAppRenamed(handler: AppRenamedHandler): Unsubscribe {
+      appRenamedHandlers.push(handler)
+      return () => {
+        const index = appRenamedHandlers.indexOf(handler)
+        if (index > -1) appRenamedHandlers.splice(index, 1)
       }
     },
 

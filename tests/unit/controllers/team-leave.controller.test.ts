@@ -121,17 +121,6 @@ describe('taking one digital human out of a joined team', () => {
     expect(store.getMember(OFFICE, B)?.duty).toBeNull()
   })
 
-  it('keeps nothing and says why while an elected authority serves the team', async () => {
-    manager.withdrawMembers.mockReturnValue('elected-authority')
-
-    const result = await leaveTeamOffice(OFFICE, [B])
-
-    expect(result).toEqual({ success: false, error: 'ELECTED_AUTHORITY' })
-    expect(store.getTeamById(OFFICE)).not.toBeNull()
-    rejoin([{ appId: LEAD, owner: HOST }, { appId: A, owner: SELF }], [B])
-    expect(store.getMember(OFFICE, B)?.duty).toBeNull()
-  })
-
   it('leaves the team when the others are already on their way out', async () => {
     manager.withdrawMembers.mockReturnValue('last-members')
 

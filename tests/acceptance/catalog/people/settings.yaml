@@ -13,6 +13,7 @@ references:
   - tests/e2e/specs/people-settings.spec.ts
   - src/main/apps/manager/service.ts
   - tests/e2e/specs/acceptance-people.spec.ts
+  - src/main/apps/team/service.ts
 promises:
   save:
     en: Unsaved settings remain identifiable until saved or cancelled.
@@ -26,7 +27,34 @@ promises:
   validation:
     en: Invalid required identity fields are explained without replacing the last saved person definition.
     zh: 无效必填身份字段有说明，不替换最后保存的数字人定义。
+  team-name:
+    en: A renamed digital human appears under its new name in every team where its name followed the person name, while a name chosen for a team stays and teammates addressing the old name still reach it.
+    zh: 数字人改名后，在其名称跟随数字人名称的每个团队中都显示新名；为团队单独取的名称保持不变，队友按旧名称寻址仍能送达。
 scenarios:
+  - id: people.settings.team-name
+    title:
+      en: Rename a person who belongs to teams
+      zh: 为已加入团队的数字人改名
+    verifies:
+      - team-name
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A person belongs to two teams under its own name and to a third under a name chosen for that team.
+        zh: 某数字人以自身名称加入两个团队，并以单独取的名称加入第三个团队。
+    steps:
+      - en: Rename the person in its settings, then open each team’s member list.
+        zh: 在设置中改名，然后打开每个团队的成员列表。
+    expected:
+      - en: The first two teams show the new name (made unique if a teammate already holds it); the third keeps its chosen name.
+        zh: 前两个团队显示新名称（若已有队友同名则自动区分）；第三个团队保留单独取的名称。
   - id: people.settings.unsaved
     title:
       en: Save one settings group

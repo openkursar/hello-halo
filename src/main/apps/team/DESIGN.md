@@ -251,10 +251,15 @@ logged), written through on every change.
   `updateTeamFields` (partial: name/goal/strategy enums), `updateTeamStatus`,
   `updateTeamLeadAppId`, `updateTeamCurrentEpoch`, `deleteTeam`.
 - **team_members**: `addMember`, `removeMember`, `listMembersByTeam`,
-  `getMemberByName` (team-unique addressing lookup), `getMember` (by app id),
+  `getMemberByName` (team-unique addressing lookup; also answers a renamed
+  member's former names until restart), `renameMember`, `getMember` (by app id),
   `listMembersByAppId` (cross-team membership lookup), `updateMemberFields`
   (partial: duty / delegated policy / accepts-checks), `setMemberLead`,
-  `setMemberScope`.
+  `setMemberScope`. A member name is set at join; afterwards only a rename of
+  the digital human changes it (`appManager.onAppRenamed` → `followAppRename`):
+  names derived from the app name follow, names chosen for the team stay, only
+  the owning node renames, and a joined office carries it to the authority as
+  `member_profile.memberName`, whose roster then brings it to everyone.
 - **joined offices**: `materializeJoinedOffice` (wholesale roster mirror;
   returns the members whose kept duty it gave back; optional `departed`),
   `purgeJoinedOffice`, `retainMemberDuties` (see "A duty outlives leaving a

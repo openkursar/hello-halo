@@ -697,11 +697,9 @@ export const useTeamStore = create<TeamState>((set, get) => ({
         i18n.t('Could not remove {{name}} from the team', { name }),
         res.error === 'OFFICE_UNREACHABLE'
           ? i18n.t('This team can’t be reached right now — its owner may be offline. Try again later.')
-          : res.error === 'ELECTED_AUTHORITY'
-            ? i18n.t('This team can’t take out one digital human on its own right now. You can leave with all of your digital humans instead — their duties are kept.')
-            : res.error === 'DESKTOP_ONLY'
-              ? i18n.t('Taking a digital human out of a team is only available in the desktop app.')
-              : undefined,
+          : res.error === 'DESKTOP_ONLY'
+            ? i18n.t('Taking a digital human out of a team is only available in the desktop app.')
+            : undefined,
       )
       return false
     } catch (err) {

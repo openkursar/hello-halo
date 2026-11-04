@@ -585,6 +585,7 @@ interface AppManagerService {
   recordAuthorSpec(appId: string, authorSpec: AppSpec): boolean                // original for an earlier install
   listStoreInstallsWithoutAuthorSpec(): string[]
   onAppSpecUpgraded(handler: SpecUpgradedHandler): Unsubscribe                 // after every upgradeSpec
+  onAppRenamed(handler: AppRenamedHandler): Unsubscribe                       // spec name changed (updateSpec / upgradeSpec)
   updateStatus(appId: string, status: AppStatus, extra?: { errorMessage?: string; pendingEscalationId?: string }): void
   updateLastRun(appId: string, outcome: RunOutcome, errorMessage?: string): void
   getApp(appId: string): InstalledApp | null

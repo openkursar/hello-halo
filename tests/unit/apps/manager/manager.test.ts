@@ -1955,6 +1955,29 @@ describe('AppManager', () => {
       expect(store.getAuthorSpec(appId)?.version).toBe('1.2.0')
     })
 
+    it('announces a rename, whether the owner or an upgrade changed the name', async () => {
+      const appId = await service.install(TEST_SPACE_ID, storeSpec())
+      const handler = vi.fn()
+      service.onAppRenamed(handler)
+
+      service.updateSpec(appId, { system_prompt: 'Mine.' })
+      expect(handler).not.toHaveBeenCalled()
+
+      service.updateSpec(appId, { name: 'Sales digest' })
+      expect(handler).toHaveBeenLastCalledWith(appId, 'daily-report', 'Sales digest')
+    })
+
+    it('announces a rename an author’s new version brings', async () => {
+      const appId = await service.install(TEST_SPACE_ID, storeSpec())
+      const handler = vi.fn()
+      service.onAppRenamed(handler)
+
+      service.upgradeSpec(appId, nextVersion({ name: 'Regional sales' }))
+
+      expect(automationSpec(appId).name).toBe('Regional sales')
+      expect(handler).toHaveBeenCalledWith(appId, 'daily-report', 'Regional sales')
+    })
+
     it('announces every upgrade with what it kept', async () => {
       const appId = await service.install(TEST_SPACE_ID, storeSpec())
       service.updateSpec(appId, { system_prompt: 'Mine.' })

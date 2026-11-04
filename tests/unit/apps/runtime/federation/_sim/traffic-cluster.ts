@@ -51,6 +51,8 @@ export interface SimNode {
   /** This node's own members' transcripts, by session key. */
   transcripts: Map<string, SerializedHistoryMessage[]>
   rx: Received
+  /** Office-shared rows (member profiles, checks) applied here from the office. */
+  officeState: Array<{ op: string; payload: Record<string, unknown> }>
 }
 
 export interface TrafficCluster {
@@ -76,6 +78,9 @@ export interface TrafficCluster {
   advance(ms: number): void
   /** The node's process dies: it sends and receives nothing any more. */
   kill(node: SimNode): void
+  /** Hold frames of these kinds bound for `node` until `release` (a late page, a slow path). */
+  defer(node: SimNode, kinds: string[]): void
+  release(node: SimNode): void
   /**
    * The host is gone: advance until the survivors elect one of themselves over
    * the real presence FSM and election, and return the winner.
@@ -129,7 +134,10 @@ export function planeGrowth(before: Received, after: Received, plane: string): T
  * `secondMemberOf`: the joiner (1-based) that brings a second member,
  * `${appId}b`, besides its own.
  */
-export function buildTrafficCluster(joinerCount: number, opts: { secondMemberOf?: number } = {}): TrafficCluster {
+export function buildTrafficCluster(
+  joinerCount: number,
+  opts: { secondMemberOf?: number; namesEverywhere?: boolean } = {}
+): TrafficCluster {
   vi.spyOn(WsFederationClient.prototype as unknown as { connect: () => void }, 'connect').mockImplementation(() => {})
   // Presence silence is measured on the monotonic clock, which fake timers leave running in real time.
   vi.spyOn(performance, 'now').mockImplementation(() => Date.now())
@@ -139,11 +147,17 @@ export function buildTrafficCluster(joinerCount: number, opts: { secondMemberOf?
   const captured = new Map<string, FederationMessage[]>()
   const nodes = new Map<string, SimNode>()
   const dead = new Set<string>()
+  const deferred = new Map<string, { kinds: Set<string>; held: Array<{ from: string; frame: FederationMessage; viaServer: boolean }> }>()
   // `viaServer`: the frame arrives on the target's WS server as from a client
   // that dialed it (a survivor's leg to a peer, or to an elected authority).
   const route = (to: string, from: string, frame: FederationMessage, viaServer = false): void => {
     const target = nodes.get(to)
     if (!target || dead.has(to) || dead.has(from)) return
+    const hold = deferred.get(to)
+    if (hold?.kinds.has(frame.kind)) {
+      hold.held.push({ from, frame, viaServer })
+      return
+    }
     // Frames cross a real wire as JSON: nothing may alias sender state.
     const wire = JSON.parse(JSON.stringify(frame)) as FederationMessage
     account(target.rx, wire, wireBytes(wire))
@@ -166,8 +180,22 @@ export function buildTrafficCluster(joinerCount: number, opts: { secondMemberOf?
     dbm.runMigrations(db, TEAM_NS, teamMigrations)
     const team = new TeamStore(db)
     const transcripts = new Map<string, SerializedHistoryMessage[]>()
-    const node: SimNode = { id, appId, dbm, team, transcripts, rx: emptyReceived(), manager: undefined as unknown as FederationManager }
+    const node: SimNode = { id, appId, dbm, team, transcripts, rx: emptyReceived(), officeState: [], manager: undefined as unknown as FederationManager }
     const joinerIds = () => [...nodes.keys()].filter((n) => n !== id)
+    // What bootstrap does with a member's new name: only where the office is
+    // served (`namesEverywhere` applies it on every node instead), unique on
+    // this node's roster, then the roster is re-projected.
+    function applyOfficeState(op: string, payload: Record<string, unknown>): void {
+      node.officeState.push({ op, payload })
+      const name = payload.memberName
+      const appId = payload.appId
+      if (op !== 'member_profile' || typeof name !== 'string' || typeof appId !== 'string') return
+      if (!opts.namesEverywhere && !node.manager.servesOffice(SIM_OFFICE)) return
+      const taken = (n: string) => { const holder = team.getMemberByName(SIM_OFFICE, n); return !!holder && holder.appId !== appId }
+      let unique = name
+      for (let i = 2; taken(unique); i++) unique = `${name}-${i}`
+      if (team.renameMember(SIM_OFFICE, appId, unique)) node.manager.broadcastRosterFor(SIM_OFFICE)
+    }
     node.manager = createFederationManager({
       hostSend: (clientId, frame) => {
         route(clientId, id, frame)
@@ -198,7 +226,15 @@ export function buildTrafficCluster(joinerCount: number, opts: { secondMemberOf?
       getMemberRuntimeStatus: (member) => runtimeStatus.get(member) ?? 'idle',
       getCurrentRunEpoch: () => ({ teamId: SIM_OFFICE, epochId: SIM_EPOCH }),
       getOwnerStatus: () => 'idle',
-      applyMemberWrite: () => {},
+      // A member write admitted at the authority: office-shared rows take the
+      // same apply as a replicated entry, as bootstrap does.
+      applyMemberWrite: (record) => {
+        if (record.op === 'member_profile' || record.op === 'check_upsert' || record.op === 'check_delete') {
+          applyOfficeState(record.op, record.payload)
+        }
+        node.manager.routeAuthorityWrite(record)
+      },
+      applyOfficeState: (op, payload) => applyOfficeState(op, payload),
       reassignTask: () => {},
       peerDialer: (_officeId, peer) => (nodes.has(peer) ? { sender: (_to, frame) => route(peer, id, frame, true) } : null),
       readOwnedTranscript: (_teamId, member, epochId) =>
@@ -306,6 +342,14 @@ export function buildTrafficCluster(joinerCount: number, opts: { secondMemberOf?
     kill(node) {
       dead.add(node.id)
       node.manager.stopAll()
+    },
+    defer(node, kinds) {
+      deferred.set(node.id, { kinds: new Set(kinds), held: [] })
+    },
+    release(node) {
+      const hold = deferred.get(node.id)
+      deferred.delete(node.id)
+      for (const { from, frame, viaServer } of hold?.held ?? []) route(node.id, from, frame, viaServer)
     },
     electAfterHostLoss() {
       if (!dead.has(host.id)) throw new Error('kill the host first')

@@ -92,21 +92,6 @@ describe('nothing left to take out', () => {
 })
 
 describe('refused', () => {
-  it('says one cannot be taken out right now and what can be done instead, naming no computer and not telling the person to wait', async () => {
-    seed(['x', 'y'])
-    api.teamLeaveOffice.mockResolvedValue({ success: false, error: 'ELECTED_AUTHORITY' })
-
-    await useTeamStore.getState().withdrawMember('t', 'x')
-
-    const [toast] = toasts()
-    expect(toast.title).toBe('Could not remove name-x from the team')
-    expect(toast.body).toMatch(/can’t take out one digital human on its own right now/)
-    expect(toast.body).toMatch(/leave with all of your digital humans instead/)
-    expect(toast.body).toMatch(/duties are kept/)
-    expect(toast.body).not.toMatch(/computer/)
-    expect(toast.body).not.toMatch(/later/i)
-  })
-
   it('says the team cannot be reached right now', async () => {
     seed(['x', 'y'])
     api.teamLeaveOffice.mockResolvedValue({ success: false, error: 'OFFICE_UNREACHABLE' })

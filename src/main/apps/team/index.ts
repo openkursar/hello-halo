@@ -49,6 +49,7 @@ export { collabReportOwnership, releaseCollaboration, releaseCollaborationsOfApp
 
 let storeInstance: TeamStore | null = null
 let serviceInstance: TeamService | null = null
+let unsubscribeAppRenamed: (() => void) | null = null
 
 export function getTeamStore(): TeamStore | null {
   return storeInstance
@@ -122,6 +123,7 @@ interface InitTeamServiceDeps {
   // no federation). Optional — absent in a non-federated build.
   onRosterMutated?: TeamServiceDeps['onRosterMutated']
   onMemberProfileChanged?: TeamServiceDeps['onMemberProfileChanged']
+  onMemberRenamed?: TeamServiceDeps['onMemberRenamed']
   onRunStateChanged?: TeamServiceDeps['onRunStateChanged']
   onMemberRemoved?: TeamServiceDeps['onMemberRemoved']
   onOfficeDissolved?: TeamServiceDeps['onOfficeDissolved']
@@ -149,6 +151,7 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
     getTriggerSync: deps.getTriggerSync,
     onRosterMutated: deps.onRosterMutated,
     onMemberProfileChanged: deps.onMemberProfileChanged,
+    onMemberRenamed: deps.onMemberRenamed,
     onRunStateChanged: deps.onRunStateChanged,
     onMemberRemoved: deps.onMemberRemoved,
     onOfficeDissolved: deps.onOfficeDissolved,
@@ -161,6 +164,8 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
     isConversationBusy: deps.isConversationBusy,
   })
   serviceInstance = service
+  unsubscribeAppRenamed = deps.appManager.onAppRenamed((appId, previousName, name) =>
+    service.followAppRename(appId, previousName, name))
   reconcileCoordinatorIdentity(deps.store, deps.appManager)
 
   const duration = performance.now() - start
@@ -169,6 +174,8 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
 }
 
 export function shutdownTeamService(): void {
+  unsubscribeAppRenamed?.()
+  unsubscribeAppRenamed = null
   serviceInstance = null
   console.log('[TeamService] Shutdown complete')
 }

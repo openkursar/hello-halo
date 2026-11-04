@@ -183,6 +183,9 @@ export type AppUninstalledHandler = (app: InstalledApp, reason: AppUninstallReas
 /** Callback fired after an author's new version was applied with `upgradeSpec`. */
 export type SpecUpgradedHandler = (appId: string, outcome: SpecUpgradeOutcome) => void
 
+/** Callback fired after a spec change gave an App a different `name`. */
+export type AppRenamedHandler = (appId: string, previousName: string, name: string) => void
+
 /** Unsubscribe function returned by event registration */
 export type Unsubscribe = () => void
 
@@ -619,4 +622,10 @@ export interface AppManagerService {
    * upgraded the App. Returns an unsubscribe function.
    */
   onAppSpecUpgraded(handler: SpecUpgradedHandler): Unsubscribe
+
+  /**
+   * Register a callback fired after `updateSpec` or `upgradeSpec` changed the
+   * App's name. Returns an unsubscribe function.
+   */
+  onAppRenamed(handler: AppRenamedHandler): Unsubscribe
 }
