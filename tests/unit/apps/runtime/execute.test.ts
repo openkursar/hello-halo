@@ -985,6 +985,35 @@ describe('executeRun — MCP wiring', () => {
   })
 })
 
+describe('executeRun — web search switch', () => {
+  it('runs without Halo web search and the engine\'s own search, but can still open a given page, when the owner switched it off', async () => {
+    vi.mocked(createSession).mockClear()
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    await executeRun({
+      app: makeApp({ permissions: { granted: [], denied: ['web-search'] } }),
+      trigger: baseTrigger,
+      store: makeStore(),
+      memory: makeMemory(),
+    })
+
+    const sdkOptions = vi.mocked(createSession).mock.calls[0][0] as { mcpServers: Record<string, unknown>; disallowedTools?: string[] }
+    expect(Object.keys(sdkOptions.mcpServers)).not.toContain('web-search')
+    expect(Object.keys(sdkOptions.mcpServers)).toEqual(expect.arrayContaining(['halo-report', 'halo-notify', 'ocr']))
+    expect(sdkOptions.disallowedTools).toEqual(expect.arrayContaining(['WebSearch']))
+    expect(sdkOptions.disallowedTools).not.toContain('WebFetch')
+  })
+
+  it('keeps web search by default', async () => {
+    vi.mocked(createSession).mockClear()
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+
+    const sdkOptions = vi.mocked(createSession).mock.calls[0][0] as { mcpServers: Record<string, unknown>; disallowedTools?: string[] }
+    expect(Object.keys(sdkOptions.mcpServers)).toContain('web-search')
+    expect(sdkOptions.disallowedTools ?? []).not.toContain('WebFetch')
+  })
+})
+
 describe('executeRun — thinking level', () => {
   async function runWith(userOverrides: Record<string, unknown>) {
     vi.mocked(createSession).mockClear()

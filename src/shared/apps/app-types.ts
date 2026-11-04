@@ -597,6 +597,17 @@ export function isConversationCollabEnabled(app: Pick<InstalledApp, 'permissions
 }
 
 /**
+ * The switch for going online to look things up: Halo's web search and the
+ * engine's own web search and page fetch. On unless the owner turns it off;
+ * the AI Browser keeps its own switch.
+ */
+export const WEB_SEARCH_PERMISSION = 'web-search'
+
+export function isWebSearchEnabled(app: Pick<InstalledApp, 'permissions' | 'spec'>): boolean {
+  return resolvePermission(app, WEB_SEARCH_PERMISSION)
+}
+
+/**
  * Whether the app was installed by the built-in loader (bundled with the
  * application binary) rather than by the user. Built-in apps are re-synced
  * from disk on every launch and are protected from permanent deletion

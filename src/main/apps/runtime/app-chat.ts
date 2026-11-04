@@ -145,6 +145,7 @@ import { createOcrMcpServer } from '../../services/ocr'
 import { createApiRefMcpServer } from '../../services/api-ref'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { createConversationCollabMcpServer, resolveConversationCollab } from './conversation-collab'
+import { withheldWebSearch, withholdWebSearchBuiltins } from './web-search-switch'
 import { getSpace, getSpaceDir, isSpaceMemoryEnabled } from '../../services/space.service'
 import { readSessionMessages, readSessionTranscript, readSessionMessageThoughts, loadChatEngineState, saveChatEngineBinding, saveChatEngineRouting, deleteChatSessionId, copySessionJsonl } from './session-store'
 import { prepareAppEngineSession, resolveAppSessionEngine } from './engine-selection'
@@ -963,15 +964,17 @@ async function runAppChatTurn(
   // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
   // Starts from the base toolset. Excluded: `halo-apps` for a disposable member,
   // whose digital-human tools would create artifacts that outlive the team
-  // (see `disposableMember`). An IM guest keeps `halo-apps` here; the capability
-  // policy below decides whether the guest may use it.
+  // (see `disposableMember`), and web search when the owner switched it off. An
+  // IM guest keeps `halo-apps` here; the capability policy below decides
+  // whether the guest may use it.
+  const webSearch = withheldWebSearch(app)
   const mcpServers: Record<string, any> = {
     ...(dbMcpServers ?? {}),
     'halo-notify': notifyMcpServer,
     ...(personCaller.authority !== 'guest' ? { 'halo-person-context': createPersonContextMcpServer(personCaller) } : {}),
     ...buildBaseToolset({
       spaceId,
-      exclude: disposableMember ? ['halo-apps'] : [],
+      exclude: [...(disposableMember ? ['halo-apps' as const] : []), ...webSearch.servers],
       // Mounted above for the caller's own authority.
       omitPersonContext: true,
       omitSkillManagement: permCtx?.isOwner === false || Boolean(origin),
@@ -1112,6 +1115,7 @@ async function runAppChatTurn(
 
   // Override for app chat context
   sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt, engineId)
+  withholdWebSearchBuiltins(sdkOptions, webSearch)
 
   // Non-native sessions (IM channels, etc.) are non-interactive — the user
   // cannot respond to interactive tool prompts, so deny them preemptively.

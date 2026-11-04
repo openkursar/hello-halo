@@ -27,13 +27,14 @@ interface ToggleableCapability {
 
 /**
  * The user-toggleable built-in capabilities, in Capabilities-panel order.
- * Always-on capabilities (web search, memory, OCR, operating Halo) are
- * intentionally excluded — they can never be "disabled", so guiding the user to
- * enable them is nonsense.
+ * Always-on capabilities (memory, OCR, operating Halo) are intentionally
+ * excluded — they can never be "disabled", so guiding the user to enable them
+ * is nonsense.
  */
 const TOGGLEABLE_CAPABILITIES: ToggleableCapability[] = [
   { permission: 'ai-browser', label: 'AI Browser', grants: 'browsing the web, filling forms, scraping pages, and browser automation' },
   { permission: 'ai-terminal', label: 'AI Terminal', grants: 'running shell commands, SSH, and interactive terminals' },
+  { permission: 'web-search', label: 'Web Search', grants: 'searching the internet' },
   { permission: 'email', label: 'Email', grants: 'reading, sending, and managing emails and calendar' },
   { permission: 'im-push', label: 'IM Push', grants: 'sending messages to IM contacts' },
 ]

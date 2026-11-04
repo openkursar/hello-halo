@@ -524,6 +524,33 @@ describe('a temporary collaboration member mounts no memory and no digital-human
   })
 })
 
+describe('the owner switched web search off', () => {
+  beforeEach(() => {
+    buildUserSessionSdkOptions.mockClear()
+    keptMemberContext()
+    app.permissions.denied = ['web-search'] as never[]
+  })
+  afterEach(() => {
+    app.permissions.denied = []
+  })
+
+  it('leaves Halo web search out, denies the engine\'s own search and still lets it open a given page', async () => {
+    await sendAppChatMessage(memberTurn())
+    expect(Object.keys(mountedSurfaces().mcpServers)).not.toContain('web-search')
+    const options = buildUserSessionSdkOptions.mock.results.at(-1)!.value as { disallowedTools?: string[] }
+    expect(options.disallowedTools).toEqual(expect.arrayContaining(['WebSearch']))
+    expect(options.disallowedTools).not.toContain('WebFetch')
+  })
+
+  it('gives a request from another computer no more than the owner allows', async () => {
+    await sendAppChatMessage(memberTurn({ origin: 'colleague' }))
+    const options = buildUserSessionSdkOptions.mock.results.at(-1)!.value as { disallowedTools?: string[]; mcpServers?: Record<string, unknown> }
+    expect(Object.keys(mountedSurfaces().mcpServers)).not.toContain('web-search')
+    expect(Object.keys(options.mcpServers ?? {})).not.toContain('web-search')
+    expect(options.disallowedTools).toEqual(expect.arrayContaining(['WebSearch']))
+  })
+})
+
 describe('a kept digital human retains persistent memory through native file tools', () => {
   beforeEach(() => {
     buildUserSessionSdkOptions.mockClear()

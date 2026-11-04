@@ -63,6 +63,7 @@ import { createApiRefMcpServer } from '../../services/api-ref'
 import { buildBaseToolset } from '../../services/agent/toolsets/base'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { createConversationCollabMcpServer, resolveConversationCollab } from './conversation-collab'
+import { withheldWebSearch, withholdWebSearchBuiltins } from './web-search-switch'
 import { buildRunSenderKey } from '../../../shared/apps/im-keys'
 import { closeRunSender, openRunSender } from './run-conversation-source'
 import { getConfig, resolveClaudeConfigDir } from '../../foundation/config.service'
@@ -545,8 +546,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     // Starts from the base toolset. Excluded: `halo-apps` — an unattended run
     // does not manage digital humans. Documentation stays: a run has no person
-    // to ask what a screen looks like.
-    const baseToolset = buildBaseToolset({ spaceId: app.spaceId!, exclude: ['halo-apps'] })
+    // to ask what a screen looks like. Web search goes when the owner switched it off.
+    const webSearch = withheldWebSearch(app)
+    const baseToolset = buildBaseToolset({ spaceId: app.spaceId!, exclude: ['halo-apps', ...webSearch.servers] })
 
     const sdkOptions = await buildUserSessionSdkOptions({
       engineId,
@@ -586,6 +588,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     // Override SDK options for automation context
     sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt, engineId)
+    withholdWebSearchBuiltins(sdkOptions, webSearch)
     // Token-level partials OFF: a run is headless and emits no renderer events,
     // so there is no live consumer for token frames. processStream persists one
     // aggregate block-level message (thinking / tool-call / tool-result / text) per

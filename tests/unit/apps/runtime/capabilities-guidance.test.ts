@@ -80,9 +80,15 @@ describe('buildDisabledCapabilitiesGuidance', () => {
   })
 
   it('never lists always-on capabilities even if named in denied', () => {
-    // web-search / memory / ocr are not toggleable; denying them is a no-op here.
-    const out = buildDisabledCapabilitiesGuidance(makeApp(['web-search', 'ocr', 'memory']))
+    // memory / ocr are not toggleable; denying them is a no-op here.
+    const out = buildDisabledCapabilitiesGuidance(makeApp(['ocr', 'memory']))
     expect(out).toBeNull()
+  })
+
+  it('lists web search once the owner switched it off', () => {
+    const out = buildDisabledCapabilitiesGuidance(makeApp(['web-search']))
+    expect(out).toContain('Web Search')
+    expect(out).toContain('Settings → Capabilities')
   })
 })
 

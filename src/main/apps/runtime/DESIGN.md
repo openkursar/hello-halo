@@ -80,7 +80,10 @@ digital-human chat in `app-chat.ts`) rather than routing through the space chat'
 - Tools: `buildBaseToolset` (`toolsets/base.ts`) — web search, Halo documentation and,
   while digital humans are enabled, `halo-apps`. Each entry starts from it and states
   its exclusions where it builds (automation: no `halo-apps`; a disposable team
-  member: no `halo-apps`). Everything else an entry mounts — notify, report,
+  member: no `halo-apps`; web search switched off by the owner: no `web-search` and
+  the engine's `WebSearch` denied, via `web-search-switch.ts`, before any capability
+  policy narrows the turn — opening a given page and the AI browser are separate
+  capabilities and stay). Everything else an entry mounts — notify, report,
   team, browser, terminal, OCR, email, Halo API, person context, IM file send — is
   its own, granted by app permission and caller.
 - Session engine: chat acquires an `acquireV2Session` lease with a `TurnSink`

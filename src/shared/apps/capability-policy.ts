@@ -211,7 +211,11 @@ export const CAPABILITY_TOOL_GROUPS: readonly CapabilityToolGroup[] = ['file', '
 
 // ── MCP server universe ──
 
-/** Halo MCP servers always available: read-only, no side effects, no local reach. */
+/**
+ * Halo MCP servers a guest or teammate keeps whatever the policy says: read-only,
+ * no side effects, no local reach. Only among what the owner's own session has —
+ * a server the owner switched off is never mounted for anyone.
+ */
 export const CAPABILITY_SAFE_MCP: readonly string[] = ['web-search']
 
 /**
