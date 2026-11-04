@@ -12,6 +12,7 @@ paths:
   - src/main/apps/runtime/im-session*.ts
   - src/renderer/components/settings/MessageChannelsSection.tsx
   - src/renderer/components/settings/*InstanceCard.tsx
+  - src/renderer/components/settings/ChannelBackendSelect.tsx
   - src/renderer/components/settings/*Scan*Dialog.tsx
   - src/renderer/components/apps/AppBotSessionsView.tsx
 dependsOn:

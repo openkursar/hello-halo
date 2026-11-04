@@ -28,11 +28,11 @@ import type {
   TeamMemberInput,
   ProposedMember,
 } from '../../../shared/apps/team-types'
-import { leadAppIdSet } from '../../../shared/apps/team-types'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTeamStore } from '../../stores/team.store'
 import { useSpaceStore } from '../../stores/space.store'
+import { teamMemberCandidates } from '../../utils/people-model'
 import { useTranslation } from '../../i18n'
 import { SystemPromptEditor } from '../apps/SystemPromptEditor'
 import { AppInstallDialog } from '../apps/AppInstallDialog'
@@ -119,21 +119,9 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
     return found?.name ?? ''
   }, [allSpaces, currentSpace, selectedSpaceId])
 
-  // Lead apps are an internal coordination role and must never be addable as a
-  // member; exclude every team's lead from the pickable set.
-  const leadAppIds = useMemo(() => leadAppIdSet(teams), [teams])
-
-  // Automation apps available to add. Show ALL of the user's digital humans
-  // (any space) so they can be composed into a team — joining never moves a
-  // digital human out of its own space.
-  const availableApps = useMemo<InstalledApp[]>(
-    () => apps.filter(a =>
-      a.spec.type === 'automation' &&
-      a.status !== 'uninstalled' &&
-      !leadAppIds.has(a.id)
-    ),
-    [apps, leadAppIds]
-  )
+  // Show ALL of the user's digital humans (any space) so they can be composed
+  // into a team — joining never moves a digital human out of its own space.
+  const availableApps = useMemo(() => teamMemberCandidates(apps, teams), [apps, teams])
 
   const addedApps = useMemo(
     () => selectedAppIds.map(id => availableApps.find(a => a.id === id)).filter(Boolean) as InstalledApp[],

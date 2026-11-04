@@ -42,6 +42,8 @@ import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { parse as parseYaml } from 'yaml'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsStore } from '../../stores/apps.store'
+import { useTeamStore } from '../../stores/team.store'
+import { pickableDigitalHumans } from '../../utils/people-model'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useNotificationStore } from '../../stores/notification.store'
 import { useTranslation } from '../../i18n'
@@ -207,6 +209,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, initial
   const targetCommandName = republishTarget?.commandName
   const { t } = useTranslation()
   const apps = useAppsStore(s => s.apps)
+  const teams = useTeamStore(s => s.teams)
   const showToast = useNotificationStore(s => s.show)
   // Post-publish "View" jumps to My Publications so the creator can see the
   // freshly-listed entry. This dialog can be opened from outside StorePage
@@ -373,6 +376,14 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, initial
       .then(res => { if (!cancelled && res.success) setPinnedAppId(res.data?.appId ?? null) })
     return () => { cancelled = true }
   }, [targetSlug, type, debouncedAuthor])
+
+  // A digital human built for one temporary collaboration is not offered, unless
+  // it is already chosen or is the one an update of this listing lands on.
+  const offeredInstalled = useMemo(() => {
+    if (type !== 'automation') return installedOfType
+    const pickable = new Set(pickableDigitalHumans(installedOfType, teams).map(a => a.id))
+    return installedOfType.filter(a => pickable.has(a.id) || a.id === selectedInstalledId || a.id === pinnedAppId)
+  }, [installedOfType, teams, type, selectedInstalledId, pinnedAppId])
 
   // Store version of the target slug — the base the suggested version increments
   // from, and what the pre-flight monotonicity check compares against. Null
@@ -1016,7 +1027,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, initial
           {/* Source body */}
           {source === 'installed' ? (
             <InstalledPicker
-              apps={installedOfType}
+              apps={offeredInstalled}
               selectedId={selectedInstalledId}
               onSelect={id => { setSelectedInstalledId(id); clearInvalid('source') }}
               type={type}

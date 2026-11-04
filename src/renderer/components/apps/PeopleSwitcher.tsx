@@ -6,7 +6,7 @@
 import { useEffect, useMemo } from 'react'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTeamStore } from '../../stores/team.store'
-import { visibleDigitalHumans } from '../../utils/people-model'
+import { pickableDigitalHumans } from '../../utils/people-model'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { AutomationAvatar } from './AutomationAvatar'
@@ -34,8 +34,7 @@ export function PeopleSwitcher({ selectedAppId, onSelect }: PeopleSwitcherProps)
 
   const language = getCurrentLanguage()
   const items = useMemo<DetailSwitcherItem[]>(
-    () => visibleDigitalHumans(apps, teams)
-      .filter(app => app.status !== 'uninstalled')
+    () => pickableDigitalHumans(apps, teams)
       .map(app => {
         const spec = resolveSpecI18n(app.spec, language)
         const name = spec.name || app.id
