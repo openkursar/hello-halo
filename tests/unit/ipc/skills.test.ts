@@ -62,6 +62,8 @@ const TOKEN = 'Fixture1!Token'
 
 beforeAll(async () => {
   registerSkillsHandlers()
+  // The preload reads Electron's process.getSystemVersion while loading; plain Node has none.
+  process.getSystemVersion = () => '15.1'
   await import('../../../src/preload')
   const app = express()
   app.use(express.json())

@@ -23,6 +23,13 @@ const apiMock = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../src/renderer/api', () => ({ api: apiMock }))
+// Titles follow the UI language, which otherwise comes from the machine running the test.
+vi.mock('../../../src/renderer/i18n', () => ({
+  default: {
+    t: (text: string, values?: Record<string, string>) => text.replace('{{time}}', values?.time ?? ''),
+    on: () => {}, off: () => {}, language: 'en',
+  },
+}))
 
 vi.mock('../../../src/renderer/services/canvas-lifecycle', () => ({
   canvasLifecycle: { hideAllBrowserViews: vi.fn() },
