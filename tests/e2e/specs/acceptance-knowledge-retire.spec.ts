@@ -36,11 +36,15 @@ async function askKnowledge(page: Page, model: AcceptanceModel, kb: KnowledgeBas
   let step = 0
   let grep = ''
   model.respond(request => {
+    // Only this turn's requests are scripted; any other request (e.g. a title) gets a plain reply.
+    if (!request.text.includes(fact)) return { text: 'OK' }
     step++
-    const prompt = [contentText(request.body.system), ...request.messages.filter(message => message.role === 'system').map(message => contentText(message.content))].join('\n')
+    // The knowledge section may arrive in the system prompt or as a context message.
+    const prompt = [contentText(request.body.system), request.text].join('\n')
     expect(prompt).toContain(`## ${kb.name}`)
-    expect(prompt).not.toContain(fact)
-    if (forbiddenName) expect(prompt).not.toContain(forbiddenName)
+    const context = prompt.split(`## ${kb.name}`)[1] ?? ''
+    expect(context.split('\n## ')[0]).not.toContain(fact)
+    if (forbiddenName) expect(context.split('\n## ')[0]).not.toContain(forbiddenName)
     if (step === 1) return { tools: [modelTool(request, 'Grep', { pattern: fact, path: join(kb.path, 'text'), output_mode: 'files_with_matches' }, 'retire-search')] }
     const result = request.toolResults.find(entry => entry.id === 'retire-search')
     expect(result?.error).toBe(false)
