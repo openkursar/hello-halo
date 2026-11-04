@@ -37,7 +37,7 @@ import { previewAppSpaceChange, changeAppDefaultSpace, retainAppEnvironments } f
 import { readSessionMessages } from './session-store'
 import { RunProcessClearedError } from './errors'
 import { buildAppCapabilityInventory } from './capability-inventory'
-import { buildPeopleDirectory } from './people-directory'
+import { buildPeopleDirectory, directoryExcludedIds } from './people-directory'
 import { getTeamStore } from '../team'
 import type { SchedulerService } from '../../platform/scheduler'
 import type { MemoryService } from '../../platform/memory'
@@ -542,6 +542,18 @@ export function getStudioSummary(language?: string) {
     .filter(member => member.ephemeral)
     .map(member => member.appId) ?? []
   return manager.getStudioSummary(language, ephemeral)
+}
+
+/**
+ * The tags on one list, with how many items carry each. Its own read: the
+ * counts span the whole list, whatever page, search or filter is showing.
+ */
+export function listAppTags(type: import('../../../shared/apps/app-tags').TaggableAppType) {
+  const manager = getAppManager()
+  if (!manager) throw new Error('App manager is not initialized')
+  // The directory's own exclusion, so the counts match the people it lists.
+  const excluded = type === 'automation' ? [...directoryExcludedIds(getTeamStore()?.listDirectoryMemberships() ?? [])] : []
+  return manager.listTagCounts(type, excluded)
 }
 
 export function listPeopleDirectory(query: import('../../../shared/apps/people-directory').PeopleDirectoryQuery = {}) {

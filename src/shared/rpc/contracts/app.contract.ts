@@ -43,6 +43,8 @@ export const appRpc = {
   appUpdateConfig: rawRpcMethod('app:update-config'),
   appUpdateFrequency: rawRpcMethod('app:update-frequency'),
   appUpdateOverrides: rawRpcMethod('app:update-overrides'),
+  appRenameTag: rawRpcMethod('app:rename-tag'),
+  appListTags: rawRpcMethod('app:list-tags'),
   appUpdateSpec: rawRpcMethod('app:update-spec'),
   appGetAuthorSpec: rawRpcMethod('app:get-author-spec'),
   appAdoptAuthorVersion: rawRpcMethod('app:adopt-author-version'),

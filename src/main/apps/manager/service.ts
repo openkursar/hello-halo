@@ -57,6 +57,7 @@ import { createSkillLifecycle, readPersonalSkill } from './skill-lifecycle'
 import { classifySkillSource } from '../../services/skills'
 import { isBuiltinApp } from './types'
 import { sanitizeMemorySettings } from '../../../shared/types/memory'
+import { cleanTag, normalizeTags, requireTag } from '../../../shared/apps/app-tags'
 import { compareDotVersions } from '../../../shared/store/version-compare'
 import type { SpecUpgradeOutcome } from '../../../shared/apps/app-types'
 import { authorVersionPatch, mergeAuthorUpgrade } from './spec-upgrade'
@@ -869,6 +870,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
           delete merged[key]
         } else if (key === 'chatReasoningEffort' && !isReasoningEffortLevel(value)) {
           throw new Error(`Invalid chatReasoningEffort: ${String(value)}`)
+        } else if (key === 'tags') {
+          const tags = normalizeTags(value)
+          if (tags.length > 0) merged[key] = tags
+          else delete merged[key]
         } else if (key === 'disabledTools') {
           if (
             !Array.isArray(value) || value.length > MAX_DISABLED_TOOLS ||
@@ -1163,6 +1168,16 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     getStudioSummary(language, excludeIds) { return store.getStudioSummary(language, excludeIds) },
 
     listPeopleDirectory(filter) { return store.listPeopleDirectory(filter) },
+    listTagCounts(type, excludeIds) { return store.listTagCounts(type, excludeIds) },
+
+    renameTag(type, from, to) {
+      const source = cleanTag(from)
+      if (!source) throw new Error('Name the tag to change')
+      const target = to == null ? null : requireTag(to)
+      const changed = store.renameTag(type, source, target)
+      if (changed > 0) console.log(`[AppManager] Tag ${target ? 'renamed' : 'removed'} on ${changed} ${type} item(s)`)
+      return changed
+    },
 
     listPersonIdsByStatus(statuses) { return store.listPersonIdsByStatus(statuses) },
 

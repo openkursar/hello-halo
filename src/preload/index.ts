@@ -585,6 +585,8 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   appUpdateConfig: (input: { appId: string; config: Record<string, unknown> }) => Promise<IpcResponse>
   appUpdateFrequency: (input: { appId: string; subscriptionId: string; frequency: string }) => Promise<IpcResponse>
   appUpdateOverrides: (input: { appId: string; overrides: Record<string, unknown> }) => Promise<IpcResponse>
+  appRenameTag: (input: import('../shared/apps/app-tags').RenameTagInput) => Promise<IpcResponse<{ changed: number }>>
+  appListTags: (type: import('../shared/apps/app-tags').TaggableAppType) => Promise<IpcResponse<import('../shared/apps/app-tags').TagCount[]>>
   appUpdateSpec: (input: { appId: string; specPatch: Record<string, unknown> }) => Promise<IpcResponse>
   appGetAuthorSpec: (appId: string) => Promise<IpcResponse<AppSpec | null>>
   appAdoptAuthorVersion: (input: { appId: string; entryId: string; fields: string[] }) => Promise<IpcResponse<import('../shared/apps/app-types').ActivityEntry>>

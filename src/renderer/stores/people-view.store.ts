@@ -15,6 +15,7 @@ interface PeopleViewState {
   query: string
   team: string
   space: string
+  tag: string
   page: number
   directoryScroll: number
   scrolls: Record<string, number>
@@ -26,7 +27,7 @@ interface PeopleViewState {
   returnInbox: boolean
   returnPerson: string | null
   returnTeam: TeamNavigationTarget | null
-  setFilters: (patch: Partial<Pick<PeopleViewState, 'query' | 'team' | 'space' | 'page'>>) => void
+  setFilters: (patch: Partial<Pick<PeopleViewState, 'query' | 'team' | 'space' | 'tag' | 'page'>>) => void
   saveScroll: (key: string, top: number) => void
   saveTranscriptPosition: (key: string, position: TranscriptPosition) => void
   saveDraft: (key: string, answers: EscalationAnswer[]) => void
@@ -34,7 +35,7 @@ interface PeopleViewState {
 }
 
 export const usePeopleViewStore = create<PeopleViewState>()(persist((set) => ({
-  query: '', team: '', space: '', page: 1,
+  query: '', team: '', space: '', tag: '', page: 1,
   directoryScroll: 0, scrolls: {}, transcriptPositions: {}, drafts: {}, focusEntry: null, teamTarget: null, returnInbox: false, returnPerson: null, returnTeam: null,
   setFilters: patch => set({ ...patch, page: patch.page ?? 1 }),
   saveScroll: (key, top) => set(state => ({ scrolls: { ...state.scrolls, [key]: top } })),
@@ -43,5 +44,5 @@ export const usePeopleViewStore = create<PeopleViewState>()(persist((set) => ({
   clearDraft: key => set(state => { const drafts = { ...state.drafts }; delete drafts[key]; return { drafts } }),
 }), {
   name: 'halo-people-view',
-  partialize: state => ({ query: state.query, team: state.team, space: state.space, page: state.page }),
+  partialize: state => ({ query: state.query, team: state.team, space: state.space, tag: state.tag, page: state.page }),
 }))

@@ -5,7 +5,7 @@ import { migrations as managerMigrations } from '../../../../src/main/apps/manag
 import { migrations } from '../../../../src/main/apps/runtime/migrations'
 import { AppManagerStore } from '../../../../src/main/apps/manager/store'
 import { ActivityStore } from '../../../../src/main/apps/runtime/store'
-import { buildPeopleDirectory } from '../../../../src/main/apps/runtime/people-directory'
+import { buildPeopleDirectory, directoryExcludedIds } from '../../../../src/main/apps/runtime/people-directory'
 import type { AppManagerService } from '../../../../src/main/apps/manager'
 import type { AppRuntimeService } from '../../../../src/main/apps/runtime/types'
 
@@ -30,7 +30,7 @@ describe('bounded people directory', () => {
     activity = new ActivityStore(db)
     manager = {
       listPeopleDirectory: filter => managerStore.listPeopleDirectory(filter),
-      listPersonIdsByStatus: statuses => managerStore.listPersonIdsByStatus(statuses),
+      listPersonIdsByStatus: statuses => managerStore.listPersonIdsByStatus(statuses), listTagCounts: (type, excludeIds) => managerStore.listTagCounts(type, excludeIds),
     } as AppManagerService
     const insert = db.prepare(`INSERT INTO installed_apps(id, spec_id, space_id, spec_json, user_config_json, status, installed_at)
       VALUES (?, ?, 'space', ?, ?, ?, 100)`)
@@ -124,5 +124,57 @@ describe('bounded people directory', () => {
     expect(page.items[0].state.consecutiveErrors).toBe(5)
     expect(activity.getDirectoryRecentRuns(['p001'])).toHaveLength(5)
     spy.mockRestore()
+  })
+
+  describe('tags', () => {
+    const tag = (id: string, tags: string[]) =>
+      database.getAppDatabase().prepare('UPDATE installed_apps SET user_overrides_json = ? WHERE id = ?').run(JSON.stringify({ tags }), id)
+
+    beforeEach(() => {
+      tag('p001', ['巡检', 'Payments'])
+      tag('p002', ['巡检'])
+      tag('p003', ['payments'])
+      tag('p000', ['巡检']) // ephemeral member: hidden, so not counted
+      tag('p149', ['Removed only']) // removed: not counted
+    })
+
+    it('counts every tag on the directory in one read, letter case folded, hidden and removed people left out', () => {
+      const spy = vi.spyOn(database.getAppDatabase(), 'prepare')
+      expect(managerStore.listTagCounts('automation', [...directoryExcludedIds(memberships)])).toEqual([{ name: 'Payments', count: 2 }, { name: '巡检', count: 2 }])
+      expect(spy).toHaveBeenCalledTimes(1)
+      spy.mockRestore()
+      expect(buildPeopleDirectory(manager, activity, runtime, memberships, { limit: 1 }).items[0].tags).toEqual(['巡检', 'Payments'])
+    })
+
+    it('folds only ASCII letter case, the same rule the screens use', () => {
+      tag('p004', ['Été'])
+      tag('p005', ['été'])
+      expect(managerStore.listTagCounts('automation').filter(entry => entry.name.endsWith('té'))).toHaveLength(2)
+      expect(managerStore.renameTag('automation', 'été', 'Summer')).toBe(1)
+      expect(managerStore.getById('p004')?.userOverrides.tags).toEqual(['Été'])
+      expect(managerStore.getById('p005')?.userOverrides.tags).toEqual(['Summer'])
+    })
+
+    it('filters by one tag whatever its case, and keeps the other filters', () => {
+      const page = buildPeopleDirectory(manager, activity, runtime, memberships, { tag: 'PAYMENTS', limit: 24 })
+      expect(page.items.map(person => person.id).sort()).toEqual(['p001', 'p003'])
+      expect(page.total).toBe(2)
+      expect(buildPeopleDirectory(manager, activity, runtime, memberships, { tag: '巡检', teamId: 'team', limit: 24 }).items.map(p => p.id)).toEqual(['p001'])
+    })
+
+    it('finds people by a tag through search', () => {
+      const page = buildPeopleDirectory(manager, activity, runtime, memberships, { q: '巡', limit: 24 })
+      expect(page.items.map(person => person.id).sort()).toEqual(['p001', 'p002'])
+    })
+
+    it('renames across the list in one go, merging into an existing tag, and deletes', () => {
+      expect(managerStore.renameTag('automation', 'payments', '巡检')).toBe(2)
+      expect(managerStore.getById('p001')?.userOverrides.tags).toEqual(['巡检'])
+      expect(managerStore.getById('p003')?.userOverrides.tags).toEqual(['巡检'])
+      expect(managerStore.renameTag('automation', '巡检', null)).toBe(4)
+      const left = database.getAppDatabase().prepare("SELECT COUNT(*) AS n FROM installed_apps WHERE user_overrides_json LIKE '%tags%' AND id != 'p149'").get() as { n: number }
+      expect(left.n).toBe(0)
+      expect(managerStore.renameTag('mcp', 'Removed only', null)).toBe(0)
+    })
   })
 })

@@ -274,6 +274,16 @@ export const appsApi = {
     return httpRequest('PATCH', `/api/apps/${appId}/overrides`, patch)
   },
 
+  appListTags: async (type: import('../../shared/apps/app-tags').TaggableAppType): Promise<ApiResponse<import('../../shared/apps/app-tags').TagCount[]>> => {
+    if (isElectron()) return window.halo.appListTags(type)
+    return httpRequest('GET', `/api/apps/tags?type=${encodeURIComponent(type)}`)
+  },
+
+  appRenameTag: async (input: import('../../shared/apps/app-tags').RenameTagInput): Promise<ApiResponse<{ changed: number }>> => {
+    if (isElectron()) return window.halo.appRenameTag(input)
+    return httpRequest('POST', '/api/apps/tags/rename', { ...input })
+  },
+
   appUpdateSpec: async (appId: string, specPatch: Record<string, unknown>): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.appUpdateSpec({ appId, specPatch })

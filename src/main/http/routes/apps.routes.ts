@@ -123,10 +123,19 @@ export function registerAppsRoutes(app: Express): void {
       language: typeof req.query.language === 'string' ? req.query.language : undefined,
       spaceId: typeof req.query.spaceId === 'string' ? req.query.spaceId : undefined,
       teamId: typeof req.query.teamId === 'string' ? req.query.teamId : undefined,
+      tag: typeof req.query.tag === 'string' ? req.query.tag : undefined,
       attention: req.query.attention === 'true', removed: req.query.removed === 'true',
       limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
       offset: req.query.offset === undefined ? undefined : Number(req.query.offset),
     }))
+  })
+  app.get('/api/apps/tags', async (req: Request, res: Response) => {
+    res.json(appController.listTags(req.query.type))
+  })
+  app.post('/api/apps/tags/rename', async (req: Request, res: Response) => {
+    const result = appController.renameTag(req.body)
+    if (result.success) console.log('[HTTP] POST /api/apps/tags/rename')
+    res.json(result)
   })
   app.get('/api/apps/pending-inbox', async (req: Request, res: Response) => {
     const runtime = getRuntimeOrFail(res)

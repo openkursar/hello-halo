@@ -1,6 +1,6 @@
 import { useShallow } from 'zustand/react/shallow'
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUpRight, ChevronDown, ChevronRight, FolderInput, MessageSquare, MoreVertical, Play, Plus, Search, Unplug, Users } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowUpRight, ChevronDown, ChevronRight, FolderInput, MessageSquare, MoreVertical, Play, Plus, Search, Tag, Unplug, Users } from 'lucide-react'
 import { usePeopleDirectoryStore } from '../../stores/people-directory.store'
 import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
@@ -17,6 +17,11 @@ import { WorkspaceMigrationDialog } from './WorkspaceMigrationDialog'
 import { needsAttention } from '../../../shared/apps/app-types'
 import type { PeopleDirectoryQuery, PeopleDirectorySummary } from '../../../shared/apps/people-directory'
 import type { TeamUpdatedChange } from '../../../shared/apps/team-types'
+import type { TagCount } from '../../../shared/apps/app-tags'
+import { TagFilterRow } from '../tags/TagFilterRow'
+import { TagChips } from '../tags/TagChips'
+import { TagEditor } from '../tags/TagEditor'
+import { notifyTagError, useTagActions } from '../tags/useTagActions'
 
 interface DirectoryGroup {
   key: string
@@ -55,16 +60,24 @@ function groupRows(rows: PeopleDirectorySummary[]): DirectoryGroup[] {
 
 export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<string, string>; onCreate: () => void }) {
   const { t } = useTranslation()
-  const prefs = usePeopleViewStore(useShallow(state => ({ query: state.query, team: state.team, space: state.space, page: state.page, setFilters: state.setFilters })))
+  const prefs = usePeopleViewStore(useShallow(state => ({ query: state.query, team: state.team, space: state.space, tag: state.tag, page: state.page, setFilters: state.setFilters })))
   const teams = useTeamStore(state => state.teams).filter(team => !team.ephemeral)
   const { data, loading, error, load, refresh } = usePeopleDirectoryStore()
   const scroll = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => { if (scroll.current) scroll.current.scrollTop = usePeopleViewStore.getState().directoryScroll }, [])
   const language = getCurrentLanguage()
   useEffect(() => {
-    const timer = setTimeout(() => void load({ q: prefs.query, language, teamId: prefs.team || undefined, spaceId: prefs.space || undefined, limit: 24, offset: (prefs.page - 1) * 24 }), 150)
+    const timer = setTimeout(() => void load({ q: prefs.query, language, teamId: prefs.team || undefined, spaceId: prefs.space || undefined, tag: prefs.tag || undefined, limit: 24, offset: (prefs.page - 1) * 24 }), 150)
     return () => clearTimeout(timer)
-  }, [prefs.query, prefs.team, prefs.space, prefs.page, language, load])
+  }, [prefs.query, prefs.team, prefs.space, prefs.tag, prefs.page, language, load])
+  const [tags, setTags] = useState<TagCount[]>([])
+  const loadTags = useCallback(async () => {
+    const response = await api.appListTags('automation').catch(() => null)
+    if (response?.success && response.data) setTags(response.data)
+  }, [])
+  useEffect(() => { void loadTags() }, [loadTags])
+  const afterTagChange = useCallback(async () => { await Promise.all([refresh(), loadTags()]) }, [refresh, loadTags])
+  const tagActions = useTagActions('automation', afterTagChange)
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     const update = () => { if (!timer) timer = setTimeout(() => { timer = undefined; void refresh() }, 250) }
@@ -81,7 +94,7 @@ export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<strin
   const total = data?.total ?? 0
   const page = prefs.page
   const waiting = data?.attentionTotal ?? 0
-  const filtering = !!(prefs.query || prefs.team || prefs.space)
+  const filtering = !!(prefs.query || prefs.team || prefs.space || prefs.tag)
   useEffect(() => { if (!loading && data && page > 1 && data.total <= (page - 1) * 24) prefs.setFilters({ page: Math.max(1, Math.ceil(data.total / 24)) }) }, [data, loading, page, prefs.setFilters])
   const open = (app: PeopleDirectorySummary, chat = false) => {
     usePeopleViewStore.setState({ returnInbox: false, returnTeam: null })
@@ -90,7 +103,7 @@ export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<strin
     else useAppsPageStore.getState().openActivityThread(app.id)
   }
   const renderRows = (items: PeopleDirectorySummary[]) => (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">{items.map(app => <PersonCard key={app.id} app={app} spaceMap={spaceMap} onOpen={open} />)}</div>
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">{items.map(app => <PersonCard key={app.id} app={app} spaceMap={spaceMap} onOpen={open} tags={tags} onPickTag={tag => prefs.setFilters({ tag })} onTagsSaved={afterTagChange} />)}</div>
   )
   const groups = groupRows(rows)
   const removedTotal = data?.removedTotal ?? 0
@@ -117,9 +130,11 @@ export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<strin
           </button>
         )}
       </div>
+ <TagFilterRow tags={tags} value={prefs.tag} onChange={tag => prefs.setFilters({ tag })} onRename={tagActions.rename} onDelete={tagActions.remove} />
+      {tagActions.DialogComponent}
       {error && <div role="alert" className="mb-4 rounded-lg border border-destructive/30 p-3 text-sm text-destructive">{t('Could not load digital humans.')} <button onClick={() => void refresh()} className="underline">{t('Retry')}</button></div>}
       {(!data || loading) && !error && !rows.length && <p role="status" className="py-12 text-center text-muted-foreground">{t('Loading…')}</p>}
-      {data && !loading && !error && !rows.length && <div className="rounded-xl border border-dashed border-border p-10 text-center"><Users className="mx-auto mb-3 text-muted-foreground" /><h2 className="font-medium">{filtering ? t('No matching digital humans') : t('No digital humans yet')}</h2><button onClick={() => filtering ? prefs.setFilters({ query: '', team: '', space: '' }) : onCreate()} className="mt-3 text-sm text-primary">{filtering ? t('Clear filters') : t('Create Digital Human')}</button></div>}
+      {data && !loading && !error && !rows.length && <div className="rounded-xl border border-dashed border-border p-10 text-center"><Users className="mx-auto mb-3 text-muted-foreground" /><h2 className="font-medium">{filtering ? t('No matching digital humans') : t('No digital humans yet')}</h2><button onClick={() => filtering ? prefs.setFilters({ query: '', team: '', space: '', tag: '' }) : onCreate()} className="mt-3 text-sm text-primary">{filtering ? t('Clear filters') : t('Create Digital Human')}</button></div>}
       {groups.map(group => (
         <section key={group.key} className="mb-6">
           <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
@@ -135,7 +150,7 @@ export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<strin
       {removedTotal > 0 && (
         <RemovedPeopleSection
           total={removedTotal}
-          query={{ q: prefs.query, language, teamId: prefs.team || undefined, spaceId: prefs.space || undefined }}
+          query={{ q: prefs.query, language, teamId: prefs.team || undefined, spaceId: prefs.space || undefined, tag: prefs.tag || undefined }}
           renderRows={renderRows}
         />
       )}
@@ -184,7 +199,7 @@ function RemovedPeopleSection({ total, query, renderRows }: {
     setItems([])
     loadFrom(0)
     return () => { request.current++ }
-  }, [expanded, total, query.q, query.language, query.teamId, query.spaceId])
+  }, [expanded, total, query.q, query.language, query.teamId, query.spaceId, query.tag])
   return (
     <section className="mt-8">
       <button
@@ -215,10 +230,13 @@ function RemovedPeopleSection({ total, query, renderRows }: {
   )
 }
 
-function PersonCard({ app, spaceMap, onOpen }: {
+function PersonCard({ app, spaceMap, onOpen, tags, onPickTag, onTagsSaved }: {
   app: PeopleDirectorySummary
   spaceMap: Record<string, string>
   onOpen: (app: PeopleDirectorySummary, chat?: boolean) => void
+  tags: readonly TagCount[]
+  onPickTag: (tag: string) => void
+  onTagsSaved: () => void | Promise<void>
 }) {
   const { t } = useTranslation()
   const state = app.state
@@ -234,10 +252,11 @@ function PersonCard({ app, spaceMap, onOpen }: {
           {app.spaceId && app.status !== 'uninstalled' && (
             <button aria-label={t('Chat with {{name}}', { name: app.name })} onClick={event => { event.stopPropagation(); onOpen(app, true) }} className="rounded-lg p-2 text-muted-foreground hover:bg-secondary"><MessageSquare size={16} /></button>
           )}
-          {app.status !== 'uninstalled' && <PersonCardMenu app={app} />}
+          {app.status !== 'uninstalled' && <PersonCardMenu app={app} tags={tags} onTagsSaved={onTagsSaved} />}
         </div>
       </div>
       <p className="my-3 min-w-0 flex-1 truncate text-sm text-muted-foreground" title={app.description}>{app.description || t('Digital human')}</p>
+      {!!app.tags?.length && <div className="-mt-1 mb-3"><TagChips tags={app.tags} onPick={onPickTag} /></div>}
       <button onClick={event => { event.stopPropagation(); useAppsPageStore.getState().openAppTeams(app.id) }} className="flex max-w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-primary"><Users size={14} /><span className="truncate">{memberships.length ? memberships.slice(0, 2).map(team => team.name).join(' · ') : t('No teams yet')}</span>{memberships.length > 2 && <span>+{memberships.length - 2}</span>}</button>
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border-soft pt-3 text-xs text-muted-foreground"><span title={app.spaceId ? t('Workspace: {{name}}', { name: spaceMap[app.spaceId] ?? t('Workspace unavailable') }) : t('Global — runs outside any workspace')}>{app.spaceId ? spaceMap[app.spaceId] ?? t('Workspace unavailable') : t('Global')}</span>      <PersonStatus app={app} /></div>
     </article>
@@ -269,21 +288,33 @@ function PersonStatus({ app }: { app: PeopleDirectorySummary }) {
 }
 
 /** Hover menu with the list-level quick actions; everything else lives on the detail page. */
-function PersonCardMenu({ app }: { app: PeopleDirectorySummary }) {
+function PersonCardMenu({ app, tags, onTagsSaved }: { app: PeopleDirectorySummary; tags: readonly TagCount[]; onTagsSaved: () => void | Promise<void> }) {
   const { t } = useTranslation()
   const { triggerApp, uninstallApp } = useAppsStore(useShallow(state => ({ triggerApp: state.triggerApp, uninstallApp: state.uninstallApp })))
   const { showConfirm, DialogComponent } = useConfirmDialog()
   const [open, setOpen] = useState(false)
   const [showWorkspaceDialog, setShowWorkspaceDialog] = useState(false)
+  const [editingTags, setEditingTags] = useState(false)
+  const [ownTags, setOwnTags] = useState<string[]>(app.tags ?? [])
+  useEffect(() => { setOwnTags(app.tags ?? []) }, [app.tags])
+  const saveTags = async (next: string[]) => {
+    const previous = ownTags
+    setOwnTags(next)
+    const result: { success: boolean; error?: string } = await api.appUpdateOverrides(app.id, { tags: next.length ? next : null })
+      .catch(error => ({ success: false, error: error instanceof Error ? error.message : undefined }))
+    if (result.success) { void onTagsSaved(); return }
+    setOwnTags(previous)
+    notifyTagError(t('Could not save the tags'), result.error)
+  }
   const menuRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (!open) return
+    if (!open && !editingTags) return
     function handle(event: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) setOpen(false)
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) { setOpen(false); setEditingTags(false) }
     }
     document.addEventListener('mousedown', handle)
     return () => document.removeEventListener('mousedown', handle)
-  }, [open])
+  }, [open, editingTags])
   const busy = app.state?.status === 'running' || app.state?.status === 'queued'
   const handleUninstall = async () => {
     setOpen(false)
@@ -306,6 +337,9 @@ function PersonCardMenu({ app }: { app: PeopleDirectorySummary }) {
           <button onClick={() => { setOpen(false); void triggerApp(app.id) }} disabled={busy} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted/60 disabled:opacity-40">
             <Play className="h-3.5 w-3.5 text-muted-foreground" />{busy ? t('Working') : t('Run now')}
           </button>
+          <button onClick={() => { setOpen(false); setEditingTags(true) }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted/60">
+            <Tag className="h-3.5 w-3.5 text-muted-foreground" />{t('Tags…')}
+          </button>
           <button onClick={() => { setOpen(false); setShowWorkspaceDialog(true) }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted/60">
             <FolderInput className="h-3.5 w-3.5 text-muted-foreground" />{t('Move to another workspace')}
           </button>
@@ -313,6 +347,11 @@ function PersonCardMenu({ app }: { app: PeopleDirectorySummary }) {
           <button onClick={() => void handleUninstall()} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-halo-error transition-colors hover:bg-halo-error/10">
             <Unplug className="h-3.5 w-3.5" />{t('Uninstall')}
           </button>
+        </div>
+      )}
+      {editingTags && (
+        <div onKeyDown={event => { if (event.key === 'Escape') setEditingTags(false) }} className="absolute right-0 top-full z-20 mt-1 w-[min(15rem,calc(100vw-3rem))] rounded-lg border border-border bg-popover shadow-lg">
+          <TagEditor value={ownTags} suggestions={tags} onChange={next => void saveTags(next)} />
         </div>
       )}
       {DialogComponent}

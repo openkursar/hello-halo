@@ -99,6 +99,8 @@ export interface InstalledApp {
      * turn. Off by default.
      */
     spaceMemoryAccess?: boolean
+    /** The user's own labels for sorting their lists (see shared/apps/app-tags). */
+    tags?: string[]
     /** This digital human's memory: on/off, auto-consolidation, cadence. */
     memory?: import('../types/memory').MemorySettings
     /**

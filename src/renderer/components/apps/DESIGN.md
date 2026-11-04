@@ -159,3 +159,14 @@ must not prepopulate the full installed-app cache before the directory opens.
 the full inventory only after a consumer has actually requested that inventory.
 The global request inbox receives page-local display names with its entries, so
 opening it does not require loading every person's complete specification.
+
+The extensions lists share one tagging ability (`components/tags/`, rules in
+`shared/apps/app-tags`). A tag is the user's own label stored on the install
+(`userOverrides.tags`) — never in the spec, an export or the store. Each list
+has its own vocabulary: the directory reads it through its own call
+(`appListTags`, one grouped SQL query, fetched on open and after a tag change —
+not per page) and filters/searches tags server-side; a wall that already holds
+its apps counts them itself. Letter case is folded for ASCII only, everywhere,
+matching SQLite's lower(). Rename and delete act on one list in one transaction
+(`appRenameTag`). The tag row appears only once a tag exists. Tags stay with a
+removed item and come back if it is reinstalled; deleting it for good drops them.

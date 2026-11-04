@@ -21,6 +21,9 @@ promises:
   live-status:
     en: A digital human working a team turn reads as working wherever its status shows — the space rail, the people switcher and the directory — and a team lead appears in its space’s rail marked as the team lead, without being offered as a chat recipient.
     zh: 正在处理团队任务的数字人，在所有显示状态的地方（空间右栏、人员切换条、目录）都显示为工作中；团队 Lead 出现在所在空间的右栏并标为团队 Lead，但不作为聊天收件人提供。
+  tags:
+    en: I can put my own tags on digital humans and MCP servers, filter a list by one tag, find items by a tag through search, and rename or delete a tag across that list; tags stay on this computer and never change the item itself.
+    zh: 我能给数字人和 MCP 服务打上自己的标签，按一个标签筛选列表，搜索时能命中标签，并能在该列表内重命名或删除标签；标签只保存在本机，不改变条目本身。
 scenarios:
   - id: people.directory.team-work-status
     title:
@@ -46,6 +49,30 @@ scenarios:
     expected:
       - en: The member reads Working while it answers and Standing by afterwards; the lead is listed with a team lead mark and no Chat action.
         zh: 成员回复期间显示工作中，结束后显示待命；Lead 带团队 Lead 标识列出，且无聊天入口。
+  - id: people.directory.tags
+    title:
+      en: Tag, filter, rename and delete
+      zh: 打标签、筛选、重命名和删除
+    verifies:
+      - tags
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: More than one page of digital humans, none tagged.
+        zh: 超过一页的数字人，均无标签。
+    steps:
+      - en: Open a card's ⋯ → Tags…, type a new tag and press Enter, tick it on another card, click the tag in the row, search for it, rename it, then delete it; repeat on the MCP list and at a width below 640px.
+        zh: 打开卡片 ⋯ → 标签…，输入新标签并回车，在另一张卡片上勾选它，点击标签行中的它，搜索它，重命名，再删除；在 MCP 列表和 640px 以下宽度重复。
+    expected:
+      - en: The row appears with the first tag, filtering and search show exactly the tagged items across pages, rename and delete apply to every tagged item of that list, and the row disappears when no tag remains.
+        zh: 有第一个标签后标签行出现；筛选和搜索跨页准确显示带该标签的条目；重命名和删除作用于该列表所有带标签的条目；没有标签时标签行消失。
   - id: people.directory.browse
     title:
       en: Search, open and return to the directory

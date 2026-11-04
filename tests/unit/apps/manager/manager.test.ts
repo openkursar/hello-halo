@@ -144,6 +144,37 @@ describe('AppManager', () => {
   // Installation
   // ===========================================================================
 
+  describe('tags', () => {
+    it('stores a cleaned tag list on the install, never on the spec, and clears it', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      service.updateOverrides(appId, { tags: [' Ops ', 'ops', 'Daily'] })
+      expect(service.getApp(appId)!.userOverrides.tags).toEqual(['Ops', 'Daily'])
+      expect(JSON.stringify(service.getApp(appId)!.spec)).not.toContain('Daily')
+      service.updateOverrides(appId, { tags: [] })
+      expect(service.getApp(appId)!.userOverrides).not.toHaveProperty('tags')
+    })
+
+    it('rejects a list that is not text or too long, keeping the saved one', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      service.updateOverrides(appId, { tags: ['Ops'] })
+      expect(() => service.updateOverrides(appId, { tags: 'Ops' } as never)).toThrow()
+      expect(() => service.updateOverrides(appId, { tags: Array.from({ length: 13 }, (_, i) => `t${i}`) })).toThrow()
+      expect(service.getApp(appId)!.userOverrides.tags).toEqual(['Ops'])
+    })
+
+    it('renames and removes a tag across the list it belongs to', async () => {
+      const first = await service.install(TEST_SPACE_ID, createTestSpec())
+      service.updateOverrides(first, { tags: ['Ops', 'Daily'] })
+      expect(service.renameTag('automation', 'ops', 'Daily')).toBe(1)
+      expect(service.getApp(first)!.userOverrides.tags).toEqual(['Daily'])
+      expect(service.renameTag('mcp', 'Daily', null)).toBe(0)
+      expect(service.renameTag('automation', 'Daily', null)).toBe(1)
+      expect(service.getApp(first)!.userOverrides).not.toHaveProperty('tags')
+      expect(() => service.renameTag('automation', ' ', 'x')).toThrow()
+      expect(() => service.renameTag('automation', 'x', ' ')).toThrow()
+    })
+  })
+
   describe('digital human engine preference', () => {
     it('refuses a known incompatible engine/account pair but permits unrelated preferences', async () => {
       const appId = await service.install(TEST_SPACE_ID, createTestSpec())

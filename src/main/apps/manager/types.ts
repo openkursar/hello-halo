@@ -89,6 +89,8 @@ export interface InstalledApp {
      * turn. Off by default.
      */
     spaceMemoryAccess?: boolean
+    /** The user's own labels for sorting their lists; see the shared InstalledApp. */
+    tags?: string[]
     /** This digital human's memory: on/off, auto-consolidation, cadence. */
     memory?: import('../../../shared/types/memory').MemorySettings
     /** MCP servers only: tools turned off on the card; see the shared InstalledApp. */
@@ -542,6 +544,13 @@ export interface AppManagerService {
    */
   getStudioSummary(language?: string, excludeIds?: string[]): import('../../../shared/apps/people-directory').StudioSummary
   listPeopleDirectory(filter: import('../../../shared/apps/people-directory').PersonDirectoryFilter): { items: import('../../../shared/apps/people-directory').PersonDirectoryRecord[]; total: number; offset: number; limit: number }
+  /**
+   * Rename a tag (merging into an existing one), or remove it with `to` null,
+   * on every installed app of `type` carrying it. Returns how many changed.
+   */
+  renameTag(type: import('../../../shared/apps/spec-types').AppType, from: string, to: string | null): number
+  /** The tags on one kind of installed app, with how many carry each; removed and excluded items do not count. */
+  listTagCounts(type: import('../../../shared/apps/spec-types').AppType, excludeIds?: readonly string[]): import('../../../shared/apps/app-tags').TagCount[]
 
   /**
    * Ids of digital humans currently in one of the given statuses, without
