@@ -445,6 +445,12 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     })
   }, [pendingComposerInput, currentSpaceId, draftKey, slashCommands, slashPreviewOverride])
 
+  // A draft restored at mount puts the caret after its text, so typing continues it.
+  useEffect(() => {
+    const textarea = textareaRef.current
+    if (textarea) textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+  }, [])
+
   // Auto-clear error after 3 seconds
   useEffect(() => {
     if (imageError) {

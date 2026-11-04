@@ -55,6 +55,7 @@ export function SkillInfoCard({ appId, skillRef, group, showUse = true, stickyHe
   const [copying, setCopying] = useState(false)
   const [sharing, setSharing] = useState(false)
   const [menu, setMenu] = useState<'scope' | 'more' | null>(null)
+  const [versionsOpen, setVersionsOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const headerSentinel = useRef<HTMLDivElement>(null)
   const [pinned, setPinned] = useState(false)
@@ -75,7 +76,7 @@ export function SkillInfoCard({ appId, skillRef, group, showUse = true, stickyHe
     return result.data.groups.find(item => item.name === name.toLowerCase()) ?? null
   }
 
-  useEffect(() => { setSelectedId(initialId); setDetail(null); setEditing(false); setDraft(''); setMenu(null) }, [initialId, contextId])
+  useEffect(() => { setSelectedId(initialId); setDetail(null); setEditing(false); setDraft(''); setMenu(null); setVersionsOpen(false) }, [initialId, contextId])
   useEffect(() => {
     let cancelled = false
     setLoading(true); setError(null); setFreshGroup(null)
@@ -213,7 +214,7 @@ export function SkillInfoCard({ appId, skillRef, group, showUse = true, stickyHe
         </div></div>
         {editing ? <div className="h-[28rem] overflow-hidden rounded-lg border border-border sm:h-[36rem]"><CodeMirrorEditor key={copy.id} content={draft} language="markdown" readOnly={false} onChange={setDraft} className="h-full" /></div> : <div className="overflow-x-auto rounded-lg border border-border-soft bg-secondary/40 p-4 text-sm"><MarkdownRenderer content={skillInstructions(detail.content)} mode="static" /></div>}
       </div>
-      {currentGroup && currentGroup.copies.length > 1 && <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">{t('Other versions')}</summary><div className="mt-2 space-y-1">{currentGroup.copies.map(item => <button key={item.id} disabled={disabled || editing || item.id === copy.id} onClick={() => { setDetail(null); setSelectedId(item.id) }} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-secondary disabled:opacity-60"><span>{scopeName(item.spaceId)} · {skillSourceLabel(item, t)}</span>{item.id === copy.id && <Check className="h-3 w-3" />}{!item.enabled && <span>{t('Disabled')}</span>}</button>)}</div></details>}
+      {currentGroup && currentGroup.copies.length > 1 && <details open={versionsOpen} onToggle={event => setVersionsOpen(event.currentTarget.open)} className="text-xs text-muted-foreground"><summary className="cursor-pointer">{t('Other versions')}</summary><div className="mt-2 space-y-1">{currentGroup.copies.map(item => <button key={item.id} disabled={disabled || editing || item.id === copy.id} onClick={() => { setDetail(null); setSelectedId(item.id) }} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-secondary disabled:opacity-60"><span>{scopeName(item.spaceId)} · {skillSourceLabel(item, t)}</span>{item.id === copy.id && <Check className="h-3 w-3" />}{!item.enabled && <span>{t('Disabled')}</span>}</button>)}</div></details>}
       {detail.files.length > 1 && <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">{t('Supporting files')} ({detail.files.length})</summary><ul className="mt-2 space-y-1">{detail.files.map(file => <li key={file.path} className="break-all font-mono">{file.path}</li>)}</ul></details>}
       <div className="border-t border-border-soft pt-3"><button disabled={disabled} className="inline-flex items-center gap-1.5 rounded-lg border border-halo-error/30 px-3 py-1.5 text-sm text-halo-error transition-colors hover:bg-halo-error/5 disabled:opacity-40" onClick={() => void actions.remove()}><Trash2 className="h-4 w-4" />{t('Delete')}</button></div>
       {copying && <SkillCopyDialog skillRef={ref} name={copy.name} content={editing ? draft : undefined} spaceId={copy.spaceId} onClose={() => setCopying(false)} onSaved={refresh} />}

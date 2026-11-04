@@ -213,7 +213,7 @@ for (const collision of [false, true]) {
     await window.getByRole('button', { name: 'Change workspace', exact: true }).click()
     await window.getByRole('button', { name: destination.name, exact: true }).click()
     if (collision) {
-      await expect(window.getByRole('alert')).toBeVisible()
+      await expect(window.getByRole('alert').filter({ hasText: 'A skill with this name already exists there. Choose another name or workspace.' })).toBeVisible()
       expect(readSkillPackage(managementApp.profile, source)).toEqual(before)
       expect(readSkillPackage(managementApp.profile, existing!)).toEqual(existingBefore)
     } else {

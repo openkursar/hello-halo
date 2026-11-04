@@ -76,6 +76,8 @@ describe('skill failure presentation', () => {
     ['Revision changed since reading /private/skills/review', 'This skill was changed elsewhere. Your draft is kept; reload the file before saving again.'],
     ['Destination already exists: /private/skills/review', 'A skill with this name already exists there. Choose another name or workspace.'],
     ['A skill already has the same name', 'A skill with this name already exists there. Choose another name or workspace.'],
+    ['The destination already contains a skill with this name.', 'A skill with this name already exists there. Choose another name or workspace.'],
+    ['A skill already exists here. Read it and explicitly replace it, or choose a different name.', 'A skill with this name already exists there. Choose another name or workspace.'],
   ])('replaces raw diagnostics with translated recovery guidance: %s', (failure, expected) => {
     const t = vi.fn((key: string) => `translated:${key}`)
     const message = skillErrorMessage(new Error(failure), 'fallback', t)

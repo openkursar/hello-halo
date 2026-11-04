@@ -31,8 +31,8 @@ export function skillErrorMessage(error: unknown, fallback: string, t: Translate
   if (/EACCES|EPERM|permission denied|read.only/i.test(message)) {
     return t('Halo cannot access this skill folder. Check its permissions and try again.')
   }
-  if (/changed since|changed before|revision|concurrent|destination.*exists|destination.*conflict|already.*same name/i.test(message)) {
-    return /destination|same name/i.test(message)
+  if (/changed since|changed before|revision|concurrent|destination.*exists|destination.*conflict|already.*same name|already contains a skill|a skill already exists/i.test(message)) {
+    return /destination|same name|already contains a skill|a skill already exists/i.test(message)
       ? t('A skill with this name already exists there. Choose another name or workspace.')
       : t('This skill was changed elsewhere. Your draft is kept; reload the file before saving again.')
   }
