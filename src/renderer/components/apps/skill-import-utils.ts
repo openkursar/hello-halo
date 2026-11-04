@@ -19,6 +19,7 @@
  */
 
 import { t } from 'i18next'
+import { parseDocument } from 'yaml'
 import { readFileBytes, readDirectoryEntryToBytes, readFileListToBytes } from './file-read-utils'
 import { isIgnoredPackagePath, unwrapPackageFolder, canonicalizePackageEntry } from './package-paths'
 import { readArchiveEntries, ArchiveTooLarge } from './package-archive'
@@ -164,6 +165,20 @@ export function parseMd(content: string): { name: string; description: string; b
   const name = fm.match(/^name:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, '') ?? ''
   const description = fm.match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, '') ?? ''
   return { name, description, bodyContent: body }
+}
+
+/**
+ * Set the given frontmatter fields on a SKILL.md, keeping every other key and
+ * the body. A file without frontmatter gets a new block-style header.
+ */
+export function withMetadata(content: string, fields: { name?: string; description?: string }): string {
+  const match = content.replace(/^\uFEFF/, '').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
+  const document = parseDocument(match?.[1] ?? '')
+  if (document.errors.length) throw new Error(document.errors[0].message)
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) document.set(key, value)
+  }
+  return `---\n${document.toString()}---\n${match ? content.replace(/^\uFEFF/, '').slice(match[0].length) : content}`
 }
 
 // ─────────────────────────────────────────────────────────

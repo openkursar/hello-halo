@@ -9,7 +9,9 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { zipSync } from 'fflate'
-import { parseSkillFiles, processZipFile, processFileListAsFolder, processDirectoryEntry, processMdFile, MAX_SKILL_BYTES, MAX_SKILL_FILES } from '../../../src/renderer/components/apps/skill-import-utils'
+import { parseSkillFiles, processZipFile, processFileListAsFolder, processDirectoryEntry, processMdFile, withMetadata, MAX_SKILL_BYTES, MAX_SKILL_FILES } from '../../../src/renderer/components/apps/skill-import-utils'
+import { setSkillMdName } from '../../../src/shared/skill-frontmatter'
+import { parseSkillMetadata } from '../../../src/main/services/skills/discovery'
 
 vi.mock('i18next', () => ({ t: (text: string) => text }))
 
@@ -155,5 +157,36 @@ describe('parseSkillFiles', () => {
 
   it('rejects a tree with no entry file', () => {
     expect(() => parseSkillFiles({ 'readme.md': 'a' }, 'folder')).toThrow(/SKILL\.md not found/)
+  })
+})
+
+describe('completing the header of an imported Markdown file', () => {
+  it('turns a file without frontmatter into a header the install step accepts, with a single name line', () => {
+    const completed = withMetadata('# Review notes\n\nSummarize the review.\n', { name: 'review-notes', description: 'Summarize: the review' })
+    expect(completed).toBe('---\nname: review-notes\ndescription: "Summarize: the review"\n---\n# Review notes\n\nSummarize the review.\n')
+    const installed = setSkillMdName(completed, 'review-notes')
+    expect(installed.match(/^name\s*:/gm)).toHaveLength(1)
+    expect(parseSkillMetadata(installed, 'review-notes')).toEqual({ name: 'review-notes', description: 'Summarize: the review', argumentHint: undefined, whenToUse: undefined })
+  })
+
+  it('keeps every other key and the whole body of a file that already has frontmatter', () => {
+    const original = '---\nname: old-name\nargument-hint: <file>\ncustom: keep-me\n---\n\n# Body\n\nUnchanged text.\n'
+    const completed = withMetadata(original, { name: 'new-name', description: 'Added description' })
+    expect(completed).toBe('---\nname: new-name\nargument-hint: <file>\ncustom: keep-me\ndescription: Added description\n---\n\n# Body\n\nUnchanged text.\n')
+    expect(parseSkillMetadata(setSkillMdName(completed, 'new-name'), 'new-name').error).toBeUndefined()
+  })
+
+  it('treats a header holding only a blank line like a missing one instead of writing a one-line mapping', () => {
+    const completed = withMetadata('---\n\n---\nBody\n', { name: 'blank-header', description: 'Described' })
+    expect(completed).toBe('---\nname: blank-header\ndescription: Described\n---\nBody\n')
+    expect(parseSkillMetadata(setSkillMdName(completed, 'blank-header'), 'blank-header').error).toBeUndefined()
+  })
+
+  it('sets only the fields it is given', () => {
+    expect(withMetadata('---\nname: a\ndescription: keep\n---\nBody', { name: 'b' })).toBe('---\nname: b\ndescription: keep\n---\nBody')
+  })
+
+  it('refuses a header that is not valid YAML instead of overwriting it', () => {
+    expect(() => withMetadata('---\nname: [unterminated\n---\nBody', { name: 'x' })).toThrow()
   })
 })

@@ -25,7 +25,6 @@ import {
 import { X, Loader2, FolderOpen, FileText, Archive, AlertCircle, Pencil } from 'lucide-react'
 import { api } from '../../api'
 import type { SkillCopy, SkillImportInput } from '../../../shared/types/skills'
-import { parseDocument } from 'yaml'
 import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
 import type { SkillSpec } from '../../../shared/apps/spec-types'
@@ -35,6 +34,7 @@ import {
   finalizeCommandName,
   buildMdFromForm,
   parseMd,
+  withMetadata,
   processMdFile,
   processDirectoryEntry,
   processFileListAsFolder,
@@ -54,16 +54,6 @@ const CodeMirrorEditor = lazy(() =>
 // ============================================
 
 type SkillMode = 'visual' | 'md' | 'import'
-
-function withMetadata(content: string, fields: { name?: string; description?: string }): string {
-  const match = content.replace(/^\uFEFF/, '').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
-  const document = parseDocument(match?.[1] || '{}')
-  if (document.errors.length) throw new Error(document.errors[0].message)
-  for (const [key, value] of Object.entries(fields)) {
-    if (value !== undefined) document.set(key, value)
-  }
-  return `---\n${document.toString()}---\n${match ? content.replace(/^\uFEFF/, '').slice(match[0].length) : content}`
-}
 
 interface VisualForm {
   /** Authored name, any script. Shown in Halo's UI. */
