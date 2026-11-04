@@ -144,6 +144,9 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
 
   // Whether the initial IPC load has completed (distinguishes "loading" from "truly empty")
   const [hasLoaded, setHasLoaded] = useState(false)
+  // Why the space folder could not be listed while nothing is shown yet;
+  // a failure after the tree has loaded keeps what it shows.
+  const [rootError, setRootError] = useState<string | null>(null)
 
   // Mutable tree data + path→node index (avoids full-tree immutable copies)
   const nodeIndex = useRef<Map<string, ArtifactTreeNode>>(new Map())
@@ -172,12 +175,15 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
         treeDataRef.current = nodes
         nodeIndex.current.clear()
         indexNodes(nodes, nodeIndex.current)
+        setRootError(null)
         setRevision(r => r + 1)
       } else {
         console.warn('[ArtifactTree] loadTree: response not successful or no data', response)
+        if (treeDataRef.current.length === 0) setRootError(response.error ?? '')
       }
     } catch (error) {
       console.error('[ArtifactTree] Failed to load tree:', error)
+      if (treeDataRef.current.length === 0) setRootError((error as Error)?.message ?? '')
     } finally {
       setHasLoaded(true)
     }
@@ -513,6 +519,7 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
           treeDataRef.current.some(n => getParentPath(n.path) === dirPath)
         if (isRoot || treeDataRef.current.length === 0) {
           treeDataRef.current = mergeChildren(incomingChildren, treeDataRef.current, nodeIndex.current, recentlyCreatedPaths.current)
+          setRootError(null)
         }
         // Else: untracked directory — loaded on first expand
       }
@@ -607,8 +614,8 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
   const treeData = useMemo(() => [...treeDataRef.current], [revision])
 
   useEffect(() => {
-    onRootCountChange?.(hasLoaded ? treeData.length : null)
-  }, [onRootCountChange, hasLoaded, treeData.length])
+    onRootCountChange?.(hasLoaded && rootError === null ? treeData.length : null)
+  }, [onRootCountChange, hasLoaded, rootError, treeData.length])
 
   const lazyLoadValue = useMemo(() => ({
     loadChildren,
@@ -662,6 +669,24 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
     if (!hasLoaded) {
       // Still loading — render empty container to avoid "No files" flash
       return null
+    }
+    if (rootError !== null) {
+      return (
+        <div className="flex flex-col h-full">
+          {toolbar(null)}
+          <div className="flex-1 flex flex-col items-center justify-center text-center px-3 gap-2">
+            <p className="text-xs text-foreground">{t("Couldn't read this folder")}</p>
+            <p className="text-[11px] text-muted-foreground break-all select-text">{rootError || t('Unknown error')}</p>
+            <button
+              onClick={() => { void loadTree() }}
+              className="mt-1 inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md text-foreground hover:bg-surface-hover transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5" strokeWidth={1.5} />
+              {t('Retry')}
+            </button>
+          </div>
+        </div>
+      )
     }
     // New file/folder need the mounted tree, so an empty folder offers only these.
     return (
@@ -742,7 +767,9 @@ export function ArtifactTree({ spaceId, onRootCountChange }: ArtifactTreeProps) 
 // ============================================
 
 // Editing state node component
-function EditingNode({ node, style, dragHandle, tree }: NodeRendererProps<ArtifactTreeNode>) {
+// No drag handle while editing: a draggable row turns a mouse drag in the
+// input into a row drag instead of a text selection.
+function EditingNode({ node, style, tree }: NodeRendererProps<ArtifactTreeNode>) {
   const { t } = useTranslation()
   const inputRef = useRef<HTMLInputElement>(null)
   const [inputValue, setInputValue] = useState(node.data.name || '')
@@ -893,7 +920,6 @@ function EditingNode({ node, style, dragHandle, tree }: NodeRendererProps<Artifa
   
   return (
     <div
-      ref={dragHandle}
       style={style}
       className="flex flex-col mr-1.5 pr-2 relative"
     >
@@ -1022,7 +1048,7 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
 
   // Check editing state (after all hooks)
   if (node.isEditing) {
-    return <EditingNode node={node} style={style} dragHandle={dragHandle} tree={node.tree} />
+    return <EditingNode node={node} style={style} tree={node.tree} />
   }
 
   // Generate context menu items
