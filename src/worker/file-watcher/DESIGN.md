@@ -32,7 +32,10 @@ events through `watcher-host.addFsEventsHandler` (automation file triggers).
    worker logs any `unhandledRejection` instead of exiting. A crash that still
    happens is restarted with exponential backoff (1 s doubling, 30 s max) and
    at most 5 restarts per 5 minutes; past that the worker is forked again only
-   when a caller next needs it.
+   when a caller next needs it. When the IPC channel closes without SIGTERM
+   (main crashed or was force-quit) the worker stops its watchers and exits
+   non-zero, so a host that is still alive takes the same backoff restart;
+   a requested stop (SIGTERM / SIGINT) exits 0.
 3. **Bursts are bounded at every hop.**
    - stat: at most 32 in flight (`MAX_CONCURRENT_STATS`), across batches.
    - worker → main: `fs-events` messages of at most 500 events; more than
