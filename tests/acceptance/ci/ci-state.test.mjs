@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import http from 'node:http'
+import os from 'node:os'
+import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { baselineLineages, baselineName, baselineReason, comparableBaseline, findBaselineLineage, findBaselineRun, makeBaseline, renderSummary } from '../../../scripts/acceptance/ci-state.mjs'
+import { baselineLineages, baselineName, baselineReason, comparableBaseline, findBaselineLineage, findBaselineRun, makeBaseline, renderSummary, usesReferenceLineage } from '../../../scripts/acceptance/ci-state.mjs'
 import { compareResults } from '../../../scripts/acceptance/lib/quality.mjs'
 
 const revision = 'a'.repeat(40)
@@ -75,6 +81,66 @@ test('earlier results are comparable across the SDK and catalog, but not across 
   for (const unusable of [null, { ...record, version: 2 }, { ...record, results: undefined }, { ...record, results: [] }, { ...record, results: {} }, { ...record, runId: undefined }]) {
     assert.equal(comparableBaseline(unusable, context, 'main'), null)
   }
+})
+
+const development = { ...context, repository: 'example/development', ref: 'topic' }
+
+test('a run of another source reads only the reference repository default branch and has no lineage of its own', () => {
+  assert.deepEqual(baselineLineages(development, 'main', 'example/halo'), [baselineName(context)])
+  assert.deepEqual(baselineLineages({ ...development, ref: 'main' }, 'main', 'example/halo'), [baselineName(context)])
+  assert.deepEqual(baselineLineages(development, undefined, 'example/halo'), [])
+  assert.notEqual(baselineName(development), baselineName({ ...development, repository: 'example/halo' }))
+  assert.equal(usesReferenceLineage(development, 'example/halo'), true)
+  for (const reference of [undefined, '', 'example/development']) assert.equal(usesReferenceLineage(development, reference), false)
+  assert.equal(usesReferenceLineage(context, 'example/halo'), false)
+  assert.deepEqual(baselineLineages({ ...context, ref: 'topic' }, 'main', 'example/halo'), [baselineName({ ...context, ref: 'topic' }), baselineName(context)])
+})
+
+test('results of the reference default branch are comparable for another source; nothing else is', () => {
+  const record = baseline(context, run)
+  assert.equal(comparableBaseline(record, { ...development, sdk: { state: 'present', revision } }, 'main', 'example/halo'), record)
+  assert.equal(comparableBaseline(record, development, 'release', 'example/halo'), null)
+  assert.equal(comparableBaseline(baseline({ ...context, ref: 'topic' }, run), development, 'main', 'example/halo'), null)
+  assert.equal(comparableBaseline(baseline({ ...development }, run), development, 'main', 'example/halo'), null)
+  assert.equal(comparableBaseline(baseline({ ...development, ref: 'main' }, run), development, 'main', 'example/halo'), null)
+  for (const key of ['profile', 'platform', 'architecture']) assert.equal(comparableBaseline(record, { ...development, [key]: 'different' }, 'main', 'example/halo'), null)
+  for (const unusable of [null, { ...record, version: 2 }, { ...record, results: {} }, { ...record, runId: undefined }]) assert.equal(comparableBaseline(unusable, development, 'main', 'example/halo'), null)
+  // Without a reference repository the rules are the original ones.
+  assert.equal(comparableBaseline(record, development, 'main'), null)
+  assert.equal(comparableBaseline(record, { ...context, ref: 'topic' }, 'main', 'example/halo'), record)
+})
+
+const stateScript = fileURLToPath(new URL('../../../scripts/acceptance/ci-state.mjs', import.meta.url))
+
+async function lookedUpArtifacts(sourceContext, environment) {
+  const requested = []
+  const server = http.createServer((request, response) => {
+    requested.push(new URL(request.url, 'http://localhost').searchParams.get('name'))
+    response.setHeader('content-type', 'application/json')
+    response.end(JSON.stringify({ artifacts: [] }))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'acceptance-find-baseline-'))
+  try {
+    fs.mkdirSync(path.join(directory, 'tests/acceptance/output/ci'), { recursive: true })
+    fs.writeFileSync(path.join(directory, 'tests/acceptance/output/ci/context.json'), JSON.stringify(sourceContext))
+    const env = { ...process.env, GITHUB_REPOSITORY: 'example/controller', GITHUB_WORKFLOW_REF: 'example/controller/.github/workflows/acceptance.yml@refs/heads/main', GH_TOKEN: 'fixture-token', GITHUB_API_URL: `http://127.0.0.1:${server.address().port}`, HALO_DEFAULT_SOURCE_REF: 'main', ...environment }
+    delete env.GITHUB_OUTPUT
+    if (!('HALO_COMPARISON_REPOSITORY' in environment)) delete env.HALO_COMPARISON_REPOSITORY
+    const child = spawn(process.execPath, [stateScript, 'find-baseline'], { cwd: directory, env, stdio: 'ignore' })
+    const code = await new Promise(resolve => child.on('exit', resolve))
+    assert.equal(code, 0)
+    return requested
+  } finally {
+    server.close()
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+}
+
+test('the baseline lookup passes the reference repository on: another source asks for the reference default branch only', async () => {
+  assert.deepEqual(await lookedUpArtifacts(development, { HALO_COMPARISON_REPOSITORY: 'example/halo' }), [baselineName(context)])
+  assert.deepEqual(await lookedUpArtifacts(context, { HALO_COMPARISON_REPOSITORY: 'example/halo' }), [baselineName(context)])
+  assert.deepEqual(await lookedUpArtifacts({ ...context, ref: 'topic' }, {}), [baselineName({ ...context, ref: 'topic' }), baselineName(context)])
 })
 
 test('unknown or modified SDK builds cannot become reproducibility baselines', () => {

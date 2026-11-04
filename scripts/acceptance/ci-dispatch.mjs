@@ -132,13 +132,13 @@ function lookupRuns(record, connection) {
 function main() {
   const { values } = parseArgs({ options: {
     repository: { type: 'string' }, workflow: { type: 'string' }, ref: { type: 'string' },
-    'source-ref': { type: 'string' }, 'source-repository': { type: 'string' }, 'sdk-ref': { type: 'string' }, profile: { type: 'string' },
+    'source-ref': { type: 'string' }, 'source-repository': { type: 'string' }, private: { type: 'boolean', default: false }, 'sdk-ref': { type: 'string' }, profile: { type: 'string' },
     module: { type: 'string', multiple: true }, case: { type: 'string', multiple: true },
     full: { type: 'boolean', default: false }, execute: { type: 'boolean', default: false },
     receipt: { type: 'string' }, reconcile: { type: 'boolean', default: false },
   } })
   if (values.receipt) {
-    if (values.execute || values.repository || values.workflow || values.ref || values['source-ref'] || values['source-repository'] || values['sdk-ref'] || values.profile || values.module || values.case || values.full) throw new Error('Receipt lookup cannot be combined with dispatch options.')
+    if (values.execute || values.repository || values.workflow || values.ref || values['source-ref'] || values['source-repository'] || values.private || values['sdk-ref'] || values.profile || values.module || values.case || values.full) throw new Error('Receipt lookup cannot be combined with dispatch options.')
     const filename = path.resolve(values.receipt)
     const { record, serialized } = readReceipt(filename)
     const result = lookupRuns(record, githubEnvironment())
@@ -159,6 +159,11 @@ function main() {
   if (values.profile !== undefined && !['fast', 'regression'].includes(values.profile)) throw new Error('--profile must be fast or regression.')
   if (!values.ref || /[\r\n\0]/.test(values.ref)) throw new Error('--ref must be a nonempty single-line controller ref.')
   if (values['source-ref'] !== undefined && (!values['source-ref'] || /[\r\n\0]/.test(values['source-ref']))) throw new Error('--source-ref must be a nonempty single-line source ref.')
+  if (values.private) {
+    if (values['source-repository']) throw new Error('--private and --source-repository both choose the source repository; give only one.')
+    values['source-repository'] = process.env.HALO_ACCEPTANCE_CI_PRIVATE_SOURCE || localSetting('halo.acceptancePrivateSource')
+    if (!values['source-repository']) throw new Error('--private needs the private development repository: git config halo.acceptancePrivateSource owner/repository.')
+  }
   if (values['source-repository'] && !repositoryPattern.test(values['source-repository'])) throw new Error('--source-repository must be owner/repository.')
   if (values['sdk-ref'] !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(values['sdk-ref'])) throw new Error('--sdk-ref must be a branch name or a commit.')
   for (const value of [...values.module ?? [], ...values.case ?? []]) if (!/^[a-z][a-z0-9.-]*$/.test(value)) throw new Error('Module and case ids must use catalog identifiers.')
@@ -173,9 +178,12 @@ function main() {
   if (values['source-repository']) inputs.source_repository = values['source-repository']
   const endpoint = `repos/${values.repository}/actions/workflows/${values.workflow}/dispatches`
   const request = { ref: values.ref, inputs }
+  // The commit is the branch head when the run starts; the run summary names it.
+  const subject = `Source under test: ${values['source-repository'] ?? "the controller's configured source repository"}, branch ${values['source-ref'] ?? 'configured default'} (its head commit when the run starts).`
   if (!values.execute) {
     console.log(JSON.stringify({ method: 'POST', endpoint, body: request }, null, 2))
     console.log('Preview only. Add --execute after authorizing this workflow dispatch.')
+    console.log(subject)
     return
   }
   const connection = githubEnvironment()
@@ -185,6 +193,7 @@ function main() {
   const record = { version: 1, requestId, repository: values.repository, workflow: values.workflow, requestedAt: new Date().toISOString(), request, status: 'pending' }
   fs.writeFileSync(receipt, JSON.stringify(record, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
   console.log(JSON.stringify({ requestId, receipt }))
+  console.log(subject)
   const { transport } = githubRequest(connection, 'POST', endpoint, request, 30000)
   record.transport = transport
   record.status = transport.responseReceived && transport.httpStatus >= 200 && transport.httpStatus < 300 ? 'accepted'

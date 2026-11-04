@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_repository:
-        description: Source owner/repository (blank uses repository variable)
+        description: Source owner/repository, either the configured source or the configured private development source (blank uses repository variable)
         type: string
       source_ref:
         description: Branch of the configured source repository (blank uses repository variable or main)
@@ -82,22 +82,35 @@ jobs:
       HALO_ACCEPTANCE_MODULES: ${{ inputs.modules }}
       HALO_ACCEPTANCE_CASES: ${{ inputs.cases }}
       HALO_DEFAULT_SOURCE_REF: ${{ vars.HALO_SOURCE_REF || 'main' }}
+      HALO_COMPARISON_REPOSITORY: ${{ vars.HALO_SOURCE_REPOSITORY || github.repository }}
     steps:
       - name: Resolve an authorized source branch
         id: source
         uses: actions/github-script@v7
         env:
           HALO_CONFIGURED_SOURCE: ${{ vars.HALO_SOURCE_REPOSITORY || github.repository }}
+          HALO_CONFIGURED_PRIVATE_SOURCE: ${{ vars.HALO_PRIVATE_SOURCE_REPOSITORY }}
+          HALO_PRIVATE_SOURCE_KEY_PRESENT: ${{ secrets.HALO_PRIVATE_SOURCE_READ_SSH_KEY != '' }}
           HALO_ALLOWED_SOURCE_BRANCHES: ${{ vars.HALO_ALLOWED_SOURCE_BRANCHES }}
+          HALO_ALLOWED_PRIVATE_SOURCE_BRANCHES: ${{ vars.HALO_ALLOWED_PRIVATE_SOURCE_BRANCHES }}
         with:
           github-token: ${{ secrets.HALO_SOURCE_READ_TOKEN || github.token }}
           script: |
             const repository = process.env.HALO_SOURCE_REPOSITORY;
             const ref = process.env.HALO_SOURCE_REF;
-            if (repository !== process.env.HALO_CONFIGURED_SOURCE) throw new Error('This controller only executes its configured source repository.');
+            const privateSource = repository !== process.env.HALO_CONFIGURED_SOURCE && Boolean(process.env.HALO_CONFIGURED_PRIVATE_SOURCE) && repository === process.env.HALO_CONFIGURED_PRIVATE_SOURCE;
+            if (repository !== process.env.HALO_CONFIGURED_SOURCE && !privateSource) throw new Error('This controller only executes its configured source repository, or its configured private development repository.');
+            if (privateSource && process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch') throw new Error('The private development repository can only be tested by a manual dispatch.');
+            if (privateSource && process.env.HALO_PRIVATE_SOURCE_KEY_PRESENT !== 'true') throw new Error('The private development repository has no read key configured (HALO_PRIVATE_SOURCE_READ_SSH_KEY).');
             if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(ref)) throw new Error('The requested branch name is not supported.');
-            const restricted = process.env.HALO_ALLOWED_SOURCE_BRANCHES ? JSON.parse(process.env.HALO_ALLOWED_SOURCE_BRANCHES) : null;
+            const allowed = privateSource ? process.env.HALO_ALLOWED_PRIVATE_SOURCE_BRANCHES : process.env.HALO_ALLOWED_SOURCE_BRANCHES;
+            const restricted = allowed ? JSON.parse(allowed) : null;
             if (restricted !== null && (!Array.isArray(restricted) || !restricted.includes(ref))) throw new Error('The requested branch has not been authorized for this runner.');
+            if (privateSource) {
+              // The deploy key is the only credential that can read this repository; the branch is resolved by the checkout.
+              core.setOutput('private', 'true');
+              return;
+            }
             const [owner, repo] = repository.split('/');
             const branch = await github.rest.repos.getBranch({owner, repo, branch: ref});
             const sha = branch.data.commit.sha;
@@ -110,6 +123,7 @@ jobs:
             }
             core.setOutput('revision', sha);
       - name: Check out source
+        if: steps.source.outputs.private != 'true'
         uses: actions/checkout@v4
         with:
           repository: ${{ env.HALO_SOURCE_REPOSITORY }}
@@ -118,6 +132,25 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           token: ${{ secrets.HALO_SOURCE_READ_TOKEN || github.token }}
+
+      - name: Check out private development source
+        if: steps.source.outputs.private == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.HALO_SOURCE_REPOSITORY }}
+          ref: refs/heads/${{ env.HALO_SOURCE_REF }}
+          path: halo
+          fetch-depth: 0
+          persist-credentials: false
+          ssh-key: ${{ secrets.HALO_PRIVATE_SOURCE_READ_SSH_KEY }}
+
+      - name: Verify the private development checkout
+        if: steps.source.outputs.private == 'true'
+        run: |
+          revision="$(git rev-parse HEAD)"
+          case "$revision" in *[!a-f0-9]*|"") echo "::error::The private checkout did not resolve to a commit"; exit 1;; esac
+          if [ "${#revision}" -ne 40 ]; then echo "::error::The private checkout did not resolve to a full commit"; exit 1; fi
+          if [ ! -f scripts/acceptance/cli.mjs ]; then echo "::error::The selected branch does not contain the acceptance harness (scripts/acceptance/cli.mjs); merge it before testing this branch."; exit 1; fi
 
       - uses: actions/setup-node@v4
         with:
@@ -210,6 +243,7 @@ jobs:
         id: execute
         env:
           HALO_ACCEPTANCE_BASELINE: ${{ runner.temp }}/acceptance-baseline-${{ github.run_id }}/baseline.json
+          HALO_ACCEPTANCE_CLAUDE_CLI: ${{ vars.HALO_ACCEPTANCE_CLAUDE_CLI }}
         run: exec node scripts/acceptance/ci-run.mjs
 
       - name: Finalize and freeze acceptance evidence
@@ -249,7 +283,7 @@ jobs:
           retention-days: 30
 
       - name: Publish successful baseline
-        if: success() && steps.execute.outcome == 'success' && steps.finalize.outputs.final == 'true' && steps.archive.outputs.source-final == 'true' && steps.finalize.outputs.baseline-file != ''
+        if: success() && steps.source.outputs.private != 'true' && steps.execute.outcome == 'success' && steps.finalize.outputs.final == 'true' && steps.archive.outputs.source-final == 'true' && steps.finalize.outputs.baseline-file != ''
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.context.outputs.artifact-name }}

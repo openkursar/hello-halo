@@ -1,0 +1,88 @@
+name: Runner tools
+
+# Manual maintenance of tools the acceptance runs use from the build host.
+# The pinned version and checksum are the single place to change on an upgrade;
+# keep them equal to the Claude Code release Halo has verified (see the CI guide).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-tools
+  cancel-in-progress: false
+
+jobs:
+  claude-code:
+    name: Install the pinned Claude Code
+    runs-on: ${{ fromJSON(vars.HALO_ACCEPTANCE_RUNNER || '["self-hosted","acceptance","macOS"]') }}
+    timeout-minutes: 20
+    env:
+      CLAUDE_CODE_VERSION: '2.1.310'
+      CLAUDE_CODE_SHA256: ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd
+      CLAUDE_CODE_RELEASES: https://downloads.claude.ai/claude-code-releases
+      HALO_CI_TOOLS_ROOT: ${{ vars.HALO_CI_TOOLS_ROOT || '/Users/Shared/halo-ci-tools' }}
+    steps:
+      - name: Install and verify
+        id: install
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          fail() { echo "::error::$1"; exit 1; }
+          [ "$(uname -s)-$(uname -m)" = "Darwin-arm64" ] || fail "Only macOS on Apple silicon has a verified Claude Code release; this host is $(uname -s)-$(uname -m)."
+          case "$CLAUDE_CODE_VERSION" in ''|*[!0-9.]*) fail "The pinned version must be a plain release number";; esac
+          case "$CLAUDE_CODE_SHA256" in ''|*[!a-f0-9]*) fail "The pinned checksum must be lowercase hexadecimal";; esac
+          [ "${#CLAUDE_CODE_SHA256}" -eq 64 ] || fail "The pinned checksum must be a full SHA-256"
+          case "$HALO_CI_TOOLS_ROOT" in /*) ;; *) fail "The tools directory must be absolute";; esac
+          case "$HALO_CI_TOOLS_ROOT" in *..*|*[!A-Za-z0-9._/-]*) fail "The tools directory contains unsupported characters";; esac
+          parent="$(dirname "$HALO_CI_TOOLS_ROOT")"
+          echo "Runner account: $(id -un); tools directory: $(ls -ld "$HALO_CI_TOOLS_ROOT" 2>/dev/null || echo 'absent'); parent: $(ls -ld "$parent" 2>&1)"
+          if [ -d "$HALO_CI_TOOLS_ROOT" ]; then
+            [ -w "$HALO_CI_TOOLS_ROOT" ] || fail "$HALO_CI_TOOLS_ROOT is not writable by the runner account; nothing was changed."
+          else
+            [ -d "$parent" ] && [ -w "$parent" ] || fail "$HALO_CI_TOOLS_ROOT does not exist and its parent is not writable by the runner account; nothing was changed."
+          fi
+          release="$CLAUDE_CODE_RELEASES/$CLAUDE_CODE_VERSION"
+          directory="$HALO_CI_TOOLS_ROOT/claude-code/$CLAUDE_CODE_VERSION"
+          binary="$directory/claude"
+          work="$(mktemp -d "${RUNNER_TEMP:-/tmp}/claude-code-install.XXXXXX")"
+          staging=""
+          trap 'rm -rf "$work"; if [ -n "$staging" ]; then rm -rf "$staging"; fi' EXIT
+          mkdir "$work/home"
+          reported_version() { env -i HOME="$work/home" PATH=/usr/bin:/bin "$1" --version 2>/dev/null | head -n 1; }
+          expect_version() { case "$1" in "$CLAUDE_CODE_VERSION"|"$CLAUDE_CODE_VERSION "*) ;; *) fail "The installed executable reports '$1', not $CLAUDE_CODE_VERSION";; esac; }
+          digest() { shasum -a 256 "$1" | cut -d ' ' -f 1; }
+
+          manifest="$(curl -fsSL --retry 3 --max-time 60 "$release/manifest.json")" || fail "The release manifest could not be downloaded"
+          [ "$(printf '%s' "$manifest" | plutil -extract version raw -o - -)" = "$CLAUDE_CODE_VERSION" ] || fail "The manifest describes a different version"
+          published="$(printf '%s' "$manifest" | plutil -extract platforms.darwin-arm64.checksum raw -o - -)" || fail "The manifest has no darwin-arm64 build"
+          [ "$published" = "$CLAUDE_CODE_SHA256" ] || fail "The published checksum differs from the pinned one; review the release before changing the pin"
+
+          if [ -e "$binary" ]; then
+            [ "$(digest "$binary")" = "$CLAUDE_CODE_SHA256" ] || fail "$binary exists but does not match the pinned checksum; nothing was changed. Inspect it and remove the directory yourself."
+            echo "Already installed; checksum verified."
+          else
+            [ ! -e "$directory" ] || fail "$directory exists without an executable; nothing was changed. Inspect it and remove it yourself."
+            mkdir -p "$HALO_CI_TOOLS_ROOT/claude-code"
+            find "$HALO_CI_TOOLS_ROOT/claude-code" -maxdepth 1 -type d -name '.install.*' -mtime +0 -exec rm -rf {} +
+            staging="$(mktemp -d "$HALO_CI_TOOLS_ROOT/claude-code/.install.XXXXXX")"
+            curl -fSL --retry 3 --max-time 900 --max-filesize 1073741824 -o "$staging/claude" "$release/darwin-arm64/claude" || fail "The executable could not be downloaded"
+            [ "$(digest "$staging/claude")" = "$CLAUDE_CODE_SHA256" ] || fail "The downloaded executable does not match the pinned checksum"
+            chmod 755 "$staging" "$staging/claude"
+            expect_version "$(reported_version "$staging/claude")"
+            mv "$staging" "$directory"
+            staging=""
+          fi
+
+          expect_version "$(reported_version "$binary")"
+          echo "path=$binary" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Claude Code $CLAUDE_CODE_VERSION"
+            echo
+            echo "Executable: \`$binary\`"
+            echo
+            echo "Set the controller variable \`HALO_ACCEPTANCE_CLAUDE_CLI\` to this path so acceptance runs use it. No account is signed in."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Claude Code $CLAUDE_CODE_VERSION is ready at $binary"

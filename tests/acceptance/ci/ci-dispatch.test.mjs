@@ -69,7 +69,7 @@ syncBuiltinESMExports();
     read() { return JSON.parse(fs.readFileSync(path.join(root, 'receipt.json'), 'utf8')) },
     execute(args, overrides = {}) {
       const env = { ...process.env, PATH: '', GH_DEBUG: 'api', GH_FORCE_TTY: '100', ...overrides }
-      for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'HALO_ACCEPTANCE_CI_PROXY', 'HALO_ACCEPTANCE_CI_REPOSITORY']) if (!Object.hasOwn(overrides, name)) delete env[name]
+      for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'HALO_ACCEPTANCE_CI_PROXY', 'HALO_ACCEPTANCE_CI_REPOSITORY', 'HALO_ACCEPTANCE_CI_PRIVATE_SOURCE']) if (!Object.hasOwn(overrides, name)) delete env[name]
       return spawnSync(process.execPath, ['--import', preload, script, ...args], { cwd: root, env, encoding: 'utf8', timeout: 10000 })
     },
     dispatchRecord(result) { const { receipt } = JSON.parse(result.stdout.split('\n')[0]); return { receipt, value: JSON.parse(fs.readFileSync(receipt, 'utf8')) } },
@@ -101,6 +101,55 @@ test('a source branch and an SDK reference travel as workflow inputs, and an uns
   assert.equal(body.body.inputs.sdk_ref, 'release_v3.2')
   assert.equal(body.body.inputs.modules, 'chat')
   for (const unsafe of ['-flag', 'a b', 'x;y']) assert.notEqual(selected.execute(['--repository', 'example/controller', '--sdk-ref', unsafe]).status, 0)
+})
+
+const previewInputs = result => JSON.parse(result.stdout.slice(0, result.stdout.indexOf('\nPreview only'))).body.inputs
+
+test('--private tests the private development repository from local configuration and says what is under test', context => {
+  const selected = fixture(context, { settings: { 'halo.acceptancePrivateSource': 'example/development-mirror' } })
+  const preview = selected.execute(['--repository', 'example/controller', '--private', '--source-ref', 'feat/topic', '--module', 'chat'])
+  assert.equal(preview.status, 0, preview.stderr)
+  const inputs = previewInputs(preview)
+  assert.equal(inputs.source_repository, 'example/development-mirror')
+  assert.equal(inputs.source_ref, 'feat/topic')
+  assert.match(preview.stdout, /Source under test: example\/development-mirror, branch feat\/topic/)
+  assert.equal(selected.calls().some(call => call.command === 'api' || call.command === 'auth'), false)
+  const environment = fixture(context)
+  const fromEnvironment = environment.execute(['--repository', 'example/controller', '--private'], { HALO_ACCEPTANCE_CI_PRIVATE_SOURCE: 'example/other-mirror' })
+  assert.equal(previewInputs(fromEnvironment).source_repository, 'example/other-mirror')
+})
+
+test('a public run names no source repository, and the output says the configured source is tested', context => {
+  const selected = fixture(context, { settings: { 'halo.acceptancePrivateSource': 'example/development-mirror' } })
+  const preview = selected.execute(['--repository', 'example/controller', '--source-ref', 'release'])
+  assert.equal(preview.status, 0, preview.stderr)
+  assert.equal('source_repository' in previewInputs(preview), false)
+  assert.match(preview.stdout, /Source under test: the controller's configured source repository, branch release/)
+})
+
+test('--private without a configured repository, with a second repository choice or with a receipt lookup is refused before any request', context => {
+  const unconfigured = fixture(context)
+  const missing = unconfigured.execute(['--repository', 'example/controller', '--private', '--execute'])
+  assert.equal(missing.status, 1)
+  assert.match(missing.stderr, /halo\.acceptancePrivateSource/)
+  assert.equal(fs.existsSync(path.join(unconfigured.root, 'tests/acceptance/output')), false)
+  const configured = fixture(context, { settings: { 'halo.acceptancePrivateSource': 'example/development-mirror' } })
+  assert.match(configured.execute(['--repository', 'example/controller', '--private', '--source-repository', 'example/third']).stderr, /give only one/)
+  const invalid = fixture(context, { settings: { 'halo.acceptancePrivateSource': 'https://attacker.invalid/repo' } })
+  assert.match(invalid.execute(['--repository', 'example/controller', '--private']).stderr, /owner\/repository/)
+  const receipt = configured.receipt()
+  assert.equal(configured.execute(['--receipt', receipt, '--private']).status, 1)
+  for (const selected of [unconfigured, configured, invalid]) assert.equal(selected.calls().some(call => call.command === 'api' || call.command === 'auth'), false)
+})
+
+test('a private dispatch travels with its repository in the receipt and prints the subject after the receipt line', context => {
+  const selected = fixture(context, { settings: { 'halo.acceptancePrivateSource': 'example/development-mirror' } })
+  const result = selected.execute(['--repository', 'example/controller', '--private', '--source-ref', 'feat/topic', '--execute'])
+  assert.equal(result.status, 0, result.stderr)
+  const { value } = selected.dispatchRecord(result)
+  assert.equal(value.request.inputs.source_repository, 'example/development-mirror')
+  assert.equal(selected.calls().find(call => call.command === 'api').input.inputs.source_repository, 'example/development-mirror')
+  assert.match(result.stdout.split('\n')[1], /^Source under test: example\/development-mirror, branch feat\/topic/)
 })
 
 test('a profile travels only when asked for, so a run is compared with the nightly baseline by default', context => {
