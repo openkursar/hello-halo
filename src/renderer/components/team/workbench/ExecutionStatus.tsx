@@ -42,7 +42,7 @@ export function ExecutionStatus({ teamId, epochId, appId, remote, busy, latestRe
     {expanded && <div className="min-w-0 space-y-3 border-t border-border p-3 [overflow-wrap:anywhere]">
       {state.active ? <>
         {at === null && <p className="text-[11px] text-muted-foreground">{t('No execution events received yet')}</p>}
-        <StreamingSection embedded streamingContent={state.live.streamingContent} isStreaming={state.live.isStreaming} thoughts={state.thoughts} isThinking={state.live.isThinking} browserToolCalls={browserTools} showBrowserViewButton={false} />
+        <StreamingSection embedded textBlockVersion={state.live.textBlockVersion} streamingContent={state.live.streamingContent} isStreaming={state.live.isStreaming} thoughts={state.thoughts} isThinking={state.live.isThinking} browserToolCalls={browserTools} showBrowserViewButton={false} />
       </> : latestResult ? <MessageRow message={latestResult} hideBrowserLiveView hideTerminalOpen defaultThoughtsExpanded /> : <p className="text-muted-foreground">{t('No execution events received yet')}</p>}
       <button onClick={onOpen} className="flex min-h-9 w-full items-center justify-center gap-1 rounded text-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">{t('View execution history')}<ArrowRight size={13} /></button>
     </div>}
