@@ -98,6 +98,7 @@ import {
 
 import { registerConversationSource } from '../../../../src/main/services/conversation-interop/source'
 import { createChatConversationSource } from '../../../../src/main/services/conversation-interop/chat-source'
+import { DEFAULT_CIRCUIT_LIMITS } from '../../../../src/main/services/conversation-interop/circuit-breaker'
 
 registerConversationSource(createChatConversationSource())
 
@@ -528,10 +529,26 @@ describe('deliverToConversation', () => {
       toConversationId: 'tgt-4',
       message: 'deep',
       summary: 's',
-      forwardDepth: 7,
+      forwardDepth: DEFAULT_CIRCUIT_LIMITS.maxForwardDepth + 1,
     })
 
     expect(result).toEqual({ ok: false, reason: 'chain_too_deep' })
+  })
+
+  it('lets a long automatic chain through; the depth ceiling only stops a runaway one', async () => {
+    seed('src-4b', 'Source')
+    seed('tgt-4b', 'Target')
+
+    const result = await deliverToConversation({
+      spaceId: 'space-1',
+      fromConversationId: 'src-4b',
+      toConversationId: 'tgt-4b',
+      message: 'still part of a working chain',
+      summary: 's',
+      forwardDepth: 50,
+    })
+
+    expect(result).toMatchObject({ ok: true, status: 'delivered' })
   })
 
   it('trips the pair rate limit as circuit_open after repeated sends', async () => {

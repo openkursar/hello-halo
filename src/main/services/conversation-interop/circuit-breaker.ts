@@ -59,7 +59,8 @@ export const DEFAULT_CIRCUIT_LIMITS: CircuitLimits = {
   sourceLimit: 60,
   windowMs: 10 * 60 * 1000,
   cooldownMs: 5 * 60 * 1000,
-  maxForwardDepth: 6,
+  // A last-resort stop for a runaway chain; the pair and source limits pace ordinary back-and-forth.
+  maxForwardDepth: 999,
   maxMessageChars: 32_000,
 }
 

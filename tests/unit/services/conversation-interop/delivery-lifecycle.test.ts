@@ -554,8 +554,9 @@ describe('circuit breaker through delivery', () => {
   it('checks depth before rate: an over-deep hop is rejected on its own, spends no budget and writes no notice', async () => {
     const source = seed('deep-src')
     seed('deep-tgt')
+    const overDepth = (await import('../../../../src/main/services/conversation-interop/circuit-breaker')).DEFAULT_CIRCUIT_LIMITS.maxForwardDepth + 1
     for (let i = 0; i < 30; i++) {
-      expect(await send('deep-src', 'deep-tgt', 'x', { forwardDepth: 7 })).toEqual({ ok: false, reason: 'chain_too_deep' })
+      expect(await send('deep-src', 'deep-tgt', 'x', { forwardDepth: overDepth })).toEqual({ ok: false, reason: 'chain_too_deep' })
     }
     expect(noticesIn(source)).toHaveLength(0)
     expect(await send('deep-src', 'deep-tgt', 'fresh chain')).toMatchObject({ ok: true, status: 'delivered' })
