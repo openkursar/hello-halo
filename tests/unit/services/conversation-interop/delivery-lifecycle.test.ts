@@ -7,7 +7,9 @@
  * engine's turn-end event stream and busyness. Delivery, pending-wait, the
  * circuit breaker, the turn gate and turn-end-watch are all the real modules,
  * wired the way production wires them, so a refactor of the internals has to
- * keep the observable behavior pinned here.
+ * keep the observable behavior pinned here. The breaker's caps are injected
+ * through its own factory so a burst stays short; the production defaults are
+ * pinned separately in default-limits.test.ts.
  *
  * The fake `sendMessage` behaves like the real one where it matters: it
  * persists the input as a `role:'user'` message and starts a turn, i.e. the
@@ -86,6 +88,24 @@ vi.mock('../../../../src/main/services/conversation-interop/busy', () => ({
   isNativeConversationBusy: (id: string) => h.busy.has(id),
   hasLiveNativeSession: (id: string) => h.hasLiveNativeSession(id),
 }))
+
+const TEST_CIRCUIT_LIMITS = vi.hoisted(() => ({ pairLimit: 4, sourceLimit: 8 }))
+
+/**
+ * A fresh breaker with test-sized caps, registered after `vi.resetModules()` so
+ * its per-window state does not leak from the previous case.
+ */
+function mockCircuitLimits(): void {
+  vi.doMock('../../../../src/main/services/conversation-interop/circuit-breaker', async () => {
+    const actual = await vi.importActual<typeof import('../../../../src/main/services/conversation-interop/circuit-breaker')>(
+      '../../../../src/main/services/conversation-interop/circuit-breaker',
+    )
+    return {
+      ...actual,
+      circuitBreaker: actual.createCircuitBreaker({ ...actual.DEFAULT_CIRCUIT_LIMITS, ...TEST_CIRCUIT_LIMITS }),
+    }
+  })
+}
 vi.mock('../../../../src/main/services/conversation.service', () => ({
   getConversation: (_spaceId: string, id: string) => h.store.get(id) ?? null,
   updateMessageById: (_spaceId: string, id: string, messageId: string, patch: Partial<FakeMessage>) => {
@@ -155,6 +175,7 @@ function noticesIn(conv: FakeConversation): FakeMessage[] {
 beforeEach(async () => {
   vi.useFakeTimers()
   vi.resetModules()
+  mockCircuitLimits()
   h.store.clear()
   h.busy.clear()
   h.pendingInput.clear()
@@ -261,7 +282,7 @@ describe('turn slot and mailbox', () => {
       await send(`filler-${i}`, 'tgt')
     }
 
-    // Far more attempts than the pair limit (20) would allow if they counted.
+    // Far more attempts than the pair limit would allow if they counted.
     for (let i = 0; i < 30; i++) {
       expect(await send('src', 'tgt')).toEqual({ ok: false, reason: 'queue_full' })
     }
@@ -506,12 +527,12 @@ describe('waitForReply lifecycle', () => {
 describe('circuit breaker through delivery', () => {
   it('trips the per-source limit for fan-out to distinct targets, with one notice that names no single target', async () => {
     const source = seed('fan-src')
-    let last
-    for (let i = 0; i < 61; i++) {
+    for (let i = 0; i < TEST_CIRCUIT_LIMITS.sourceLimit; i++) {
       seed(`fan-tgt-${i}`)
-      last = await send('fan-src', `fan-tgt-${i}`, `m-${i}`)
-      if (i < 60) expect(last).toMatchObject({ ok: true })
+      expect(await send('fan-src', `fan-tgt-${i}`, `m-${i}`)).toMatchObject({ ok: true })
     }
+    seed(`fan-tgt-${TEST_CIRCUIT_LIMITS.sourceLimit}`)
+    const last = await send('fan-src', `fan-tgt-${TEST_CIRCUIT_LIMITS.sourceLimit}`, 'one too many')
     expect(last).toEqual({ ok: false, reason: 'circuit_open' })
 
     // Repeats during the cooldown stay silent.
@@ -529,7 +550,7 @@ describe('circuit breaker through delivery', () => {
   it('a pair cooldown pauses only that pair; the source can still reach other conversations', async () => {
     seed('pair-src'); seed('pair-tgt'); seed('pair-other')
     h.busy.add('pair-tgt')
-    for (let i = 0; i < 21; i++) await send('pair-src', 'pair-tgt', `m-${i}`)
+    for (let i = 0; i < TEST_CIRCUIT_LIMITS.pairLimit; i++) await send('pair-src', 'pair-tgt', `m-${i}`)
     expect(await send('pair-src', 'pair-tgt')).toEqual({ ok: false, reason: 'circuit_open' })
 
     expect(await send('pair-src', 'pair-other')).toMatchObject({ ok: true, status: 'delivered' })
@@ -538,7 +559,7 @@ describe('circuit breaker through delivery', () => {
   it('holds the cooldown for its full five minutes, then admits sends once the sliding window has decayed', async () => {
     seed('cool-src'); seed('cool-tgt')
     h.busy.add('cool-tgt')
-    for (let i = 0; i < 21; i++) await send('cool-src', 'cool-tgt', `m-${i}`)
+    for (let i = 0; i < TEST_CIRCUIT_LIMITS.pairLimit; i++) await send('cool-src', 'cool-tgt', `m-${i}`)
     expect(await send('cool-src', 'cool-tgt')).toEqual({ ok: false, reason: 'circuit_open' })
 
     await vi.advanceTimersByTimeAsync(4 * 60_000 + 59_000)
@@ -570,20 +591,23 @@ describe('circuit breaker through delivery', () => {
 
   it('a reply that answers a pending wait is exempt from the breaker: the answering direction never accumulates budget', async () => {
     seed('w'); seed('t')
-    // 19 ask/answer rounds: the waiter stays under its own pair limit (20),
-    // while the answering side sends more messages than that would allow if they were charged.
-    for (let i = 0; i < 19; i++) {
+    // The waiter stays under its own pair limit while the answering side sends
+    // more messages than that would allow if they were charged.
+    const rounds = TEST_CIRCUIT_LIMITS.pairLimit - 1
+    for (let i = 0; i < rounds; i++) {
       const pending = ask('w', 't', `q-${i}`)
       await flush()
       expect(await send('t', 'w', `a-${i}`)).toEqual({ ok: true, status: 'resolved_pending_wait' })
       await expect(pending).resolves.toMatchObject({ outcome: { status: 'replied' } })
       await endTurn('t')
     }
-    // 19 answers so far; pile up ordinary sends up to the pair limit and beyond to prove
-    // the answers were not counted: 20 ordinary sends still succeed before the 21st trips.
+    // The answers were not counted: a full pair limit of ordinary sends still
+    // succeeds before the next one trips.
     h.busy.add('w')
-    for (let i = 0; i < 20; i++) expect(await send('t', 'w', `n-${i}`)).toMatchObject({ ok: true })
-    expect(await send('t', 'w', 'n-21')).toEqual({ ok: false, reason: 'circuit_open' })
+    for (let i = 0; i < TEST_CIRCUIT_LIMITS.pairLimit; i++) {
+      expect(await send('t', 'w', `n-${i}`)).toMatchObject({ ok: true })
+    }
+    expect(await send('t', 'w', 'n-over')).toEqual({ ok: false, reason: 'circuit_open' })
   })
 })
 

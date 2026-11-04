@@ -14,3 +14,10 @@ export const DEFAULT_MAX_TURNS = 999
  * having chosen it.
  */
 export const LEGACY_DEFAULT_MAX_TURNS = 50
+
+/**
+ * The team chain-depth default before it became the shared extreme (999).
+ * Settings used to save both team circuit limits together, so configs can
+ * carry this value without the user ever having chosen it.
+ */
+export const LEGACY_TEAM_DEFAULT_FORWARD_DEPTH = 8

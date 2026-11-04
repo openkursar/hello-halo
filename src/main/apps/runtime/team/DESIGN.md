@@ -730,6 +730,10 @@ team-level overridable via `circuitOverrides`:
   that turn makes (`TeamMcpContext.forwardDepth`) — a chain restarting at 0 per
   hop is a chain this limit can never see.
 
+The defaults are deliberately extreme (999 for `maxForwardDepth`, 2000 for
+`maxMessages`): they are the last-resort stop for a runaway loop such as a model
+bug, not pace control. Team-level `circuitOverrides` can still tighten them.
+
 A person's 1:1 message charges nothing at all (see "A person is not a member").
 
 On breach, `send()` throws `CircuitBreakerError` (the offending action is

@@ -9,8 +9,11 @@
  * patch that exact message — by id, via a mocked `updateMessageById` that
  * mirrors the real one's "re-read then mutate in place" contract — into the
  * delivered shape afterward. `pending-wait` and `circuit-breaker` are the REAL
- * modules (pure, deterministic) — each test uses distinct conversation ids
- * so their shared module-level state never interferes across cases.
+ * modules (pure, deterministic) — the breaker runs with test-sized caps
+ * injected through its own factory so a burst stays short; the production
+ * defaults are pinned separately in default-limits.test.ts. Each test uses
+ * distinct conversation ids so their shared module-level state never
+ * interferes across cases.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -52,6 +55,16 @@ function seed(id: string, title: string): FakeConversation {
   store.set(id, conv)
   return conv
 }
+
+const TEST_CIRCUIT_LIMITS = vi.hoisted(() => ({ pairLimit: 4, sourceLimit: 8 }))
+
+vi.mock('../../../../src/main/services/conversation-interop/circuit-breaker', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/main/services/conversation-interop/circuit-breaker')>()
+  return {
+    ...actual,
+    circuitBreaker: actual.createCircuitBreaker({ ...actual.DEFAULT_CIRCUIT_LIMITS, ...TEST_CIRCUIT_LIMITS }),
+  }
+})
 
 vi.mock('../../../../src/main/services/agent/send-message', () => ({ sendMessage }))
 
@@ -555,17 +568,25 @@ describe('deliverToConversation', () => {
     seed('src-5', 'Source')
     seed('tgt-5', 'Target')
 
-    let lastResult
-    for (let i = 0; i < 21; i++) {
-      isNativeConversationBusy.mockReturnValue(true) // keep queuing so each attempt only charges the breaker, not exhausting the mailbox cap differently
-      lastResult = await deliverToConversation({
+    // Keep queuing so each attempt only charges the breaker, not exhausting the
+    // mailbox cap differently.
+    isNativeConversationBusy.mockReturnValue(true)
+    for (let i = 0; i < TEST_CIRCUIT_LIMITS.pairLimit; i++) {
+      expect(await deliverToConversation({
         spaceId: 'space-1',
         fromConversationId: 'src-5',
         toConversationId: 'tgt-5',
         message: `msg-${i}`,
         summary: 's',
-      })
+      })).toMatchObject({ ok: true })
     }
+    const lastResult = await deliverToConversation({
+      spaceId: 'space-1',
+      fromConversationId: 'src-5',
+      toConversationId: 'tgt-5',
+      message: 'one too many',
+      summary: 's',
+    })
     expect(lastResult).toEqual({ ok: false, reason: 'circuit_open' })
   })
 
@@ -675,7 +696,7 @@ describe('deliverToConversation', () => {
 
     // Trip the pair breaker from target-q back to waiter-q first, so a plain
     // send along that exact pair would normally be hard-rejected.
-    for (let i = 0; i < 21; i++) {
+    for (let i = 0; i < TEST_CIRCUIT_LIMITS.pairLimit; i++) {
       await deliverToConversation({
         spaceId: 'space-1',
         fromConversationId: 'target-q',
@@ -725,17 +746,32 @@ describe('deliverToConversation', () => {
     const source = seed('notice-src', 'Notice Source')
     seed('notice-tgt', 'Notice Target')
 
-    let last
-    for (let i = 0; i < 22; i++) {
-      last = await deliverToConversation({
+    for (let i = 0; i < TEST_CIRCUIT_LIMITS.pairLimit; i++) {
+      expect(await deliverToConversation({
         spaceId: 'space-1',
         fromConversationId: 'notice-src',
         toConversationId: 'notice-tgt',
         message: `m-${i}`,
         summary: 's',
-      })
+      })).toMatchObject({ ok: true })
     }
+    const last = await deliverToConversation({
+      spaceId: 'space-1',
+      fromConversationId: 'notice-src',
+      toConversationId: 'notice-tgt',
+      message: 'one too many',
+      summary: 's',
+    })
     expect(last).toEqual({ ok: false, reason: 'circuit_open' })
+
+    // A repeat during the cooldown stays silent.
+    expect(await deliverToConversation({
+      spaceId: 'space-1',
+      fromConversationId: 'notice-src',
+      toConversationId: 'notice-tgt',
+      message: 'again',
+      summary: 's',
+    })).toEqual({ ok: false, reason: 'circuit_open' })
 
     const notices = source.messages.filter((m) => m.source === 'cross-conversation-notice')
     expect(notices).toHaveLength(1)

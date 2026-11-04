@@ -1032,6 +1032,23 @@ describe('MessageBus', () => {
       ).rejects.toBeInstanceOf(CircuitBreakerError)
     })
 
+    it('leaves a 50-hop chain to the models: the default depth ceiling is only a runaway-loop stop', async () => {
+      seedTeam(store, 'free')
+      const { hooks } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+
+      await bus.send({
+        teamId: TEAM_ID,
+        epochId: EPOCH_ID,
+        fromAppId: LEAD_APP,
+        to: 'researcher',
+        message: 'a long but ordinary chain',
+        wait: false,
+        forwardDepth: 50,
+      })
+      expect(bus.getEpochStats(EPOCH_ID).messageCount).toBe(1)
+    })
+
     it('resetEpoch clears the counters', async () => {
       seedTeam(store, 'free')
       const { hooks } = makeHooks()

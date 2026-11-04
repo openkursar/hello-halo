@@ -3,7 +3,9 @@
  * listing and reading, reference resolution, delivery routing, capability
  * gating, and turn-end wiring. The sources here are in-memory fakes; the
  * module's own state (turn gate, waits, rate windows, registry) is reloaded for
- * every test.
+ * every test. The breaker's caps are injected through its own factory so a
+ * burst stays short; the production defaults are pinned in
+ * default-limits.test.ts.
  *
  * `dh` stands for any source owned by a higher tier (ids `app-chat:*`); `notes`
  * is a second one with a different id space. The built-in space source that
@@ -35,6 +37,24 @@ vi.mock('../../../../src/main/services/conversation-interop/busy', () => ({
   isNativeConversationBusy: () => false,
   hasLiveNativeSession: () => false,
 }))
+
+const TEST_CIRCUIT_LIMITS = vi.hoisted(() => ({ pairLimit: 4, sourceLimit: 8 }))
+
+/**
+ * A fresh breaker with test-sized caps, registered after `vi.resetModules()` so
+ * its per-window state does not leak from the previous case.
+ */
+function mockCircuitLimits(): void {
+  vi.doMock('../../../../src/main/services/conversation-interop/circuit-breaker', async () => {
+    const actual = await vi.importActual<typeof import('../../../../src/main/services/conversation-interop/circuit-breaker')>(
+      '../../../../src/main/services/conversation-interop/circuit-breaker',
+    )
+    return {
+      ...actual,
+      circuitBreaker: actual.createCircuitBreaker({ ...actual.DEFAULT_CIRCUIT_LIMITS, ...TEST_CIRCUIT_LIMITS }),
+    }
+  })
+}
 
 interface FakeConv {
   id: string
@@ -142,6 +162,7 @@ const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await Pr
 beforeEach(async () => {
   vi.useFakeTimers()
   vi.resetModules()
+  mockCircuitLimits()
   sourceModule = await import('../../../../src/main/services/conversation-interop/source')
   listRead = await import('../../../../src/main/services/conversation-interop/list-read')
   resolution = await import('../../../../src/main/services/conversation-interop/target-resolution')
@@ -460,7 +481,10 @@ describe('delivery across sources', () => {
 
   it('writes the rate-limit notice through the SENDER\'s source, naming the target from its own', async () => {
     dh.busy.add('app-chat:app-1') // keep queueing so only the breaker limits
-    for (let i = 0; i < 22; i++) await send('notes:1', 'app-chat:app-1', `m-${i}`)
+    for (let i = 0; i < TEST_CIRCUIT_LIMITS.pairLimit; i++) await send('notes:1', 'app-chat:app-1', `m-${i}`)
+    expect(await send('notes:1', 'app-chat:app-1', 'one too many')).toEqual({ ok: false, reason: 'circuit_open' })
+    // A repeat during the cooldown stays silent.
+    expect(await send('notes:1', 'app-chat:app-1', 'again')).toEqual({ ok: false, reason: 'circuit_open' })
 
     expect(notes.notices).toHaveLength(1)
     expect(notes.notices[0].id).toBe('notes:1')
@@ -470,7 +494,10 @@ describe('delivery across sources', () => {
 
   it('a sender in another source gets its notice from that source', async () => {
     notes.busy.add('notes:1')
-    for (let i = 0; i < 22; i++) await send('app-chat:app-1', 'notes:1', `m-${i}`)
+    for (let i = 0; i < TEST_CIRCUIT_LIMITS.pairLimit; i++) await send('app-chat:app-1', 'notes:1', `m-${i}`)
+    expect(await send('app-chat:app-1', 'notes:1', 'one too many')).toEqual({ ok: false, reason: 'circuit_open' })
+    // A repeat during the cooldown stays silent.
+    expect(await send('app-chat:app-1', 'notes:1', 'again')).toEqual({ ok: false, reason: 'circuit_open' })
 
     expect(dh.notices).toHaveLength(1)
     expect(dh.notices[0].id).toBe('app-chat:app-1')
@@ -482,8 +509,10 @@ describe('delivery across sources', () => {
     try {
       notes.source.writeNotice = () => { throw new Error('disk full') }
       dh.busy.add('app-chat:app-1')
-      let last
-      for (let i = 0; i < 22; i++) last = await send('notes:1', 'app-chat:app-1', `m-${i}`)
+      for (let i = 0; i < TEST_CIRCUIT_LIMITS.pairLimit; i++) {
+        expect(await send('notes:1', 'app-chat:app-1', `m-${i}`)).toMatchObject({ ok: true })
+      }
+      const last = await send('notes:1', 'app-chat:app-1', 'one too many')
       expect(last).toEqual({ ok: false, reason: 'circuit_open' })
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('cooldown notice not written'), expect.any(Error))
     } finally {

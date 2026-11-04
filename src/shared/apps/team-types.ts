@@ -1562,7 +1562,13 @@ export const TEAM_IPC = {
 
 export const TEAM_CIRCUIT_DEFAULTS = {
   maxMessages: 2000,
-  maxForwardDepth: 8,
+  maxForwardDepth: 999,
+} as const
+
+/** Number-input bounds for the team circuit-limit overrides in settings. */
+export const TEAM_CIRCUIT_LIMIT_BOUNDS = {
+  maxMessages: { min: 10, max: 5000 },
+  maxForwardDepth: { min: 1, max: 9999 },
 } as const
 
 /** Default member turn timeout (ms) when `agent.teamTurnTimeoutMs` is unset. */

@@ -24,9 +24,11 @@ import {
 } from '../../../shared/constants/session-budget'
 import {
   TEAM_CIRCUIT_DEFAULTS,
+  TEAM_CIRCUIT_LIMIT_BOUNDS,
   TEAM_DEFAULT_TURN_TIMEOUT_MS,
   TEAM_DEFAULT_MAX_CONCURRENT_TURNS,
 } from '../../../shared/apps/team-types'
+import { saveTeamCircuitLimitChange } from './team-circuit-limits'
 
 // ─── Agent SDK Engine ───────────────────────────────────────────────────────────
 
@@ -310,19 +312,15 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   }
 
   const handleTeamCircuitLimitChange = async (patch: Partial<typeof teamCircuitLimits>) => {
-    const previous = teamCircuitLimits
-    const next = { ...previous, ...patch }
-    setTeamCircuitLimitsState(next)
+    const saved = config?.agent?.teamCircuitLimits
     try {
-      await saveAgentConfig({
-        teamCircuitLimits: {
-          maxMessages: next.maxMessages,
-          maxForwardDepth: next.maxForwardDepth,
-        },
-      })
+      await saveTeamCircuitLimitChange(saved, patch, saveAgentConfig)
     } catch (error) {
       console.error('[AdvancedSection] Failed to update teamCircuitLimits:', error)
-      setTeamCircuitLimitsState(previous)
+      setTeamCircuitLimitsState({
+        maxMessages: saved?.maxMessages ?? TEAM_CIRCUIT_DEFAULTS.maxMessages,
+        maxForwardDepth: saved?.maxForwardDepth ?? TEAM_CIRCUIT_DEFAULTS.maxForwardDepth,
+      })
     }
   }
 
@@ -629,8 +627,8 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
               <span className="text-xs text-muted-foreground">{t('Max messages per run')}</span>
               <input
                 type="number"
-                min={10}
-                max={5000}
+                min={TEAM_CIRCUIT_LIMIT_BOUNDS.maxMessages.min}
+                max={TEAM_CIRCUIT_LIMIT_BOUNDS.maxMessages.max}
                 value={teamCircuitLimits.maxMessages}
                 onChange={(e) => {
                   const val = parseInt(e.target.value, 10)
@@ -650,8 +648,8 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
               </span>
               <input
                 type="number"
-                min={1}
-                max={100}
+                min={TEAM_CIRCUIT_LIMIT_BOUNDS.maxForwardDepth.min}
+                max={TEAM_CIRCUIT_LIMIT_BOUNDS.maxForwardDepth.max}
                 value={teamCircuitLimits.maxForwardDepth}
                 onChange={(e) => {
                   const val = parseInt(e.target.value, 10)

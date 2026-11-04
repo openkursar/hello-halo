@@ -163,10 +163,13 @@ sign-offs until a breaker trips" failure the team's own DESIGN.md records.
 
 An ordinary conversation has no run/epoch to scope a budget to and reset on
 seal, so `circuit-breaker.ts` is its own always-live sliding-window limiter:
-a per-`(source, target)` pair cap and a per-source total (numbers from the
-approved spec), independent of each other so neither masks the failure mode the
-other exists for. Check order — depth, then pair rate, then source rate —
-mirrors team's `chargeCircuit` ("structural before counting"), per D19.
+a per-`(source, target)` pair cap and a per-source total. Their defaults are
+deliberately extreme (999 each, a product decision): they are the last-resort
+stop for a runaway loop such as a model bug, not pace control — ordinary
+back-and-forth is trusted to the models. The caps stay independent so neither
+masks the failure mode the other exists for. Check order — depth, then pair
+rate, then source rate — mirrors team's `chargeCircuit`
+("structural before counting"), per D19.
 
 `forwardDepth` has no `TeamTriggerContext`-shaped object to ride on for
 native conversations (D18), so it is tracked here instead
@@ -182,8 +185,8 @@ delivery from hours ago must not inflate a fresh chain's depth. For the same rea
 recorded inbound depth is dropped when the turn it was recorded for ends
 (`lifecycle.ts`): depth travels with the messages of a chain, so a later turn the
 user starts in that conversation begins a chain of its own instead of inheriting a
-limit-sized count. Exceeding the limit is its own failure (`chain_too_deep`), not
-the rate-limit pause.
+limit-sized count. The depth ceiling defaults to the same extreme value (999);
+exceeding it is its own failure (`chain_too_deep`), not the rate-limit pause.
 
 **D19 — a breach is a HARD STOP, resolved after product input (not this
 module's own default).** The first cut left this as a soft failure (an
