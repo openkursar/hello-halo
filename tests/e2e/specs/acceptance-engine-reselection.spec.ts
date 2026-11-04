@@ -11,8 +11,8 @@ import { modelTool } from '../fixtures/acceptance-model'
 import { assertEngineDiscovery, engineDiscoveryObserver, readCcAvailability, reselectAutomaticCcInstallation, seedAutomaticCcInstallation } from '../fixtures/acceptance-engine-upgrade'
 
 const caseId = 'models.engines.reselect-automatic-installation'
-test.use({ startupObserver: engineDiscoveryObserver })
-automationTest.use({ startupObserver: engineDiscoveryObserver })
+test.use({ startupObserver: engineDiscoveryObserver, diagnoseShutdown: true })
+automationTest.use({ startupObserver: engineDiscoveryObserver, diagnoseShutdown: true })
 test.setTimeout(120000)
 automationTest.setTimeout(120000)
 
@@ -21,16 +21,24 @@ async function setPersonOverride(page: Page, appId: string) {
   expect(result.success).toBe(true)
 }
 
-async function failChatBeforeSelection(page: Page) {
+async function failChatBeforeSelection(page: Page, entry: 'space-chat' | 'digital-human') {
   await expect(page.getByText('Claude Code is selected for this conversation. Select a Claude Code installation once in Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Select Claude Code in Settings', exact: true })).toBeEnabled()
   await page.locator('textarea').first().fill('Reply without tools before installation selection.')
   await page.locator('[data-onboarding="send-button"]').click()
-  await expect.poll(() => page.evaluate(() => (window as unknown as { acceptanceProbe: { errors: unknown[] } }).acceptanceProbe.errors)).not.toEqual([])
+  if (entry === 'space-chat') {
+    await expect(page.getByText('Failed to send message', { exact: true })).toBeVisible()
+    await expect(page.locator('textarea').first()).toHaveValue('Reply without tools before installation selection.')
+  } else {
+    await expect.poll(() => page.evaluate(() => (window as unknown as { acceptanceProbe: { errors: unknown[] } }).acceptanceProbe.errors)).not.toEqual([])
+  }
   await expect(page.getByRole('button', { name: 'Select Claude Code in Settings', exact: true })).toBeEnabled()
   const errors = await page.evaluate(() => (window as unknown as { acceptanceProbe: { errors: unknown[] } }).acceptanceProbe.errors)
-  expect(JSON.stringify(errors)).toContain('Claude Code')
-  expect(JSON.stringify(errors)).not.toContain('Engine \\"anthropic\\"')
+  if (entry === 'space-chat') expect(errors).toEqual([])
+  else {
+    expect(JSON.stringify(errors)).toContain('Claude Code')
+    expect(JSON.stringify(errors)).not.toContain('Engine \\"anthropic\\"')
+  }
   return errors
 }
 
@@ -72,8 +80,15 @@ for (const entry of ['space-chat', 'digital-human'] as const) {
       }
     }
     await openOriginal()
-    const expectedErrors = await failChatBeforeSelection(page)
+    const expectedErrors = await failChatBeforeSelection(page, entry)
     expect(model.exchanges).toHaveLength(0)
+    if (entry === 'space-chat') {
+      const stored = JSON.parse(readFileSync(conversationFile, 'utf8'))
+      expect(stored.engineOverride).toBe('anthropic')
+      expect(stored.messages.map((message: { content: string }) => message.content)).toEqual(['Preserve the cedar reference.'])
+    } else {
+      expect(readFileSync(seeded.transcriptPath, 'utf8')).toContain(seeded.turns[0].user)
+    }
     await reselectAutomaticCcInstallation(acceptanceApp, page, info, selectedPath, true)
     await openOriginal(true)
     const prompt = 'Continue the original conversation without using tools.'
@@ -115,9 +130,13 @@ automationTest('reselect the recorded installation for an independent task', acc
   expect(model.exchanges).toHaveLength(0)
   await assertEngineDiscovery(automation.session, info)
   await reselectAutomaticCcInstallation(automation.session, page, info, selectedPath)
-  model.respond(request => request.toolResults.some(result => result.id === 'reselection-report')
-    ? { text: 'The task completed on the selected installation.' }
-    : { tools: [modelTool(request, 'report_to_user', { type: 'run_complete', message: 'The task completed on the selected installation.' }, 'reselection-report')] })
+  model.respond(request => {
+    if (request.toolResults.some(result => result.id === 'reselection-report')) return { text: 'The task completed on the selected installation.' }
+    if (!request.tools.some(tool => tool === 'report_to_user' || tool.endsWith('__report_to_user'))) {
+      return { tools: [modelTool(request, 'ToolSearch', { query: '+halo-report report_to_user', max_results: 1 }, 'reselection-search')] }
+    }
+    return { tools: [modelTool(request, 'report_to_user', { type: 'run_complete', message: 'The task completed on the selected installation.' }, 'reselection-report')] }
+  })
   await openAutomation(page, automation)
   const run = await startAutomation(page, automation.appId)
   await waitForAutomationResult(page, automation.appId, run.runId, 'ok')
