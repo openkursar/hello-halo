@@ -80,11 +80,12 @@ function BootSplashRelease() {
 
 // Page loading fallback - minimal spinner that matches app style
 function PageLoader() {
+  const { t } = useTranslation()
   return (
     <div className="h-full w-full flex items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-4">
         <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-        <span className="text-sm text-muted-foreground">Loading...</span>
+        <span className="text-sm text-muted-foreground">{t('Loading...')}</span>
       </div>
     </div>
   )
