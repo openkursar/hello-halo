@@ -40,7 +40,7 @@ let shuttingDown = false
 export class EngineUnavailableError extends Error {
   readonly code = 'ENGINE_UNAVAILABLE'
   constructor(readonly engineId: EngineId, reason: string, options?: ErrorOptions) {
-    super(`Engine "${engineId}" is unavailable: ${reason}`, options)
+    super(`Engine "${defaultCapabilitiesFor(engineId).displayName}" is unavailable: ${reason}`, options)
     this.name = 'EngineUnavailableError'
   }
 }

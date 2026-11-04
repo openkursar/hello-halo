@@ -79,7 +79,7 @@ describe('engine availability', () => {
     const { getEngineAvailability } = await loadProbe()
     const spies = [vi.spyOn(fs, 'existsSync'), vi.spyOn(fs, 'readFileSync'), vi.spyOn(fs.promises, 'stat'), vi.spyOn(fs.promises, 'realpath'), vi.spyOn(fs.promises, 'readFile'), vi.spyOn(fs.promises, 'opendir')]
     try {
-      expect((await getEngineAvailability(['anthropic']))[0]).toMatchObject({ available: false, reason: expect.stringContaining('Select an installation once in Settings > Advanced') })
+      expect((await getEngineAvailability(['anthropic']))[0]).toMatchObject({ available: false, reason: expect.stringContaining('Select an installation once in the Halo desktop app under Settings > Advanced') })
       expect(runtime.resolve).not.toHaveBeenCalled()
       for (const spy of spies) expect(spy).not.toHaveBeenCalled()
     } finally { spies.forEach(spy => spy.mockRestore()) }

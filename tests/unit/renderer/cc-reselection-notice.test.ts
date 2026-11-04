@@ -2,9 +2,9 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
-const state = vi.hoisted(() => ({ config: { agent: { ccRuntime: { selectedPath: '/legacy/claude' } } }, openSettings: vi.fn() }))
+const state = vi.hoisted(() => ({ config: { agent: { ccRuntime: { selectedPath: '/legacy/claude' } } }, openSettings: vi.fn(), remote: false }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }) }))
-vi.mock('../../../src/renderer/api', () => ({ api: { isRemoteMode: () => false } }))
+vi.mock('../../../src/renderer/api', () => ({ api: { isRemoteMode: () => state.remote } }))
 vi.mock('../../../src/renderer/stores/app.store', () => ({ useAppStore: (select: any) => select({ config: state.config, openClaudeCodeSettings: state.openSettings }) }))
 vi.mock('../../../src/renderer/stores/engine.store', () => ({ useEngineId: (id: string) => id }))
 vi.mock('../../../src/renderer/stores/apps.store', () => ({ useAppsStore: vi.fn() }))
@@ -24,5 +24,16 @@ describe('Claude Code reselection recovery notice', () => {
     expect(html).toContain('Your history and engine choice are kept')
     expect(html).toContain('Select Claude Code in Settings')
     expect(state.openSettings).not.toHaveBeenCalled()
+  })
+
+  it('directs remote users to the host desktop app without a nonexistent settings action', () => {
+    state.remote = true
+    try {
+      const html = renderToStaticMarkup(createElement(EngineRecoveryNotice, { engineId: 'anthropic' }))
+      expect(html).toContain('In the Halo desktop app on the host computer')
+      expect(html).toContain('select a Claude Code installation once')
+      expect(html).not.toContain('Select Claude Code in Settings')
+      expect(html).not.toContain('Open Settings')
+    } finally { state.remote = false }
   })
 })

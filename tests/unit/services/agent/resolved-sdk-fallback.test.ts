@@ -63,6 +63,14 @@ describe('startup engine resolution', () => {
     vi.resetModules()
   })
 
+  it('uses the UI engine name in failures while retaining the machine-readable identity', async () => {
+    const sdk = await initFresh()
+    const error = new sdk.EngineUnavailableError('anthropic', 'Select an installation in the Halo desktop app.')
+    expect(error.message).toBe('Engine "Claude Code" is unavailable: Select an installation in the Halo desktop app.')
+    expect(error.engineId).toBe('anthropic')
+    expect(error.code).toBe('ENGINE_UNAVAILABLE')
+  })
+
   it('loads the configured engine when this build carries it', async () => {
     const sdk = await initFresh()
 

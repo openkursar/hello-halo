@@ -79,7 +79,9 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
         ? t('Codex supports OpenAI-compatible Chat Completions and Responses accounts. Choose another account or another engine.')
         : issue === 'cc-missing'
           ? !hasExplicitCcSelection(ccRuntime, sources)
-            ? t('Claude Code is selected for this conversation. Select a Claude Code installation once in Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.')
+            ? api.isRemoteMode()
+              ? t('Claude Code is selected for this conversation. In the Halo desktop app on the host computer, select a Claude Code installation once under Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.')
+              : t('Claude Code is selected for this conversation. Select a Claude Code installation once in Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.')
             : t('This conversation runs on Claude Code, which is not available on this computer. Install or connect Claude Code, or continue with Halo SDK.')
           : notice.kind === 'failure'
             ? t('This conversation’s engine or account cannot run on this computer. Check the engine and account in Settings.')
