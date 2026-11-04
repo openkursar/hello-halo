@@ -14,7 +14,7 @@ for (const operation of ['stat', 'access', 'realpath', 'open', 'opendir']) {
   promises[operation] = function (...args) {
     const path = String(args[0])
     if (path === selectedPath || relevant.test(path) || operation === 'opendir' && /[/\\]runtimes[/\\]claude-code$/.test(path)) {
-      if (evidence.operations.length < 1024) evidence.operations.push({ operation, path })
+      if (evidence.operations.length < 1024) evidence.operations.push({ operation, path, stack: new Error('Runtime filesystem observation').stack })
       else evidence.truncated = true
       write()
     }

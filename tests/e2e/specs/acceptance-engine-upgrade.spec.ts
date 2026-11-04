@@ -52,7 +52,7 @@ for (const history of ['native', 'transcript'] as const) {
     await openManagedConversation(page, target.title, space.id)
     await assertNoCcRecoveryNotice(page)
     await assertEngineDiscovery(acceptanceApp, info)
-    await page.getByRole('button', { name: 'gpt-4o', exact: true }).click()
+    await page.getByRole('button', { name: 'GPT-4o', exact: true }).click()
     await page.getByRole('button', { name: 'Advanced', exact: true }).click()
     await expect(page.getByLabel('Conversation engine', { exact: true })).toBeEnabled()
     await expect(page.getByText('Current engine: Halo SDK', { exact: true })).toBeVisible()

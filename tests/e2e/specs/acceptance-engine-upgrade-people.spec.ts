@@ -35,6 +35,8 @@ test('a historical digital human receives its prior chat on Halo', acceptance('m
     return { text: 'The earlier conversation is retained.' }
   })
   await openManagedPerson(page, seeded.name)
+  await page.getByRole('button', { name: 'Chat', exact: true }).click()
+  await expect(page.locator('textarea').first()).toBeVisible()
   await assertNoCcRecoveryNotice(page)
   await sendAcceptanceMessage(page, 'Continue using my first question and your last answer.')
   await expect(page.locator('.message-assistant').last()).toContainText('The earlier conversation is retained.')
