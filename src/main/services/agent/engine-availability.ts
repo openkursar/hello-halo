@@ -106,7 +106,7 @@ async function probeCc(): Promise<EngineAvailability> {
   try {
     const config = getConfig()
     if (!hasExplicitCcSelection(config.agent?.ccRuntime, config.aiSources)) {
-      return { engineId: 'anthropic', available: false, version: '', fingerprint: '', reason: 'No Claude Code installation is explicitly selected' }
+      return { engineId: 'anthropic', available: false, version: '', fingerprint: '', reason: 'No Claude Code installation is explicitly selected. Select an installation once in Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.' }
     }
     const { resolveCcRuntimeLaunch } = await import('../cc-runtime')
     const launch = await resolveCcRuntimeLaunch()

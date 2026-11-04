@@ -84,6 +84,7 @@ export interface CcInstallProgress {
 }
 
 export interface CcRuntimeStatus {
+  /** Effective explicit selection; ambiguous legacy paths remain in the installation catalog. */
   selectedPath?: string
   selected: CcInstallation | null
   installations: CcInstallation[]

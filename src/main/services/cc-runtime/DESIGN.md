@@ -68,7 +68,10 @@ more probes after it eventually returns.
 
 `agent.ccRuntime` stores the chosen launcher and download preferences. Manual selection
 and installation persist `selectionOrigin: 'user'`; old selected paths alone cannot
-prove intent because automatic migration also wrote them. Selecting
+prove intent because automatic migration also wrote them. Status exposes `selectedPath`
+and `selected` only when `hasExplicitCcSelection` recognizes intent; the stored legacy
+path stays in configuration and the catalog, so Settings can explicitly select the
+same installation without downloading another version. Selecting
 requires a successful probe and a persisted config readback. Choosing a new runtime
 does not interrupt existing sessions. Migration and engine fallback are owned by
 their callers, not this service.

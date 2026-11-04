@@ -1,5 +1,6 @@
 import { getConfig, saveConfig } from '../../foundation/config.service'
 import { DEFAULT_MAX_TURNS } from '../../../shared/constants/agent-limits'
+import { hasExplicitCcSelection } from '../../../shared/types/cc-runtime'
 import type { CcInstallation, CcInstallProgress, CcInstallRequest, CcReleaseInfo, CcRuntimeConfig, CcRuntimePreferences, CcRuntimeStatus } from '../../../shared/types/cc-runtime'
 import { getCatalogEntry, getCatalogSnapshot, getManagedCatalogEntries, mergeInstallationSnapshot, rememberInstallation } from './catalog'
 import { discoverInstallations } from './discovery'
@@ -28,15 +29,17 @@ function persistConfig(patch: Partial<CcRuntimeConfig>): void {
 }
 
 export async function getCcRuntimeStatus(): Promise<CcRuntimeStatus> {
-  const config = readConfig()
+  const settings = getConfig()
+  const config = settings.agent?.ccRuntime || {}
+  const selectedPath = hasExplicitCcSelection(config, settings.aiSources) ? config.selectedPath : undefined
   const catalog = await getCatalogSnapshot()
   const installations = catalog.installations.map(item => {
     const known = readKnownInstallation(item.path)
     return known?.checkedAt && (!item.checkedAt || known.checkedAt > item.checkedAt) ? mergeInstallationSnapshot(item, known) : item
   })
   return {
-    selectedPath: config.selectedPath,
-    selected: config.selectedPath ? installations.find(item => item.path === config.selectedPath) ?? readKnownInstallation(config.selectedPath) : null,
+    selectedPath,
+    selected: selectedPath ? installations.find(item => item.path === selectedPath) ?? readKnownInstallation(selectedPath) : null,
     installations, catalogTruncated: catalog.truncated,
     sources: getSources(config), sourceId: getEffectiveSourceId(config),
     installVersion: config.installVersion || RECOMMENDED_VERSION,

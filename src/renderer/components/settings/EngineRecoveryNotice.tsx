@@ -78,7 +78,9 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
       : issue === 'codex-account'
         ? t('Codex supports OpenAI-compatible Chat Completions and Responses accounts. Choose another account or another engine.')
         : issue === 'cc-missing'
-          ? t('This conversation runs on Claude Code, which is not available on this computer. Install or connect Claude Code, or continue with Halo SDK.')
+          ? !hasExplicitCcSelection(ccRuntime, sources)
+            ? t('Claude Code is selected for this conversation. Select a Claude Code installation once in Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.')
+            : t('This conversation runs on Claude Code, which is not available on this computer. Install or connect Claude Code, or continue with Halo SDK.')
           : notice.kind === 'failure'
             ? t('This conversation’s engine or account cannot run on this computer. Check the engine and account in Settings.')
             : t('Halo SDK is currently running. To use Claude Code, connect it in Settings > Advanced. Your chat history is kept; no restart is needed.')
@@ -93,7 +95,7 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
           {/* Claude Code is set up on the computer running Halo; remote clients have no such settings. */}
           {(issue === 'account-needs-cc' || issue === 'cc-missing') && !api.isRemoteMode() && (
             <button type="button" className={action} onClick={openClaudeCodeSettings}>
-              {issue === 'cc-missing' ? t('Install or connect Claude Code') : t('Set up Claude Code')}
+              {issue === 'cc-missing' && !hasExplicitCcSelection(ccRuntime, sources) ? t('Select Claude Code in Settings') : issue === 'cc-missing' ? t('Install or connect Claude Code') : t('Set up Claude Code')}
             </button>
           )}
           {issue === 'account-cc-ready' && canMove && (

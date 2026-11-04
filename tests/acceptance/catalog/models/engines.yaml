@@ -139,6 +139,25 @@ scenarios:
     variants:
       runtime: [installed, missing]
     notes: Seeds the real persisted delegated-source shape and checks engine selection without logging in or sending a model request. The installed variant requires a real isolated external CC runtime; absence is blocked. This does not establish delegated login or successful authenticated inference. Only the currently selected claude-cli delegated source counts as active choice; other historical defaults still use Halo.
+  - id: models.engines.reselect-automatic-installation
+    title: Reuse the same automatically recorded installation after an explicit conversation or digital-human CC choice
+    verifies: [upgrade, selection, fallback]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk, local-claude-code]
+    variants:
+      entry: [space-chat, digital-human, automation]
+    preconditions:
+      - A historical profile has an automatically saved valid CC path without selectionOrigin and an explicit conversation or digital-human CC override.
+    steps:
+      - Try a turn or run, read the setup explanation, open Settings > Advanced, and select the same listed installation without downloading another version. Retry the conversation or task.
+    expected:
+      - The initial attempt stays on CC and fails with an explanation to select an installation once in Settings; automation retains the reason in its failed-run record. No automatic runtime check or fallback occurs.
+      - The same installation is selectable. Explicit selection checks it, records user intent, and makes CC available; the next turn or run uses CC while history and the override remain intact.
+    notes: Unit coverage exercises status, rendered installation actions, the selection controller, availability and recovery copy with isolated config and probe mocks. It is not evidence of a real UI click, external CC turn, or completed end-to-end journey.
   - id: models.engines.ordinary-upgrade
     title:
       en: Continue old conversations without discovering external runtimes
