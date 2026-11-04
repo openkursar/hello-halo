@@ -12,6 +12,7 @@ import type { ApiRetryState } from '../../../shared/types/api-retry'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import type { MessageTask } from '../../../shared/types/message-task'
 import type { BackendRequestConfig } from '../../../shared/types/ai-sources'
+import type { SkillNotice } from '../../../shared/types/skills'
 
 // ============================================
 // API Credentials
@@ -169,6 +170,7 @@ export interface Thought {
   type: ThoughtType
   content: string
   timestamp: string
+  skillNotice?: SkillNotice
   toolName?: string
   toolInput?: Record<string, unknown>
   toolOutput?: string

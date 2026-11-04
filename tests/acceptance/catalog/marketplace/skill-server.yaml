@@ -1,0 +1,46 @@
+version: 1
+id: marketplace.skill-server
+module: marketplace
+title: Install and explicitly replace one maintained skill through the real server UI
+story: I can install a global skill from the marketplace, save my edits with confirmation, keep its current package when an update appears and explicitly replace it without losing my disabled choice or changing unrelated skills.
+basis: documented
+references:
+  - tests/acceptance/skills-requirements.md
+  - tests/acceptance/catalog/marketplace/skill-updates.yaml
+  - src/main/apps/manager/DESIGN.md
+  - src/renderer/components/apps/SkillInfoCard.tsx
+  - src/renderer/components/store/StoreUpdateDialog.tsx
+promises:
+  install: An explicit global marketplace installation creates one complete maintained package in Halo's private skill directory with the selected source identity, not a personal manual-import copy.
+  save: Saving instructions requires confirmation. Cancelling keeps the unsaved draft and original package; confirming persists current instructions without changing the version or supporting files.
+  keep: Keeping the current customized version ignores only that offered version, hides its update badge and retains the complete saved package and disabled state; a later version can still notify.
+  replace: Explicit replacement adopts the entire new package, removes obsolete supporting files and reports the actual installed version. The same installation and disabled state survive restart while unrelated controls remain unchanged.
+scenarios:
+  - id: marketplace.skill-server.install-update
+    title: Install globally, keep an edited package while ignoring version two, then explicitly adopt version three
+    verifies: [install, save, keep, replace]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - Use the isolated no-window production main process, authenticated HTTP and unchanged built renderer in headless Chromium or installed macOS Chrome. No model endpoint or credentials are configured.
+      - Keep the shared fixture's legacy rows and complete text/binary control packages as a baseline after its requested-scope migration. They are controls, not evidence of marketplace binary transport.
+      - During this test only, serve a controlled loopback registry with real split index documents, spec.yaml and separately downloaded text files. Before application startup, preconfigure only this trusted fixture source in the disposable profile and disable other sources; verify the production registry service reports that exact source after startup.
+    steps:
+      - Open Digital Humans, Capability library and Skills, then Install from Marketplace. Open the controlled skill card, choose Add, select Global in the install dialog and explicitly Install.
+      - Inspect the private package and installation source metadata. Edit its instructions in the real editor, cancel the Save confirmation once, verify the draft and original package, then confirm Save and disable the skill through its detail action.
+      - Publish version two only in the controlled registry with revised instructions and reference text, one added text resource and one removed resource. Refresh and check updates through production APIs, then refresh the actual store UI and reopen the installed skill.
+      - Open Update to v2.0.0, inspect the customization warning and choose Keep current version. Compare the retained package, disabled status and version one with the saved snapshot, and verify no apply request was sent.
+      - Verify the version-two badge is gone, publish version three and refresh. Open Update to v3.0.0 and choose Replace with new version. Read the apply response, notification and refreshed detail without leaving it, then check the list badge.
+      - Restart the same isolated profile. Open the disabled skill, read version-three instructions and verify source identity, unique installation, cleared customization, complete package, absent obsolete resource and unchanged legacy controls.
+    expected:
+      - Installation downloads the selected version's spec.yaml and every declared text file, creates exactly one global store installation in the private UUID directory and creates no corresponding personal skill directory.
+      - Save cancellation sends no save request, preserves every original file and retains the draft. One confirmed save changes only the instructions, marks the maintained package customized and leaves version one intact.
+      - Keep current version neither applies a force update nor advances the recorded or displayed version; all saved instructions and supporting files remain at version one and the skill remains paused.
+      - Replace with new version is the explicit overwrite decision, not an assumed second confirmation. Its response, notification and open detail agree on version three and the complete author package; customization is cleared rather than permanently treating the author version as a user edit.
+      - Replacement and restart preserve installation identity, source metadata, Global scope and paused status with no effective enabled copy. Obsolete files disappear, edited version-one instructions do not remain, and unrelated legacy rows and package bytes are unchanged.
+    notes: >-
+      This single journey covers a customized, globally installed maintained store skill over the real HTTP/browser UI at the fixture's 1280 by 900 viewport, with text and obsolete-resource replacement only. It does not establish remote binary transfer, other package formats, automatic updates, unchanged/built-in/dependency updates, replacement write failures, publication, model consumption, desktop IPC, packaged distribution, narrow layouts or cross-platform execution. Platform declarations are obligations, not recorded passes. The loopback source is trusted test configuration written before startup, matching the existing registry fixture; the add-source API's public-host security policy is neither weakened nor replaced. This case does not claim to verify adding a source. No handler or DOM state is injected. The fixture retains traces and main-process logs; the spec also attaches actual registry requests, UI mutation requests and versioned snapshots, including on failure.

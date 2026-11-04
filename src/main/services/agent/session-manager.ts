@@ -1387,7 +1387,12 @@ async function getOrCreateV2SessionInner(
   // resolved-sdk handles sdkEngine switch (Halo SDK vs CC SDK) transparently.
   // Mark the creation window so a toolset toggle arriving during this await is
   // not lost (see requestSessionRebuild / sessionsUnderCreation).
+  // Control imports this manager, so subscribe only while a native session is being created.
+  const { onUserStop } = await import('./control')
   sessionsUnderCreation.add(conversationId)
+  const creationAbort: AbortController = sdkOptions.abortController ?? new AbortController()
+  const stopSubscription = onUserStop(id => { if (id === conversationId) creationAbort.abort() })
+  sdkOptions = { ...sdkOptions, abortController: creationAbort }
   let session: V2SDKSession
   try {
     try {
@@ -1401,7 +1406,12 @@ async function getOrCreateV2SessionInner(
       }
       session = (await createSession(sdkOptions)) as unknown as V2SDKSession
     }
+    if (creationAbort.signal.aborted) {
+      session.close()
+      creationAbort.signal.throwIfAborted()
+    }
   } finally {
+    stopSubscription.dispose()
     sessionsUnderCreation.delete(conversationId)
   }
 

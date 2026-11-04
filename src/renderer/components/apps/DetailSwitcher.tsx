@@ -9,7 +9,7 @@
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Loader2, Search } from 'lucide-react'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
 import { cn } from '../../lib/utils'
@@ -47,14 +47,31 @@ interface DetailSwitcherProps {
   items: DetailSwitcherItem[]
   selectedId: string
   onSelect: (id: string) => void
+  /** Controlled queries are filtered by the caller, including results outside this page. */
+  controlledQuery?: string
+  onQueryChange?: (query: string) => void
+  loading?: boolean
+  footer?: React.ReactNode
 }
 
-export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, onSelect }: DetailSwitcherProps) {
+export function DetailSwitcher({
+  title,
+  searchPlaceholder,
+  items,
+  selectedId,
+  onSelect,
+  controlledQuery,
+  onQueryChange,
+  loading = false,
+  footer,
+}: DetailSwitcherProps) {
   const { t } = useTranslation()
   const collapsed = useAppsPageStore(s => s.switcherCollapsed)
   const storedWidth = useAppsPageStore(s => s.switcherWidth)
   const setCollapsed = (value: boolean) => useAppsPageStore.setState({ switcherCollapsed: value })
-  const [query, setQuery] = useState('')
+  const [localQuery, setLocalQuery] = useState('')
+  const query = controlledQuery ?? localQuery
+  const setQuery = controlledQuery === undefined ? setLocalQuery : onQueryChange
 
   // Live width while dragging; committed to the persisted store on release.
   const containerRef = useRef<HTMLDivElement>(null)
@@ -106,7 +123,7 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
   const selectedRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     selectedRef.current?.scrollIntoView({ block: 'nearest' })
-  }, [selectedId, collapsed])
+  }, [selectedId, collapsed, loading])
 
   // Hovering a row shows who it is (the folded strip has only faces; the list
   // truncates names). Fixed and portaled: the list scrolls and would clip it.
@@ -177,7 +194,14 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
   )
 
   const trimmed = query.trim().toLowerCase()
-  const listed = trimmed ? items.filter(item => item.name.toLowerCase().includes(trimmed)) : items
+  const listed = controlledQuery === undefined && trimmed
+    ? items.filter(item => item.name.toLowerCase().includes(trimmed))
+    : items
+  const loadingStatus = loading && items.length === 0 && (
+    <div role="status" aria-label={t('Loading…')} className="flex justify-center py-3 text-muted-foreground">
+      <Loader2 className="h-4 w-4 animate-spin" />
+    </div>
+  )
 
   if (collapsed) {
     return (
@@ -191,7 +215,8 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
         >
           <ChevronRight className="h-4 w-4" />
         </button>
-        <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto py-1">
+        <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto py-1" aria-busy={loading}>
+          {loadingStatus}
           {items.map(item => {
             const active = item.id === selectedId
             // The open item is the only one at full size and opacity; the rest
@@ -228,6 +253,7 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
             )
           })}
         </div>
+        {footer}
         {dragHandle}
         {hoverCard}
       </div>
@@ -250,14 +276,14 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
           <ChevronLeft className="h-4 w-4" />
         </button>
       </div>
-      {items.length >= SEARCH_MIN_ITEMS && (
+      {(controlledQuery !== undefined || items.length >= SEARCH_MIN_ITEMS) && (
         <div className="px-2.5 pb-2">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle-foreground" />
             <input
               type="text"
               value={query}
-              onChange={e => setQuery(e.target.value)}
+              onChange={e => setQuery?.(e.target.value)}
               placeholder={searchPlaceholder}
               aria-label={searchPlaceholder}
               className="h-8 w-full rounded-sm border border-border bg-secondary pl-7 pr-2.5 text-xs outline-none focus:border-primary transition-colors ease-halo"
@@ -265,7 +291,8 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
           </div>
         </div>
       )}
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3" aria-busy={loading}>
+        {loadingStatus}
         {listed.map(item => {
           const active = item.id === selectedId
           return (
@@ -288,10 +315,11 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
             </button>
           )
         })}
-        {trimmed && listed.length === 0 && (
+        {controlledQuery === undefined && trimmed && listed.length === 0 && !loading && (
           <p className="px-2 py-4 text-center text-xs text-muted-foreground">{t('No matching results found')}</p>
         )}
       </div>
+      {footer}
       {dragHandle}
       {hoverCard}
     </div>

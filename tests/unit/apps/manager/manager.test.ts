@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync, renameSync } from 'fs'
 import { join } from 'path'
 import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../src/main/platform/store/types'
@@ -58,6 +58,11 @@ vi.mock('@parcel/watcher', () => ({
   },
 }))
 
+vi.mock('node:os', async importOriginal => ({
+  ...await importOriginal<typeof import('node:os')>(),
+  homedir: () => globalThis.__HALO_TEST_DIR__,
+}))
+
 // ============================================
 // Test Fixtures
 // ============================================
@@ -72,6 +77,7 @@ function createTestSpec(overrides?: Partial<AppSpec>): AppSpec {
     description: 'A test app',
     type: 'automation',
     system_prompt: 'You are a test bot.',
+    ...(overrides?.type === 'skill' ? { skill_content: 'Test instructions' } : {}),
     ...overrides,
   } as AppSpec
 }
@@ -101,7 +107,8 @@ describe('AppManager', () => {
     store = new AppManagerStore(db)
 
     // Create space directories in the test temp dir
-    const testDir = globalThis.__HALO_TEST_DIR__
+    const testDir = realpathSync(globalThis.__HALO_TEST_DIR__)
+    globalThis.__HALO_TEST_DIR__ = testDir
     spacePaths = {
       [TEST_SPACE_ID]: join(testDir, 'spaces', TEST_SPACE_ID),
       [TEST_SPACE_ID_2]: join(testDir, 'spaces', TEST_SPACE_ID_2),
@@ -119,6 +126,7 @@ describe('AppManager', () => {
       getSpacePath: (spaceId: string) => spacePaths[spaceId] ?? null,
       getAppDataPath: (spaceId: string) => spacePaths[spaceId] ?? null,
       getGlobalAppDir: () => globalDir,
+      trashItem: async path => { renameSync(path, `${path}.test-trash`) },
     }
 
     service = createAppManagerService(deps)
@@ -257,9 +265,7 @@ describe('AppManager', () => {
       expect(service.getApp(appId)!.spaceId).toBe(TEST_SPACE_ID)
     })
 
-    it('should overwrite an existing active skill instead of throwing', async () => {
-      // Skills are content-only (prompt + files) — re-installing should
-      // refresh the row in place rather than fail with a conflict error.
+    it('requires an explicit replacement for different skill content', async () => {
       const original = {
         spec_version: '1',
         name: 'shared-skill',
@@ -276,16 +282,13 @@ describe('AppManager', () => {
       } as unknown as AppSpec
 
       const id1 = await service.install(TEST_SPACE_ID, original)
-      const id2 = await service.install(TEST_SPACE_ID, updated, { foo: 'bar' })
-
-      // Same DB row reused — overwrite is in place, not a fresh row.
-      expect(id2).toBe(id1)
+      await expect(service.install(TEST_SPACE_ID, updated, { foo: 'bar' })).rejects.toThrow(AppAlreadyInstalledError)
 
       const app = service.getApp(id1)!
-      expect(app.spec.version).toBe('2.0.0')
-      expect(app.spec.description).toBe('second version')
-      expect((app.spec as unknown as { skill_content: string }).skill_content).toBe('updated content')
-      expect(app.userConfig).toEqual({ foo: 'bar' })
+      expect(app.spec.version).toBe('1.0.0')
+      expect(app.spec.description).toBe('first version')
+      expect((app.spec as unknown as { skill_content: string }).skill_content).toContain('original content')
+      expect(app.userConfig).toEqual({})
       expect(app.status).toBe('active')
     })
 
@@ -306,7 +309,7 @@ describe('AppManager', () => {
       const app = service.getApp(id1)!
       // Existing userConfig is preserved when the re-install omits one.
       expect(app.userConfig).toEqual({ keep: 'me' })
-      expect(app.spec.version).toBe('1.1.0')
+      expect(app.spec.version).toBe('1.0.0')
     })
 
     it('should still reject duplicate MCP spec+space (runtime state is not safe to overwrite)', async () => {
@@ -2061,13 +2064,13 @@ describe('AppManager', () => {
       expect(service.getApp(second)!.specId).toBe('ai-xie-zuo-2')
     })
 
-    it('refreshes in place when the same skill is installed again', async () => {
+    it('reuses identical content without replacing metadata on repeated installation', async () => {
       const first = await service.install(null, skillSpec('AI写作'))
       const second = await service.install(null, skillSpec('AI写作', { description: 'Updated' }))
 
       expect(second).toBe(first)
       expect(service.listApps({ spaceId: null, type: 'skill' })).toHaveLength(1)
-      expect(service.getApp(first)!.spec.description).toBe('Updated')
+      expect(service.getApp(first)!.spec.description).toBe('A test skill')
     })
 
     it('keeps an ASCII name as its own identifier', async () => {
@@ -2080,7 +2083,7 @@ describe('AppManager', () => {
 
     it('moves the skill directory when the command name changes', async () => {
       const appId = await service.install(TEST_SPACE_ID, skillSpec('AI写作'))
-      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.claude', 'skills')
+      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.agents', 'skills')
       expect(existsSync(join(skillsDir, 'ai-xie-zuo'))).toBe(true)
 
       service.updateSpec(appId, { name: 'my-writer' })
@@ -2092,7 +2095,7 @@ describe('AppManager', () => {
 
     it('rewrites the SKILL.md frontmatter when an author-named skill is renamed', async () => {
       const appId = await service.install(TEST_SPACE_ID, skillSpec('code-review'))
-      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.claude', 'skills')
+      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.agents', 'skills')
 
       service.updateSpec(appId, { name: 'code-audit' })
 
@@ -2107,7 +2110,7 @@ describe('AppManager', () => {
     it('refuses a rename onto a name already taken in the same scope', async () => {
       const appId = await service.install(TEST_SPACE_ID, skillSpec('code-review'))
       await service.install(TEST_SPACE_ID, skillSpec('code-audit'))
-      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.claude', 'skills')
+      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.agents', 'skills')
 
       expect(() => service.updateSpec(appId, { name: 'code-audit' })).toThrow(AppAlreadyInstalledError)
 
@@ -2134,7 +2137,7 @@ describe('AppManager', () => {
 
     it('leaves the directory in place when only the display name changes', async () => {
       const appId = await service.install(TEST_SPACE_ID, skillSpec('AI写作'))
-      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.claude', 'skills')
+      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.agents', 'skills')
 
       service.updateSpec(appId, { display_name: '写作助手' })
 

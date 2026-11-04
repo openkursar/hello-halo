@@ -1,0 +1,45 @@
+version: 1
+id: marketplace.skill-updates
+module: marketplace
+title: Update or share the current skill package
+story: I can keep my customizations when a maintained skill updates and copy or preview publishing its current complete content.
+basis: documented
+references:
+  - tests/acceptance/skills-requirements.md
+promises:
+  customization: Maintained skill edits change installed content; customizations require keeping the whole current package or explicitly replacing it, preserving disable choice and never falsely advancing version.
+  copy: Custom copies and publishing previews read current complete content rather than stale stored instructions; independent copies do not sync and publication requires explicit authorization.
+scenarios:
+  - id: marketplace.skill-updates.customization
+    title: Choose whether to replace a customized maintained skill
+    verifies: [customization]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    variants:
+      origin: [store, builtin, dependency]
+      customization: [unchanged, modified]
+      decision: [keep, replace, cancel, write-failure]
+    steps:
+      - Edit a controlled installed package when applicable, disable it, offer a new complete package, inspect choices and exercise the applicable decision; restart.
+    expected:
+      - Unmodified content may adopt the whole new package; modified content never silently merges or overwrites. Keeping/cancelling preserves old version/content, replacement removes obsolete resources and failure preserves old usable package.
+      - Disable choice survives refresh/update; private installed content is not advertised as a manual external-file installation entrance.
+  - id: marketplace.skill-updates.copy-publish
+    title: Copy and preview current content without publishing
+    verifies: [copy, customization]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    variants:
+      resources: [single-file, nested-text, binary]
+    steps:
+      - Modify current skill content, save a uniquely named custom copy, reopen existing publication preview and cancel; change the original again and inspect both packages.
+    expected:
+      - Copy contains current complete resources in user-file storage, independent from original and future maintained updates; original is unchanged by copying.
+      - Publication preview reads current files/installation bytes, never stale database body; cancellation sends no publication and no cross-application sharing or plugin format is added.
+    notes: No real publishing is authorized or performed; this case establishes preview and copy, not external publication delivery.

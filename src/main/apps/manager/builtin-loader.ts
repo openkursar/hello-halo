@@ -43,7 +43,7 @@
  *           which keeps the user's edits to the definition; the runtime
  *           reschedules the app on that upgrade. userConfig / status /
  *           overrides live outside the spec and are never touched. Bundled
- *           skills are refreshed via updateSpec regardless of parent version;
+ *           skills are refreshed via upgradeSpec regardless of parent version;
  *           non-bundled skills are (re)installed from the store if missing.
  *   3. Garbage-collect: any installed app marked install_source='builtin' that
  *      is no longer in the current manifest (renamed, removed, swapped to a
@@ -69,6 +69,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
 import { join, resolve } from 'path'
 import { app } from 'electron'
+import { sameSkillSource } from '../../services/skills'
 
 import type { AppManagerService, InstalledApp } from './types'
 import { isBuiltinApp } from './types'
@@ -282,12 +283,13 @@ async function installRequiredSkillsForBuiltin(
   spec: AppSpec,
   spaceId: string | null,
   bundledSkills: SkillSpec[],
+  parentAppId: string,
 ): Promise<boolean> {
   if (!spec.requires?.skills?.length) return true
   try {
     const { installRequiredSkills } = await import('../../store/registry.service')
     const bundledMap = new Map(bundledSkills.map(s => [s.name, s]))
-    await installRequiredSkills(spec, spaceId, bundledMap)
+    await installRequiredSkills(spec, spaceId, bundledMap, parentAppId)
     return true
   } catch (err) {
     console.warn(`[BuiltinLoader] Failed to install required skills for "${spec.name}":`, err)
@@ -462,7 +464,7 @@ async function processEntry(
 
     // Install every declared skill dependency — bundled (from `skills/` on
     // disk) and non-bundled (fetched from the store by slug) alike.
-    if (!await installRequiredSkillsForBuiltin(stampedSpec, entry.spaceId, bundledSkills)) processed.failures++
+    if (!await installRequiredSkillsForBuiltin(stampedSpec, entry.spaceId, bundledSkills, installedAppId)) processed.failures++
     installed.invalidate()
 
     // Activate runtime so subscriptions and event sources wire up.
@@ -546,10 +548,10 @@ async function processEntry(
   }
 
   // Refresh bundled skills regardless of parent version — skills can change
-  // independently and updateSpec is idempotent on equal content.
+  // independently; upgradeSpec preserves customized packages.
   for (const skillSpec of bundledSkills) {
-    const existingSkill = installed.list(entry.spaceId, 'skill')
-      .find(a => a.specId === skillSpec.name)
+    const existingSkill = appManager.listSkillRecords(entry.spaceId)
+      .find(a => a.spec.type === 'skill' && a.spec.name === skillSpec.name && sameSkillSource(a.spec, skillSpec))
 
     if (!existingSkill) {
       try {
@@ -571,11 +573,11 @@ async function processEntry(
       continue
     }
 
-    if (existingSkill.status === 'uninstalled') continue
+    if (existingSkill.status === 'uninstalled' || existingSkill.userOverrides.skill?.deleted) continue
 
     if (compareDotVersions(skillSpec.version, existingSkill.spec.version) > 0) {
       try {
-        appManager.updateSpec(existingSkill.id, skillSpec as unknown as Record<string, unknown>)
+        appManager.upgradeSpec(existingSkill.id, skillSpec)
       } catch (err) {
         processed.failures++
         console.warn(`[BuiltinLoader] Failed to refresh bundled skill "${skillSpec.name}":`, err)
@@ -610,7 +612,7 @@ async function processEntry(
       ...stampedSpec,
       requires: { ...stampedSpec.requires, skills: missingNonBundledDeps },
     }
-    processed.retries.push(installRequiredSkillsForBuiltin(nonBundledSpec, entry.spaceId, []))
+    processed.retries.push(installRequiredSkillsForBuiltin(nonBundledSpec, entry.spaceId, [], existing.id))
   }
 
   return { parsed: true }

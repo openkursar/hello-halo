@@ -291,7 +291,7 @@ export function cleanupTestConfigDir(testDir: string): void {
  * `createTestConfigDir()` and this call, then reuse the exact same launch
  * behavior (env vars, GPU/accel flags) instead of duplicating it.
  */
-export async function launchElectronApp(appEntryPath: string, testConfigDir: string, options: { bootstrapDirectory?: string; bootstrapObserver?: string } = {}): Promise<ElectronApplication> {
+export async function launchElectronApp(appEntryPath: string, testConfigDir: string, options: { bootstrapDirectory?: string; env?: Record<string, string>; bootstrapObserver?: string } = {}): Promise<ElectronApplication> {
   console.log(`[E2E] App entry: ${appEntryPath}`)
   console.log(`[E2E] Test config dir: ${testConfigDir}`)
 
@@ -306,7 +306,7 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
     return electron.launch({
       executablePath: appEntryPath,
       args: ['--lang=en-US', ...(process.env.HALO_E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : [])],
-      env: { ...cleanEnv, HOME: testConfigDir, USERPROFILE: testConfigDir, HALO_DATA_DIR: path.join(testConfigDir, '.halo'), HALO_E2E_TEST: '1', ELECTRON_DISABLE_GPU: '1' },
+      env: { ...cleanEnv, ...options.env, HOME: testConfigDir, USERPROFILE: testConfigDir, HALO_DATA_DIR: path.join(testConfigDir, '.halo'), HALO_E2E_TEST: '1', ELECTRON_DISABLE_GPU: '1' },
     })
   }
 
@@ -332,6 +332,7 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
     args: launchArgs,
     env: {
       ...cleanEnv,
+      ...options.env,
       // Use test-specific config directory
       HOME: testConfigDir,
       USERPROFILE: testConfigDir,

@@ -6,9 +6,10 @@ title:
   zh: 维护可复用技能
 story:
   en: I can write or install a skill and make it available to the intended people.
-  zh: 我能编写或安装技能，并让指定数字人使用。
-basis: observed
+  zh: 我能编写或安装技能，并供目标空间及全局范围内的使用者使用。
+basis: documented
 references:
+  - tests/acceptance/skills-requirements.md
   - src/renderer/components/apps/SkillInstallDialog.tsx
   - src/main/apps/manager/skill-sync.ts
   - tests/e2e/specs/people-capabilities.spec.ts
@@ -30,8 +31,8 @@ promises:
     en: Removing or disabling a skill changes availability without deleting unrelated skills.
     zh: 移除或停用技能只改变该技能可用性，不删除其他技能。
   edit:
-    en: Confirmed shared instruction edits reach the stored skill and its files while preserving supporting files and unrelated resources.
-    zh: 确认后的共享指令修改会写入技能记录及文件，同时保留配套文件和无关资源。
+    en: Confirmed shared instruction edits write the authoritative file or installed content while preserving supporting files and unrelated resources; stale stored instructions never overwrite file edits.
+    zh: 确认后的共享指令修改写入作为真相的文件或安装内容，保留配套文件与无关资源；旧存储正文不覆盖文件修改。
   copy:
     en: A custom copy has its own valid command name and preserves the original skill unchanged.
     zh: 自定义副本使用独立的有效命令名，原技能保持不变。
@@ -75,23 +76,23 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: none
-    automation: automated
+    automation: planned
     preconditions:
       - en: Two digital humans inherit a shared skill and a separate control skill from the same workspace.
         zh: 两位数字人从同一空间继承共享技能及另一个对照技能。
     steps:
-      - en: Inspect affected people, cancel once, then confirm disabling or uninstalling; restart and restore the skill through Enable or Reinstall.
-        zh: 查看受影响数字人，先取消，再确认停用或卸载；重启后通过启用或重装恢复。
+      - en: Inspect the selected copy and shared scope, cancel deletion once, then disable or confirm its single trash action; restart and restore through Enable or the applicable file restore or explicit reinstall.
+        zh: 查看选定副本及共享范围，先取消删除，再停用或单次确认移入回收站；重启后通过启用、适用的文件恢复或明确重装恢复。
     expected:
-      - en: Cancellation keeps the skill active. Confirmed removal withdraws its runtime-discoverable files for both consumers across restart while the control stays intact; restoration brings the same skill back.
-        zh: 取消保留活动技能；确认后两位使用者在重启前后均不能发现其文件，对照技能不变；恢复后同一技能重新可用。
+      - en: Cancellation changes nothing. Disable preserves every package byte while omitting the copy from both consumers' new Halo SDK catalogs across restart. Delete trashes only the selected content, never unrelated resources, with no permanent fallback when trash is unavailable. Restoration makes the effective copy available again.
+        zh: 取消不改变任何内容；停用保留全部文件字节，重启后双方新 Halo SDK 清单均排除该副本；删除仅回收选定内容，不动无关资源，回收站不可用不降级永久删除；恢复后有效副本重新可用。
     variants:
       operation:
         - disable
-        - uninstall
+        - delete
     notes:
-      en: Availability is established by actual skill discovery and filesystem state, not by claiming that an AI already invoked the skill.
-      zh: 通过真实技能发现和文件状态证明可用性，不声称 AI 已经调用该技能。
+      en: The old uninstall binding must be replaced with the confirmed trash lifecycle; it is not evidence for this expectation. Availability requires actual effective SDK discovery plus filesystem checks, not an assertion that an AI invoked the skill. Existing sessions may retain loaded instructions.
+      zh: 旧卸载绑定须替换为确认后的回收站生命周期，不作为本期待证据。可用性须通过实际 SDK 有效发现及文件检查证明，不冒称 AI 已调用；旧会话可能保留已加载正文。
   - id: capabilities.skills.edit
     title:
       en: Edit shared instructions without losing supporting files

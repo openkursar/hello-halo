@@ -23,7 +23,7 @@ import { categoryTaxonomyResource, discoverPageResource } from '../lib/store-res
 import { findInstalledApp, findEntryUpdate } from '../utils/store-install-state'
 import { useAppsStore } from './apps.store'
 import type { RegistryEntry, StoreAppDetail, UpdateInfo, StoreQuery, StoreQueryResponse, StoreInstallProgress } from '../../shared/store/store-types'
-import type { AppType } from '../../shared/apps/spec-types'
+import type { AppType, SkillSpec } from '../../shared/apps/spec-types'
 
 /** The app types the store accepts a publication for. */
 type PublishableAppType = Extract<AppType, 'automation' | 'skill'>
@@ -168,7 +168,7 @@ interface AppsPageState {
   /** Pending "open the publish dialog pre-selected on this installed app"
    * intent, carried across navigation from a detail page's Share action and
    * consumed once by the store header (mirrors storeAutoInstall). */
-  storePublishIntent: { type: PublishableAppType; appId: string } | null
+  storePublishIntent: { type: PublishableAppType; appId?: string; specOverride?: SkillSpec } | null
   storeSelectedDetail: StoreAppDetail | null
   storeDetailLoading: boolean
   storeDetailError: string | null
@@ -222,9 +222,9 @@ interface AppsPageState {
   consumeStoreAutoInstall: () => boolean
   /** Navigate to the store and request the publish dialog open pre-selected on
    * the given installed app (used by a detail page's Share action). */
-  openStorePublish: (type: PublishableAppType, appId: string) => void
+  openStorePublish: (type: PublishableAppType, appId?: string, specOverride?: SkillSpec) => void
   /** Consume the publish-dialog intent (returns it once, then clears). */
-  consumeStorePublishIntent: () => { type: PublishableAppType; appId: string } | null
+  consumeStorePublishIntent: () => { type: PublishableAppType; appId?: string; specOverride?: SkillSpec } | null
   installFromStore: (slug: string, spaceId: string | null, userConfig?: Record<string, unknown>, onProgress?: (progress: StoreInstallProgress) => void) => Promise<string | null>
   refreshStore: () => Promise<void>
   checkUpdates: () => Promise<void>
@@ -600,7 +600,7 @@ export const useAppsPageStore = create<AppsPageState>()(
     return true
   },
 
-  openStorePublish: (type, appId) => {
+  openStorePublish: (type, appId, specOverride) => {
     // Navigate to StorePage (same cross-store edge as openMarketplaceFilteredBy
     // above, LAWS L3) and surface its header, which owns the publish dialog:
     // leave any detail/mine sub-view so StoreHeader renders and can consume
@@ -610,7 +610,7 @@ export const useAppsPageStore = create<AppsPageState>()(
     set({
       storeMineOpen: false,
       storeSelectedSlug: null,
-      storePublishIntent: { type, appId },
+      storePublishIntent: { type, appId, specOverride },
     })
   },
 

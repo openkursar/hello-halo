@@ -7,6 +7,7 @@ import { resolveHistoricalEngine } from './engine-migration'
 import { getEngineAvailability } from './engine-availability'
 import { defaultCapabilitiesFor, type EngineCapabilities } from './capabilities'
 import { tool as defineTool, createSdkMcpServer as defineMcpServer } from './mcp/sdk-server'
+import { readReadySessionSkills, unsupportedSkillNames, withSkillNotice } from './skill-availability'
 
 interface SdkModule {
   createSession?: (options: any) => Promise<any>
@@ -263,8 +264,11 @@ export async function createSession(options: Record<string, any>): Promise<any> 
   try {
     const create = borrow.module.createSession ?? borrow.module.unstable_v2_createSession
     if (!create) throw new EngineUnavailableError(engineId, 'The adapter does not expose session creation')
-    const session = await create({ ...sessionOptions, abortController: borrow.controller })
-    return ownSession(session, engineId, borrow)
+    const prepared = { ...sessionOptions, abortController: borrow.controller }
+    const catalog = engineId === 'anthropic' || engineId === 'codex' ? readReadySessionSkills(prepared) : undefined
+    const names = catalog ? unsupportedSkillNames(catalog, prepared, engineId) : undefined
+    const session = await create(prepared)
+    return ownSession(withSkillNotice(session, names?.size ? 'engine-unsupported' : undefined, names), engineId, borrow)
   } catch (error) { borrow.release(); throw error }
 }
 
@@ -275,8 +279,13 @@ async function* queryIterable(params: any): AsyncGenerator<any> {
   const engineId = params.options?.engineId ?? await resolveDefaultEngine()
   const borrow = await borrowEngine(engineId, params.options?.abortController?.signal)
   const { engineId: _engineId, engineHandoffContent: _engineHandoffContent, engineHandoffRecovered: _engineHandoffRecovered, ...options } = params.options ?? {}
-  try { yield* borrow.module.query({ ...params, options: { ...options, abortController: borrow.controller } }) }
-  finally { borrow.release() }
+  try {
+    const prepared = { ...options, abortController: borrow.controller }
+    const catalog = engineId === 'anthropic' || engineId === 'codex' ? readReadySessionSkills(prepared) : undefined
+    const names = catalog ? unsupportedSkillNames(catalog, prepared, engineId) : undefined
+    const stream = borrow.module.query({ ...params, options: prepared })
+    yield* withSkillNotice({ stream: () => stream }, names?.size ? 'engine-unsupported' : undefined, names, params.prompt).stream()
+  } finally { borrow.release() }
 }
 
 /** Startup prewarms only the default; other runtimes start when a session borrows them. */

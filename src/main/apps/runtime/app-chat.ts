@@ -876,7 +876,7 @@ async function runAppChatTurn(
   // for colleagues ever widens what a stranger can reach. The owner's own
   // digital humans and the runtime are held to nothing.
   let skillCopies: AvailableSkill[] | undefined
-  const loadableSkills = (): AvailableSkill[] => (skillCopies ??= listLoadableSkillCopies(spaceId))
+  const loadableSkills = (): AvailableSkill[] => (skillCopies ??= listLoadableSkillCopies(spaceId, environment.workDir))
   const delegatedPolicy = borrowedTeamTurn && teamContext
     ? getActiveTeamRuntime()?.getDelegatedPolicy(teamContext.teamId, appId) ?? null
     : null
@@ -974,6 +974,7 @@ async function runAppChatTurn(
       exclude: disposableMember ? ['halo-apps'] : [],
       // Mounted above for the caller's own authority.
       omitPersonContext: true,
+      omitSkillManagement: permCtx?.isOwner === false || Boolean(origin),
     }),
     'ocr': createOcrMcpServer(),
     // A reminder returns to the conversation it was set in. A team turn has its

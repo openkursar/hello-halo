@@ -41,6 +41,7 @@ import { ImageAttachmentPreview } from './ImageAttachmentPreview'
 import { KnowledgeBaseButton } from './KnowledgeBaseButton'
 import { processImage, isValidImageType, formatFileSize } from '../../utils/imageProcessor'
 import { startDigitalHumanConversation } from '../../utils/conversation-navigation'
+import { prefillSkillCommand } from '../../utils/skill-command'
 import type { ImageAttachment } from '../../types'
 import type { FileQueryItem } from '../../../shared/types/artifact'
 import { normalizePathLike } from '../../../shared/file-path-match'
@@ -412,7 +413,9 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     const slashPreview = pendingComposerInput.slashPreview
     useChatStore.setState({ pendingComposerInput: null })
     composerOriginRef.current = takeComposerOrigin()
-    setContent(text)
+    setContent(current => pendingComposerInput.preserveDraft
+      ? prefillSkillCommand(current, text, slashPreviewOverride ? [...slashCommands, slashPreviewOverride] : slashCommands)
+      : text)
     // A prefilled slash command (skill "use" actions always fill one) opens
     // the same autocomplete menu the user would see typing it — it's the
     // only surface that shows the skill's argument hint, and it doubles as
@@ -440,7 +443,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
       ta.focus()
       ta.setSelectionRange(ta.value.length, ta.value.length)
     })
-  }, [pendingComposerInput, currentSpaceId, draftKey])
+  }, [pendingComposerInput, currentSpaceId, draftKey, slashCommands, slashPreviewOverride])
 
   // Auto-clear error after 3 seconds
   useEffect(() => {

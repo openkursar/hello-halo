@@ -94,6 +94,7 @@ import { installAppsSubscribers } from '../services/analytics/subscribers/apps.s
 import { runStartupSnapshot } from '../services/analytics/snapshot'
 import { analytics } from '../services/analytics/analytics.service'
 import { registerAppHandlers } from '../ipc/app'
+import { registerSkillsHandlers } from '../ipc/skills'
 import { registerTeamIpc } from '../ipc/team'
 import { registerTaskHandlers } from '../ipc/task'
 import { registerAnalyticsHandlers } from '../ipc/analytics'
@@ -1582,6 +1583,7 @@ export function initializeExtendedServices(): void {
 
   // App management IPC handlers (app:install, app:list, etc.)
   registerAppHandlers()
+  registerSkillsHandlers()
 
   // Digital Team IPC handlers (team:list, team:create, team:run, etc.)
   registerTeamIpc()

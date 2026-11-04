@@ -71,17 +71,17 @@ export function findPackageEntry(paths: Iterable<string>, name: string): string 
  * they resolve to the same file as the canonical entry, so whichever is written
  * last wins — silently replacing normalized content with the raw variant.
  */
-export function canonicalizePackageEntry(
-  files: Record<string, string>,
+export function canonicalizePackageEntry<T>(
+  files: Record<string, T>,
   name: string,
-): Record<string, string> {
+): Record<string, T> {
   const lowered = name.toLowerCase()
   const matches = Object.keys(files).filter(path => path.toLowerCase() === lowered)
   if (matches.length === 0) return files
   if (matches.length === 1 && matches[0] === name) return files
 
   const entry = matches.includes(name) ? name : matches[0]
-  const canonical: Record<string, string> = {}
+  const canonical: Record<string, T> = Object.create(null)
   for (const [path, content] of Object.entries(files)) {
     if (!matches.includes(path)) canonical[path] = content
   }
@@ -90,11 +90,11 @@ export function canonicalizePackageEntry(
 }
 
 /** Drop ignored entries and re-key what is left against the package root. */
-export function unwrapPackageFolder(files: Record<string, string>): Record<string, string> {
+export function unwrapPackageFolder<T>(files: Record<string, T>): Record<string, T> {
   const kept = Object.entries(files).filter(([path]) => !isIgnoredPackagePath(path))
   const prefix = wrapperPrefix(kept.map(([path]) => path))
 
-  const unwrapped: Record<string, string> = {}
+  const unwrapped: Record<string, T> = Object.create(null)
   for (const [path, content] of kept) {
     const relative = path.slice(prefix.length)
     if (relative) unwrapped[relative] = content

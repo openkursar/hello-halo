@@ -370,6 +370,8 @@ export const StoreMetadataSchema = z.object({
   category: z.string().optional(),
   /** Free-form tags for discovery */
   tags: z.array(z.string()).default([]),
+  /** Release notes retained when publishing an updated resource. */
+  changelog: z.string().optional(),
   /** Primary locale (BCP 47) */
   locale: z.string().optional(),
   /** Minimum client version required */
@@ -510,8 +512,11 @@ export const SkillSpecSchema = AppSpecCommonSchema.extend({
   author: z.string().optional(),
   /** Single-file content (manual add / legacy). Used when skill is a single .md file. */
   skill_content: z.string().optional(),
-  /** All files in the skill folder, keyed by filename (e.g. { 'SKILL.md': '...' }). Used for registry installs. */
+  /** UTF-8 files in the skill folder, keyed by relative path. */
   skill_files: z.record(z.string()).optional(),
+  /** Binary supporting files retain their original bytes. */
+  skill_assets: z.record(z.object({ encoding: z.literal('base64'), content: z.string() })).optional(),
+  skill_modes: z.record(z.number().int().min(0).max(0o777)).optional(),
 })
 
 /**

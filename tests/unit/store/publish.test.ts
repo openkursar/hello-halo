@@ -23,7 +23,7 @@ function fakeSpec(): AppSpec {
     description: 'unit-test',
     type: 'skill',
     skill_files: { 'SKILL.md': '# hi\n' },
-    store: { slug: 'tester/publish-test' },
+    store: { slug: 'tester/publish-test', tags: [] },
   } as AppSpec
 }
 
@@ -94,6 +94,22 @@ describe('publish/http-registry', () => {
     } finally {
       ;(globalThis as { fetch: typeof fetch }).fetch = realFetch
     }
+  })
+
+  it('declares binary resources and sends their exact bytes without inline base64', async () => {
+    const bytes = Buffer.from([0, 255, 128, 1])
+    const mockFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ slug: 'tester/publish-test', version: '0.1.0' }), { status: 200 }))
+    globalThis.fetch = mockFetch
+    try {
+      await dispatchHttp({ ...fakeSpec(), skill_assets: { 'probe.bin': { encoding: 'base64', content: bytes.toString('base64') } } } as AppSpec,
+        { 'SKILL.md': '# hi\n', 'probe.bin': bytes }, { registryId: 'official', registryUrl: 'http://example.test' }, { token: 'secret' })
+      const form = mockFetch.mock.calls[0][1].body as FormData
+      const yaml = await (form.get('spec') as Blob).text()
+      expect(yaml).toContain('- probe.bin')
+      expect(yaml).not.toContain('skill_assets')
+      expect(yaml).not.toContain(bytes.toString('base64'))
+      expect(Buffer.from(await (form.get('probe.bin') as Blob).arrayBuffer())).toEqual(bytes)
+    } finally { globalThis.fetch = realFetch }
   })
 
   it('returns error when the registry responds non-2xx', async () => {

@@ -1,6 +1,13 @@
-import { describe, it, expect, vi } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+import { getEffectiveSkillCatalogForSession, waitForSkillCatalogProvider } from '../../../../../src/main/services/app-bridge'
+vi.mock('../../../../../src/main/services/app-bridge', () => ({ getEffectiveSkillCatalogForSession: vi.fn(), waitForSkillCatalogProvider: vi.fn() }))
+beforeEach(() => {
+  vi.mocked(getEffectiveSkillCatalogForSession).mockReset().mockReturnValue([])
+  vi.mocked(waitForSkillCatalogProvider).mockReset().mockResolvedValue(false)
+})
 import { createHaloSdkModule } from '../../../../../src/main/services/agent/halo'
 import { isNativeSessionResumeError } from '../../../../../src/shared/types/engine-session'
+import { readSkillNotice } from '../../../../../src/shared/skill-notice'
 import { app } from 'electron'
 import * as fs from 'node:fs'
 import { join } from 'node:path'
@@ -49,15 +56,81 @@ describe('Halo host worker adapter', () => {
     const mcpServers = { host: { type: 'sdk', instance: {} } }
     await module.createSession({ workerGroup: 'space', haloRequestIdentity: { sessionId: 'conversation' },
       requestIdentity: { systemPrefix: vi.fn() }, canUseTool, hooks, mcpServers, model: 'model' })
-    expect(runtime.createSession).toHaveBeenCalledWith({ canUseTool, hooks, mcpServers, model: 'model' }, {
+    expect(runtime.createSession).toHaveBeenCalledWith({ canUseTool, hooks, mcpServers, model: 'model', skillCatalog: [] }, {
       group: 'space', setup: { module: 'file:///application/out/main/worker/halo-setup.cjs', data: { sessionId: 'conversation' } },
     })
   })
 
-  it('routes one-shot helper queries through the same independent runtime', () => {
+  it('routes one-shot helper queries through the same independent runtime', async () => {
     const { runtime, module } = fixture()
-    module.query({ prompt: 'task', options: { model: 'model' } })
-    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { model: 'model' } }, { group: undefined, setup: undefined })
+    for await (const _frame of module.query({ prompt: 'task', options: { model: 'model' } })) { /* drain */ }
+    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { model: 'model', skillCatalog: [] } }, { group: undefined, setup: undefined })
+  })
+
+  it('resolves one effective catalog at session creation and query creation with the actual workspace', async () => {
+    const catalog = [{ name: 'weekly', description: 'Weekly', source: { kind: 'file' as const, path: '/skills/weekly.md' } }]
+    vi.mocked(getEffectiveSkillCatalogForSession).mockReturnValue(catalog)
+    const { runtime, module } = fixture()
+    await module.createSession({ workerGroup: 'space', cwd: '/work' })
+    expect(getEffectiveSkillCatalogForSession).toHaveBeenCalledTimes(1)
+    expect(getEffectiveSkillCatalogForSession).toHaveBeenCalledWith('space', '/work')
+    expect(runtime.createSession.mock.calls[0][0].skillCatalog).toEqual(catalog)
+    for await (const _frame of module.query({ prompt: 'task', options: { workerGroup: 'space', cwd: '/other' } })) { /* drain */ }
+    expect(getEffectiveSkillCatalogForSession).toHaveBeenLastCalledWith('space', '/other')
+    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { cwd: '/other', skillCatalog: catalog } }, expect.anything())
+  })
+
+  it('takes only the effective catalog, never caller-supplied or disabled copies', async () => {
+    const catalog = [{ name: 'weekly', description: 'Weekly', source: { kind: 'file' as const, path: '/skills/weekly.md' } }]
+    vi.mocked(getEffectiveSkillCatalogForSession).mockReturnValue(catalog)
+    const { runtime, module } = fixture()
+    await module.createSession({ workerGroup: 'space', skillCatalog: [{ name: 'disabled', source: { kind: 'file', path: '/disabled/SKILL.md' } }] })
+    expect(runtime.createSession.mock.calls[0][0].skillCatalog).toEqual(catalog)
+    expect(waitForSkillCatalogProvider).not.toHaveBeenCalled()
+  })
+
+  it('continues known-space work with an explicit empty catalog when the provider stays unavailable', async () => {
+    vi.mocked(getEffectiveSkillCatalogForSession).mockReturnValue(undefined)
+    const { runtime, module } = fixture()
+    await module.createSession({ workerGroup: 'space' })
+    for await (const _frame of module.query({ prompt: 'task', options: { workerGroup: 'space' } })) { /* drain */ }
+    expect(runtime.createSession.mock.calls[0][0].skillCatalog).toEqual([])
+    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { skillCatalog: [] } }, expect.anything())
+    expect(waitForSkillCatalogProvider).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps normal replies running and emits the unavailable notice only once when a catalog read throws', async () => {
+    vi.mocked(getEffectiveSkillCatalogForSession).mockImplementation(() => { throw new Error('read failed') })
+    const { runtime, module } = fixture()
+    const native = {
+      sessionId: 'real', send: vi.fn(), close: vi.fn(),
+      async *stream() {
+        yield { type: 'system', subtype: 'init' }
+        yield { type: 'assistant', message: { content: 'normal answer' } }
+        yield { type: 'result' }
+      },
+    }
+    runtime.createSession.mockResolvedValue(native)
+    const session = await module.createSession({ workerGroup: 'space' })
+    const output = []
+    for await (const frame of session.stream()) output.push(frame)
+    expect(output[1]).toEqual({ type: 'system', subtype: 'skill_notice', skillNotice: 'catalog-unavailable' })
+    expect(output[2]).toMatchObject({ type: 'assistant', message: { content: 'normal answer' } })
+    const next = []
+    for await (const frame of session.stream()) next.push(frame)
+    expect(next.some(frame => readSkillNotice(frame))).toBe(false)
+    expect(runtime.createSession.mock.calls[0][0].skillCatalog).toEqual([])
+    expect(getEffectiveSkillCatalogForSession).toHaveBeenCalledOnce()
+  })
+
+  it('keeps unscoped helpers explicitly empty even before Apps bootstrap', async () => {
+    vi.mocked(getEffectiveSkillCatalogForSession).mockReturnValue(undefined)
+    const { runtime, module } = fixture()
+    await module.createSession({ skillCatalog: [{ name: 'commit', source: { kind: 'builtin', name: 'commit' } }] })
+    expect(runtime.createSession.mock.calls[0][0].skillCatalog).toEqual([])
+    for await (const _frame of module.query({ prompt: 'task' })) { /* drain */ }
+    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { skillCatalog: [] } }, expect.anything())
+    expect(getEffectiveSkillCatalogForSession).not.toHaveBeenCalled()
   })
 
   it('maps the host-resolved shell into the SDK environment without overwriting an explicit SDK choice', async () => {

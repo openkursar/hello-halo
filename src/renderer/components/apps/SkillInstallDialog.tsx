@@ -24,7 +24,8 @@ import {
 } from 'react'
 import { X, Loader2, FolderOpen, FileText, Archive, AlertCircle, Pencil } from 'lucide-react'
 import { api } from '../../api'
-import { useAppsStore } from '../../stores/apps.store'
+import type { SkillCopy, SkillImportInput } from '../../../shared/types/skills'
+import { parseDocument } from 'yaml'
 import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
 import type { SkillSpec } from '../../../shared/apps/spec-types'
@@ -53,6 +54,16 @@ const CodeMirrorEditor = lazy(() =>
 // ============================================
 
 type SkillMode = 'visual' | 'md' | 'import'
+
+function withMetadata(content: string, fields: { name?: string; description?: string }): string {
+  const match = content.replace(/^\uFEFF/, '').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
+  const document = parseDocument(match?.[1] || '{}')
+  if (document.errors.length) throw new Error(document.errors[0].message)
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) document.set(key, value)
+  }
+  return `---\n${document.toString()}---\n${match ? content.replace(/^\uFEFF/, '').slice(match[0].length) : content}`
+}
 
 interface VisualForm {
   /** Authored name, any script. Shown in Halo's UI. */
@@ -152,7 +163,7 @@ function ImportDropZone({ imported, onImported, onClear, onError }: ImportDropZo
     const Icon = imported.sourceType === 'folder' ? FolderOpen
       : imported.sourceType === 'zip' ? Archive
       : FileText
-    const fileCount = Object.keys(imported.parsed.skillFiles).length
+    const fileCount = Object.keys(imported.parsed.skillFiles).length + Object.keys(imported.parsed.skillAssets ?? {}).length
 
     return (
       <div className="space-y-3">
@@ -243,12 +254,15 @@ export interface SkillInstallDialogProps {
   initialSpaceId?: string | null
   draftKey?: string
   initialMode?: SkillMode
-  onInstalled?: (appId: string) => void | Promise<void>
+  onInstalled?: (id: string) => void | Promise<void>
 }
 
 export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onInstalled, draftKey }: SkillInstallDialogProps) {
   const { t } = useTranslation()
-  const { installApp, loadApps } = useAppsStore()
+  const busy = useRef(false)
+  const attempt = useRef<{ key: string; input: SkillImportInput } | null>(null)
+  const [conflict, setConflict] = useState<{ spec: SkillSpec; copies: SkillCopy[]; spaceId: string | null } | null>(null)
+  const [newName, setNewName] = useState('')
   const cacheKey = `skill:${draftKey ?? 'library'}:${initialSpaceId ?? 'global'}`
   const [draft] = useState(() => getCapabilityDraft<{ form: VisualForm; mode: SkillMode; mdContent: string; imported: ImportedSkill | null; spaceId: string }>(cacheKey))
   const completed = useRef(false)
@@ -316,9 +330,17 @@ export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onIns
     if (commandNameEdited.current) return
     let cancelled = false
     const timer = setTimeout(async () => {
-      const res = await api.appDeriveSkillCommandName(authored)
-      if (cancelled || !res.success || !res.data) return
-      setForm(prev => (prev.commandName === res.data ? prev : { ...prev, commandName: res.data! }))
+      try {
+        const res = await api.appDeriveSkillCommandName(authored)
+        if (cancelled || commandNameEdited.current) return
+        if (!res.success || !res.data) {
+          console.warn('[SkillInstallDialog] Command name preview unavailable; submission will retry')
+          return
+        }
+        setForm(prev => (prev.commandName === res.data ? prev : { ...prev, commandName: res.data! }))
+      } catch {
+        if (!cancelled) console.warn('[SkillInstallDialog] Command name preview failed; submission will retry')
+      }
     }, 250)
     return () => { cancelled = true; clearTimeout(timer) }
   }, [form.name, mode])
@@ -350,7 +372,9 @@ export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onIns
   }, [mdContent])
 
   // ── Build spec and install ──
-  async function handleInstall() {
+  async function handleInstall(decision?: 'replace' | 'new') {
+    if (busy.current) return
+    busy.current = true
     setError(null)
     setLoading(true)
 
@@ -363,17 +387,21 @@ export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onIns
           setLoading(false)
           return
         }
-        const { name, description, skillFiles } = imported.parsed
+        const { name, description, skillFiles, skillAssets } = imported.parsed
         if (!name) {
           setError(t('Could not determine skill name. Make sure SKILL.md has a name field in its frontmatter.'))
           setLoading(false)
           return
         }
+        const importDescription = description.trim() ? description : t('Skill: {{name}}', { name })
         spec = {
           name,
-          description: description || `Skill: ${name}`,
+          description: importDescription,
           type: 'skill',
-          skill_files: skillFiles,
+          skill_files: imported.sourceType === 'md' && (parseMd(skillFiles['SKILL.md']).name !== name || parseMd(skillFiles['SKILL.md']).description !== importDescription)
+            ? { ...skillFiles, 'SKILL.md': withMetadata(skillFiles['SKILL.md'], { name, description: importDescription }) }
+            : skillFiles,
+          skill_assets: skillAssets,
         }
       } else {
         // Visual or MD mode
@@ -395,12 +423,16 @@ export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onIns
             setLoading(false)
             return
           }
-          // The derived command name may still be in flight on a fast submit;
-          // fall back to the synchronous slug so the install is never blocked.
-          name = finalizeCommandName(form.commandName) || toSlug(authored)
+          if (commandNameEdited.current) {
+            name = finalizeCommandName(form.commandName)
+          } else {
+            const derived = await api.appDeriveSkillCommandName(authored)
+            if (!derived.success || !derived.data) throw new Error(derived.error || t('Could not generate a skill command name. Please try again.'))
+            name = derived.data
+          }
           displayName = authored === name ? undefined : authored
-          description = form.description.trim() || `Skill: ${authored}`
-          skillContent = buildMdFromForm({ ...form, commandName: name })
+          description = form.description.trim() || t('Skill: {{name}}', { name: authored })
+          skillContent = buildMdFromForm({ ...form, description, commandName: name })
         }
 
         if (!name) {
@@ -412,38 +444,66 @@ export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onIns
         spec = {
           name,
           display_name: displayName,
-          description: description || `Skill: ${name}`,
+          description: description || t('Skill: {{name}}', { name }),
           type: 'skill',
           skill_content: skillContent,
         }
       }
 
-      const fullSpec: SkillSpec = {
-        spec_version: '1.0',
-        version: '1.0',
-        ...spec,
+      let fullSpec: SkillSpec = { spec_version: '1.0', version: '1.0', ...spec }
+      const spaceId = decision && conflict ? conflict.spaceId : selectedSpaceId || null
+      let replace: SkillImportInput['replace']
+      if (decision && conflict) {
+        fullSpec = conflict.spec
+        if (decision === 'replace') {
+          const personal = conflict.copies.filter(copy => copy.source === 'personal' && copy.editable && !copy.isLink)
+          if (personal.length !== 1 || conflict.copies.some(copy => copy.source !== 'personal')) {
+            throw new Error(t('This skill cannot be replaced. Save it with a new name instead.'))
+          }
+          replace = { ref: { id: personal[0].id, spaceId }, revision: personal[0].revision }
+        } else {
+          const name = finalizeCommandName(newName)
+          if (!name || name === fullSpec.name) throw new Error(t('Choose a different skill command name.'))
+          fullSpec = {
+            ...fullSpec, name,
+            ...(fullSpec.skill_content !== undefined ? { skill_content: withMetadata(fullSpec.skill_content, { name }) } : {}),
+            ...(fullSpec.skill_files ? { skill_files: { ...fullSpec.skill_files, 'SKILL.md': withMetadata(fullSpec.skill_files['SKILL.md'], { name }) } } : {}),
+          }
+        }
       }
-
-      const spaceId = selectedSpaceId || null
-      const duplicate = useAppsStore.getState().apps.find(app => app.status !== 'uninstalled' && app.spaceId === spaceId && app.spec.type === 'skill' && app.spec.name === fullSpec.name)
-      if (duplicate) {
-        setError(t('A skill with this name already exists in this scope. Choose another command name, or edit the existing skill from the library.'))
-        return
+      const key = JSON.stringify({ spaceId, spec: fullSpec, replace })
+      // An uncertain transport result must retry the same mutation, not discover its own copy as a new conflict.
+      if (attempt.current?.key !== key) {
+        if (!replace) {
+          const inventory = await api.skillsList({ spaceId, q: fullSpec.name, limit: 100 })
+          if (!inventory.success || !inventory.data) throw new Error(inventory.error || t('Could not check existing skills. Please try again.'))
+          if (inventory.data.truncated) throw new Error(t('Skill inspection is incomplete. Refresh the library and try again.'))
+          const copies = inventory.data.groups.flatMap(group => group.copies).filter(copy => copy.spaceId === spaceId && copy.name === fullSpec.name)
+          if (copies.length) {
+            const candidates = [...copies]
+            if (copies.length === 1 && copies[0].source === 'personal' && copies[0].editable && !copies[0].isLink) {
+              const current = await api.skillsRead({ id: copies[0].id, spaceId })
+              if (!current.success || !current.data?.revision) throw new Error(t('Could not open this skill. Please try again.'))
+              candidates[0] = { ...current.data.copy, revision: current.data.revision }
+            }
+            setConflict({ spec: fullSpec, copies: candidates, spaceId })
+            setNewName('')
+            return
+          }
+        }
+        attempt.current = { key, input: { spaceId, spec: fullSpec, requestId: crypto.randomUUID(), ...(replace ? { replace } : {}) } }
       }
-      const appId = await installApp(spaceId, fullSpec)
-      if (appId) {
-        await loadApps()
-        await onInstalled?.(appId)
-        completed.current = true
-        clearCapabilityDraft(cacheKey)
-        onClose()
-      } else {
-        setError(t('Installation failed. Check the skill content and try again.'))
-      }
+      const result = await api.skillsImport(attempt.current.input)
+      if (!result.success || !result.data) throw new Error(result.error || t('Installation failed. Check the skill content and try again.'))
+      await onInstalled?.(result.data.id)
+      completed.current = true
+      clearCapabilityDraft(cacheKey)
+      onClose()
     } catch (err) {
       console.warn('[SkillInstallDialog] Skill installation failed; draft retained')
       setError(err instanceof Error ? err.message : t('Installation failed'))
     } finally {
+      busy.current = false
       setLoading(false)
     }
   }
@@ -469,6 +529,7 @@ export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onIns
             {/* Mode toggle */}
             <div className="flex items-center gap-0.5 bg-secondary rounded-lg p-0.5">
               <button
+                disabled={loading || !!conflict}
                 onClick={() => mode !== 'visual' && handleSwitchToVisual()}
                 className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
                   mode === 'visual'
@@ -479,6 +540,7 @@ export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onIns
                 {t('Visual')}
               </button>
               <button
+                disabled={loading || !!conflict}
                 onClick={() => mode !== 'md' && handleSwitchToMd()}
                 className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
                   mode === 'md'
@@ -489,6 +551,7 @@ export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onIns
                 {t('Markdown')}
               </button>
               <button
+                disabled={loading || !!conflict}
                 onClick={() => { setError(null); setMode('import') }}
                 className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
                   mode === 'import'
@@ -512,6 +575,7 @@ export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onIns
 
         {/* Body */}
         <div className="p-4 space-y-4 overflow-y-auto flex-1">
+          <fieldset disabled={loading || !!conflict} className="space-y-4 min-w-0">
           {mode === 'visual' && (
             <>
               <p className="text-xs text-muted-foreground">
@@ -617,8 +681,14 @@ export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onIns
           {mode === 'import' && (
             <>
               <p className="text-xs text-muted-foreground">
-                {t('Import a skill from a local file or folder.')}
+                {t('Import creates an independent copy. Changes to the source will not sync with this skill.')}
               </p>
+              {imported?.sourceType === 'md' && (
+                <div className="space-y-2">
+                  <input aria-label={t('Skill command name')} value={imported.parsed.name} onChange={event => setImported({ ...imported, parsed: { ...imported.parsed, name: sanitizeCommandName(event.target.value) } })} placeholder={t('Skill command name')} className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg" />
+                  <input aria-label={t('Description')} value={imported.parsed.description} onChange={event => setImported({ ...imported, parsed: { ...imported.parsed, description: event.target.value } })} placeholder={t('Description')} className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg" />
+                </div>
+              )}
               <ImportDropZone
                 imported={imported}
                 onImported={skill => { setImported(skill); setError(null) }}
@@ -652,6 +722,20 @@ export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onIns
 
           <p className="rounded-lg bg-secondary p-3 text-xs text-muted-foreground">{selectedSpaceId ? t('All digital humans in this workspace can discover this skill. It is not private to one digital human.') : t('Digital humans in every workspace can discover this global skill. A workspace skill with the same name takes precedence.')}</p>
 
+          </fieldset>
+          {conflict && (
+            <div className="space-y-3 rounded-lg border border-border p-3">
+              <p className="text-sm">{t('A skill with this name already exists in this scope. Nothing has been overwritten.')}</p>
+              <input aria-label={t('New skill command name')} value={newName} onChange={event => setNewName(sanitizeCommandName(event.target.value))} disabled={loading} className="w-full px-3 py-2 bg-secondary border border-border rounded-lg text-sm" />
+              <div className="flex flex-col sm:flex-row flex-wrap gap-2">
+                {conflict.copies.length === 1 && conflict.copies[0].source === 'personal' && conflict.copies[0].editable && !conflict.copies[0].isLink && (
+                  <button disabled={loading} onClick={() => handleInstall('replace')} className="px-3 py-2 text-sm border border-border rounded-lg">{t('Replace existing')}</button>
+                )}
+                <button disabled={loading || !finalizeCommandName(newName)} onClick={() => handleInstall('new')} className="px-3 py-2 text-sm border border-border rounded-lg">{t('Save as new skill')}</button>
+                <button disabled={loading} onClick={() => { setConflict(null); setError(null) }} className="px-3 py-2 text-sm border border-border rounded-lg">{t('Cancel')}</button>
+              </div>
+            </div>
+          )}
           {/* Error */}
           {error && (
             <div className="flex items-start gap-2 px-3 py-2 bg-destructive/10 border border-destructive/20 rounded-lg">
@@ -671,8 +755,8 @@ export function SkillInstallDialog({ onClose, initialSpaceId, initialMode, onIns
             {t('Close and keep draft')}
           </button>
           <button
-            onClick={handleInstall}
-            disabled={loading || !canInstall}
+            onClick={() => handleInstall()}
+            disabled={loading || !!conflict || !canInstall}
             className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
           >
             {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}

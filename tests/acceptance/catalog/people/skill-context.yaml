@@ -1,0 +1,63 @@
+version: 1
+id: people.skill-context
+module: people
+title: Understand shared workspace skills
+story: I can manage skills from a digital human without confusing their source with exclusive allocation or removing other people's resources.
+basis: documented
+references:
+  - tests/acceptance/skills-requirements.md
+promises:
+  shared: A digital human inherits workspace and global skills; adding or changing a shared skill accurately explains its scope and grants no extra tool or file permissions.
+  uninstall: Uninstalling a digital human retains its skill dependencies for explicit separate deletion and presents historical origin truthfully without automatic cleanup.
+  details: The person's skills panel retains its known skill count, inline instructions and required connection names; the desktop folder shortcut does not require opening the preview.
+scenarios:
+  - id: people.skill-context.details
+    title: Show already-known skill totals and required connection names
+    verifies: [details]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - Install an isolated person and a local skill declaring github and slack through actual APIs, then open the person's settings in the real remote renderer.
+      - Observe the total from its scoped list without any skill detail read, then expand the skill and inspect instructions and named required connections before the Open detail link.
+    expected:
+      - The count uses the already-read total, and expansion performs one read for the selected skill. Names are shown rather than a count-only substitute.
+      - The desktop-only folder button is absent in the remote renderer. No command/model call is made.
+    notes: Real server-mode application, authenticated HTTP and headless Chrome. Desktop icon visibility, invalid/missing conditions and click behavior have separate component tests; this remote case does not prove an OS file manager opens.
+
+  - id: people.skill-context.shared
+    title: Add or copy a skill for a shared work environment
+    verifies: [shared]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    variants:
+      caller: [owner, im-guest, external-teammate]
+    preconditions:
+      - Two controlled people share a workspace; another skill exists only in a different workspace, and restricted callers have existing permission policies.
+    steps:
+      - Inspect skill settings, add a skill to the person's workspace, copy the other workspace skill explicitly and start controlled fresh work for both people and the caller role.
+    expected:
+      - UI explains workspace/global inheritance and possible peer use, not exclusive person ownership or per-person allowlists. Cross-space selection produces an independent copy, not binding.
+      - Both people's effective catalogs reflect applicable scope; source labels are not exclusive access, historical use counts or authority to bypass guest/team tool/file restrictions.
+  - id: people.skill-context.uninstall
+    title: Retain dependencies after uninstalling a person
+    verifies: [uninstall, shared]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    variants:
+      resource: [enabled, disabled, missing]
+    steps:
+      - Uninstall one of two people sharing a fixture dependency, restart, inspect origin and resource bytes, then reinstall the person.
+    expected:
+      - Uninstall never cascades deletion; retained skill remains separately manageable and removed person's source is historical rather than falsely active.
+      - No all-history scan, automatic reference-count cleanup or background work is created. Reinstall reuses matching valid content and explicitly reports disabled/missing dependencies instead of false readiness.

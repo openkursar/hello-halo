@@ -52,6 +52,8 @@ import type { StoreAppDetail } from '../../../shared/store/store-types'
 import {
   processMdFile,
   processZipFile,
+  processDirectoryEntry,
+  processFileListAsFolder,
   parseSkillFiles,
   parseMd,
   type ParsedSkill,
@@ -166,6 +168,7 @@ export interface ShareToStoreDialogProps {
    * a detail page's Share action routes into the unified publish flow). */
   initialType?: ShareType
   initialAppId?: string
+  initialSpec?: SkillSpec
   /** Opening surface, for publish telemetry attribution. */
   entry?: PublishEntry
   /** The listing being updated, when the dialog was opened from an existing
@@ -193,7 +196,7 @@ export interface RepublishTarget {
 // Component
 // ────────────────────────────────────────────────
 
-export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, republishTarget }: ShareToStoreDialogProps) {
+export function ShareToStoreDialog({ onClose, initialType, initialAppId, initialSpec, entry, republishTarget }: ShareToStoreDialogProps) {
   const republish = !!republishTarget
   // Read as values, not as an object: the freshness effect below would otherwise
   // key on the prop's identity and re-request on every render of a caller that
@@ -225,9 +228,9 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
   // A brief type-choice step precedes the form; picking a type prefills it (and
   // it stays switchable inside the form). A caller-supplied type or app skips
   // straight to the form (e.g. republishing a known publication).
-  const [step, setStep] = useState<'type' | 'form'>(initialAppId || initialType ? 'form' : 'type')
-  const [type, setType] = useState<ShareType>(initialType ?? 'automation')
-  const [source, setSource] = useState<ShareSource>('installed')
+  const [step, setStep] = useState<'type' | 'form'>(initialSpec || initialAppId || initialType ? 'form' : 'type')
+  const [type, setType] = useState<ShareType>(initialSpec?.type ?? initialType ?? 'automation')
+  const [source, setSource] = useState<ShareSource>(initialSpec ? 'import' : 'installed')
 
   // Installed source state
   const installedOfType = useMemo(
@@ -246,7 +249,9 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
   }, [type])
 
   // File / folder source state
-  const [staged, setStaged] = useState<StagedSpec | null>(null)
+  const [staged, setStaged] = useState<StagedSpec | null>(() => initialSpec
+    ? { spec: initialSpec, label: initialSpec.display_name ?? initialSpec.name, origin: 'folder', skillFiles: initialSpec.skill_files }
+    : null)
   const [parseError, setParseError] = useState<string | null>(null)
   const [parsing, setParsing] = useState(false)
 
@@ -520,8 +525,11 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     savePublishDraft(draftKey, { name, description, version, changelog, category, tags })
   }, [draftKey, name, description, version, changelog, category, tags, submitSuccess])
 
-  // Reset staged when type/source changes
+  // Preserve the opening snapshot; discard it only when the source actually changes.
+  const previousSource = useRef({ type, source })
   useEffect(() => {
+    if (previousSource.current.type === type && previousSource.current.source === source) return
+    previousSource.current = { type, source }
     setStaged(null)
     setParseError(null)
     setSubmitError(null)
@@ -558,6 +566,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
       description: parsed.description || `Skill: ${parsed.name}`,
       type: 'skill',
       skill_files: parsed.skillFiles,
+      skill_assets: parsed.skillAssets,
     }
     setStaged({ spec, label, origin, skillFiles: parsed.skillFiles })
   }
@@ -678,14 +687,18 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     // Held outside the try so a failure mid-parse can still be classified.
     let files: Record<string, string> = {}
     try {
-      files = await readDirectoryEntryToMap(entry)
-      await stageFolder(files, entry.name)
+      if (type === 'skill') {
+        stageSkill(await processDirectoryEntry(entry), entry.name, 'folder')
+      } else {
+        files = await readDirectoryEntryToMap(entry)
+        await stageFolder(files, entry.name)
+      }
     } catch (err) {
       setParseError(describeFailure(detectAppType(Object.keys(files)), err))
     } finally {
       setParsing(false)
     }
-  }, [stageFolder, describeFailure])
+  }, [type, stageFolder, describeFailure])
 
   const handleFolderList = useCallback(async (fileList: FileList) => {
     setParseError(null)
@@ -693,15 +706,20 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     setParsing(true)
     let files: Record<string, string> = {}
     try {
-      const read = await readFileListToMap(fileList)
-      files = read.files
-      await stageFolder(files, read.folderName || t('Folder'))
+      if (type === 'skill') {
+        const parsed = await processFileListAsFolder(fileList)
+        stageSkill(parsed, fileList[0]?.webkitRelativePath.split('/')[0] || t('Folder'), 'folder')
+      } else {
+        const read = await readFileListToMap(fileList)
+        files = read.files
+        await stageFolder(files, read.folderName || t('Folder'))
+      }
     } catch (err) {
       setParseError(describeFailure(detectAppType(Object.keys(files)), err))
     } finally {
       setParsing(false)
     }
-  }, [stageFolder, describeFailure, t])
+  }, [type, stageFolder, describeFailure, t])
 
   // ── Submit ───────────────────────────────────
 
@@ -1444,6 +1462,7 @@ function MissingSkillInstallButton({ depId, spaceId }: MissingSkillInstallButton
         description: parsed.description || depId,
         type: 'skill',
         skill_files: parsed.skillFiles,
+        skill_assets: parsed.skillAssets,
       }
       const appId = await installApp(spaceId, spec)
       if (!appId) throw new Error(t('Install failed.'))
@@ -1471,7 +1490,7 @@ function MissingSkillInstallButton({ depId, spaceId }: MissingSkillInstallButton
   const handleDirEntry = useCallback(async (entry: FileSystemDirectoryEntry) => {
     setError('')
     try {
-      await install(parseSkillFiles(await readDirectoryEntryToMap(entry), entry.name))
+      await install(await processDirectoryEntry(entry))
     } catch (err) {
       setError(err instanceof Error ? err.message : t('Failed to read folder'))
     }
@@ -1480,8 +1499,7 @@ function MissingSkillInstallButton({ depId, spaceId }: MissingSkillInstallButton
   const handleFolderList = useCallback(async (fileList: FileList) => {
     setError('')
     try {
-      const { files, folderName } = await readFileListToMap(fileList)
-      await install(parseSkillFiles(files, folderName))
+      await install(await processFileListAsFolder(fileList))
     } catch (err) {
       setError(err instanceof Error ? err.message : t('Failed to read folder'))
     }
@@ -1751,7 +1769,9 @@ interface StagedPreviewProps {
 function StagedPreview({ staged, onClear }: StagedPreviewProps) {
   const { t } = useTranslation()
   const Icon = staged.origin === 'folder' ? FolderOpen : staged.label.toLowerCase().endsWith('.zip') || staged.label.toLowerCase().endsWith('.dhpkg') ? Archive : FileText
-  const fileCount = staged.skillFiles ? Object.keys(staged.skillFiles).length : undefined
+  const fileCount = staged.spec.type === 'skill'
+    ? Object.keys(staged.spec.skill_files ?? {}).length + Object.keys(staged.spec.skill_assets ?? {}).length
+    : undefined
 
   return (
     <div className="flex items-start gap-3 p-3 bg-muted/40 rounded-lg border border-border-soft">

@@ -21,6 +21,7 @@ import type {
   TranscriptSource,
 } from '../../../shared/types/transcript'
 import { roleForTranscriptSource, summarizeThoughts } from '../../../shared/transcript'
+import { readSkillNotice, SKILL_NOTICE_TEXT } from '../../../shared/skill-notice'
 
 // ============================================
 // Types
@@ -276,6 +277,13 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
       streamBlocks.clear()
       toolUseMap.clear()
       openTurnStart = messages.length
+      continue
+    }
+
+    const skillNotice = readSkillNotice(event)
+    if (skillNotice) {
+      turnFirstLine ??= lineOf(index)
+      pendingThoughts.push({ id: generateThoughtId(), type: 'system', content: SKILL_NOTICE_TEXT[skillNotice], skillNotice, timestamp: ts })
       continue
     }
 

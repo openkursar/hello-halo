@@ -372,8 +372,12 @@ export interface SkillSpec extends Omit<AppSpecCommon, 'author'> {
   author?: string
   /** Single-file content (manual add / legacy) */
   skill_content?: string
-  /** All files in the skill folder, keyed by filename. Used for registry installs. */
+  /** UTF-8 files in the skill folder, keyed by relative path. */
   skill_files?: Record<string, string>
+  /** Binary supporting files, separate from text so imports preserve their bytes. */
+  skill_assets?: Record<string, { encoding: 'base64'; content: string }>
+  /** Optional ordinary permission bits for package files; no ownership or special bits. */
+  skill_modes?: Record<string, number>
 }
 
 /** Extension — reserved for future use */

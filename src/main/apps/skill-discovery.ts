@@ -1,109 +1,39 @@
-/**
- * apps/skill-discovery
- *
- * Enumerates the skills a digital human can actually load at runtime by
- * scanning the exact directories the Claude Code SDK reads (see
- * services/agent/sdk-config.ts: settingSources ['user','project']):
- *
- *   - Global (user):   $CLAUDE_CONFIG_DIR/skills/<name>/SKILL.md
- *   - Space (project): <workDir>/.claude/skills/<name>/SKILL.md
- *
- * where workDir is the digital human's space working directory (the agent cwd).
- *
- * This is deliberately disk-based, not DB-based: global skills and manually
- * placed skills frequently have no installed-apps record, and space skills are
- * bound to a space's working dir — so filtering the app table would show an
- * empty or wrong list. The disk is the runtime source of truth.
- */
-
-import { existsSync, readdirSync, readFileSync, type Dirent } from 'fs'
-import { join } from 'path'
-import { resolveGlobalSkillsDir } from './manager/skill-sync'
-import { getWorkingDir } from '../services/agent/helpers'
-import { extractFrontmatterField } from '../../shared/skill-frontmatter'
+import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { getSkillLibrary } from './skills'
 import type { AvailableSkill } from '../../shared/apps/app-types'
 
-/** Cap per-skill content to keep the response light for large skill sets. */
-const MAX_CONTENT_CHARS = 20000
-
-function scanSkillsDir(dir: string, scope: 'global' | 'space'): AvailableSkill[] {
-  if (!existsSync(dir)) return []
-
-  const results: AvailableSkill[] = []
-  let entries: Dirent[]
+function readInstructions(path: string): string {
+  const fd = openSync(path, 'r')
   try {
-    entries = readdirSync(dir, { withFileTypes: true })
-  } catch (err) {
-    console.warn(`[SkillDiscovery] Failed to read ${dir}:`, (err as Error).message)
-    return []
-  }
+    const info = fstatSync(fd)
+    if (!info.isFile() || info.size > 1024 * 1024) throw new Error('The skill instructions cannot be read safely.')
+    const buffer = Buffer.alloc(Math.min(info.size, 20000))
+    const count = readSync(fd, buffer, 0, buffer.length, 0)
+    return buffer.toString('utf8', 0, count)
+  } finally { closeSync(fd) }
+}
 
-  for (const entry of entries) {
-    // Symlinked skill dirs load fine in the SDK; the SKILL.md check below
-    // filters out symlinks that don't point at a skill directory.
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
-    const skillDir = join(dir, entry.name)
-    const mdPath = join(skillDir, 'SKILL.md')
-    if (!existsSync(mdPath)) continue
-
-    let content = ''
+function availableCopies(spaceId: string, effectiveOnly: boolean, workDir?: string): AvailableSkill[] {
+  const library = getSkillLibrary()
+  const results: AvailableSkill[] = []
+  for (const copy of library.runtimeCopies(spaceId, workDir)) {
+    if (!copy.enabled || copy.availability === 'missing' || copy.availability === 'invalid' || (effectiveOnly && copy.availability !== 'available')) continue
     try {
-      content = readFileSync(mdPath, 'utf-8')
-    } catch {
-      continue
+      results.push({ name: copy.name, description: copy.description, scope: copy.scope,
+        dirName: copy.name, path: dirname(copy.path), content: readInstructions(copy.path) })
+    } catch (error) {
+      console.warn('[Skills] Available skill could not be inspected', { id: copy.id, reason: (error as Error).message })
     }
-
-    const name = extractFrontmatterField(content, 'name') || entry.name
-    const description = extractFrontmatterField(content, 'description') || ''
-    results.push({
-      name,
-      description,
-      scope,
-      dirName: entry.name,
-      path: skillDir,
-      content: content.length > MAX_CONTENT_CHARS ? content.slice(0, MAX_CONTENT_CHARS) : content,
-    })
   }
-
   return results
 }
 
-function skillDirsOf(spaceId: string): { globalDir: string; spaceDir: string } {
-  return { globalDir: resolveGlobalSkillsDir(), spaceDir: join(getWorkingDir(spaceId), '.claude', 'skills') }
-}
-
-/**
- * List the skills a digital human in the given space can load at runtime.
- * Space-scoped skills override global ones sharing the same directory name
- * (project settings win over user settings), matching SDK resolution.
- */
 export function listAvailableSkills(spaceId: string): AvailableSkill[] {
-  const { globalDir, spaceDir } = skillDirsOf(spaceId)
-
-  const globalSkills = scanSkillsDir(globalDir, 'global')
-  const spaceSkills = scanSkillsDir(spaceDir, 'space')
-
-  const spaceNames = new Set(spaceSkills.map(s => s.dirName))
-  const merged = [
-    ...spaceSkills,
-    ...globalSkills.filter(s => !spaceNames.has(s.dirName)),
-  ]
-  merged.sort((a, b) => a.name.localeCompare(b.name))
-
-  console.log(
-    `[SkillDiscovery] space=${spaceId}: ${spaceSkills.length} space + ` +
-    `${globalSkills.length} global → ${merged.length} available`
-  )
-  return merged
+  return availableCopies(spaceId, true)
 }
 
-/**
- * Every copy of every skill the space's engine may load, a global and a space
- * skill of the same name both kept. Which copy the engine loads for a name is
- * its own order, so a check of what may load has to hold for each.
- */
-export function listLoadableSkillCopies(spaceId: string): AvailableSkill[] {
-  const { globalDir, spaceDir } = skillDirsOf(spaceId)
-  return [...scanSkillsDir(spaceDir, 'space'), ...scanSkillsDir(globalDir, 'global')]
+/** Permission checks conservatively consider every enabled copy an external engine could discover. */
+export function listLoadableSkillCopies(spaceId: string, workDir?: string): AvailableSkill[] {
+  return availableCopies(spaceId, false, workDir)
 }
-

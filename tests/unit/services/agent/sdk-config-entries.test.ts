@@ -90,7 +90,7 @@ describe('buildUserSessionSdkOptions', () => {
     const halo = await buildUserSessionSdkOptions({ ...params(), engineId: 'halo' })
     expect(cc.engineId).toBe('anthropic')
     expect(typeof cc.systemPrompt).toBe('string')
-    expect(cc).not.toHaveProperty('workerGroup')
+    expect(cc.workerGroup).toBe('space-1')
     expect(cc).not.toHaveProperty('haloRequestIdentity')
     expect(halo.engineId).toBe('halo')
     expect(halo.systemPrompt).toMatchObject({ type: 'preset', preset: 'default' })

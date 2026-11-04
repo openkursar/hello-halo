@@ -26,9 +26,14 @@ export class ArchiveTooLarge extends Error {
  * whole package to read its file names would cost more than the question is
  * worth. Callers that need content decode the entries they actually use.
  */
-export async function readArchiveEntries(file: File): Promise<Record<string, Uint8Array>> {
+export async function readArchiveEntries(
+  file: File,
+  include?: (path: string, size: number) => boolean,
+): Promise<Record<string, Uint8Array>> {
   if (file.size > MAX_ARCHIVE_BYTES) throw new ArchiveTooLarge(file.size)
 
   const { unzipSync } = await import('fflate')
-  return unzipSync(new Uint8Array(await file.arrayBuffer()))
+  return unzipSync(new Uint8Array(await file.arrayBuffer()), include
+    ? { filter: entry => include(entry.name, entry.originalSize) }
+    : undefined)
 }

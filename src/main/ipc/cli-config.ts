@@ -11,9 +11,13 @@
  * (passthrough — handler bodies and return shapes preserved verbatim).
  */
 
-import { join, resolve } from 'path'
+import { join, resolve, sep } from 'path'
 import { homedir } from 'os'
-import { stat, readdir, mkdir, cp, readFile, access } from 'fs/promises'
+import { stat, lstat, opendir, readFile, access } from 'fs/promises'
+import {
+  canonicalSkillPath, parseSkillMetadata, readSkillPackage, writeSkillPackage, skillRevision, validateSkillName,
+} from '../services/skills'
+import { withSkillMdName } from '../../shared/skill-frontmatter'
 import { getConfig, saveConfig, resolveClaudeConfigDir } from '../foundation/config.service'
 import type { McpServerConfig } from '../foundation/config.service'
 import { getAppManager, AppAlreadyInstalledError } from '../apps/manager'
@@ -36,6 +40,50 @@ async function pathExists(p: string): Promise<boolean> {
     return true
   } catch {
     return false
+  }
+}
+
+const MAX_LEGACY_SKILLS = 2000
+
+type SkillMigrationAction = { name: string; action: 'skip' | 'overwrite' | 'rename' }
+
+function validateSkillMigrationActions(actions: unknown): asserts actions is SkillMigrationAction[] {
+  if (!Array.isArray(actions) || actions.length > MAX_LEGACY_SKILLS) {
+    throw new Error(`Skill migration requires an array of at most ${MAX_LEGACY_SKILLS} actions`)
+  }
+  for (const item of actions) {
+    if (!item || typeof item !== 'object' || typeof item.name !== 'string' || validateSkillName(item.name) !== item.name) {
+      throw new Error('Invalid skill migration name')
+    }
+  }
+}
+
+function renamedSkillFiles(files: Record<string, string>, name: string): Record<string, string> {
+  const content = files['SKILL.md']
+  if (typeof content !== 'string') throw new Error('SKILL.md must be UTF-8 text')
+  const bom = content.startsWith('\ufeff') ? '\ufeff' : ''
+  const renamed = withSkillMdName({ skill_files: { ...files, 'SKILL.md': content.slice(bom.length) } }, name).skill_files
+  const metadata = parseSkillMetadata(renamed['SKILL.md'], name)
+  if (metadata.error || metadata.name !== name) throw new Error('The skill command could not be renamed safely')
+  return { ...renamed, 'SKILL.md': bom + renamed['SKILL.md'] }
+}
+
+async function skillPathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+async function legacySkillExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory() && (await stat(join(path, 'SKILL.md'))).isFile()
+  } catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return false
+    throw error
   }
 }
 
@@ -70,82 +118,104 @@ export function registerCliConfigHandlers(): void {
 
     // ── Scan skills for conflicts ────────────────────────────────────────────
     cliConfigScanSkills: async () => {
-      console.log('[CliConfig] cli-config:scan-skills')
       try {
         const ccSkillsDir = join(getCCDefaultDir(), 'skills')
-        const haloSkillsDir = join(resolveClaudeConfigDir('halo'), 'skills')
+        const haloSkillsDir = join(homedir(), '.agents', 'skills')
 
-        if (!(await pathExists(ccSkillsDir))) {
+        if (!(await skillPathExists(ccSkillsDir))) {
           return { success: true, data: { skills: [], ccSkillsDir, haloSkillsDir } }
         }
 
-        const entries = await readdir(ccSkillsDir)
+        const entries = await opendir(ccSkillsDir)
         const skills: Array<{ name: string; ccPath: string; haloPath: string; exists: boolean }> = []
+        let inspected = 0
 
-        for (const name of entries) {
+        for await (const { name } of entries) {
+          if (++inspected > MAX_LEGACY_SKILLS) throw new Error(`Skill scan exceeds ${MAX_LEGACY_SKILLS} entries`)
           const entryPath = join(ccSkillsDir, name)
-          const entryStat = await stat(entryPath)
-          if (entryStat.isDirectory()) {
-            skills.push({
-              name,
-              ccPath: entryPath,
-              haloPath: join(haloSkillsDir, name),
-              exists: await pathExists(join(haloSkillsDir, name)),
-            })
-          }
+          if (!(await legacySkillExists(entryPath))) continue
+          if (validateSkillName(name) !== name) throw new Error('Invalid legacy skill directory name')
+          skills.push({
+            name,
+            ccPath: entryPath,
+            haloPath: join(haloSkillsDir, name),
+            exists: await skillPathExists(join(haloSkillsDir, name)),
+          })
         }
 
         console.log(`[CliConfig] scan-skills: found ${skills.length} CC skills`)
         return { success: true, data: { skills, ccSkillsDir, haloSkillsDir } }
       } catch (error: unknown) {
         const err = error as Error
-        console.error('[CliConfig] scan-skills failed:', err.message)
+        console.error('[CliConfig] scan-skills failed:', err)
         return { success: false, error: err.message }
       }
     },
 
     // ── Migrate skills ───────────────────────────────────────────────────────
-    cliConfigMigrateSkills: async (
-      actions: Array<{ name: string; action: 'skip' | 'overwrite' | 'rename' }>
-    ) => {
-      console.log('[CliConfig] cli-config:migrate-skills, items:', actions.length)
+    cliConfigMigrateSkills: async (actions: SkillMigrationAction[]) => {
       try {
+        validateSkillMigrationActions(actions)
         const ccSkillsDir = join(getCCDefaultDir(), 'skills')
-        const haloSkillsDir = join(resolveClaudeConfigDir('halo'), 'skills')
-
-        await mkdir(haloSkillsDir, { recursive: true })
-
+        const haloSkillsDir = join(homedir(), '.agents', 'skills')
         const results: Array<{ name: string; status: 'migrated' | 'skipped' | 'renamed' | 'error'; dest?: string; error?: string }> = []
 
         for (const { name, action } of actions) {
-          const srcDir = join(ccSkillsDir, name)
-          if (!(await pathExists(srcDir))) {
-            results.push({ name, status: 'skipped' })
-            continue
-          }
-
+          let writing = false
           try {
+            if (action !== 'skip' && action !== 'overwrite' && action !== 'rename') {
+              throw new Error('Unsupported skill import action')
+            }
             if (action === 'skip') {
+              console.log(`[CliConfig] Skipped skill '${name}': selected by user`)
               results.push({ name, status: 'skipped' })
               continue
             }
 
+            const srcDir = join(ccSkillsDir, name)
+            if (!(await legacySkillExists(srcDir))) {
+              console.warn(`[CliConfig] Skipped skill '${name}': source directory or SKILL.md is missing`)
+              results.push({ name, status: 'skipped' })
+              continue
+            }
+
+            const srcPath = join(srcDir, 'SKILL.md')
+            let pack: ReturnType<typeof readSkillPackage> | undefined
             let destName = name
             if (action === 'rename') {
-              let suffix = 1
-              while (await pathExists(join(haloSkillsDir, `${name}-cc${suffix > 1 ? String(suffix) : ''}`))) {
-                suffix++
+              pack = readSkillPackage(srcPath)
+              const sourceName = parseSkillMetadata(pack.files['SKILL.md'] ?? '', name).name.toLocaleLowerCase('en-US')
+              for (let suffix = 1; suffix <= MAX_LEGACY_SKILLS; suffix++) {
+                destName = validateSkillName(`${name}-cc${suffix > 1 ? String(suffix) : ''}`)
+                if (destName.toLocaleLowerCase('en-US') !== sourceName && !(await skillPathExists(join(haloSkillsDir, destName)))) break
+                if (suffix === MAX_LEGACY_SKILLS) throw new Error('No available skill copy name within the scan limit')
               }
-              destName = `${name}-cc${suffix > 1 ? String(suffix) : ''}`
             }
 
             const destDir = join(haloSkillsDir, destName)
-            await cp(srcDir, destDir, { recursive: true, force: true })
-            console.log(`[CliConfig] Migrated skill: ${name} -> ${destName}`)
+            const destPath = join(destDir, 'SKILL.md')
+            if (canonicalSkillPath(srcPath) === canonicalSkillPath(destPath)) {
+              console.warn(`[CliConfig] Skipped skill '${name}': source and destination refer to the same skill`)
+              results.push({ name, status: 'skipped' })
+              continue
+            }
+            const legacyRoot = canonicalSkillPath(ccSkillsDir)
+            const targetRoot = canonicalSkillPath(haloSkillsDir)
+            if (targetRoot === legacyRoot || targetRoot.startsWith(legacyRoot + sep)) {
+              throw new Error('The migration destination must be outside the legacy skill directory')
+            }
+            const expectedRevision = action === 'overwrite' && await skillPathExists(destDir)
+              ? skillRevision(destPath) : undefined
+            pack ??= readSkillPackage(srcPath)
+            const files = action === 'rename' ? renamedSkillFiles(pack.files, destName) : pack.files
+
+            writing = true
+            writeSkillPackage(destPath, files, pack.assets, expectedRevision, pack.modes)
             results.push({ name, status: action === 'rename' ? 'renamed' : 'migrated', dest: destName })
           } catch (err: unknown) {
             const e = err as Error
-            console.error(`[CliConfig] Failed to migrate skill '${name}':`, e.message)
+            // The file service logs replacement failures, including rollback details.
+            if (!writing) console.error(`[CliConfig] Failed to migrate skill '${name}':`, e)
             results.push({ name, status: 'error', error: e.message })
           }
         }
@@ -155,7 +225,7 @@ export function registerCliConfigHandlers(): void {
         return { success: true, data: { results } }
       } catch (error: unknown) {
         const err = error as Error
-        console.error('[CliConfig] migrate-skills failed:', err.message)
+        console.error('[CliConfig] migrate-skills failed:', err)
         return { success: false, error: err.message }
       }
     },

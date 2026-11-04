@@ -88,9 +88,7 @@ export async function dispatch(
     if (!normalized || normalized === 'spec.yaml') continue
     const bytes = typeof value === 'string'
       ? new TextEncoder().encode(value)
-      : value instanceof Buffer
-        ? new Uint8Array(value)
-        : value
+      : new Uint8Array(value)
     auxBytes += bytes.byteLength
     form.append(
       normalized,
@@ -223,12 +221,12 @@ export async function dispatch(
  */
 function projectSpecForWire(spec: AppSpec): AppSpec {
   if (spec.type !== 'skill') return spec
-  const skillFiles = (spec as { skill_files?: unknown }).skill_files
-  if (!skillFiles || Array.isArray(skillFiles) || typeof skillFiles !== 'object') {
-    return spec
-  }
+  const { skill_assets: assets, ...metadata } = spec
+  const skillFiles = spec.skill_files
+  if (!skillFiles && !assets) return spec
+  const names = Array.isArray(skillFiles) ? skillFiles : Object.keys(skillFiles ?? {})
   return {
-    ...spec,
-    skill_files: Object.keys(skillFiles as Record<string, unknown>).filter(n => n !== 'spec.yaml'),
-  } as AppSpec
+    ...metadata,
+    skill_files: [...new Set([...names, ...Object.keys(assets ?? {})])].filter(name => name !== 'spec.yaml'),
+  } as unknown as AppSpec
 }

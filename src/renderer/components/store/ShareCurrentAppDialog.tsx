@@ -1,14 +1,6 @@
 /**
- * ShareCurrentAppDialog
- *
- * "Share this installed app" chooser opened from a Digital Human / Skill detail
- * page (AutomationHeader, SkillInfoCard). Two actions:
- *   - Export: save the app as a .dhpkg file to share by hand (desktop only).
- *   - Share:  jump to the store and open the unified publish dialog
- *             (ShareToStoreDialog) pre-selected on this app.
- *
- * Publishing itself lives entirely in ShareToStoreDialog so there is a single
- * publish flow (author/version/category/review) rather than a second inline one.
+ * Detail-page sharing delegates publication to ShareToStoreDialog. Skills may
+ * supply a current filesystem snapshot independently of an installed app record.
  */
 
 import { useCallback, useState } from 'react'
@@ -18,10 +10,13 @@ import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import { isElectron } from '../../api/transport'
-import type { AppType } from '../../../shared/apps/spec-types'
+import type { AppType, SkillSpec } from '../../../shared/apps/spec-types'
+import type { SkillRef } from '../../../shared/types/skills'
 
 export interface ShareCurrentAppDialogProps {
-  appId: string
+  appId?: string
+  specOverride?: SkillSpec
+  skillRef?: SkillRef
   onClose: () => void
 }
 
@@ -48,31 +43,48 @@ function typeLabel(type: AppType, t: (s: string) => string): string {
   }
 }
 
-export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogProps) {
+export function ShareCurrentAppDialog({ appId, specOverride, skillRef, onClose }: ShareCurrentAppDialogProps) {
   const { t } = useTranslation()
   const app = useAppsStore(s => s.apps.find(a => a.id === appId))
   const openStorePublish = useAppsPageStore(s => s.openStorePublish)
+  const spec = specOverride ?? app?.spec
 
   const [exporting, setExporting] = useState(false)
   const [feedback, setFeedback] = useState<Feedback | null>(null)
 
   const handleShareToMarket = useCallback(() => {
-    if (!app) return
-    // Only digital humans and skills are publishable; the store publish dialog
-    // is scoped to those two types.
-    const shareType: AppType = app.spec.type === 'skill' ? 'skill' : 'automation'
+    if (!spec) return
+    const shareType = spec.type === 'skill' ? 'skill' : 'automation'
     onClose()
-    openStorePublish(shareType, appId)
-  }, [app, appId, onClose, openStorePublish])
+    openStorePublish(shareType, appId, specOverride)
+  }, [spec, specOverride, appId, onClose, openStorePublish])
 
   const handleExport = useCallback(async () => {
-    if (!app) return
+    if (!spec || (!skillRef && !appId)) return
     setExporting(true)
     setFeedback(null)
     try {
+      if (spec.type === 'skill' && skillRef) {
+        const res = await api.skillsExport(skillRef)
+        if (!res.success || !res.data) throw new Error(res.error || t('Export failed.'))
+        const bytes = Uint8Array.from(atob(res.data.base64), char => char.charCodeAt(0))
+        const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }))
+        const link = document.createElement('a')
+        link.href = url
+        link.download = res.data.filename
+        document.body.appendChild(link)
+        try {
+          link.click()
+        } finally {
+          link.remove()
+          setTimeout(() => URL.revokeObjectURL(url), 1000)
+        }
+        return
+      }
+      if (!appId) return
       // Skills distribute as a `.zip` of their file tree; digital humans as a
       // `.dhpkg` (spec.yaml package). Each type gets its own export format.
-      const res = app.spec.type === 'skill'
+      const res = spec.type === 'skill'
         ? await api.storeExportSkill(appId)
         : await api.storeExportDhpkg(appId)
       if (res.success && res.data?.path) {
@@ -81,14 +93,14 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
         setFeedback({ kind: 'error', text: res.error })
       }
     } catch (err) {
+      console.warn('[ShareCurrentAppDialog] Package export failed', err)
       setFeedback({ kind: 'error', text: (err as Error).message })
     } finally {
       setExporting(false)
     }
-  }, [app, appId, t])
+  }, [spec, skillRef, appId, t])
 
-  // App may have been uninstalled between mount and render — guard gracefully.
-  if (!app) {
+  if (!spec) {
     return (
       <div
         className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
@@ -106,7 +118,6 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
     )
   }
 
-  const spec = app.spec
   const Icon = iconForType(spec.type)
   const label = typeLabel(spec.type, t)
 
@@ -173,7 +184,7 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border">
-          {isElectron() && (
+          {((spec.type === 'skill' && skillRef) || (isElectron() && appId)) && (
             <button
               onClick={handleExport}
               disabled={exporting}

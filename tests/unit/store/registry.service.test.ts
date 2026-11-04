@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdirSync } from "fs"
-import { join } from "path"
+import { existsSync, mkdirSync, readFileSync } from "fs"
+import { dirname, join } from "path"
 import { homedir } from "os"
 
 const { getAppManagerMock, getAppRuntimeMock, loadProductConfigMock, authorizeInstallMock, completeInstallIntentMock } =
@@ -55,8 +55,15 @@ import {
   onSyncStatusChanged,
 } from "../../../src/main/store/registry.service"
 import { createDatabaseManager } from "../../../src/main/platform/store/database-manager"
+import { AppManagerStore } from "../../../src/main/apps/manager/store"
+import { createAppManagerService } from "../../../src/main/apps/manager/service"
+import { MIGRATION_NAMESPACE, migrations } from "../../../src/main/apps/manager/migrations"
 import type { DatabaseManager } from "../../../src/main/platform/store/types"
 import type { RegistryIndex } from "../../../src/shared/store/store-types"
+import type { AppSpec, SkillSpec } from "../../../src/shared/apps/spec-types"
+import type { SkillSpec as InstalledSkillSpec } from "../../../src/main/apps/spec"
+import { sameSkillSource } from "../../../src/main/services/skills"
+import type { SkillInstallationState } from "../../../src/shared/types/skills"
 
 function jsonResponse(data: unknown): Response {
   return new Response(JSON.stringify(data), {
@@ -613,6 +620,95 @@ ${requiresSkill ? `requires:\n  skills:\n    - ${requiresSkill}\n` : ""}store:
       expect(result).toMatchObject({ from: "1.0.0", to: "1.1.0", kept: ["system_prompt"], editsKnown: true })
     })
 
+    it("reports the retained version when the manager keeps a customized skill package", async () => {
+      const installed = {
+        id: "skill-1",
+        status: "active",
+        spec: { name: "Ledger App", type: "skill", version: "1.0.0", store: { slug: "ledger-app", registry_id: "official" } },
+        userOverrides: { skill: { version: 1, filePath: "/fixture/skills/ledger-app", customized: true } },
+      }
+      const manager = {
+        getApp: vi.fn(() => installed),
+        upgradeSpec: vi.fn(() => ({ fromVersion: "1.0.0", toVersion: "1.0.0", kept: ["skill_files"], editsKnown: true })),
+        listApps: vi.fn(() => []),
+      }
+      getAppManagerMock.mockReturnValue(manager)
+      await serve([{ ...APP, type: "skill", version: "1.1.0" }], {
+        "packages/digital-humans/ledger-app/spec.yaml":
+          'spec_version: "1"\nname: Ledger App\nversion: 1.1.0\nauthor: tester\n' +
+          "description: Ledger test\ntype: skill\nskill_files: {}\n",
+      })
+
+      const result = await applyUpgrade("skill-1", "patch_minor")
+
+      expect(manager.upgradeSpec).toHaveBeenCalledWith("skill-1", expect.objectContaining({ type: "skill", version: "1.1.0" }))
+      expect(result).toMatchObject({ from: "1.0.0", to: "1.0.0", kept: ["skill_files"], editsKnown: true })
+    })
+
+    it("replaces a customized skill only when the user explicitly forces the complete update", async () => {
+      const installed = {
+        id: "skill-1", status: "paused",
+        spec: { name: "Ledger App", type: "skill", version: "1.0.0", store: { slug: "ledger-app", registry_id: "official" } },
+        userOverrides: { skill: { version: 1, filePath: "/fixture/skills/ledger-app", customized: true } },
+      }
+      const manager = {
+        getApp: vi.fn(() => installed),
+        replaceSkillFromAuthor: vi.fn((_id: string, next: { version: string }) => {
+          installed.spec.version = next.version
+          return { fromVersion: "1.0.0", toVersion: next.version, kept: [], editsKnown: true }
+        }),
+        updateSpec: vi.fn(), upgradeSpec: vi.fn(), listApps: vi.fn(() => []),
+      }
+      getAppManagerMock.mockReturnValue(manager)
+      await serve([{ ...APP, type: "skill", version: "1.1.0" }], {
+        "packages/digital-humans/ledger-app/spec.yaml":
+          'spec_version: "1"\nname: Ledger App\nversion: 1.1.0\nauthor: tester\n' +
+          "description: Ledger test\ntype: skill\nskill_files: {}\n",
+      })
+      const result = await applyUpgrade("skill-1", "force")
+      expect(manager.replaceSkillFromAuthor).toHaveBeenCalledWith("skill-1", expect.objectContaining({ version: "1.1.0" }))
+      expect(manager.updateSpec).not.toHaveBeenCalled()
+      expect(manager.upgradeSpec).not.toHaveBeenCalled()
+      expect(installed.status).toBe("paused")
+      expect(result).toMatchObject({ from: "1.0.0", to: "1.1.0", kept: [] })
+    })
+
+    it("resets customization through a real SQLite force upgrade and keeps later edits on normal upgrade", async () => {
+      const appDb = db.getAppDatabase()
+      db.runMigrations(appDb, MIGRATION_NAMESPACE, migrations)
+      const store = new AppManagerStore(appDb)
+      const manager = createAppManagerService({ store, getSpacePath: () => null, getAppDataPath: () => null,
+        getGlobalAppDir: () => join(globalThis.__HALO_TEST_DIR__, "managed-skills"),
+      })
+      getAppManagerMock.mockReturnValue(manager)
+      const installed: InstalledSkillSpec = {
+        spec_version: "1", type: "skill", name: "Ledger App", version: "1.0.0", description: "Ledger test",
+        store: { slug: "ledger-app", registry_id: "official", install_source: "store", tags: [] },
+        skill_files: { "SKILL.md": "Original instructions", "obsolete.txt": "old resource" },
+      }
+      const id = await manager.install(null, installed)
+      manager.updateSpec(id, { skill_content: "Customized instructions" })
+      manager.pause(id)
+      const file = manager.getApp(id)!.userOverrides.skill!.filePath
+      await serve([{ ...APP, type: "skill", version: "1.1.0" }], {
+        "packages/digital-humans/ledger-app/spec.yaml":
+          'spec_version: "1"\nname: Ledger App\nversion: 1.1.0\nauthor: tester\n' +
+          "description: Ledger test\ntype: skill\nskill_files:\n  SKILL.md: Author replacement\n  new.txt: new resource\n",
+      })
+      expect(await applyUpgrade(id, "force")).toMatchObject({ from: "1.0.0", to: "1.1.0", kept: [] })
+      expect(manager.getApp(id)).toMatchObject({ status: "paused", userOverrides: { skill: { customized: false } } })
+      expect(readFileSync(file, "utf8")).toContain("Author replacement")
+      expect(existsSync(join(dirname(file), "obsolete.txt"))).toBe(false)
+      const author = manager.getSkillRecord(id)!.spec as InstalledSkillSpec
+      expect(author.skill_files).toHaveProperty("new.txt", "new resource")
+      const following = { ...author, version: "1.2.0", skill_files: { "SKILL.md": "Following author version" } }
+      expect(manager.upgradeSpec(id, following)).toMatchObject({ fromVersion: "1.1.0", toVersion: "1.2.0", kept: [] })
+      manager.updateSpec(id, { skill_content: "New local edit" })
+      expect(manager.upgradeSpec(id, { ...following, version: "1.3.0" })).toMatchObject({ toVersion: "1.2.0", kept: ["skill_files", "skill_assets", "skill_content"] })
+      expect(readFileSync(file, "utf8")).toBe("New local edit")
+      expect(manager.getApp(id)).toMatchObject({ status: "paused", userOverrides: { skill: { customized: true } } })
+    })
+
     // The update dialog shows what would keep the user's version before
     // anything is installed, so the preview is a browse fetch, never an order.
     it("previews an upgrade without opening an install order", async () => {
@@ -753,21 +849,58 @@ ${requiresSkill ? `requires:\n  skills:\n    - ${requiresSkill}\n` : ""}store:
     })
 
     /** Parent app declaring `helper-skill`, with that skill offered at 2.0.0. */
-    async function serveWithDependency(installedSkillVersion: string | null): Promise<void> {
+    async function serveWithDependency(
+      installedSkillVersion: string | null,
+      otherSkill?: { id: string; spaceId: string; status: string; spec: SkillSpec; userOverrides: { skill: SkillInstallationState } },
+    ): Promise<void> {
+      const skillState: SkillInstallationState = {
+        version: 1,
+        filePath: "/fixture/space-1/skills/helper-skill",
+        owners: [],
+      }
+      const skill = {
+        id: "skill-1",
+        spaceId: "space-1",
+        specId: "helper-skill",
+        status: "active",
+        spec: {
+          name: "helper-skill", version: installedSkillVersion ?? "2.0.0", type: "skill", spec_version: "1", description: "Helper workflow",
+          store: { slug: "helper-skill", registry_id: "official", install_source: "store", tags: [] },
+        } as SkillSpec,
+        userOverrides: { skill: skillState },
+      }
+      let skillInstalled = installedSkillVersion !== null
+      let parentSpec: AppSpec | undefined
       getAppManagerMock.mockReturnValue({
-        install: vi.fn().mockResolvedValue("app-1"),
-        listApps: vi.fn(() =>
-          installedSkillVersion
-            ? [
-                {
-                  id: "skill-1",
-                  specId: "helper-skill",
-                  status: "active",
-                  spec: { name: "helper-skill", version: installedSkillVersion },
-                },
-              ]
-            : [],
+        install: vi.fn(async (spaceId: string | null, spec: AppSpec) => {
+          expect(spaceId).toBe("space-1")
+          if (spec.type === "skill") {
+            if (otherSkill && otherSkill.spec.name === spec.name && sameSkillSource(otherSkill.spec, spec)) {
+              return otherSkill.id
+            }
+            skill.spec = spec
+            skillInstalled = true
+            return skill.id
+          }
+          parentSpec = spec
+          return "app-1"
+        }),
+        listApps: vi.fn(() => []),
+        listSkillRecords: vi.fn((spaceId: string | null) =>
+          [otherSkill, ...(skillInstalled ? [skill] : [])].filter(row => row && row.spaceId === spaceId),
         ),
+        getApp: vi.fn((id: string) => {
+          if (id === otherSkill?.id) return otherSkill
+          if (id === skill.id && skillInstalled) return skill
+          if (id === "app-1" && parentSpec) {
+            return { id, spaceId: "space-1", status: "active", spec: parentSpec }
+          }
+          return null
+        }),
+        updateSkillRecord: vi.fn((id: string, patch: { skill: SkillInstallationState }) => {
+          expect(id).toBe(skill.id)
+          skill.userOverrides.skill = patch.skill
+        }),
       })
       await serve(
         [
@@ -790,6 +923,46 @@ ${requiresSkill ? `requires:\n  skills:\n    - ${requiresSkill}\n` : ""}store:
       )
     }
 
+    it.each([
+      ["paused", "paused", false],
+      ["deleted", "uninstalled", true],
+    ])("installs a dependency without changing a %s same-name skill from another source", async (_case, status, deleted) => {
+      const otherSkill = {
+        id: "other-skill",
+        spaceId: "space-1",
+        status,
+        spec: {
+          spec_version: "1", name: "helper-skill", version: "2.0.0", type: "skill",
+          author: "tester", description: "dep", skill_files: {},
+          store: { slug: "helper-skill", registry_id: "other-source", install_source: "store", tags: [] },
+        } as SkillSpec,
+        userOverrides: { skill: {
+          version: 1, filePath: "/fixture/space-1/skills/other-skill", deleted,
+          owners: [{ id: "other-app", name: "Other App" }],
+        } as SkillInstallationState },
+      }
+      const original = structuredClone(otherSkill)
+      await serveWithDependency(null, otherSkill)
+
+      await expect(installFromStore("ledger-app", "space-1")).resolves.toBe("app-1")
+
+      const manager = getAppManagerMock()
+      expect(manager.install).toHaveBeenCalledWith("space-1", expect.objectContaining({
+        name: "helper-skill", type: "skill",
+        store: expect.objectContaining({ slug: "helper-skill", registry_id: "official" }),
+      }), {})
+      expect(manager.getApp("skill-1")).toMatchObject({
+        status: "active",
+        spec: { store: { registry_id: "official" } },
+        userOverrides: { skill: { owners: [{ id: "app-1", name: "Ledger App" }] } },
+      })
+      expect(manager.updateSkillRecord).toHaveBeenCalledTimes(1)
+      expect(manager.updateSkillRecord).toHaveBeenCalledWith("skill-1", {
+        skill: expect.objectContaining({ owners: [{ id: "app-1", name: "Ledger App" }] }),
+      })
+      expect(otherSkill).toEqual(original)
+    })
+
     function orderedTargets(): unknown[] {
       return authorizeInstallMock.mock.calls.map(([, target]) => target)
     }
@@ -810,6 +983,11 @@ ${requiresSkill ? `requires:\n  skills:\n    - ${requiresSkill}\n` : ""}store:
         { slug: "ledger-app", version: "1.0.0" },
         { slug: "helper-skill", version: "2.0.0" },
       ])
+      const manager = getAppManagerMock()
+      expect(manager.listSkillRecords).toHaveBeenCalledWith("space-1")
+      expect(manager.updateSkillRecord).toHaveBeenCalledWith("skill-1", {
+        skill: expect.objectContaining({ owners: [{ id: "app-1", name: "Ledger App" }] }),
+      })
     })
   })
 

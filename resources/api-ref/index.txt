@@ -203,3 +203,15 @@ POST   /api/tlon/<kbId>/resolve-sources                            [ai]       kn
 POST   /api/tlon/<kbId>/ingest                                     [ai]       knowledge-base          Start indexing a collection's documents (fire-and-forget)
 POST   /api/tlon/<kbId>/clear-relearn                              [ai]       knowledge-base          Wipe extracted text and re-index a collection from scratch
 GET    /api/tlon/<kbId>/ingest-status                              [ai]       knowledge-base          Get the current indexing progress for a collection
+POST   /api/skills/list                                            [ai]       store                   List skill copies available in one workspace and global scope
+POST   /api/skills/read                                            [ai]       store                   Read one discovered skill copy and its current file revision
+POST   /api/skills/save                                            [ai]       store                   Save one skill instruction file against the revision just read
+POST   /api/skills/import                                          [ai]       store                   Import a complete personal skill package into an explicit scope
+POST   /api/skills/set-enabled                                     [ai]       store                   Enable or disable one skill copy without deleting its files
+POST   /api/skills/move-preview                                    [ai]       store                   Preview a skill scope move without changing any files
+POST   /api/skills/move                                            [ai]       store                   Move one complete skill package to the selected scope
+POST   /api/skills/copy                                            [ai]       store                   Create an independent personal skill copy under a new name
+POST   /api/skills/delete                                          [ai]       store                   Trash one skill package on the host computer
+POST   /api/skills/export                                          [ai]       store                   Export one discovered skill package as base64 ZIP bytes
+POST   /api/skills/restore-legacy                                  [ai]       store                   Recover an explicitly selected legacy removed skill
+POST   /api/skills/delete-legacy                                   [ai]       store                   Permanently discard one recoverable legacy skill package

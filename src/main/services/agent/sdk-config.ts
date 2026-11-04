@@ -1097,10 +1097,11 @@ async function assembleSdkOptions(
     sdkOptions.mcpServers = mcpServers
   }
 
+  sdkOptions.workerGroup = spaceId
+
   // Request identity — host-injected headers, system prefix and metadata
   // (halo engine only).
   if (engineId === 'halo') {
-    sdkOptions.workerGroup = spaceId
     try {
       sdkOptions.haloRequestIdentity = {
         deviceId: getDeviceIdentity().deviceId,

@@ -85,6 +85,7 @@ export function openSkillInComposer(skill: { spaceId: string | null; name: strin
       pendingComposerInput: {
         spaceId: target.id,
         text: `${command} `,
+        preserveDraft: true,
         // Shown whether or not the space's session has announced this command itself.
         slashPreview: { command, label: command.slice(1), description: skill.description },
       },

@@ -15,6 +15,7 @@ import { dispatch as dispatchGithubPr } from './dispatchers/github-pr'
 import { dispatch as dispatchHttpRegistry } from './dispatchers/http-registry'
 import { dispatch as dispatchLocalDhpkg } from './dispatchers/local-dhpkg'
 import { enrichSpecForPublish } from './spec-enrich'
+import { prepareSkillPackage, sameSkillSource } from '../../services/skills'
 import { withSkillMdName } from '../../../shared/skill-frontmatter'
 import type { PublishResult, PublishContext } from './types'
 import type { AppSpec, SkillSpec } from '../../apps/spec'
@@ -206,7 +207,13 @@ export async function publish(appId: string, overrides: PublishOverrides = {}): 
       details: (e as Error).message,
     }
   }
-  const { files, missingSkillIds } = collectFiles(spec, manager, app.spaceId)
+  let collected: ReturnType<typeof collectFiles>
+  try { collected = collectFiles(spec, manager, app.spaceId) }
+  catch (error) {
+    console.warn('[publish] Skill package rejected before dispatch', { appId, reason: (error as Error).message })
+    return { status: 'error', target: target.config.target, details: (error as Error).message }
+  }
+  const { files, missingSkillIds } = collected
   if (missingSkillIds.length > 0) {
     return {
       status: 'error',
@@ -267,7 +274,7 @@ export async function publish(appId: string, overrides: PublishOverrides = {}): 
  * `bundled: true`: once the files travel inside the package, the dependency
  * must say so, or an installer will try (and fail) to fetch them elsewhere.
  */
-function declareBundledSkillFiles(spec: AppSpec, files: Record<string, string>): AppSpec {
+function declareBundledSkillFiles(spec: AppSpec, files: Record<string, string | Buffer>): AppSpec {
   if (spec.type !== 'automation') return spec
   const deps = spec.requires?.skills
   if (!deps || deps.length === 0) return spec
@@ -318,18 +325,10 @@ export function collectFiles(
   spec: AppSpec,
   manager: AppManagerService,
   spaceId: string | null,
-): { files: Record<string, string>; missingSkillIds: string[] } {
-  if (spec.type === 'skill') {
-    const skillFiles = (spec as SkillSpec).skill_files ?? {}
-    const files: Record<string, string> = {}
-    for (const [name, content] of Object.entries(skillFiles)) {
-      if (name === 'spec.yaml') continue
-      files[name] = content
-    }
-    return { files, missingSkillIds: [] }
-  }
+): { files: Record<string, string | Buffer>; missingSkillIds: string[] } {
+  if (spec.type === 'skill') return { files: publishSkillFiles(spec), missingSkillIds: [] }
 
-  const files: Record<string, string> = {}
+  const files: Record<string, string | Buffer> = {}
   const missingSkillIds: string[] = []
   const deps = spec.requires?.skills ?? []
   if (deps.length === 0) return { files, missingSkillIds }
@@ -343,21 +342,34 @@ export function collectFiles(
       missingSkillIds.push(id)
       continue
     }
-    const skillFiles = (skillApp.spec as SkillSpec).skill_files ?? {}
-    for (const [name, content] of Object.entries(skillFiles)) {
-      if (name === 'spec.yaml') continue
+    const current = manager.getApp(skillApp.id)
+    if (!current || current.spec.type !== 'skill') {
+      missingSkillIds.push(id)
+      continue
+    }
+    for (const [name, content] of Object.entries(publishSkillFiles(current.spec))) {
       files[`skills/${id}/${name}`] = content
     }
   }
   return { files, missingSkillIds }
 }
 
+function publishSkillFiles(spec: SkillSpec): Record<string, string | Buffer> {
+  const textFiles = { ...(spec.skill_files ?? (spec.skill_content ? { 'SKILL.md': spec.skill_content } : {})) }
+  delete textFiles['spec.yaml']
+  if (spec.skill_assets?.['spec.yaml']) throw new Error('A binary skill resource cannot replace spec.yaml.')
+  const prepared = prepareSkillPackage(textFiles, spec.skill_assets)
+  return Object.fromEntries([...prepared].map(([name, bytes]) => [name, Object.hasOwn(textFiles, name) ? textFiles[name] : bytes]))
+}
+
 type InstalledSkillApp = ReturnType<AppManagerService['listApps']>[number]
 
 function effectiveSkillApps(manager: AppManagerService, spaceId: string | null): InstalledSkillApp[] {
-  return spaceId
-    ? manager.listEffectiveSkillApps(spaceId)
-    : manager.listApps({ spaceId: null, type: 'skill' })
+  const rows = [...manager.listSkillRecords(null), ...(spaceId ? manager.listSkillRecords(spaceId) : [])]
+    .filter(row => row.status === 'active' && !row.userOverrides.skill?.deleted)
+  return rows.filter(row => row.spaceId === spaceId || !rows.some(other => other.spaceId === spaceId
+    && other.spec.type === 'skill' && row.spec.type === 'skill' && other.spec.name === row.spec.name
+    && sameSkillSource(other.spec, row.spec)))
 }
 
 /**
@@ -373,7 +385,10 @@ function classifySkillDep(
   const id = typeof dep === 'string' ? dep : dep.id
   const declaredBundled = typeof dep !== 'string' && dep.bundled === true
   const found = declaredBundled ? null : findStoreEntry(id)
-  const skillApp = installedSkills.find(a => a.specId === id) ?? null
+  const exact = installedSkills.filter(app => app.spec.store?.slug === id)
+  const matches = exact.length ? exact : installedSkills.filter(app => app.spec.name === id)
+  if (!found && matches.length > 1) throw new Error(`Skill dependency "${id}" has multiple installed sources. Specify a unique source slug before publishing.`)
+  const skillApp = matches.length === 1 ? matches[0] : null
   return { id, declaredBundled, resolvable: Boolean(found), skillApp, storeEntry: found?.entry ?? null }
 }
 

@@ -18,9 +18,10 @@ import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
 import { getConfig, saveConfig as saveHaloConfig } from '../foundation/config.service'
 import { getAppManager } from '../apps/manager'
-import { AppAlreadyInstalledError } from '../apps/manager/errors'
+import { sameSkillSource } from '../services/skills'
 import { getAppRuntime } from '../apps/runtime'
-import type { AppSpec, SkillSpec } from '../apps/spec/schema'
+import type { AppSpec, SkillSpec } from '../apps/spec'
+import { validateAppSpec } from '../apps/spec'
 import { resolveInstallSpaceId } from '../../shared/apps/install-scope'
 import type { SpecUpgradeOutcome } from '../../shared/apps/app-types'
 import type {
@@ -592,7 +593,7 @@ export async function installFromStore(
         }
       }
 
-      await installRequiredSkills(specWithStore, targetSpaceId, bundledSkillSpecs)
+      await installRequiredSkills(specWithStore, targetSpaceId, bundledSkillSpecs, specWithStore.type === 'automation' ? appId : undefined)
     } catch (err) {
       // deleteApp() only accepts 'uninstalled' apps, and the app may already
       // be runtime-active — deactivate and soft-delete before hard-deleting.
@@ -629,14 +630,14 @@ export async function installFromStore(
  * Two install paths depending on the `bundled` flag:
  *   - bundled: true  → install directly from the pre-fetched SkillSpec (no store lookup).
  *                      The spec was fetched by the adapter from the package's `skills/` dir.
- *   - bundled: false → install via `installFromStore()`, reusing the full store chain.
+ *   - bundled: false → acquire from its registry through the normal install ledger,
+ *                      then apply the same dependency availability gate.
  *
  * Design decisions:
  *   - Sequential install: avoids DB contention and keeps logs readable.
- *   - Already-installed skills are skipped/re-synced, never an error. Any other
- *     failure is collected and thrown at the end — an app without its declared
- *     skills is broken at runtime, so partial installs must surface to the UI
- *     (callers roll back the parent app).
+ *   - Matching active packages may be reused; conflicts and user-disabled or
+ *     deleted dependencies are reported without overwriting or reactivating them.
+ *     Failures are collected so callers can report an incomplete installation.
  *   - No recursion: `installFromStore()` guards with `type !== 'skill'`, so skills
  *     that themselves declare `requires.skills` won't trigger another round.
  */
@@ -644,12 +645,40 @@ export async function installRequiredSkills(
   spec: AppSpec,
   spaceId: string | null,
   bundledSkillSpecs?: Map<string, SkillSpec>,
+  parentAppId?: string,
 ): Promise<void> {
   const skills = spec.requires?.skills
   if (!skills || skills.length === 0) return
 
   const manager = getAppManager()
   const failures: string[] = []
+
+  async function installDependency(rawSpec: SkillSpec): Promise<string> {
+    if (!manager) throw new Error('App Manager is not available')
+    const dependency = validateAppSpec(rawSpec)
+    if (dependency.type !== 'skill') throw new Error('The declared dependency is not a skill')
+    const existing = manager.listSkillRecords(spaceId).find(row => row.spec.type === 'skill'
+      && row.spec.name === dependency.name && sameSkillSource(row.spec, dependency))
+    if (existing && (existing.status !== 'active' || existing.userOverrides.skill?.deleted)) {
+      throw new Error(`Skill "${dependency.name}" was disabled or deleted; enable or reinstall it explicitly`)
+    }
+    const id = await manager.install(spaceId, dependency, {})
+    const installed = manager.getApp(id)
+    if (!installed || installed.status !== 'active' || !installed.userOverrides.skill || installed.userOverrides.skill.deleted) {
+      throw new Error(`Skill "${dependency.name}" is not available`)
+    }
+    if (parentAppId) {
+      const parent = manager.getApp(parentAppId)
+      if (!parent || parent.spec.type !== 'automation' || parent.spaceId !== spaceId) {
+        throw new Error('The skill dependency owner is not an installed digital human in this workspace')
+      }
+      const owners = installed.userOverrides.skill.owners ?? []
+      manager.updateSkillRecord(id, { skill: { ...installed.userOverrides.skill,
+        owners: [...owners.filter(owner => owner.id !== parent.id), { id: parent.id, name: parent.spec.display_name ?? parent.spec.name }],
+      } })
+    }
+    return id
+  }
 
   for (const dep of skills) {
     const skillId = typeof dep === 'string' ? dep : dep.id
@@ -667,78 +696,38 @@ export async function installRequiredSkills(
         continue
       }
       try {
-        await manager.install(spaceId, bundledSpec, {})
+        await installDependency({ ...bundledSpec, store: {
+          tags: [], ...bundledSpec.store, install_source: 'bundled',
+          slug: bundledSpec.store?.slug ?? skillId,
+          registry_id: bundledSpec.store?.registry_id ?? spec.store?.registry_id
+            ?? (spec.store?.install_source === 'builtin' ? 'halo-builtin' : `bundle:${spec.store?.slug ?? spec.name}`),
+          repository: bundledSpec.store?.repository ?? spec.store?.repository,
+        } })
         console.log(`[RegistryService] Installed bundled skill "${skillId}" for "${spec.name}"`)
       } catch (err) {
-        if (err instanceof AppAlreadyInstalledError) {
-          // Stale/orphaned record from a previous install — find it and re-sync
-          try {
-            const existing = manager.listApps({ spaceId, type: 'skill' })
-              .find(a => a.specId === skillId)
-
-            if (existing) {
-              // Update spec with fresh bundled content (also re-syncs files to disk)
-              manager.updateSpec(existing.id, bundledSpec as unknown as Record<string, unknown>)
-
-              if (existing.status === 'uninstalled') {
-                manager.reinstall(existing.id)
-                console.log(`[RegistryService] Reinstalled stale bundled skill "${skillId}" for "${spec.name}"`)
-              } else {
-                console.log(`[RegistryService] Re-synced bundled skill "${skillId}" for "${spec.name}"`)
-              }
-            } else {
-              console.warn(`[RegistryService] Bundled skill "${skillId}" reported as installed but not found in DB`)
-            }
-          } catch (syncErr) {
-            console.warn(
-              `[RegistryService] Failed to re-sync bundled skill "${skillId}": ${(syncErr as Error).message}`
-            )
-          }
-          continue
-        }
         failures.push(`bundled skill "${skillId}": ${(err as Error).message}`)
       }
       continue
     }
 
-    // Non-bundled skill: install from store by slug
     try {
-      await installFromStore(skillId, spaceId)
-      console.log(`[RegistryService] Auto-installed required skill "${skillId}" for "${spec.name}"`)
+      ensureInitialized()
+      const found = queryService?.findEntry(skillId)
+      if (!found) throw new Error(`Skill not found in store: ${skillId}`)
+      const registry = config.registries.find(source => source.id === found.registryId)
+      if (!registry) throw new Error(`Registry not found: ${found.registryId}`)
+      if (!isBundleFormat(found.entry)) throw new Error('The skill dependency must use bundle format')
+      const fetched = await acquireSpec(registry, found.entry)
+      if (fetched.type !== 'skill') throw new Error('The declared dependency is not a skill')
+      await installDependency(withInstallStoreMetadata(fetched, found.entry.slug, found.registryId) as SkillSpec)
+      console.log(`[RegistryService] Installed required skill "${skillId}" for "${spec.name}"`)
     } catch (err) {
-      if (err instanceof AppAlreadyInstalledError) {
-        // Check if the existing record is uninstalled or needs file re-sync
-        if (manager) {
-          try {
-            const existing = manager.listApps({ spaceId, type: 'skill' })
-              .find(a => a.specId === skillId)
-
-            if (existing) {
-              if (existing.status === 'uninstalled') {
-                // Reinstall the uninstalled skill
-                manager.reinstall(existing.id)
-                console.log(`[RegistryService] Reinstalled uninstalled skill "${skillId}" for "${spec.name}"`)
-              } else {
-                console.log(`[RegistryService] Required skill "${skillId}" already installed and active, skipping`)
-              }
-            } else {
-              console.log(`[RegistryService] Required skill "${skillId}" already installed, skipping`)
-            }
-          } catch (syncErr) {
-            console.warn(
-              `[RegistryService] Failed to check/reinstall skill "${skillId}": ${(syncErr as Error).message}`
-            )
-          }
-        } else {
-          console.log(`[RegistryService] Required skill "${skillId}" already installed, skipping`)
-        }
-        continue
-      }
       failures.push(`required skill "${skillId}": ${(err as Error).message}`)
     }
   }
 
   if (failures.length > 0) {
+    console.warn('[RegistryService] Skill dependencies remain unmet', { parentAppId, failures })
     throw new Error(`Failed to install required skills — ${failures.join('; ')}`)
   }
 }
@@ -923,14 +912,25 @@ export async function applyUpgrade(
 
   // The runtime reschedules the app and notes what was kept on its own: it
   // reacts to every upgradeSpec, whichever path made it.
-  const outcome = manager.upgradeSpec(appId, newSpecWithStore)
+  const replaceCustomizedSkill = mode === 'force' && app.spec.type === 'skill'
+    && app.status !== 'uninstalled' && app.userOverrides.skill?.customized && !app.userOverrides.skill?.deleted
+  let outcome: SpecUpgradeOutcome
+  if (replaceCustomizedSkill) {
+    if (newSpecWithStore.type !== 'skill') {
+      console.warn('[RegistryService] Skill replacement refused a different package type', { appId, type: newSpecWithStore.type })
+      throw new Error('A skill upgrade must contain a skill package')
+    }
+    outcome = manager.replaceSkillFromAuthor(appId, newSpecWithStore)
+  } else {
+    outcome = manager.upgradeSpec(appId, newSpecWithStore)
+  }
 
   console.log(
-    `[RegistryService] applyUpgrade: ${slug} ${fromVersion} -> ${toVersion} ` +
+    `[RegistryService] applyUpgrade: ${slug} ${fromVersion} -> ${outcome.toVersion} ` +
     `(severity=${severity}, mode=${mode}, kept=${outcome.kept.length})`
   )
 
-  return { appId, from: fromVersion, to: toVersion, severity, kept: outcome.kept, editsKnown: outcome.editsKnown }
+  return { appId, from: fromVersion, to: outcome.toVersion, severity, kept: outcome.kept, editsKnown: outcome.editsKnown }
 }
 
 /**

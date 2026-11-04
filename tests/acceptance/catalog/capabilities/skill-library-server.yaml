@@ -1,0 +1,102 @@
+version: 1
+id: capabilities.skill-library-server
+module: capabilities
+title: Keep everyday skill management usable through the real server library
+story: I can retain a new skill draft, manage an uploaded package and move a custom copy through the library without losing its content or changing unrelated skills.
+basis: documented
+references:
+  - tests/acceptance/skills-requirements.md
+  - tests/acceptance/catalog/capabilities/skill-files.yaml
+  - tests/acceptance/catalog/capabilities/skill-library.yaml
+promises:
+  draft: Closing the Visual creation form keeps the name, description and instructions without installing anything. Reopening permits one explicit global installation that can be found by searching its description.
+  toggle: A global card can be disabled and enabled directly, with each choice surviving restart and retaining the instruction file. Cancelling that card's Delete confirmation leaves it and unrelated skills unchanged.
+  zip: A wrapped ZIP uploaded from the browser becomes an independent global copy with nested text and exact binary bytes. Changing the client archive does not update the installed package on refresh.
+  replace: A same-name upload offers an explicit replacement choice rather than overwriting by default. Cancelling preserves the old package; choosing Replace existing replaces the complete package, removes obsolete supporting files and preserves disabled state after restart without modifying the client archive.
+  copy: Save custom copy uses the unsaved instruction draft and copies supporting files under a new command name while keeping the original skill unchanged.
+  move: Card and detail scope menus move the complete disabled custom copy only after confirmation. Dismissing the card menu, cancelling a move or selecting an occupied destination does not mutate either package; successful moves preserve content and disabled state through restart.
+  scopes: All workspaces is an explicit opt-in view. A workspace is queried only when loaded, global skills appear once, and the opened detail retains the selected workspace context.
+scenarios:
+  - id: capabilities.skill-library-server.all-workspaces
+    title: Inspect all workspaces without an implicit all-directory scan
+    verifies: [scopes]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - Seed two isolated workspaces and a local skill through real APIs. Open the normal library, then select All workspaces and inspect outgoing skill queries.
+      - Load only the first workspace and Global. Confirm no query for the second workspace, no repeated global card in the local section and bounded page size. Open the local skill.
+    expected:
+      - Selecting All does not itself load every workspace. Each Load skills requests only its explicit context, and the local detail keeps that workspace and its actual body.
+    notes: Production server-mode main, authenticated HTTP and unchanged renderer in headless Chrome. Wire queries establish no implicit scope requests, not exact disk-call budgets at arbitrary scale. Only two workspaces are exercised.
+  - id: capabilities.skill-library-server.create
+    title: Retain a Visual draft and persist direct global card toggles
+    verifies: [draft, toggle]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - Use the isolated no-window production server fixture, unchanged built renderer and authenticated HTTP in headless Chromium or installed macOS Chrome. No model endpoint is configured or needed.
+      - Preserve the fixture's legacy control rows and supporting files; the new command name is absent from the global inventory and user skill directory.
+    steps:
+      - Navigate from Home through Digital Humans, Capability library and Skills; select Global and open Manual Add Skill.
+      - Fill the Visual name, description and instructions, choose Close and keep draft, and reopen the form before installing once.
+      - Search by the description, disable the result with its card shortcut, restart the same profile and inspect the disabled card and real instruction file.
+      - Enable the card, open its More menu, choose Delete and cancel the confirmation. Restart again, open the skill and read its instructions.
+    expected:
+      - Closing creates neither an import request nor an instruction file, and reopening restores all three draft fields. Installation creates one global personal copy in the user-owned skill directory.
+      - Search includes the created skill and excludes an unrelated control. Ordinary disable and enable finish without a confirmation; both choices survive their subsequent restart with the same instruction content.
+      - Cancelled deletion sends no delete request, preserves the skill and all baseline legacy controls, and never calls system Trash.
+    notes: This is only the remote Global Visual form, description search, ordinary card toggle and Delete-cancel journey at the fixture's 1280 by 900 viewport. It does not establish localized creation, Markdown editing, failed saves, fallback behavior, desktop IPC, narrow-screen accessibility, system Trash success or skill consumption in either chat surface.
+  - id: capabilities.skill-library-server.zip
+    title: Upload and explicitly replace a disabled wrapped ZIP without changing the source
+    verifies: [zip, replace]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - Use the same isolated production server and headless browser boundary without a model. Generate a real client ZIP in the test output directory containing one top-level folder, instructions, nested text, binary bytes and one obsolete supporting file.
+      - Retain an independent expected byte sequence and snapshots of the unrelated legacy skills before any UI operation.
+    steps:
+      - Open Manual Add Skill, switch to Import, read the independent-copy notice, upload through the real file input and install into Global.
+      - Compare the installed package with the source. Change only the client ZIP to a replacement package with revised instructions, text and binary bytes and without the obsolete file; refresh the library and disable the installed card.
+      - Upload the changed ZIP, attempt installation and inspect the same-name conflict. Cancel once, attempt installation again and explicitly choose Replace existing.
+      - Restart, read the disabled card and revised instructions, and compare the installed supporting bytes, source archive and baseline controls.
+    expected:
+      - The initial upload creates one complete independent package and leaves the client archive unchanged. A later client archive change alone does not synchronize into the installed package.
+      - Conflict inspection and cancellation send no replacement request and retain every old package byte. Replace existing is the explicit authorization in the import window, not an assumed second confirmation dialog.
+      - Replacement contains exactly the new instruction, reference and binary files, removes the obsolete supporting file and retains the same disabled copy with no effective entry after restart.
+      - Installed binary bytes match the independently generated bytes; the replacement never modifies the client archive and unrelated legacy controls remain unchanged.
+    notes: Only a wrapped ZIP with nested text and binary resources in Global is exercised. This does not cover Markdown or directory upload, malformed or unsafe archives, failed writes, repeated transport delivery, save-as, self-import, desktop file pickers, script execution safety or model invocation. The fixture preserves traces and logs in test output; screenshots alone are not persistence evidence.
+  - id: capabilities.skill-library-server.move-copy
+    title: Copy an unsaved draft and move the disabled package through both scope menus
+    verifies: [copy, move]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - Use an isolated production server and headless browser with no model. Keep the fixture's recovered global source and unrelated legacy controls unchanged.
+      - Seed two disposable workspaces through the real space API with custom directories inside the fixture profile. Seed a distinct same-name destination control in one workspace through the real skill import API; the other destination is empty.
+    steps:
+      - Open the recovered source, edit its instructions without saving, choose Save custom copy and supply a new global command name. Cancel editing the original and inspect both packages.
+      - Disable the custom card. Open More and Move to workspace, inspect both workspace destinations and Global, then dismiss with Escape. Reopen, choose the empty destination and cancel its move confirmation.
+      - Choose the occupied destination and inspect the real conflict response and visible card error without confirming or sending a move.
+      - Confirm moving the custom copy from Global into the empty workspace through its card menu. Open its detail there and confirm moving it back to Global through Change workspace.
+      - Restart and compare the returned global package, former workspace location, destination control and original source.
+    expected:
+      - The custom copy contains the unsaved body under its new command name, retains unknown valid metadata and all supporting text and binary bytes, and sends no save request for the original.
+      - Menu dismissal, confirmation cancellation and conflict refusal leave the original and both controlled packages unchanged. The empty destination remains empty until the user confirms the move.
+      - Both successful moves carry the complete disabled package, remove its previous location and preserve the original source and occupied destination control. The final global copy remains disabled and byte-identical after restart.
+    notes: Only same-filesystem Global-to-workspace and workspace-to-Global moves are covered, with an explicit same-name preflight conflict and cancellation. The seeded source is a precondition, not proof of creation or migration here. This does not cover workspace-to-workspace moves, links, cross-volume or read-only failures, duplicate consumer contexts, digital-human settings or any complete skill-consumption journey. The visible conflict is asserted as an error without claiming specific localized wording.

@@ -23,8 +23,9 @@ import type { ActivityEntry } from '../runtime'
 import { ConcurrencyLimitError } from '../runtime/errors'
 import { truncateUtf16Safe } from '../runtime/text-truncate'
 import { validateAppSpec } from '../spec'
-import { installFromStore, installRequiredSkills } from '../../store/registry.service'
+import { installRequiredSkills } from '../../store/registry.service'
 import { CREATE_GUIDE_PATH } from '../../services/official-docs-mcp'
+import { createSkillManagementTool } from './skill-tools'
 
 // ============================================
 // Helpers
@@ -566,125 +567,6 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
     }
   )
 
-  // ============================================
-  // Skill Management Tool
-  // ============================================
-
-  const skill_manage = tool(
-    'skill_manage',
-    'Manage skills. Supports install and uninstall actions.\n\n' +
-    'Actions:\n' +
-    '  install: Install a skill from the store (by slug) or from a spec directly\n' +
-    '  uninstall: Remove an installed skill\n\n' +
-    'Parameters:\n' +
-    '  action*: "install" | "uninstall"\n' +
-    '  slug?: string — For install from store, the skill slug (e.g. "code-commit")\n' +
-    '  spec?: string (JSON) — For direct install, the full SkillSpec object. Must include: name, description, version, and either skill_content (single file) or skill_files (multi-file).\n' +
-    '  skill_id?: string — For uninstall, the installed skill ID\n' +
-    '  scope?: "global" | "space" — Install scope. "global" = available in all spaces, "space" = current space only. Default: "space".\n\n' +
-    'Examples:\n' +
-    '  Install from store (current space): { "action": "install", "slug": "code-commit" }\n' +
-    '  Install globally: { "action": "install", "slug": "code-commit", "scope": "global" }\n' +
-    '  Uninstall: { "action": "uninstall", "skill_id": "xxx-xxx-xxx" }',
-    {
-      action: z.enum(['install', 'uninstall']).describe('The action to perform'),
-      slug: z.string().optional().describe('Skill slug for store install (e.g. "code-commit")'),
-      spec: z.string().optional().describe('JSON string of SkillSpec for direct install'),
-      skill_id: z.string().optional().describe('Skill ID for uninstall'),
-      scope: z.enum(['global', 'space']).optional().describe('Install scope: "global" for all spaces, "space" for current space only. Default: "space"')
-    },
-    async (args) => {
-      try {
-        const manager = await waitForAppManager()
-        if (!manager) {
-          return textResult(NOT_READY, true)
-        }
-
-        const targetSpaceId = args.scope === 'global' ? null : spaceId
-
-        if (args.action === 'install') {
-          const scopeLabel = args.scope === 'global' ? 'globally' : 'to current space'
-
-          // Install from store by slug
-          if (args.slug) {
-            try {
-              const appId = await installFromStore(args.slug, targetSpaceId)
-              return textResult(`Skill "${args.slug}" installed ${scopeLabel} from store. ID: ${appId}`)
-            } catch (e) {
-              const msg = (e as Error).message
-              if (msg.includes('not found in store')) {
-                return textResult(`Skill "${args.slug}" not found in store. Check the slug or try installing from spec directly.`, true)
-              }
-              throw e
-            }
-          }
-
-          // Install from spec directly
-          if (args.spec) {
-            let parsedSpec: Record<string, unknown>
-            try {
-              parsedSpec = JSON.parse(args.spec)
-            } catch (e) {
-              return textResult(`Invalid JSON in spec: ${(e as Error).message}`, true)
-            }
-
-            // Force skill type and apply defaults
-            parsedSpec.type = 'skill'
-            if (!parsedSpec.version) parsedSpec.version = '1.0'
-            if (!parsedSpec.author) parsedSpec.author = 'User'
-
-            // Validate using the canonical schema
-            let validatedSpec
-            try {
-              validatedSpec = validateAppSpec(parsedSpec)
-            } catch (e) {
-              return textResult(`Spec validation failed: ${(e as Error).message}`, true)
-            }
-
-            const appId = await manager.install(targetSpaceId, validatedSpec, {})
-            return textResult(`Skill "${validatedSpec.name}" installed ${scopeLabel}. ID: ${appId}`)
-          }
-
-          return textResult(
-            'Install requires either "slug" (for store install) or "spec" (for direct install).\n' +
-            'Example: { "action": "install", "slug": "code-commit" }',
-            true
-          )
-        }
-
-        if (args.action === 'uninstall') {
-          if (!args.skill_id) {
-            return textResult(
-              'Uninstall requires "skill_id".\n' +
-              'Example: { "action": "uninstall", "skill_id": "xxx-xxx-xxx" }',
-              true
-            )
-          }
-
-          const app = manager.getApp(args.skill_id)
-          if (!app) {
-            return textResult(`Skill not found: ${args.skill_id}`, true)
-          }
-
-          if (app.spec.type !== 'skill') {
-            return textResult(
-              `App ${args.skill_id} is not a skill (type: ${app.spec.type}). ` +
-              'Use delete_automation_app for automation apps.',
-              true
-            )
-          }
-
-          await manager.uninstall(args.skill_id, { reason: 'ai' })
-          return textResult(`Skill "${app.spec.name}" (${args.skill_id}) uninstalled successfully.`)
-        }
-
-        return textResult(`Unknown action: ${args.action}`, true)
-      } catch (e) {
-        return textResult(`Error: ${(e as Error).message}`, true)
-      }
-    }
-  )
-
   return [
     list_automation_apps,
     create_automation_app,
@@ -694,7 +576,7 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
     pause_automation_app,
     resume_automation_app,
     trigger_automation_app,
-    skill_manage
+    createSkillManagementTool(spaceId)
   ]
 }
 
@@ -709,8 +591,8 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
  * @param spaceId - The current space ID (captured via closure by all tools)
  * @param guideConsulted - the `halo-docs` session's authoring-guide gate
  */
-export function createHaloAppsMcpServer(spaceId: string, guideConsulted: () => boolean, options?: { omitPersonContext?: boolean }) {
-  const allTools = buildTools(spaceId, guideConsulted)
+export function createHaloAppsMcpServer(spaceId: string, guideConsulted: () => boolean, options?: { omitPersonContext?: boolean; omitSkillManagement?: boolean }) {
+  const allTools = buildTools(spaceId, guideConsulted).filter(tool => !options?.omitSkillManagement || tool.name !== 'skill_manage')
   if (!options?.omitPersonContext) allTools.push(createPersonContextTool({ authority: 'owner' }))
 
   return createSdkMcpServer({

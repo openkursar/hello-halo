@@ -18,7 +18,8 @@
  * `api.appInstall` with `type: 'skill'`.
  */
 
-import { readFileText, readDirectoryEntryToMap, readFileListToMap } from './file-read-utils'
+import { t } from 'i18next'
+import { readFileBytes, readDirectoryEntryToBytes, readFileListToBytes } from './file-read-utils'
 import { isIgnoredPackagePath, unwrapPackageFolder, canonicalizePackageEntry } from './package-paths'
 import { readArchiveEntries, ArchiveTooLarge } from './package-archive'
 
@@ -34,6 +35,69 @@ export interface ParsedSkill {
   description: string
   /** All files keyed by relative path. Single-file skills have only 'SKILL.md'. */
   skillFiles: Record<string, string>
+  skillAssets?: Record<string, { encoding: 'base64'; content: string }>
+}
+
+export const MAX_SKILL_BYTES = 10 * 1024 * 1024
+export const MAX_SKILL_FILES = 2000
+
+class InvalidSkillPackage extends Error {}
+
+function skillReadFilter(): (path: string, size: number) => boolean {
+  let total = 0
+  const seen = new Set<string>()
+  return (path, size) => {
+    if (path.startsWith('/') || path.includes('\\') || /[:\u0000-\u001f]/.test(path)
+      || path.split('/').some(segment => segment === '..' || segment === '.')) {
+      throw new InvalidSkillPackage(t('Skill package contains an unsafe path.'))
+    }
+    if (isIgnoredPackagePath(path)) return false
+    if (!path || path.split('/').some(segment => !segment) || seen.has(path)) {
+      throw new InvalidSkillPackage(t('Skill package contains an invalid or duplicate path.'))
+    }
+    seen.add(path)
+    total += size
+    if (total > MAX_SKILL_BYTES || seen.size > MAX_SKILL_FILES) {
+      throw new InvalidSkillPackage(t('Skill package exceeds the 10 MB or 2000 file limit.'))
+    }
+    return true
+  }
+}
+
+function decodeSkillText(bytes: Uint8Array): string | undefined {
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+    return text.includes('\0') ? undefined : text
+  } catch {
+    return undefined
+  }
+}
+
+function parseSkillBytes(files: Record<string, Uint8Array>, folderName: string): ParsedSkill {
+  const include = skillReadFilter()
+  for (const [path, bytes] of Object.entries(files)) include(path, bytes.byteLength)
+  const entries = canonicalizePackageEntry(unwrapPackageFolder(files), 'SKILL.md')
+  const skillFiles: Record<string, string> = Object.create(null)
+  const skillAssets: NonNullable<ParsedSkill['skillAssets']> = Object.create(null)
+  for (const [path, bytes] of Object.entries(entries)) {
+    const text = decodeSkillText(bytes)
+    if (text !== undefined) {
+      skillFiles[path] = text
+    } else {
+      if (path === 'SKILL.md') throw new InvalidSkillPackage(t('SKILL.md must contain valid UTF-8 text.'))
+      let binary = ''
+      for (let offset = 0; offset < bytes.length; offset += 8192) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192))
+      }
+      skillAssets[path] = { encoding: 'base64', content: btoa(binary) }
+    }
+  }
+  if (!skillFiles['SKILL.md']) throw new InvalidSkillPackage(t('SKILL.md not found. A skill package must contain SKILL.md at its root, or inside a single top-level folder.'))
+  const { name, description } = parseMd(skillFiles['SKILL.md'])
+  return {
+    name: name || toSlug(folderName), description, skillFiles,
+    ...(Object.keys(skillAssets).length ? { skillAssets } : {}),
+  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -93,7 +157,7 @@ export function buildMdFromForm(
  * Returns empty strings for any field that is absent.
  */
 export function parseMd(content: string): { name: string; description: string; bodyContent: string } {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
+  const match = content.replace(/^\uFEFF/, '').match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
   if (!match) return { name: '', description: '', bodyContent: content.trim() }
   const fm = match[1]
   const body = match[2].trim()
@@ -111,13 +175,8 @@ export function parseMd(content: string): { name: string; description: string; b
  * The file is always stored as 'SKILL.md' regardless of its original name.
  */
 export async function processMdFile(file: File): Promise<ParsedSkill> {
-  const content = await readFileText(file)
-  const { name, description } = parseMd(content)
-  return {
-    name: name || toSlug(file.name.replace(/\.md$/i, '')),
-    description: description || '',
-    skillFiles: { 'SKILL.md': content },
-  }
+  skillReadFilter()('SKILL.md', file.size)
+  return parseSkillBytes({ 'SKILL.md': await readFileBytes(file) }, file.name.replace(/\.md$/i, ''))
 }
 
 /**
@@ -127,21 +186,10 @@ export async function processMdFile(file: File): Promise<ParsedSkill> {
  * fallback name for a SKILL.md whose frontmatter carries none.
  */
 export function parseSkillFiles(files: Record<string, string>, folderName: string): ParsedSkill {
-  const skillFiles = canonicalizePackageEntry(unwrapPackageFolder(files), 'SKILL.md')
-
-  if (!skillFiles['SKILL.md']) {
-    throw new Error(
-      'SKILL.md not found. A skill package must contain SKILL.md at its root, ' +
-      'or inside a single top-level folder.'
-    )
-  }
-
-  const { name, description } = parseMd(skillFiles['SKILL.md'])
-  return {
-    name: name || toSlug(folderName),
-    description: description || '',
-    skillFiles,
-  }
+  const encoder = new TextEncoder()
+  const bytes: Record<string, Uint8Array> = Object.create(null)
+  for (const [path, content] of Object.entries(files)) bytes[path] = encoder.encode(content)
+  return parseSkillBytes(bytes, folderName)
 }
 
 /**
@@ -149,37 +197,25 @@ export function parseSkillFiles(files: Record<string, string>, folderName: strin
  * The entry is the folder itself; we strip its name from all paths.
  */
 export async function processDirectoryEntry(entry: FileSystemDirectoryEntry): Promise<ParsedSkill> {
-  return parseSkillFiles(await readDirectoryEntryToMap(entry), entry.name)
+  return parseSkillBytes(await readDirectoryEntryToBytes(entry, { include: skillReadFilter() }), entry.name)
 }
 
 /** Build a ParsedSkill from a FileList produced by `<input webkitdirectory>`. */
 export async function processFileListAsFolder(fileList: FileList): Promise<ParsedSkill> {
-  const { files, folderName } = await readFileListToMap(fileList)
-  return parseSkillFiles(files, folderName)
+  const { files, folderName } = await readFileListToBytes(fileList, { include: skillReadFilter() })
+  return parseSkillBytes(files, folderName)
 }
 
 /** Build a ParsedSkill from a .zip file. */
 export async function processZipFile(file: File): Promise<ParsedSkill> {
   let entries: Record<string, Uint8Array>
   try {
-    entries = await readArchiveEntries(file)
+    entries = await readArchiveEntries(file, skillReadFilter())
   } catch (err) {
-    if (err instanceof ArchiveTooLarge) throw err
-    throw new Error('Could not extract ZIP. Make sure the file is a valid ZIP archive.')
+    if (err instanceof ArchiveTooLarge || err instanceof InvalidSkillPackage) throw err
+    throw new Error(t('Could not extract ZIP. Make sure the file is a valid ZIP archive.'))
   }
 
-  // Ignored entries are skipped here rather than left to parseSkillFiles so
-  // macOS's binary metadata is never decoded.
-  const decoder = new TextDecoder('utf-8')
-  const rawFiles: Record<string, string> = {}
-  for (const [path, bytes] of Object.entries(entries)) {
-    if (isIgnoredPackagePath(path)) continue
-    rawFiles[path] = decoder.decode(bytes)
-  }
-
-  if (Object.keys(rawFiles).length === 0) {
-    throw new Error('ZIP archive is empty.')
-  }
-
-  return parseSkillFiles(rawFiles, file.name.replace(/\.zip$/i, ''))
+  if (Object.keys(entries).length === 0) throw new Error(t('ZIP archive is empty.'))
+  return parseSkillBytes(entries, file.name.replace(/\.zip$/i, ''))
 }

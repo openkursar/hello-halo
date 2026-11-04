@@ -2217,8 +2217,13 @@ Remote, tool-started and scheduled runs keep their pages in the hidden host.
 
 ## Skills on a borrowed turn
 
-An owner allows skills one by one (`CapabilityPolicy.allowedSkills`, folder
-names): a restricted caller gets none until listed; a colleague whose member
+An owner allows skills one by one (`CapabilityPolicy.allowedSkills`, canonical
+command names). Old grants using `toSkillDirName(command)` remain valid aliases,
+such as `Ledger_App` for `Ledger App`; the stored grant itself is never normalized.
+Runtime accepts an alias only when it identifies one distinct available command;
+an exact command grant does not extend to another command sharing its old alias.
+Aliases affect policy matching, not the names the engine accepts for invocation.
+A restricted caller gets none until listed; a colleague whose member
 grants everything — or was never configured — is not restricted at all. The panel offers one switch per skill the digital human can load
 (`skill-discovery`, global + space), next to the tool switches. The skill tool
 itself has no switch: it exists for a caller exactly when some skill does.

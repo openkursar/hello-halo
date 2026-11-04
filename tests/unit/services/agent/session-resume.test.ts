@@ -12,7 +12,8 @@ const { createSession, getActiveEngine, paths } = vi.hoisted(() => ({
 vi.mock('electron', () => ({ app: { getPath: vi.fn(() => paths.userData), getVersion: vi.fn(() => '0.0.0'), getAppPath: vi.fn(() => '/tmp/halo-resume-app'), isPackaged: false } }))
 vi.mock('os', async importOriginal => {
   const actual = await importOriginal<typeof import('os')>()
-  return { ...actual, default: { ...actual, homedir: () => paths.home } }
+  const homedir = () => paths.home || globalThis.__HALO_TEST_DIR__ || '/tmp/halo-resume-config-placeholder'
+  return { ...actual, homedir, default: { ...actual, homedir } }
 })
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ createSession, getActiveEngine }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({ analytics: { track: vi.fn(), trackErrorSurface: vi.fn() } }))
@@ -34,6 +35,7 @@ vi.mock('../../../../src/main/services/health', () => ({ registerProcess: vi.fn(
 
 import { acquireV2Session, getOrCreateV2Session, closeAllV2Sessions, stopSessionCleanup } from '../../../../src/main/services/agent/session-manager'
 import { NativeSessionResumeError } from '../../../../src/shared/types/engine-session'
+import { stopGeneration } from '../../../../src/main/services/agent/control'
 
 const directories: string[] = []
 beforeEach(() => {
@@ -70,6 +72,36 @@ function fixture() {
   }, sessionId, workDir)
   return { configDir, sessionId, transcript, save, resume }
 }
+
+it('cancels catalog preparation when the person stops before a native session exists', async () => {
+  const { registerAppBridge } = await import('../../../../src/main/services/app-bridge')
+  const { prepareSessionSkills } = await import('../../../../src/main/services/agent/skill-availability')
+  registerAppBridge({ getAppManager: () => null, createHaloAppsMcpServer: () => null, onMcpAppsChange: () => () => {} })
+  const native = { close: vi.fn(), query: { transport: { isReady: () => true, onExit: () => () => {} } } }
+  let signal!: AbortSignal
+  let started!: () => void
+  const preparing = new Promise<void>(resolve => { started = resolve })
+  createSession.mockImplementationOnce(async options => {
+    signal = options.abortController.signal
+    started()
+    await prepareSessionSkills({ ...options, workerGroup: 'space' })
+    return native
+  })
+  const conversationId = randomUUID()
+  const pending = getOrCreateV2Session('space', conversationId, { engineId: 'halo', model: 'test', systemPrompt: 'test' })
+  const stopped = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  await preparing
+  await stopGeneration(conversationId, { reason: 'user' })
+  await stopped
+  expect(signal.aborted).toBe(true)
+  expect(native.close).not.toHaveBeenCalled()
+
+  const next = await getOrCreateV2Session('space', conversationId, { engineId: 'halo', model: 'test', systemPrompt: 'test' })
+  expect(next).toBeDefined()
+  const nextSignal = createSession.mock.calls.at(-1)![0].abortController.signal
+  await stopGeneration(conversationId, { reason: 'user' })
+  expect(nextSignal.aborted).toBe(false)
+})
 
 it.each(['halo', 'anthropic'])('resumes %s history from the session config directory', async engine => {
   getActiveEngine.mockReturnValue(engine)

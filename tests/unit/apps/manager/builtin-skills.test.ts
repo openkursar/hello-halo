@@ -8,7 +8,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdirSync, writeFileSync } from 'fs'
+import { mkdirSync, writeFileSync, rmSync } from 'fs'
+import { createHash } from 'node:crypto'
+const { definitions } = vi.hoisted(() => ({ definitions: vi.fn(() => [] as Array<{ name: string; description: string; argumentHint?: string; instructions: string }>) }))
+vi.mock('@hello-halo/agent-sdk/worker', () => ({ getBuiltinSkillDefinitions: definitions }))
 import { join } from 'path'
 import { seedBuiltinSkills } from '../../../../src/main/apps/manager/builtin-skills'
 import type { AppManagerService, InstalledApp, AppStatus } from '../../../../src/main/apps/manager/types'
@@ -35,6 +38,7 @@ function writeSkill(id: string, version: string, extraFiles: Record<string, stri
 interface StubRow {
   id: string
   status: AppStatus
+  userOverrides?: InstalledApp['userOverrides']
   spec: {
     type: string
     version: string
@@ -55,7 +59,7 @@ function createStubManager(rows: StubRow[]) {
     })
     return { id: `row-${spec.name}` } as unknown as InstalledApp
   })
-  const updateSpec = vi.fn()
+  const upgradeSpec = vi.fn((_id: string, next: AppSpec) => ({ fromVersion: '1.0.0', toVersion: next.version, kept: [], editsKnown: true }))
   const uninstall = vi.fn(async () => undefined)
   const deleteApp = vi.fn(async (id: string) => {
     const idx = rows.findIndex(r => r.id === id)
@@ -63,18 +67,72 @@ function createStubManager(rows: StubRow[]) {
   })
 
   const manager = {
-    listApps: () => rows as unknown as InstalledApp[],
+    listSkillRecords: () => rows.map(row => ({ ...row, userOverrides: row.userOverrides ?? { skill: { version: 1, filePath: '/fixture/SKILL.md' } } })) as unknown as InstalledApp[],
     install,
-    updateSpec,
+    upgradeSpec,
     uninstall,
     deleteApp,
   } as unknown as AppManagerService
 
-  return { manager, install, updateSpec, uninstall, deleteApp, rows }
+  return { manager, install, upgradeSpec, uninstall, deleteApp, rows }
 }
 
 beforeEach(() => {
+  definitions.mockReturnValue([])
   mkdirSync(skillsRoot(), { recursive: true })
+})
+
+const sdkDefinitions = [
+  { name: 'commit', description: 'Commit workflow', argumentHint: '<scope>', instructions: 'Inspect changes. $ARGUMENTS' },
+  { name: 'pull-request', description: 'Pull request workflow', instructions: 'Prepare a request. $ARGUMENTS' },
+]
+const sdkVersion = (definition: typeof sdkDefinitions[number]) => createHash('sha256').update(JSON.stringify(definition)).digest('hex').slice(0, 16)
+
+describe('SDK builtin inventory seeding', () => {
+  it('installs two discoverable records before the resources-root check with stable slugs and content hashes', async () => {
+    rmSync(skillsRoot(), { recursive: true })
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(globalThis.__HALO_TEST_DIR__)
+    definitions.mockReturnValue(sdkDefinitions)
+    const { manager, install, rows } = createStubManager([])
+    await seedBuiltinSkills(manager)
+    expect(install).toHaveBeenCalledTimes(2)
+    for (const [index, definition] of sdkDefinitions.entries()) {
+      const [scope, spec] = install.mock.calls[index]
+      expect(scope).toBeNull()
+      expect(spec).toMatchObject({ name: definition.name, version: sdkVersion(definition), store: { slug: `halo-builtin-skills/sdk-${definition.name}` } })
+      expect((spec as SkillSpec).skill_content).toContain(definition.instructions)
+      expect(rows[index].spec.store?.slug).toBe(`halo-builtin-skills/sdk-${definition.name}`)
+    }
+    await seedBuiltinSkills(manager)
+    expect(install).toHaveBeenCalledTimes(2)
+    expect(rows).toHaveLength(2)
+    cwd.mockRestore()
+  })
+
+  it('refreshes a changed definition through upgradeSpec without resuming a paused record', async () => {
+    definitions.mockReturnValue(sdkDefinitions)
+    const rows: StubRow[] = sdkDefinitions.map(definition => ({ id: definition.name, status: 'paused', spec: { type: 'skill', version: sdkVersion(definition), store: { slug: `halo-builtin-skills/sdk-${definition.name}` } } }))
+    const { manager, install, upgradeSpec } = createStubManager(rows)
+    definitions.mockReturnValue([{ ...sdkDefinitions[0], instructions: 'Updated workflow' }, sdkDefinitions[1]])
+    await seedBuiltinSkills(manager)
+    expect(install).not.toHaveBeenCalled()
+    expect(upgradeSpec).toHaveBeenCalledTimes(1)
+    expect(upgradeSpec.mock.calls[0][0]).toBe('commit')
+    expect(upgradeSpec.mock.calls[0][1].version).not.toBe(sdkVersion(sdkDefinitions[0]))
+    expect(rows.every(row => row.status === 'paused')).toBe(true)
+  })
+
+  it.each(['uninstalled', 'deleted', 'customized'] as const)('preserves %s records even when the bundled definition changes', async condition => {
+    definitions.mockReturnValue(sdkDefinitions)
+    const rows: StubRow[] = sdkDefinitions.map(definition => ({ id: definition.name, status: condition === 'uninstalled' ? 'uninstalled' : 'paused',
+      userOverrides: { skill: { version: 1, filePath: '/fixture/SKILL.md', ...(condition === 'uninstalled' ? {} : { [condition]: true }) } },
+      spec: { type: 'skill', version: 'old', store: { slug: `halo-builtin-skills/sdk-${definition.name}` } } }))
+    const { manager, install, upgradeSpec } = createStubManager(rows)
+    await seedBuiltinSkills(manager)
+    expect(install).not.toHaveBeenCalled()
+    expect(upgradeSpec).not.toHaveBeenCalled()
+    expect(rows.every(row => row.spec.version === 'old')).toBe(true)
+  })
 })
 
 describe('seedBuiltinSkills', () => {
@@ -104,17 +162,18 @@ describe('seedBuiltinSkills', () => {
     await seedBuiltinSkills(first.manager)
     expect(first.install).toHaveBeenCalledTimes(1)
 
-    const listApps = vi.fn(() => [])
+    const listSkillRecords = vi.fn(() => [])
     const second = createStubManager([])
-    await seedBuiltinSkills({ ...second.manager, listApps } as unknown as AppManagerService)
-    expect(listApps).not.toHaveBeenCalled()
+    await seedBuiltinSkills({ ...second.manager, listSkillRecords } as unknown as AppManagerService)
+    expect(listSkillRecords).toHaveBeenCalledTimes(1)
+    expect(listSkillRecords).toHaveBeenCalledWith(null)
     expect(second.install).not.toHaveBeenCalled()
   })
 
-  it('refreshes via updateSpec only on version drift', async () => {
+  it('refreshes via upgradeSpec only on version drift', async () => {
     writeSkill('drift', '2.0.0')
     writeSkill('stable', '1.0.0')
-    const { manager, install, updateSpec } = createStubManager([
+    const { manager, install, upgradeSpec } = createStubManager([
       {
         id: 'row-drift',
         status: 'active',
@@ -130,16 +189,14 @@ describe('seedBuiltinSkills', () => {
     await seedBuiltinSkills(manager)
 
     expect(install).not.toHaveBeenCalled()
-    expect(updateSpec).toHaveBeenCalledTimes(1)
-    expect(updateSpec.mock.calls[0][0]).toBe('row-drift')
-    expect((updateSpec.mock.calls[0][1] as { version: string }).version).toBe('2.0.0')
+    expect(upgradeSpec).toHaveBeenCalledTimes(1)
+    expect(upgradeSpec.mock.calls[0][0]).toBe('row-drift')
+    expect((upgradeSpec.mock.calls[0][1] as { version: string }).version).toBe('2.0.0')
   })
 
-  // syncSkillToFilesystem refuses to write a paused record, so refreshing the
-  // spec here can't accidentally re-enable the skill.
   it('refreshes the spec of a paused row without resuming it', async () => {
     writeSkill('dormant', '2.0.0')
-    const { manager, install, updateSpec, uninstall } = createStubManager([
+    const { manager, install, upgradeSpec, uninstall } = createStubManager([
       {
         id: 'row-dormant',
         status: 'paused',
@@ -151,13 +208,13 @@ describe('seedBuiltinSkills', () => {
 
     expect(install).not.toHaveBeenCalled()
     expect(uninstall).not.toHaveBeenCalled()
-    expect(updateSpec).toHaveBeenCalledTimes(1)
-    expect(updateSpec.mock.calls[0][0]).toBe('row-dormant')
+    expect(upgradeSpec).toHaveBeenCalledTimes(1)
+    expect(upgradeSpec.mock.calls[0][0]).toBe('row-dormant')
   })
 
   it('respects user uninstalls: never reinstalls or refreshes uninstalled rows', async () => {
     writeSkill('removed', '3.0.0')
-    const { manager, install, updateSpec } = createStubManager([
+    const { manager, install, upgradeSpec } = createStubManager([
       {
         id: 'row-removed',
         status: 'uninstalled',
@@ -168,10 +225,10 @@ describe('seedBuiltinSkills', () => {
     await seedBuiltinSkills(manager)
 
     expect(install).not.toHaveBeenCalled()
-    expect(updateSpec).not.toHaveBeenCalled()
+    expect(upgradeSpec).not.toHaveBeenCalled()
   })
 
-  it('GCs seeded rows whose directory no longer ships, leaving other skills alone', async () => {
+  it('keeps installed packages and tombstones when their directory no longer ships', async () => {
     writeSkill('kept', '1.0.0')
     const { manager, uninstall, deleteApp } = createStubManager([
       {
@@ -193,9 +250,8 @@ describe('seedBuiltinSkills', () => {
 
     await seedBuiltinSkills(manager)
 
-    expect(uninstall).toHaveBeenCalledWith('row-stale', { reason: 'system' })
-    expect(deleteApp).toHaveBeenCalledWith('row-stale')
-    expect(deleteApp).toHaveBeenCalledTimes(1)
+    expect(uninstall).not.toHaveBeenCalled()
+    expect(deleteApp).not.toHaveBeenCalled()
   })
 
   it('skips GC entirely when the scan finds zero skills', async () => {
@@ -212,6 +268,18 @@ describe('seedBuiltinSkills', () => {
 
     expect(uninstall).not.toHaveBeenCalled()
     expect(deleteApp).not.toHaveBeenCalled()
+  })
+
+  it.each(['customized', 'deleted', 'unmigrated'])('does not refresh a %s skill', async condition => {
+    writeSkill('kept', '2.0.0')
+    const userOverrides = condition === 'unmigrated' ? {} : { skill: { version: 1 as const, filePath: '/fixture/SKILL.md', [condition]: true } }
+    const { manager, install, upgradeSpec } = createStubManager([{
+      id: 'kept', status: 'active', userOverrides,
+      spec: { type: 'skill', version: '1.0.0', store: { slug: 'halo-builtin-skills/kept' } },
+    }])
+    await seedBuiltinSkills(manager)
+    expect(install).not.toHaveBeenCalled()
+    expect(upgradeSpec).not.toHaveBeenCalled()
   })
 
   it('skips directories without SKILL.md and isolates per-skill failures', async () => {

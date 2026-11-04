@@ -412,6 +412,23 @@ export class AppManagerStore {
     return apps
   }
 
+  listSkillRecords(spaceId: string | null): InstalledApp[] {
+    const columns = APP_COLUMNS.replace('spec_json',
+      "json_remove(spec_json, '$.skill_files', '$.skill_assets', '$.skill_content') AS spec_json")
+    const rows = this.db.prepare(`SELECT ${columns} FROM installed_apps
+      WHERE space_id IS ? AND json_extract(spec_json, '$.type') = 'skill'
+      ORDER BY installed_at DESC, id ASC`).all(spaceId) as AppRow[]
+    return rows.map(rowToInstalledApp)
+  }
+
+  /** Commit the file operation's metadata without exposing a partly updated record. */
+  updateSkillRecord(app: InstalledApp): void {
+    this.db.prepare(`UPDATE installed_apps SET spec_json = ?, spec_id = ?,
+      user_overrides_json = ?, space_id = ?, status = ?, uninstalled_at = ? WHERE id = ?`)
+      .run(JSON.stringify(app.spec), app.specId, JSON.stringify(app.userOverrides),
+        app.spaceId, app.status, app.status === 'uninstalled' ? (app.uninstalledAt ?? Date.now()) : null, app.id)
+  }
+
   // ── Update ─────────────────────────────────────
 
   /**
@@ -577,6 +594,7 @@ export class AppManagerStore {
     const stmt = this.db.prepare(`
       DELETE FROM installed_apps
       WHERE status = 'uninstalled' AND uninstalled_at IS NOT NULL AND uninstalled_at < ?
+        AND json_extract(spec_json, '$.type') != 'skill'
     `)
     const result = stmt.run(cutoff)
     return result.changes

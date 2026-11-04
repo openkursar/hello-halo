@@ -106,6 +106,8 @@ export interface InstalledApp {
      * the card lists. No session is given them, whoever it runs for.
      */
     disabledTools?: string[]
+    /** Internal skill installation metadata, not a user-editable override. */
+    skill?: import('../types/skills').SkillInstallationState
   }
 
   /** Permission grants and denials */

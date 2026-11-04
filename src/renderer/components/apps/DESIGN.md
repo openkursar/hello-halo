@@ -24,9 +24,25 @@ stops one by its key, the form the remote transport accepts for it, and offers n
 clear: its context belongs to the backend calling it.
 
 Capability surfaces are two-level: a wall is the first level and one card opens a
-full-width detail behind a back link. The walls carry the scope and install-source
-filters; the disk-scanned "unmanaged" group stays unfiltered by design, since
-those skills have no install record to filter on. The settings tab groups its
+detail behind a back link, with the existing searchable, resizable/foldable
+`DetailSwitcher` beside it on desktop. Skill rows use the same scoped inventory
+as the wall; opening a detail never scans every workspace for the switcher.
+The switcher's explicit paging and search keep large libraries bounded. Skills use the shared `skills` inventory,
+not installed-app records: one selected workspace plus global files, paged and
+searched together. `useSkillInventory` discards obsolete responses without polling
+or scanning other workspaces. Cards retain the existing scope badge, quick enable
+control, resource menu and version/update row, grouped by source. One command may
+have several file sources, but paths, copy counts and engine compatibility tables
+are not everyday library content. Details retain the author/version/scope header,
+Use action and rendered instruction/editor hierarchy. Alternate sources appear
+only under Other versions. `useSkillActions` owns the shared card/detail mutations
+and their concise scope/fallback/Trash confirmations; saves carry the read revision.
+Backend diagnostics stay in logs, while an affected skill offers a localized,
+actionable error rather than exposing filesystem exceptions. Legacy removed
+content has a recovery entry only when present. Digital-human settings retain
+inline instruction previews and load content only after expansion. Copies between
+workspaces are independent, not a per-person binding.
+The settings tab groups its
 sections behind `AppSettingsNav`, whose entries double as a status board (dirty
 edits, empty required config, trigger interval) — a group id is the anchor a deep
 link (`openAppConfigAt`) scrolls to. `RunsSummaryBand` at the top of

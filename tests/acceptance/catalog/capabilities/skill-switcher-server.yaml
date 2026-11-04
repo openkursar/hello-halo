@@ -1,0 +1,60 @@
+version: 1
+id: capabilities.skill-switcher-server
+module: capabilities
+title: Switch between skills without leaving their detail pages
+story: I can use the familiar skill sidebar to find another skill, open it directly and retain my preferred sidebar width while keeping narrow screens readable.
+basis: documented
+references:
+  - src/renderer/components/apps/DESIGN.md
+  - tests/acceptance/catalog/capabilities/skill-library.yaml
+promises:
+  navigation: At desktop widths, skill details retain the searchable sibling sidebar instead of requiring a return to the library. Switching selects the intended command and its applicable copy in the same selected workspace plus global scope, without showing filesystem paths or browse-level tabs above the detail.
+  presentation: The sidebar retains its collapsed icon strip, descriptive hover card, drag-to-resize edge and persisted width and folded preference. Below the existing md breakpoint it is hidden and the detail and back action remain usable without horizontal page overflow.
+  search: Backend search includes descriptions and skills beyond the visible page. Search stays available with a short or empty result, and Previous and Next load bounded pages only on request without scanning other workspaces. Filtering a selected row does not close its detail.
+  saved: After explicitly saving a skill and switching away and back, its saved instructions remain readable and belong only to that skill. Another skill does not show the previous skill's instructions.
+scenarios:
+  - id: capabilities.skill-switcher-server.navigate
+    title: Search siblings, save before switching and retain the familiar sidebar layout
+    verifies: [navigation, presentation, search, saved]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - Use the isolated no-window production server fixture and its unchanged built renderer in headless Chromium or installed macOS Chrome. No model endpoint is configured or needed.
+      - Import four disposable Global skills through the real API in addition to the fixture's baseline library, ensuring at least eight active or disabled entries. Keep a unique search description and distinct instruction bodies; reload before navigating through the library.
+    steps:
+      - Open a skill from the Global library at 1280 by 900, inspect its sibling navigation, search by another skill's description and switch directly without returning to the library.
+      - Explicitly edit and confirm saving the second skill, switch away and back, and compare the real saved instruction file and the unchanged first skill.
+      - Collapse the sidebar, inspect a named icon's hover card, open that skill from its icon, expand and drag the existing right edge to a different width.
+      - Reload and reopen to check width persistence, collapse again, reload and reopen to check folded persistence, then expand to recover the saved width.
+      - Reduce the viewport to 767, 375 and 320 pixels and inspect the detail, Edit and back action; restore the desktop viewport.
+    expected:
+      - Detail has the existing sidebar but not browse-level tabs or a library workspace selector. Description search is performed through the real skill list request, retains its search input with one result and does not close the currently open skill when its row is filtered out.
+      - One sibling click opens that skill and displays its own instructions. Save happens once only after confirmation; the saved bytes and subsequent displayed body match, while the first skill remains unchanged.
+      - Collapsed icons still select siblings and their hover card contains the name and description. Width is committed after dragging and survives reload; the folded preference also survives reload and expansion restores that width.
+      - The sidebar is hidden below md without horizontal page overflow; the selected skill's heading, instructions, Edit and back action stay visible. Restoring desktop width shows the sidebar again.
+    notes: This is the remote Global, dark-theme, saved-before-switching journey only. It does not establish unsaved-draft preservation or a new leave-confirmation policy, desktop IPC, light theme, all workspace combinations or skill invocation. Existing unit checks exercise stale query rejection and the page's keyed detail identity; this browser case does not delay or replace application handlers to simulate an out-of-order detail response.
+  - id: capabilities.skill-switcher-server.pages
+    title: Navigate explicit sibling pages and search outside the currently visible page
+    verifies: [navigation, search]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - Use the same isolated production server and headless browser boundary without a model or application-handler replacement.
+      - Import 55 disposable Global skills through the real skill API and reload. Read the real first and second inventory pages to identify a sibling absent from the first page.
+    steps:
+      - Open a first-page skill, use Next to reveal the second-page sibling and select it directly.
+      - Use Previous without closing that selected detail, then search for its command while its row is outside the current page.
+      - Inspect the actual list requests and the one-result sidebar, including search and paging controls.
+    expected:
+      - Next and Previous each request the intended 50-row page, stay within Global and preserve the selected detail while browsing rows. Previous is disabled on the first page and Next on the last.
+      - Searching resets the offset to zero and reaches the off-page command through the backend, not a filter over the visible rows. The search box remains visible with one result and unnecessary paging controls disappear.
+      - No observed skill list request exceeds 100 rows or switches to an unrelated workspace, and the selected skill's instructions belong to that command.
+    notes: This verifies a two-page Global library and command search. It does not measure filesystem scan counts, startup latency, very large libraries, every source collision or workspace selection; those obligations remain in the broader skill-library catalog rather than being claimed by this narrow server journey.

@@ -17,7 +17,8 @@ Transport (src/main/ipc, src/main/http, src/preload)
 
 Apps Layer (src/main/apps)
   - spec            : App YAML parse + validate
-  - manager         : install/config/status persistence + skill-sync
+  - manager         : install/config/status persistence + skill lifecycle
+  - skills          : scoped skill inventory, effective copies, file-oriented management and legacy migration
   - runtime         : activation/execution/activity/escalation
                       + im-channels/ (IM provider plugins)
                       + sources/ (file-watcher, schedule-bridge, webhook event sources)
@@ -29,7 +30,8 @@ Apps Layer (src/main/apps)
 Services Layer (src/main/services)
   - domain services: agent, ai-browser, ai-sources, space, conversation,
     artifact, analytics, remote, git, etc.
-  - app-bridge.ts   : DI seam so services reach Apps data without importing up
+  - skills         : bounded file discovery, canonical identities, per-file preferences and safe package operations
+  - app-bridge.ts   : DI seam so services reach Apps data and the effective skill catalog without importing up
   - memory-consolidation: background agent that reorganises an oversized memory
                     (digital human or space) into topics; space turns reach it
                     via the onAgentEvent turn-end signal, never from services/agent

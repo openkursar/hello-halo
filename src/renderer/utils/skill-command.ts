@@ -8,3 +8,12 @@
 export function deriveSkillCommand(name: string): string {
   return `/${name.toLowerCase().replace(/\s+/g, '-')}`
 }
+
+export function prefillSkillCommand(draft: string, text: string, commands: ReadonlyArray<{ command: string }>): string {
+  const command = text.trim()
+  const prefix = draft.match(/^(\s*)(\/[^\s/\\]+)(?=\s|$)/)
+  if (!/^\/[^\s/\\]+$/.test(command) || !prefix) return `${text}${draft}`
+  if (prefix[2] === command) return draft
+  if (!commands.some(item => item.command === prefix[2])) return `${text}${draft}`
+  return `${prefix[1]}${command}${draft.slice(prefix[0].length)}`
+}

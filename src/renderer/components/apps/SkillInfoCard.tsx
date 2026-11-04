@@ -1,550 +1,224 @@
-/**
- * SkillInfoCard
- *
- * Right-panel detail view for a Skill-type app. Provides:
- *  - Scope badge (Global / space-scoped) with interactive space selector
- *  - Enable/disable toggle
- *  - Trigger command reference
- *  - Description (plain text)
- *  - SKILL.md viewer (MarkdownRenderer) + inline editor (CodeMirror markdown)
- *  - Open skill folder in OS file manager
- *  - Uninstall action
- *
- * Enable/Disable maps to app:pause / app:resume — disabled skills are excluded
- * from conversation context injection.
- *
- * Space selector: clicking the scope badge opens a dropdown to move the skill
- * to a different space (or to global scope) without uninstalling and reinstalling.
- */
-
-import { useState, useCallback, useRef, useEffect } from 'react'
-import {
-  Terminal,
-  Unplug,
-  Loader2,
-  FolderOpen,
-  Globe,
-  Pencil,
-  X,
-  Check,
-  ChevronDown,
-  AlertCircle,
-  Share2,
-  Power,
-  PowerOff,
-} from 'lucide-react'
-import { useAppsStore } from '../../stores/apps.store'
-import { useAppsPageStore } from '../../stores/apps-page.store'
-import { useSpaceStore } from '../../stores/space.store'
-import { useStoreUpdateFlow } from '../store/useStoreUpdateFlow'
-import { findEntryUpdate } from '../../utils/store-install-state'
-import { openSkillInComposer } from '../../utils/conversation-navigation'
-import { AppStatusDot } from './AppStatusDot'
+import { useEffect, useRef, useState } from 'react'
+import { Check, ChevronDown, FolderOpen, Globe, Loader2, MoreHorizontal, Pencil, Power, PowerOff, RefreshCw, Share2, Terminal, Trash2, X } from 'lucide-react'
+import { api } from '../../api'
+import { isElectron } from '../../api/transport'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
-import { resolveSpecI18n } from '../../utils/spec-i18n'
-import { getSkillMdContent } from '../../../shared/skill-frontmatter'
-import { buildSkillContentPatch } from '../../utils/skill-content'
+import { useSpaceStore } from '../../stores/space.store'
+import { useAppsPageStore } from '../../stores/apps-page.store'
+import { useStoreUpdateFlow } from '../store/useStoreUpdateFlow'
+import { useChatStore } from '../../stores/chat.store'
+import { useConfirmDialog } from '../../hooks/useConfirmDialog'
+import { useSkillActions } from '../../hooks/useSkillActions'
+import { navigateToConversation, openSkillInComposer } from '../../utils/conversation-navigation'
+import { skillDisplay, skillErrorMessage, skillSourceLabel, skillInstructions } from '../../utils/skill-presentation'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import { CodeMirrorEditor } from '../canvas/viewers/CodeMirrorEditor'
-import { api } from '../../api'
 import { SkillCopyDialog } from './SkillCopyDialog'
-import { CapabilityImpact, CapabilityChangeDialog } from './CapabilityImpact'
 import { ShareCurrentAppDialog } from '../store/ShareCurrentAppDialog'
-import type { AppStatus } from '../../../shared/apps/app-types'
-import type { SkillSpec } from '../../../shared/apps/spec-types'
-
-// ============================================
-// Props
-// ============================================
+import type { SkillDetail, SkillGroup, SkillRef } from '../../../shared/types/skills'
+import type { EngineAvailabilityReport } from '../../types'
 
 interface SkillInfoCardProps {
-  appId: string
-  /** Display name for the scope: resolved space name, or the translated "Global" string */
+  appId?: string
+  skillRef?: SkillRef
+  group?: SkillGroup
   spaceName?: string
-  /** Offer "Use" (opens a space's composer); off where leaving the current screen is out of place. */
   showUse?: boolean
-  /** Keep the header pinned while the page scrolls; off inside a dialog that pins its own title. */
   stickyHeader?: boolean
+  onChanged?: () => void
+  onDeleted?: () => void
 }
 
-// ============================================
-// Helpers
-// ============================================
-
-function statusLabel(status: AppStatus, t: (s: string) => string): string {
-  switch (status) {
-    case 'active':  return t('Enabled')
-    case 'paused':  return t('Disabled')
-    case 'error':   return t('Error')
-    default:        return String(status)
-  }
-}
-
-// ============================================
-// Component
-// ============================================
-
-export function SkillInfoCard({ appId, spaceName, showUse = true, stickyHeader = true }: SkillInfoCardProps) {
+export function SkillInfoCard({ appId, skillRef, group, showUse = true, stickyHeader = true, onChanged, onDeleted }: SkillInfoCardProps) {
   const { t } = useTranslation()
-  const { apps, pauseApp, resumeApp, uninstallApp, updateAppSpec, moveAppToSpace } = useAppsStore()
-  const spaces    = useSpaceStore(s => s.spaces)
-  const haloSpace = useSpaceStore(s => s.haloSpace)
-  const app = apps.find(a => a.id === appId)
-  const update = useAppsPageStore(s => findEntryUpdate(app ?? null, s.availableUpdates))
-  const updateFlow = useStoreUpdateFlow(update?.entry, update)
-  const [pendingChange, setPendingChange] = useState<{ title: string; apply: () => Promise<void> } | null>(null)
+  const currentSpace = useSpaceStore(state => state.currentSpace)
+  const haloSpace = useSpaceStore(state => state.haloSpace)
+  const spaces = useSpaceStore(state => state.spaces)
+  const contextId = skillRef ? skillRef.spaceId : currentSpace?.id ?? haloSpace?.id ?? null
+  const initialId = skillRef?.id ?? `app:${appId}`
+  const [selectedId, setSelectedId] = useState(initialId)
+  const [detail, setDetail] = useState<SkillDetail | null>(null)
+  const [freshGroup, setFreshGroup] = useState<SkillGroup | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const operation = useRef(false)
+  const identity = `${contextId}:${initialId}:${selectedId}`
+  const activeIdentity = useRef(identity)
+  activeIdentity.current = identity
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  const [revision, setRevision] = useState(0)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [editRevision, setEditRevision] = useState('')
+  const [copying, setCopying] = useState(false)
+  const [sharing, setSharing] = useState(false)
+  const [menu, setMenu] = useState<'scope' | 'more' | null>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const headerSentinel = useRef<HTMLDivElement>(null)
+  const [pinned, setPinned] = useState(false)
+  const { showConfirm, DialogComponent } = useConfirmDialog()
+  const allSpaces = [...(haloSpace ? [haloSpace] : []), ...spaces.filter(space => space.id !== haloSpace?.id)]
+  const scopeName = (id: string | null) => id === null ? t('Global (all spaces)') : allSpaces.find(space => space.id === id)?.name ?? t('Workspace')
+  const copy = detail?.copy
+  const ref: SkillRef = { spaceId: contextId, id: copy?.id ?? selectedId }
+  const refresh = () => { setRevision(value => value + 1); onChanged?.() }
+  const actions = useSkillActions(ref, refresh, onDeleted)
+  const disabled = busy || actions.busy || loading
+  const update = useAppsPageStore(state => state.availableUpdates.find(item => item.appId === copy?.appId))
+  const updateFlow = useStoreUpdateFlow(update?.entry, update, undefined, refresh)
 
-  const [toggling, setToggling]         = useState(false)
-  const [toggleError, setToggleError]   = useState<string | null>(null)
-  const [isEditing, setIsEditing]       = useState(false)
-  const [draftContent, setDraft]        = useState('')
-  const [saving, setSaving]             = useState(false)
-  const [saveError, setSaveError]       = useState<string | null>(null)
-  const [moving, setMoving]             = useState(false)
-  const [moveError, setMoveError]       = useState<string | null>(null)
-  const [dropdownOpen, setDropdownOpen] = useState(false)
-  const [showShareDialog, setShowShareDialog] = useState(false)
-  const [showCopy, setShowCopy] = useState(false)
-  const dropdownRef                     = useRef<HTMLDivElement>(null)
-  // The header's divider shows only once it is pinned, i.e. once this marker above it has scrolled away.
-  const headerSentinelRef               = useRef<HTMLDivElement>(null)
-  const [headerPinned, setHeaderPinned] = useState(false)
+  async function readGroup(spaceId: string | null, name: string) {
+    const result = await api.skillsList({ spaceId, q: name, limit: 100 })
+    if (!result.success || !result.data) throw new Error(result.error)
+    return result.data.groups.find(item => item.name === name.toLowerCase()) ?? null
+  }
+
+  useEffect(() => { setSelectedId(initialId); setDetail(null); setEditing(false); setDraft(''); setMenu(null) }, [initialId, contextId])
   useEffect(() => {
-    const sentinel = headerSentinelRef.current
-    if (!stickyHeader || !sentinel) return
-    const observer = new IntersectionObserver(([entry]) => setHeaderPinned(!entry.isIntersecting))
-    observer.observe(sentinel)
+    let cancelled = false
+    setLoading(true); setError(null); setFreshGroup(null)
+    api.skillsRead({ spaceId: contextId, id: selectedId }).then(async result => {
+      if (cancelled) return
+      if (!result.success || !result.data) throw new Error(result.error)
+      setDetail(result.data)
+      const latest = await readGroup(contextId, result.data.copy.name)
+      if (!cancelled) setFreshGroup(latest)
+    }).catch(failure => {
+      if (cancelled) return
+      console.warn('[SkillInfoCard] Skill read failed', { id: selectedId, reason: failure instanceof Error ? failure.message : String(failure) })
+      setError(skillErrorMessage(failure, t('Could not open this skill. Please try again.'), t))
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [selectedId, contextId, revision, t])
+  useEffect(() => {
+    if (!menu) return
+    function close(event: MouseEvent) { if (!menuRef.current?.contains(event.target as Node)) setMenu(null) }
+    function escape(event: KeyboardEvent) { if (event.key === 'Escape') { event.stopPropagation(); setMenu(null) } }
+    document.addEventListener('mousedown', close); document.addEventListener('keydown', escape)
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape) }
+  }, [menu])
+  useEffect(() => {
+    if (!stickyHeader || !headerSentinel.current || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(([entry]) => setPinned(!entry.isIntersecting))
+    observer.observe(headerSentinel.current)
     return () => observer.disconnect()
-  }, [stickyHeader, app?.id])
+  }, [stickyHeader, selectedId])
 
-  // Close the space dropdown when the user clicks outside it
-  useEffect(() => {
-    if (!dropdownOpen) return
-    function handleClickOutside(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [dropdownOpen])
-
-  // When the selected skill changes, discard any in-progress edit.
-  // Using useEffect (not an inline setState in render) to avoid extra render cycles.
-  useEffect(() => {
-    setIsEditing(false)
-    setDraft('')
-    setToggleError(null)
-    setSaveError(null)
-    setMoveError(null)
-  }, [appId])
-
-  if (!app) return null
-
-  const { name, description } = resolveSpecI18n(app.spec, getCurrentLanguage())
-  const spec       = app.spec as SkillSpec
-  const status     = app.status
-  const isEnabled  = status === 'active'
-  const canToggle  = status === 'active' || status === 'paused' || status === 'error'
-  const isGlobal   = app.spaceId === null
-
-  const triggerCommand  = `/${spec.name.toLowerCase().replace(/\s+/g, '-')}`
-  const skillContent    = getSkillMdContent(spec)
-  const hasSkillContent = skillContent.length > 0
-
-  // Build the ordered space list for the selector.
-  // haloSpace (the primary Halo workspace) is shown first, then dedicated spaces.
-  const allSpaces = [
-    ...(haloSpace ? [haloSpace] : []),
-    ...spaces.filter(s => !haloSpace || s.id !== haloSpace.id),
-  ]
-
-  // ── Handlers ──────────────────────────────
-
-  const handleToggle = async () => {
-    if (!canToggle || toggling) return
-    setToggling(true)
-    setToggleError(null)
-    try {
-      const ok = await (isEnabled ? pauseApp(appId) : resumeApp(appId))
-      if (!ok) throw new Error(t('Could not change shared resource availability.'))
-    } catch (e) {
-      setToggleError((e as Error).message)
-      throw e
-    } finally {
-      setToggling(false)
-    }
+  async function act(action: () => Promise<void>) {
+    if (operation.current) return
+    operation.current = true; setBusy(true); setError(null)
+    try { await action() }
+    catch (failure) {
+      console.warn('[SkillInfoCard] Skill operation failed', { id: selectedId, reason: failure instanceof Error ? failure.message : String(failure) })
+      if (mounted.current && activeIdentity.current === identity) setError(skillErrorMessage(failure, t('Could not update this skill. Your changes are kept; please try again.'), t))
+    } finally { operation.current = false; if (mounted.current) setBusy(false) }
   }
 
-  const handleStartEdit = () => {
-    setDraft(skillContent)
-    setSaveError(null)
-    setIsEditing(true)
-  }
-
-  const handleCancelEdit = () => {
-    setIsEditing(false)
-    setDraft('')
-    setSaveError(null)
-  }
-
-  const handleSave = async () => {
-    if (saving) return
-    setSaving(true)
-    setSaveError(null)
-    try {
-      const ok = await updateAppSpec(appId, buildSkillContentPatch(spec, draftContent))
-      if (ok) {
-        setIsEditing(false)
-        setDraft('')
-      } else {
-        throw new Error(t('Save failed. Please try again.'))
-      }
-    } catch (e) {
-      setSaveError((e as Error).message)
-      throw e
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleOpenFolder = useCallback(async () => {
-    const res = await api.appOpenSkillFolder(appId)
-    if (!res.success) {
-      console.error('[SkillInfoCard] appOpenSkillFolder failed:', res.error)
-    }
-  }, [appId])
-
-  const handleMoveToSpace = async (newSpaceId: string | null) => {
-    if (moving || newSpaceId === app.spaceId) {
-      setDropdownOpen(false)
+  async function useSkill(newConversation = false) {
+    const spaceId = contextId ?? currentSpace?.id ?? haloSpace?.id
+    if (!spaceId || !copy) { setError(t('Choose a workspace first.')); return }
+    const stillSelected = () => mounted.current && activeIdentity.current === identity
+    const latest = await readGroup(spaceId, copy.name)
+    if (!stillSelected()) return
+    if (latest?.effectiveId !== copy.id) {
+      setError(t('This workspace uses a different version of this skill. Open its workspace version to continue.'))
       return
     }
-    setDropdownOpen(false)
-    setMoveError(null)
-    setMoving(true)
-    try {
-      const ok = await moveAppToSpace(appId, newSpaceId)
-      if (!ok) {
-        throw new Error(t('Failed to move skill. Please try again.'))
+    if (copy.source !== 'personal') {
+      const chat = useChatStore.getState()
+      const state = chat.spaceStates?.get(spaceId)
+      const conversationId = !newConversation ? state?.selectedAppChat?.conversationId ?? state?.currentConversationId : undefined
+      const conversation = conversationId ? chat.conversationCache?.get(conversationId) ?? state?.conversations.find(item => item.id === conversationId) : undefined
+      let engine = conversationId ? chat.sessionInitInfo?.get(conversationId)?.engineId ?? conversation?.resolvedEngineId ?? conversation?.engineBinding?.engineId ?? conversation?.engineOverride : undefined
+      if (!engine) {
+        const response = await api.getEngineAvailability()
+        if (!stillSelected()) return
+        if (!response.success || !response.data) throw new Error(response.error)
+        const availability = response.data as EngineAvailabilityReport
+        engine = availability.defaultEngine ?? availability.activeEngine ?? undefined
       }
-    } catch (e) {
-      setMoveError((e as Error).message)
-      throw e
-    } finally {
-      setMoving(false)
+      if (engine !== 'halo') {
+        setError(t('This skill needs Halo SDK. Choose Halo SDK in the conversation’s advanced settings, then use it again.'))
+        return
+      }
     }
+    if (newConversation) {
+      const created = await api.createConversation(spaceId)
+      if (!created.success || !created.data || typeof created.data !== 'object' || !('id' in created.data) || typeof created.data.id !== 'string') throw new Error(created.error)
+      if (!stillSelected()) return
+      await useChatStore.getState().loadConversations(spaceId)
+      if (!stillSelected()) return
+      navigateToConversation(spaceId, created.data.id)
+    }
+    if (!stillSelected()) return
+    openSkillInComposer({ spaceId, name: copy.name, description: copy.description })
   }
 
-  // ── Render ────────────────────────────────
+  const display = copy ? skillDisplay(copy, getCurrentLanguage()) : { name: group?.displayName ?? t('Skill details'), description: '' }
+  const buttonClass = 'inline-flex items-center gap-1.5 rounded-md border border-border-soft bg-background px-3 py-1.5 text-xs font-medium transition-colors hover:border-border hover:bg-secondary disabled:opacity-40'
+  const iconButton = 'rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40'
+  const menuItem = 'flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-secondary disabled:opacity-40'
+  const failed = error || actions.error
+  const currentGroup = freshGroup ?? group
 
-  return (
-    // No scroller of its own: the page or dialog around it scrolls, and the sticky header pins to that.
-    <div className="flex-1 py-4 sm:py-6 px-6 sm:px-10 space-y-5">
-      {pendingChange && <CapabilityChangeDialog appId={appId} title={pendingChange.title} onConfirm={pendingChange.apply} onClose={() => setPendingChange(null)} />}
-      <CapabilityImpact appId={appId} />
-      {showCopy && <SkillCopyDialog spec={spec} content={isEditing ? draftContent : skillContent} spaceId={app.spaceId} onClose={() => setShowCopy(false)} onSaved={() => { setIsEditing(false); setDraft('') }} />}
-
-      {/* ── Header ── */}
-      {stickyHeader && <div ref={headerSentinelRef} aria-hidden="true" className="!mt-0 h-px" />}
-      <div className={stickyHeader
-        // Bleeds into the page padding so the pinned bar spans the full width.
-        ? `sticky top-0 z-20 -mx-6 sm:-mx-10 px-6 sm:px-10 py-3 bg-background flex items-start justify-between gap-3 border-b transition-colors ${headerPinned ? 'border-border-faint' : 'border-transparent'}`
-        : 'flex items-start justify-between gap-3'}>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 min-w-0">
-            <h2 className="text-base font-semibold text-foreground truncate">{name}</h2>
-            {/* Enabled is the norm; only the other states are called out. */}
-            {!isEnabled && (
-              <span className="inline-flex flex-shrink-0 items-center gap-1.5 text-[11px] px-2 py-0.5 rounded-full bg-muted/60 text-muted-foreground">
-                <AppStatusDot status={status} size="sm" />
-                {statusLabel(status, t)}
-              </span>
-            )}
+  return <div className="min-w-0 flex-1 space-y-5 px-4 py-4 sm:px-10 sm:py-6">
+    {stickyHeader && <div ref={headerSentinel} aria-hidden="true" className="!mt-0 h-px" />}
+    <div ref={menuRef} className={`${stickyHeader ? 'sticky top-0 z-20 -mx-4 border-b bg-background px-4 py-3 sm:-mx-10 sm:px-10' : ''} flex flex-col items-start justify-between gap-3 sm:flex-row ${pinned ? 'border-border-faint' : 'border-transparent'}`}>
+      <div className="w-full min-w-0 sm:w-auto sm:flex-1">
+        <div className="flex min-w-0 items-center gap-2"><h2 className="break-words text-base font-semibold text-foreground">{display.name}</h2>{copy && !copy.enabled && <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">{t('Disabled')}</span>}</div>
+        {copy && <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          {detail?.spec.author && <span>{t('by')} {detail.spec.author}</span>}{detail?.spec.version && <span>v{detail.spec.version}</span>}
+          {update && <button type="button" disabled={disabled || updateFlow.busy} onClick={updateFlow.start} className="rounded-full border border-halo-success/30 bg-halo-success/10 px-2 py-0.5 text-[11px] font-medium text-halo-success hover:bg-halo-success/20">{t('Update to v{{version}}', { version: update.latestVersion })}</button>}
+          <div className="relative">
+            <button type="button" disabled={disabled || editing || copy.availability === 'missing'} onClick={() => setMenu(value => value === 'scope' ? null : 'scope')} aria-expanded={menu === 'scope'} aria-label={t('Change workspace')} title={t('Click to change space')} className="inline-flex items-center gap-1 rounded-full border border-border-soft bg-secondary/50 px-2 py-0.5 text-[11px] hover:text-foreground disabled:opacity-40">{copy.scope === 'global' && <Globe className="h-3 w-3" />}<span>{scopeName(copy.spaceId)}</span><ChevronDown className="h-3 w-3" /></button>
+            {menu === 'scope' && <div className="absolute left-0 top-full z-30 mt-1 min-w-[180px] max-w-[260px] rounded-lg border border-border bg-popover py-1 shadow-lg">
+              <button className={menuItem} onClick={() => { setMenu(null); void actions.move(null, t('Global (all spaces)')) }}><Globe className="h-3.5 w-3.5" />{t('Global (all spaces)')}{copy.spaceId === null && <Check className="ml-auto h-3.5 w-3.5" />}</button>
+              {allSpaces.map(space => <button key={space.id} className={menuItem} onClick={() => { setMenu(null); void actions.move(space.id, space.name) }}><span className="truncate">{space.isTemp ? t('Halo') : space.name}</span>{copy.spaceId === space.id && <Check className="ml-auto h-3.5 w-3.5" />}</button>)}
+            </div>}
           </div>
-
-          {/* Author + scope badge row */}
-          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-            <p className="text-xs text-muted-foreground">
-              {t('by')} {spec.author}
-              {spec.version && <span> · v{spec.version}</span>}
-            </p>
-            {/* The update sits beside the version it replaces. */}
-            {update && (
-              <button
-                type="button"
-                onClick={updateFlow.start}
-                disabled={updateFlow.busy}
-                className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium border border-halo-success/30 bg-halo-success/10 text-halo-success hover:bg-halo-success/20 transition-colors disabled:opacity-60"
-              >
-                {updateFlow.busy && <Loader2 className="w-3 h-3 animate-spin" />}
-                {t('Update to v{{version}}', { version: update.latestVersion })}
-              </button>
-            )}
-
-            {/* Scope badge — interactive dropdown to switch the skill's space */}
-            <div ref={dropdownRef} className="relative">
-              <button
-                type="button"
-                disabled={moving}
-                onClick={() => setDropdownOpen(prev => !prev)}
-                title={t('Click to change space')}
-                className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium border
-                  transition-colors cursor-pointer select-none
-                  disabled:opacity-60 disabled:cursor-not-allowed
-                  ${isGlobal
-                    ? 'bg-blue-500/10 text-blue-400 border-blue-500/25 hover:bg-blue-500/20'
-                    : 'bg-muted/60 text-muted-foreground border-border/40 hover:bg-muted'
-                  }`}
-              >
-                {moving ? (
-                  <Loader2 className="w-3 h-3 flex-shrink-0 animate-spin" />
-                ) : (
-                  isGlobal && <Globe className="w-3 h-3 flex-shrink-0" />
-                )}
-                <span>
-                  {isGlobal
-                    ? t('Takes effect in all spaces')
-                    : t('Takes effect in {{space}} space', { space: spaceName })}
-                </span>
-                {!moving && <ChevronDown className="w-3 h-3 flex-shrink-0 opacity-60" />}
-              </button>
-
-              {/* Space selector dropdown */}
-              {dropdownOpen && (
-                <div className={`
-                  absolute left-0 top-full mt-1 z-50 min-w-[180px]
-                  bg-popover border border-border rounded-lg shadow-lg
-                  py-1 text-[12px]
-                `}>
-                  {/* Global option */}
-                  <button
-                    type="button"
-                    onClick={() => setPendingChange({ title: t('Change this skill’s scope?'), apply: () => handleMoveToSpace(null) })}
-                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-left
-                      hover:bg-muted/60 transition-colors
-                      ${app.spaceId === null ? 'text-blue-400 font-medium' : 'text-foreground'}`}
-                  >
-                    <Globe className="w-3 h-3 flex-shrink-0" />
-                    {t('Global (all spaces)')}
-                    {app.spaceId === null && (
-                      <Check className="w-3 h-3 ml-auto flex-shrink-0" />
-                    )}
-                  </button>
-
-                  {/* Divider */}
-                  {allSpaces.length > 0 && (
-                    <div className="my-1 border-t border-border-faint" />
-                  )}
-
-                  {/* Per-space options */}
-                  {allSpaces.map(space => (
-                    <button
-                      key={space.id}
-                      type="button"
-                      onClick={() => setPendingChange({ title: t('Change this skill’s scope?'), apply: () => handleMoveToSpace(space.id) })}
-                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-left
-                        hover:bg-muted/60 transition-colors
-                        ${app.spaceId === space.id ? 'text-foreground font-medium' : 'text-muted-foreground'}`}
-                    >
-                      <span className="truncate">{space.name}</span>
-                      {app.spaceId === space.id && (
-                        <Check className="w-3 h-3 ml-auto flex-shrink-0 text-foreground" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            {showUse && isEnabled && (
-              <button
-                type="button"
-                onClick={() => openSkillInComposer({ spaceId: app.spaceId, name: spec.name, description })}
-                className="h-7 px-3 text-xs font-medium border border-border-soft bg-background text-foreground rounded-md hover:border-muted-foreground/40 transition-colors"
-              >
-                {t('Use')}
-              </button>
-            )}
-            {/* Labelled with what a click does, like the skill card's power button. Enabling is
-                the page's main action once disabled; disabling stays quiet, since red is
-                the uninstall button's and disabling is reversible. */}
-            <button
-              type="button"
-              disabled={!canToggle || toggling}
-              onClick={() => setPendingChange({ title: t('Change shared resource availability?'), apply: handleToggle })}
-              className={`inline-flex items-center gap-1.5 h-7 px-3 text-xs font-medium border rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                isEnabled
-                  ? 'border-border-soft bg-background text-foreground hover:border-halo-error/40 hover:text-halo-error'
-                  : 'border-halo-success/30 bg-halo-success/10 text-halo-success hover:bg-halo-success/20'
-              }`}
-            >
-              {toggling
-                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                : isEnabled ? <PowerOff className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />}
-              {isEnabled ? t('Disable') : t('Enable')}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowShareDialog(true)}
-              title={t('Share')}
-              aria-label={t('Share')}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
-            >
-              <Share2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-          {toggleError && (
-            <div className="flex items-center gap-1 text-[11px] text-red-500">
-              <AlertCircle className="w-3 h-3 flex-shrink-0" />
-              <span>{toggleError}</span>
-            </div>
-          )}
-        </div>
+        </div>}
       </div>
-
-      {/* ── Move error ── */}
-      {moveError && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400">
-          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-          {moveError}
-        </div>
-      )}
-
-      {/* ── How to use ── */}
-      <div className="space-y-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-          <Terminal className="w-3.5 h-3.5" />
-          {t('How to use')}
-        </h3>
-        <div className="bg-secondary rounded-lg p-3 text-xs font-mono text-foreground">
-          {triggerCommand} [arguments]
-        </div>
-        <p className="text-xs text-muted-foreground">
-          {t('Invoke this skill by typing the command above in any conversation.')}
-        </p>
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+        {copy && <>{showUse && copy.availability === 'available' && <button disabled={disabled} className={buttonClass} onClick={() => void act(() => useSkill())}>{t('Use')}</button>}
+          <button disabled={disabled || (!copy.enabled && ['missing', 'invalid'].includes(copy.availability))} onClick={() => void actions.toggle()} className={buttonClass}>{actions.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : copy.enabled ? <PowerOff className="h-3.5 w-3.5" /> : <Power className="h-3.5 w-3.5" />}{copy.enabled ? t('Disable') : t('Enable')}</button>
+          <button disabled={disabled || copy.availability === 'missing'} aria-label={t('Share')} title={t('Share')} onClick={() => setSharing(true)} className={iconButton}><Share2 className="h-3.5 w-3.5" /></button>
+          <div className="relative"><button aria-label={t('More')} title={t('More')} aria-expanded={menu === 'more'} disabled={disabled} className={iconButton} onClick={() => setMenu(value => value === 'more' ? null : 'more')}><MoreHorizontal className="h-4 w-4" /></button>{menu === 'more' && <div className="absolute right-0 top-full z-30 mt-1 min-w-[180px] rounded-lg border border-border bg-popover py-1 shadow-lg">
+            <button className={menuItem} disabled={copy.availability === 'missing'} onClick={() => { setMenu(null); setCopying(true) }}>{t('Save custom copy')}</button>
+            {showUse && copy.availability === 'available' && <button className={menuItem} onClick={() => { setMenu(null); void act(() => useSkill(true)) }}>{t('Use in a new conversation')}</button>}
+            <button className={menuItem} onClick={() => { setMenu(null); refresh() }}><RefreshCw className="h-3.5 w-3.5" />{t('Refresh')}</button>
+          </div>}</div></>}
       </div>
-
-      {/* ── Description (plain text) ── */}
-      {description && (
-        <div className="space-y-2">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {t('Description')}
-          </h3>
-          <p className="text-sm text-foreground leading-relaxed">{description}</p>
-        </div>
-      )}
-
-      {/* ── Skill Instructions (SKILL.md) ── */}
-      {(hasSkillContent || isEditing) && (
-        <div className="space-y-2">
-
-          {/* Section header with view/edit toggle */}
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {t('Skill Instructions')}
-            </h3>
-
-            <div className="flex items-center gap-1.5">
-              {/* Open skill folder — always visible, useful alongside editing */}
-              <button
-                onClick={handleOpenFolder}
-                title={t('Open skill folder')}
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors p-1 rounded"
-              >
-                <FolderOpen className="w-3.5 h-3.5" />
-              </button>
-
-              {!isEditing ? (
-                <button
-                  onClick={handleStartEdit}
-                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <Pencil className="w-3 h-3" />
-                  {t('Edit')}
-                </button>
-              ) : (
-                <>
-                  <button onClick={() => setShowCopy(true)} disabled={saving} className="text-xs text-primary">{t('Save custom copy')}</button>
-                  <button
-                    onClick={handleCancelEdit}
-                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <X className="w-3 h-3" />
-                    {t('Cancel')}
-                  </button>
-                  <button
-                    onClick={() => setPendingChange({ title: t('Save shared resource changes?'), apply: handleSave })}
-                    disabled={saving}
-                    className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors disabled:opacity-50"
-                  >
-                    {saving
-                      ? <Loader2 className="w-3 h-3 animate-spin" />
-                      : <Check className="w-3 h-3" />}
-                    {t('Save')}
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Save error — shown below the section header */}
-          {saveError && (
-            <div className="flex items-center gap-1.5 text-xs text-red-500">
-              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-              <span>{saveError}</span>
-            </div>
-          )}
-
-          {/* Content area: rendered markdown OR CodeMirror editor */}
-          {isEditing ? (
-            <div className="rounded-lg overflow-hidden border border-border" style={{ height: '36rem' }}>
-              {/*
-                key={appId} ensures the editor remounts if the user switches skills
-                while edit mode is open. content prop is the initial value only —
-                ongoing changes are tracked via onChange → draftContent state.
-              */}
-              <CodeMirrorEditor
-                key={appId}
-                content={draftContent}
-                language="markdown"
-                readOnly={false}
-                onChange={setDraft}
-                className="h-full"
-              />
-            </div>
-          ) : (
-            <div className="rounded-lg bg-secondary/40 border border-border/30 p-4 text-sm overflow-x-auto">
-              <MarkdownRenderer content={skillContent} mode="static" />
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Danger zone ── */}
-      <div className="pt-2 border-t border-border">
-        <button
-          onClick={() => setPendingChange({ title: t('Remove this shared resource?'), apply: async () => { if (!await uninstallApp(appId)) throw new Error('Uninstall failed') } })}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-red-400 hover:text-red-300
-            border border-red-400/30 hover:border-red-400/60 rounded-lg transition-colors"
-        >
-          <Unplug className="w-4 h-4" />
-          {t('Uninstall')}
-        </button>
-      </div>
-
-      {showShareDialog && (
-        <ShareCurrentAppDialog
-          appId={appId}
-          onClose={() => setShowShareDialog(false)}
-        />
-      )}
-      {updateFlow.dialogs}
-
     </div>
-  )
+    {failed && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-halo-error/30 bg-halo-error/5 px-3 py-2.5 text-xs text-halo-error"><span className="min-w-0 break-words">{failed}</span><button disabled={disabled} onClick={() => { actions.clearError(); refresh() }} className="shrink-0 underline">{t('Retry')}</button></div>}
+    {loading && !detail && <p role="status" className="flex items-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t('Loading…')}</p>}
+    {copy && detail && <>
+      {copy.availability === 'missing' && <p role="status" className="text-sm text-muted-foreground">{t('The skill file could not be found. Check its folder or import the skill again.')}</p>}
+      {copy.availability === 'invalid' && <p role="status" className="text-sm text-halo-error">{t('This skill has invalid instructions. Edit the file to correct its format, then try again.')}</p>}
+      {copy.availability === 'conflict' && <p className="text-sm text-halo-error">{t('Two skills have the same name in this workspace. Rename or disable one to use the other.')}</p>}
+      {copy.availability === 'overridden' && <p className="text-xs text-muted-foreground">{t('This workspace uses its own version. This global version remains available in other workspaces.')}</p>}
+      <div className="space-y-2"><h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"><Terminal className="h-3.5 w-3.5" />{t('How to use')}</h3><div className="rounded-lg bg-secondary p-3 font-mono text-xs text-foreground">/{copy.name}</div><p className="text-xs text-muted-foreground">{t('Invoke this skill by typing the command above in any conversation.')}</p></div>
+      {display.description && <div className="space-y-2"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('Description')}</h3><p className="text-sm leading-relaxed text-foreground">{display.description}</p></div>}
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('Skill Instructions')}</h3><div className="flex items-center gap-2">
+          {isElectron() && <button title={t('Open skill folder')} aria-label={t('Open skill folder')} disabled={disabled} className={iconButton} onClick={() => void actions.openFolder()}><FolderOpen className="h-3.5 w-3.5" /></button>}
+          {editing ? <><button disabled={disabled} className="text-xs text-primary" onClick={() => setCopying(true)}>{t('Save custom copy')}</button><button disabled={disabled} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground" onClick={() => { setEditing(false); setDraft('') }}><X className="h-3 w-3" />{t('Cancel')}</button><button disabled={disabled} className="inline-flex items-center gap-1 text-xs text-primary" onClick={() => void act(async () => {
+            if (!await showConfirm({ title: t('Save shared resource changes?'), message: t('The changes will be saved to this skill. Supporting files will be kept.'), confirmLabel: t('Save'), cancelLabel: t('Cancel') })) return
+            const result = await api.skillsSave({ ref, content: draft, revision: editRevision })
+            if (!result.success || !result.data) throw new Error(result.error)
+            if (!mounted.current || activeIdentity.current !== identity) return
+            setDetail(result.data); setEditing(false); setDraft(''); onChanged?.()
+          })}>{busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}{t('Save')}</button></> : <button disabled={disabled || !copy.editable} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40" onClick={() => { setDraft(detail.content); setEditRevision(detail.revision); setEditing(true) }}><Pencil className="h-3 w-3" />{t('Edit')}</button>}
+        </div></div>
+        {editing ? <div className="h-[28rem] overflow-hidden rounded-lg border border-border sm:h-[36rem]"><CodeMirrorEditor key={copy.id} content={draft} language="markdown" readOnly={false} onChange={setDraft} className="h-full" /></div> : <div className="overflow-x-auto rounded-lg border border-border-soft bg-secondary/40 p-4 text-sm"><MarkdownRenderer content={skillInstructions(detail.content)} mode="static" /></div>}
+      </div>
+      {currentGroup && currentGroup.copies.length > 1 && <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">{t('Other versions')}</summary><div className="mt-2 space-y-1">{currentGroup.copies.map(item => <button key={item.id} disabled={disabled || editing || item.id === copy.id} onClick={() => { setDetail(null); setSelectedId(item.id) }} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-secondary disabled:opacity-60"><span>{scopeName(item.spaceId)} · {skillSourceLabel(item, t)}</span>{item.id === copy.id && <Check className="h-3 w-3" />}{!item.enabled && <span>{t('Disabled')}</span>}</button>)}</div></details>}
+      {detail.files.length > 1 && <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">{t('Supporting files')} ({detail.files.length})</summary><ul className="mt-2 space-y-1">{detail.files.map(file => <li key={file.path} className="break-all font-mono">{file.path}</li>)}</ul></details>}
+      <div className="border-t border-border-soft pt-3"><button disabled={disabled} className="inline-flex items-center gap-1.5 rounded-lg border border-halo-error/30 px-3 py-1.5 text-sm text-halo-error transition-colors hover:bg-halo-error/5 disabled:opacity-40" onClick={() => void actions.remove()}><Trash2 className="h-4 w-4" />{t('Delete')}</button></div>
+      {copying && <SkillCopyDialog skillRef={ref} name={copy.name} content={editing ? draft : undefined} spaceId={copy.spaceId} onClose={() => setCopying(false)} onSaved={refresh} />}
+      {sharing && <ShareCurrentAppDialog appId={copy.appId ?? ''} specOverride={detail.spec} skillRef={ref} onClose={() => setSharing(false)} />}
+    </>}
+    {actions.DialogComponent}{DialogComponent}{updateFlow.dialogs}
+  </div>
 }

@@ -19,6 +19,8 @@ import { useAppsPageStore, tabForAppType } from '../stores/apps-page.store'
 import { useTeamStore } from '../stores/team.store'
 import { useSearchStore } from '../stores/search.store'
 import type { AppType } from '../../shared/apps/spec-types'
+import type { SkillGroup, LegacySkill } from '../../shared/types/skills'
+import { LegacySkillsDialog } from '../components/apps/LegacySkillsDialog'
 import { Header } from '../components/layout/Header'
 import { SearchIcon } from '../components/search/SearchIcon'
 import { visibleDigitalHumans } from '../utils/people-model'
@@ -26,6 +28,7 @@ import { PeopleInbox } from '../components/apps/PeopleInbox'
 import { PeopleDirectory } from '../components/apps/PeopleDirectory'
 import { PeopleSwitcher } from '../components/apps/PeopleSwitcher'
 import { CapabilitySwitcher } from '../components/apps/CapabilitySwitcher'
+import { SkillDetailSwitcher } from '../components/apps/SkillDetailSwitcher'
 import { PersonTeams } from '../components/apps/PersonTeams'
 import { SkillCardWall } from '../components/apps/SkillCardWall'
 import { McpCardWall } from '../components/apps/McpCardWall'
@@ -76,6 +79,11 @@ export function AppsPage() {
   /** When set, ManualAddDialog opens pre-targeted to that type (skips chooser) */
   const [manualAddType, setManualAddType] = useState<'mcp' | 'skill' | null>(null)
   const [showSkillInstallDialog, setShowSkillInstallDialog] = useState(false)
+  const [skillInstallSpaceId, setSkillInstallSpaceId] = useState<string | null | undefined>(undefined)
+  const [selectedSkill, setSelectedSkill] = useState<{ group: SkillGroup; spaceId: string | null } | null>(null)
+  const [legacySkills, setLegacySkills] = useState<LegacySkill[] | null>(null)
+  const [skillRevision, setSkillRevision] = useState(0)
+  useEffect(() => { if (currentTab !== 'my-skills') setSelectedSkill(null) }, [currentTab])
 
   /** Maps the current tab to the AppType filter used for visibility */
   const appTypeForCurrentTab = useMemo<AppType | null>(() => {
@@ -112,7 +120,7 @@ export function AppsPage() {
   }, [])
   useEffect(() => { void useTeamStore.getState().loadTeams() }, [])
   useEffect(() => {
-    if (currentTab === 'team' || currentTab === 'my-skills' || currentTab === 'my-mcp' || detailView?.type === 'app-config') void loadApps()
+    if (currentTab === 'team' || currentTab === 'my-mcp' || detailView?.type === 'app-config') void loadApps()
   }, [currentTab, detailView?.type, loadApps])
   const [detailFailed, setDetailFailed] = useState(false)
   const [detailRevision, setDetailRevision] = useState(0)
@@ -188,12 +196,11 @@ export function AppsPage() {
     [apps, selectedAppId]
   )
 
-  // Mirrors the content branches below: a selection only replaces the wall
-  // on these tabs, and on the capability tabs only once the app resolves.
-  const showsAppDetail = !!selectedAppId && (
+  // Browse tabs stay hidden while a resolved skill or app replaces the wall.
+  const showsAppDetail = (currentTab === 'my-skills' && !!selectedSkill) || (!!selectedAppId && (
     currentTab === 'my-digital-humans'
     || ((currentTab === 'my-skills' || currentTab === 'my-mcp') && !!selectedApp)
-  )
+  ))
 
   // Switching people keeps the tab being viewed. The "return to requests /
   // team task" link belonged to the person the user arrived at, so it goes.
@@ -353,8 +360,44 @@ export function AppsPage() {
           </div>
         </div> : <PeopleDirectory spaceMap={spaceMap} onCreate={() => setShowInstallDialog(true)} />
       ) : (currentTab === 'my-skills' || currentTab === 'my-mcp') ? (
-        /* ── Capability library: wall first, one full-width detail behind a card ── */
-        selectedAppId && selectedApp ? (
+        selectedSkill && currentTab === 'my-skills' ? (
+          <div className="flex min-h-0 flex-1">
+            <div className="hidden md:flex">
+              <SkillDetailSwitcher
+                spaceId={selectedSkill.spaceId}
+                selectedGroup={selectedSkill.group}
+                revision={skillRevision}
+                onSelect={group => setSelectedSkill({ group, spaceId: selectedSkill.spaceId })}
+              />
+            </div>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div className="flex shrink-0 items-center gap-2 px-4 pt-3 text-sm sm:px-10">
+                <button
+                  onClick={() => setSelectedSkill(null)}
+                  className="inline-flex min-h-8 items-center gap-1.5 text-muted-foreground transition-colors hover:text-primary"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  {t('Back to capability library')}
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <SkillInfoCard
+                  key={`${selectedSkill.spaceId}:${selectedSkill.group.name}`}
+                  skillRef={{
+                    spaceId: selectedSkill.spaceId,
+                    id: selectedSkill.group.effectiveId ?? selectedSkill.group.copies[0].id,
+                  }}
+                  group={selectedSkill.group}
+                  onChanged={() => setSkillRevision(value => value + 1)}
+                  onDeleted={() => {
+                    setSelectedSkill(null)
+                    setSkillRevision(value => value + 1)
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        ) : selectedAppId && selectedApp ? (
           <div className="flex min-h-0 flex-1">
             <div className="hidden md:flex">
               <CapabilitySwitcher
@@ -404,9 +447,12 @@ export function AppsPage() {
             <div className="flex min-h-0 flex-1 flex-col pt-2 pb-3">
               {currentTab === 'my-skills' ? (
                 <SkillCardWall
+                  key={skillRevision}
                   spaceMap={spaceMap}
                   onBrowseStore={() => handleBrowseMarketplace('skill')}
-                  onManualAdd={() => setShowSkillInstallDialog(true)}
+                  onManualAdd={spaceId => { setSkillInstallSpaceId(spaceId); setShowSkillInstallDialog(true) }}
+                  onOpen={(group, spaceId) => { clearSelection(); setSelectedSkill({ group, spaceId }) }}
+                  onOpenLegacy={skill => setLegacySkills([skill])}
                 />
               ) : (
                 <McpCardWall
@@ -436,9 +482,13 @@ export function AppsPage() {
         />
       )}
 
+      {legacySkills && <LegacySkillsDialog skills={legacySkills} onClose={() => setLegacySkills(null)} onChanged={() => setSkillRevision(value => value + 1)} />}
+
       {/* Skill install dialog */}
       {showSkillInstallDialog && (
         <SkillInstallDialog
+          initialSpaceId={skillInstallSpaceId}
+          onInstalled={() => setSkillRevision(value => value + 1)}
           onClose={() => setShowSkillInstallDialog(false)}
         />
       )}

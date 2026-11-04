@@ -69,7 +69,7 @@ export function StoreHeader() {
 
   const [showShareDialog, setShowShareDialog] = useState(false)
   // Pre-selection carried from a detail page's Share action.
-  const [publishPreselect, setPublishPreselect] = useState<{ type: Extract<AppType, 'automation' | 'skill'>; appId: string } | null>(null)
+  const [publishPreselect, setPublishPreselect] = useState<ReturnType<typeof consumeStorePublishIntent>>(null)
 
   // A detail page's Share routed here — open the publish dialog pre-selected on
   // that app (consume the one-shot intent so it doesn't re-fire).
@@ -193,6 +193,7 @@ export function StoreHeader() {
         <ShareToStoreDialog
           initialType={publishPreselect?.type}
           initialAppId={publishPreselect?.appId}
+          initialSpec={publishPreselect?.specOverride}
           entry={publishPreselect ? 'share' : 'store'}
           onClose={() => { setShowShareDialog(false); setPublishPreselect(null) }}
         />

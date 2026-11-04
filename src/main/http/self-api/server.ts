@@ -14,6 +14,7 @@ import { issueSelfApiToken } from './token-store'
 import { redactResponses } from './redact'
 import { rejectNonApi, selfApiAuthMiddleware, selfApiErrorHandler } from './middleware'
 import { rejectWithheldFields } from './withheld-fields'
+import { isSkillRequest, parseSkillBody } from '../skills-body'
 
 /** Distinct from the public listener's 3847 so the two never contend for a port. */
 const DEFAULT_PORT = 4791
@@ -49,10 +50,12 @@ function buildApp(): Express {
   // an easy mistake to make with curl, and one that would otherwise answer
   // with a stack trace.
   app.set('env', 'production')
-  app.use(express.json())
+  const parseJson = express.json()
+  app.use((req, res, next) => isSkillRequest(req.path) ? next() : parseJson(req, res, next))
   app.use(rejectNonApi)
   app.use(redactResponses)
   app.use('/api', selfApiAuthMiddleware)
+  app.use('/api/skills', parseSkillBody)
   app.use('/api', rejectWithheldFields)
   registerApiRoutes(app)
   app.use(selfApiErrorHandler)

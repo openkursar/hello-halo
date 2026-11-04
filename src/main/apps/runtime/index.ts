@@ -71,6 +71,7 @@ import { onMcpAppsChange } from '../manager/service'
 import { createHaloAppsMcpServer, createSpaceTeamMcpServer, TEAM_TOOLSET_GUIDE } from '../conversation-mcp'
 import { TEAM_MCP_SERVER_NAME } from '../../../shared/apps/team-types'
 import { registerAppBridge } from '../../services/app-bridge'
+import { getSkillLibrary } from '../skills'
 import { registerToolset } from '../../services/agent/toolsets/registry'
 import { handleMcpAppsChange } from '../../services/agent/session-manager'
 import { handleMcpAppsChangeForStatus } from '../../services/agent/mcp-probe'
@@ -274,6 +275,7 @@ export async function initAppRuntime(
     getAppManager,
     createHaloAppsMcpServer,
     onMcpAppsChange,
+    getEffectiveSkillCatalog: (spaceId, workDir) => getSkillLibrary().effectiveCatalog(spaceId, workDir),
     getImChannelStatuses: () => getActiveImChannelManager()?.getAllStatuses() ?? [],
   })
   onMcpAppsChange(handleMcpAppsChange)
