@@ -256,7 +256,7 @@ import { isServerMode } from './foundation/runtime-mode'
 import { getConfig, initializeApp } from './foundation/config.service'
 import { startupWindowColors } from './foundation/window-startup'
 import { applyDisplayScale, currentDisplayScale, nudgeDisplayScale, setDisplayScale, DISPLAY_STEP, registerDisplayHandlers } from './services/display.service'
-import { MAC_TRAFFIC_LIGHT_POSITION } from '../shared/constants/mac-traffic-lights'
+import { macTrafficLightGeometry } from '../shared/constants/mac-traffic-lights'
 import { TITLE_BAR_OVERLAY_HEIGHT } from '../shared/constants/app-header'
 import { flushAllPendingIndexWrites } from './services/conversation.service'
 import { shutdownRemoteAccess } from './services/remote'
@@ -503,7 +503,7 @@ function createWindow(): void {
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
     // Sits in NavRail's column above the brand mark; the renderer derives its
     // clearance from the same shared geometry.
-    trafficLightPosition: isMac ? MAC_TRAFFIC_LIGHT_POSITION : undefined,
+    trafficLightPosition: isMac ? macTrafficLightGeometry(process.getSystemVersion()).position : undefined,
     // Windows/Linux: native window controls overlay in content area. App.tsx's
     // applyTheme keeps it on the live theme's tokens once the page runs.
     titleBarOverlay: !isMac ? {

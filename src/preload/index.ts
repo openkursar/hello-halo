@@ -1241,7 +1241,8 @@ const platformInfo = {
   platform: process.platform as 'darwin' | 'win32' | 'linux',
   isMac: process.platform === 'darwin',
   isWindows: process.platform === 'win32',
-  isLinux: process.platform === 'linux'
+  isLinux: process.platform === 'linux',
+  systemVersion: process.getSystemVersion()
 }
 
 contextBridge.exposeInMainWorld('platform', platformInfo)
@@ -1255,6 +1256,8 @@ declare global {
       isMac: boolean
       isWindows: boolean
       isLinux: boolean
+      /** OS version, e.g. "26.1.0" on macOS. */
+      systemVersion?: string
     }
   }
 }
