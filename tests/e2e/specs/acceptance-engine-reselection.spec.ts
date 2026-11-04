@@ -29,6 +29,8 @@ async function failChatBeforeSelection(page: Page, entry: 'space-chat' | 'digita
   if (entry === 'space-chat') {
     await expect(page.getByText('Failed to send message', { exact: true })).toBeVisible()
     await expect(page.locator('textarea').first()).toHaveValue('Reply without tools before installation selection.')
+    await expect(page.getByText('Claude Code is selected for this conversation. Select a Claude Code installation once in Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Select Claude Code in Settings', exact: true })).toBeVisible()
   } else {
     await expect.poll(() => page.evaluate(() => (window as unknown as { acceptanceProbe: { errors: unknown[] } }).acceptanceProbe.errors)).not.toEqual([])
   }
