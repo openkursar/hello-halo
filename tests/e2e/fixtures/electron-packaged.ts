@@ -16,14 +16,25 @@ export function packagedAppPath(): string {
   return path.join(projectRoot, 'dist/linux-unpacked/halo')
 }
 
-export const test = base.extend<{ hostCommands: HostCommandPolicy }>({
+export const test = base.extend<{ hostCommands: HostCommandPolicy; explicitClaudeCode: boolean }>({
   hostCommands: ['inherit', { option: true }],
-  electronApp: async ({ sdkEngine, hostCommands }, use, testInfo) => {
+  explicitClaudeCode: [false, { option: true }],
+  electronApp: async ({ sdkEngine, hostCommands, explicitClaudeCode }, use, testInfo) => {
     const executablePath = packagedAppPath()
     if (!fs.existsSync(executablePath)) throw new Error(`Packaged app missing: ${executablePath}`)
+    const selectedPath = explicitClaudeCode ? process.env.HALO_ACCEPTANCE_CLAUDE_CLI : undefined
+    if (explicitClaudeCode && (!selectedPath || !fs.existsSync(selectedPath))) {
+      throw new Error('Blocked prerequisite: HALO_ACCEPTANCE_CLAUDE_CLI must name an installed external Claude Code')
+    }
     const { ELECTRON_RUN_AS_NODE: _unused, ...environment } = process.env
     const commandEnvironment = packagedCommandEnvironment(environment, hostCommands)
     const profile = createTestConfigDir(executablePath, undefined, { sdkEngine })
+    if (explicitClaudeCode) {
+      const configFile = path.join(profile, '.halo', 'config.json')
+      const config = JSON.parse(fs.readFileSync(configFile, 'utf8'))
+      config.agent = { ...config.agent, ccRuntime: { selectedPath, selectionOrigin: 'user' } }
+      fs.writeFileSync(configFile, JSON.stringify(config))
+    }
     const instance = await electron.launch({
       executablePath,
       args: ['--lang=en-US', ...(process.env.HALO_E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : [])],
