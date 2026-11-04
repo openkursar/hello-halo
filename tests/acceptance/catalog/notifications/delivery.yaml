@@ -12,6 +12,9 @@ references:
   - src/main/services/notification.service.ts
   - src/renderer/components/settings/MessageChannelsSection.tsx
   - src/renderer/components/settings/SystemSection.tsx
+  - src/renderer/components/apps/AppNotifyChannelsSection.tsx
+  - src/renderer/components/apps/AppContactsList.tsx
+  - src/main/apps/runtime/im-auto-sync.ts
 promises:
   destination:
     en: A configured notice goes to its intended enabled destination.
@@ -22,7 +25,34 @@ promises:
   navigate:
     en: Opening a supported local notification returns to the referenced task.
     zh: 打开支持的本地通知会回到引用的任务。
+  run-results:
+    en: For each IM contact of a digital human I can choose, in words that name scheduled runs, whether every successful scheduled run's result is sent there, choose many contacts at once from the current search, and see how many are chosen; replies in chat are unaffected, and with none chosen the digital human can still message a contact only when its instructions say something needs attention.
+    zh: 对数字人的每个 IM 联系人，我能用点明「定时任务」的文案选择是否把每次成功的定时运行结果发过去，能对当前搜索结果一次全选或清空并看到已选数量；聊天回复不受影响；都不勾选时，数字人仍可按说明只在有事时主动发消息。
 scenarios:
+  - id: notifications.delivery.run-result-recipients
+    title:
+      en: Choose who gets scheduled run results
+      zh: 选择接收定时运行结果的联系人
+    verifies:
+      - run-results
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A digital human with IM Push on, a schedule and several IM contacts.
+        zh: 一位开启 IM 推送、有定时任务并有多个 IM 联系人的数字人。
+    steps:
+      - en: Search the contacts, use Select all, run the schedule, then Clear and run again with instructions to message only on a problem.
+        zh: 搜索联系人并全选，运行定时任务；再清空，并在说明里要求只在有问题时通知，再运行一次。
+    expected:
+      - en: The first run's result reaches every chosen chat and the count matches; the second sends nothing unless the run finds a problem.
+        zh: 第一次运行结果发到所有已选会话且数量一致；第二次只有发现问题时才发送。
   - id: notifications.delivery.background
     title:
       en: Receive and open a background completion notice
