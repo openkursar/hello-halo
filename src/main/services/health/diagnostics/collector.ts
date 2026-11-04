@@ -15,6 +15,18 @@ import { getRecentEvents } from '../health-checker'
 import { getImChannelStatuses } from '../../app-bridge'
 import { sanitizeReport } from './sanitizer'
 
+// Loaded on demand: the app manager is not part of this module's startup tier.
+async function countMcpServers(): Promise<number> {
+  try {
+    const { getAppManager } = await import('../../../apps/manager')
+    const manager = getAppManager()
+    return manager ? manager.listApps({ type: 'mcp' }).filter(a => a.status !== 'uninstalled').length : 0
+  } catch (error) {
+    console.warn('[Diagnostics] MCP server count unavailable:', error)
+    return 0
+  }
+}
+
 /**
  * Collect full diagnostic report
  */
@@ -65,13 +77,7 @@ export async function collectDiagnosticReport(): Promise<DiagnosticReport> {
       provider,
       hasApiKey,
       apiUrlHost,
-      mcpServerCount: (() => {
-        try {
-          const { getAppManager } = require('../../../apps/manager')
-          const manager = getAppManager()
-          return manager ? manager.listApps({ type: 'mcp' }).filter((a: any) => a.status !== 'uninstalled').length : 0
-        } catch { return 0 }
-      })()
+      mcpServerCount: await countMcpServers()
     },
 
     processes: {
