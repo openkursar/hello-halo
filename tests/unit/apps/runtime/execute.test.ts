@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import * as engineSelection from '../../../../src/main/apps/runtime/engine-selection'
 
 // ── Agent SDK + electron-touching dependencies (mirrors runtime.test.ts) ──
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
@@ -425,6 +426,7 @@ describe('executeRun — guards', () => {
 
 describe('executeRun — per-person engines', () => {
   it.each(['halo', 'anthropic', 'codex', 'dsh'] as const)('uses %s for credentials, prompt and session creation', async engineId => {
+    const prepare = vi.spyOn(engineSelection, 'prepareAppEngineSession')
     nextSession = new FakeSession({ script: [systemInit('engine-session'), assistantReport()] })
     vi.mocked(createSession).mockClear()
     vi.mocked(resolveCredentialsForSdk).mockClear()
@@ -435,6 +437,8 @@ describe('executeRun — per-person engines', () => {
     expect(buildAppSystemPrompt).toHaveBeenLastCalledWith(expect.objectContaining({ engineId }))
     expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ engineId }))
     expect(saveChatEngineBinding).toHaveBeenCalledWith('/tmp/space-1', 'app-1', result.runId, { version: 1, engineId, sessionId: 'engine-session' }, { routingEngine: engineId })
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ engineId, explicitEngine: true }))
+    prepare.mockRestore()
   })
 
   it('fails an unavailable explicit engine before credentials or a replacement session', async () => {
