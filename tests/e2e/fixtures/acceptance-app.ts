@@ -1,6 +1,6 @@
 import { test as base, expect, type ElectronApplication, type Page, type TestInfo } from '@playwright/test'
-import type { ChildProcess } from 'node:child_process'
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { execFile, type ChildProcess } from 'node:child_process'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createTestConfigDir, getAppEntryPath, launchElectronApp, cleanupTestConfigDir } from './electron'
@@ -93,7 +93,31 @@ async function open(entry: string, profile: string, register: (app: ElectronAppl
   return { app, window }
 }
 
-async function close(owned: OwnedApplication, phase: string) {
+/**
+ * Writes the native stacks and child processes of an application that outlived
+ * its close deadline (macOS). Runs in the background so the deadline itself is
+ * unchanged; the file lands in the test output directory.
+ */
+function recordStuckApplication(pid: number | undefined, file: string) {
+  if (process.platform !== 'darwin' || !pid) return
+  const raw = `${file}.raw`
+  try { mkdirSync(dirname(file), { recursive: true }) } catch { return }
+  execFile('/usr/bin/sample', [String(pid), '2', '-file', raw], { timeout: 15000 }, () => {
+    execFile('/bin/ps', ['-A', '-o', 'pid=,ppid=,stat=,etime=,comm='], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 }, (_error, listing) => {
+      try {
+        const children = String(listing ?? '').split('\n').filter(line => line.trim().split(/\s+/)[1] === String(pid))
+        const sample = existsSync(raw) ? readFileSync(raw, 'utf8') : 'sample unavailable\n'
+        const start = sample.indexOf('Call graph:')
+        const end = sample.indexOf('Binary Images:')
+        const stacks = sample.slice(start < 0 ? 0 : start, end < 0 ? undefined : end)
+        writeFileSync(file, `pid ${pid}\nchildren (pid ppid stat etime comm):\n${children.join('\n')}\n\n${stacks}`.replaceAll(process.cwd(), '<repository>'))
+      } catch { /* Evidence is best effort and must not affect the run. */ }
+      try { rmSync(raw, { force: true }) } catch { /* best effort */ }
+    })
+  })
+}
+
+async function close(owned: OwnedApplication, phase: string, stuckEvidence?: string) {
   const { app, child } = owned
   const attempt = observe(owned, observer => observer.begin(phase, 15000))
   if (hasExited(owned)) {
@@ -118,6 +142,7 @@ async function close(owned: OwnedApplication, phase: string) {
       Promise.all([closing, exited]),
       new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => {
         if (attempt) observe(owned, observer => observer.deadline(attempt))
+        if (stuckEvidence) recordStuckApplication(child?.pid, stuckEvidence)
         reject(new Error('Acceptance application did not close within 15 seconds'))
       }, 15000) }),
     ])
@@ -187,7 +212,7 @@ export const test = base.extend<Fixtures>({
     const closeOwned = async (app: ElectronApplication, phase: string) => {
       const owned = applications.find(owned => owned.app === app)
       if (!owned) throw new Error('Refusing to close an application outside this acceptance fixture')
-      await close(owned, phase)
+      await close(owned, phase, testInfo.outputPath(`stuck-application-${phase}-${applications.indexOf(owned)}.txt`))
     }
     const failures: unknown[] = []
     let session: AcceptanceApp | undefined
@@ -216,7 +241,7 @@ export const test = base.extend<Fixtures>({
         if (session && !session.window.isClosed()) await session.window.screenshot({ path: testInfo.outputPath('final-window.png') })
       } catch (error) { failures.push(error) }
       for (const owned of applications) {
-        try { await close(owned, 'teardown') } catch (error) { failures.push(error) }
+        try { await close(owned, 'teardown', testInfo.outputPath(`stuck-application-teardown-${applications.indexOf(owned)}.txt`)) } catch (error) { failures.push(error) }
       }
       try { await attachEvidence(profile, model, testInfo) } catch (error) { failures.push(error) }
       if (diagnoseShutdown) {
