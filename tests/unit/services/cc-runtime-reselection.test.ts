@@ -44,7 +44,7 @@ describe('explicit reselection of an automatic Claude Code path', () => {
     expect(before.selectedPath).toBeUndefined()
     expect(before.selected).toBeNull()
     expect(before.installations).toEqual(expect.arrayContaining([expect.objectContaining({ path: '/legacy/claude' })]))
-    expect((await getEngineAvailability(['anthropic']))[0]).toMatchObject({ available: false, reason: expect.stringContaining('Select an installation once in Settings > Advanced') })
+    expect((await getEngineAvailability(['anthropic']))[0]).toMatchObject({ available: false, reason: expect.stringContaining('Select an installation once in the Halo desktop app under Settings > Advanced') })
     expect(state.check).not.toHaveBeenCalled()
     expect(state.launch).not.toHaveBeenCalled()
     const list = renderToStaticMarkup(createElement(CcInstallationList, { installations: before.installations, selectedPath: before.selectedPath, onSelect: vi.fn(), onCheck: vi.fn() }))
