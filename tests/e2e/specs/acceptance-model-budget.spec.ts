@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Page, TestInfo } from '@playwright/test'
 import type { HaloAPI } from '../../../src/preload'
+import type { ImageAttachment } from '../../../src/shared/types/image-attachment'
 import { test, expect, acceptance, sendAcceptanceMessage, waitForAcceptanceIdle, readAcceptanceConversation, type AcceptanceApp } from '../fixtures/acceptance-app'
 import type { AcceptanceModel } from '../fixtures/acceptance-model'
 import { aiSection, providerField, sourceCard, readProviderConfiguration } from '../fixtures/acceptance-model-settings'
@@ -14,6 +15,9 @@ test.use({ startupObserver: resolve(dirname(fileURLToPath(import.meta.url)), '..
 
 type Engine = 'halo' | 'anthropic'
 type Budget = { contextWindow: number; maxOutputTokens: number }
+type PersistedConversation = {
+  messages: Array<{ id: string; role: string; content: string; images?: ImageAttachment[] }>
+}
 const defaults: Budget = { contextWindow: 200000, maxOutputTokens: 64000 }
 
 async function addAccount(page: Page, model: AcceptanceModel, id: string, name = 'Budget account', preset = false) {
@@ -115,10 +119,12 @@ async function sendBudget(app: AcceptanceApp, page: Page, model: AcceptanceModel
     expect(request.body.max_tokens).toBe(budget.maxOutputTokens)
   }
   const observations = await app.app.evaluate(() => (globalThis as unknown as { modelBudgetObservations: Array<Budget & { engine: string }> }).modelBudgetObservations)
-  expect(observations).toContainEqual(expect.objectContaining({ engine, ...budget, ...(engine === 'halo' ? { model: id } : {}) }))
-  const file = join(app.profile, '.halo/temp/conversations', `${turn.conversationId}.json`)
-  expect(JSON.parse(readFileSync(file, 'utf8')).engineBinding.engineId).toBe(engine)
   await info.attach('engine-budget-boundary', { body: JSON.stringify(observations), contentType: 'application/json' })
+  // Extended-context decoration belongs to the engine ID, never the wire or saved selection.
+  const engineModel = budget.contextWindow > 200000 ? `${id}[1m]` : id
+  expect(observations).toContainEqual(expect.objectContaining({ engine, ...budget, ...(engine === 'halo' ? { model: engineModel } : {}) }))
+  const file = join(app.profile, '.halo/temp/conversations', `${turn.conversationId}.json`)
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ engineBinding: { engineId: engine }, modelId: id })
   return turn
 }
 
@@ -247,20 +253,26 @@ for (const enabled of [true, false]) {
       const exchanges = model.exchanges.filter(item => item.request.lastUserText.includes(marker))
       expect(exchanges.length).toBeGreaterThan(0)
       const saved = await readAcceptanceConversation(page, turn.spaceId, turn.conversationId)
-      const image = saved.messages.find(item => item.role === 'user')?.images?.[0]
-      expect(image).toBeTruthy()
+      const file = join(acceptanceApp.profile, '.halo/temp/conversations', `${turn.conversationId}.json`)
+      // Desktop history returns file URLs; the persisted record retains the image bytes.
+      const persisted = JSON.parse(readFileSync(file, 'utf8')) as PersistedConversation
+      const user = persisted.messages.find(item => item.role === 'user' && item.content.includes(marker))!
+      expect(user.images).toHaveLength(1)
+      const image = user.images![0]
+      expect(image.data).toEqual(expect.any(String))
+      expect(image.data!.length).toBeGreaterThan(0)
+      expect(saved.messages.find(item => item.id === user.id)?.images).toEqual([
+        expect.objectContaining({ id: image.id, mediaType: image.mediaType })
+      ])
       for (const { request } of exchanges) {
         expect(request.body.model).toBe(id)
         const images = request.messages.flatMap(message => Array.isArray(message.content) ? message.content : []).filter(part => part.type === 'image' || part.type === 'image_url')
         expect(images.length).toBe(enabled ? 1 : 0)
-        if (enabled) {
-          expect(image!.data).toEqual(expect.any(String))
-          expect(image!.data!.length).toBeGreaterThan(0)
-          expect(JSON.stringify(images)).toContain(image!.data)
-        }
+        if (enabled) expect(JSON.stringify(images)).toContain(image.data)
       }
       const reopened = await acceptanceApp.restart()
       expect((await readAcceptanceConversation(reopened, turn.spaceId, turn.conversationId)).messages).toEqual(saved.messages)
+      expect(JSON.parse(readFileSync(file, 'utf8')).messages).toEqual(persisted.messages)
       await editAccount(reopened)
       await expect(aiSection(reopened).getByLabel('Vision', { exact: true })).toBeChecked({ checked: enabled })
       const account = readProviderConfiguration(acceptanceApp.profile).sources.find(item => item.name === 'Budget account')!
