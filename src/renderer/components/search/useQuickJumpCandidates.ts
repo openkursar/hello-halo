@@ -3,10 +3,11 @@
  * and title-match views) — prototype's CMDK_ITEMS, but built from real data
  * instead of a static demo list.
  *
- * Scope note: conversations are drawn from the *current* space only (the
- * same set already loaded for the sidebar), not aggregated across every
- * space — a cross-space conversation index doesn't exist yet, and building
- * one is out of scope for a command-palette quick-jump.
+ * Conversations come from the current space only — the set the sidebar has
+ * already loaded. Other spaces' lists live on disk, one index per space, and
+ * reading them all whenever the palette opens would grow with the user's
+ * data; each row and its section name the space instead, so the list never
+ * claims more than it holds.
  */
 import { useMemo } from 'react'
 import { useChatStore, usePulseItems } from '@/stores/chat.store'
@@ -47,7 +48,7 @@ export function useQuickJumpCandidates(): QuickJumpItem[] {
         type: 'conv',
         key: `conv:${c.id}`,
         title: c.title,
-        meta: t('Conversation'),
+        meta: spaceName(currentSpaceId!),
         updatedAt: c.updatedAt,
         conversationId: c.id,
         spaceId: currentSpaceId!,
