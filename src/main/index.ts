@@ -10,7 +10,12 @@
 // This replaces console.log/warn/error globally with electron-log
 // Logs are written to: ~/Library/Logs/Halo/ (macOS), %USERPROFILE%\AppData\Roaming\Halo\logs (Windows)
 import log from 'electron-log/main.js'
-import { createNumberedArchiveFn, MAIN_LOG_ARCHIVES, MAIN_LOG_MAX_BYTES } from './foundation/logging'
+import {
+  createNumberedArchiveFn,
+  MAIN_LOG_ARCHIVES,
+  MAIN_LOG_MAX_BYTES,
+  routeUncaughtErrorsToMainLog,
+} from './foundation/logging'
 
 // Initialize for renderer process support (IPC transport)
 log.initialize()
@@ -94,6 +99,7 @@ log.errorHandler.startCatching({
     if (errorName === 'Unhandled') showUncaughtErrorNotice(error)
   }
 })
+routeUncaughtErrorsToMainLog()
 
 // Replace global console with electron-log (performance: direct replacement, no wrapper)
 Object.assign(console, log.functions)
