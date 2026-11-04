@@ -41,7 +41,7 @@ import { ImageAttachmentPreview } from './ImageAttachmentPreview'
 import { KnowledgeBaseButton } from './KnowledgeBaseButton'
 import { processImage, isValidImageType, formatFileSize } from '../../utils/imageProcessor'
 import { startDigitalHumanConversation } from '../../utils/conversation-navigation'
-import { prefillSkillCommand } from '../../utils/skill-command'
+import { completeSlashCommand, prefillSkillCommand } from '../../utils/skill-command'
 import type { ImageAttachment } from '../../types'
 import type { FileQueryItem } from '../../../shared/types/artifact'
 import { normalizePathLike } from '../../../shared/file-path-match'
@@ -1007,8 +1007,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     }
     // A command is not a goal.
     if (goalMode) goal?.exit()
-    const newContent = item.command + ' '
-    setContent(newContent)
+    setContent(current => completeSlashCommand(current, item.command))
     setSlashMenuOpen(false)
     setSlashSelectedIndex(0)
     // Restore focus
