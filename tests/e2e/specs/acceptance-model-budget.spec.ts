@@ -9,6 +9,7 @@ import { test, expect, acceptance, sendAcceptanceMessage, waitForAcceptanceIdle,
 import type { AcceptanceModel } from '../fixtures/acceptance-model'
 import { aiSection, providerField, sourceCard, readProviderConfiguration } from '../fixtures/acceptance-model-settings'
 import { navigateToChat, navigateToSettings } from '../fixtures/helpers'
+import { listManagedConversations } from '../fixtures/acceptance-management'
 
 test.setTimeout(120000)
 test.use({ startupObserver: resolve(dirname(fileURLToPath(import.meta.url)), '../fixtures/model-budget-observer.cjs') })
@@ -90,10 +91,14 @@ async function restartEngine(app: AcceptanceApp, engine: Engine) {
 
 async function selectBudgetModel(app: AcceptanceApp, page: Page, id: string) {
   await navigateToChat(page)
+  // Existing conversations retain their engine when the global default changes.
+  const before = new Set((await listManagedConversations(page)).map(conversation => conversation.id))
+  await page.getByRole('button', { name: 'New', exact: true }).click()
+  await expect.poll(async () => (await listManagedConversations(page)).filter(conversation => !before.has(conversation.id)).length).toBe(1)
+  await expect(page.locator('.message-user')).toHaveCount(0)
   const source = readProviderConfiguration(app.profile).sources.find(item => item.name === 'Budget account')!
   expect(source.model).toBe(id)
   const label = source.availableModels?.find(model => model.id === id)?.name || id
-  // Settings changes the default, not the conversation created at fixture startup.
   const picker = page.locator('button[aria-label][title]').filter({ has: page.locator('svg.lucide-chevron-down') })
   await expect(picker).toHaveCount(1)
   await picker.click()
