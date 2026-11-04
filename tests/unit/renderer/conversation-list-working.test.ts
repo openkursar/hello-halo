@@ -41,7 +41,6 @@ vi.mock('../../../src/renderer/components/chat/conversation-list-panes', () => (
   usePaneResize: () => ({ height: 160, dragging: false, handleProps: {} }),
   PaneResizeHandle: () => null,
 }))
-vi.mock('../../../src/renderer/components/chat/EngineBadge', () => ({ EngineBadge: () => null }))
 vi.mock('../../../src/renderer/components/apps/AutomationAvatar', () => ({ AutomationAvatar: () => null }))
 vi.mock('../../../src/renderer/services/home-telemetry', () => ({ markEntry: vi.fn(), trackHome: vi.fn(), trackNavigate: vi.fn() }))
 vi.mock('../../../src/renderer/utils/conversation-navigation', () => ({ openDigitalHumanChat: vi.fn() }))
