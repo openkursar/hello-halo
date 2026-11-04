@@ -82,7 +82,11 @@ test('a digital human\u2019s own chat organizes a temporary team and receives it
     appId: automation.appId, spaceId, conversationId: chat,
   })
   expect(deleted.success).toBe(true)
-  await expect.poll(async () => (await window.evaluate(id => (globalThis as unknown as { halo: HaloAPI }).halo.teamGetDetail(id), collab.teamId)).success, {
+  // A dissolved team reads back as a successful lookup with no data.
+  await expect.poll(async () => {
+    const detail = await window.evaluate(id => (globalThis as unknown as { halo: HaloAPI }).halo.teamGetDetail(id), collab.teamId)
+    return { success: detail.success, team: detail.data ?? null, association: (await api(window).collabFor(chat)).data ?? null }
+  }, {
     timeout: 30000, message: 'Deleting the chat dissolves the temporary collaboration it started',
-  }).toBe(false)
+  }).toEqual({ success: true, team: null, association: null })
 })
