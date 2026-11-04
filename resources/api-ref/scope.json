@@ -301,6 +301,14 @@
   },
   {
     "method": "GET",
+    "path": "/api/apps/tags"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/tags/rename"
+  },
+  {
+    "method": "GET",
     "path": "/api/apps"
   },
   {

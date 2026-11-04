@@ -79,6 +79,8 @@ GET    /api/im-sessions/linked                                     [ai]       ch
 POST   /api/im-sessions/set-push-link                              [ai]       channels,digital-human  Let a digital human push to an IM chat another digital human's bot knows, or stop it
 GET    /api/auth/providers                                         [ai]       settings                List the sign-in and model providers this build offers
 GET    /api/system/version                                         [ai]       settings                Read the running Halo version
+GET    /api/apps/tags                                              [ai]       digital-human           List the user's tags on one list (digital humans, skills or MCP servers), with how many items carry each
+POST   /api/apps/tags/rename                                       [ai]       digital-human           Rename or remove one of the user's tags across a list (digital humans, skills or MCP servers)
 GET    /api/apps                                                   [ai]       digital-human           List digital humans (and other installed apps) in a space
 POST   /api/apps/install                                           [wrapped]  digital-human           Install a digital human (or other app type) from its full definition (spec) object
 GET    /api/apps/<appId>                                           [ai]       digital-human           Get one installed digital human (or other app) by id

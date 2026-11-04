@@ -614,6 +614,16 @@
   },
   {
     "method": "GET",
+    "path": "/api/apps/tags",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/tags/rename",
+    "group": "digital-human"
+  },
+  {
+    "method": "GET",
     "path": "/api/apps/pending-inbox"
   },
   {
