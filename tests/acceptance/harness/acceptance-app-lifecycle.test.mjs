@@ -75,7 +75,9 @@ async function workspace(context, settings = {}) {
     root,
     async run(use = async () => {}) {
       const info = { outputPath: name => path.join(root, name), attach: async (name, attachment) => { if (name === settings.attachmentFailureAt) throw settings.attachmentFailure; state.attachments.push({ name, attachment }) } }
-      return fixtureDefinition.acceptanceApp({ model: { url: 'http://127.0.0.1:9', exchanges: [], errors: [] }, diagnoseShutdown: settings.diagnoseShutdown ?? false }, use, info)
+      const model = { url: 'http://127.0.0.1:9', exchanges: [], errors: [] }
+      const aiSource = { provider: 'openai', apiKey: 'local-scripted-endpoint', apiUrl: model.url, model: 'gpt-4o' }
+      return fixtureDefinition.acceptanceApp({ model, aiSource, diagnoseShutdown: settings.diagnoseShutdown ?? false }, use, info)
     },
     async inspect(index = 0) {
       const child = state.children[index]
