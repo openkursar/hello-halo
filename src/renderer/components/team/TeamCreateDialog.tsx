@@ -119,8 +119,8 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
     return found?.name ?? ''
   }, [allSpaces, currentSpace, selectedSpaceId])
 
-  // Show ALL of the user's digital humans (any space) so they can be composed
-  // into a team — joining never moves a digital human out of its own space.
+  // Digital humans from any space can be composed into a team — joining never
+  // moves one out of its own space.
   const availableApps = useMemo(() => teamMemberCandidates(apps, teams), [apps, teams])
 
   const addedApps = useMemo(

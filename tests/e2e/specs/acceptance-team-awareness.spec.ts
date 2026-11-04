@@ -127,7 +127,7 @@ test('a digital human lists Operate Halo as always on, with no switch to turn it
   await installTeammate(window, space.id, name, 'Answer only what is asked.')
   await openManagedPersonSettings(window, name)
   await expect(window.getByText('Operate Halo', { exact: true })).toHaveCount(0)
-  // #462 (d8998d25) made this the Other group, collapsed while web search is on.
+  // Operate Halo sits in the Other group, collapsed while web search is on.
   const other = window.getByRole('button', { name: 'Other: web search, memory, operate Halo', exact: true })
   await expect(other).toHaveAttribute('aria-expanded', 'false')
   await other.click()

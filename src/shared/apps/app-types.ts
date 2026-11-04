@@ -600,8 +600,8 @@ export function isConversationCollabEnabled(app: Pick<InstalledApp, 'permissions
 
 /**
  * The switch for going online to look things up: Halo's web search and the
- * engine's own web search and page fetch. On unless the owner turns it off;
- * the AI Browser keeps its own switch.
+ * engine's own web search tool. On unless the owner turns it off; opening a
+ * given page and the AI Browser keep their own controls.
  */
 export const WEB_SEARCH_PERMISSION = 'web-search'
 
