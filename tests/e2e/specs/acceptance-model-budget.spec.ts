@@ -84,9 +84,26 @@ async function restartEngine(app: AcceptanceApp, engine: Engine) {
   return page
 }
 
+async function selectBudgetModel(app: AcceptanceApp, page: Page, id: string) {
+  await navigateToChat(page)
+  const source = readProviderConfiguration(app.profile).sources.find(item => item.name === 'Budget account')!
+  expect(source.model).toBe(id)
+  const label = source.availableModels?.find(model => model.id === id)?.name || id
+  // Settings changes the default, not the conversation created at fixture startup.
+  const picker = page.locator('button[aria-label][title]').filter({ has: page.locator('svg.lucide-chevron-down') })
+  await expect(picker).toHaveCount(1)
+  await picker.click()
+  await page.getByTitle('Switch model', { exact: true }).click()
+  const account = page.getByTitle(source.name, { exact: true })
+  if (await account.getAttribute('aria-expanded') !== 'true') await account.click()
+  await account.locator('..').getByRole('button', { name: label, exact: true }).click()
+  await expect(page.getByTitle('Switch model', { exact: true })).toHaveCount(0)
+  await expect(picker).toHaveAttribute('title', label)
+}
+
 async function sendBudget(app: AcceptanceApp, page: Page, model: AcceptanceModel, id: string, budget: Budget, engine: Engine, info: TestInfo) {
   model.respond(() => ({ text: 'Model budget received.' }))
-  await navigateToChat(page)
+  await selectBudgetModel(app, page, id)
   const marker = `Budget verification ${randomUUID()}`
   const turn = await sendAcceptanceMessage(page, marker)
   await expect(page.locator('.message-assistant').last()).toContainText('Model budget received.', { timeout: 45000 })
@@ -205,7 +222,7 @@ for (const enabled of [true, false]) {
       await saveAccount(window)
       const page = await restartEngine(acceptanceApp, 'halo')
       model.respond(() => ({ text: 'Attachment request received.' }))
-      await navigateToChat(page)
+      await selectBudgetModel(acceptanceApp, page, id)
       const marker = `Image ${randomUUID()}`
       const imageData = await page.evaluate(marker => {
         const canvas = document.createElement('canvas')
