@@ -19,9 +19,19 @@ export interface AcceptanceApp {
   restart(afterClose?: (profile: string) => void | Promise<void>): Promise<Page>
 }
 
+/** The single model account seeded into the isolated profile; defaults to the scripted model. */
+export interface AcceptanceSource {
+  provider: string
+  apiUrl: string
+  apiKey: string
+  model: string
+  apiType?: 'chat_completions' | 'responses' | 'anthropic_passthrough' | 'kiro'
+}
+
 interface Fixtures {
   diagnoseShutdown: boolean
   model: AcceptanceModel
+  aiSource: AcceptanceSource
   acceptanceApp: AcceptanceApp
   window: Page
 }
@@ -130,14 +140,17 @@ export const test = base.extend<Fixtures>({
     const model = await startAcceptanceModel()
     try { await use(model) } finally { await model.close() }
   },
-  acceptanceApp: async ({ model, diagnoseShutdown }, use, testInfo) => {
+  aiSource: async ({ model }, use) => {
+    await use({ provider: 'openai', apiKey: 'local-scripted-endpoint', apiUrl: model.url, model: 'gpt-4o' })
+  },
+  acceptanceApp: async ({ model, aiSource, diagnoseShutdown }, use, testInfo) => {
     const entry = getAppEntryPath()
     const profile = createTestConfigDir(entry, [])
     const file = join(profile, '.halo/config.json')
     const config = JSON.parse(readFileSync(file, 'utf8'))
     const now = new Date().toISOString()
-    config.api = { provider: 'openai', apiKey: 'local-scripted-endpoint', apiUrl: model.url, model: 'gpt-4o' }
-    config.aiSources = { version: 2, currentId: 'acceptance-local', sources: [{ id: 'acceptance-local', name: 'Local acceptance model', authType: 'api-key', ...config.api, availableModels: [{ id: 'gpt-4o', name: 'gpt-4o' }], createdAt: now, updatedAt: now }] }
+    config.api = { provider: aiSource.provider, apiKey: aiSource.apiKey, apiUrl: aiSource.apiUrl, model: aiSource.model }
+    config.aiSources = { version: 2, currentId: 'acceptance-local', sources: [{ id: 'acceptance-local', name: 'Local acceptance model', authType: 'api-key', ...aiSource, availableModels: [{ id: aiSource.model, name: aiSource.model }], createdAt: now, updatedAt: now }] }
     config.agent = { ...config.agent, sdkEngine: 'halo', configDirMode: 'custom', customConfigDir: join(profile, 'sdk-state'), maxTurns: 16 }
     config.imChannels = { instances: [] }
     config.notificationChannels = {}

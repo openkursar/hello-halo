@@ -1,0 +1,69 @@
+version: 1
+id: chat.provider-replies
+module: chat
+title:
+  en: See why a model gave no answer
+  zh: 看到模型没有给出回答的原因
+story:
+  en: When the model declines or returns no answer, I promptly see the reason instead of an endless wait, and I can keep chatting.
+  zh: 模型拒绝回答或没有返回答案时，我能很快看到原因，而不是一直等待，并且可以继续对话。
+basis: documented
+references:
+  - src/main/openai-compat-router/adapters/kiro.adapter.ts
+  - src/main/openai-compat-router/adapters/kiro-event-stream.ts
+  - tests/unit/openai-compat-router/kiro-adapter-stream.test.ts
+  - tests/e2e/specs/acceptance-kiro-replies.spec.ts
+promises:
+  reason:
+    en: A refusal or an empty answer from the model is shown as a failure that carries the provider's reason; no answer is invented.
+    zh: 模型拒绝或回答为空时显示为失败，并带上服务给出的原因；不会虚构回答。
+  no-retry:
+    en: A refusal or an empty answer is not retried automatically; the turn ends after one request and the conversation stays usable.
+    zh: 拒绝或空回答不会被自动重试；本轮只发出一次请求即结束，对话仍可继续。
+scenarios:
+  - id: chat.provider-replies.kiro-refusal
+    title:
+      en: A Kiro account refuses the request
+      zh: Kiro 账号拒绝了请求
+    verifies: [reason, no-retry]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: The only model account is a Kiro account whose endpoint answers with reasoning followed by a content-filter refusal and its explanation.
+        zh: 唯一的模型账号是 Kiro 账号，其端点先返回思考内容，再返回内容过滤拒绝及其说明。
+    steps:
+      - en: Send a message, wait for the turn to end, then send another message that the endpoint answers normally.
+        zh: 发送消息，等待本轮结束，再发送一条端点会正常回答的消息。
+    expected:
+      - en: The refusal explanation appears in the chat, no assistant answer is stored, exactly one request reaches the endpoint for the turn, and the next message gets its answer.
+        zh: 聊天中显示拒绝说明，没有保存助手回答，本轮只有一次请求到达端点，下一条消息正常得到回答。
+    notes:
+      en: The real app runs on the Halo SDK engine with a seeded API-key account using the Kiro protocol; only the Kiro endpoint is a local scripted event-stream server. It does not cover Kiro sign-in, token refresh, account routing headers, tool calls or other Kiro exception types; those stay with the adapter unit tests. Before the fix the reply ended as an empty success with a generic message, so the reason text is what tells old from new; the single-request check guards that the failure is not retried. Reported in https://github.com/openkursar/hello-halo/issues/416 (comments of 2026-10-23 and 2026-11-02).
+      zh: 真实应用在 Halo SDK 引擎上运行，预置一个使用 Kiro 协议的 API Key 账号，只有 Kiro 端点被替换为本地脚本化事件流服务。不覆盖 Kiro 登录、令牌刷新、账号路由请求头、工具调用及其他 Kiro 异常类型，这些仍由适配器单元测试负责。修复前该回复以空的成功结束并显示通用提示，因此原因文字是区分修复前后的依据；单次请求检查用于防止该失败被重试。用户报告见 https://github.com/openkursar/hello-halo/issues/416（2026-10-23 与 2026-11-02 的评论）。
+  - id: chat.provider-replies.kiro-reasoning-only
+    title:
+      en: A Kiro account returns reasoning without an answer
+      zh: Kiro 账号只返回思考、没有回答
+    verifies: [reason, no-retry]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: The only model account is a Kiro account whose endpoint streams reasoning and then ends without answer text.
+        zh: 唯一的模型账号是 Kiro 账号，其端点只输出思考内容，没有回答文字就结束。
+    steps:
+      - en: Send a message, wait for the turn to end, then send another message that the endpoint answers normally.
+        zh: 发送消息，等待本轮结束，再发送一条端点会正常回答的消息。
+    expected:
+      - en: The chat says the model returned no content because there was reasoning only, the reasoning is not stored as the answer, exactly one request reaches the endpoint for the turn, and the next message gets its answer.
+        zh: 聊天中说明模型因只有思考而没有返回内容，思考不会被保存为回答，本轮只有一次请求到达端点，下一条消息正常得到回答。
+    notes:
+      en: Same boundary as the refusal scenario. A stream with no events at all is deliberately still retryable and is not covered here. Reported in https://github.com/openkursar/hello-halo/issues/416 (comments of 2026-10-23 and 2026-11-02).
+      zh: 边界同拒绝场景。完全没有事件的流仍按设计可重试，不在此覆盖。用户报告见 https://github.com/openkursar/hello-halo/issues/416（2026-10-23 与 2026-11-02 的评论）。
