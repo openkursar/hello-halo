@@ -15,6 +15,7 @@ import { useEngineStore } from '../../stores/engine.store'
 import { useAppStore } from '../../stores/app.store'
 import { DEFAULT_DISABLED_TOOLS } from '../../../shared/constants/disabled-tools'
 import { DEFAULT_MAX_TURNS } from '../../../shared/constants/agent-limits'
+import { hasExplicitCcSelection } from '../../../shared/types/cc-runtime'
 import {
   DEFAULT_MAX_RESIDENT_SESSIONS,
   MAX_MAX_RESIDENT_SESSIONS,
@@ -121,9 +122,11 @@ interface AdvancedSectionProps {
 export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   const { t } = useTranslation()
 
+  const configuredEngine = config?.agent?.sdkEngine === 'anthropic' && !hasExplicitCcSelection(config.agent.ccRuntime, config.aiSources)
+    ? 'halo' : config?.agent?.sdkEngine ?? 'halo'
   const [maxTurns, setMaxTurnsState] = useState(config?.agent?.maxTurns ?? DEFAULT_MAX_TURNS)
   const [sdkEngine, setSdkEngineState] = useState<EngineId>(
-    config?.agent?.sdkEngine ?? 'halo'
+    configuredEngine
   )
   const [disabledTools, setDisabledToolsState] = useState<string[]>(
     config?.agent?.disabledTools ?? [...DEFAULT_DISABLED_TOOLS]
@@ -155,7 +158,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   )
   const [capsPanelOpen, setCapsPanelOpen] = useState(false)
   const [engineAvailability, setEngineAvailability] = useState<EngineAvailabilityReport | null>(null)
-  const [ccOpen, setCcOpen] = useState(config?.agent?.sdkEngine === 'anthropic' || useAppStore.getState().settingsFocus === 'claude-code')
+  const [ccOpen, setCcOpen] = useState(configuredEngine === 'anthropic' || useAppStore.getState().settingsFocus === 'claude-code')
   const engineChoice = useRef(0)
   const ccPanelId = useId()
   const ccDisclosure = useRef<HTMLButtonElement>(null)
@@ -252,7 +255,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
     } catch (error) {
       console.error('[AdvancedSection] Failed to update sdkEngine:', error)
       if (choice !== engineChoice.current) return
-      setSdkEngineState(config?.agent?.sdkEngine ?? 'halo')
+      setSdkEngineState(configuredEngine)
       setEngineError(t('The engine selection could not be saved. Please try again.'))
       return
     }

@@ -1,7 +1,7 @@
 // External runtime selection and provisioning; no engine sessions or automatic discovery.
 export {
   getCcRuntimeStatus, configureCcRuntime, scanCcInstallations, probeCcInstallation,
-  selectCcInstallation, resolveCcRuntimeLaunch, discoverAndSelectCcRuntime,
+  selectCcInstallation, resolveCcRuntimeLaunch,
   installCcRuntime, cancelCcInstall, shutdownCcRuntime, lookupCcRelease
 } from './service'
 export { CcRuntimeError } from './errors'

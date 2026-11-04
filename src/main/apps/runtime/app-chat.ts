@@ -55,7 +55,7 @@ import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable 
 import { acquireChatBrowserContext, bindChatBrowserSession, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
 import { opensWithSlashCommand } from '../../services/agent/opening-context'
-import { acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
+import { acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, resolveHistoricalEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
@@ -1374,7 +1374,7 @@ async function runAppChatTurn(
     // Load saved sessionId for resume when V2 session is rebuilt after idle
     // timeout, process crash, or config change (same pattern as send-message.ts)
     const sessionPlan = prepareAppEngineSession({
-      engineId, state: engineState, spacePath, appId, runId: chatRunId, conversationId,
+      engineId, explicitEngine: Boolean(app.userOverrides?.engineId), state: engineState, spacePath, appId, runId: chatRunId, conversationId,
       legacySessionId: forkResumeSessionId, excludeInputIds: request.recordedInputIds,
       readPendingInputIds: () => [
         ...chatDelivery?.pendingRecordedInputIds(conversationId) ?? [],
@@ -1886,7 +1886,11 @@ export function loadChatMessagesForConversation(
 export function loadChatEngineMetadata(spacePath: string, appId: string, conversationId: string): AppChatEngineMetadata {
   const path = chatRecordPath(appId, conversationId, spacePath)
   const state = loadChatEngineState(path, appId, deriveRunId(conversationId, appId))
-  const engineId = getSessionEngineId(conversationId) ?? state.binding?.engineId ?? state.routingEngine ?? (state.sessionId ? getLegacyEngine() : undefined)
+  const historical = state.binding?.engineId ?? state.routingEngine
+  const override = getAppManager()?.getApp(appId)?.userOverrides?.engineId
+  const engineId = getSessionEngineId(conversationId)
+    ?? (historical ? override ? historical : resolveHistoricalEngine(historical)
+      : override ?? (state.sessionId ? getLegacyEngine() : undefined))
   return { ...(engineId ? { engineId } : {}), ...(state.binding ? { engineBinding: state.binding } : {}) }
 }
 

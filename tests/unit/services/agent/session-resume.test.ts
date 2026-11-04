@@ -116,10 +116,10 @@ it('resumes directly in the Claude Code directory without copying into Halo', as
   expect(existsSync(transcript(join(paths.userData, 'claude-config')))).toBe(false)
 })
 
-it('starts fresh when no transcript exists', async () => {
+it('refuses to start empty when no transcript exists', async () => {
   const { configDir, resume } = fixture()
-  await resume(configDir)
-  expect(createSession.mock.calls[0][0]).not.toHaveProperty('resume')
+  await expect(resume(configDir)).rejects.toBeInstanceOf(NativeSessionResumeError)
+  expect(createSession).not.toHaveBeenCalled()
 })
 
 it.each(['codex', 'dsh'])('leaves %s resumption to its adapter', async engine => {
@@ -155,15 +155,10 @@ describe('continuing from the transcript when the stored record is lost', () => 
     acquired.release()
   })
 
-  it('still starts a legacy chat fresh when it has no transcript either', async () => {
+  it('refuses a legacy continuation when both history sources are unavailable', async () => {
     const { configDir, sessionId } = fixture()
-    createSession.mockResolvedValue(session())
-    const { acquired, sink } = await lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => { throw new Error('no record') } })
-    expect(createSession.mock.calls[0][0]).not.toHaveProperty('resume')
-    expect(createSession.mock.calls[0][0]).not.toHaveProperty('engineHandoffContent')
-    await acquired.send('Next question')
-    expect(sink.onContinuedFromRecord).not.toHaveBeenCalled()
-    acquired.release()
+    await expect(lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => { throw new Error('no record') } })).rejects.toThrow('no record')
+    expect(createSession).not.toHaveBeenCalled()
   })
 
   it('asks the halo engine for an exact restore and falls back to the transcript when it refuses', async () => {
@@ -177,13 +172,12 @@ describe('continuing from the transcript when the stored record is lost', () => 
     expect(createSession.mock.calls[1][0].strictResume).toBeUndefined()
   })
 
-  it('resumes a legacy record with what the engine can read when there is no transcript to fall back on', async () => {
+  it('preserves the original file when strict restore fails without fallback history', async () => {
     const { configDir, sessionId, save } = fixture()
     save(configDir)
     createSession.mockRejectedValueOnce(new NativeSessionResumeError('halo', sessionId)).mockResolvedValue(session())
-    await lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => '' })
-    expect(createSession.mock.calls[1][0]).toMatchObject({ resume: sessionId })
-    expect(createSession.mock.calls[1][0].strictResume).toBeUndefined()
+    await expect(lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => '' })).rejects.toBeInstanceOf(NativeSessionResumeError)
+    expect(createSession).toHaveBeenCalledOnce()
   })
 
   it('does not ask other engines for a strict restore', async () => {

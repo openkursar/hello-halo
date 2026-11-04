@@ -26,7 +26,7 @@ vi.mock('../../../src/main/services/cc-runtime/probe', () => ({
   launchForInstallation: vi.fn()
 }))
 
-import { cancelCcInstall, configureCcRuntime, discoverAndSelectCcRuntime, getCcRuntimeStatus, installCcRuntime, lookupCcRelease, selectCcInstallation } from '../../../src/main/services/cc-runtime'
+import { cancelCcInstall, configureCcRuntime, getCcRuntimeStatus, installCcRuntime, lookupCcRelease, selectCcInstallation } from '../../../src/main/services/cc-runtime'
 import { clearReleaseCache } from '../../../src/main/services/cc-runtime/releases'
 
 const artifact = Buffer.from('native release fixture bytes')
@@ -52,12 +52,18 @@ beforeEach(() => {
 })
 
 describe('managed CC installation', () => {
+  it('marks a deliberate local selection without inferring intent from its previous path', async () => {
+    mocks.config.agent.ccRuntime = { selectedPath: '/old/claude', discoveryCompleted: true }
+    await selectCcInstallation('/chosen/claude')
+    expect(mocks.config.agent.ccRuntime).toMatchObject({ selectedPath: '/chosen/claude', selectionOrigin: 'user' })
+  })
+
   it('checks the manifest checksum, publishes atomically, and preserves other agent settings', async () => {
     downloads()
     const result = await installCcRuntime()
     expect(await readFile(result.path)).toEqual(artifact)
     expect(result.path).not.toContain('.install-')
-    expect(mocks.config.agent).toMatchObject({ sdkEngine: 'halo', ccRuntime: { selectedPath: result.path } })
+    expect(mocks.config.agent).toMatchObject({ sdkEngine: 'halo', ccRuntime: { selectedPath: result.path, selectionOrigin: 'user' } })
     expect((await getCcRuntimeStatus()).install.phase).toBe('complete')
     expect((await readdir(join(globalThis.__HALO_TEST_DIR__, '.halo', 'runtimes', 'claude-code'))).some(name => name.startsWith('.install-'))).toBe(false)
   })
@@ -304,15 +310,6 @@ describe('managed CC installation', () => {
     release()
     await installing
     expect(mocks.config.agent.ccRuntime.selectedPath).toBe('/user/preferred/claude')
-  })
-
-  it('bounds migration detection and never selects an aborted result', async () => {
-    mocks.config.agent.ccRuntime.selectedPath = '/existing/claude'
-    mocks.probe.mockImplementation((_path, options) => new Promise(resolve => options.signal.addEventListener('abort', () => resolve({ compatibility: 'unavailable', issue: 'cancelled' }), { once: true })))
-    const start = Date.now()
-    expect(await discoverAndSelectCcRuntime({ deadlineMs: 25 })).toBeNull()
-    expect(Date.now() - start).toBeLessThan(500)
-    expect(mocks.config.agent.ccRuntime.selectedPath).toBe('/existing/claude')
   })
 
   it('does no subprocess or network work when reading settings and rejects unsafe source values', async () => {

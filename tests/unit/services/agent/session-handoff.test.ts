@@ -406,7 +406,7 @@ beforeEach(async () => {
   m.writeEvent.mockReset()
   m.buildMemorySnapshot.mockReset().mockImplementation(async (layout: MemoryLayout) => memorySnapshot(layout))
   m.ensureMemoryFile.mockReset().mockResolvedValue(false)
-  saveConfig({ aiSources: { version: 2, currentId: 'account-b', sources: [account('account-a'), account('account-b')] } })
+  saveConfig({ agent: { maxTurns: 200, ccRuntime: { selectionOrigin: 'user' } }, aiSources: { version: 2, currentId: 'account-b', sources: [account('account-a'), account('account-b')] } })
   await new Promise<void>(resolve => setTimeout(resolve, 0))
 })
 

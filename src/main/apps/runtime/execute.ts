@@ -612,7 +612,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //   All other triggers → create a fresh session.
     const escalationResumeId = trigger.escalation?.sessionId
     const continueResumeId = trigger.continue?.sessionId
-    const sessionPlan = prepareAppEngineSession({ engineId, state: engineState, legacySessionId, spacePath: environment.spacePath, appId: app.id, runId, conversationId: sessionKey })
+    const sessionPlan = prepareAppEngineSession({ engineId, explicitEngine: Boolean(app.userOverrides?.engineId), state: engineState, legacySessionId, spacePath: environment.spacePath, appId: app.id, runId, conversationId: sessionKey })
     if (sessionPlan.engineHandoffContent) sdkOptions.engineHandoffContent = sessionPlan.engineHandoffContent
     if (sessionPlan.strictNativeResume) sdkOptions.strictNativeResume = true
     const resumeGates = sessionPlan.recoverNativeSession ? { recoverNativeSession: sessionPlan.recoverNativeSession } : undefined

@@ -237,9 +237,12 @@ const { loadChatSessionId } = vi.hoisted(() => ({ loadChatSessionId: vi.fn<[], s
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
   getImSessionRegistry: () => sessionRegistry.current,
 }))
+const { prepareAppEngineSession } = vi.hoisted(() => ({
+  prepareAppEngineSession: vi.fn((options: { state: { sessionId?: string }; legacySessionId?: string }) => ({ resumeSessionId: options.state.sessionId ?? options.legacySessionId })),
+}))
 vi.mock('../../../../src/main/apps/runtime/engine-selection', () => ({
   resolveAppSessionEngine: async (selection: { engineId?: string }) => selection.engineId ?? 'halo',
-  prepareAppEngineSession: (options: { state: { sessionId?: string }; legacySessionId?: string }) => ({ resumeSessionId: options.state.sessionId ?? options.legacySessionId }),
+  prepareAppEngineSession,
 }))
 
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
@@ -436,6 +439,12 @@ function keptMemberContext(): void {
 }
 
 describe('a temporary collaboration member mounts no memory and no digital-human tools', () => {
+  it('passes a digital human explicit engine choice to history preparation', async () => {
+    app.userOverrides = { engineId: 'anthropic' }
+    prepareAppEngineSession.mockClear()
+    await sendAppChatMessage(memberTurn())
+    expect(prepareAppEngineSession).toHaveBeenCalledWith(expect.objectContaining({ engineId: 'anthropic', explicitEngine: true }))
+  })
   beforeEach(() => {
     buildUserSessionSdkOptions.mockClear()
     beginRound.mockClear()

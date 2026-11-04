@@ -9,7 +9,7 @@ consume only `index.ts`; renderer-safe contracts live in `shared/types/cc-runtim
 This boundary keeps external distribution concerns out of the engine adapter.
 
 There is no bundled executable, automatic download, startup scan, filesystem
-watcher or background upgrade. Migration may explicitly request one bounded scan.
+watcher or background upgrade. Startup never requests discovery.
 Ordinary launch resolution examines only the saved selection with an eight-second
 total deadline that aborts the probe process. Manual checks allow twenty seconds
 per stage. User-owned files are never modified; environment overrides affect only
@@ -54,16 +54,17 @@ native/npm locations, and a bounded set of installed Node version directories.
 It never recurses through user data. A directory chosen by the user is resolved
 against a small list of recognized binary/package layouts. Symlinks retain the
 user-facing launcher path but resolve to a stamped target for process creation.
-The explicit migration helper has an eight-second total deadline and stops at
-the first compatible installation; it never selects after cancellation. Its
-caller persists `discoveryCompleted` so an unsuccessful migration does not scan
-again at every launch. Settings discovery remains an explicit user action.
+Discovery runs only after an explicit Settings action. The legacy
+`discoveryCompleted` field is read-compatible but no longer written; startup
+neither scans nor selects an installation.
 Settings discovery has a twelve-second total deadline and returns completed
 checks with `truncated: true` on timeout. The deadline aborts real probe children;
 an uncancellable filesystem lookup cannot hold the response and cannot launch
 more probes after it eventually returns.
 
-`agent.ccRuntime` stores the chosen launcher and download preferences. Selecting
+`agent.ccRuntime` stores the chosen launcher and download preferences. Manual selection
+and installation persist `selectionOrigin: 'user'`; old selected paths alone cannot
+prove intent because automatic migration also wrote them. Selecting
 requires a successful probe and a persisted config readback. Choosing a new runtime
 does not interrupt existing sessions. Migration and engine fallback are owned by
 their callers, not this service.

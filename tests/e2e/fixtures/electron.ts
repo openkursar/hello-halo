@@ -291,7 +291,7 @@ export function cleanupTestConfigDir(testDir: string): void {
  * `createTestConfigDir()` and this call, then reuse the exact same launch
  * behavior (env vars, GPU/accel flags) instead of duplicating it.
  */
-export async function launchElectronApp(appEntryPath: string, testConfigDir: string, options: { bootstrapDirectory?: string } = {}): Promise<ElectronApplication> {
+export async function launchElectronApp(appEntryPath: string, testConfigDir: string, options: { bootstrapDirectory?: string; bootstrapObserver?: string } = {}): Promise<ElectronApplication> {
   console.log(`[E2E] App entry: ${appEntryPath}`)
   console.log(`[E2E] Test config dir: ${testConfigDir}`)
 
@@ -302,6 +302,7 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
   const { ELECTRON_RUN_AS_NODE: _, ...cleanEnv } = process.env
 
   if (process.env.HALO_E2E_PACKAGED_APP) {
+    if (options.bootstrapObserver) throw new Error('Startup observation requires the source application bootstrap')
     return electron.launch({
       executablePath: appEntryPath,
       args: ['--lang=en-US', ...(process.env.HALO_E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : [])],
@@ -315,7 +316,7 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
   fs.mkdirSync(userData, { recursive: true })
   // macOS resolves appData independently of HOME. Isolate browser storage before main imports.
   // Selectors are English UI labels, so the renderer must not follow the OS language.
-  fs.writeFileSync(bootstrap, `const { app } = require('electron');\napp.commandLine.appendSwitch('lang', 'en-US');\napp.setPath('appData',${JSON.stringify(appData)});\napp.setPath('userData', ${JSON.stringify(userData)});\nimport(${JSON.stringify(pathToFileURL(appEntryPath).href)});\n`)
+  fs.writeFileSync(bootstrap, `const { app } = require('electron');\napp.commandLine.appendSwitch('lang', 'en-US');\napp.setPath('appData',${JSON.stringify(appData)});\napp.setPath('userData', ${JSON.stringify(userData)});\n${options.bootstrapObserver ? `require(${JSON.stringify(options.bootstrapObserver)});\n` : ''}import(${JSON.stringify(pathToFileURL(appEntryPath).href)});\n`)
   const identityModule = process.env.PERF_CONTENT_IDENTITY_RUN ? await import('../../perf/build-identity/index.mjs') : undefined
   // Pixel assertions compare CSS sRGB values, not the host monitor's color profile.
   const launchArgs = ['--force-color-profile=srgb', ...(process.env.HALO_E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : []), bootstrap]

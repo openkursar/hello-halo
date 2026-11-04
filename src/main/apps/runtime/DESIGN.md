@@ -38,7 +38,10 @@ permission assembly. A running session keeps its original engine; a changed
 preference applies when it becomes idle. Without an explicit preference, an
 existing session keeps its persisted engine binding, a legacy session uses the
 retained legacy default, and only a new conversation or run reads the current
-default. An unavailable explicitly selected engine fails rather than falling
+default. Historical CC bindings without a recorded user runtime selection are
+resolved to Halo by the shared agent policy; their compatible native history is
+restored lazily before considering neutral history. Explicit app overrides remain
+choices. An unavailable explicitly selected engine fails rather than falling
 back. Team and IM turns enter the same app-chat path, so their capability and
 permission checks use the resolved session engine too.
 
@@ -2235,4 +2238,4 @@ itself has no switch: it exists for a caller exactly when some skill does.
 
 A map that is not a JSON object can only be a torn write from an older release, which truncated before writing. It is renamed to `_session-ids.json.corrupt-<time>` (never deleted) and read as empty, so one bad file cannot stop every chat, IM reply and run of a digital human; each chat then continues from its own transcript (`prepareAppEngineSession` flags an answered chat with no recorded session as a lost record, and the chat shows the continuity notice). A read that fails for another reason (locked, permission) fails that turn and leaves the file alone. A single malformed row is still refused.
 
-`readChatHandoffHistory` reads a bounded JSONL tail only when an engine changes, without building a whole-file index. Its message IDs use byte positions for audit, not UI pagination. It excludes reasoning, keeps completed tool observations, reports omitted or malformed records explicitly, and supplies the full transcript path. Missing history rejects the change instead of silently starting empty. Ordinary transcript and native-resume paths are unchanged.
+`readChatHandoffHistory` reads a bounded JSONL tail for a deliberate engine change or after native history cannot be restored, without building a whole-file index. Its message IDs use byte positions for audit, not UI pagination. It excludes reasoning, keeps completed tool observations, reports omitted or malformed records explicitly, and supplies the full transcript path. Missing history rejects the continuation instead of silently starting empty. Historical automatic CC sessions try Halo's compatible native resume first; successful native resume does not read neutral history.

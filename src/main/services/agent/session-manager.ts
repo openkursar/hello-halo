@@ -1342,14 +1342,14 @@ async function getOrCreateV2SessionInner(
     sdkOptions = { ...sdkOptions, resume: undefined, strictResume: undefined, engineHandoffContent: content, engineHandoffRecovered: true }
     console.warn(`[Agent][${conversationId}] Native ${engineId} session unavailable; continuing from Halo's recorded context`)
   }
-  // A legacy resume never fails on a lost record: without a readable
-  // transcript of its own it starts fresh (or keeps what the engine can read).
+  // Halo must not silently discard history when both recovery sources fail.
   const recoverLegacySession = async (error: unknown): Promise<boolean> => {
     try {
       await recoverNativeSession(error)
       return true
     } catch (recoveryError) {
       console.warn(`[Agent][${conversationId}] Legacy session ${sessionId} has no transcript to continue from:`, recoveryError instanceof Error ? recoveryError.message : recoveryError)
+      if (engineId === 'halo') throw recoveryError
       return false
     }
   }
@@ -1371,7 +1371,7 @@ async function getOrCreateV2SessionInner(
   }
   // The halo engine reads the stored record itself; with a transcript to fall
   // back on, it refuses a record that would come back with gaps.
-  if (effectiveSessionId && engineId === 'halo' && gates?.recoverNativeSession) {
+  if (effectiveSessionId && engineId === 'halo') {
     sdkOptions = { ...sdkOptions, strictResume: true }
   }
   const startTime = Date.now()

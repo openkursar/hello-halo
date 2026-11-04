@@ -155,9 +155,6 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
           updatedAt: newConversation.updatedAt,
           messageCount: newConversation.messages?.length || 0,
           preview: undefined,
-          // Carry the engine stamp so EngineBadge renders immediately on the
-          // newly created item — without this the badge only appears after
-          // a meta reload (e.g. switching away and back).
           engineId: newConversation.engineId
         }
 

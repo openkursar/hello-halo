@@ -2,6 +2,7 @@ import { getConversationEngineState, readConversationHandoffHistory, type Conver
 import type { EngineSessionState } from '../../../shared/types/engine-session'
 import { planEngineHandoff, serializeEngineHandoff } from './engine-handoff'
 import { getGoalDraft } from './goal/draft'
+import { resolveHistoricalEngine } from './engine-migration'
 import { waitForSdkInitialization } from './initialization'
 import { getConfig } from '../../foundation/config.service'
 import { isEngineId, type EngineId } from '../../../shared/types/engine'
@@ -10,7 +11,17 @@ import { getStartupEngine, resolveDefaultEngine, ensureEngineAvailable } from '.
 /** Old sessions have no engine binding; a live default change preserves their prior routing. */
 export function getLegacyEngine(): EngineId {
   const recorded = getConfig().agent?.legacySdkEngine
-  return isEngineId(recorded) ? recorded : getStartupEngine()
+  return resolveHistoricalEngine(isEngineId(recorded) ? recorded : getStartupEngine())
+}
+
+/** Cold reads resolve historical ownership without probing or starting a runtime. */
+export function getConversationEngineMetadata(conversation: Conversation): EngineId {
+  const recorded = conversation.engineBinding?.engineId
+    ?? (conversation.engineRoutingVersion === 1 && isEngineId(conversation.engineId) ? conversation.engineId : undefined)
+  const configured = getConfig().agent?.sdkEngine
+  if (recorded) return conversation.engineOverride ? recorded : resolveHistoricalEngine(recorded)
+  return conversation.engineOverride ?? (conversation.sessionId || conversation.messages.length
+    ? getLegacyEngine() : resolveHistoricalEngine(isEngineId(configured) ? configured : 'halo'))
 }
 
 /** Engine preferences never move an in-flight turn or silently repoint an existing binding. */
@@ -24,8 +35,9 @@ export async function resolveConversationEngine(
   const requested = conversation?.engineOverride ?? conversation?.engineBinding?.engineId
     ?? (conversation?.engineRoutingVersion === 1 && isEngineId(conversation.engineId) ? conversation.engineId : undefined)
   if (isEngineId(requested)) {
-    await ensureEngineAvailable(requested)
-    return requested
+    const engineId = conversation?.engineOverride ? requested : resolveHistoricalEngine(requested)
+    await ensureEngineAvailable(engineId)
+    return engineId
   }
   if (residentEngine) return residentEngine
   if (conversation?.sessionId || conversation?.messages.length) return getLegacyEngine()
@@ -57,8 +69,9 @@ export async function prepareConversationContinuation(
     legacySessionId: options.legacySessionId ?? engineState.sessionId,
     sourceEngine: engineState.binding?.engineId ?? (conversation.engineRoutingVersion === 1 && isEngineId(conversation.engineId) ? conversation.engineId : getLegacyEngine()),
     hasHistory: boundary > 0,
+    compatibleNativeResume: !conversation.engineOverride && resolveHistoricalEngine('anthropic') === 'halo',
   })
-  if (plan.kind !== 'handoff' && !options.forceHandoff) return { engineId, engineState, resumeSessionId: plan.resumeSessionId, strictNativeResume: plan.kind === 'resume' }
+  if (plan.kind !== 'handoff' && !options.forceHandoff) return { engineId, engineState, resumeSessionId: plan.resumeSessionId, strictNativeResume: plan.kind === 'resume' && engineState.binding?.engineId === engineId }
   const { getPendingConversationInputIds } = await import('../conversation-interop')
   const history = readConversationHandoffHistory(spaceId, conversationId, {
     beforeMessageId: options.beforeMessageId,

@@ -1,3 +1,6 @@
+import type { AISourcesConfig } from './ai-sources'
+import { CLI_DELEGATED_PROVIDER_ID } from '../constants/claude-models'
+
 export type CcCompatibility = 'verified' | 'compatible' | 'incompatible' | 'unavailable' | 'unchecked'
 
 export type CcRuntimeIssue =
@@ -16,10 +19,18 @@ export interface CcDownloadSource {
 
 export interface CcRuntimeConfig {
   selectedPath?: string
+  selectionOrigin?: 'user'
   sourceId?: string
   sources?: CcDownloadSource[]
   installVersion?: string
+  /** Written by earlier releases' startup discovery; read-compatible, never written. */
   discoveryCompleted?: boolean
+}
+
+export function hasExplicitCcSelection(config?: CcRuntimeConfig, sources?: AISourcesConfig): boolean {
+  if (config?.selectionOrigin === 'user') return true
+  const selected = sources?.version === 2 ? sources.sources.find(source => source.id === sources.currentId) : undefined
+  return selected?.authType === 'delegated' && selected.provider === CLI_DELEGATED_PROVIDER_ID
 }
 
 export type CcRuntimePreferences = Pick<CcRuntimeConfig, 'sources' | 'sourceId' | 'installVersion'>

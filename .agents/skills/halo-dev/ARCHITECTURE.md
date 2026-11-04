@@ -973,11 +973,14 @@ engine. `services/agent/cc` implements the stream-json adapter; the app bundles
 neither the upstream Claude Agent SDK nor the Claude Code executable. Halo SDK
 is a required dependency and the default when no user preference exists.
 
-Only a legacy explicit CC preference triggers one bounded discovery attempt.
-Engine initialization has a shared readiness promise; the window and essential
-settings become available before external checks, and AI entry points await the
-same selection. Missing or unusable CC falls back to Halo without overwriting
-the user's preference. CC-only delegated accounts retain their credentials and
+Startup never discovers CC. A recorded user runtime selection checks only its saved
+installation; old defaults and automatically selected paths do not prove intent and
+route to Halo without rewriting history. A currently selected `claude-cli` delegated
+account also proves intent because Halo records it only after delegated login;
+this never authorizes discovery or substitutes another installation. Engine initialization has a shared readiness
+promise; the window and essential settings become available before external checks,
+and AI entry points await the same selection. An explicitly selected unavailable CC
+fails without switching engines or overwriting the user's preference. CC-only delegated accounts retain their credentials and
 receive a recovery notice; the app never silently selects a different account.
 CC and Halo saved transcripts are reconciled through `agent/stored-session`.
 

@@ -102,17 +102,17 @@ export async function selectCcInstallation(path: string): Promise<CcInstallation
     if (entry) await rememberInstallation({ ...entry.installation, ...result, managed: entry.installation.managed })
     throw new CcRuntimeError(result.issue || 'protocol-unsupported')
   }
-  await persistSelection(result)
+  await persistSelection(result, undefined, 'user')
   return result
 }
 
-async function persistSelection(result: CcInstallation, stillCurrent?: () => boolean): Promise<boolean> {
+async function persistSelection(result: CcInstallation, stillCurrent?: () => boolean, selectionOrigin?: 'user'): Promise<boolean> {
   await rememberInstallation(result)
   if (stillCurrent && !stillCurrent()) {
     console.log('[CcRuntime] Selection persistence preserved a newer choice')
     return false
   }
-  try { persistConfig({ selectedPath: result.path }) } catch (error) {
+  try { persistConfig({ selectedPath: result.path, selectionOrigin }) } catch (error) {
     console.error('[CcRuntime] Checked runtime could not be selected', { issue: issueFromError(error, 'storage-failed') })
     throw new CcRuntimeError('storage-failed', { cause: error })
   }
@@ -157,28 +157,6 @@ async function withCheckDeadline<T>(
   }
 }
 
-export async function discoverAndSelectCcRuntime(options: { deadlineMs?: number; signal?: AbortSignal } = {}): Promise<CcInstallation | null> {
-  const initialConfig = getConfig()
-  const initialPath = initialConfig.agent?.ccRuntime?.selectedPath
-  const initialEngine = initialConfig.agent?.sdkEngine
-  return withCheckDeadline(async signal => {
-    const selected = initialPath
-    const result = selected ? await checkInstallation(selected, { signal })
-      : (await discoverInstallations(undefined, { signal, stopOnCompatible: true })).installations.find(item => ['verified', 'compatible'].includes(item.compatibility))
-    if (signal.aborted || !result || !['verified', 'compatible'].includes(result.compatibility)) return null
-    const current = getConfig().agent
-    if (current?.ccRuntime?.selectedPath !== initialPath || current?.sdkEngine !== initialEngine) {
-      console.log('[CcRuntime] Initial discovery retained a newer user choice')
-      return null
-    }
-    if (!selected && !await persistSelection(result, () => {
-      const latest = getConfig().agent
-      return latest?.ccRuntime?.selectedPath === initialPath && latest?.sdkEngine === initialEngine
-    })) return null
-    return result
-  }, options, 'Initial discovery')
-}
-
 export async function installCcRuntime(request: CcInstallRequest = {}): Promise<CcInstallation> {
   if (installController) throw new CcRuntimeError('install-busy')
   const config = readConfig()
@@ -199,7 +177,7 @@ export async function installCcRuntime(request: CcInstallRequest = {}): Promise<
     const checked = await checkInstallation(result.path, { signal: controller.signal })
     if (controller.signal.aborted) throw new CcRuntimeError('cancelled')
     if (!['verified', 'compatible'].includes(checked.compatibility)) throw new CcRuntimeError(checked.issue || 'protocol-unsupported')
-    if (initialSelectionRevision === selectionRevision) await persistSelection(checked, () => initialSelectionRevision === selectionRevision)
+    if (initialSelectionRevision === selectionRevision) await persistSelection(checked, () => initialSelectionRevision === selectionRevision, 'user')
     else console.log('[CcRuntime] Installed runtime retained without replacing a newer user selection', { version: checked.version })
     installProgress = { ...installProgress, phase: 'complete', version: checked.version }
     console.log('[CcRuntime] Managed installation completed', { version: checked.version })

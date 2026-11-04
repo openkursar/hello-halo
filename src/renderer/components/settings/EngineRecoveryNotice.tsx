@@ -14,6 +14,7 @@ import { resolveModelSelection } from '../../types'
 import type { EngineId } from '../../../shared/types/engine'
 import { getEngineSourceCompatibility } from '../../../shared/engine-source'
 import { resolveEngineIssue, resolveEngineNotice } from './engine-issue'
+import { hasExplicitCcSelection } from '../../../shared/types/cc-runtime'
 
 /**
  * What the chat says when its engine or account cannot run here, with the ways
@@ -31,6 +32,7 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
   const { t } = useTranslation()
   const engine = useEngineId(engineId)
   const requested = useAppStore(state => state.config?.agent?.sdkEngine)
+  const ccRuntime = useAppStore(state => state.config?.agent?.ccRuntime)
   const sources = useAppStore(state => state.config?.aiSources)
   const navigate = useAppStore(state => state.navigate)
   const openClaudeCodeSettings = useAppStore(state => state.openClaudeCodeSettings)
@@ -47,7 +49,7 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
   const availability = useEngineAvailability(engine === 'anthropic' || delegated || Boolean(failure), failure)
   const ccAvailable = availability ? Boolean(availability.engines.find(item => item.engineId === 'anthropic')?.available) : undefined
   const accountCompatibility = engine ? getEngineSourceCompatibility(engine, selected) : { compatible: true as const }
-  const fellBack = !engineId && requested === 'anthropic' && engine === 'halo'
+  const fellBack = !engineId && requested === 'anthropic' && hasExplicitCcSelection(ccRuntime, sources) && engine === 'halo'
   const canMove = target.kind === 'digital-human' || Boolean(spaceId && target.conversation)
 
   const issue = engine ? resolveEngineIssue({ engine, delegated, accountCompatible: accountCompatibility.compatible, ccAvailable }) : null

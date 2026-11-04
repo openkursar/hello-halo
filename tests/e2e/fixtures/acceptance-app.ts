@@ -29,6 +29,7 @@ export interface AcceptanceSource {
 }
 
 interface Fixtures {
+  startupObserver: string | undefined
   diagnoseShutdown: boolean
   model: AcceptanceModel
   aiSource: AcceptanceSource
@@ -82,9 +83,9 @@ function hasExited(owned: OwnedApplication): boolean {
   return !!owned.child && (owned.child.exitCode != null || owned.child.signalCode != null)
 }
 
-async function open(entry: string, profile: string, register: (app: ElectronApplication) => void) {
+async function open(entry: string, profile: string, register: (app: ElectronApplication) => void, startupObserver?: string) {
   const project = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-  const app = await launchElectronApp(entry, profile, { bootstrapDirectory: project })
+  const app = await launchElectronApp(entry, profile, { bootstrapDirectory: project, bootstrapObserver: startupObserver })
   register(app)
   const window = await app.firstWindow()
   await window.waitForLoadState('domcontentloaded')
@@ -135,6 +136,7 @@ async function attachEvidence(profile: string, model: AcceptanceModel, info: Tes
 }
 
 export const test = base.extend<Fixtures>({
+  startupObserver: [undefined, { option: true }],
   diagnoseShutdown: [false, { option: true }],
   model: async ({}, use) => {
     const model = await startAcceptanceModel()
@@ -143,7 +145,7 @@ export const test = base.extend<Fixtures>({
   aiSource: async ({ model }, use) => {
     await use({ provider: 'openai', apiKey: 'local-scripted-endpoint', apiUrl: model.url, model: 'gpt-4o' })
   },
-  acceptanceApp: async ({ model, aiSource, diagnoseShutdown }, use, testInfo) => {
+  acceptanceApp: async ({ model, aiSource, diagnoseShutdown, startupObserver }, use, testInfo) => {
     const entry = getAppEntryPath()
     const profile = createTestConfigDir(entry, [])
     const file = join(profile, '.halo/config.json')
@@ -171,7 +173,7 @@ export const test = base.extend<Fixtures>({
             try { owned.shutdown = observeAcceptanceShutdown(app, owned.child, profile) }
             catch (error) { owned.diagnosticErrors.push(error) }
           }
-        })
+        }, startupObserver)
         const owned = applications.find(owned => owned.app === opened.app)!
         if (owned.shutdown) {
           try { await owned.shutdown.installMain() } catch (error) { owned.diagnosticErrors.push(error) }

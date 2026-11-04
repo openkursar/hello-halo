@@ -125,10 +125,18 @@ borrows and closes all loaded shared runtimes. Public MCP tool/server descriptio
 are engine-neutral executable objects, preserving schemas, handlers, annotations,
 metadata and handler cancellation signals.
 
-A historical explicit CC preference without a selected
-installation receives one bounded eight-second discovery attempt (`engine-migration.ts`),
-recorded as `ccRuntime.discoveryCompleted`; ordinary Halo startup never scans CC.
-Missing or incompatible CC leaves the preference intact and loads Halo.
+Startup never discovers CC. Old `sdkEngine`, origin labels and automatic bindings
+are not user intent: `engine-migration.ts` routes historical CC to Halo unless
+`ccRuntime.selectionOrigin` records `user` or the current source is the `claude-cli`
+delegated account created after Halo's delegated login. Other source types and
+unselected delegated accounts do not establish intent. Old selected paths are ambiguous because
+the removed startup migration wrote the same field as manual selection. They remain
+stored but are not activated until the user selects them again. Explicit conversation
+and digital-human overrides still take precedence. A recorded user CC default checks
+only its selected installation and fails if unavailable, without switching engines.
+Ordinary CC history attempts Halo's compatible native resume on demand; only a failed
+resume reads bounded neutral history. If both sources fail, continuation fails without
+starting an empty session or changing the previous binding.
 
 ## 2) Single Source of Truth Contract
 
@@ -144,7 +152,7 @@ Missing or incompatible CC leaves the preference intact and loads Halo.
 
 - **CC and Halo history remains resumable.** Both consume the same user/assistant/tool JSONL records. `stored-session.prepareStoredSession` resolves canonical, NFC and legacy project directories, then atomically carries the transcript and its sidecar into the active engine's directory convention. A newer alias within the same config store wins so switching back retains subsequent turns; a legacy config store never replaces an existing destination. This matters for symlinks: CC stores the resolved cwd while Halo uses the given cwd. A real external CC → Halo test verifies user, assistant and tool-result context reaches the next model request. This restores recorded context, not a terminated process's running tools.
 
-- **CC is an optional external runtime.** `services/cc-runtime` owns discovery, compatibility checks, selection and managed installation; `agent/cc` consumes only its public launch descriptor. No Claude Agent SDK or CC CLI is bundled. Native CC executes directly; legacy JavaScript entries use the supplied interpreter. Halo options never resolve a CC file. Missing CC falls back to Halo without erasing the user’s preference. The CC adapter owns stream-json control requests, hooks, permissions and per-turn streams, and reuses `mcp/sdk-server` plus `mcp/sdk-bridge` for in-process tools. A selected local CC is never updated or patched by Halo; its child disables automatic updating.
+- **CC is an optional external runtime.** `services/cc-runtime` owns discovery, compatibility checks, selection and managed installation; `agent/cc` consumes only its public launch descriptor. No Claude Agent SDK or CC CLI is bundled. Native CC executes directly; legacy JavaScript entries use the supplied interpreter. Halo options never resolve a CC file. Historical automatic CC choices route to Halo; a missing explicitly selected CC fails without erasing the user’s preference or substituting another engine. The CC adapter owns stream-json control requests, hooks, permissions and per-turn streams, and reuses `mcp/sdk-server` plus `mcp/sdk-bridge` for in-process tools. A selected local CC is never updated or patched by Halo; its child disables automatic updating.
 
 - **Windows process visibility.** Halo-owned launches set `windowsHide: true`. CC is external and never patched; visibility of programs that it launches internally belongs to that CC version. Compatibility validation must not assume a host spawn flag propagates into nested launches.
 
@@ -167,7 +175,7 @@ Missing or incompatible CC leaves the preference intact and loads Halo.
   3. *Optional build.* Its build is not on the path of `npm run dev`, and the app build runs it with `--optional`: a failure removes its output and the artifact ships without it (Settings shows it unavailable). `afterPack.cjs` and `tests/check/binaries.mjs` treat its absence as normal.
   4. *Removable.* Its footprint outside its own directories is listed below and kept current, so removing it is a checklist, not an investigation.
 
-  dsh footprint. Owned (delete wholesale): `services/agent/dsh/`, `runtimes/dsh/`, `tests/unit/services/agent/dsh/`, `resources/dsh-runtime/` (build output). Registrations (remove the dsh entry): `EngineId` and `defaultCapabilitiesFor` in `capabilities.ts`; `ENGINE_LABELS`, `normalizeEngineId`, `loadEngine` in `resolved-sdk.ts`; `ALL_ENGINE_IDS` and `probeDsh` in `engine-availability.ts`; the `sdkEngine` / `engineId` unions in `foundation/config.service.ts`, `services/conversation.service.ts`, `renderer/types/index.ts`; `AdvancedSection.tsx` (`ENGINE_IDS`, `ENGINE_COPY`) and `EngineBadge.tsx`; build glue in `package.json` (`runtime:dsh`, `prebuild`), `electron-builder.cjs` (asarUnpack), `scripts/afterPack.cjs` (dsh private externals, node-pty prune, bundle check), `scripts/engine-runtimes.cjs`, `scripts/typecheck-changed.mjs` + `tsconfig.node.json` (`runtimes/*/plugins`, drop only if no runtime has plugins left), `.gitignore`, `runtimes/README.md`. Keep on removal — shared with other engines: `mcp/` (Codex uses it), `skills.ts`, `clampModelRuntimeLimits`; `prompt.nativeAgentGuidance` + `buildEngineNeutralTemplate` in `system-prompt.ts` have no other user and may go too.
+  dsh footprint. Owned (delete wholesale): `services/agent/dsh/`, `runtimes/dsh/`, `tests/unit/services/agent/dsh/`, `resources/dsh-runtime/` (build output). Registrations (remove the dsh entry): `EngineId` and `defaultCapabilitiesFor` in `capabilities.ts`; `ENGINE_LABELS`, `normalizeEngineId`, `loadEngine` in `resolved-sdk.ts`; `ALL_ENGINE_IDS` and `probeDsh` in `engine-availability.ts`; the `sdkEngine` / `engineId` unions in `foundation/config.service.ts`, `services/conversation.service.ts`, `renderer/types/index.ts`; `AdvancedSection.tsx` (`ENGINE_IDS`, `ENGINE_COPY`) ; build glue in `package.json` (`runtime:dsh`, `prebuild`), `electron-builder.cjs` (asarUnpack), `scripts/afterPack.cjs` (dsh private externals, node-pty prune, bundle check), `scripts/engine-runtimes.cjs`, `scripts/typecheck-changed.mjs` + `tsconfig.node.json` (`runtimes/*/plugins`, drop only if no runtime has plugins left), `.gitignore`, `runtimes/README.md`. Keep on removal — shared with other engines: `mcp/` (Codex uses it), `skills.ts`, `clampModelRuntimeLimits`; `prompt.nativeAgentGuidance` + `buildEngineNeutralTemplate` in `system-prompt.ts` have no other user and may go too.
 
   Codex predates these rules and is shipped, so it is a known exception rather than a model: `ipc/agent.ts` imports `./codex` statically (pending-question routing), `openai-compat-router/` carries its Responses handler and model table, and `shared/constants/codex-models.ts` holds engine constants. Bring it under the same rules as a separate change; do not copy its pattern.
 
@@ -745,7 +753,8 @@ published with compare-and-swap against the state captured before preparation, s
 a retired consumer cannot overwrite a newer engine's binding.
 
 `engine-handoff.ts` is the shared, storage-independent boundary. Its pure planner
-only resumes the current engine's native session. A changed engine receives the
+resumes the current binding, including compatible historical CC records on Halo
+when no explicit override or recorded external CC choice applies. Other engine changes receive the
 latest Halo transcript as bounded JSON historical data in the first **user** input;
 no prior tool call is dispatched and no history is made into a system instruction.
 Reasoning is excluded; visible messages, tool results, goals and file references
@@ -768,15 +777,18 @@ that transcript as handoff context, and the conversation's sink records a
 (`TurnSink.onContinuedFromRecord`; shown in Halo, never sent to an IM party).
 The halo engine reads the record itself, so the host asks it for `strictResume`;
 the SDK then refuses a record it would have to repair (`RESUME_HISTORY_UNAVAILABLE`,
-mapped to `NativeSessionResumeError` in `halo/index.ts`). A legacy resume with no
-transcript either keeps what the engine can read, or starts fresh when nothing
-is stored; a bound resume without one fails as before. Deliberate engine changes
+mapped to `NativeSessionResumeError` in `halo/index.ts`). Halo continuation fails
+if neither the native record nor the recorded transcript can be restored; it never
+starts an empty session in place of that history. Other engines' legacy unbound
+resume retains its existing fallback; a bound resume without history fails.
+Deliberate engine changes
 are handoffs too but are not losses and carry no notice.
 
-Opted-in Codex bindings pass `strictNativeResume: true`. A rejected `thread/resume` raises `NativeSessionResumeError` without starting a fresh thread; the session owner decides how to rebuild from neutral records. Startup failures close the app-server, RPC handlers and MCP bridge before returning. Legacy unbound resume retains its earlier fallback contract.
+Opted-in Codex bindings pass `strictNativeResume: true`. A rejected `thread/resume` raises `NativeSessionResumeError` without starting a fresh thread; the session owner decides how to rebuild from neutral records. Startup failures close the app-server, RPC handlers and MCP bridge before returning. Legacy unbound Codex resume retains its earlier fallback contract.
 
 New space conversations carry `engineRoutingVersion: 1`, which makes their existing
 `engineId` the initial routing identity even before the first native session is
 ready. Legacy records are not backfilled: their old origin badge cannot identify
-the current session owner. Generic conversation updates cannot rewrite this
-version or initial identity; an explicit change uses `engineOverride` instead.
+current user intent. Historical automatic CC identities still follow the shared
+compatibility policy and route to Halo. Generic conversation updates cannot rewrite
+this version or initial identity; an explicit change uses `engineOverride` instead.

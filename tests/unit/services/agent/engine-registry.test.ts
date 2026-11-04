@@ -4,6 +4,7 @@ import { z } from 'zod'
 const state = vi.hoisted(() => ({
   configured: 'halo',
   selectedPath: '',
+  selectionOrigin: 'user' as 'user' | undefined,
   unavailable: new Set<string>(),
   modules: new Map<string, any[]>(),
   factories: new Map<string, () => any>(),
@@ -11,10 +12,9 @@ const state = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../../src/main/foundation/config.service', () => ({
-  getConfig: () => ({ agent: { sdkEngine: state.configured, ccRuntime: { selectedPath: state.selectedPath } } }),
+  getConfig: () => ({ agent: { sdkEngine: state.configured, ccRuntime: { selectedPath: state.selectedPath, selectionOrigin: state.selectionOrigin } } }),
 }))
 vi.mock('../../../../src/main/foundation/logging', () => ({ installSdkLogger: vi.fn() }))
-vi.mock('../../../../src/main/services/agent/engine-migration', () => ({ migrateCcRuntimeSelection: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/engine-availability', () => ({
   getEngineAvailability: async (ids: string[]) => {
     state.probed.push(...ids)
@@ -59,6 +59,7 @@ beforeEach(async () => {
   vi.resetModules()
   state.configured = 'halo'
   state.selectedPath = ''
+  state.selectionOrigin = 'user'
   state.modules.clear()
   state.unavailable.clear()
   state.probed = []
@@ -68,6 +69,18 @@ beforeEach(async () => {
 afterEach(async () => { await sdk.closeSdkRuntime() })
 
 describe('session-owned engine registry', () => {
+  it.each(['', '/old-automatic-selection'])('starts and continues ordinary upgrades without probing CC (%s)', async selectedPath => {
+    state.configured = 'anthropic'
+    state.selectedPath = selectedPath
+    state.selectionOrigin = undefined
+    await sdk.initSdk()
+    expect(await sdk.resolveDefaultEngine()).toBe('halo')
+    const session = await sdk.createSession({ model: 'test', resume: 'old-session' })
+    expect(session.engineId).toBe('halo')
+    expect(state.probed.every(engine => engine === 'halo')).toBe(true)
+    session.close(); await session.flush()
+  })
+
   it('loads only the startup default and prewarms only when requested', async () => {
     await sdk.initSdk()
     expect(state.probed).toEqual(['halo'])
@@ -157,15 +170,17 @@ describe('session-owned engine registry', () => {
     second.close(); await second.flush()
   })
 
-  it('falls back only for defaults and recovers a later-installed default without restart', async () => {
+  it('refuses an unavailable explicit CC default and recovers its installation without restart', async () => {
     state.configured = 'anthropic'
     state.unavailable.add('anthropic')
     await sdk.initSdk()
-    expect(sdk.getDefaultEngine()).toBe('halo')
+    expect(sdk.getActiveEngine()).toBeNull()
+    await expect(sdk.resolveDefaultEngine()).rejects.toMatchObject({ code: 'ENGINE_UNAVAILABLE' })
+    expect(state.probed.every(engine => engine === 'anthropic')).toBe(true)
     await expect(sdk.createSession({ engineId: 'anthropic' })).rejects.toMatchObject({ code: 'ENGINE_UNAVAILABLE', engineId: 'anthropic' })
     state.unavailable.delete('anthropic')
     expect(await sdk.resolveDefaultEngine()).toBe('anthropic')
-    expect(sdk.getStartupEngine()).toBe('halo')
+    expect(sdk.getStartupEngine()).toBe('anthropic')
   })
 
   it('releases failed creation without closing another engine', async () => {

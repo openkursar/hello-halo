@@ -153,6 +153,7 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   ...(await vi.importActual('../../../../src/main/services/agent/engine-handoff')),
   ensureEngineAvailable: vi.fn(async () => {}),
   getLegacyEngine: () => 'halo',
+  resolveHistoricalEngine: (engine: string) => engine,
   hasLiveTurn: () => false,
   resolveDefaultEngine: async () => 'halo',
   toEngineSystemPrompt: (prompt: string) => prompt,

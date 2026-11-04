@@ -192,7 +192,8 @@ export { withInputImageFiles } from './image-attachments'
 /** Await the process-wide engine decision before caching a capability snapshot. */
 export { waitForSdkInitialization } from './initialization'
 
-export { getLegacyEngine, resolveConversationEngine } from './engine-routing'
+export { getLegacyEngine, getConversationEngineMetadata, resolveConversationEngine } from './engine-routing'
+export { resolveHistoricalEngine } from './engine-migration'
 export type { ResolvedSdkCredentials } from './sdk-config'
 
 /** Engine-neutral context transfer; session owners retain their own persistence and permissions. */

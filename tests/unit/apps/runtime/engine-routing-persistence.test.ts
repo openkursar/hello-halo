@@ -6,6 +6,7 @@ const runtime = vi.hoisted(() => ({ defaultEngine: 'codex', checked: [] as strin
 vi.mock('../../../../src/main/services/agent', async () => ({
   ...(await vi.importActual('../../../../src/main/services/agent/engine-handoff')),
   getLegacyEngine: () => 'anthropic',
+  resolveHistoricalEngine: (engine: string) => engine,
   getSessionEngineId: () => undefined,
   isSessionBusy: () => false,
   resolveDefaultEngine: async () => runtime.defaultEngine,

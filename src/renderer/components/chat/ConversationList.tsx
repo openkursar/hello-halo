@@ -23,7 +23,6 @@ import { ROW_HEIGHT, usePaneResize, PaneResizeHandle } from './conversation-list
 import { api } from '../../api'
 import { cn } from '../../lib/utils'
 import { TaskStatusDot } from '../pulse/TaskStatusDot'
-import { EngineBadge } from './EngineBadge'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { useAppChatConversationRows, type AppChatConversationRow } from '../../hooks/useAppChatConversationRows'
 import { appChatSessionLabel, formatRowTime } from './conversation-row-format'
@@ -768,8 +767,6 @@ export const ConversationList = memo(function ConversationList({
             {status !== 'idle' && <TaskStatusDot status={status} size="sm" />}
 
             <span className={ROW_TITLE}>{conversation.title}</span>
-
-            <EngineBadge engineId={conversation.engineId} size="xs" />
 
             <div className={ROW_ACTIONS}>
               <button
