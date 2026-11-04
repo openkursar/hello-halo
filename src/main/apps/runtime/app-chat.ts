@@ -55,7 +55,7 @@ import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable 
 import { acquireChatBrowserContext, bindChatBrowserSession, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
 import { opensWithSlashCommand } from '../../services/agent/opening-context'
-import { acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, resolveHistoricalEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
+import { getToolset, acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, resolveHistoricalEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
@@ -831,6 +831,15 @@ async function runAppChatTurn(
     entry = NATIVE_CHAT_ENTRY
     constraints = []
   }
+  // Team collaboration is built into the owner's own chats, the same toolset a
+  // space conversation opens. Not offered to anyone
+  // acting through it (IM, guests, requests from outside) nor inside a team turn,
+  // so a member can never assemble a team of its own.
+  const teamToolset = !teamContext && !imSession && permCtx?.isOwner !== false && !origin
+    && parseNativeChatKey(conversationId)?.appId === appId && getActiveTeamRuntime()
+    ? getToolset(TEAM_MCP_SERVER_NAME)
+    : undefined
+  if (teamToolset) entry = `${entry}\n\n${teamToolset.usageGuide}`
   const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
 
   // ── 4. Build MCP servers ─────────────────────────────
@@ -1001,6 +1010,16 @@ async function runAppChatTurn(
       ? {
           'halo-report': createReportToolServer(activityStore, reportContext, () => {
             peekAppChatSink(conversationId)?.noteAskedUser()
+          }),
+        }
+      : {}),
+    ...(teamToolset
+      ? {
+          [TEAM_MCP_SERVER_NAME]: teamToolset.createServer({
+            spaceId,
+            conversationId,
+            workDir,
+            modelSelection: credentials.sourceId ? { modelSourceId: credentials.sourceId, modelId: credentials.model } : undefined,
           }),
         }
       : {}),
@@ -2381,6 +2400,14 @@ export function forkNativeChatSession(
  * record. Only 'local'-source sessions are deletable this way; other keys are
  * rejected so the default session and IM sessions can't be removed here.
  */
+const nativeChatDeletedListeners = new Set<(conversationId: string) => void>()
+
+/** Notified after a native local session is deleted; returns its unsubscribe. */
+export function onNativeChatDeleted(listener: (conversationId: string) => void): () => void {
+  nativeChatDeletedListeners.add(listener)
+  return () => { nativeChatDeletedListeners.delete(listener) }
+}
+
 export async function deleteNativeChatSession(
   appId: string,
   spaceId: string,
@@ -2396,6 +2423,13 @@ export async function deleteNativeChatSession(
   getTaskStateService()?.remove(conversationId)
   emitSessionUpdated(appId, { channel: parsed.channel, chatId: parsed.chatId, chatType: parsed.chatType }, {})
   console.log(`[AppChat][${appId}] Native local session deleted: ${conversationId}`)
+  for (const listener of nativeChatDeletedListeners) {
+    try {
+      listener(conversationId)
+    } catch (error) {
+      console.error(`[AppChat][${appId}] Session-deleted listener failed: ${conversationId}`, error)
+    }
+  }
 }
 
 /**

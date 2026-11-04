@@ -35,7 +35,7 @@
 import { createTurnGate, TurnGateCapacityError } from '../../platform/turn-gate'
 import type { TurnGate } from '../../platform/turn-gate'
 import type { TranscriptProvenanceMetadata, TranscriptSource } from '../../../shared/types/transcript'
-import { AdmissionRefusal, admitSend } from './admission'
+import { AdmissionRefusal, admitOwnWorkReport, admitSend } from './admission'
 import { sourceOfConversation } from './source'
 import type { ConversationSource, DispatchedMessage, DispatchOutcome, SourceConversation } from './source'
 import { circuitBreaker } from './circuit-breaker'
@@ -80,6 +80,8 @@ interface DeliveryJob {
   external?: {
     turnInput: string
     persist: { content: string; source: TranscriptSource; metadata: TranscriptProvenanceMetadata }
+    /** Reports on work the target delegated itself, true while it still does; see `admitOwnWorkReport`. */
+    ownWork?: () => boolean
   }
   /**
    * Written by `dispatchToConversation` once the real message is identified
@@ -158,7 +160,7 @@ function requireSource(conversationId: string): ConversationSource {
 function requireAdmitted(target: ConversationSource, job: DeliveryJob): void {
   const meta = target.getMeta(job.spaceId, job.toConversationId)
   if (!meta) throw new ConversationUnavailableError('the conversation no longer exists')
-  const admission = admitSend(target, meta, false)
+  const admission = job.external?.ownWork ? admitOwnWorkReport(target, job.external.ownWork()) : admitSend(target, meta, false)
   if (!admission.ok) throw new AdmissionRefusal(admission.reason, admission.detail)
 }
 
@@ -665,6 +667,11 @@ export interface ExternalDeliverParams {
   turnInput: string
   /** What the transcript keeps for this message. */
   persist: { content: string; source: TranscriptSource; metadata: TranscriptProvenanceMetadata }
+  /**
+   * The target delegated this work itself, so its collaboration switch does not
+   * refuse the report. Asked again when a queued report leaves the queue.
+   */
+  ownWork?: () => boolean
 }
 
 /**
@@ -681,7 +688,7 @@ export async function deliverExternalMessage(params: ExternalDeliverParams): Pro
   const target = sourceOfConversation(params.toConversationId)
   const meta = target?.getMeta(params.spaceId, params.toConversationId)
   if (!target || !meta) return { ok: false, reason: 'not_found' }
-  const admission = admitSend(target, meta, false)
+  const admission = params.ownWork ? admitOwnWorkReport(target, params.ownWork()) : admitSend(target, meta, false)
   if (!admission.ok) return { ok: false, reason: admission.reason, detail: admission.detail }
   if (bufferedCountFor(params.toConversationId) >= TARGET_MAILBOX_CAP) {
     return { ok: false, reason: 'queue_full' }
@@ -696,7 +703,7 @@ export async function deliverExternalMessage(params: ExternalDeliverParams): Pro
     message: params.persist.content,
     summary: '',
     forwardDepth: 0,
-    external: { turnInput: params.turnInput, persist: params.persist },
+    external: { turnInput: params.turnInput, persist: params.persist, ...(params.ownWork ? { ownWork: params.ownWork } : {}) },
   }
 
   reclaimLeakedReservation(job.toConversationId)

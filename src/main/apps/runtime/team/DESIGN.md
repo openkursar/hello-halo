@@ -489,6 +489,16 @@ seeded before any collaboration exists, so the tools look the current
 collaboration up at call time — `collab_start` and the first `team_send` work
 inside one turn, with no session rebuild between them.
 
+A digital human's own native chat (default or local session, owner turn, no
+team context, not IM) mounts the same `halo-team` toolset from the toolset
+registry, so it coordinates exactly like a space conversation: its chat id is
+the `coordinatorConversationId`, and reports land through the digital-human
+conversation source. Those deliveries carry `ownWork`, which conversation-interop
+admits even while the digital human's conversation-collaboration switch is off —
+that switch governs other conversations reaching in, not the team the chat
+started. Deleting a local session releases its collaboration like deleting a
+space conversation (`onNativeChatDeleted`).
+
 ## A person is not a member (`fromAppId === null`)
 
 A person's 1:1 message to a member travels this same bus — that is how it

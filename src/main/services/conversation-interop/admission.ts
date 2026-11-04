@@ -28,6 +28,7 @@ export class AdmissionRefusal extends Error {
 
 const NOT_READABLE = 'it cannot be read by other conversations'
 const NOT_WRITABLE = 'it takes no messages from other conversations'
+const NOT_OWNED = 'the work this report belongs to is no longer bound to it'
 
 /**
  * Why another conversation's AI may not take part in this conversation, or null
@@ -54,6 +55,21 @@ export function admitSend(source: ConversationSource, meta: SourceConversation, 
   const withheld = withheldReason(meta)
   if (withheld) return { ok: false, reason: 'unavailable', detail: withheld }
   if (!source.capabilities.writable && !answersWait) {
+    return { ok: false, reason: 'read_only', detail: source.whyNotWritable ?? NOT_WRITABLE }
+  }
+  return { ok: true }
+}
+
+/**
+ * A report on work the target conversation itself delegated (its own temporary
+ * collaboration). The withholding a source reports governs other conversations'
+ * AI reaching in; it never cuts a conversation off from the team it started.
+ * Nothing else is opened: the conversation must still exist, take messages and
+ * still own the work (`owned`).
+ */
+export function admitOwnWorkReport(source: ConversationSource, owned: boolean): Admission {
+  if (!owned) return { ok: false, reason: 'unavailable', detail: NOT_OWNED }
+  if (!source.capabilities.writable) {
     return { ok: false, reason: 'read_only', detail: source.whyNotWritable ?? NOT_WRITABLE }
   }
   return { ok: true }

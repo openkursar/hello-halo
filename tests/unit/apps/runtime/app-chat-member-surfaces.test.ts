@@ -13,7 +13,7 @@
  * subprocess; the session layer is a fake whose send() settles the round.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 
 // ============================================
 // Mocks (must be declared before importing app-chat)
@@ -101,9 +101,10 @@ const { buildPromptContext, getDelegatedPolicy } = vi.hoisted(() => ({
 }))
 // Partial: only the accessor is faked, so modules that merely read the runtime
 // (live instances, the board) keep their real implementations.
+const teamRuntimeReady = vi.hoisted(() => ({ current: true }))
 vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  getActiveTeamRuntime: () => ({
+  getActiveTeamRuntime: () => teamRuntimeReady.current ? ({
     buildPromptContext,
     getDelegatedPolicy,
     getTeamName: () => 'Test Team',
@@ -115,7 +116,7 @@ vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
     recordToolAudit: () => {},
     maybeAutoNameConversation: () => {},
     bus: { drainMailbox: () => {} },
-  }),
+  }) : null,
 }))
 vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({
   createTeamMcpServer: () => ({ _isMcpServer: true, name: 'halo-team' }),
@@ -343,7 +344,7 @@ vi.mock('../../../../src/main/services/memory-consolidation', () => ({
 // Imports (after all mocks)
 // ============================================
 
-import { sendAppChatMessage } from '../../../../src/main/apps/runtime/app-chat'
+import { sendAppChatMessage, deleteNativeChatSession, onNativeChatDeleted } from '../../../../src/main/apps/runtime/app-chat'
 import { hasChatBrowserContext, destroyAllChatBrowserContexts } from '../../../../src/main/apps/runtime/app-chat-browser'
 import { createScopedBrowserContext } from '../../../../src/main/services/ai-browser'
 import { acquireV2Session, updateConsumerDisplayModel } from '../../../../src/main/services/agent/session-manager'
@@ -356,6 +357,8 @@ import { setImPermissionContext, clearImPermissionContext } from '../../../../sr
 import { setActiveImChannelManager } from '../../../../src/main/apps/runtime/im-channels'
 import { buildTeamSessionKey } from '../../../../src/shared/apps/team-types'
 import { fullCapabilityPolicy } from '../../../../src/shared/apps/capability-policy'
+import { registerToolset } from '../../../../src/main/services/agent/toolsets'
+import { buildLocalSessionKey, getAppChatConversationId } from '../../../../src/shared/apps/im-keys'
 
 beforeEach(() => {
   app.userOverrides = undefined
@@ -922,3 +925,112 @@ describe('a request from outside never operates Halo', () => {
     }
   })
 })
+
+describe('the owner\u2019s own chats have team collaboration built in', () => {
+  const createServer = vi.fn((scope: { conversationId: string }) => ({ _isMcpServer: true, name: 'halo-team', scope }))
+  const GUIDE = 'Team collaboration guide (test)'
+
+  beforeAll(() => {
+    registerToolset({
+      id: 'halo-team', displayName: 'Team', summary: 'test', usageGuide: GUIDE,
+      isAvailable: () => true, createServer,
+    })
+  })
+
+  beforeEach(() => {
+    buildUserSessionSdkOptions.mockClear()
+    createServer.mockClear()
+    buildPromptContext.mockReturnValue(null)
+    vi.mocked(getApiCredentialsForSelection).mockResolvedValue({ provider: 'anthropic', sourceId: 'dh-source', model: 'dh-model' } as never)
+  })
+
+  afterEach(() => {
+    vi.mocked(getApiCredentialsForSelection).mockResolvedValue({ provider: 'anthropic' } as never)
+  })
+
+  const ownerTurn = (conversationId?: string) => ({
+    appId: app.id, spaceId: 'space-1', message: 'organize a team', ...(conversationId ? { conversationId } : {}),
+  })
+
+  it('mounts the same toolset and guide in the default chat and in a local chat, each scoped to its own chat and the digital human\u2019s model', async () => {
+    const local = buildLocalSessionKey(app.id, 'chat-a')
+    const other = buildLocalSessionKey(app.id, 'chat-b')
+    for (const conversationId of [getAppChatConversationId(app.id), local, other]) {
+      await sendAppChatMessage(ownerTurn(conversationId === getAppChatConversationId(app.id) ? undefined : conversationId))
+      expect(mountedSurfaces().mcpServers['halo-team']).toMatchObject({ scope: { conversationId } })
+      expect(mountedSurfaces().systemPrompt).toContain(GUIDE)
+      expect(createServer).toHaveBeenLastCalledWith({
+        spaceId: 'space-1', conversationId, workDir: environment.workDir,
+        modelSelection: { modelSourceId: 'dh-source', modelId: 'dh-model' },
+      })
+    }
+    expect(createServer.mock.calls.map(([scope]) => scope.conversationId)).toEqual([getAppChatConversationId(app.id), local, other])
+  })
+
+  it('mounts nothing for an IM chat, whether the sender is the owner or a guest', async () => {
+    const conversationId = `app-chat:${app.id}:wecom-bot:group:group-7`
+    const turn = {
+      appId: app.id, spaceId: 'space-1', conversationId, message: 'organize a team',
+      imSession: { channel: 'wecom-bot', chatType: 'group' as const, displayName: 'Group', sessionId: 'inst:group-7' },
+    }
+    try {
+      for (const sender of [
+        { senderId: 'owner', senderName: 'Owner', isOwner: true, ownerIds: ['owner'] },
+        { senderId: 'guest', senderName: 'Guest', isOwner: false, guestPolicy: {} },
+      ]) {
+        setImPermissionContext(conversationId, sender)
+        await sendAppChatMessage(turn)
+        expect(mountedSurfaces().mcpServers).not.toHaveProperty('halo-team')
+        expect(mountedSurfaces().systemPrompt).not.toContain(GUIDE)
+      }
+    } finally {
+      clearImPermissionContext(conversationId)
+    }
+    expect(createServer).not.toHaveBeenCalled()
+  })
+
+  it('mounts nothing on a chat key of another digital human', async () => {
+    await sendAppChatMessage(ownerTurn(buildLocalSessionKey('app-other', 'chat-a')))
+    expect(mountedSurfaces().mcpServers).not.toHaveProperty('halo-team')
+    expect(mountedSurfaces().systemPrompt).not.toContain(GUIDE)
+    expect(createServer).not.toHaveBeenCalled()
+  })
+
+  it('mounts nothing while the team runtime is not ready', async () => {
+    teamRuntimeReady.current = false
+    try {
+      await sendAppChatMessage(ownerTurn())
+    } finally {
+      teamRuntimeReady.current = true
+    }
+    expect(mountedSurfaces().mcpServers).not.toHaveProperty('halo-team')
+    expect(mountedSurfaces().systemPrompt).not.toContain(GUIDE)
+    expect(createServer).not.toHaveBeenCalled()
+  })
+
+  it('tells listeners after a local chat is deleted, and only for that chat', async () => {
+    const conversationId = buildLocalSessionKey(app.id, 'chat-gone')
+    const removeSession = vi.fn(() => true)
+    sessionRegistry.current = { register: vi.fn(), getPushableSessions: () => [], removeSession, resetActivity: vi.fn() } as never
+    const deleted: string[] = []
+    const unsubscribe = onNativeChatDeleted(id => deleted.push(id))
+    try {
+      await deleteNativeChatSession(app.id, 'space-1', conversationId)
+      await expect(deleteNativeChatSession(app.id, 'space-1', getAppChatConversationId(app.id))).rejects.toThrow(/Not a deletable/)
+    } finally {
+      unsubscribe()
+    }
+    expect(removeSession).toHaveBeenCalledOnce()
+    expect(deleted).toEqual([conversationId])
+  })
+
+  it('gives a team turn its member channel, not a collaboration of its own, with or without an outside origin', async () => {
+    keptMemberContext()
+    for (const turn of [memberTurn(), memberTurn({ origin: 'colleague' })]) {
+      await sendAppChatMessage(turn)
+      expect(mountedSurfaces().systemPrompt).not.toContain(GUIDE)
+    }
+    expect(createServer).not.toHaveBeenCalled()
+  })
+})
+

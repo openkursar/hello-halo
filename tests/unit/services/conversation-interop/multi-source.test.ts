@@ -13,6 +13,7 @@
  * is registered first to win its own ids — the registry is first-owner-wins.
  */
 
+import { collabReportOwnership } from '../../../../src/main/apps/team/collab-binding'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { ConversationSource, DispatchedMessage } from '../../../../src/main/services/conversation-interop/source'
 import type { TranscriptLine } from '../../../../src/main/services/conversation-interop/types'
@@ -130,6 +131,7 @@ function createFakeSource(options: FakeSourceOptions) {
     seed(id: string, title: string, updatedAt: string, lines: TranscriptLine[] = [], unavailable?: string) {
       conversations.set(id, { id, title, updatedAt, lines, ...(unavailable ? { unavailable } : {}) })
     },
+    remove(id: string) { conversations.delete(id) },
     setUnavailable(id: string, reason: string | undefined) {
       const c = conversations.get(id)
       if (!c) return
@@ -459,6 +461,85 @@ describe('delivery across sources', () => {
         persist: { content: 'x', source: 'team-message', metadata: {} },
       })
     ).toMatchObject({ ok: false, reason: 'read_only' })
+  })
+
+  describe('a report on work the target delegated itself', () => {
+    // The real ownership check, against a store whose binding the test moves.
+    let binding: string | null = 'app-chat:app-1'
+    let owned = true
+    beforeEach(() => { owned = true; binding = 'app-chat:app-1' })
+    const store = { getTeamById: (id: string) => (id === 't1' ? { coordinatorConversationId: owned ? binding : null } : null) }
+    const report = (ownWork: boolean) => delivery.deliverExternalMessage({
+      spaceId: SPACE,
+      toConversationId: 'app-chat:app-1',
+      turnInput: 'member report',
+      persist: { content: 'member report', source: 'team-message', metadata: { teamId: 't1' } },
+      ...(ownWork ? { ownWork: collabReportOwnership(store as never, 't1', 'app-chat:app-1') } : {}),
+    })
+
+    it('reaches a chat whose collaboration switch withholds it, while other conversations stay refused', async () => {
+      dh.setUnavailable('app-chat:app-1', 'switched off')
+      expect(await send('notes:1', 'app-chat:app-1')).toMatchObject({ ok: false, reason: 'unavailable', detail: 'switched off' })
+      expect(await report(false)).toMatchObject({ ok: false, reason: 'unavailable' })
+      expect(dh.dispatched).toHaveLength(0)
+
+      expect(await report(true)).toMatchObject({ ok: true, status: 'delivered' })
+      expect(dh.dispatched).toHaveLength(1)
+      expect(dh.dispatched[0].message.record.source).toBe('team-message')
+    })
+
+    it('is admitted again when it leaves the queue', async () => {
+      dh.busy.add('app-chat:app-1')
+      expect(await report(true)).toEqual({ ok: true, status: 'queued' })
+      dh.setUnavailable('app-chat:app-1', 'switched off')
+
+      dh.endTurn('app-chat:app-1')
+      await flush()
+
+      const delivered = dh.dispatched.map(item => item.message.record.content)
+      expect(delivered).toEqual(['member report'])
+    })
+
+    it('a space conversation coordinator is not given the exemption', () => {
+      expect(collabReportOwnership(store as never, 't1', 'notes:1')).toBeUndefined()
+    })
+
+    it('is refused once the collaboration moved to another chat', async () => {
+      binding = 'app-chat:app-1:local:direct:other'
+      expect(await report(true)).toMatchObject({ ok: false, reason: 'unavailable' })
+    })
+
+    it('still refuses a target that takes no messages', async () => {
+      expect(await delivery.deliverExternalMessage({
+        spaceId: SPACE,
+        toConversationId: 'archive:1',
+        turnInput: 'x',
+        persist: { content: 'x', source: 'team-message', metadata: {} },
+        ownWork: () => true,
+      })).toMatchObject({ ok: false, reason: 'read_only' })
+    })
+
+    it('is refused once the work is no longer bound to the target, also while it waited in the queue', async () => {
+      owned = false
+      expect(await report(true)).toMatchObject({ ok: false, reason: 'unavailable' })
+
+      owned = true
+      dh.busy.add('app-chat:app-1')
+      expect(await report(true)).toEqual({ ok: true, status: 'queued' })
+      owned = false
+      dh.endTurn('app-chat:app-1')
+      await flush()
+      expect(dh.dispatched).toHaveLength(0)
+    })
+
+    it('is refused when the target conversation is gone by the time the queue hands it over', async () => {
+      dh.busy.add('app-chat:app-1')
+      expect(await report(true)).toEqual({ ok: true, status: 'queued' })
+      dh.remove('app-chat:app-1')
+      dh.endTurn('app-chat:app-1')
+      await flush()
+      expect(dh.dispatched).toHaveLength(0)
+    })
   })
 
   it('reports not_found for an id no registered source owns', async () => {
