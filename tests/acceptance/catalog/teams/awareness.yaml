@@ -164,12 +164,13 @@ scenarios:
       - en: A digital human installed with no permissions declared.
         zh: 一个未声明任何权限的数字人。
     steps:
-      - en: Open its capabilities and settings, then expand the always-available capabilities.
-        zh: 打开它的能力与设置，再展开始终可用的能力。
+      - en: Open its capabilities and settings, then expand the Other capabilities group (web search,
+          memory, operate Halo).
+        zh: 打开它的能力与设置，再展开“其他”能力组（网络搜索、记忆、操作 Halo）。
     expected:
-      - en: No switch is offered for operating Halo; it is listed among the always-available
-          capabilities as built in and always on.
-        zh: 不提供操作 Halo 的开关；它在始终可用的能力中显示为内置、始终开启。
+      - en: No switch is offered for operating Halo; it is listed in the Other group as built in and
+          always on.
+        zh: 不提供操作 Halo 的开关；它在“其他”能力组中显示为内置、始终开启。
     notes:
       en: No model request is made; the settings page is the real one.
       zh: 不发起模型请求；设置页面为真实页面。

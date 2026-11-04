@@ -9,9 +9,9 @@
 import { randomUUID } from 'node:crypto'
 import type { HaloAPI } from '../../../src/preload'
 import { test, expect, acceptance } from '../fixtures/acceptance-app'
-import { contentText, modelTool, type ModelReply, type ModelRequest } from '../fixtures/acceptance-model'
+import { modelTool, type ModelReply, type ModelRequest } from '../fixtures/acceptance-model'
 import { openManagedPersonSettings, seedManagedSpace } from '../fixtures/acceptance-management'
-import { createAwareTeam, hasOperateHalo, installTeammate, memberTranscript, promptOf, selfApi } from '../fixtures/acceptance-team-awareness'
+import { createAwareTeam, hasOperateHalo, installTeammate, memberTranscript, promptOf, selfApi, systemOf } from '../fixtures/acceptance-team-awareness'
 
 test.setTimeout(180000)
 
@@ -38,7 +38,7 @@ test('in its own chat a digital human reads its team live, is refused an unnamed
   const unexpected: number[] = []
 
   model.respond((request): ModelReply => {
-    const system = contentText(request.body.system)
+    const system = systemOf(request)
     if (system.includes(testerMarker)) {
       testerRequests.push(request)
       return { text: testerReply }
@@ -127,7 +127,11 @@ test('a digital human lists Operate Halo as always on, with no switch to turn it
   await installTeammate(window, space.id, name, 'Answer only what is asked.')
   await openManagedPersonSettings(window, name)
   await expect(window.getByText('Operate Halo', { exact: true })).toHaveCount(0)
-  await window.getByRole('button', { name: 'Always available: web search, memory, operate Halo', exact: true }).click()
+  // #462 (d8998d25) made this the Other group, collapsed while web search is on.
+  const other = window.getByRole('button', { name: 'Other: web search, memory, operate Halo', exact: true })
+  await expect(other).toHaveAttribute('aria-expanded', 'false')
+  await other.click()
+  await expect(other).toHaveAttribute('aria-expanded', 'true')
   const label = window.getByText('Operate Halo', { exact: true })
   await expect(label).toHaveCount(1)
   const row = label.locator('xpath=..')

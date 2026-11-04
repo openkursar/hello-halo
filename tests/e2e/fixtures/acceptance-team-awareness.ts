@@ -18,6 +18,15 @@ export interface AwareTeam {
   unrelated: { epochId: string; label: string }
 }
 
+/**
+ * The system prompt of a request, whichever protocol the provider speaks:
+ * Anthropic sends it apart from the messages, OpenAI as a system message.
+ */
+export function systemOf(request: ModelRequest): string {
+  const messages = (request.body.messages ?? []) as Array<{ role?: string; content?: unknown }>
+  return [contentText(request.body.system), ...messages.filter(message => message.role === 'system').map(message => contentText(message.content))].join('\n')
+}
+
 /** Everything the model was given for a turn: its system prompt and its messages. */
 export function promptOf(request: ModelRequest): string {
   return `${contentText(request.body.system)}\n${request.text}`

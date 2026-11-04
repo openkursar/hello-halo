@@ -71,7 +71,11 @@ function buildApp(): Express {
  */
 function listenWithRetry(app: Express, port: number, attempt = 0): Promise<number> {
   return new Promise((resolveListen, rejectListen) => {
-    const server = app.listen(port, '127.0.0.1', () => resolveListen(port))
+    // Express 5 also calls this with the bind error; only a clean bind may
+    // settle the port, or a taken one is handed to every session.
+    const server = app.listen(port, '127.0.0.1', (error?: Error) => {
+      if (!error) resolveListen(port)
+    })
     server.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE' && attempt < MAX_PORT_ATTEMPTS) {
         listenWithRetry(app, port + 1, attempt + 1).then(resolveListen, rejectListen)
