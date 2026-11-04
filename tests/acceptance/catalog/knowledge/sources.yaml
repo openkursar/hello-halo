@@ -26,6 +26,9 @@ promises:
   remove:
     en: Removing a knowledge-base entry does not silently delete the original file.
     zh: 移除知识库条目不悄悄删除原始文件。
+  retire:
+    en: A source deleted from the knowledge base or its watched folder stops being found by later knowledge-base answers, while a folder that is only unavailable or no longer watched keeps what was learned.
+    zh: 从知识库或其监视目录删除的资料，后续知识库回答不再检索到；目录仅暂时不可用或已解除监视时，已学内容保留。
   upgrade:
     en: Improved extraction can repair earlier generated results while preserving source files and owner-maintained content.
     zh: 提取能力改善后可修复旧的系统生成结果，同时保留源文件及用户维护的内容。
@@ -119,6 +122,42 @@ scenarios:
     expected:
       - en: Cancellation retains it; confirmed removal leaves the original source on disk.
         zh: 取消保留条目，确认后原始磁盘文件仍在。
+  - id: knowledge.sources.retire-removed
+    title:
+      en: Deleted sources leave knowledge-base search
+      zh: 已删除资料退出知识库检索
+    verifies:
+      - retire
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    variants:
+      change:
+        - removed
+        - deleted
+        - renamed
+        - protected
+    preconditions:
+      - en: A knowledge base has learned a source carrying a unique phrase and an unrelated source that stays.
+        zh: 知识库已学习一份含独特短语的资料，以及一份保留的无关资料。
+    steps:
+      - en: Remove the imported source in the UI, delete or rename a watched file on disk, or delete the source of owner-maintained text while the application is closed.
+        zh: 在界面移除导入资料，在磁盘删除或重命名监视文件，或在应用关闭时删除带用户维护正文的资料来源。
+      - en: Ask a conversation with the knowledge base loaded to search for the phrase, restart and ask again.
+        zh: 在加载该知识库的对话中检索该短语，重启后再检索一次。
+    expected:
+      - en: The search finds nothing from the removed source before and after restart, its name leaves the document map, and the unrelated source is still found; a renamed file is found only under its new name.
+        zh: 重启前后都检索不到被移除资料的内容，其名称从文档目录消失，无关资料仍可检索；重命名文件只以新名称被检索到。
+      - en: The original outside the store stays on disk; owner-maintained text is kept outside the searched corpus.
+        zh: 知识库外的原件仍在磁盘；用户维护的正文保留在检索范围之外。
+    notes:
+      en: A scripted model issues a real Grep over the knowledge base's searched text directory; the asserted result is the application's own tool output. Watched folders are linked through the application's API instead of the operating-system folder picker. Owner-maintained text is staged in the closed profile, as in the extraction-upgrade cases. A watched folder that is merely unavailable, an unmounted volume and a record learned before devices were recorded are kept and are covered only by unit tests on simulated device identity, not by real external or network drives.
+      zh: 脚本模型在知识库检索正文目录上执行真实 Grep，断言的是应用自身的工具结果。监视目录经应用 API 关联，不经操作系统目录选择器。用户维护正文与提取升级用例一样在关闭的资料中布置。目录暂不可用、卷未挂载及无设备记录的旧记录均保留，仅由模拟设备身份的单元测试覆盖，未用真实外置盘或网络盘验证。
   - id: knowledge.sources.upgrade
     title:
       en: Repair an earlier spreadsheet extraction after startup

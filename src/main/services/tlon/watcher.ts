@@ -20,8 +20,8 @@ import { isDiskRoot } from '../../../shared/disk-paths'
 import { watcherBackend } from '../../../shared/watcher-backend'
 import type { LinkedDirectory } from '../../../shared/types/tlon'
 import { getKBRawDir } from './paths'
-import { listKBs, getKB, collectIngestCandidates, checkLinkedDirAvailable } from './service'
-import { enqueueFiles, processQueue, rebuildIndexMd } from './ingest'
+import { listKBs, getKB, checkLinkedDirAvailable } from './service'
+import { enqueueFiles, processQueue, rebuildIndexMd, collectCandidatesRetiringRemoved } from './ingest'
 
 interface WatchHandle {
   key: string
@@ -41,7 +41,7 @@ function scheduleScan(kbId: string): void {
     debounceTimers.delete(kbId)
     const kb = getKB(kbId)
     if (!kb || kb.status !== 'active') return
-    const candidates = collectIngestCandidates(kbId)
+    const candidates = collectCandidatesRetiringRemoved(kbId)
     if (candidates.length === 0) return
     enqueueFiles(kbId, candidates, { automatic: true })
     processQueue(kbId).catch(err =>

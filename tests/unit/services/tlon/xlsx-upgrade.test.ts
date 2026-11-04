@@ -107,6 +107,36 @@ describe('XLSX extractor revision upgrade', () => {
     expect({ calls: extractionCalls, legacy: legacyCalls, record: readHashes(old.kb.id).files[old.sourcePath], mtime: fs.statSync(old.target).mtimeMs }).toEqual(before)
   })
 
+  it.each(['delete', 'recreate'] as const)('does not commit an upgrade read from a spreadsheet that was %sd mid-extraction', async change => {
+    const old = await seedOld()
+    const oldText = fs.readFileSync(old.target, 'utf8')
+    let release!: () => void
+    extractionGate = new Promise<void>(resolve => { release = resolve })
+    const run = migrateKBsToTextIndex()
+    await vi.waitFor(() => expect(extractionCalls).toBe(1))
+    fs.rmSync(old.raw)
+    if (change === 'recreate') fs.writeFileSync(old.raw, workbook(true, 4242.5))
+    release()
+    await run
+    extractionGate = null
+
+    expect(fs.readFileSync(old.target, 'utf8')).toBe(oldText)
+    expect(readHashes(old.kb.id).files[old.sourcePath]).toMatchObject({ hash: sha256(old.bytes) })
+    expect(readHashes(old.kb.id).files[old.sourcePath].extractorRevision).toBeUndefined()
+
+    _resetTlonHashCache()
+    await migrateKBsToTextIndex()
+    if (change === 'delete') {
+      expect(fs.existsSync(old.target)).toBe(false)
+      expect(readHashes(old.kb.id).files[old.sourcePath]).toBeUndefined()
+    } else {
+      expect(fs.readFileSync(old.target, 'utf8')).toBe(expectedCurrent(old.sourcePath, 4242.5))
+    }
+    expect(fs.readFileSync(old.extra, 'utf8')).toBe('Keep this independently maintained text.')
+    expect(fs.readFileSync(old.wiki, 'utf8')).toBe('Keep the human and AI notes.')
+    expect(fs.readFileSync(old.original)).toEqual(old.bytes)
+  })
+
   it('records a genuine empty workbook at the current revision without retrying each startup', async () => {
     const old = await seedOld(false, true)
     await migrateKBsToTextIndex()

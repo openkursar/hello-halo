@@ -10,7 +10,7 @@ import { extractText } from './extract'
 import { extractionRevision, isExtractionCurrent, sameTextStamp, stampOf, type TextStamp } from './extraction-revision'
 import { legacyXlsxTextHash } from './legacy-xlsx'
 import { getKBDir, getKBTextDir } from './paths'
-import { getKB, readHashes, sha256, writeHashes } from './service'
+import { generatedTextHeader, getKB, readHashes, sha256, writeHashes } from './service'
 
 type RecordEntry = IngestHashesV1['files'][string]
 type Protection = NonNullable<RecordEntry['protection']>
@@ -172,7 +172,7 @@ export async function upgradeXlsxSource(job: IngestJob, textPath: string, onWrit
     throw error
   }
   if (!currentSource()) return deferred()
-  const body = content.trim() ? `<!-- source: ${job.sourcePath} -->\n\n${content}` : null
+  const body = content.trim() ? `${generatedTextHeader(job.sourcePath)}\n\n${content}` : null
   const currentHash = body === null ? null : await hashText(body)
   const legacyHash = before.kind === 'file' && before.hash !== currentHash ? await legacyXlsxTextHash(buffer, job.sourcePath) : null
   if (!currentSource()) return deferred()
@@ -226,6 +226,7 @@ export async function upgradeXlsxSource(job: IngestJob, textPath: string, onWrit
   const hashes = readHashes(job.kbId)
   hashes.files[job.sourcePath] = {
     hash: sourceHash, ingestedAt: new Date().toISOString(), extractorRevision: revision,
+    ...(job.sourceType === 'linked' ? { sourceDev: sourceIdentity.dev } : {}),
     ...(body === null ? { empty: true } : { textPath }),
   }
   writeHashes(job.kbId, hashes)

@@ -10,6 +10,7 @@
  *       text/  extracted plaintext, one per source (what queries grep/read)
  *       wiki/  legacy LLM-compiled pages — no longer written; cleared on re-index
  *       .ingest/hashes.json
+ *       .ingest/retained/  owner-maintained text of removed sources, kept out of search
  */
 
 import { join } from 'path'
@@ -61,4 +62,14 @@ export function getKBIngestDir(id: KnowledgeBaseId): string {
 
 export function getKBHashesPath(id: KnowledgeBaseId): string {
   return join(getKBIngestDir(id), 'hashes.json')
+}
+
+/** Owner-maintained text of removed sources: kept, but outside the searched text/ dir. */
+export function getKBRetainedDir(id: KnowledgeBaseId): string {
+  return join(getKBIngestDir(id), 'retained')
+}
+
+/** Present once a KB's one-time cleanup of text left by earlier removals has run. */
+export function getKBRetirementMarkerPath(id: KnowledgeBaseId): string {
+  return join(getKBIngestDir(id), 'retirement-v1.json')
 }

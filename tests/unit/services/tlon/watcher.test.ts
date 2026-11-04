@@ -32,11 +32,19 @@ vi.mock('@parcel/watcher', () => ({
 const enqueueFiles = vi.fn()
 const processQueue = vi.fn<unknown[], Promise<void>>(async () => {})
 const rebuildIndexMd = vi.fn()
-vi.mock('../../../../src/main/services/tlon/ingest', () => ({
-  enqueueFiles: (...args: unknown[]) => enqueueFiles(...args),
-  processQueue: (...args: unknown[]) => processQueue(...args),
-  rebuildIndexMd: (...args: unknown[]) => rebuildIndexMd(...args),
-}))
+const scans = vi.fn((_kbId: string) => {})
+vi.mock('../../../../src/main/services/tlon/ingest', async () => {
+  const service = await vi.importActual<typeof import('../../../../src/main/services/tlon/service')>('../../../../src/main/services/tlon/service')
+  return {
+    enqueueFiles: (...args: unknown[]) => enqueueFiles(...args),
+    processQueue: (...args: unknown[]) => processQueue(...args),
+    rebuildIndexMd: (...args: unknown[]) => rebuildIndexMd(...args),
+    collectCandidatesRetiringRemoved: (kbId: string) => {
+      scans(kbId)
+      return service.collectIngestCandidates(kbId)
+    },
+  }
+})
 
 import {
   _resetTlonRegistry,
@@ -289,10 +297,13 @@ describe('Tlon Watcher', () => {
       vi.useFakeTimers()
       const { cb } = subscriptions.get(getKBRawDir(kb.id))!
 
-      // No candidate files at all.
-      cb(null, [{ type: 'update', path: 'x' }])
+      // No candidate files at all — the scan (which also retires removed
+      // sources) still runs; nothing is processed.
+      scans.mockClear()
+      cb(null, [{ type: 'delete', path: 'x' }])
       await vi.advanceTimersByTimeAsync(500)
       expect(processQueue).not.toHaveBeenCalled()
+      expect(scans).toHaveBeenCalledWith(kb.id)
 
       // Candidates exist but the KB is paused.
       fs.writeFileSync(path.join(getKBRawDir(kb.id), 'doc.md'), 'content')
