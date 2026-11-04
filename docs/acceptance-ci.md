@@ -408,6 +408,26 @@ worked around. Because the downloaded file runs on the build host with the
 runner account's rights, treat the pin like any other code the controller
 executes: change it deliberately.
 
+## Processes left on the build host
+
+A scenario that fails to close its application is ended by force, and helpers
+the application started (the file-watcher worker, crash handlers) can outlive
+it as orphans adopted by `launchd`. GitHub's runner stops what a job started when
+the job ends; within a job they stay until then.
+
+To look at the host without a run, copy [the diagnostics template](../tests/acceptance/ci/runner-diagnostics.yml)
+to `.github/workflows/runner-diagnostics.yml` of the **private** controller (it
+refuses to list anything otherwise: its output names the runner account,
+directories and command lines). Started by hand it lists the
+account's acceptance-related processes by class, orphan or not, with the oldest
+age, load average, memory pressure and swap use; `cleanup: true` additionally
+stops those that are provably the CI's own: same account, parent `launchd`,
+command line inside the runner's work directory or the account's temporary
+`halo-*` / `acceptance-*` directories, older than ten minutes, never runner
+infrastructure; SIGTERM first, SIGKILL after ten seconds only for an unchanged
+command. An account that is short of memory makes
+closings slow, so check swap use before blaming a scenario.
+
 ## Baselines and honest outcomes
 
 Each run ends in one of two ways. It is **complete** when everything it executed
