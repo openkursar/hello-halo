@@ -18,7 +18,34 @@ promises:
   scale:
     en: Large directories remain bounded and usable at narrow widths.
     zh: 大量数字人时列表仍有限加载，窄屏也可操作。
+  live-status:
+    en: A digital human working a team turn reads as working wherever its status shows — the space rail, the people switcher and the directory — and a team lead appears in its space’s rail marked as the team lead, without being offered as a chat recipient.
+    zh: 正在处理团队任务的数字人，在所有显示状态的地方（空间右栏、人员切换条、目录）都显示为工作中；团队 Lead 出现在所在空间的右栏并标为团队 Lead，但不作为聊天收件人提供。
 scenarios:
+  - id: people.directory.team-work-status
+    title:
+      en: See a team member at work outside the team view
+      zh: 在团队视图之外看到正在工作的团队成员
+    verifies:
+      - live-status
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A saved team with its lead and a member installed in the current space; no scheduled run is in progress.
+        zh: 当前空间有一个已保存团队，含 Lead 和一名成员；没有定时运行在进行。
+    steps:
+      - en: Send the member a message in the team view, then look at the space rail’s digital humans tab and the people switcher while it answers, and after it finishes.
+        zh: 在团队视图给成员发消息，在其回复期间及结束后查看空间右栏数字人标签和人员切换条。
+    expected:
+      - en: The member reads Working while it answers and Standing by afterwards; the lead is listed with a team lead mark and no Chat action.
+        zh: 成员回复期间显示工作中，结束后显示待命；Lead 带团队 Lead 标识列出，且无聊天入口。
   - id: people.directory.browse
     title:
       en: Search, open and return to the directory

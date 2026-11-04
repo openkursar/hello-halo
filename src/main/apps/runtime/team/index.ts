@@ -182,6 +182,8 @@ export interface TeamRuntime {
    * the host; never mutates orchestration state.
    */
   getMemberStatus(appId: string): TeamMemberRuntimeStatus
+  /** In-memory: a member of this machine is serving a team turn (person-level status). */
+  isMemberWorking(appId: string): boolean
   /**
    * The office's status as a viewer observes it, which is NOT the same as the
    * stored run status: the stored one only tracks the office's own orchestrated
@@ -199,7 +201,7 @@ export interface TeamRuntime {
    * until the next re-baseline — which only a HOSTED office gets. Read-through:
    * announce AFTER the ledger write, never before.
    */
-  noteMemberStatusChanged(teamId: string): void
+  noteMemberStatusChanged(teamId: string, appId?: string): void
   /**
    * A member's team-channel turn began on this machine. Opens the window its
    * acts are counted in, so the turn-end report can tell "filed nothing" apart
@@ -338,6 +340,7 @@ export interface CreateTeamRuntimeDeps {
    * viewers see pulses start AND stop in step. Absent → no propagation.
    */
   onMemberStatusChanged?: (teamId: string) => void
+  onMemberWorkChanged?: (appId: string) => void
   /** A member's owner-authored profile changed → share it with the office. */
   onMemberProfileChanged?: (teamId: string, appId: string) => void
   /**
@@ -464,6 +467,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     maxConcurrentTurns: deps.maxConcurrentTurns,
     onRunStateChanged: deps.onRunStateChanged,
     onMemberStatusChanged: deps.onMemberStatusChanged,
+    onMemberWorkChanged: deps.onMemberWorkChanged,
     onMemberProfileChanged: deps.onMemberProfileChanged,
     onEpochMutation: deps.onEpochMutation,
     hasPendingEscalation: deps.hasPendingEscalation,
@@ -542,9 +546,10 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     ...(deps.readArtifact ? { readArtifact: deps.readArtifact } : {}),
     ...(deps.readMemberRecord ? { readMemberRecord: deps.readMemberRecord } : {}),
     getMemberStatus: memberStatus,
+    isMemberWorking: (appId) => orchestration!.isMemberWorking(appId),
     getObservableStatus: (teamId) => orchestration!.getObservableStatus(teamId),
     getMemberBusy: (appId, teamId) => orchestration!.getMemberBusy(appId, teamId),
-    noteMemberStatusChanged: (teamId) => orchestration!.noteMemberStatusChanged(teamId),
+    noteMemberStatusChanged: (teamId, appId) => orchestration!.noteMemberStatusChanged(teamId, appId),
     noteMemberTurnStarted: (params) => turnReport.noteTurnStarted(params),
     stopMemberTurn: ({ appId, teamId, epochId }) => session.stopTeamSession(appId, teamId, epochId),
     holdSessionAfterStop: (sessionKey) => bus.holdSession(sessionKey).map(({ envelope, trigger }) => ({

@@ -69,7 +69,7 @@ import { initScheduler, shutdownScheduler } from '../platform/scheduler'
 import { combinedDisposable } from '../platform/event'
 import { initMemory } from '../platform/memory'
 import { initAppManager, shutdownAppManager } from '../apps/manager'
-import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, onNativeChatDeleted, createDigitalHumanConversationSource, createRunConversationSource, releaseTeamEpochSessions } from '../apps/runtime'
+import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, onNativeChatDeleted, createDigitalHumanConversationSource, createRunConversationSource, releaseTeamEpochSessions, getAppRuntime } from '../apps/runtime'
 import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService, collabReportOwnership, releaseCollaboration, releaseCollaborationsOfApp } from '../apps/team'
 import type { TeamStore } from '../apps/team'
 import { initFederationStore, shutdownFederationStore, getFederationStore, getAuthorityStore } from '../apps/federation'
@@ -1175,6 +1175,8 @@ async function initPlatformAndApps(): Promise<void> {
         // coalesced roster refresh — without it a viewer's board froze on the
         // last projected status until an unrelated write refreshed the roster.
         onMemberStatusChanged: (teamId) => getFederationManager()?.scheduleRosterRefresh(teamId),
+        // Person-level status (space rail, people switcher) counts team turns too.
+        onMemberWorkChanged: (appId) => getAppRuntime()?.refreshAppState(appId),
         // "Waiting on its owner" is authored here and read by the whole office —
         // same channel a duty edit takes up to the authority.
         onMemberProfileChanged: (teamId, appId) => publishMemberProfile(teamId, appId),

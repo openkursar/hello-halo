@@ -438,6 +438,8 @@ export interface AutomationAppState {
   pendingEscalationId?: string
   /** Set while the person is stopped and only the user can restart it. */
   blocked?: BlockedReason
+  /** Serving a team turn right now — work that `status` (its own runs) does not count. */
+  teamWorking?: boolean
 }
 
 /**

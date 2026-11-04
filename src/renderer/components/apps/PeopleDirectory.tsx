@@ -12,7 +12,7 @@ import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { AutomationAvatar } from './AutomationAvatar'
 import { PersonStatusDot } from './PersonStatusDot'
-import { describePersonStatus } from '../../utils/automation-status'
+import { describePersonStatus, personRuntimeStatus } from '../../utils/automation-status'
 import { WorkspaceMigrationDialog } from './WorkspaceMigrationDialog'
 import { needsAttention } from '../../../shared/apps/app-types'
 import type { PeopleDirectoryQuery, PeopleDirectorySummary } from '../../../shared/apps/people-directory'
@@ -41,7 +41,7 @@ function groupRows(rows: PeopleDirectorySummary[]): DirectoryGroup[] {
   for (const app of rows) {
     const state = app.state
     if (needsAttention(state)) needsMe.push(app)
-    else if (state?.status === 'running' || state?.status === 'queued') running.push(app)
+    else if (personRuntimeStatus(state) === 'running' || state?.status === 'queued') running.push(app)
     else if (state?.automaticEnabled === false || app.status === 'paused') paused.push(app)
     else standingBy.push(app)
   }

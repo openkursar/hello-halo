@@ -2036,6 +2036,12 @@ renderer-safe contract rather than maintaining another structural copy.
 questions and accepted continuations coexist. Manual execution and answering do
 not enable automatic schedules. The legacy status field no longer closes questions
 or overwrites the user's pause intent when an execution asks for a decision.
+`status` describes the person's own runs only; a team turn it is serving is the
+separate `teamWorking` flag (from the team runtime's member status), so
+"independent execution in progress" surfaces never mistake team work for a run.
+Team turn edges republish the state through `onMemberWorkChanged` →
+`refreshAppState`, coalesced per member; person-level labels fold the two
+(`personRuntimeStatus` in the renderer).
 
 
 ### Read-only identity and team awareness

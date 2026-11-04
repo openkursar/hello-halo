@@ -1,6 +1,7 @@
 import type { AppManagerService } from '../manager'
 import type { ActivityStore } from './store'
 import type { AppRuntimeService } from './types'
+import { getActiveTeamRuntime } from './team'
 import { BLOCKED_STATUSES, automaticEnabled, blockedReason, deriveRuntimeStatus } from './app-state'
 import type { DirectoryMembership, PeopleDirectoryPage, PeopleDirectoryQuery } from '../../../shared/apps/people-directory'
 
@@ -72,6 +73,7 @@ export function buildPeopleDirectory(
         lastRunAtMs: latest?.startedAt, lastDurationMs: latest?.durationMs ?? undefined,
         lastStatus: latest && ['ok', 'error', 'skipped'].includes(latest.status) ? latest.status as 'ok' | 'error' | 'skipped' : undefined,
         ...(latest?.status === 'running' ? { runningAtMs: latest.startedAt, runningRunId: latest.runId, runningSessionKey: latest.sessionKey } : {}),
+        ...(getActiveTeamRuntime()?.isMemberWorking(person.id) ? { teamWorking: true } : {}),
       } }
     }),
   }

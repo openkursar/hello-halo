@@ -257,6 +257,11 @@ export interface Orchestration {
    */
   buildPromptContext(teamId: string, selfAppId: string, epochId: string): TeamPromptContext | null
   getMemberStatus(appId: string): TeamMemberRuntimeStatus
+  /**
+   * Whether a member of this machine holds a team turn slot, as of the last
+   * settled status edge. In memory, for person-level reads on every app.
+   */
+  isMemberWorking(appId: string): boolean
   /** The office's status as a viewer observes it (see {@link observableStatus}). */
   getObservableStatus(teamId: string): TeamStatus
   /**
@@ -271,7 +276,7 @@ export interface Orchestration {
    * nothing to tell viewers. Re-derived when the pulse lands, so announce AFTER
    * the ledger write being reported, never before.
    */
-  noteMemberStatusChanged(teamId: string): void
+  noteMemberStatusChanged(teamId: string, appId?: string): void
   /**
    * Re-derive whether a member owned by THIS machine still owes its own person
    * an answer, and share the result with the office. Idempotent and safe to call
@@ -338,6 +343,12 @@ export interface OrchestrationDeps {
    * the subscriber's job. Never thrown into the turn path.
    */
   onMemberStatusChanged?: (teamId: string) => void
+  /**
+   * A member of this machine started or stopped serving a team turn, coalesced
+   * and fired after the turn's slot settled, so a person-level status (outside
+   * any team view) can re-read it. Never thrown into the turn path.
+   */
+  onMemberWorkChanged?: (appId: string) => void
   /**
    * A member's owner-authored profile changed and has to reach the rest of the
    * office — the same channel a duty edit rides. Used here for "waiting on its
@@ -492,7 +503,38 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     })
   }
 
-  function notifyMemberStatusChanged(teamId: string): void {
+  const memberWorkTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const workingMembers = new Set<string>()
+
+  function holdsTurnSlot(appId: string): boolean {
+    for (const m of store.listMembersByAppId(appId)) {
+      for (const epoch of store.listOpenEpochs(m.teamId)) {
+        if (isSessionOccupied(buildTeamSessionKey(appId, m.teamId, epoch.id))) return true
+      }
+    }
+    return false
+  }
+
+  function scheduleMemberWorkPush(appId: string): void {
+    if (memberWorkTimers.has(appId)) return
+    const timer = setTimeout(() => {
+      memberWorkTimers.delete(appId)
+      try {
+        const working = holdsTurnSlot(appId)
+        if (working === workingMembers.has(appId)) return
+        if (working) workingMembers.add(appId)
+        else workingMembers.delete(appId)
+        deps.onMemberWorkChanged?.(appId)
+      } catch (err) {
+        console.error(`${LOG_TAG} onMemberWorkChanged observer failed:`, err)
+      }
+    }, STATUS_PUSH_COALESCE_MS)
+    if (typeof timer.unref === 'function') timer.unref()
+    memberWorkTimers.set(appId, timer)
+  }
+
+  function notifyMemberStatusChanged(teamId: string, appId?: string): void {
+    if (appId) scheduleMemberWorkPush(appId)
     // The viewer's own machine needs this too: the federation observer below
     // projects the roster to OTHER nodes and is a no-op for a team that is not
     // hosted, so without this push a local team's board never learns that a
@@ -719,7 +761,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       turnTimeoutMs
     )
     // The member just went working → push the pulse to viewers.
-    notifyMemberStatusChanged(teamId)
+    notifyMemberStatusChanged(teamId, appId)
 
     // Detached: not awaited so the bus stays non-blocking.
     void turnPromise
@@ -797,7 +839,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         try {
           capturedEscalations.delete(trigger.correlationId)
           // The turn ended → clear the viewer-side pulse (working → idle/alert).
-          notifyMemberStatusChanged(teamId)
+          notifyMemberStatusChanged(teamId, appId)
           if (outcome.kind === 'escalation') {
             markEscalationToUser(teamId, epochId, appId)
           }
@@ -852,7 +894,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       if (unwritten.length) {
         session.recordStoppedInputs?.(sessionKey, unwritten.map((delivery) => recordDelivery(delivery, renderEnvelope(delivery.envelope, delivery.trigger))))
       }
-      notifyMemberStatusChanged(teamId)
+      notifyMemberStatusChanged(teamId, appId)
     }
   }
 
@@ -1218,7 +1260,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         `${LOG_TAG} awaiting-decision reconciled: team=${member.teamId} app=${appId} awaiting=${awaiting}`
       )
       emitTeamUpdated(member.teamId)
-      notifyMemberStatusChanged(member.teamId)
+      notifyMemberStatusChanged(member.teamId, appId)
     }
   }
 
@@ -1243,7 +1285,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     publishAwaitingDecision(teamId, appId, true)
     emitTeamUpdated(teamId)
     // waiting_user is a member-status flip too → push it to viewers.
-    notifyMemberStatusChanged(teamId)
+    notifyMemberStatusChanged(teamId, appId)
   }
 
   // Wakes the escalating member via the team channel, which reactivates a sealed
@@ -1348,7 +1390,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     }
     reconcileAwaitingDecision(appId)
     emitTeamUpdated(teamId)
-    notifyMemberStatusChanged(teamId)
+    notifyMemberStatusChanged(teamId, appId)
 
     return true
   }
@@ -2069,6 +2111,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     captureReport,
     buildPromptContext,
     getMemberStatus,
+    isMemberWorking: (appId: string) => workingMembers.has(appId),
     getObservableStatus: observableStatus,
     getMemberBusy,
     noteMemberStatusChanged: notifyMemberStatusChanged,

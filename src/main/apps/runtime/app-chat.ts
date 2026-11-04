@@ -1479,7 +1479,7 @@ async function runAppChatTurn(
     const startedTeamSession = parseTeamSessionKey(conversationId)
     if (startedTeamSession) {
       const runtime = getActiveTeamRuntime()
-      runtime?.noteMemberStatusChanged(startedTeamSession.teamId)
+      runtime?.noteMemberStatusChanged(startedTeamSession.teamId, startedTeamSession.appId)
       // Opens the window this turn's board writes and messages are counted in,
       // so the report at the other end can say the member filed nothing without
       // guessing (see apps/runtime/team/turn-report.ts).
@@ -1645,7 +1645,7 @@ async function runAppChatTurn(
       // Only bus-driven turns get orchestration's own pulse, and only a HOSTED
       // office is re-baselined periodically, so a 1:1 turn would otherwise leave
       // the member's own machine showing it as working forever.
-      getActiveTeamRuntime()?.noteMemberStatusChanged(endedTeamSession.teamId)
+      getActiveTeamRuntime()?.noteMemberStatusChanged(endedTeamSession.teamId, endedTeamSession.appId)
       // Tell the lead the member stopped. Nothing else will: the member's own
       // words reach no teammate, so a turn that ends without a team_send — the
       // ordinary shape of a model that quit early, crashed, or was stopped by
