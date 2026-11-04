@@ -161,18 +161,17 @@ describe('catalogCapability (provider-declared, live /models data)', () => {
     }
   })
 
-  // Catalog data fills what nothing else knows; it does not restate curated
-  // ones. Many OpenAI-compatible proxies report one blanket limit for every
-  // model they front, so letting that outrank a deliberate per-model entry
-  // would silently downgrade a known model to the proxy's house number.
-  it('loses to a built-in exact preset', () => {
+  // The account's server knows its own deployment; a preset is Halo's guess
+  // about the bare id, so the server's value wins even over an exact entry.
+  it('outranks a built-in exact preset', () => {
+    expect(modelCapabilitiesService.getPreset('deepseek-chat')).not.toBeNull()
     const cap = modelCapabilitiesService.resolve(
       'deepseek-chat',
       undefined,
       { contextWindow: 999_000, maxOutputTokens: 4096 }
     )
-    expect(cap.contextWindow).toBe(modelCapabilitiesService.getPreset('deepseek-chat')!.contextWindow)
-    expect(cap.maxOutputTokens).toBe(8192)
+    expect(cap.contextWindow).toBe(999_000)
+    expect(cap.maxOutputTokens).toBe(4096)
   })
 
   it('loses to an explicit user override for the same field', () => {

@@ -12,7 +12,7 @@ import type {
   ModelPresentation,
   WithdrawnModel
 } from '../../../shared/types'
-import type { CatalogModelCapability } from '../../../shared/types/model-capabilities'
+import type { CatalogModelCapability, ModelCapabilityOverride } from '../../../shared/types/model-capabilities'
 
 /** The per-model maps a provider reports, keyed by model id (login `_`-prefixed fields use the same shapes). */
 export interface CatalogMaps {
@@ -20,6 +20,64 @@ export interface CatalogMaps {
   modelCapabilities?: Record<string, CatalogModelCapability | undefined>
   modelVision?: Record<string, boolean>
   modelPresentation?: Record<string, unknown>
+}
+
+/**
+ * Some providers still report server limits in the shape of the user's
+ * `modelOverrides`. That map belongs to the user alone, so the server values are
+ * read as catalog data instead; maps the provider states explicitly win.
+ */
+export function withLegacyCatalogOverrides(
+  maps: CatalogMaps,
+  legacy: Record<string, ModelCapabilityOverride> | undefined
+): CatalogMaps {
+  if (!legacy || typeof legacy !== 'object') return maps
+  const modelNames = { ...maps.modelNames }
+  const modelCapabilities = { ...maps.modelCapabilities }
+  const modelVision = { ...maps.modelVision }
+  for (const [id, entry] of Object.entries(legacy)) {
+    if (!entry || typeof entry !== 'object') continue
+    if (typeof entry.displayName === 'string' && entry.displayName && !modelNames[id]) modelNames[id] = entry.displayName
+    if (!modelCapabilities[id]) {
+      const capability: CatalogModelCapability = {}
+      if (typeof entry.contextWindow === 'number') capability.contextWindow = entry.contextWindow
+      if (typeof entry.maxOutputTokens === 'number') capability.maxOutputTokens = entry.maxOutputTokens
+      if (Object.keys(capability).length) modelCapabilities[id] = capability
+    }
+    if (typeof entry.vision === 'boolean' && typeof modelVision[id] !== 'boolean') modelVision[id] = entry.vision
+  }
+  return { ...maps, modelNames, modelCapabilities, modelVision }
+}
+
+/**
+ * The user's overrides without the fields an earlier refresh copied from the
+ * server: a field equal to what the server reports now changes nothing the
+ * user sees, while leaving it would flag an untouched model as edited.
+ * Runs on every refresh that stores a catalog, a reconciled fallback included.
+ */
+export function withoutServerValues(
+  overrides: AISource['modelOverrides'],
+  models: ModelOption[]
+): AISource['modelOverrides'] {
+  if (!overrides || !models.length) return overrides
+  const server = new Map(models.map(model => [model.id, {
+    displayName: model.name,
+    ...model.capabilities,
+    ...(typeof model.supportsVision === 'boolean' ? { vision: model.supportsVision } : {})
+  } as Record<string, unknown>]))
+  let changed = false
+  const next: NonNullable<AISource['modelOverrides']> = {}
+  for (const [id, entry] of Object.entries(overrides)) {
+    const reported = server.get(id)
+    if (!reported || !entry || typeof entry !== 'object') {
+      next[id] = entry
+      continue
+    }
+    const kept = Object.fromEntries(Object.entries(entry).filter(([key, value]) => reported[key] !== value))
+    if (Object.keys(kept).length !== Object.keys(entry).length) changed = true
+    if (Object.keys(kept).length) next[id] = kept as ModelCapabilityOverride
+  }
+  return changed ? next : overrides
 }
 
 const MODEL_GROUPS: readonly ModelGroup[] = ['enterprise']

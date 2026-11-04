@@ -68,7 +68,14 @@ import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 import { Emitter, type Event } from '../../platform/event'
 import { CatalogSchedule } from './catalog-schedule'
-import { catalogModel, presentationMap, recordCatalogChange } from './catalog-models'
+import {
+  catalogModel,
+  presentationMap,
+  recordCatalogChange,
+  withLegacyCatalogOverrides,
+  withoutServerValues
+} from './catalog-models'
+import type { ModelCapabilityOverride } from '../../../shared/types/model-capabilities'
 
 /**
  * Extended OAuth provider interface for token management
@@ -97,6 +104,7 @@ interface OAuthLoginPayload extends OAuthCompleteResult {
   _modelNames?: Record<string, string>
   _modelCapabilities?: Record<string, ModelOption['capabilities']>
   _modelVision?: Record<string, boolean>
+  _modelOverrides?: Record<string, ModelCapabilityOverride>
   _modelPresentation?: Record<string, unknown>
   _modelCatalogCache?: AISource['modelCatalogCache']
   _defaultModel?: string
@@ -1066,12 +1074,13 @@ class AISourceManager {
   ): string[] {
     const tokenData = data._tokenData
     const defaultModel = data._defaultModel || ''
-    const models: ModelOption[] = (data._availableModels || []).map(id => catalogModel(id, {
+    const loginCatalog = withLegacyCatalogOverrides({
       modelNames: data._modelNames,
       modelCapabilities: data._modelCapabilities,
       modelVision: data._modelVision,
       modelPresentation: data._modelPresentation
-    }))
+    }, data._modelOverrides)
+    const models: ModelOption[] = (data._availableModels || []).map(id => catalogModel(id, loginCatalog))
     if (!models.length && defaultModel) models.push({ id: defaultModel, name: data._modelNames?.[defaultModel] || defaultModel })
     const aiSources = this.getAiSourcesConfig()
     const target = targetId ? aiSources.sources.find(source => source.id === targetId) : undefined
@@ -1491,7 +1500,11 @@ class AISourceManager {
 
     // Convert provider's string[] + per-model maps to v2 ModelOption[]
     const modelIds: string[] = providerData.availableModels || []
-    const models: ModelOption[] = modelIds.map(id => catalogModel(id, providerData))
+    const catalogMaps = withLegacyCatalogOverrides(
+      providerData,
+      providerData.modelOverrides as Record<string, ModelCapabilityOverride> | undefined
+    )
+    const models: ModelOption[] = modelIds.map(id => catalogModel(id, catalogMaps))
 
     // Read fresh config from disk to avoid overwriting concurrent token rotations
     const freshAiSources = this.getAiSourcesConfig()
@@ -1502,7 +1515,6 @@ class AISourceManager {
     }
     const now = new Date().toISOString()
 
-    const nextOverrides = providerData.modelOverrides as AISource['modelOverrides']
     const degraded = Boolean(providerData.degraded)
     let changed = false
 
@@ -1518,7 +1530,7 @@ class AISourceManager {
         model: providerData.degraded || s.model !== refreshed.model ? s.model : (providerData.model || s.model),
         modelCatalogCache: providerData.modelCatalogCache ?? s.modelCatalogCache,
         modelOverrides: JSON.stringify(s.modelOverrides) === JSON.stringify(refreshed.modelOverrides)
-          ? nextOverrides ?? s.modelOverrides : s.modelOverrides,
+          ? withoutServerValues(s.modelOverrides, models) : s.modelOverrides,
         updatedAt: now
       }
       const recorded = degraded || models.length === 0 ? next : recordCatalogChange(s, next, now)

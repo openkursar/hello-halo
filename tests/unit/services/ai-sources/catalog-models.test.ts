@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  withLegacyCatalogOverrides,
+  withoutServerValues,
   catalogModel,
   presentationMap,
   recordCatalogChange,
@@ -128,5 +130,41 @@ describe('what a fresh catalog changed', () => {
       LATER
     )
     expect(next.modelReplacement).toEqual(earlier)
+  })
+})
+
+describe('withLegacyCatalogOverrides', () => {
+  it('reads server values sent in the overrides shape as catalog data, explicit maps first', () => {
+    const maps = withLegacyCatalogOverrides(
+      { modelCapabilities: { a: { contextWindow: 1 } } },
+      { a: { contextWindow: 2, vision: true }, b: { displayName: 'B', maxOutputTokens: 3 } }
+    )
+    expect(catalogModel('a', maps)).toEqual({ id: 'a', name: 'a', capabilities: { contextWindow: 1 }, supportsVision: true })
+    expect(catalogModel('b', maps)).toEqual({ id: 'b', name: 'B', capabilities: { maxOutputTokens: 3 } })
+  })
+})
+
+describe('withoutServerValues', () => {
+  const models: ModelOption[] = [
+    { id: 'm', name: 'M', capabilities: { contextWindow: 128000, maxOutputTokens: 8192 }, supportsVision: false }
+  ]
+
+  it('drops only the fields equal to what the server reports', () => {
+    expect(withoutServerValues({ m: { contextWindow: 128000, maxOutputTokens: 4096, vision: false } }, models))
+      .toEqual({ m: { maxOutputTokens: 4096 } })
+  })
+
+  it('drops an entry made entirely of server values', () => {
+    expect(withoutServerValues({ m: { displayName: 'M', contextWindow: 128000 } }, models)).toEqual({})
+  })
+
+  it('keeps an entry for a model the server no longer lists', () => {
+    const overrides = { gone: { contextWindow: 128000 } }
+    expect(withoutServerValues(overrides, models)).toBe(overrides)
+  })
+
+  it('keeps a setting the server never reports', () => {
+    const overrides = { m: { reasoningEffort: 'high' } } as never
+    expect(withoutServerValues(overrides, models)).toBe(overrides)
   })
 })

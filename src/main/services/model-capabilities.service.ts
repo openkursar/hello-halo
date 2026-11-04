@@ -58,11 +58,9 @@ class ModelCapabilitiesService {
   ): ResolvedModelCapability {
     const match = findModelPresetMatch(modelId)
     const catalog = sanitizeCatalogModelCapability(catalogCapability)
-    // Lowest to highest. A family `pattern` sits below the provider's live
-    // catalog: Codex slugs have no entry of their own and land on `gpt-5`,
-    // whose 200K window is not theirs. A deliberate per-model `exact` entry
-    // sits above it — those are curated, and many proxies report one blanket
-    // limit for every model they front.
+    // Lowest to highest: Halo's preset, then what the account's server
+    // reports, then the user's own settings. The server knows its deployment;
+    // a preset is only Halo's guess about the bare id.
     //
     // Spread rather than alias: the preset table hands back a shared object
     // and this result is handed to callers.
@@ -70,9 +68,8 @@ class ModelCapabilitiesService {
       displayName: modelId,
       provider: 'unknown',
       ...DEFAULT_CAPABILITY,
-      ...(match?.kind === 'pattern' ? match.capability : {}),
+      ...match?.capability,
       ...catalog,
-      ...(match?.kind === 'exact' ? match.capability : {}),
       // The id chain also reads allow/blocklist substring signals no preset
       // blob can express, and the router and the renderer input gate both
       // answer through it. A disagreement here strips images the UI calls fine.
