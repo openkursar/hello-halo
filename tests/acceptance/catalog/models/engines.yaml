@@ -146,7 +146,7 @@ scenarios:
     profiles: [regression]
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
     requirements: [halo-sdk, local-claude-code]
     variants:
       entry: [space-chat, digital-human, automation]
@@ -157,7 +157,7 @@ scenarios:
     expected:
       - The initial attempt stays on CC and fails with an explanation to select an installation once in Settings; automation retains the reason in its failed-run record. No automatic runtime check or fallback occurs.
       - The same installation is selectable. Explicit selection checks it, records user intent, and makes CC available; the next turn or run uses CC while history and the override remain intact.
-    notes: Unit coverage exercises status, rendered installation actions, the selection controller, availability and recovery copy with isolated config and probe mocks. It is not evidence of a real UI click, external CC turn, or completed end-to-end journey.
+    notes: Three executable bindings use the real installation selector and Advanced engine controls, persist user selection, and require an external Claude Code process to complete against a local scripted endpoint without fallback. Missing HALO_ACCEPTANCE_CLAUDE_CLI is blocked; no owner credentials or delegated login may be used. Binding and discovery alone are not evidence that these journeys passed.
   - id: models.engines.ordinary-upgrade
     title:
       en: Continue old conversations without discovering external runtimes
