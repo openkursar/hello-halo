@@ -37,10 +37,18 @@ async function addAccount(page: Page, model: AcceptanceModel, id: string, name =
 }
 
 async function openBudget(page: Page) {
-  if (!await providerField(page, 'Context Window').isVisible()) {
-    await aiSection(page).getByRole('button', { name: 'Model Configuration', exact: true }).click()
-  }
-  await expect(providerField(page, 'Context Window')).toBeVisible()
+  const toggle = aiSection(page).getByRole('button', { name: 'Model Configuration', exact: true })
+  const field = providerField(page, 'Context Window')
+  await expect(toggle).toBeVisible()
+  // Capability loading can auto-expand the panel. Only click a collapsed toggle,
+  // and re-check after a racing auto-expand rather than blindly toggling it shut.
+  await expect(async () => {
+    const collapsed = toggle.filter({ has: page.locator('svg.lucide-chevron-right') })
+    if (await collapsed.count()) await collapsed.click({ timeout: 1000 })
+    await expect(toggle.locator('svg.lucide-chevron-down')).toBeVisible({ timeout: 1000 })
+    await expect(aiSection(page).getByText('Loading model capabilities...', { exact: true })).toHaveCount(0, { timeout: 1000 })
+    await expect(field).toBeVisible({ timeout: 1000 })
+  }).toPass({ timeout: 15000, intervals: [100, 250, 500] })
 }
 
 async function inspectBudget(page: Page, budget: Budget) {
