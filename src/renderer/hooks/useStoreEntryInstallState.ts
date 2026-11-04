@@ -8,14 +8,19 @@
 import { useMemo } from 'react'
 import { useAppsStore } from '../stores/apps.store'
 import { useAppsPageStore } from '../stores/apps-page.store'
-import { findInstalledApp, findEntryUpdate } from '../utils/store-install-state'
+import { useSpaceStore } from '../stores/space.store'
+import { findInstalledApps, findInstallableSpaceIds, findInstallsUpdate } from '../utils/store-install-state'
 import type { RegistryEntry, UpdateInfo } from '../../shared/store/store-types'
 import type { InstalledApp } from '../../shared/apps/app-types'
 
 export interface StoreEntryInstallState {
-  /** The installed app matching this entry, or null when not installed. */
+  /** The first install of this entry, or null when not installed. */
   installedApp: InstalledApp | null
-  /** Update info when a newer version is available for the installed app. */
+  /** Every install of this entry, one per workspace or Global. */
+  installedApps: InstalledApp[]
+  /** Workspaces the entry is not installed in yet. */
+  installableSpaceIds: string[]
+  /** The first pending update among the installs. */
   updateInfo: UpdateInfo | null
 }
 
@@ -26,14 +31,24 @@ export function useStoreEntryInstallState(
   const apps = useAppsStore(state => state.apps)
   const availableUpdates = useAppsPageStore(state => state.availableUpdates)
 
-  const installedApp = useMemo(
-    () => findInstalledApp(entry, registryId, apps),
+  const haloSpace = useSpaceStore(state => state.haloSpace)
+  const spaces = useSpaceStore(state => state.spaces)
+
+  const installedApps = useMemo(
+    () => findInstalledApps(entry, registryId, apps),
     [apps, entry, registryId],
   )
+  const installableSpaceIds = useMemo(
+    () => findInstallableSpaceIds(
+      installedApps,
+      [...(haloSpace ? [haloSpace.id] : []), ...spaces.map(space => space.id)],
+    ),
+    [installedApps, haloSpace, spaces],
+  )
   const updateInfo = useMemo(
-    () => findEntryUpdate(installedApp, availableUpdates),
-    [availableUpdates, installedApp],
+    () => findInstallsUpdate(installedApps, availableUpdates),
+    [availableUpdates, installedApps],
   )
 
-  return { installedApp, updateInfo }
+  return { installedApp: installedApps[0] ?? null, installedApps, installableSpaceIds, updateInfo }
 }

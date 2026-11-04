@@ -20,7 +20,7 @@ import { api } from '../api'
 import { useAppStore } from './app.store'
 import { getCurrentLanguage } from '../i18n'
 import { categoryTaxonomyResource, discoverPageResource } from '../lib/store-resources'
-import { findInstalledApp, findEntryUpdate } from '../utils/store-install-state'
+import { findInstalledApps, findInstallsUpdate } from '../utils/store-install-state'
 import { useAppsStore } from './apps.store'
 import type { RegistryEntry, StoreAppDetail, UpdateInfo, StoreQuery, StoreQueryResponse, StoreInstallProgress } from '../../shared/store/store-types'
 import type { AppType, SkillSpec } from '../../shared/apps/spec-types'
@@ -70,12 +70,12 @@ function abandonStoreDetail(): void {
  * open, such as leaving the store tab with a detail on screen and coming back.
  */
 function reportDetailView(detail: StoreAppDetail, availableUpdates: UpdateInfo[]): void {
-  const installedApp = findInstalledApp(detail.entry, detail.registryId, useAppsStore.getState().apps)
-  const updateInfo = findEntryUpdate(installedApp, availableUpdates)
+  const installs = findInstalledApps(detail.entry, detail.registryId, useAppsStore.getState().apps)
+  const updateInfo = findInstallsUpdate(installs, availableUpdates)
   void api.trackEvent('store.detail.view', {
     appId: detail.entry.slug,
     appType: detail.entry.type,
-    installedState: updateInfo ? 'update' : installedApp ? 'installed' : 'new',
+    installedState: updateInfo ? 'update' : installs.length ? 'installed' : 'new',
   })
 }
 
