@@ -19,7 +19,7 @@ import { useCodePlugin, useMathPlugin } from '../../lib/streamdown-plugins'
 import { createStreamingMarkdown } from '../../lib/streaming-markdown'
 import { MARKDOWN_REHYPE_PLUGINS, markdownRaw, markdownSanitize, rehypeLinkPolicy } from '../../lib/markdown-link-policy'
 import { useTranslation } from '../../i18n'
-import { conversationReferenceShortId } from '../../../shared/conversation-reference'
+import { parseConversationReference } from '../../../shared/conversation-reference'
 import { OpenTableContext } from './open-table-context'
 import { ConversationReferenceLink } from './cross-conversation'
 import { fileLinkHandlers, rehypeFileMentions, rehypeLocalFileLinks, rehypeRestoreFileLinks, useFileLinkOptions, useFileMentionLinks } from '../references'
@@ -107,9 +107,9 @@ const components = {
   // Links
   a: ({ href, children }: { href?: string; children?: React.ReactNode }) => {
     const className = 'text-primary hover:underline underline-offset-2'
-    const conversation = href ? conversationReferenceShortId(href) : null
+    const conversation = href ? parseConversationReference(href) : null
     if (conversation) {
-      return <ConversationReferenceLink shortId={conversation} className={className}>{children}</ConversationReferenceLink>
+      return <ConversationReferenceLink target={conversation} className={className}>{children}</ConversationReferenceLink>
     }
     return (
       <a href={href} target="_blank" rel="noopener noreferrer" className={className}>

@@ -5,6 +5,7 @@
  *
  * - web and mail links open in the default app;
  * - `halo:` links are Halo's own, handled in-process;
+ * - `conv:` conversation references open only inside the chat view, never here;
  * - a local `file:` link is never run: the file is shown in its folder;
  * - any other target (an app protocol, a file on another host) can start a
  *   program, so it opens only after the person confirms the full address;
@@ -18,10 +19,12 @@ import { app, dialog, shell, type BrowserWindow } from 'electron'
 import { fileURLToPath } from 'url'
 import { handleDeepLinkUrl } from './deep-link.service'
 import { getDeepLinkScheme } from '../foundation/product-config'
+import { CONVERSATION_REFERENCE_SCHEME } from '../../shared/conversation-reference'
 
 export type ExternalLinkAction =
   | { kind: 'open' }
   | { kind: 'deep-link' }
+  | { kind: 'in-app' }
   | { kind: 'reveal'; path: string }
   | { kind: 'confirm' }
   | { kind: 'refuse' }
@@ -38,6 +41,7 @@ export function classifyExternalLink(raw: string): ExternalLinkAction {
   }
   if (OPEN_DIRECTLY.has(url.protocol)) return { kind: 'open' }
   if (url.protocol === `${getDeepLinkScheme()}:`) return { kind: 'deep-link' }
+  if (url.protocol === `${CONVERSATION_REFERENCE_SCHEME}:`) return { kind: 'in-app' }
   if (REFUSED.has(url.protocol)) return { kind: 'refuse' }
   if (url.protocol === 'file:' && (!url.host || url.host === 'localhost')) {
     try {
@@ -101,6 +105,9 @@ export async function openExternalLink(raw: string, parent: BrowserWindow | null
       return
     case 'deep-link':
       handleDeepLinkUrl(raw)
+      return
+    case 'in-app':
+      console.warn('[ExternalLink] Not opened: a conversation reference reached the external path; it opens only inside Halo')
       return
     case 'reveal':
       shell.showItemInFolder(action.path)

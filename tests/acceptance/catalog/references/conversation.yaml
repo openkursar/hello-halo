@@ -1,0 +1,56 @@
+version: 1
+id: references.conversation
+module: references
+title:
+  en: Open a conversation from a conv link
+  zh: 从会话链接打开会话
+story:
+  en: When a reply or a Markdown file points at another conversation, I can open it inside Halo, and a dead link tells me so instead of asking the operating system.
+  zh: 回复或 Markdown 文件指向另一个会话时，我能在 Halo 内打开它；失效的链接直接告诉我，而不是交给操作系统。
+basis: documented
+references:
+  - src/shared/conversation-reference.ts
+  - src/renderer/components/chat/cross-conversation/open-conversation-reference.ts
+  - src/renderer/components/chat/cross-conversation/ConversationReferenceLink.tsx
+  - src/renderer/components/chat/MarkdownRenderer.tsx
+  - src/renderer/components/canvas/viewers/MarkdownViewer.tsx
+  - src/main/services/external-link.service.ts
+  - tests/unit/shared/conversation-reference.test.ts
+  - tests/unit/renderer/open-conversation-reference.test.ts
+  - tests/unit/services/external-link.test.ts
+  - tests/e2e/specs/acceptance-conversation-links.spec.ts
+promises:
+  open:
+    en: A conv link with a short id or a full conversation id opens exactly that conversation inside Halo.
+    zh: 带短 id 或完整会话 id 的会话链接在 Halo 内打开的正是那个会话。
+  unavailable:
+    en: A conv link whose conversation does not exist, or that is malformed, shows "This conversation is no longer available" and nothing is handed to the operating system.
+    zh: 指向不存在会话或格式错误的会话链接显示“此会话已不可用”，不交给操作系统处理。
+scenarios:
+  - id: references.conversation.open
+    title:
+      en: Follow short, full and missing conv links
+      zh: 点击短 id、完整 id 及失效的会话链接
+    verifies: [open, unavailable]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      surface: [reply, preview]
+    preconditions:
+      - en: Two named conversations exist in the workspace; a third conversation or a Markdown file contains links to the first by short id, to the second by full id and to a conversation that does not exist.
+        zh: 工作区有两个已命名会话；第三个会话的回复或一个 Markdown 文件含有指向第一个（短 id）、第二个（完整 id）和一个不存在会话的链接。
+    steps:
+      - en: Click each link in the AI reply, or in the canvas Markdown preview of the file.
+        zh: 在 AI 回复中或文件的画布 Markdown 预览中依次点击每个链接。
+    expected:
+      - en: The short and full links show the linked conversation's title and messages; the missing link shows the unavailable notice and leaves the current conversation in place.
+        zh: 短 id 和完整 id 链接显示目标会话的标题与消息；失效链接显示不可用提示并停留在当前会话。
+      - en: No external open, file reveal or "open with another app" prompt happens for any of them.
+        zh: 任何一个链接都不会触发外部打开、在文件夹中显示或“用其他应用打开”提示。
+    notes:
+      en: Fixes https://github.com/openkursar/hello-halo/issues/509. The real app runs with a scripted model; the two target conversations are created through the app's own conversation API. External hand-off is observed by replacing Electron's shell and dialog entry points in the main process with recorders, which also keeps the test from touching the host; a positive control confirms the recorder sees the app's real external-open path. Not covered here — digital-human chat keys (app-chat:…), ambiguous short ids, keyboard activation, remote web access and middle-click; those rely on the unit tests.
+      zh: 修复 https://github.com/openkursar/hello-halo/issues/509。真实应用、脚本模型；两个目标会话通过应用自身的会话接口创建。外部交接通过在主进程把 Electron 的 shell 与 dialog 入口替换为记录器来观察，同时避免触碰宿主机；正向对照确认记录器能看到应用真实的外部打开路径。此处未覆盖：数字人会话键（app-chat:…）、有歧义的短 id、键盘激活、远程网页访问与中键点击，这些依赖单元测试。

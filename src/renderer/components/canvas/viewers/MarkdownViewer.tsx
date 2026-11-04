@@ -17,7 +17,7 @@ import 'streamdown/styles.css'
 import { useCodePlugin } from '../../../lib/streamdown-plugins'
 import { splitMarkdownIntoChunks } from '../../../lib/markdown-chunks'
 import { MARKDOWN_REHYPE_PLUGINS } from '../../../lib/markdown-link-policy'
-import { conversationReferenceShortId } from '../../../../shared/conversation-reference'
+import { parseConversationReference } from '../../../../shared/conversation-reference'
 import { api } from '../../../api'
 import type { CanvasTab } from '../../../stores/canvas.store'
 import { useCanvasActions } from '../../../hooks/useCanvasLifecycle'
@@ -238,8 +238,8 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
       },
       // Links - add target="_blank" (styling from tailwind.config.cjs)
       a({ href, children }: any) {
-        const conversation = typeof href === 'string' ? conversationReferenceShortId(href) : null
-        if (conversation) return <ConversationReferenceLink shortId={conversation}>{children}</ConversationReferenceLink>
+        const conversation = typeof href === 'string' ? parseConversationReference(href) : null
+        if (conversation) return <ConversationReferenceLink target={conversation}>{children}</ConversationReferenceLink>
         return (
           <a href={href} target="_blank" rel="noopener noreferrer">
             {children}

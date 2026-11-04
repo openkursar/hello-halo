@@ -8,11 +8,11 @@ import { describe, it, expect } from 'vitest'
 import { createHash, randomUUID } from 'crypto'
 import {
   CHAT_TITLE_PREVIEW_CHARS,
-  conversationReferenceShortId,
   digitalHumanChatTitle,
   formatConversationReference,
   isShortConversationId,
   normalizeConversationTarget,
+  parseConversationReference,
   shortConversationId,
 } from '../../../src/shared/conversation-reference'
 import { buildLocalSessionKey, getAppChatConversationId } from '../../../src/shared/apps/im-keys'
@@ -80,17 +80,32 @@ describe('digitalHumanChatTitle', () => {
   })
 })
 
-describe('conversationReferenceShortId', () => {
+describe('parseConversationReference', () => {
+  const fullId = '12345678-1234-4234-8234-123456789abc'
+
   it('reads the short id back from the link target the composer writes', () => {
     const id = randomUUID()
     const href = /\]\((.+)\)$/.exec(formatConversationReference('Plan', id))![1]
-    expect(conversationReferenceShortId(href)).toBe(shortConversationId(id))
-    expect(conversationReferenceShortId('CONV:3A5D77EA')).toBe('3a5d77ea')
+    expect(parseConversationReference(href)).toEqual({ kind: 'short', id: shortConversationId(id) })
+    expect(parseConversationReference('CONV:3A5D77EA')).toEqual({ kind: 'short', id: '3a5d77ea' })
   })
 
-  it('is null for anything that is not a reference', () => {
-    for (const href of ['https://example.com', 'conv:', 'conv:3a5d77', 'conv:3a5d77ea0', 'conv:zzzzzzzz', 'xconv:3a5d77ea', '']) {
-      expect(conversationReferenceShortId(href), href).toBeNull()
+  it('keeps a full id whole, so it is matched exactly rather than by its short form', () => {
+    expect(parseConversationReference(`conv:${fullId}`)).toEqual({ kind: 'full', id: fullId })
+    expect(parseConversationReference(`conv:${fullId.toUpperCase()}`)).toEqual({ kind: 'full', id: fullId })
+    const chatKey = buildLocalSessionKey('app-1', randomUUID())
+    expect(parseConversationReference(`conv:${chatKey}`)).toEqual({ kind: 'full', id: chatKey })
+  })
+
+  it('marks an unreadable conv: link invalid instead of letting it leave Halo', () => {
+    for (const href of ['conv:', 'conv:3a5d77', 'conv:3a5d77ea0', 'conv:zzzzzzzz', `conv:${fullId}/x`, `conv:${fullId}?a=1`, `conv:${fullId}#top`, `conv:${fullId.slice(0, -1)}`]) {
+      expect(parseConversationReference(href), href).toEqual({ kind: 'invalid' })
+    }
+  })
+
+  it('is null for anything that is not a conv: link', () => {
+    for (const href of ['https://example.com', 'xconv:3a5d77ea', 'mailto:a@b.c', '']) {
+      expect(parseConversationReference(href), href).toBeNull()
     }
   })
 })
