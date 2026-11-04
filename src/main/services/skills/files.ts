@@ -56,6 +56,43 @@ interface Mutation {
   issues: string[]
 }
 
+/**
+ * Electron's asar layer is a read-only virtual filesystem: it has no opendir, and its
+ * lstat and fstat disagree on inode and timestamps. Packaged built-in skills live there.
+ *
+ * A name ending in `.asar` is not proof: `app.asar.unpacked` holds real files and a user may own
+ * a folder called `foo.asar`. The archive is the `.asar` segment that is a regular file once
+ * Electron's virtual layer is bypassed, so ordinary directories keep their strict checks.
+ */
+const archiveSegments = new Map<string, boolean>()
+
+function isArchiveFile(candidate: string): boolean {
+  const known = archiveSegments.get(candidate)
+  if (known !== undefined) return known
+  const processWithAsar = process as NodeJS.Process & { noAsar?: boolean }
+  const previous = processWithAsar.noAsar
+  let archive = false
+  try {
+    processWithAsar.noAsar = true
+    archive = fs.lstatSync(candidate).isFile()
+  } catch {
+    archive = false
+  } finally {
+    processWithAsar.noAsar = previous
+  }
+  // The archive of a packaged app never changes while it runs; remember it, but not a miss for a path that may appear later.
+  if (archive) archiveSegments.set(candidate, true)
+  return archive
+}
+
+export function insideAsar(path: string): boolean {
+  // Check every `.asar` segment, outermost first: a user folder named foo.asar may precede the real archive.
+  for (const match of path.matchAll(/\.asar(?=[\\/]|$)/gi)) {
+    if (isArchiveFile(path.slice(0, match.index + match[0].length))) return true
+  }
+  return false
+}
+
 function locationOf(filePath: string): Location {
   if (typeof filePath !== 'string' || !filePath || filePath.includes('\0') || filePath.length > 4096) {
     throw new Error('Invalid skill file path')
@@ -115,21 +152,29 @@ function registerPath(path: string, paths: Map<string, string>, files: Set<strin
   if (file) files.add(pathKey(path))
 }
 
-function stamp(stat: fs.Stats, omitChangeTime = false): Array<number | string> {
-  return [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeMs, omitChangeTime ? '' : stat.ctimeMs]
+function stamp(stat: fs.Stats, omitChangeTime = false, stableIdentity = true): Array<number | string> {
+  return [stat.dev, stableIdentity ? stat.ino : '', stat.mode, stat.size, stat.mtimeMs, omitChangeTime ? '' : stat.ctimeMs]
 }
 
 function sameStat(left: fs.Stats, right: fs.Stats): boolean {
   return JSON.stringify(stamp(left)) === JSON.stringify(stamp(right))
 }
 
+/** asar reports a fresh inode on every lstat, so identity there rests on mode, size and times. */
+function sameEntry(left: fs.Stats, right: fs.Stats, path: string): boolean {
+  if (!insideAsar(path)) return sameStat(left, right)
+  return left.mode === right.mode && left.size === right.size && left.mtimeMs === right.mtimeMs
+}
+
 // Renaming changes the root inode's ctime; descendants must still match the original snapshot.
 function treeRevision(tree: Omit<Tree, 'revision'>, relocated = false): string {
   const hash = createHash('sha256')
-  hash.update(JSON.stringify([tree.location.directory, stamp(tree.root, relocated), tree.link,
-    stamp(tree.target, relocated && tree.link === undefined)]))
+  // asar invents a new inode per lstat; its entries are immutable, so path, size and times identify them.
+  const stable = !insideAsar(tree.physicalRoot)
+  hash.update(JSON.stringify([tree.location.directory, stamp(tree.root, relocated, stable), tree.link,
+    stamp(tree.target, relocated && tree.link === undefined, stable)]))
   for (const entry of tree.entries) {
-    hash.update(JSON.stringify([entry.path, stamp(entry.stat, relocated && !tree.location.directory), entry.link]))
+    hash.update(JSON.stringify([entry.path, stamp(entry.stat, relocated && !tree.location.directory, stable), entry.link]))
   }
   return hash.digest('hex')
 }
@@ -164,20 +209,28 @@ function scanTree(location: Location): Tree {
     if (depth > MAX_DEPTH) throw new Error('Skill package is too deeply nested')
     const before = fs.lstatSync(directory)
     if (!before.isDirectory()) throw new Error('Skill directory changed during reading')
-    const handle = fs.opendirSync(directory)
-    try {
-      let entry: fs.Dirent | null
-      while ((entry = handle.readSync()) !== null) {
-        const path = prefix ? `${prefix}/${entry.name}` : entry.name
-        const absolutePath = join(directory, entry.name)
-        const stat = fs.lstatSync(absolutePath)
-        append(path, stat, absolutePath)
-        if (stat.isDirectory()) visit(absolutePath, path, depth + 1)
-      }
-    } finally {
-      handle.closeSync()
+    const visitEntry = (entry: fs.Dirent): void => {
+      const path = prefix ? `${prefix}/${entry.name}` : entry.name
+      const absolutePath = join(directory, entry.name)
+      const stat = fs.lstatSync(absolutePath)
+      append(path, stat, absolutePath)
+      if (stat.isDirectory()) visit(absolutePath, path, depth + 1)
     }
-    if (!sameStat(before, fs.lstatSync(directory))) throw new Error('Skill directory changed during reading')
+    if (insideAsar(directory)) {
+      // The whole listing is materialized, so refuse an oversized directory before visiting it.
+      const names = fs.readdirSync(directory, { withFileTypes: true })
+      if (names.length > MAX_ENTRIES) throw new Error('Skill package exceeds 2000 entries')
+      for (const entry of names) visitEntry(entry)
+    } else {
+      const handle = fs.opendirSync(directory)
+      try {
+        let entry: fs.Dirent | null
+        while ((entry = handle.readSync()) !== null) visitEntry(entry)
+      } finally {
+        handle.closeSync()
+      }
+    }
+    if (!sameEntry(before, fs.lstatSync(directory), directory)) throw new Error('Skill directory changed during reading')
   }
   if (location.directory) visit(physicalRoot, '', 0)
   else append('SKILL.md', target, physicalRoot)
@@ -185,7 +238,7 @@ function scanTree(location: Location): Tree {
   if (!tree.entries.some(entry => entry.path === 'SKILL.md' && !entry.stat.isDirectory())) {
     throw new Error('Skill package is missing SKILL.md')
   }
-  if (!sameStat(root, fs.lstatSync(location.root)) || !sameStat(target, fs.lstatSync(physicalRoot))) {
+  if (!sameEntry(root, fs.lstatSync(location.root), location.root) || !sameEntry(target, fs.lstatSync(physicalRoot), physicalRoot)) {
     throw new Error('Skill changed during reading')
   }
   tree.revision = treeRevision(tree)
@@ -206,7 +259,9 @@ function readBytes(path: string, expected: fs.Stats): Buffer {
   const fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
   try {
     const before = fs.fstatSync(fd)
-    if (!before.isFile() || !sameStat(before, expected)) throw new Error('Skill file changed during reading')
+    // Packaged sources are immutable; compare the size only, as asar reports different identities.
+    const unchanged = insideAsar(path) ? before.size === expected.size : sameStat(before, expected)
+    if (!before.isFile() || !unchanged) throw new Error('Skill file changed during reading')
     const bytes = Buffer.alloc(expected.size)
     let offset = 0
     while (offset < bytes.length) {
@@ -214,7 +269,7 @@ function readBytes(path: string, expected: fs.Stats): Buffer {
       if (count === 0) throw new Error('Skill file changed during reading')
       offset += count
     }
-    if (!sameStat(before, fs.fstatSync(fd))) throw new Error('Skill file changed during reading')
+    if (!insideAsar(path) && !sameStat(before, fs.fstatSync(fd))) throw new Error('Skill file changed during reading')
     return bytes
   } finally {
     fs.closeSync(fd)

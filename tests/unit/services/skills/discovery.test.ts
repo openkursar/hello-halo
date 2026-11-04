@@ -33,6 +33,13 @@ function copy(id: string, scope: 'global' | 'space', source: SkillCopy['source']
 }
 
 describe('skill discovery and effective copies', () => {
+  it('only scans real user directories, which never live inside the packaged app archive', async () => {
+    const { skillSearchRoots, insideAsar } = await import('../../../../src/main/services/skills')
+    const project = join(root, 'project')
+    for (const scanned of skillSearchRoots(project)) expect(insideAsar(scanned.path)).toBe(false)
+    expect(insideAsar(join('/Applications/Halo.app/Contents/Resources/app.asar', 'resources', 'builtin-skills'))).toBe(true)
+  })
+
   it('discovers only the selected project and global conventional roots, including legacy commands', () => {
     const project = join(root, 'a')
     write(project, '.agents/skills/weekly/SKILL.md', '---\nname: weekly\ndescription: Current report\n---\nCurrent')

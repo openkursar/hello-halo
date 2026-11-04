@@ -7,12 +7,20 @@
  * stub AppManagerService: install/refresh/GC decisions and their guards.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, writeFileSync, rmSync } from 'fs'
+import * as fs from 'fs'
 import { createHash } from 'node:crypto'
+const realFs = vi.hoisted(() => ({ opendir: null as unknown, lstat: null as unknown }))
+vi.mock('fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('fs')>()
+  realFs.opendir = actual.opendirSync
+  realFs.lstat = actual.lstatSync
+  return { ...actual, opendirSync: vi.fn(actual.opendirSync), lstatSync: vi.fn(actual.lstatSync) }
+})
 const { definitions } = vi.hoisted(() => ({ definitions: vi.fn(() => [] as Array<{ name: string; description: string; argumentHint?: string; instructions: string }>) }))
 vi.mock('@hello-halo/agent-sdk/worker', () => ({ getBuiltinSkillDefinitions: definitions }))
-import { join } from 'path'
+import { basename, join } from 'path'
 import { seedBuiltinSkills } from '../../../../src/main/apps/manager/builtin-skills'
 import type { AppManagerService, InstalledApp, AppStatus } from '../../../../src/main/apps/manager/types'
 import type { AppSpec, SkillSpec } from '../../../../src/main/apps/spec/schema'
@@ -132,6 +140,60 @@ describe('SDK builtin inventory seeding', () => {
     expect(install).not.toHaveBeenCalled()
     expect(upgradeSpec).not.toHaveBeenCalled()
     expect(rows.every(row => row.spec.version === 'old')).toBe(true)
+  })
+})
+
+describe('shipped skills inside a read-only archive', () => {
+  const office = ['docx', 'pdf', 'pptx', 'xlsx', 'office-runtime-check']
+  const archiveRoot = () => join(globalThis.__HALO_TEST_DIR__, 'app.asar', 'resources', 'builtin-skills')
+  let appPath: { mockRestore: () => void }
+
+  beforeEach(async () => {
+    // A packaged app serves resources from app.asar, whose filesystem implements readdir but not opendir.
+    const { app } = await import('electron')
+    appPath = vi.spyOn(app, 'getAppPath').mockReturnValue(join(globalThis.__HALO_TEST_DIR__, 'app.asar'))
+    vi.mocked(fs.opendirSync).mockImplementation((() => {
+      throw Object.assign(new Error('ENOTDIR: not a directory, opendir'), { code: 'ENOTDIR' })
+    }) as unknown as typeof fs.opendirSync)
+    // With Electron's virtual layer bypassed (process.noAsar) the archive is one regular file on disk.
+    vi.mocked(fs.lstatSync).mockImplementation(((path: fs.PathLike, options?: unknown) => {
+      const stat = (realFs.lstat as typeof fs.lstatSync)(path, options as fs.StatOptions) as fs.Stats
+      // The product resolves the test directory to its real path (/private/var on macOS), so match the archive by name.
+      if (basename(String(path)) === 'app.asar' && (process as NodeJS.Process & { noAsar?: boolean }).noAsar) {
+        return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { isFile: () => true, isDirectory: () => false })
+      }
+      return stat
+    }) as typeof fs.lstatSync)
+  })
+
+  afterEach(() => {
+    appPath.mockRestore()
+    vi.mocked(fs.opendirSync).mockImplementation(realFs.opendir as typeof fs.opendirSync)
+    vi.mocked(fs.lstatSync).mockImplementation(realFs.lstat as typeof fs.lstatSync)
+  })
+
+  it('installs every shipped skill, including nested resources, without logging a read failure', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    for (const id of office) {
+      const dir = join(archiveRoot(), id)
+      mkdirSync(join(dir, 'references'), { recursive: true })
+      mkdirSync(join(dir, 'scripts'), { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${id}\ndescription: Test skill ${id}\nversion: 1.0.0\n---\n\n# ${id}\n`)
+      writeFileSync(join(dir, 'references', 'guide.md'), `guide for ${id}`)
+      writeFileSync(join(dir, 'scripts', 'run.js'), 'run()\n')
+    }
+    const { manager, install } = createStubManager([])
+    await seedBuiltinSkills(manager)
+
+    const installed = install.mock.calls.map(call => (call[1] as SkillSpec).name).sort()
+    expect(installed).toEqual([...office].sort())
+    for (const [, raw] of install.mock.calls) {
+      const spec = raw as SkillSpec
+      expect(Object.keys(spec.skill_files ?? {}).sort()).toEqual(['SKILL.md', 'references/guide.md', 'scripts/run.js'])
+    }
+    const messages = [...warn.mock.calls, ...error.mock.calls].map(call => String(call[0]))
+    expect(messages.filter(message => message.includes('Failed to read shipped package'))).toEqual([])
   })
 })
 

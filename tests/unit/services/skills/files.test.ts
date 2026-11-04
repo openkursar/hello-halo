@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import * as fs from 'fs'
-import { dirname, join } from 'path'
+import { dirname, join, win32 } from 'path'
 import { execFileSync } from 'child_process'
 import {
   assertSkillRevision,
   moveSkillFiles,
+  insideAsar,
   readSkillPackage,
   skillRemovalPath,
   skillRevision,
@@ -16,6 +17,9 @@ vi.mock('fs', async importOriginal => {
   const actual = await importOriginal<typeof import('fs')>()
   return {
     ...actual,
+    opendirSync: vi.fn(actual.opendirSync),
+    lstatSync: vi.fn(actual.lstatSync),
+    fstatSync: vi.fn(actual.fstatSync),
     renameSync: vi.fn(actual.renameSync),
     writeFileSync: vi.fn(actual.writeFileSync),
     rmSync: vi.fn(actual.rmSync),
@@ -993,5 +997,219 @@ describe('moveSkillFiles', () => {
     expect(fs.lstatSync(dirname(source)).isSymbolicLink()).toBe(true)
     expect(fs.readFileSync(actual, 'utf8')).toBe('# Original\n')
     expect(fs.existsSync(dirname(destination))).toBe(false)
+  })
+})
+
+describe('read-only packaged sources (Electron asar)', () => {
+  // Electron's asar layer has no opendir, and reports a new inode for every lstat/fstat.
+  function simulateAsar(base: string): void {
+    let counter = 1_000_000
+    vi.mocked(fs.opendirSync).mockImplementation(((path: fs.PathLike) => {
+      if (String(path).startsWith(base)) throw Object.assign(new Error('ENOTDIR: not a directory, opendir'), { code: 'ENOTDIR' })
+      return actualFs.opendirSync(path)
+    }) as typeof fs.opendirSync)
+    const fresh = (stat: fs.Stats): fs.Stats => Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { ino: counter++, dev: 1 })
+    vi.mocked(fs.lstatSync).mockImplementation(((path: fs.PathLike, options?: unknown) => {
+      const stat = actualFs.lstatSync(path, options as fs.StatOptions) as fs.Stats
+      if (!String(path).startsWith(base) || !stat) return stat
+      // Bypassing the virtual layer exposes the archive itself, which is a single regular file on disk.
+      if ((process as NodeJS.Process & { noAsar?: boolean }).noAsar && String(path) === base) {
+        return Object.assign(fresh(stat), { isFile: () => true, isDirectory: () => false })
+      }
+      return fresh(stat)
+    }) as typeof fs.lstatSync)
+    vi.mocked(fs.fstatSync).mockImplementation(((fd: number, options?: unknown) => {
+      const stat = actualFs.fstatSync(fd, options as fs.StatOptions) as fs.Stats
+      return fresh(stat)
+    }) as typeof fs.fstatSync)
+  }
+
+  afterEach(() => {
+    vi.mocked(fs.opendirSync).mockImplementation(actualFs.opendirSync)
+    vi.mocked(fs.lstatSync).mockImplementation(actualFs.lstatSync as typeof fs.lstatSync)
+    vi.mocked(fs.fstatSync).mockImplementation(actualFs.fstatSync as typeof fs.fstatSync)
+  })
+
+  function packaged(): { base: string; file: string } {
+    const base = join(root, 'resources.asar')
+    const file = join(base, 'builtin-skills', 'office', 'SKILL.md')
+    fs.mkdirSync(join(dirname(file), 'references', 'deep'), { recursive: true })
+    fs.writeFileSync(file, '---\nname: office\n---\n# Office\n')
+    fs.writeFileSync(join(dirname(file), 'references', 'guide.md'), 'guide')
+    fs.writeFileSync(join(dirname(file), 'references', 'deep', 'blob.bin'), Buffer.from([0, 1, 2, 255]))
+    return { base, file }
+  }
+
+  describe('telling the archive apart from ordinary folders that merely look like it', () => {
+    // On disk the archive is one regular file; its contents are virtual. Real files hold the same name pattern.
+    function archiveFile(directory: string): string {
+      fs.mkdirSync(directory, { recursive: true })
+      const archive = join(directory, 'app.asar')
+      fs.writeFileSync(archive, 'archive bytes')
+      return archive
+    }
+
+    it('recognises an archive file and everything beneath it', () => {
+      const archive = archiveFile(join(root, 'resources'))
+      expect(insideAsar(archive)).toBe(true)
+      expect(insideAsar(join(archive, 'resources', 'builtin-skills', 'pdf', 'SKILL.md'))).toBe(true)
+    })
+
+    it('splits Windows-style separators and drive paths at the archive segment', () => {
+      // POSIX cannot resolve C:\ on disk, so the real archive is addressed through its own path and only the
+      // text after it is written the Windows way. The Windows-only prefix cases below are covered as non-archives.
+      const archive = archiveFile(join(root, 'resources'))
+      const beneathWindowsStyle = `${archive}${win32.sep}resources${win32.sep}builtin-skills${win32.sep}docx${win32.sep}SKILL.md`
+      expect(insideAsar(beneathWindowsStyle)).toBe(true)
+      expect(insideAsar(`${archive}\\resources/builtin-skills\\docx`)).toBe(true)
+      for (const text of [
+        win32.join('C:\\Program Files\\Halo\\resources', 'app.asar.unpacked', 'x', 'index.js'),
+        win32.join('c:\\users\\a\\skills', 'foo.asar', 'pdf', 'SKILL.md'),
+        win32.join('C:\\HALO\\RESOURCES', 'APP.ASARX', 'pdf'),
+        '\\\\server\\share\\Halo\\app.asar.unpacked\\x',
+      ]) expect(insideAsar(text)).toBe(false)
+    })
+
+    it('follows the filesystem when the archive path is written in another case', () => {
+      const archive = archiveFile(join(root, 'Program Files', 'Halo', 'resources'))
+      const probe = join(dirname(archive), 'case-probe.txt')
+      fs.writeFileSync(probe, 'x')
+      const caseInsensitive = fs.existsSync(probe.replace('case-probe', 'CASE-PROBE'))
+      // Windows and default macOS volumes resolve the other spelling to the same archive; case-sensitive ones do not.
+      expect(insideAsar(archive.replace('app.asar', 'APP.ASAR'))).toBe(caseInsensitive)
+    })
+
+    it('never treats app.asar.unpacked as the archive: its files are real', () => {
+      const archive = archiveFile(join(root, 'resources'))
+      const unpacked = `${archive}.unpacked`
+      fs.mkdirSync(join(unpacked, 'node_modules', 'x'), { recursive: true })
+      expect(insideAsar(join(unpacked, 'node_modules', 'x', 'index.js'))).toBe(false)
+      expect(insideAsar(win32.join('C:\\Halo\\resources', 'app.asar.unpacked', 'x', 'index.js'))).toBe(false)
+    })
+
+    it('reads a package inside app.asar.unpacked with the strict identity check and real directory listing', () => {
+      const archive = archiveFile(join(root, 'resources'))
+      const skill = join(`${archive}.unpacked`, 'builtin-skills', 'office', 'SKILL.md')
+      fs.mkdirSync(join(dirname(skill), 'references'), { recursive: true })
+      fs.writeFileSync(skill, '---\nname: office\n---\n# Office\n')
+      fs.writeFileSync(join(dirname(skill), 'references', 'guide.md'), 'guide')
+      const before = skillRevision(skill)
+      expect(readSkillPackage(skill).revision).toBe(before)
+      // Strict listing: the real opendir was used for this directory, not the archive path.
+      expect(vi.mocked(fs.opendirSync).mock.calls.some(([path]) => String(path).startsWith(`${archive}.unpacked`))).toBe(true)
+      // Strict identity: touching the directory changes its revision, which the relaxed archive check would ignore.
+      const stat = fs.statSync(dirname(skill))
+      fs.utimesSync(dirname(skill), stat.atime, new Date(stat.mtimeMs + 5000))
+      expect(skillRevision(skill)).not.toBe(before)
+    })
+
+    it.each([
+      ['a user folder called foo.asar', (base: string) => join(base, 'foo.asar', 'pdf', 'SKILL.md')],
+      ['a user folder called app.asar', (base: string) => join(base, 'app.asar', 'pdf', 'SKILL.md')],
+    ])('does not treat %s as an archive', (_name, build) => {
+      const file = build(join(root, 'projects'))
+      fs.mkdirSync(dirname(file), { recursive: true })
+      fs.writeFileSync(file, '---\nname: pdf\n---\n')
+      expect(insideAsar(file)).toBe(false)
+      expect(insideAsar(dirname(dirname(file)))).toBe(false)
+    })
+
+    it('does not treat a lookalike name or a missing path as an archive', () => {
+      expect(insideAsar(join(root, 'app.asarx', 'pdf', 'SKILL.md'))).toBe(false)
+      expect(insideAsar(join(root, 'does-not-exist', 'app.asar', 'pdf'))).toBe(false)
+      expect(insideAsar(join(root, 'plain', 'SKILL.md'))).toBe(false)
+    })
+
+    // process.noAsar is process-wide: left set, the app could no longer read its own packaged files.
+    it.each([undefined, false, true])('hands process.noAsar back as %s after probing, also when the probe fails', original => {
+      // Electron types noAsar as a required boolean; outside Electron the property is absent.
+      const processWithAsar = process as unknown as { noAsar?: boolean }
+      const hadNoAsar = Object.prototype.hasOwnProperty.call(process, 'noAsar')
+      const noAsarBefore = processWithAsar.noAsar
+      const seen: Array<boolean | undefined> = []
+      const probe = join(root, `restore-miss-${original}`, 'app.asar')
+      processWithAsar.noAsar = original
+      try {
+        vi.mocked(fs.lstatSync).mockImplementationOnce((() => {
+          seen.push(processWithAsar.noAsar)
+          throw Object.assign(new Error('EIO: i/o error, lstat'), { code: 'EIO' })
+        }) as unknown as typeof fs.lstatSync)
+        expect(insideAsar(probe)).toBe(false)
+        expect(seen).toEqual([true])
+        expect(processWithAsar.noAsar).toBe(original)
+
+        vi.mocked(fs.lstatSync).mockImplementationOnce((() => {
+          seen.push(processWithAsar.noAsar)
+          return Object.assign(Object.create(fs.Stats.prototype), { isFile: () => true })
+        }) as unknown as typeof fs.lstatSync)
+        expect(insideAsar(join(root, `restore-hit-${original}`, 'app.asar'))).toBe(true)
+        expect(seen).toEqual([true, true])
+        expect(processWithAsar.noAsar).toBe(original)
+      } finally {
+        if (hadNoAsar) processWithAsar.noAsar = noAsarBefore
+        else Reflect.deleteProperty(process, 'noAsar')
+      }
+    })
+
+    it('finds the real archive even when a user folder named foo.asar precedes it', () => {
+      const outer = join(root, 'foo.asar', 'inner')
+      const archive = archiveFile(outer)
+      expect(insideAsar(join(archive, 'resources', 'builtin-skills', 'pdf', 'SKILL.md'))).toBe(true)
+      expect(insideAsar(join(root, 'foo.asar', 'inner', 'other', 'SKILL.md'))).toBe(false)
+    })
+
+    it('keeps the strict identity check for an ordinary folder called foo.asar', () => {
+      const source = join(root, 'projects', 'foo.asar', 'my-skill')
+      fs.mkdirSync(source, { recursive: true })
+      fs.writeFileSync(join(source, 'SKILL.md'), '---\nname: my-skill\n---\nbody')
+      const before = skillRevision(join(source, 'SKILL.md'))
+      const stat = fs.statSync(source)
+      fs.utimesSync(source, stat.atime, new Date(stat.mtimeMs + 5000))
+      expect(skillRevision(join(source, 'SKILL.md'))).not.toBe(before)
+      expect(vi.mocked(fs.opendirSync).mock.calls.some(([path]) => String(path).includes('foo.asar'))).toBe(true)
+    })
+  })
+
+  it('lists and reads a nested package, including binary resources, when opendir is unavailable', () => {
+    const { base, file } = packaged()
+    simulateAsar(base)
+    const pkg = readSkillPackage(file)
+    expect(Object.keys(pkg.files).sort()).toEqual(['SKILL.md', 'references/guide.md'])
+    expect(pkg.assets['references/deep/blob.bin'].content).toBe(Buffer.from([0, 1, 2, 255]).toString('base64'))
+    expect(pkg.entries.map(entry => entry.path)).toEqual(['SKILL.md', 'references/deep/blob.bin', 'references/guide.md'])
+    expect(vi.mocked(fs.opendirSync).mock.calls.filter(([path]) => String(path).startsWith(base))).toEqual([])
+  })
+
+  it('gives a stable revision even though every lstat reports a new inode', () => {
+    const { base, file } = packaged()
+    simulateAsar(base)
+    const first = skillRevision(file)
+    expect(skillRevision(file)).toBe(first)
+    expect(readSkillPackage(file).revision).toBe(first)
+    expect(() => assertSkillRevision(file, first)).not.toThrow()
+  })
+
+  it('still refuses a packaged source whose content changed while it was being read', () => {
+    const { base, file } = packaged()
+    simulateAsar(base)
+    const first = skillRevision(file)
+    fs.writeFileSync(file, '---\nname: office\n---\n# Office, edited and longer\n')
+    expect(() => assertSkillRevision(file, first)).toThrow(/changed/)
+  })
+
+  it('keeps the bounded entry limit when listing an asar directory', () => {
+    const { base, file } = packaged()
+    for (let index = 0; index < 2001; index++) fs.writeFileSync(join(dirname(file), 'references', `f${index}.md`), 'x')
+    simulateAsar(base)
+    expect(() => readSkillPackage(file)).toThrow(/2000 entries/)
+  })
+
+  it('keeps the strict identity check for ordinary user directories', () => {
+    const source = fixture('user-skill')
+    const before = skillRevision(source)
+    const stat = fs.statSync(source)
+    fs.utimesSync(source, stat.atime, new Date(stat.mtimeMs + 5000))
+    expect(skillRevision(source)).not.toBe(before)
+    expect(vi.mocked(fs.opendirSync)).toHaveBeenCalled()
   })
 })
