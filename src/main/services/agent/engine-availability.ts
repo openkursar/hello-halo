@@ -10,6 +10,8 @@ import { existsSync, readFileSync } from 'fs'
 import path from 'path'
 import { app } from 'electron'
 import { ENGINE_IDS, type EngineId } from '../../../shared/types/engine'
+import { hasExplicitCcSelection } from '../../../shared/types/cc-runtime'
+import { getConfig } from '../../foundation/config.service'
 
 export interface EngineAvailability {
   engineId: EngineId
@@ -102,6 +104,10 @@ function probePackageEngine(engineId: Exclude<EngineId, 'codex' | 'dsh' | 'anthr
 
 async function probeCc(): Promise<EngineAvailability> {
   try {
+    const config = getConfig()
+    if (!hasExplicitCcSelection(config.agent?.ccRuntime, config.aiSources)) {
+      return { engineId: 'anthropic', available: false, version: '', fingerprint: '', reason: 'No Claude Code installation is explicitly selected' }
+    }
     const { resolveCcRuntimeLaunch } = await import('../cc-runtime')
     const launch = await resolveCcRuntimeLaunch()
     return { engineId: 'anthropic', available: launch !== null, version: launch?.version ?? '', fingerprint: '',

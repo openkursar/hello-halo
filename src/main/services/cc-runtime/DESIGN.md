@@ -10,6 +10,10 @@ This boundary keeps external distribution concerns out of the engine adapter.
 
 There is no bundled executable, automatic download, startup scan, filesystem
 watcher or background upgrade. Startup never requests discovery.
+Engine availability treats CC as unconfigured unless `hasExplicitCcSelection` recognizes
+recorded user intent or the currently selected delegated account; it never inspects an
+automatically saved path, even when an engine picker requests availability. This gate
+belongs to the availability caller, not manual selection, installation or discovery.
 Ordinary launch resolution examines only the saved selection with an eight-second
 total deadline that aborts the probe process. Manual checks allow twenty seconds
 per stage. User-owned files are never modified; environment overrides affect only

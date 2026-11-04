@@ -12,8 +12,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import path from 'path'
 
-const runtime = vi.hoisted(() => ({ launch: null as any }))
-vi.mock('../../../../src/main/services/cc-runtime', () => ({ resolveCcRuntimeLaunch: async () => runtime.launch }))
+const runtime = vi.hoisted(() => ({ launch: null as any, config: {} as any, resolve: vi.fn() }))
+vi.mock('../../../../src/main/foundation/config.service', () => ({ getConfig: () => runtime.config }))
+vi.mock('../../../../src/main/services/cc-runtime', () => ({ resolveCcRuntimeLaunch: runtime.resolve }))
 const HALO_PACKAGE = '@hello-halo/agent-sdk'
 
 function appNodeModules(): string {
@@ -56,6 +57,8 @@ async function probe(engineId: 'anthropic' | 'halo') {
 describe('engine availability', () => {
   beforeEach(() => {
     runtime.launch = null
+    runtime.config = {}
+    runtime.resolve.mockReset().mockImplementation(async () => runtime.launch)
     fs.mkdirSync(appNodeModules(), { recursive: true })
   })
 
@@ -71,7 +74,27 @@ describe('engine availability', () => {
     expect(result.fingerprint).toBe('')
   })
 
+  it.each([undefined, {}, { selectedPath: '/automatic/claude', discoveryCompleted: true }])('does not inspect CC files without explicit selection: %j', async ccRuntime => {
+    runtime.config = { agent: { sdkEngine: 'anthropic', ccRuntime } }
+    const { getEngineAvailability } = await loadProbe()
+    const spies = [vi.spyOn(fs, 'existsSync'), vi.spyOn(fs, 'readFileSync'), vi.spyOn(fs.promises, 'stat'), vi.spyOn(fs.promises, 'realpath'), vi.spyOn(fs.promises, 'readFile'), vi.spyOn(fs.promises, 'opendir')]
+    try {
+      expect((await getEngineAvailability(['anthropic']))[0]).toMatchObject({ available: false, reason: 'No Claude Code installation is explicitly selected' })
+      expect(runtime.resolve).not.toHaveBeenCalled()
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled()
+    } finally { spies.forEach(spy => spy.mockRestore()) }
+  })
+
+  it.each([true, false])('only the current delegated account authorizes a runtime check: %s', async current => {
+    runtime.config = { agent: { ccRuntime: { selectedPath: '/delegated/claude' } }, aiSources: { version: 2, currentId: current ? 'cli' : 'other', sources: [{ id: 'cli', provider: 'claude-cli', authType: 'delegated' }] } }
+    runtime.launch = { version: '2.1.89' }
+    const { getEngineAvailability } = await loadProbe()
+    expect((await getEngineAvailability(['anthropic']))[0].available).toBe(current)
+    expect(runtime.resolve).toHaveBeenCalledTimes(current ? 1 : 0)
+  })
+
   it('reports a selected external CC and rechecks after its selection changes', async () => {
+    runtime.config = { agent: { ccRuntime: { selectedPath: '/selected/claude', selectionOrigin: 'user' } } }
     runtime.launch = { version: '2.1.89' }
     const { getEngineAvailability } = await loadProbe()
     expect((await getEngineAvailability(['anthropic']))[0]).toMatchObject({ available: true, version: '2.1.89' })
