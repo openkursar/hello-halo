@@ -31,13 +31,6 @@ export interface ResolvedModelCapabilities {
   maxOutputTokens: number
   contextWindow: number
   reasoningEffort?: ReasoningEffortSetting
-  /**
-   * False when `maxOutputTokens` is only Halo's blanket fallback — no preset,
-   * no catalog entry, no user value. Required rather than optional so every
-   * producer has to state it: an absent flag read as "configured" would put a
-   * guess on the wire for exactly the models Halo knows nothing about.
-   */
-  maxOutputTokensConfigured: boolean
   /** The model thinks adaptively instead of against a token budget. */
   adaptiveThinking?: boolean
 }

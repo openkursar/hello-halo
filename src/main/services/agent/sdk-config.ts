@@ -182,8 +182,7 @@ export function resolveSdkRuntimeLimits(
   // auto-compact later fails — but we no longer silently rewrite their value
   // (the UI shows the same warning so the choice is explicit).
   if (
-    capabilities.maxOutputTokensConfigured
-    && Number.isFinite(capabilities.maxOutputTokens)
+    Number.isFinite(capabilities.maxOutputTokens)
     && capabilities.maxOutputTokens > 0
   ) {
     const value = clampInt(

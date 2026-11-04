@@ -38,7 +38,7 @@ function credentials(): ApiCredentials {
     displayModel: 'Model A', apiType: 'responses', adapterId: 'chatgpt-codex', profileArn: 'profile-a',
     customHeaders: { 'ChatGPT-Account-Id': 'workspace-a' },
     codexModelCapabilities: { reasoningSummary: true, responsesLite: false, reasoningLevels: ['low', 'high'] },
-    capabilities: { contextWindow: 272_000, maxOutputTokens: 64_000, maxOutputTokensConfigured: true },
+    capabilities: { contextWindow: 272_000, maxOutputTokens: 64_000 },
   }
 }
 

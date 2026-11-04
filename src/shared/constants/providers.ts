@@ -128,17 +128,15 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     apiUrl: 'https://api.deepseek.com',
     modelsUrl: 'https://api.deepseek.com/models',
     models: [
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
-      { id: 'deepseek-chat', name: 'DeepSeek Chat (V3 Legacy)' },
-      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner (R1 Legacy)' }
+      { id: 'deepseek-flash', name: 'DeepSeek V4.1 Flash' },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }
     ],
-    description: 'DeepSeek official API with V4 Flash/Pro and legacy V3/R1 models',
+    description: 'DeepSeek official API',
     website: 'https://platform.deepseek.com/',
     region: 'cn',
     recommended: true,
     icon: 'search',
-    notes: 'V4 models support thinking mode via reasoning_content field. Legacy deepseek-chat/deepseek-reasoner will be deprecated 2026/07/24'
+    notes: 'DeepSeek Flash supports image input and thinking mode. V4 Pro supports thinking mode.'
   },
   {
     id: 'siliconflow',

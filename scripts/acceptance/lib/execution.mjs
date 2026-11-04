@@ -202,7 +202,10 @@ export async function terminalShellFailure({ platform = process.platform, enviro
 export async function prerequisiteFailures(root, scenario, { liveReady = false, clipboardProbe = macClipboardFailure } = {}) {
   const problems = []
   if (scenario.mode === 'live' && !liveReady) problems.push('Live execution requires an explicit, credentialed budget broker configuration')
-  for (const requirement of scenario.requirements ?? []) {
+  const requirements = new Set(scenario.requirements ?? [])
+  if (scenario.variant?.engine === 'anthropic') requirements.add('local-claude-code')
+  if (scenario.variant?.engine === 'halo') requirements.add('halo-sdk')
+  for (const requirement of requirements) {
     if (requirement === 'halo-sdk') {
       try {
         const directory = path.join(root, 'node_modules/@hello-halo/agent-sdk')

@@ -21,9 +21,8 @@ const EXPLICIT_1M_CONTEXT_WINDOW = 1_000_000
  * no catalog entry. 200K matches CC's own assumption for an unrecognised
  * model, so it neither inflates nor shrinks what CC would have done.
  *
- * `maxOutputTokens` here is a guess and is deliberately never injected as
- * CLAUDE_CODE_MAX_OUTPUT_TOKENS — see `maxOutputTokensConfigured` in
- * agent/types.ts. It exists so the Model Config panel has a number to show.
+ * These defaults drive both Model Config and runtime limits; engines must
+ * not substitute their own defaults for unknown models.
  *
  * No `vision`: that field is owned by the id chain (see `resolve`).
  */

@@ -13,10 +13,9 @@
  * algorithm (NON_VISION_PATTERNS / VISION_KEYWORDS, commit history) over
  * every catalog model id, every JSON preset key, and synthetic ids covering
  * each allowlist/blocklist entry. When the vision data moved into
- * model-capabilities.json, only glm-5.3-flash was allowed to differ (the
- * product fix this migration shipped). If one of these expectations fails,
- * the JSON data drifted and a live model's image handling changed — that is
- * a regression, not a test to update.
+ * model-capabilities.json. glm-5.3-flash and the DeepSeek Flash aliases are
+ * the exceptions, covered by explicit variant tests below; the snapshot
+ * protects the remaining text-only models.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -60,7 +59,7 @@ describe('resolveModelVision', () => {
 
   it('falls back to the id heuristic for a model missing from availableModels', () => {
     const source = { availableModels: [{ id: 'other', name: 'Other' }] }
-    expect(resolveModelVision(source, 'deepseek-v4-flash')).toBe(false)
+    expect(resolveModelVision(source, 'deepseek-v4-flash')).toBe(true)
     expect(resolveModelVision(source, 'gpt-4o')).toBe(true)
   })
 
@@ -114,18 +113,18 @@ const VISION_TRUE = [
   'cogvlm-2', 'glm-ocr-pro', 'gpt-4o-vision',
   'my-model-omni', 'acme-multimodal-1', 'x-vision-turbo',
   'vision-ai/somemodel', 'GPT-4O', 'unknown-model',
-  'some-future-model-9',
+  'some-future-model-9', 'deepseek-v4-flash', 'deepseek-ai/deepseek-v4-flash',
 ]
 
 const VISION_FALSE = [
-  'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat',
+  'deepseek-v4-pro', 'deepseek-chat',
   'deepseek-reasoner', 'Pro/deepseek-ai/DeepSeek-V3', 'Pro/deepseek-ai/DeepSeek-R1',
   'Pro/zai-org/GLM-4.7', 'qwen3-coder', 'glm-4.7',
   'glm-4.7-flash', 'glm-4-plus', 'glm-5.2',
   'glm-5.1', 'glm-5', 'glm-4.6',
   'glm-4.5', 'MiniMax-M2.7', 'MiniMax-M2.1',
   'MiniMax-M1', 'MiniMax-M2.7-highspeed', 'deepseek/deepseek-v3.2',
-  'deepseek-ai/deepseek-v4-flash', 'deepseek-ai/deepseek-v4-pro', 'deepseek/deepseek-chat',
+  'deepseek-ai/deepseek-v4-pro', 'deepseek/deepseek-chat',
   'llama-3.3-70b-versatile', 'mistral-large-2512', 'mistral-medium-3.1',
   'codestral-2508', 'deepseek-ai/DeepSeek-V3', 'accounts/fireworks/models/deepseek-v3p2',
   'accounts/fireworks/models/deepseek-r1-0528', 'accounts/fireworks/models/qwen3-coder-480b-a35b-instruct', 'glm-4.5-air',
@@ -165,6 +164,26 @@ describe('supportsVisionById — production parity snapshot', () => {
     expect(supportsVisionById(null)).toBe(true)
     expect(supportsVisionById('')).toBe(true)
   })
+})
+
+describe('DeepSeek Flash vision variants', () => {
+  it.each([
+    'deepseek-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash',
+    'deepseek-v4-flash-vision-exp', 'DEEPSEEK-V4.1-FLASH',
+    'deepseek/deepseek-flash', 'Pro/deepseek-ai/DeepSeek-V4.1-Flash',
+    'deepseek-ai/deepseek-v4-flash'
+  ])('recognizes %s without enabling every DeepSeek model', (id) => {
+    expect(supportsVisionById(id)).toBe(true)
+    expect(resolveModelVision(null, id)).toBe(true)
+    expect(resolveModelVision({ modelOverrides: { [id]: { vision: false } } }, id)).toBe(false)
+    expect(resolveModelVision({ availableModels: [{ id, name: id, supportsVision: false }] }, id)).toBe(false)
+  })
+
+  it.each(['deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-pro', 'deepseek-v5', 'deepseek-proxy/gpt-4o'])(
+    'keeps the existing non-vision decision for %s', (id) => {
+      expect(supportsVisionById(id)).toBe(false)
+    }
+  )
 })
 
 describe('Zhipu vision variants inside text-only GLM families', () => {

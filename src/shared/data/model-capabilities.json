@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-10-06",
+  "updatedAt": "2026-11-02",
   "vision": {
     "allowlist": [
       "vision", "-vl", "pixtral", "paligemma", "cogvlm",
@@ -168,8 +168,8 @@
     "qwen-": {
       "displayName": "Qwen",
       "provider": "qwen",
-      "contextWindow": 131072,
-      "maxOutputTokens": 8192,
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
       "vision": true,
       "thinking": false
     },
@@ -184,16 +184,16 @@
     "deepseek-": {
       "displayName": "DeepSeek",
       "provider": "deepseek",
-      "contextWindow": 128000,
-      "maxOutputTokens": 8192,
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
       "vision": false,
       "thinking": false
     },
     "kimi-": {
       "displayName": "Kimi",
       "provider": "moonshot",
-      "contextWindow": 131072,
-      "maxOutputTokens": 32768,
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
       "vision": true,
       "thinking": true
     },
@@ -201,15 +201,15 @@
       "displayName": "MiniMax",
       "provider": "minimax",
       "contextWindow": 200000,
-      "maxOutputTokens": 16384,
+      "maxOutputTokens": 64000,
       "vision": false,
       "thinking": false
     },
     "grok-": {
       "displayName": "Grok",
       "provider": "xai",
-      "contextWindow": 131072,
-      "maxOutputTokens": 16384,
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
       "vision": true,
       "thinking": false
     },
@@ -217,26 +217,50 @@
       "displayName": "Mistral",
       "provider": "mistral",
       "contextWindow": 200000,
-      "maxOutputTokens": 8192,
+      "maxOutputTokens": 64000,
       "vision": true,
       "thinking": false
     },
     "llama-": {
       "displayName": "Llama",
       "provider": "meta",
-      "contextWindow": 128000,
-      "maxOutputTokens": 16384,
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
       "vision": true,
       "thinking": false
     }
   },
   "models": {
-    "deepseek-v4-flash": {
-      "displayName": "DeepSeek V4 Flash",
+    "deepseek-flash": {
+      "displayName": "DeepSeek V4.1 Flash",
       "provider": "deepseek",
       "contextWindow": 200000,
       "maxOutputTokens": 64000,
-      "vision": false,
+      "vision": true,
+      "thinking": true
+    },
+    "deepseek-v4.1-flash": {
+      "displayName": "DeepSeek V4.1 Flash",
+      "provider": "deepseek",
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "vision": true,
+      "thinking": true
+    },
+    "deepseek-v4-flash": {
+      "displayName": "DeepSeek V4 Flash (Flash Alias)",
+      "provider": "deepseek",
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "vision": true,
+      "thinking": true
+    },
+    "deepseek-v4-flash-vision-exp": {
+      "displayName": "DeepSeek V4 Flash Vision (Flash Alias)",
+      "provider": "deepseek",
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "vision": true,
       "thinking": true
     },
     "deepseek-v4-pro": {

@@ -27,7 +27,7 @@ function credentials(capabilities?: { maxOutputTokens: number; contextWindow: nu
     sourceId: 'account-a', credentialsGeneration: 'captured-a',
     baseUrl: 'https://gateway.example.com/v1/chat/completions',
     apiKey: 'test-key-a', model: 'glm-4.7-zp', provider: 'openai',
-    ...(capabilities ? { capabilities: { ...capabilities, maxOutputTokensConfigured: true } } : {}),
+    ...(capabilities ? { capabilities } : {}),
   }
 }
 

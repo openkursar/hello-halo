@@ -24,12 +24,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 import { applyCC1mContextUnlock } from '../../../../src/main/services/agent/sdk-config'
 import type { ResolvedModelCapabilities } from '../../../../src/main/services/agent/types'
 
-// `maxOutputTokensConfigured` is required on the contract but plays no part in
-// the unlock decision. Pinned here so each case states only the window and the
-// opt-in it is actually about.
-const caps = (
-  values: Omit<ResolvedModelCapabilities, 'maxOutputTokensConfigured'>
-): ResolvedModelCapabilities => ({ maxOutputTokensConfigured: true, ...values })
+const caps = (values: ResolvedModelCapabilities): ResolvedModelCapabilities => values
 
 describe('applyCC1mContextUnlock', () => {
   it('appends [1m] when contextWindow exceeds CC default (200K)', () => {

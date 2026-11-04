@@ -16,8 +16,19 @@ paths:
   - src/renderer/components/settings/ProviderSelector.tsx
   - src/main/services/api-validator.service.ts
   - src/renderer/utils/model-fetch-error.ts
+  - src/shared/data/model-capabilities.json
+  - src/shared/constants/model-capabilities.ts
+  - src/shared/constants/model-runtime-limits.ts
+  - src/shared/constants/providers.ts
+  - src/shared/types/model-capabilities.ts
+  - src/shared/model-capability-overrides.ts
+  - src/shared/model-catalog.ts
+  - src/main/services/model-capabilities.service.ts
+  - src/main/services/agent/helpers.ts
+  - src/main/services/agent/sdk-config.ts
+  - src/main/services/agent/types.ts
 dependsOn:
   - startup
 scope:
-  en: API-key, OAuth and delegated-login accounts; installed Claude Code SDK, optional Halo SDK, Codex and dsh engines; application-wide engine selection requires restart.
-  zh: API Key、OAuth 与委托登录账户；已安装的 Claude Code SDK、可选 Halo SDK、Codex 及 dsh 引擎；应用级引擎选择需要重启。
+  en: API-key, OAuth and delegated-login accounts; model budgets and capabilities; Halo SDK by default, optional external Claude Code, Codex and dsh engines. The default engine for new conversations changes without restarting; existing conversations retain their engine until explicitly moved.
+  zh: API Key、OAuth 与委托登录账户；模型预算与能力；默认 Halo SDK，可选外部 Claude Code、Codex 及 dsh 引擎。新对话的默认引擎无需重启即可切换，已有对话保持其引擎直到被明确迁移。
