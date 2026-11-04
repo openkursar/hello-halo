@@ -17,7 +17,7 @@ import { useAppStore } from '../../stores/app.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppChatPinsStore } from '../../stores/app-chat-pins.store'
 import {
-  useConversationListPrefs, isSectionOpen, type ConversationSection,
+  useConversationListPrefs, isSectionOpen, isListFolded, type ConversationSection, type ConversationListLayout,
 } from '../../stores/conversation-list-prefs.store'
 import { ROW_HEIGHT, usePaneResize, PaneResizeHandle } from './conversation-list-panes'
 import { api } from '../../api'
@@ -38,17 +38,17 @@ import { openPersonActivity } from '../../utils/people-navigation'
 const MIN_WIDTH = 140
 const MAX_WIDTH = 360
 const DEFAULT_WIDTH = 260
-// Dragging the resize handle below this width snaps into the same 56px
-// icon-strip view the canvas-open `collapsed` prop uses — dragging it back
-// out past the same threshold restores the normal list.
+// Dragging the resize handle below this width folds the list to its 56px icon
+// strip; dragging it back out past the same threshold opens the list again.
 const DRAG_COLLAPSE_THRESHOLD = 100
 const clampWidth = (v: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, v))
 
 interface ConversationListProps {
-  /** Canvas-open collapsed mode — 56px icon strip: grouping/pin hidden,
-   * each conversation is just a status dot (prototype's
-   * `.body.canvas-open .conv`). The resize handle can still drag it open. */
-  collapsed?: boolean
+  /** The content canvas is open beside the chat. The list keeps a separate
+   * fold choice for this layout, folded by default to the 56px icon strip
+   * (prototype's `.body.canvas-open .conv`): grouping/pin hidden, each
+   * conversation just a status dot. */
+  canvasOpen?: boolean
 }
 
 
@@ -273,7 +273,7 @@ function digitalHumansAtWork(
 }
 
 export const ConversationList = memo(function ConversationList({
-  collapsed = false,
+  canvasOpen = false,
 }: ConversationListProps) {
   const { t } = useTranslation()
 
@@ -375,15 +375,17 @@ export const ConversationList = memo(function ConversationList({
   const initialWidth = layoutConfig?.sidebarWidth
   const [width, setWidth] = useState(initialWidth != null ? clampWidth(initialWidth) : DEFAULT_WIDTH)
   const [isDragging, setIsDragging] = useState(false)
-  // Drag-triggered version of the canvas-open `collapsed` prop — lets the
-  // user reach the same icon-strip view by dragging the handle instead of
-  // only via the canvas. Independent of `collapsed`; combined below.
-  const [isDragCollapsed, setIsDragCollapsed] = useState(false)
-  // Dragged back open while the canvas has it collapsed. Lasts until the
-  // canvas closes, so the next canvas open starts collapsed again.
-  const [expandedOverCanvas, setExpandedOverCanvas] = useState(false)
-  useEffect(() => { if (!collapsed) setExpandedOverCanvas(false) }, [collapsed])
   const widthRef = useRef(width)
+  const dragStartWidthRef = useRef(width)
+
+  // Folded or open as the user last left it in this layout; while the handle is
+  // held the pointer decides, and releasing it saves that choice.
+  const listLayout: ConversationListLayout = canvasOpen ? 'with-canvas' : 'without-canvas'
+  const savedFolded = useConversationListPrefs(s => isListFolded(s.listFolded, listLayout))
+  const setListFolded = useConversationListPrefs(s => s.setListFolded)
+  const [dragFolded, setDragFolded] = useState<boolean | null>(null)
+  const dragFoldedRef = useRef<boolean | null>(null)
+  const folded = dragFolded ?? savedFolded
 
   // Sync width when config arrives asynchronously
   useEffect(() => {
@@ -473,6 +475,7 @@ export const ConversationList = memo(function ConversationList({
   // Handle drag resize
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
+    dragStartWidthRef.current = widthRef.current
     setIsDragging(true)
   }, [])
 
@@ -483,20 +486,30 @@ export const ConversationList = memo(function ConversationList({
       if (!containerRef.current) return
       const containerRect = containerRef.current.getBoundingClientRect()
       const newWidth = e.clientX - containerRect.left
-      if (newWidth < DRAG_COLLAPSE_THRESHOLD) {
-        if (collapsed) setExpandedOverCanvas(false)
-        else setIsDragCollapsed(true)
-        return
-      }
-      setIsDragCollapsed(false)
-      if (collapsed) setExpandedOverCanvas(true)
-      const clampedWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, newWidth))
+      const nextFolded = newWidth < DRAG_COLLAPSE_THRESHOLD
+      dragFoldedRef.current = nextFolded
+      setDragFolded(nextFolded)
+      if (nextFolded) return
+      const clampedWidth = clampWidth(newWidth)
       setWidth(clampedWidth)
       widthRef.current = clampedWidth
     }
 
     const handleMouseUp = () => {
+      const releasedFolded = dragFoldedRef.current
+      dragFoldedRef.current = null
+      // Saved before the preview ends, so no frame shows the previous choice.
+      if (releasedFolded !== null) setListFolded(listLayout, releasedFolded)
+      setDragFolded(null)
       setIsDragging(false)
+      if (releasedFolded) {
+        // Folding is not a resize: the widths passed on the way are dropped, so
+        // the list opens again at the width it had.
+        widthRef.current = dragStartWidthRef.current
+        setWidth(dragStartWidthRef.current)
+        return
+      }
+      if (widthRef.current === dragStartWidthRef.current) return
       // Persist width to in-memory store + backend config
       const currentConfig = useAppStore.getState().config
       if (currentConfig) {
@@ -514,7 +527,7 @@ export const ConversationList = memo(function ConversationList({
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [isDragging, collapsed])
+  }, [isDragging, listLayout, setListFolded])
 
   // Close dropdown menu on outside click
   useEffect(() => {
@@ -963,7 +976,7 @@ export const ConversationList = memo(function ConversationList({
     return renderConversationItem(row.conversation)
   }
 
-  if ((collapsed && !expandedOverCanvas) || isDragCollapsed) {
+  if (folded) {
     return (
       <div
         ref={containerRef}

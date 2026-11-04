@@ -610,7 +610,7 @@ thing the cap exists to prevent.
 
 ### Interface Layout
 
-- **Left sidebar**: Conversation list (collapsible)
+- **Left sidebar**: Conversation list (collapsible). Folded to its icon strip or open is the user's last dragged choice, kept per layout (with / without an open canvas; folded by default only with one) in `stores/conversation-list-prefs.store.ts` — an open canvas does not by itself mean a folded list
 - **Center**: Chat Stream (conversation flow)
 - **Right**: Content Canvas (content preview) + Artifact Rail (file list)
 

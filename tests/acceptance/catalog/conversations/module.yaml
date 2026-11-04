@@ -9,9 +9,10 @@ description:
 paths:
   - src/main/services/conversation.service.ts
   - src/renderer/components/chat/ConversationList.tsx
+  - src/renderer/stores/conversation-list-prefs.store.ts
   - src/renderer/stores/chat.store.ts
 dependsOn:
   - workspaces
 scope:
-  en: Space conversations and digital-human conversations on desktop and remote views; history, drafts, deletion and long transcripts.
-  zh: 桌面及远程界面的空间对话与数字人对话；包括历史、草稿、删除及长记录。
+  en: Space conversations and digital-human conversations on desktop and remote views; history, drafts, deletion, long transcripts and the conversation list's layout.
+  zh: 桌面及远程界面的空间对话与数字人对话；包括历史、草稿、删除、长记录及会话列表的布局。
