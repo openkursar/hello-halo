@@ -730,6 +730,7 @@
   "Claude Code could not start. Check the installation and try again.": "No se pudo iniciar Claude Code. Comprueba la instalación e inténtalo de nuevo.",
   "Claude Code is ready for new conversations. Existing conversations and running work keep their engine.": "Claude Code está listo para las conversaciones nuevas. Las conversaciones existentes y el trabajo en curso mantienen su motor.",
   "Claude Code is ready. Your newer engine selection has been kept.": "Claude Code está listo. Se ha conservado tu elección de motor más reciente.",
+  "Claude Code is selected for this conversation. In the Halo desktop app on the host computer, select a Claude Code installation once under Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.": "",
   "Claude Code is selected for this conversation. Select a Claude Code installation once in Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.": "",
   "Claude Code login": "Inicio de sesión de Claude Code",
   "Claude Code path": "Ruta de Claude Code",

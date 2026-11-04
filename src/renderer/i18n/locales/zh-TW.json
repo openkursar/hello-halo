@@ -658,6 +658,7 @@
   "Claude Code could not start. Check the installation and try again.": "Claude Code 無法啟動。請檢查安裝是否正常，然後再試一次。",
   "Claude Code is ready for new conversations. Existing conversations and running work keep their engine.": "Claude Code 已可用於新對話。現有對話和進行中的工作繼續使用各自的引擎。",
   "Claude Code is ready. Your newer engine selection has been kept.": "Claude Code 已就緒。已保留您後來選擇的引擎。",
+  "Claude Code is selected for this conversation. In the Halo desktop app on the host computer, select a Claude Code installation once under Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.": "",
   "Claude Code is selected for this conversation. Select a Claude Code installation once in Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.": "",
   "Claude Code login": "Claude Code 登入",
   "Claude Code path": "Claude Code 路徑",
