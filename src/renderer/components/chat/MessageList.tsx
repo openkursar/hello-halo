@@ -31,6 +31,7 @@ import { InterruptedBubble } from './InterruptedBubble'
 import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, nextTranscriptRows, openerOwner, liveArrivals, type ScrollMotion, type TranscriptRows } from './transcript'
 import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion, WorkDirIssue } from '../../types'
 import { WorkingDirUnavailableNotice } from './WorkingDirUnavailableNotice'
+import { agentErrorText } from './agent-error-text'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 import { useAppsStore } from '../../stores/apps.store'
@@ -440,7 +441,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                     </svg>
                     <span className="text-sm font-medium">{t('Something went wrong')}</span>
                   </div>
-                  <p className="mt-2 text-sm text-destructive/80">{error}</p>
+                  <p className="mt-2 text-sm text-destructive/80">{agentErrorText(error, t)}</p>
                   {errorType === 'engine_unavailable' && engineNoticeShown && (
                     <p className="mt-1 text-sm text-destructive/80">{t('The note below says what to do.')}</p>
                   )}

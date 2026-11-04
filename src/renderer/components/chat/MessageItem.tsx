@@ -33,6 +33,7 @@ import { MessageImages } from './ImageAttachmentPreview'
 import { TokenUsageIndicator } from './TokenUsageIndicator'
 import { truncateText, getToolFriendlyFormat } from './thought-utils'
 import type { Message, Thought, ThoughtsSummary } from '../../types'
+import { agentErrorText } from './agent-error-text'
 import { useTranslation } from '../../i18n'
 import { useChatStore, selectActiveConversationId } from '../../stores/chat.store'
 import { SourceChips } from './SourceChips'
@@ -355,7 +356,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
           </svg>
           <span className="text-sm font-medium">{t('Something went wrong')}</span>
         </div>
-        <p className="mt-1.5 text-sm text-destructive/80">{message.error}</p>
+        <p className="mt-1.5 text-sm text-destructive/80">{agentErrorText(message.error ?? '', t)}</p>
       </div>
     </div>
   ) : (
@@ -418,7 +419,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
             </svg>
             <span className="text-sm font-medium">{t('Something went wrong')}</span>
           </div>
-          <p className="mt-1.5 text-sm text-destructive/80">{message.error}</p>
+          <p className="mt-1.5 text-sm text-destructive/80">{agentErrorText(message.error, t)}</p>
         </div>
       )}
 

@@ -62,6 +62,7 @@ import { engineErrorDetail } from './engine-error'
 import { onAgentError, runPpidScanAndCleanup } from '../health'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
+import { COMMAND_ENVIRONMENT_NOT_INSTALLED_ERROR } from '../../../shared/constants/agent-errors'
 
 // ============================================
 // Send Message
@@ -70,6 +71,12 @@ import { AnalyticsEvents } from '../analytics/types'
 export interface InternalSendOptions {
   onUserMessageRecorded?: (messageId: string) => void
   excludedHistoryMessageIds?: readonly string[]
+}
+
+function isCommandEnvironmentFailure(message: string, stderr: string | undefined): boolean {
+  return message.includes('exited with code 1') || message.includes('process exited') ||
+    message.includes('spawn ENOENT') || message.includes('ENOENT') ||
+    !!stderr?.includes('bash') || !!stderr?.includes('ENOENT')
 }
 
 /**
@@ -149,13 +156,15 @@ export async function sendMessage(
   let dispatchAttempted = false
   let failureReported = false
 
-  const reportFailure = (error: unknown): void => {
-    if (failureReported) return
+  // Resolves once the failure is in the chat; the pre-dispatch path awaits it
+  // so a late error cannot land on the user's next send.
+  const reportFailure = (error: unknown): Promise<void> => {
+    if (failureReported) return Promise.resolve()
     failureReported = true
     const err = error as Error
     if (err.name === 'AbortError') {
       console.log(`[Agent][${conversationId}] Aborted by user`)
-      return
+      return Promise.resolve()
     }
 
     console.error(`[Agent][${conversationId}] Error during send:`, error)
@@ -166,25 +175,26 @@ export async function sendMessage(
       console.warn(`[Agent][${conversationId}] Send failed before its goal was set; dropped the goal from the message`)
     }
 
-    let errorMessage = err.message || 'Unknown error. Check logs in Settings > System > Logs.'
-    if (process.platform === 'win32') {
-      const isExitCode1 = errorMessage.includes('exited with code 1') ||
-                          errorMessage.includes('process exited') ||
-                          errorMessage.includes('spawn ENOENT')
-      const isBashError = stderrBuffer?.includes('bash') ||
-                          stderrBuffer?.includes('ENOENT') ||
-                          errorMessage.includes('ENOENT')
-
-      if (isExitCode1 || isBashError) {
-        const { detectGitBash } = require('../git-bash')
-        const gitBashStatus = detectGitBash()
-        errorMessage = !gitBashStatus.found
-          ? 'Command execution environment not installed. Please restart the app and complete setup, or install manually in settings.'
-          : `Command execution failed. This may be an environment configuration issue, please try restarting the app.\n\nTechnical details: ${err.message}`
-      }
+    const fallbackMessage = err.message || 'Unknown error. Check logs in Settings > System > Logs.'
+    if (process.platform === 'win32' && isCommandEnvironmentFailure(fallbackMessage, stderrBuffer)) {
+      // Loaded on demand: git-bash (and its installer) stays out of the first startup phase.
+      return import('../git-bash')
+        .then(({ detectGitBash }) => detectGitBash().found ? fallbackMessage : COMMAND_ENVIRONMENT_NOT_INSTALLED_ERROR)
+        .catch(e => {
+          console.error(`[Agent][${conversationId}] Git Bash check after failed send failed:`, e)
+          return fallbackMessage
+        })
+        .then(message => deliverFailure(error, message))
+        .catch(e => console.error(`[Agent][${conversationId}] Failed to report send failure:`, e))
     }
+    deliverFailure(error, fallbackMessage)
+    return Promise.resolve()
+  }
 
-    if (stderrBuffer && !errorMessage.includes('Command execution')) {
+  const deliverFailure = (error: unknown, detectedMessage: string): void => {
+    const err = error as Error
+    let errorMessage = detectedMessage
+    if (stderrBuffer && errorMessage !== COMMAND_ENVIRONMENT_NOT_INSTALLED_ERROR) {
       const mcpErrorMatch = stderrBuffer.match(/Error: Invalid MCP configuration:[\s\S]*?(?=\n\s*at |$)/m)
       const genericErrorMatch = stderrBuffer.match(/Error: [\s\S]*?(?=\n\s*at |$)/m)
       if (mcpErrorMatch) errorMessage = mcpErrorMatch[0].trim()
@@ -405,7 +415,7 @@ export async function sendMessage(
   } catch (error: unknown) {
     if (!dispatchAttempted) {
       if (!sessionLease || sessionLease.isCurrent) {
-        reportFailure(error)
+        await reportFailure(error)
       } else {
         console.warn(`[Agent][${conversationId}] Discarded retired session's preparation failure`)
       }
