@@ -43,7 +43,7 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
     preconditions:
       - en: A digital human with IM Push on, a schedule and several IM contacts.
         zh: 一位开启 IM 推送、有定时任务并有多个 IM 联系人的数字人。

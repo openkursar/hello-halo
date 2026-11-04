@@ -38,8 +38,8 @@ scenarios:
     profiles:
       - regression
     evidence: app-e2e
-    mode: none
-    automation: planned
+    mode: scripted
+    automation: automated
     preconditions:
       - en: A saved team with its lead and a member installed in the current space; no scheduled run is in progress.
         zh: 当前空间有一个已保存团队，含 Lead 和一名成员；没有定时运行在进行。

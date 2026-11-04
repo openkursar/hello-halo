@@ -48,7 +48,7 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: none
-    automation: planned
+    automation: automated
     preconditions:
       - en: A person belongs to two teams under its own name and to a third under a name chosen for that team.
         zh: 某数字人以自身名称加入两个团队，并以单独取的名称加入第三个团队。
