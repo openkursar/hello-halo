@@ -24,8 +24,9 @@ test('finds native resources without depending on extension or executable permis
   }
 });
 
-test('local build targets the host and cannot inherit distribution signing', () => {
+function runLocalBuild({ buildHaloSdk = () => {} } = {}) {
   const calls = [];
+  const errors = [];
   const root = path.resolve(__dirname, '../..');
   const fakeProcess = {
     platform: 'darwin', arch: 'arm64', argv: ['node', 'build-mac-local.cjs'],
@@ -33,7 +34,7 @@ test('local build targets the host and cannot inherit distribution signing', () 
   };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'scripts/build-mac-local.cjs'), 'utf8'), {
     __dirname: path.join(root, 'scripts'), process: fakeProcess,
-    console: { log() {}, error(message) { throw new Error(message); } },
+    console: { log() {}, error(message) { errors.push(message); } },
     require(id) {
       if (id === 'node:path') return path;
       if (id === 'node:child_process') return { execFileSync: (...args) => calls.push(args) };
@@ -41,10 +42,19 @@ test('local build targets the host and cannot inherit distribution signing', () 
         signingEnvironment: () => ({ CSC_LINK: '/secret.p12', CSC_NAME: 'Developer ID',
           HALO_MAC_SIGN_MODE: 'developer-id', APPLE_ID: 'example', CODESIGN_ALLOCATE: '/working/tool' }),
       };
+      if (id === './lib/halo-sdk-build.cjs') return {
+        buildHaloSdk: (...args) => { calls.push(['halo-sdk', args]); buildHaloSdk(...args); },
+      };
       throw new Error(`Unexpected import: ${id}`);
     },
   });
-  assert.equal(fakeProcess.exitCode, 0);
+  return { calls, errors, root, exitCode: fakeProcess.exitCode };
+}
+
+test('local build targets the host and cannot inherit distribution signing', () => {
+  const { calls, errors, exitCode } = runLocalBuild();
+  assert.deepEqual(errors, []);
+  assert.equal(exitCode, 0);
   const prepare = calls.find(([, args]) => args[0] === 'scripts/prepare-binaries.mjs');
   assert.equal(prepare[1][2], 'mac-arm64');
   const [, args, options] = calls.at(-1);
@@ -58,4 +68,23 @@ test('local build targets the host and cannot inherit distribution signing', () 
   assert.equal(options.env.CSC_LINK, undefined);
   assert.equal(options.env.APPLE_ID, undefined);
   assert.equal(options.env.CODESIGN_ALLOCATE, '/working/tool');
+});
+
+test('local build rebuilds the Halo SDK before changing the version or compiling the app', () => {
+  const { calls, root } = runLocalBuild();
+  const sdk = calls.findIndex(([file]) => file === 'halo-sdk');
+  const bump = calls.findIndex(([file, args]) => file === 'npm' && args.includes('bump-rc'));
+  assert.ok(sdk >= 0 && sdk < bump);
+  const [, [sdkRoot, { env }]] = calls[sdk];
+  assert.equal(sdkRoot, root);
+  assert.equal(env.CSC_LINK, undefined);
+});
+
+test('a Halo SDK that cannot be built stops the local build before anything else runs', () => {
+  const { calls, errors, exitCode } = runLocalBuild({
+    buildHaloSdk: () => { throw new Error('Halo SDK dependencies are missing; run npm install in src/sdk/halo-sdk first.'); },
+  });
+  assert.equal(exitCode, 1);
+  assert.deepEqual(calls.map(([file]) => file), ['halo-sdk']);
+  assert.match(errors[0], /npm install in src\/sdk\/halo-sdk/);
 });

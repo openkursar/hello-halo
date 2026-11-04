@@ -5,6 +5,7 @@ const path = require('node:path')
 const { execFileSync } = require('node:child_process')
 const { signingEnvironment } = require('./lib/mac-local-signing.cjs')
 const { validateExperimentalProduct } = require('./lib/experimental-product.cjs')
+const { buildHaloSdk } = require('./lib/halo-sdk-build.cjs')
 
 try {
   if (process.platform !== 'darwin') throw new Error('This installer target requires macOS')
@@ -23,6 +24,7 @@ try {
     'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID', 'APPLE_API_KEY', 'APPLE_API_KEY_ID', 'APPLE_API_ISSUER']) delete env[key]
   delete env.HALO_PRODUCT_SOURCE
   const run = (file, argv) => execFileSync(file, argv, { cwd: root, env, stdio: 'inherit' })
+  buildHaloSdk(root, { env })
   run(process.execPath, ['scripts/prepare-experimental-product.mjs'])
   const product = JSON.parse(fs.readFileSync(path.join(root, 'product.json'), 'utf8'))
   validateExperimentalProduct(product)
