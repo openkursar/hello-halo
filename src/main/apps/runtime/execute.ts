@@ -59,7 +59,7 @@ import { admitTransientSession } from './session-budget'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { createOcrMcpServer } from '../../services/ocr'
-import { createApiRefMcpServer, HALO_API_TOOLSET_ID } from '../../services/api-ref'
+import { createApiRefMcpServer } from '../../services/api-ref'
 import { buildBaseToolset } from '../../services/agent/toolsets/base'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { createConversationCollabMcpServer, resolveConversationCollab } from './conversation-collab'
@@ -367,12 +367,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
     const usesEmail = resolvePermission(app, 'email') // gated on channel config below
     const usesImPush = resolvePermission(app, 'im-push') // AI-driven IM push
-    // Default OFF, unlike every other built-in capability. This one operates
-    // Halo's own configuration and data rather than the outside world, and it
-    // costs a tool schema plus a usage guide on every scheduled run — not a
-    // sensible default for an automation that never needs it. A spec can still
-    // declare it, and the user can grant it in Capabilities.
-    const usesHaloApi = resolvePermission(app, HALO_API_TOOLSET_ID, false)
+    // Operating Halo is not a switch for a digital human, and a run is always
+    // its owner's own; the tool, its credentials and its guide follow this one value.
+    const usesHaloApi = true
     // Off unless the owner switched conversation collaboration on. A run is always
     // the owner's, and acts under its own sender key: what it sends is a one-way
     // notice, and nothing sent back can reach its digital human's chats.

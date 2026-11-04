@@ -13,7 +13,6 @@ import { sendToRenderer } from '../../foundation/window.service'
 import {
   TEAM_EVENTS,
   AI_MEMBER_HARD_LIMIT,
-  memberChatKey,
   parseMemberChatKey,
   nativeConversationChatKey,
   spaceCollabChatKey,
@@ -290,8 +289,8 @@ export interface TeamService {
   /**
    * Drive ONE member turn and return its reply. Position-transparent: a
    * remote-owned target is woken on its owner node over the office link and the
-   * reply refluxes back — the caller never learns position. epochId defaults to
-   * the team's current run when omitted/empty.
+   * reply refluxes back — the caller never learns position. The caller names
+   * the conversation (epochId); none is chosen for it.
    */
   sendToMember(params: SendToMemberParams): Promise<SendToMemberResult>
   /**
@@ -355,12 +354,8 @@ export interface SendToMemberResult {
 export interface StopMemberParams {
   teamId: string
   appId: string
-  /**
-   * The session to stop. Omitted → resolved exactly as the send and history
-   * paths resolve it (open run epoch → the member's long-lived chat → the
-   * latest epoch even when sealed), so all three act on one conversation.
-   */
-  epochId?: string
+  /** The conversation whose turn to stop; never chosen on the caller's behalf. */
+  epochId: string
 }
 
 export interface StopMemberResult {
@@ -1686,26 +1681,11 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const target = store.listMembersByTeam(params.teamId).find((m) => m.appId === params.appId)
     if (!target) return { ok: false, stopped: false, reason: 'MEMBER_NOT_FOUND' }
 
-    const rt = requireRuntime()
-    // Resolve the SAME epoch the send and history paths resolve, down to the
-    // last step, or stop would aim at a different conversation than the one the
-    // caller is writing to and reading from: the requested epoch, else an open
-    // run epoch, else the member's long-lived chat, else the latest epoch even
-    // when sealed. Sealing does not end a turn that is already running — a
-    // caller can send into a sealed epoch, which reopens it — so a stop that
-    // refused to look there would leave exactly that turn unstoppable.
-    //
-    // Read-only throughout: creating a conversation as a side effect of
-    // stopping nothing would be the opposite of what was asked. Resolving an
-    // epoch with no live turn costs nothing — it answers `stopped: false`.
-    const epochId =
-      params.epochId ||
-      store.getCurrentEpochForTeam(params.teamId)?.id ||
-      store.getOpenConversationEpoch(params.teamId, memberChatKey(params.appId))?.id ||
-      store.listEpochsByTeam(params.teamId)[0]?.id
-    if (!epochId) return { ok: true, stopped: false, reason: 'NO_SESSION' }
-
-    const stopped = await rt.stopMemberTurn({ appId: params.appId, teamId: params.teamId, epochId })
+    // Named by the caller, like a message: a stop aimed at a conversation picked
+    // for it could end the member's work in another one. A sealed conversation
+    // can still hold a running turn, so it stays stoppable when named.
+    if (!params.epochId) throw new Error('Name the conversation whose turn to stop.')
+    const stopped = await requireRuntime().stopMemberTurn({ appId: params.appId, teamId: params.teamId, epochId: params.epochId })
     return { ok: true, stopped }
   }
 
@@ -1724,20 +1704,19 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
     const rt = requireRuntime()
 
-    // 1:1 direct chat must NOT require first starting a run — that leaks the internal
-    // run/epoch mechanism and breaks "remote = local" (local chat needs no run). Ride
-    // an OPEN run epoch when one exists (a message mid-run lands in that context),
-    // else open/reuse a long-lived per-member 'conversation' epoch: a chat container
-    // that does NOT trigger the run orchestration (sets no currentEpochId/status). A
-    // brand-new office therefore chats fine. The history read (team:chat-messages)
-    // resolves the SAME epoch via memberChatKey.
-    const epochId =
-      params.epochId ||
-      store.getCurrentEpochForTeam(params.teamId)?.id ||
-      rt.ensureConversationEpoch(params.teamId, memberChatKey(params.appId)).id
-
+    // The caller names the conversation. Choosing one for it — a running run,
+    // the member's own chat, the newest — filed messages into work they did not
+    // belong to. A member with no conversation yet gets one opened first
+    // (`openConversation`), as the team view does; naming the member there is
+    // only for one installed on this computer.
+    if (!params.epochId) throw new Error('Name the conversation to send this message in.')
+    const epochId = params.epochId
     const epoch = store.getEpochById(epochId)
-    if (epoch && isReadonlyCollaboration(team, epoch)) {
+    if (!epoch || epoch.teamId !== params.teamId) {
+      console.warn(`${LOG_TAG} direct message refused: team=${params.teamId} epoch=${epochId} reason=conversation-not-in-team`)
+      return { ok: false, finalMessage: null, reason: 'CONVERSATION_NOT_FOUND' }
+    }
+    if (isReadonlyCollaboration(team, epoch)) {
       console.warn(`${LOG_TAG} direct message refused: team=${params.teamId} epoch=${epochId} reason=source-task-readonly`)
       throw new Error('This task is read-only.')
     }

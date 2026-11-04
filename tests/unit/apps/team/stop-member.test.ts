@@ -1,11 +1,11 @@
 /**
  * Unit tests for teamService.stopMember (the stop button behind a member chat).
  *
- * Stop has to act on the SAME session the person is looking at, which is the
- * session a send would reach — the two resolve the epoch identically, or the
- * button would abort a conversation other than the one on screen. Position is
- * not this layer's concern: the runtime seam it delegates to is what routes a
- * remotely-owned member's abort to the machine running the turn.
+ * Stop acts on the conversation the caller names — the one on screen — and on
+ * no other: a stop aimed at a conversation picked for the caller could end the
+ * member's work somewhere else. Position is not this layer's concern: the
+ * runtime seam it delegates to is what routes a remotely-owned member's abort
+ * to the machine running the turn.
  *
  * Runs against a real in-memory TeamStore with a stubbed runtime.
  */
@@ -25,7 +25,6 @@ import { TeamStore } from '../../../../src/main/apps/team/store'
 import { MIGRATION_NAMESPACE, migrations } from '../../../../src/main/apps/team/migrations'
 import { createTeamService } from '../../../../src/main/apps/team/service'
 import type { TeamServiceDeps } from '../../../../src/main/apps/team/service'
-import { memberChatKey } from '../../../../src/shared/apps/team-types'
 
 const SPACE = 'space-a'
 const LEAD = 'app-lead'
@@ -115,29 +114,23 @@ describe('teamService.stopMember', () => {
     expect(res).toEqual({ ok: true, stopped: false })
   })
 
-  it('falls back to the member\u2019s open chat epoch, the same one a send resolves', async () => {
+  it('refuses a stop that names no conversation, even with one running, and stops nothing', async () => {
     const ctx = build(true)
     dbManager = ctx.dbManager
     seedTeam(ctx.store)
     const now = Date.now()
     ctx.store.insertEpoch({
-      id: 'conv-1', teamId: TEAM, startedAt: now, endedAt: null, endReason: null,
-      summary: null, lifecycle: 'conversation', chatKey: memberChatKey(WORKER),
-      lastActivityAt: now,
+      id: 'run-1', teamId: TEAM, startedAt: now, endedAt: null, endReason: null,
+      summary: null, lifecycle: 'run', lastActivityAt: now,
     })
+    ctx.store.updateTeamCurrentEpoch(TEAM, 'run-1')
 
-    const res = await ctx.service.stopMember({ teamId: TEAM, appId: WORKER })
-
-    expect(res).toEqual({ ok: true, stopped: true })
-    expect(ctx.stops).toEqual([{ appId: WORKER, teamId: TEAM, epochId: 'conv-1' }])
-    // Read-only resolution: no conversation may be created by a stop.
+    await expect(ctx.service.stopMember({ teamId: TEAM, appId: WORKER, epochId: '' })).rejects.toThrow(/Name the conversation/)
+    expect(ctx.stops).toHaveLength(0)
     expect(ctx.runtime.ensureConversationEpoch).not.toHaveBeenCalled()
   })
 
-  it('reaches the latest epoch even when sealed, the same one a send writes into', async () => {
-    // Sealing does not end a turn already running, and a send with no epochId
-    // lands in this same sealed epoch (reopening it). A stop that refused to
-    // look here would leave exactly that turn unstoppable.
+  it('still reaches a named conversation that has been sealed, where a turn can still be running', async () => {
     const ctx = build(true)
     dbManager = ctx.dbManager
     seedTeam(ctx.store)
@@ -147,22 +140,10 @@ describe('teamService.stopMember', () => {
       summary: null, lifecycle: 'run', lastActivityAt: now,
     })
 
-    const res = await ctx.service.stopMember({ teamId: TEAM, appId: WORKER })
+    const res = await ctx.service.stopMember({ teamId: TEAM, appId: WORKER, epochId: 'run-1' })
 
     expect(res).toEqual({ ok: true, stopped: true })
     expect(ctx.stops).toEqual([{ appId: WORKER, teamId: TEAM, epochId: 'run-1' }])
-  })
-
-  it('no session at all: answers cleanly instead of opening one to stop', async () => {
-    const ctx = build(true)
-    dbManager = ctx.dbManager
-    seedTeam(ctx.store)
-
-    const res = await ctx.service.stopMember({ teamId: TEAM, appId: WORKER })
-
-    expect(res).toEqual({ ok: true, stopped: false, reason: 'NO_SESSION' })
-    expect(ctx.stops).toHaveLength(0)
-    expect(ctx.runtime.ensureConversationEpoch).not.toHaveBeenCalled()
   })
 
   it('refuses a member that is not on this team', async () => {

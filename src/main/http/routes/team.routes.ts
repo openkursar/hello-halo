@@ -6,7 +6,6 @@ import { getOfficeCredential } from '../auth/middleware'
 import { resolveOfficeMemberAppIds } from '../identity/office-membership'
 import { createScopeGate } from '../../apps/runtime/federation/authority/scope-gate'
 import { getFederationManager } from '../../apps/runtime/federation/manager'
-import { memberChatKey } from '../../../shared/apps/team-types'
 import { CAPABILITY_MCP_TOGGLES } from '../../../shared/apps/capability-policy'
 import {
   generateTeamInvite,
@@ -53,6 +52,29 @@ export function registerTeamRoutes(app: Express): void {
       return false
     }
     return true
+  }
+
+  // A message to a member, a read of its transcript and a stop each name the
+  // conversation they are for. Choosing one for the caller once filed a reply
+  // into an unrelated task, so the request is refused instead — with the
+  // conversations it could mean, unless a teammate's credential is asking,
+  // whose view of the team is narrower than its list.
+  function conversationNamed(req: Request, res: Response, teamId: string, epochId: unknown): epochId is string {
+    if (typeof epochId === 'string' && epochId) return true
+    const candidates = getOfficeCredential(req)
+      ? undefined
+      : (getTeamService()?.listConversations(teamId) ?? [])
+          .filter((conversation) => !conversation.completed)
+          .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+          .slice(0, 10)
+          .map(({ epochId: id, label, kind, active, lastActivityAt }) => ({ epochId: id, label, kind, active: !!active, lastActivityAt }))
+    res.status(400).json({
+      success: false,
+      code: 'halo.team.conversation_required',
+      error: 'Name the conversation with "epochId". Pick it by label from GET /api/teams/:teamId/conversations; if more than one could be meant, ask the user using their labels.',
+      ...(candidates ? { candidates } : {}),
+    })
+    return false
   }
 
   // Per-invite scope projection. A request authenticated by an office
@@ -294,30 +316,13 @@ export function registerTeamRoutes(app: Express): void {
           }
         }
       }
-      // Resolve the SAME epoch the send path uses so a message and its transcript
-      // never diverge: the requested epoch, else an open run epoch, else the
-      // member's long-lived conversation epoch (read-only — never created here),
-      // else the latest epoch even when sealed. That last step is what the send
-      // path already does; without it a bare read went empty the moment a run
-      // ended, so a caller that omitted epochId could write into the sealed run
-      // (the send path resolves it) and then read nothing back.
-      const epochId =
-        (typeof req.query.epochId === 'string' && req.query.epochId
-          ? req.query.epochId
-          : (store.getCurrentEpochForTeam(teamId)?.id ??
-             store.getOpenConversationEpoch(teamId, memberChatKey(appId))?.id ??
-             store.listEpochsByTeam(teamId)[0]?.id)) ?? ''
+      const epochId = req.query.epochId
+      if (!conversationNamed(req, res, teamId, epochId)) return
       // A remote-owned member's transcript lives on the node that OWNS it, not
       // here. Pull it over the office link from that owner; the owner
       // authorizes and serves only members it owns. A locally-owned member is
       // read straight from local chat storage as before.
       if (targetMember.origin === 'remote' && targetMember.ownerNodeId) {
-        // Nothing sent yet (no run, no conversation epoch) → empty, not an error:
-        // 1:1 chat does not require a run first (parity with the IPC surface).
-        if (!epochId) {
-          res.json({ success: true, data: [] })
-          return
-        }
         const manager = getFederationManager()
         if (!manager) {
           res.status(503).json({ success: false, error: 'Federation is not yet initialized. Please try again shortly.' })
@@ -344,12 +349,7 @@ export function registerTeamRoutes(app: Express): void {
         }
         return
       }
-      // Locally-owned member: its transcript is per-epoch on disk. No epoch yet
-      // means nothing has run for it here → empty (never an error).
-      if (!epochId) {
-        res.json({ success: true, data: [] })
-        return
-      }
+      // Locally-owned member: its transcript is per-epoch on disk.
       const sinceRaw = typeof req.query.sinceSeq === 'string' ? Number(req.query.sinceSeq) : NaN
       const sinceSeq = Number.isInteger(sinceRaw) && sinceRaw > 0 ? sinceRaw : undefined
       res.json({ success: true, data: readTeamMemberHistory(appId, teamId, epochId, sinceSeq) })
@@ -420,19 +420,11 @@ export function registerTeamRoutes(app: Express): void {
         return
       }
       const message = built.message
-      // One chain for send, history and stop (open run epoch → the member's
-      // long-lived chat → the latest epoch even when sealed), so a caller that
-      // omits epochId writes to, reads from and stops the same conversation.
-      // An office where nothing has run yet resolves to none: passed through as
-      // empty, because the service opens the member's long-lived chat itself.
-      // Rejecting it here made a brand-new office unaddressable over HTTP while
-      // the desktop path — same service, same office — worked.
-      const epochId =
-        (typeof req.body?.epochId === 'string' && req.body.epochId
-          ? req.body.epochId
-          : (store.getCurrentEpochForTeam(teamId)?.id ??
-             store.getOpenConversationEpoch(teamId, memberChatKey(targetAppId))?.id ??
-             store.listEpochsByTeam(teamId)[0]?.id)) ?? ''
+      // A member with no conversation yet is reached by opening one first
+      // (POST /api/teams/:teamId/conversations; memberAppId only for a member on
+      // this computer, as one elsewhere cannot be given a one-to-one thread).
+      const epochId = req.body?.epochId
+      if (!conversationNamed(req, res, teamId, epochId)) return
 
       // An office credential is a teammate reaching in from their own machine;
       // its absence is the owner using their own remote access. The two look
@@ -454,13 +446,8 @@ export function registerTeamRoutes(app: Express): void {
   })
 
   // POST /api/teams/:teamId/members/:appId/stop — abort the turn one member is
-  // running. Gated exactly like /send: whoever may dispatch work to a member may
-  // stop it, and nobody else.
-  //
-  // An omitted epochId is passed through rather than resolved here: the service
-  // runs the same chain the send and read paths run (open run epoch → the
-  // member's long-lived chat → the latest epoch even when sealed), and resolving
-  // it a second time at this boundary is how the three drift apart.
+  // running in one conversation. Gated exactly like /send: whoever may dispatch
+  // work to a member may stop it, and nobody else.
   app.post('/api/teams/:teamId/members/:appId/stop', async (req: Request, res: Response) => {
     try {
       const teamId = req.params.teamId
@@ -498,8 +485,9 @@ export function registerTeamRoutes(app: Express): void {
         }
       }
 
-      const epochId = typeof req.body?.epochId === 'string' && req.body.epochId ? req.body.epochId : undefined
-      const result = await service.stopMember({ teamId, appId: targetAppId, ...(epochId ? { epochId } : {}) })
+      const epochId = req.body?.epochId
+      if (!conversationNamed(req, res, teamId, epochId)) return
+      const result = await service.stopMember({ teamId, appId: targetAppId, epochId })
       res.json({ success: true, data: result })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })

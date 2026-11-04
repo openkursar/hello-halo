@@ -514,6 +514,7 @@ door: an agent holding the `halo-api-ref` toolset can call
 (both listed for AI in `apps.routes.meta.ts`), and those routes serve the
 user's own remote client as well, so they do not consult the collaboration
 switch. The switch is therefore "this digital human is not in the
-conversation directory", not "no agent can ever reach its chats": an owner who
-grants a digital human the self-API has already granted it the operate-Halo
-surface.
+conversation directory", not "no agent can ever reach its chats": every digital
+human holds the self-API on its owner's own turns (it is not a switch; see
+`toolsets/DESIGN.md` §6), so any of them can reach these routes there. Only IM
+guests and requests from outside are kept from it.

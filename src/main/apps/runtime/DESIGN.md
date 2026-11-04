@@ -2048,6 +2048,23 @@ The space assistant's `halo-apps` read tool may query an authorized named digita
 human but does not claim that person's identity. Links use stable team/task/member
 identifiers and the renderer's guarded navigation path.
 
+A person can ask a digital human about its team work from any chat — its own, an
+IM chat bound to it, or a team-bound one — without knowing how Halo separates
+those conversations. A digital human that holds Operate Halo and serves on saved
+teams gets `prompt/team-awareness.ts`: the teams by name, id and role (ten at
+most), which conversation this chat is (and that its own team tools serve that
+one), and the Operate Halo calls that list a team's conversations, read one's
+board and a member's messages there, and message a member in a named
+conversation. Only stable facts are in it, so every turn of a session carries the
+same words whether a person or a teammate started it — a fragment that followed
+the trigger would rebuild the warm session and drop its prompt cache each time
+the two alternate. Joining, leaving or renaming a team changes it once, and the
+next turn of each warm chat rebuilds. Guests and requests from outside get none
+of it, because they hold no Operate Halo. Every one of those calls names its
+conversation: the team routes refuse a member message, transcript read or stop
+without `epochId` and list recent conversations instead, because choosing one for
+the caller once filed a reply into an unrelated task.
+
 Changing the default space uses the runtime facade, pins provable legacy run/session
 environments and rebinds future subscriptions without deactivating current work.
 The manager's persisted data path keeps identity memory stable across the move.

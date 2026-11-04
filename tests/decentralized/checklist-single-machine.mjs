@@ -9,7 +9,7 @@
  * Run: node tests/decentralized/checklist-single-machine.mjs
  */
 
-import { PROJECT_ROOT, clusterStart, clusterStop, apiOk, api, pollUntil, sleep, Reporter } from './_lib.mjs'
+import { PROJECT_ROOT, clusterStart, clusterStop, apiOk, api, pollUntil, sleep, Reporter, latestRunEpochId } from './_lib.mjs'
 import { checkedRunPath, declareClusterCases, isMain, startAcceptanceRun, requiredNativeIds } from './_acceptance.mjs'
 
 export const acceptanceCases = declareClusterCases('single', import.meta.url, [
@@ -331,7 +331,8 @@ async function main() {
   })
 
   // ── 1.3 Member collaboration & chat ─────────────────────────────────────────────────────
-  let chatTeam, chatMemberAppId
+  // Every message below names the run it is about; none is chosen for the caller.
+  let chatTeam, chatMemberAppId, chatRunEpochId
   await report.run('1.3.setup', async (mark) => {
     const { team } = await createAiTeam({
       name: 'T13-Chat',
@@ -343,18 +344,19 @@ async function main() {
     chatMemberAppId = d.members.find((m) => !m.isLead).appId
     await apiOk(node, 'POST', `/api/teams/${team.id}/run`, {})
     const running = await waitRunning(team.id, 20_000)
-    mark(running ? 'PASS' : 'FAIL', `running=${!!running}`)
+    chatRunEpochId = await latestRunEpochId(node, team.id)
+    mark(running && chatRunEpochId ? 'PASS' : 'FAIL', `running=${!!running} run=${chatRunEpochId}`)
   })
 
   await report.run('1.3.1', async (mark) => {
-    const res = await apiOk(node, 'POST', `/api/teams/${chatTeam.id}/members/${chatMemberAppId}/send`, { message: 'PING-DURING-RUN' })
+    const res = await apiOk(node, 'POST', `/api/teams/${chatTeam.id}/members/${chatMemberAppId}/send`, { message: 'PING-DURING-RUN', epochId: chatRunEpochId })
     mark(res?.ok && res.finalMessage ? 'PASS' : 'FAIL', JSON.stringify(res))
   })
 
   await report.run('1.3.2', async (mark) => {
     await apiOk(node, 'POST', `/api/teams/${chatTeam.id}/pause`, {})
     await sleep(1000)
-    const { status, json } = await api(node, 'POST', `/api/teams/${chatTeam.id}/members/${chatMemberAppId}/send`, { message: 'PING-AFTER-SEAL' })
+    const { status, json } = await api(node, 'POST', `/api/teams/${chatTeam.id}/members/${chatMemberAppId}/send`, { message: 'PING-AFTER-SEAL', epochId: chatRunEpochId })
     const ok = status === 200 && json?.success !== false && json?.data?.ok
     mark(ok ? 'PASS' : 'FAIL', `status=${status} noEpochError=${json?.error !== 'No epoch available'}`)
   })
@@ -394,8 +396,9 @@ async function main() {
 
   await report.run('1.3.4', async (mark) => {
     const longText = 'x'.repeat(20_000)
-    const r1 = await api(node, 'POST', `/api/teams/${chatTeam.id}/members/${chatMemberAppId}/send`, { message: longText })
+    const r1 = await api(node, 'POST', `/api/teams/${chatTeam.id}/members/${chatMemberAppId}/send`, { message: longText, epochId: chatRunEpochId })
     const r2 = await api(node, 'POST', `/api/teams/${chatTeam.id}/members/${chatMemberAppId}/send`, {
+      epochId: chatRunEpochId,
       message: 'describe this image',
       images: [{ data: 'aGVsbG8=', mediaType: 'image/png' }],
     })
@@ -406,7 +409,7 @@ async function main() {
   await report.run('1.3.5', async (mark) => {
     const sends = await Promise.all(
       Array.from({ length: 5 }, (_, i) =>
-        api(node, 'POST', `/api/teams/${chatTeam.id}/members/${chatMemberAppId}/send`, { message: `BURST-${i}` })),
+        api(node, 'POST', `/api/teams/${chatTeam.id}/members/${chatMemberAppId}/send`, { message: `BURST-${i}`, epochId: chatRunEpochId })),
     )
     const allOk = sends.every((r) => r.status === 200 && r.json?.success !== false && r.json?.data?.ok)
     mark(allOk ? 'PASS' : 'FAIL', sends.map((r) => `${r.status}/${r.json?.data?.ok}`).join(','))

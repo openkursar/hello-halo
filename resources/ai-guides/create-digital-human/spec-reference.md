@@ -60,14 +60,15 @@ There is no credential type, by design. Use `browser_login` for login-gated site
 | `ai-terminal` | Shell commands / interactive terminals | ON where the platform supports terminals |
 | `email` | Email and calendar tools | ON, but tools load only once an email channel is configured |
 | `im-push` | `notify_bot` proactive IM push | ON, but tools load only once a pushable contact exists |
-| `halo-api-ref` | **Operate Halo** — Halo's own API through `halo_api_ref`: spaces, digital humans, knowledge bases, settings | **OFF** |
+| `halo-api-ref` | **Operate Halo** — Halo's own API through `halo_api_ref`: spaces, digital humans, teams, knowledge bases, settings | **Always on** — not a switch; listing it changes nothing |
 | `conversation-collab` | **Conversation Collaboration** — read and message the other conversations of its space, other digital humans included, with their authority | **OFF** |
 
 Resolution order (`resolvePermission`, `src/shared/apps/app-types.ts:564-573`): explicit user
 deny → explicit user grant → declared in `spec.permissions` → the default (`true` for the first
-four, `false` for the last two). **A spec can only add capability, never remove it**; only a user
-opt-out in the UI disables one. Declaring an OFF-by-default permission turns it on at install, so
-add `halo-api-ref` or `conversation-collab` only when the task truly needs it, and tell the user.
+four, `false` for `conversation-collab`; `halo-api-ref` is not resolved at all). **A spec can only
+add capability, never remove it**; only a user opt-out in the UI disables one. Declaring an
+OFF-by-default permission turns it on at install, so add `conversation-collab` only when the task
+truly needs it, and tell the user.
 Web search, memory, and OCR are always on and not permission-gated.
 
 ## `output`
@@ -213,7 +214,7 @@ Generated from the schema of Halo 3.0.4.
 | `author` | `string` non-empty | yes | — | Who made it. When published, it becomes the namespace of the Store address, `<author>/<name>`. Optional for skills. |
 | `description` | `string` non-empty | yes | — | One or two sentences on what it does, shown in lists and the Store. |
 | `icon` | `string` |  | — | An emoji or an image URL. Anything else falls back to the type icon; a Digital Human without an icon gets a generated avatar. |
-| `permissions` | `string[]` |  | — | Capabilities to turn on at install: `ai-browser`, `ai-terminal`, `email`, `im-push` (on by default anyway), `halo-api-ref` (Operate Halo) and `conversation-collab` (Conversation Collaboration), both off by default. A spec can only add a capability; the user can still turn any of them off. |
+| `permissions` | `string[]` |  | — | Capabilities to turn on at install: `ai-browser`, `ai-terminal`, `email`, `im-push` (on by default anyway), `conversation-collab` (Conversation Collaboration, off by default). `halo-api-ref` (Operate Halo) is always on and need not be listed. A spec can only add a capability; the user can still turn any of the others off. |
 | `requires` | `object` |  | — | MCP servers and skills it depends on. |
 | `requires.mcps` | `object[]` |  | — | MCP servers it uses. Runs get only the servers listed here, and a run doesn't start while one of them is not installed, turned off, waiting for sign-in or failing. A chat gets every server of its workspace and the global ones, except those marked `enabled: false`. |
 | `requires.mcps[].id` | `string` non-empty | yes | — | Id of an installed MCP server. |

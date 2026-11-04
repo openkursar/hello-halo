@@ -399,6 +399,7 @@ export function TeamSessionChat({
             case 'TIMEOUT': return t('No reply from {{owner}} in time — they may be busy. Try again shortly.', { owner })
             case 'UNDELIVERED': return t('Couldn\u2019t reach {{owner}} — your message was not delivered. Try again when they\u2019re back online.', { owner })
             case 'MEMBER_NOT_FOUND': return t('{{owner}} is no longer in this team.', { owner })
+            case 'CONVERSATION_NOT_FOUND': return t('This conversation no longer exists in the team.')
             default: return t('Couldn\u2019t send your message just now. Please try again.')
           }
         }
@@ -443,9 +444,10 @@ export function TeamSessionChat({
     try {
       // A remote member's turn runs in ITS owner's process; the local app-chat
       // abort would find no session here and report success while the member
-      // kept working. Same split as the send path above.
+      // kept working. Same split as the send path above. A conversation not
+      // created yet runs nothing to stop.
       if (isRemote) {
-        await api.teamStopMember({ teamId, appId, ...(epochId ? { epochId } : {}) })
+        if (epochId) await api.teamStopMember({ teamId, appId, epochId })
       } else {
         await api.appChatStop(appId, conversationId)
       }

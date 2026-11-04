@@ -4,7 +4,7 @@
  * Built-in capabilities for an automation digital human, rendered as toggles.
  *
  * These map to Halo-native, always-present tool servers gated by per-app
- * permissions (resolvePermission): AI Browser, AI Terminal, Operate Halo,
+ * permissions (resolvePermission): AI Browser, AI Terminal,
  * Conversation Collaboration, Email, IM Push.
  * They are distinct from MCP dependencies (external, may be missing) — the
  * visual language here is a plain on/off switch, because the capability is
@@ -15,9 +15,9 @@
  * amber hint links to Settings when the underlying channel is missing —
  * intent and availability are kept as separate concerns.
  *
- * A collapsed "always available" row surfaces the two capabilities that are
- * never toggleable (web search, memory) so the user sees the full picture
- * without adding noise to the default view.
+ * A collapsed "always available" row surfaces the capabilities that are never
+ * toggleable (web search, memory, operating Halo) so the user sees the full
+ * picture without adding noise to the default view.
  */
 
 import { useState, useEffect } from 'react'
@@ -117,9 +117,6 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
   const aiTerminalOn = resolvePermission(app, 'ai-terminal')
   const emailOn = resolvePermission(app, 'email')
   const imPushOn = resolvePermission(app, 'im-push')
-  // Off unless granted — must pass the same default the runtime uses
-  // (apps/runtime/execute.ts), or the switch shows the opposite of reality.
-  const haloApiOn = resolvePermission(app, 'halo-api-ref', false)
   const conversationCollabOn = isConversationCollabEnabled(app)
 
   return (
@@ -140,15 +137,6 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
         description={t('Allow this app to run shell commands and interactive terminals')}
         checked={aiTerminalOn}
         onToggle={next => setPermission('ai-terminal', next)}
-      />
-
-      {/* Operate Halo */}
-      <ToggleRow
-        icon={Settings2}
-        label={t('Operate Halo')}
-        description={t('Allow this app to manage Halo itself: spaces, digital humans, knowledge bases and settings')}
-        checked={haloApiOn}
-        onToggle={next => setPermission('halo-api-ref', next)}
       />
 
       {/* Conversation Collaboration */}
@@ -205,7 +193,7 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
           className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
         >
           <ChevronRight className={`w-3.5 h-3.5 transition-transform ${alwaysExpanded ? 'rotate-90' : ''}`} />
-          {t('Always available: web search, memory')}
+          {t('Always available: web search, memory, operate Halo')}
         </button>
         {alwaysExpanded && (
           <div className="mt-2 pl-5 space-y-2">
@@ -216,6 +204,14 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
             </div>
             <p className="text-xs text-muted-foreground/70 pl-[22px] -mt-1">
               {t('Search the internet for real-time information')}
+            </p>
+            <div className="flex items-center gap-2">
+              <Settings2 className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+              <span className="text-sm text-foreground flex-1">{t('Operate Halo')}</span>
+              <span className="text-xs text-muted-foreground/70">{t('Built-in · always on')}</span>
+            </div>
+            <p className="text-xs text-muted-foreground/70 pl-[22px] -mt-1">
+              {t('Look into its teams and work, and manage Halo when you ask. Not offered to IM guests or requests from other computers.')}
             </p>
             <div className="flex items-center gap-2">
               <Brain className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />

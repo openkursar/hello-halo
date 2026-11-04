@@ -705,7 +705,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   /** Send a message to a remote member via the office owner (team wake). */
   teamSendToMember: (input: { teamId: string; appId: string; epochId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; spaceId?: string; references?: ContentReference[] }) => Promise<IpcResponse>
   /** Stop a member's running turn, wherever that member runs. */
-  teamStopMember: (input: { teamId: string; appId: string; epochId?: string }) => Promise<IpcResponse>
+  teamStopMember: (input: { teamId: string; appId: string; epochId: string }) => Promise<IpcResponse>
   /** Conversations (office-shared session objects). */
   teamListConversations: (teamId: string) => Promise<IpcResponse>
   teamOpenConversation: (input: { teamId: string; title?: string; memberAppId?: string }) => Promise<IpcResponse>

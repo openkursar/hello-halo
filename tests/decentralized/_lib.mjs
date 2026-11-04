@@ -307,11 +307,25 @@ export function assertConsistentBoard(details, presences) {
   return { ok, evidence }
 }
 
-/** GET /chat-messages for one member from every node; returns per-node transcripts. */
+/**
+ * The team's newest run. A member message, transcript read or stop names the
+ * conversation it is for; none is chosen on the caller's behalf.
+ */
+export async function latestRunEpochId(node, teamId) {
+  const epochs = await apiOk(node, 'GET', `/api/teams/${teamId}/epochs`)
+  return epochs.find((e) => e.lifecycle === 'run')?.id ?? null
+}
+
+/** Open a one-to-one conversation with a member, for a script that has no run to talk in. */
+export async function openMemberConversation(node, teamId, memberAppId) {
+  return (await apiOk(node, 'POST', `/api/teams/${teamId}/conversations`, { memberAppId })).epochId
+}
+
+/** GET /chat-messages for one member, in one conversation, from every node; returns per-node transcripts. */
 export async function chatOnAll(nodes, teamId, appId, epochId) {
   const results = await Promise.all(
     nodes.map(async (node) => {
-      const q = epochId ? `?appId=${appId}&epochId=${epochId}` : `?appId=${appId}`
+      const q = `?appId=${appId}&epochId=${epochId}`
       const { status, json, error } = await api(node, 'GET', `/api/teams/${teamId}/chat-messages${q}`)
       return { node, status, messages: json?.data ?? null, error: error ?? (json?.success === false ? json.error : null) }
     }),

@@ -47,6 +47,7 @@ const getTeamDetail = vi.fn<[string], unknown>()
 const getEpochBoard = vi.fn<[string, string], unknown>()
 const sendToMember = vi.fn<[unknown], Promise<unknown>>()
 const stopMember = vi.fn<[unknown], Promise<unknown>>()
+const listConversations = vi.fn<[string], unknown[]>()
 const listArtifacts = vi.fn<[string, string?], Promise<unknown[]>>()
 
 vi.mock('../../../../src/main/apps/team', () => ({
@@ -58,6 +59,7 @@ vi.mock('../../../../src/main/apps/team', () => ({
     getEpochBoard: (teamId: string, epochId: string) => getEpochBoard(teamId, epochId),
     sendToMember: (input: unknown) => sendToMember(input),
     stopMember: (input: unknown) => stopMember(input),
+    listConversations: (teamId: string) => listConversations(teamId),
     listArtifacts: (teamId: string, epochId?: string) => listArtifacts(teamId, epochId),
   }),
   getTeamStore: () => ({
@@ -155,7 +157,32 @@ beforeEach(() => {
   fetchMemberHistory.mockResolvedValue({ messages: [], stale: false })
   sendToMember.mockResolvedValue({ ok: true, finalMessage: 'done' })
   stopMember.mockResolvedValue({ ok: true, stopped: true })
+  listConversations.mockReturnValue([])
 })
+
+/** Recent conversations of team X as the service lists them, one already ended. */
+function seedConversations(): void {
+  listConversations.mockReturnValue([
+    { epochId: 'e-release', teamId: 'X', kind: 'native', label: 'Release', readonly: false, completed: false, startedAt: 1, lastActivityAt: 30, active: true },
+    { epochId: 'e-done', teamId: 'X', kind: 'native', label: 'Old bug', readonly: false, completed: true, startedAt: 1, lastActivityAt: 50 },
+    { epochId: 'e-im', teamId: 'X', kind: 'im', label: 'Ops group', readonly: true, completed: false, startedAt: 1, lastActivityAt: 40 },
+  ])
+}
+
+/** A request that names no conversation: refused, with the open ones to choose from unless a teammate asks. */
+async function expectConversationRequired(res: Response, listed: boolean): Promise<void> {
+  expect(res.status).toBe(400)
+  const body = await res.json()
+  expect(body).toMatchObject({ success: false, code: 'halo.team.conversation_required' })
+  if (listed) {
+    expect(body.candidates).toEqual([
+      { epochId: 'e-im', label: 'Ops group', kind: 'im', active: false, lastActivityAt: 40 },
+      { epochId: 'e-release', label: 'Release', kind: 'native', active: true, lastActivityAt: 30 },
+    ])
+  } else {
+    expect(body).not.toHaveProperty('candidates')
+  }
+}
 
 // ── Cross-office isolation ────────────────────────────────────────────────
 
@@ -209,15 +236,14 @@ describe('cross-office isolation on team read routes', () => {
 // ── chat-messages membership validation ──────────────────────────────────────
 
 describe('GET /api/teams/:teamId/chat-messages', () => {
-  it('returns messages for the reader own member appId (200) using the current epoch', async () => {
+  it('returns messages for the reader own member appId (200) in the conversation it names', async () => {
     // The office reader (identity id-reader) owns member-1; reading its OWN
     // transcript is always allowed regardless of scope.
     listMembersByTeam.mockReturnValue([{ appId: 'member-1', memberIdentity: 'id-reader' }])
-    getCurrentEpochForTeam.mockReturnValue({ id: 'epoch-1' })
     readTeamMemberMessages.mockReturnValue([{ id: 'm1', role: 'assistant', content: 'hi' }])
 
     await withServer(buildApp('X'), async (base) => {
-      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-1`)
+      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-1&epochId=epoch-1`)
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.success).toBe(true)
@@ -236,7 +262,7 @@ describe('GET /api/teams/:teamId/chat-messages', () => {
     ])
 
     await withServer(buildApp(null), async (base) => {
-      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-1&sinceSeq=2`)
+      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-1&epochId=epoch-1&sinceSeq=2`)
       const body = await res.json()
       expect(body.data).toEqual([{ id: 'm3', role: 'user', content: 'c', seq: 3 }])
     })
@@ -275,33 +301,25 @@ describe('GET /api/teams/:teamId/chat-messages', () => {
     })
   })
 
-  it('falls back to the member conversation epoch when no run is open', async () => {
-    // With no open run, the read path resolves the SAME long-lived conversation
-    // epoch the send path uses, so a 1:1 transcript stays readable without a run.
+  it('refuses a read that names no conversation, even with a run open, listing the open ones newest first', async () => {
+    // Reading "the" transcript used to pick the open run, then the member's own
+    // chat, then the newest conversation — another task's words, read as this one's.
     listMembersByTeam.mockReturnValue([{ appId: 'member-1' }])
-    getCurrentEpochForTeam.mockReturnValue(null)
-    getOpenConversationEpoch.mockReturnValue({ id: 'epoch-convo' })
+    getCurrentEpochForTeam.mockReturnValue({ id: 'e-release' })
+    seedConversations()
 
     await withServer(buildApp(null), async (base) => {
-      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-1`)
-      expect(res.status).toBe(200)
+      await expectConversationRequired(await fetch(`${base}/api/teams/X/chat-messages?appId=member-1`), true)
     })
-    expect(readTeamMemberMessages).toHaveBeenCalledWith('member-1', 'X', 'epoch-convo')
+    expect(readTeamMemberMessages).not.toHaveBeenCalled()
   })
 
-  it('returns an empty transcript (200) when a local member has no epoch yet', async () => {
-    // 1:1 chat does not require a run first (parity with the IPC surface): no run
-    // and no conversation epoch means nothing has been said yet → empty, not 400.
+  it('refuses a teammate\u2019s credential the same way, without the team\u2019s list', async () => {
     listMembersByTeam.mockReturnValue([{ appId: 'member-1', memberIdentity: 'id-reader' }])
-    getCurrentEpochForTeam.mockReturnValue(null)
-    getOpenConversationEpoch.mockReturnValue(null)
+    seedConversations()
 
     await withServer(buildApp('X'), async (base) => {
-      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-1`)
-      expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.success).toBe(true)
-      expect(body.data).toEqual([])
+      await expectConversationRequired(await fetch(`${base}/api/teams/X/chat-messages?appId=member-1`), false)
     })
     expect(readTeamMemberMessages).not.toHaveBeenCalled()
   })
@@ -332,7 +350,7 @@ describe('GET /api/teams/:teamId/chat-messages', () => {
     readTeamMemberMessages.mockReturnValue([{ id: 'm', role: 'assistant', content: 'x' }])
 
     await withServer(buildApp('X'), async (base) => {
-      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-other`)
+      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-other&epochId=epoch-1`)
       expect(res.status).toBe(200)
     })
     expect(readTeamMemberMessages).toHaveBeenCalledWith('member-other', 'X', 'epoch-1')
@@ -348,7 +366,7 @@ describe('GET /api/teams/:teamId/chat-messages', () => {
     fetchMemberHistory.mockResolvedValue({ messages: [{ role: 'assistant', content: 'from owner', ts: 1 }], stale: false })
 
     await withServer(buildApp(null), async (base) => {
-      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-remote`)
+      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-remote&epochId=epoch-1`)
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.success).toBe(true)
@@ -375,7 +393,7 @@ describe('GET /api/teams/:teamId/chat-messages', () => {
     })
 
     await withServer(buildApp(null), async (base) => {
-      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-remote`)
+      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-remote&epochId=epoch-1`)
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.success).toBe(true)
@@ -392,7 +410,7 @@ describe('GET /api/teams/:teamId/chat-messages', () => {
     fetchMemberHistory.mockRejectedValue(new Error('history: office not present or M2 off office=X'))
 
     await withServer(buildApp(null), async (base) => {
-      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-remote`)
+      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-remote&epochId=epoch-1`)
       expect(res.status).toBe(502)
       const body = await res.json()
       expect(body.success).toBe(false)
@@ -535,12 +553,11 @@ describe('POST /api/teams/:teamId/members/:appId/send scope gating', () => {
     })
   }
 
-  it('PIN request (no credential) may dispatch and resolves the current epoch', async () => {
+  it('PIN request (no credential) may dispatch into the conversation it names', async () => {
     listMembersByTeam.mockReturnValue([{ appId: 'member-1' }])
-    getCurrentEpochForTeam.mockReturnValue({ id: 'epoch-1' })
 
     await withServer(buildApp(null), async (base) => {
-      const res = await post(base, 'X', 'member-1', { message: 'hello' })
+      const res = await post(base, 'X', 'member-1', { message: 'hello', epochId: 'epoch-1' })
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.success).toBe(true)
@@ -622,7 +639,7 @@ describe('POST /api/teams/:teamId/members/:appId/send scope gating', () => {
     ])
     getCurrentEpochForTeam.mockReturnValue({ id: 'epoch-1' })
     await withServer(buildApp('X'), async (base) => {
-      const res = await post(base, 'X', 'target', { message: 'hi' })
+      const res = await post(base, 'X', 'target', { message: 'hi', epochId: 'epoch-1' })
       expect(res.status).toBe(200)
     })
     expect(sendToMember).toHaveBeenCalledTimes(1)
@@ -635,7 +652,7 @@ describe('POST /api/teams/:teamId/members/:appId/send scope gating', () => {
     ])
     getCurrentEpochForTeam.mockReturnValue({ id: 'epoch-1' })
     await withServer(buildApp('X'), async (base) => {
-      const res = await post(base, 'X', 'target', { message: 'hi', thinkingEnabled: true })
+      const res = await post(base, 'X', 'target', { message: 'hi', thinkingEnabled: true, epochId: 'epoch-1' })
       expect(res.status).toBe(200)
     })
     expect(sendToMember).toHaveBeenCalledWith({
@@ -659,7 +676,7 @@ describe('POST /api/teams/:teamId/members/:appId/send scope gating', () => {
     listMembersByTeam.mockReturnValue([{ appId: 'member-1' }])
     getCurrentEpochForTeam.mockReturnValue({ id: 'epoch-1' })
     await withServer(buildApp(null), async (base) => {
-      const res = await post(base, 'X', 'member-1', { message: 'hi' })
+      const res = await post(base, 'X', 'member-1', { message: 'hi', epochId: 'epoch-1' })
       expect(res.status).toBe(200)
     })
     expect(sendToMember).toHaveBeenCalledWith(
@@ -681,11 +698,11 @@ describe('POST /api/teams/:teamId/members/:appId/send scope gating', () => {
     getCurrentEpochForTeam.mockReturnValue({ id: 'epoch-1' })
     await withServer(buildApp(null), async (base) => {
       // Cards alone are a message too.
-      expect((await post(base, 'X', 'member-1', { message: '', spaceId: 's1', references: [reference] })).status).toBe(200)
+      expect((await post(base, 'X', 'member-1', { message: '', spaceId: 's1', references: [reference], epochId: 'epoch-1' })).status).toBe(200)
       expect((await post(base, 'X', 'member-1', { message: 'hi', references: [{ id: 1 }] })).status).toBe(400)
     })
     await withServer(buildApp('X'), async (base) => {
-      expect((await post(base, 'X', 'member-1', { message: 'hi', spaceId: 's1', references: [reference] })).status).toBe(200)
+      expect((await post(base, 'X', 'member-1', { message: 'hi', spaceId: 's1', references: [reference], epochId: 'epoch-1' })).status).toBe(200)
     })
     const [own, teammate] = sendToMember.mock.calls.map(([input]) => (input as { message: string }).message)
     expect(own).toMatch(/^<halo_references>\n[\s\S]*\[1\] src\/a\.ts, line 4\n/)
@@ -705,6 +722,30 @@ describe('POST /api/teams/:teamId/members/:appId/send scope gating', () => {
       expect.objectContaining({ epochId: 'epoch-explicit' }),
     )
   })
+
+  it('refuses a message that names no conversation, even with a run open, and lists the open ones', async () => {
+    // The newest task used to catch an unnamed message; that is how a result
+    // landed in a task it had nothing to do with.
+    listMembersByTeam.mockReturnValue([{ appId: 'member-1' }])
+    getCurrentEpochForTeam.mockReturnValue({ id: 'e-release' })
+    seedConversations()
+    await withServer(buildApp(null), async (base) => {
+      await expectConversationRequired(await post(base, 'X', 'member-1', { message: 'Results are in' }), true)
+    })
+    expect(sendToMember).not.toHaveBeenCalled()
+  })
+
+  it('refuses a teammate\u2019s unnamed message without showing it the team\u2019s list', async () => {
+    listMembersByTeam.mockReturnValue([
+      { appId: 'caller', memberIdentity: 'id-reader' },
+      { appId: 'target', memberIdentity: 'id-target' },
+    ])
+    seedConversations()
+    await withServer(buildApp('X'), async (base) => {
+      await expectConversationRequired(await post(base, 'X', 'target', { message: 'hi' }), false)
+    })
+    expect(sendToMember).not.toHaveBeenCalled()
+  })
 })
 
 // ── Member dispatch: POST /members/:appId/stop ────────────────────────────
@@ -718,18 +759,14 @@ describe('POST /api/teams/:teamId/members/:appId/stop scope gating', () => {
     })
   }
 
-  it('PIN request (no credential) may stop, and the epoch is left for the service to resolve', async () => {
+  it('refuses a stop that names no conversation and stops nothing', async () => {
     listMembersByTeam.mockReturnValue([{ appId: 'member-1' }])
+    seedConversations()
 
     await withServer(buildApp(null), async (base) => {
-      const res = await post(base, 'X', 'member-1')
-      expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.data).toEqual({ ok: true, stopped: true })
+      await expectConversationRequired(await post(base, 'X', 'member-1'), true)
     })
-    // No epochId invented at the boundary: the service resolves the same session
-    // a send would, so the two can never act on different conversations.
-    expect(stopMember).toHaveBeenCalledWith({ teamId: 'X', appId: 'member-1' })
+    expect(stopMember).not.toHaveBeenCalled()
   })
 
   it('honors an explicit epochId in the body', async () => {
@@ -781,7 +818,7 @@ describe('POST /api/teams/:teamId/members/:appId/stop scope gating', () => {
       { appId: 'target', memberIdentity: 'id-target' },
     ])
     await withServer(buildApp('X'), async (base) => {
-      const res = await post(base, 'X', 'target')
+      const res = await post(base, 'X', 'target', { epochId: 'epoch-1' })
       expect(res.status).toBe(200)
     })
     expect(stopMember).toHaveBeenCalledTimes(1)

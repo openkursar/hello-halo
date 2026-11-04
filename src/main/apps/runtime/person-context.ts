@@ -3,6 +3,7 @@ import { getAppManager, getPersonConnectionAccess, type AppManagerService } from
 import { getTeamStore, type TeamStore } from '../team'
 import { isRemoteMember } from '../../../shared/apps/team-types'
 import { listAvailableSkills } from '../skill-discovery'
+import type { TeamAwarenessTeam } from './prompt/team-awareness'
 
 interface ContextDependencies {
   manager: Pick<AppManagerService, 'getApp' | 'listEffectiveMcpApps'>
@@ -65,6 +66,28 @@ export function queryPersonContext(
     }
   }
   return result
+}
+
+/**
+ * The saved teams a digital human serves from this computer, as its own prompt
+ * names them. A temporary collaboration is one piece of work, not a team it
+ * belongs to, and a member run by another computer is that computer's to name.
+ */
+export function collectPersonTeams(
+  appId: string,
+  teams: Pick<TeamStore, 'listMembersByAppId' | 'getTeamById'>,
+): TeamAwarenessTeam[] {
+  return teams.listMembersByAppId(appId).flatMap(member => {
+    if (isRemoteMember(member)) return []
+    const team = teams.getTeamById(member.teamId)
+    if (!team || team.ephemeral) return []
+    return [{ teamId: team.id, name: team.name, role: member.role, isLead: member.isLead, hostedElsewhere: !!team.hostNodeId }]
+  })
+}
+
+export function listPersonTeams(appId: string): TeamAwarenessTeam[] {
+  const teams = getTeamStore()
+  return teams ? collectPersonTeams(appId, teams) : []
 }
 
 export function readPersonContext(caller: PersonContextCaller, query: PersonContextQuery): PersonContextResult {

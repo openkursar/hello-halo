@@ -168,6 +168,12 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   getSessionEngineId: () => undefined,
 }))
 
+// Every run holds Operate Halo; its server is built by its own module and tested there.
+vi.mock('../../../../src/main/services/api-ref', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/services/api-ref')>()),
+  createApiRefMcpServer: () => ({ _isMcpServer: true, name: 'halo-api-ref' }),
+}))
+
 // The fake session used by createSession — swapped per test via nextSession.
 let nextSession: FakeSession
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({

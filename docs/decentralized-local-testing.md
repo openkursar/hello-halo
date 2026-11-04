@@ -147,7 +147,8 @@ remote-control PIN (an office-member credential is rejected with 403).
 Supporting routes used by the flow (all under `Authorization: Bearer <pin>`):
 `POST /api/spaces`, `POST /api/teams`, `POST /api/teams/:id/invite`,
 `PATCH /api/teams/:id` (set `leadAppId`), `POST /api/teams/:id/run`,
-`GET /api/teams/:id/detail`, `GET /api/teams/:id/chat-messages?appId=`.
+`GET /api/teams/:id/detail`, `GET /api/teams/:id/chat-messages?appId=&epochId=` (the
+conversation is required; `GET /api/teams/:id/epochs` lists them).
 
 ### Example: drive a node by hand
 

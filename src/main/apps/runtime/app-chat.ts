@@ -142,7 +142,7 @@ import {
 } from './live-instances'
 import { buildBaseToolset } from '../../services/agent/toolsets/base'
 import { createOcrMcpServer } from '../../services/ocr'
-import { createApiRefMcpServer, HALO_API_TOOLSET_ID } from '../../services/api-ref'
+import { createApiRefMcpServer } from '../../services/api-ref'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { createConversationCollabMcpServer, resolveConversationCollab } from './conversation-collab'
 import { getSpace, getSpaceDir, isSpaceMemoryEnabled } from '../../services/space.service'
@@ -152,6 +152,8 @@ import type { Thought, TranscriptMessage, TranscriptPageRequest, TranscriptProve
 import { getAppMemoryService, getActivityStore } from './index'
 import { resolveExecutionEnvironment, validateExecutionEnvironment, legacySessionEnvironmentKey, resolveChatEnvironment, appChatRunId, validateEnvironmentConnections } from './execution-environment'
 import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
+import { listPersonTeams } from './person-context'
+import { buildTeamAwarenessPrompt } from './prompt/team-awareness'
 import type { PersonContextCaller } from '../../../shared/apps/person-context'
 import {
   prepareMemoryForTurn,
@@ -752,18 +754,17 @@ async function runAppChatTurn(
     ...(teamContext ? { teamId: teamContext.teamId, epochId: teamContext.epochId } : {}),
   }
 
-  // Default OFF, unlike the other built-in capabilities: this one operates
-  // Halo's own configuration and data, which is not a sensible default for a
-  // digital human the user installed to do something else.
+  // Not a switch: operating Halo is how a digital human perceives its own
+  // environment — its teams, its people, its settings.
   //
   // Never on a request from outside, however much else it may use: the
   // switches others are offered do not include it, and its credential governs
   // all of Halo. `filterMcpServersByPolicy` already withholds the server from a
   // restricted turn, so the credentials and the usage guide have to be
   // withheld here too — otherwise an outside sender gets a prompt describing a
-  // tool the session does not have.
-  const usesHaloApi =
-    resolvePermission(app, HALO_API_TOOLSET_ID, false) && permCtx?.isOwner !== false && !origin
+  // tool the session does not have. A disposable member goes without it as it
+  // goes without `halo-apps`: what it could create would outlive the team.
+  const usesHaloApi = !disposableMember && permCtx?.isOwner !== false && !origin
 
   // Off unless the owner switched it on, and never on someone else's turn (an IM
   // guest, a request from outside), in a team channel, or in an IM/HTTP session.
@@ -840,6 +841,19 @@ async function runAppChatTurn(
     ? getToolset(TEAM_MCP_SERVER_NAME)
     : undefined
   if (teamToolset) entry = `${entry}\n\n${teamToolset.usageGuide}`
+  // Whoever started the turn, a person or a teammate: a fragment that came and
+  // went with the trigger would rebuild the warm session and drop its prompt
+  // cache every time the two alternate in one conversation.
+  const teamAwareness = usesHaloApi
+    ? buildTeamAwarenessPrompt({
+        teams: listPersonTeams(appId),
+        ...(teamPromptCtx && teamContext
+          ? { current: { teamName: teamPromptCtx.teamName, epochId: teamContext.epochId, viaIm: !!imSession } }
+          : {}),
+        collaborationToolsHere: !!teamToolset,
+      })
+    : null
+  if (teamAwareness) identity.push(teamAwareness)
   const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
 
   // ── 4. Build MCP servers ─────────────────────────────

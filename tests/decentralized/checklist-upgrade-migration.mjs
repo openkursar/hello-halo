@@ -15,7 +15,7 @@
 import { execFileSync } from 'child_process'
 import path from 'path'
 import {
-  clusterStart, clusterStop, apiOk, api, pollUntil, sleep, Reporter, PROJECT_ROOT,
+  clusterStart, clusterStop, apiOk, api, pollUntil, sleep, Reporter, PROJECT_ROOT, openMemberConversation,
 } from './_lib.mjs'
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a)
 const report = new Reporter()
@@ -196,6 +196,7 @@ try {
     const members = (await apiOk(node, 'GET', `/api/teams/${oldTeam.id}/detail`)).members
     const member = members.find((m) => !m.isLead) ?? members[0]
     const sent = await apiOk(node, 'POST', `/api/teams/${oldTeam.id}/members/${member.appId}/send`, {
+      epochId: await openMemberConversation(node, oldTeam.id, member.appId),
       message: 'Call report_to_user with type "run_complete" and summary "CHAT-REPORT-POST-UPGRADE", then stop.',
     })
     const gotEntry = await pollUntil(async () => {

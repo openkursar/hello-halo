@@ -26,7 +26,7 @@
  */
 
 import fs from 'node:fs'
-import { clusterStart, clusterStop, apiOk, api, pollUntil, sleep, Reporter, createOffice, mintInvite, joinOffice, members } from './_lib.mjs'
+import { clusterStart, clusterStop, apiOk, api, pollUntil, sleep, Reporter, createOffice, mintInvite, joinOffice, members, openMemberConversation } from './_lib.mjs'
 
 const CLUSTER_DIR = '.cluster-scale'
 const JOINERS = 30
@@ -156,8 +156,9 @@ try {
     for (const joiner of joiners) {
       const own = (await members(joiner, officeId)).find((m) => m.origin !== 'remote' && !m.isLead)
       if (!own) throw new Error(`node-${joiner.index}: its brought member is missing`)
-      brought.push({ joiner, appId: own.appId })
-      await api(joiner, 'POST', `/api/teams/${officeId}/members/${own.appId}/send`, { message: 'Say hello in one short sentence.' })
+      const epochId = await openMemberConversation(joiner, officeId, own.appId)
+      brought.push({ joiner, appId: own.appId, epochId })
+      await api(joiner, 'POST', `/api/teams/${officeId}/members/${own.appId}/send`, { message: 'Say hello in one short sentence.', epochId })
     }
     await sleep(120_000 + HEALTH_LINE_WAIT_MS)
     const after = joiners.map((j) => readRx(j, officeId))
@@ -167,8 +168,9 @@ try {
     // (members message one another, so the host's members count too).
     let transcriptsKb = 0
     let messages = 0
-    for (const member of await members(host, officeId)) {
-      const res = await api(host, 'GET', `/api/teams/${officeId}/chat-messages?appId=${member.appId}`)
+    const conversations = (await apiOk(host, 'GET', `/api/teams/${officeId}/conversations`)).map((c) => c.epochId)
+    for (const member of await members(host, officeId)) for (const epochId of conversations) {
+      const res = await api(host, 'GET', `/api/teams/${officeId}/chat-messages?appId=${member.appId}&epochId=${epochId}`)
       const rows = res.json?.data ?? []
       transcriptsKb += JSON.stringify(rows).length / 1024
       messages += rows.length

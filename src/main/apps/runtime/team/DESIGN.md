@@ -1306,8 +1306,8 @@ only the turn a request from outside directly drives, and what that restricted
 turn sets in motion as described above. So a colleague can have one of the
 owner's digital humans ask another for work, and that work runs with the
 owner's reach and stays off the owner's record; and what a full-reach turn sets
-in motion runs as the owner's own — Operate Halo included, where the member it
-reaches has it switched on, though the colleague's own turn never gets it.
+in motion runs as the owner's own — Operate Halo included, though the
+colleague's own turn never gets it.
 What the owner's own turns READ that came from elsewhere — a colleague's result
 in a turn-end notice, the board, findings, published artifacts — is weighed by
 a digital human running with the owner's reach, at its own judgment. A turn

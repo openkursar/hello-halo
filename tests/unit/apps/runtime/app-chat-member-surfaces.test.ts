@@ -223,6 +223,10 @@ vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
   createPersonContextMcpServer,
   personContextPrompt: () => 'person-context',
 }))
+const { listPersonTeams } = vi.hoisted(() => ({
+  listPersonTeams: vi.fn((_appId: string): Array<{ teamId: string; name: string; role: string; isLead: boolean; hostedElsewhere: boolean }> => []),
+}))
+vi.mock('../../../../src/main/apps/runtime/person-context', () => ({ listPersonTeams }))
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
   createReportToolServer: () => ({ _isMcpServer: true, name: 'halo-report' }),
 }))
@@ -911,9 +915,12 @@ describe('a request from outside never operates Halo', () => {
     }
   })
 
-  it('keeps the explicitly enabled self-API for a local owner turn', async () => {
+  it.each([
+    ['nothing saved', { granted: [], denied: [] }],
+    ['an "off" an earlier version saved', { granted: [], denied: ['halo-api-ref'] }],
+  ])('gives a local owner turn the self-API with %s — it is not a switch', async (_case, permissions) => {
     const prior = app.permissions
-    app.permissions = { granted: ['halo-api-ref'], denied: [] } as any
+    app.permissions = permissions as any
     try {
       await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId: 'app-chat:app-member:local:direct:owner-api', message: 'start' })
       const options = buildUserSessionSdkOptions.mock.calls.at(-1)![0] as any
@@ -1034,3 +1041,100 @@ describe('the owner\u2019s own chats have team collaboration built in', () => {
   })
 })
 
+describe('a person asking about team work is told which teams it serves', () => {
+  const RELEASE = { teamId: 'team-release', name: 'Release crew', role: 'Tester', isLead: false, hostedElsewhere: false }
+
+  beforeEach(() => {
+    buildUserSessionSdkOptions.mockClear()
+    listPersonTeams.mockReset().mockReturnValue([RELEASE])
+    keptMemberContext()
+  })
+
+  function promptHasTeams(): boolean {
+    return mountedSurfaces().systemPrompt.includes('## Your teams')
+  }
+
+  it('in its own chat: the teams, how to look into them, and that this chat is none of them', async () => {
+    await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId: `app-chat:${app.id}:local:direct:ask-team`, message: 'How is the release going?' })
+    const prompt = mountedSurfaces().systemPrompt
+    expect(prompt).toContain('- Release crew [id team-release] — your role: Tester')
+    expect(prompt).toContain('This chat is your own conversation, outside them.')
+    expect(prompt).toContain('GET /api/teams/<teamId>/conversations')
+    expect(listPersonTeams).toHaveBeenCalledWith(app.id)
+  })
+
+  it('the owner inside one team conversation is told which one it is, and to keep its team tools for it', async () => {
+    const turn = memberTurn()
+    await sendAppChatMessage({ ...turn, teamContext: { ...turn.teamContext!, kind: undefined, fromAppId: null } })
+    expect(mountedSurfaces().systemPrompt).toContain(`This chat is one conversation of Standing team (epochId ${turn.teamContext!.epochId}): for it use your team tools`)
+  })
+
+  it('a teammate waking it in that conversation gets the very same words, so the session is never rebuilt between them', async () => {
+    const turn = memberTurn()
+    await sendAppChatMessage({ ...turn, teamContext: { ...turn.teamContext!, kind: undefined, fromAppId: null } })
+    const fromOwner = mountedSurfaces().systemPrompt
+    await sendAppChatMessage(turn)
+    expect(promptHasTeams()).toBe(true)
+    expect(mountedSurfaces().systemPrompt).toBe(fromOwner)
+  })
+
+  it('a request from another machine gets none of it, having no Operate Halo to follow it with', async () => {
+    const turn = memberTurn({ origin: 'colleague' })
+    await sendAppChatMessage({ ...turn, conversationId: buildTeamSessionKey(app.id, TEAM_ID, 'epoch-outside'), teamContext: { ...turn.teamContext!, epochId: 'epoch-outside', kind: 'human_message' } })
+    expect(promptHasTeams()).toBe(false)
+    expect(mountedSurfaces().mcpServers).not.toHaveProperty('halo-api-ref')
+  })
+
+  it('an IM guest gets none of it', async () => {
+    const conversationId = `app-chat:${app.id}:wecom-bot:group:guest-asks`
+    setImPermissionContext(conversationId, { senderId: 'guest', senderName: 'Guest', isOwner: false, guestPolicy: {} })
+    try {
+      await sendAppChatMessage({
+        appId: app.id, spaceId: 'space-1', conversationId, message: 'How is the release going?',
+        imSession: { channel: 'wecom-bot', chatType: 'group' as const, displayName: 'Group', sessionId: 'inst:guest-asks' },
+      })
+      expect(promptHasTeams()).toBe(false)
+    } finally {
+      clearImPermissionContext(conversationId)
+    }
+  })
+
+  it('a digital human in no team is told nothing about teams', async () => {
+    listPersonTeams.mockReturnValue([])
+    await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId: `app-chat:${app.id}:local:direct:no-team`, message: 'hi' })
+    expect(promptHasTeams()).toBe(false)
+  })
+
+  it('the same teams give the same words on the next turn', async () => {
+    const conversationId = `app-chat:${app.id}:local:direct:stable`
+    await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId, message: 'first' })
+    const first = mountedSurfaces().systemPrompt
+    await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId, message: 'second' })
+    expect(mountedSurfaces().systemPrompt).toBe(first)
+  })
+
+  it('beside the collaboration tools of its own chat, says they do not reach its teams; an IM chat without them is told nothing of them', async () => {
+    registerToolset({
+      id: 'halo-team', displayName: 'Team', summary: 'test', usageGuide: 'Team collaboration guide (test)',
+      isAvailable: () => true, createServer: () => ({ _isMcpServer: true, name: 'halo-team' }) as never,
+    })
+    const reach = 'Here team_send and team_read_board reach only a collaboration started in this chat'
+    await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId: buildLocalSessionKey(app.id, 'beside-tools'), message: 'Tell the tester the release is done.' })
+    expect(mountedSurfaces().mcpServers).toHaveProperty('halo-team')
+    expect(mountedSurfaces().systemPrompt).toContain(reach)
+
+    const conversationId = `app-chat:${app.id}:wecom-bot:direct:owner-asks`
+    setImPermissionContext(conversationId, { senderId: 'owner', senderName: 'Owner', isOwner: true, ownerIds: ['owner'] })
+    try {
+      await sendAppChatMessage({
+        appId: app.id, spaceId: 'space-1', conversationId, message: 'Tell the tester the release is done.',
+        imSession: { channel: 'wecom-bot', chatType: 'direct' as const, displayName: 'Owner', sessionId: 'inst:owner-asks' },
+      })
+      expect(mountedSurfaces().mcpServers).not.toHaveProperty('halo-team')
+      expect(promptHasTeams()).toBe(true)
+      expect(mountedSurfaces().systemPrompt).not.toContain('team_run')
+    } finally {
+      clearImPermissionContext(conversationId)
+    }
+  })
+})

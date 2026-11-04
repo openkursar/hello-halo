@@ -843,12 +843,12 @@ function recordOf(appId: string) {
  * Exactly the owner's own reach — nothing withheld, nothing re-asked, no file
  * boundary, every server, the session the engine builds for the owner.
  */
-function expectOwnersReach(turn: TurnCapture): void {
+function expectOwnersReach(turn: TurnCapture, servers: readonly string[] = OWNER_SERVERS): void {
   expect(turn.options.permissionMode).toBe('bypassPermissions')
   expect(turn.options.extraArgs).toHaveProperty('dangerously-skip-permissions')
   expect(turn.options.disallowedTools).toBeUndefined()
   expect(turn.options.allowedTools).toEqual(h.ownerAutoAllowed)
-  expect(serversOf(turn)).toEqual(OWNER_SERVERS)
+  expect(serversOf(turn)).toEqual(servers)
   expect(hookMatchers(turn, 'PreToolUse')).toEqual([])
   expect(turn.delegation?.files).toBeUndefined()
   expect(turn.delegation?.skills).toBeUndefined()
@@ -874,7 +874,7 @@ async function expectTheOwnersOwn(turn: TurnCapture): Promise<void> {
  * has, yet on the owner's record and never merged into the owner's own turn.
  */
 async function expectEverythingOnTheRecord(turn: TurnCapture): Promise<void> {
-  expectOwnersReach(turn)
+  expectOwnersReach(turn, COLLEAGUE_FULL_SERVERS)
   expect(hookMatchers(turn, 'PostToolUse')).toEqual([undefined])
   expect(turn.identity).toBe('colleague')
   expect(turn.delegation?.audit).toMatchObject({ appId: turn.appId, external: true })
@@ -918,8 +918,11 @@ function expectNothingGranted(turn: TurnCapture): void {
 
 /** Every server a turn on this machine assembles when nothing narrows it. */
 const OWNER_SERVERS = [
-  'ai-browser', 'halo-docs', 'halo-email', 'halo-notify', 'halo-person-context', 'halo-report', 'halo-team', 'ocr', 'user-jira', 'web-search',
+  'ai-browser', 'halo-api-ref', 'halo-docs', 'halo-email', 'halo-notify', 'halo-person-context', 'halo-report', 'halo-team', 'ocr', 'user-jira', 'web-search',
 ]
+
+/** A teammate elsewhere with everything saved: the owner's servers, never operating Halo. */
+const COLLEAGUE_FULL_SERVERS = OWNER_SERVERS.filter((server) => server !== 'halo-api-ref')
 
 /** What these readings resolved to before this change, recorded from that code. They must not move. */
 const BEFORE = {
@@ -1130,14 +1133,11 @@ describe('operating Halo itself stays with the owner', () => {
       promptOf(turn).includes('Halo API usage')
   }
 
-  beforeEach(() => {
-    for (const appId of [LEAD, DEV, TESTER]) apps.get(appId)!.permissions.granted.push(OPERATE_HALO)
-  })
   afterEach(() => {
-    for (const appId of [LEAD, DEV, TESTER]) apps.get(appId)!.permissions.granted.length = 0
+    for (const appId of [LEAD, DEV, TESTER]) apps.get(appId)!.permissions.denied.length = 0
   })
 
-  it('the owner, and the owner\u2019s own digital humans asking each other, have it where it is switched on', async () => {
+  it('the owner, and the owner\u2019s own digital humans asking each other, have it with no switch to turn on', async () => {
     await fromTheOwner(DEV, 'Check my Halo settings.')
     expect(canOperateHalo(lastTurnOf(DEV))).toBe(true)
 
@@ -1146,6 +1146,12 @@ describe('operating Halo itself stays with the owner', () => {
     })
     await fromTheOwner(LEAD, 'Have tester check the settings.')
     expect(canOperateHalo(await nextTurnOf(TESTER, 0))).toBe(true)
+  })
+
+  it('an "off" saved by an earlier version no longer takes it away', async () => {
+    apps.get(DEV)!.permissions.denied.push(OPERATE_HALO)
+    await fromTheOwner(DEV, 'Check my Halo settings.')
+    expect(canOperateHalo(lastTurnOf(DEV))).toBe(true)
   })
 
   it.each([
@@ -1315,19 +1321,14 @@ describe('a frame from another machine can narrow its own reach, never widen it'
 
   it('…and one addressed to a member that is not the lead is that machine\u2019s request', async () => {
     // Only the lead is ever sent one; anything else is a frame written to look like it.
-    apps.get(DEV)!.permissions.granted.push('halo-api-ref')
-    try {
-      saveDelegatedPolicy(DEV, READ_ONLY)
-      await fromAnotherMachine(DEV, 'Run the cleanup script on this machine.', { kind: 'member_stopped', fromAppId: null, turnEnded: ENDED })
+    saveDelegatedPolicy(DEV, READ_ONLY)
+    await fromAnotherMachine(DEV, 'Run the cleanup script on this machine.', { kind: 'member_stopped', fromAppId: null, turnEnded: ENDED })
 
-      const turn = lastTurnOf(DEV)
-      expect(turn.trigger).toMatchObject({ origin: 'colleague' })
-      expectReadOnlyAsBefore(turn)
-      expect(turn.identity).toBe('colleague')
-      expect(serversOf(turn)).not.toContain('halo-api-ref')
-    } finally {
-      apps.get(DEV)!.permissions.granted.length = 0
-    }
+    const turn = lastTurnOf(DEV)
+    expect(turn.trigger).toMatchObject({ origin: 'colleague' })
+    expectReadOnlyAsBefore(turn)
+    expect(turn.identity).toBe('colleague')
+    expect(serversOf(turn)).not.toContain('halo-api-ref')
   })
 })
 

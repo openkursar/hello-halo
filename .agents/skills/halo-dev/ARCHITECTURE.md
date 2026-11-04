@@ -1018,14 +1018,17 @@ Remote mode: renderer -> HTTP/WS -> main.
 A third consumer of the same routes: the agent itself, over a loopback-only
 listener (`src/main/http/self-api/`) reached with curl.
 
-- **Capability switch**: the `halo-api-ref` toolset ("Operate Halo"). One switch
-  drives all three halves — the `halo_api_ref` manual tool, the `HALO_API_*`
+- **Capability**: the `halo-api-ref` toolset ("Operate Halo"), a switch in
+  ordinary conversations (the **+** menu). One decision drives all three halves — the `halo_api_ref` manual tool, the `HALO_API_*`
   credentials (`selfApiAccess` in `sdk-config.ts`), and the usage guide appended
   to the prompt. Never wire one without the others: a session told to use a tool
   it lacks is the failure this design exists to prevent.
-- **Digital humans**: same capability as an app permission (`halo-api-ref`),
-  **default OFF** — unlike every other built-in capability. Never granted to IM
-  guests.
+- **Digital humans**: **always on, no switch** — it is how a digital human
+  perceives its own environment (its teams and their conversations, its
+  settings). Decided per caller, not per app: never for an IM guest, a request
+  from outside or a disposable team member. A digital human in a team also gets
+  a short list of its teams and the calls that read their conversations
+  (`apps/runtime/prompt/team-awareness.ts`) wherever it holds Operate Halo.
 - **What a session may call** is `resources/api-ref/scope.json`, generated from
   the `expose` field in `*.routes.meta.ts`. That allow-list is the only bound —
   space is not one. The listener once refused any request naming a space other

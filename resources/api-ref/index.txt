@@ -131,11 +131,11 @@ GET    /api/teams/collab-for-conversation/<conversationId>         [ai]       te
 POST   /api/teams/<teamId>/save-collab                             [ai]       team                    Keep a temporary collaboration as a persistent team
 GET    /api/teams/<teamId>                                         [ai]       team                    Get one team's own record
 GET    /api/teams/<teamId>/detail                                  [ai]       team                    Get a team with members, edges, roster status, board and decisions
-GET    /api/teams/<teamId>/chat-messages                           [ai]       team                    Read one member's transcript within a team
-POST   /api/teams/<teamId>/members/<appId>/send                    [ai]       team                    Send a message to one team member and wait for its reply
-POST   /api/teams/<teamId>/members/<appId>/stop                    [ai]       team                    Stop the turn one team member is running
+GET    /api/teams/<teamId>/chat-messages                           [ai]       team                    Read one member's transcript in one team conversation
+POST   /api/teams/<teamId>/members/<appId>/send                    [ai]       team                    Send a message to one team member in one conversation and wait for its reply
+POST   /api/teams/<teamId>/members/<appId>/stop                    [ai]       team                    Stop the turn one team member is running in one conversation
 GET    /api/teams/<teamId>/artifacts                               [ai]       team                    List files each member produced in the current or latest run
-GET    /api/teams/<teamId>/conversations                           [ai]       team                    List a team's open conversations, newest first
+GET    /api/teams/<teamId>/conversations                           [ai]       team                    List a team's conversations (its tasks and chats), newest first
 POST   /api/teams/<teamId>/conversations                           [ai]       team                    Open a new team conversation
 PATCH  /api/teams/<teamId>/conversations/<epochId>                 [ai]       team                    Rename a team conversation
 DELETE /api/teams/<teamId>/conversations/<epochId>                 [ai]       team                    Archive (close) a team conversation

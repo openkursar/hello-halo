@@ -745,7 +745,7 @@ function looksLikeListResponse(returns) {
  */
 function buildCurl(method, path, query, jsonBody, truncate) {
   const url = `$HALO_API_URL${toDisplayPath(path)}${query ?? ''}`
-  const pipe = truncate ? ' | head -c 4000' : ''
+  const pipe = truncate ? ` | ${truncate} -c 4000` : ''
   if (jsonBody === undefined) {
     const flag = method === 'GET' ? '-s' : `-sX ${method}`
     return `${BASE_INDENT}curl ${flag} "${url}" -H "Authorization: Bearer $HALO_API_TOKEN"${pipe}`
@@ -791,7 +791,7 @@ function renderEntry(r, pathWidth) {
     ].join('\n')
   }
   const jsonBody = r.method !== 'GET' ? r.meta.__derivedBody : undefined
-  const truncate = r.method === 'GET' && looksLikeListResponse(r.meta.returns)
+  const truncate = r.method === 'GET' && looksLikeListResponse(r.meta.returns) ? (r.meta.newestLast ? 'tail' : 'head') : null
   const lines = [header, ...renderImpactLines(r.meta), buildCurl(r.method, r.path, r.meta.query, jsonBody, truncate)]
   if (r.meta.body !== undefined) lines.push(`${BASE_INDENT}# body: ${r.meta.body}`)
   if (r.meta.returns) lines.push(`${BASE_INDENT}# out: ${r.meta.returns}`)
