@@ -9,19 +9,22 @@ import { isEngineId, type EngineId } from '../../../shared/types/engine'
 import { getStartupEngine, resolveDefaultEngine, ensureEngineAvailable } from './resolved-sdk'
 
 /** Old sessions have no engine binding; a live default change preserves their prior routing. */
-export function getLegacyEngine(): EngineId {
-  const recorded = getConfig().agent?.legacySdkEngine
-  return resolveHistoricalEngine(isEngineId(recorded) ? recorded : getStartupEngine())
+export function getLegacyEngine(config = getConfig()): EngineId {
+  const recorded = config.agent?.legacySdkEngine
+  return resolveHistoricalEngine(isEngineId(recorded) ? recorded : getStartupEngine(), config)
 }
 
 /** Cold reads resolve historical ownership without probing or starting a runtime. */
-export function getConversationEngineMetadata(conversation: Conversation): EngineId {
+export function getConversationEngineMetadata(
+  conversation: Pick<Conversation, 'engineBinding' | 'engineRoutingVersion' | 'engineId' | 'engineOverride' | 'sessionId' | 'messageCount'> & Partial<Pick<Conversation, 'messages'>>,
+  config = getConfig(),
+): EngineId {
   const recorded = conversation.engineBinding?.engineId
     ?? (conversation.engineRoutingVersion === 1 && isEngineId(conversation.engineId) ? conversation.engineId : undefined)
-  const configured = getConfig().agent?.sdkEngine
-  if (recorded) return conversation.engineOverride ? recorded : resolveHistoricalEngine(recorded)
-  return conversation.engineOverride ?? (conversation.sessionId || conversation.messages.length
-    ? getLegacyEngine() : resolveHistoricalEngine(isEngineId(configured) ? configured : 'halo'))
+  const configured = config.agent?.sdkEngine
+  if (recorded) return conversation.engineOverride ? recorded : resolveHistoricalEngine(recorded, config)
+  return conversation.engineOverride ?? (conversation.sessionId || (conversation.messages?.length ?? conversation.messageCount)
+    ? getLegacyEngine(config) : resolveHistoricalEngine(isEngineId(configured) ? configured : 'halo', config))
 }
 
 /** Engine preferences never move an in-flight turn or silently repoint an existing binding. */

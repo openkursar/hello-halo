@@ -24,8 +24,7 @@ import type { EngineCapabilities } from '../capabilities'
 export const CODEX_CAPABILITIES: EngineCapabilities = {
   engineId: 'codex',
   // Two-token brand string aligns visually with sibling engine names
-  // ("Claude Code" / "Halo SDK" / "Codex Agent"). The short EngineBadge
-  // label still uses just "Codex".
+  // ("Claude Code" / "Halo SDK" / "Codex Agent").
   displayName: 'Codex Agent',
   streaming: {
     text: 'token',
