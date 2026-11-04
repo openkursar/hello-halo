@@ -52,6 +52,12 @@ async function askKnowledge(page: Page, model: AcceptanceModel, kb: KnowledgeBas
     return { text: expectHits === 0 ? 'The knowledge base has nothing about it.' : 'Found it.' }
   })
   await navigateToChat(page)
+  // Each ask needs a fresh conversation: reopening the earlier one keeps its
+  // selection, and clicking the knowledge base there would deselect it.
+  const create = page.getByRole('button', { name: 'New', exact: true })
+  await expect(create).toHaveCount(1)
+  await create.click()
+  await expect(page.locator('.message-assistant')).toHaveCount(0)
   await page.getByTitle('Load knowledge bases into this conversation', { exact: true }).click()
   await page.getByText(kb.name, { exact: true }).click()
   await page.keyboard.press('Escape')
