@@ -473,6 +473,10 @@ export function CanvasTabBar() {
   const { switchTab, closeTab, closeAllTabs, refreshTab, openUrl } = useCanvasActions()
   const isCanvasMaximized = useCanvasStore(state => state.isMaximized)
   const toggleCanvasMaximized = useCanvasStore(state => state.toggleMaximized)
+  // Leaving fullscreen restores only what entering changed: a window
+  // maximized beforehand stays maximized.
+  const maximizedWindowForFullscreen = useCanvasStore(state => state.maximizedWindowForFullscreen)
+  const setMaximizedWindowForFullscreen = useCanvasStore(state => state.setMaximizedWindowForFullscreen)
   const { isMaximized: isWindowMaximized, toggleMaximize: toggleWindowMaximize } = useWindowMaximize()
 
   // Combined maximize state: both window AND canvas are maximized
@@ -483,18 +487,11 @@ export function CanvasTabBar() {
     trackToolOpen('browser', 'canvas_new_tab', getBrowserHomepage().then(url => openUrl(url, t('New Tab'))))
   }, [openUrl, t])
 
-  // Whether entering canvas fullscreen maximized the window: leaving it
-  // restores only that, so a window maximized beforehand stays maximized.
-  const maximizedWindowRef = useRef(false)
-  useEffect(() => {
-    if (!isCanvasMaximized) maximizedWindowRef.current = false
-  }, [isCanvasMaximized])
-
   // Handle combined maximize toggle: window maximize + canvas fullscreen
   const handleToggleMaximize = useCallback(async () => {
     if (isFullyMaximized) {
       // Exit: restore window size first if entering changed it, then exit canvas fullscreen
-      if (maximizedWindowRef.current) {
+      if (maximizedWindowForFullscreen) {
         await toggleWindowMaximize()
       }
       toggleCanvasMaximized()
@@ -502,13 +499,13 @@ export function CanvasTabBar() {
       // Enter: maximize window and canvas fullscreen together
       if (!isWindowMaximized) {
         await toggleWindowMaximize()
-        maximizedWindowRef.current = true
+        setMaximizedWindowForFullscreen(true)
       }
       if (!isCanvasMaximized) {
         toggleCanvasMaximized()
       }
     }
-  }, [isFullyMaximized, isWindowMaximized, isCanvasMaximized, toggleWindowMaximize, toggleCanvasMaximized])
+  }, [isFullyMaximized, isWindowMaximized, isCanvasMaximized, maximizedWindowForFullscreen, toggleWindowMaximize, toggleCanvasMaximized, setMaximizedWindowForFullscreen])
 
   return (
     <CanvasTabs
