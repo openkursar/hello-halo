@@ -642,7 +642,8 @@ Consequences that matter:
   can tell it from a model error. Every IM exit — the person's reply
   (`dispatch-inbound`), a teammate-woken front-desk turn (`team/index.ts`), a
   reminder, an autonomous turn's push — adds the same note after the text it
-  wrote (`withTurnEndingNote`), naming the step limit the person can raise.
+  wrote (`imTurnReply`, over `withTurnEndingNote`), naming the step limit the
+  person can raise.
   Where somebody waits on the answer (all but the autonomous push) the note also
   comes alone when nothing was written, and a cut-off or a failure is told
   (`imErrorReply`, below); an autonomous turn that wrote nothing pushes nothing,
@@ -667,6 +668,21 @@ Consequences that matter:
   otherwise `⚠️ Error: …` with this computer's paths replaced by `<local path>`
   (POSIX roots, drives, network shares, file URLs — never a web address's path),
   then cut to 200 characters. An IM group may hold people from outside.
+- **A failed model request is the turn's failure, never its answer.** Claude
+  Code and the Halo SDK tell one as an `assistant` frame carrying `error`
+  (services/agent DESIGN, per-turn output contract; Codex and dsh do not yet).
+  The reply accumulator skips it: a turn that wrote nothing fails its round
+  with the turn's error, so every exit above tells a failure (a team records
+  one; an autonomous turn pushes nothing). Text written before the failure is
+  still the round's one reply, ending `failed` (`turn-ending.ts`): an IM chat
+  gets it with the error after it, as `imErrorReply` words it alone
+  (`imTurnReply`; a last paragraph that is the reason itself, as Codex writes
+  it, is said once), and its team records a failure all the same — the turn-end
+  report and the woken turn's result alike. The transcript reads the frame's
+  text as the turn's `error`, so the chat shows a failure card, under any text,
+  as a space conversation does; a run records it as its error, not its output
+  (`execute.ts`). A sub-agent's notice stays with the result of the tool that
+  ran it.
 - Those cover a session that *reports* its death. A session that simply never
   produces a turn — a resume against a transcript a crashed process left broken,
   an engine that failed to launch — reports nothing, and the caller would await a
@@ -1689,7 +1705,7 @@ src/main/apps/runtime/
   -- Interactive chat with an App (separate from automation runs):
   app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
   app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a); the record's one writer, announcing accepted inputs and pushes at arrival (§2.14a)
-  turn-ending.ts             -- A turn that stopped short (step limit, cut off): how it is recognized and the note an IM chat gets (§2.12a)
+  turn-ending.ts             -- A turn that stopped short (step limit, cut off, failed request): how it is recognized and the note an IM chat gets (§2.12a)
   im-error-reply.ts          -- What an IM chat is told when its turn failed: no path or program of this computer goes out (§2.12a)
   turn-skills.ts             -- Which skills a borrowed turn may load, what a granted skill may not bring with it, and why its message never runs as a command ("Skills on a borrowed turn")
   app-chat-browser.ts        -- The AI browser context each chat drives: resident for native chats, per-turn for IM/HTTP/team, idle/cap reaping, teardown by reason (§2.19)

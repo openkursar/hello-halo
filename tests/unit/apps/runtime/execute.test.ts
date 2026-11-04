@@ -530,6 +530,21 @@ describe('executeRun — completion branches', () => {
     )
   })
 
+  it('records a failed model request the engine told as an assistant message as the error, never as output', async () => {
+    const reason = 'Anthropic API error (403): OAuth authentication is currently not allowed for this organization.'
+    nextSession = new FakeSession({
+      script: [
+        assistantReport(),
+        { type: 'assistant', error: 'authentication_failed', message: { model: '<synthetic>', content: [{ type: 'text', text: reason }] } },
+        { type: 'result', subtype: 'error_during_execution', is_error: true, result: reason },
+      ],
+    })
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toBe(reason)
+    expect(result.finalText).toBe('All done.')
+  })
+
   it('adds up what the model processed over the run, cache included, beside the input and output total', async () => {
     const usage = (input: number, output: number, cacheRead: number, cacheWrite: number) => ({
       type: 'result',

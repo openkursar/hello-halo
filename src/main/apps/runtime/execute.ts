@@ -1130,7 +1130,9 @@ async function processStream(
           writer.writeEvent(sdkMessage as Record<string, unknown>)
         }
 
-        if (msgType === 'assistant') {
+        // A failed model request told as an assistant message carrying `error`
+        // is the run's error, which its result reports — never its output.
+        if (msgType === 'assistant' && !(sdkMessage as { error?: unknown }).error) {
           const content = (sdkMessage as any).message?.content
           if (Array.isArray(content)) {
             for (const block of content) {

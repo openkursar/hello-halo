@@ -666,9 +666,20 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
 
       if (captured.heldBack) return { finalMessage: null, heldBack: captured.heldBack }
       const finalMessage = captured.reply
+      const ending = captured.ending
+      // A request that failed after the member wrote something: the chat reads
+      // the text with the failure after it; the team gets the failure.
+      if (ending?.kind === 'failed') {
+        if (imRoute && captured.delivers) {
+          await import('../im-error-reply')
+            .then(({ imTurnReply }) => pushToFrontDesk(imRoute, imTurnReply(finalMessage ?? '', ending), 'front-desk reply'))
+            .catch(loadError => console.error(`${LOG_TAG} could not tell the IM chat its turn failed:`, loadError))
+        }
+        throw new Error(ending.error)
+      }
       // The chat reads a turn that stopped short the way a person's own turn
       // reads in dispatch-inbound; the team gets the text as written.
-      const pushed = captured.ending ? withTurnEndingNote(finalMessage ?? '', captured.ending) : finalMessage
+      const pushed = ending ? withTurnEndingNote(finalMessage ?? '', ending) : finalMessage
       if (imRoute && captured.delivers && pushed && pushed.trim()) pushToFrontDesk(imRoute, pushed, 'front-desk reply')
       return { finalMessage }
     },

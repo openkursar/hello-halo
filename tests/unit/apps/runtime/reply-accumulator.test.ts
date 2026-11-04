@@ -149,4 +149,10 @@ describe('ReplyTextAccumulator', () => {
     ])
     expect(reply).toBe('First.\n\nSecond.')
   })
+
+  it('never takes the engine telling a failed model request for reply text', () => {
+    const failure = { ...assistant(text('Anthropic API error (403): not allowed')), error: 'authentication_failed' }
+    expect(feedAll(new ReplyTextAccumulator(), [failure])).toBe('')
+    expect(feedAll(new ReplyTextAccumulator(), [assistant(text('Partial answer.')), failure])).toBe('Partial answer.')
+  })
 })

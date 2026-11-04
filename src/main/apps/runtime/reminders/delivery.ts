@@ -20,8 +20,7 @@ import { resolveImFileSend } from '../im-channels/file-send-resolve'
 import { setImPermissionContext } from '../im-permission-registry'
 import { instanceTakesChat, resolveImPermission } from '../im-sender-standing'
 import { sanitizeRuntimeTags } from '../pending-relays'
-import { withTurnEndingNote } from '../turn-ending'
-import { imErrorReply } from '../im-error-reply'
+import { imErrorReply, imTurnReply } from '../im-error-reply'
 import { getSpaceDir } from '../../../services/space.service'
 import { parseAppChatKey, parseNativeChatKey } from '../../../../shared/apps/im-keys'
 import { classifySessionSource, getImSessionDisplayName, LOCAL_SESSION_CHANNEL } from '../../../../shared/types/im-channel'
@@ -104,7 +103,7 @@ function targetOf(reminder: ConversationReminder): Target {
       thinkingEnabled: true,
       onReply: (reply, ending) => {
         // A turn that stopped short says so, as any reply in an IM chat does.
-        const pushed = ending ? withTurnEndingNote(reply, ending) : reply
+        const pushed = ending ? imTurnReply(reply, ending) : reply
         if (pushed.trim()) push(pushed, 'reminder reply')
       },
     },

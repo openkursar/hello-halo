@@ -1521,6 +1521,8 @@ async function runAppChatTurn(
       onProgress, onMessageAccepted, onResult: request.onResult,
       onReply: (content, ending) => {
         finalReply = content
+        // Answered with what was written, but its team hears of a failure.
+        if (ending?.kind === 'failed') turnFailure = ending.error
         if (ending) onReply?.(content, ending)
         else onReply?.(content)
       },

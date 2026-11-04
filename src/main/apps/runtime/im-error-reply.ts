@@ -3,15 +3,17 @@
  *
  * Said in place of the answer by every IM path where somebody waits on one: the
  * person's message (dispatch-inbound), a front-desk turn woken by a teammate
- * (team), a reminder (reminder delivery). An autonomous turn answers no one and
- * pushes nothing it did not write. An IM group may hold people from outside, so
- * nothing about the computer Halo runs on goes out: no path, no program.
+ * (team), a reminder (reminder delivery); after the answer when the turn wrote
+ * some before its request failed (imTurnReply). An autonomous turn answers no
+ * one, so a failure pushes nothing unless the turn wrote something first. An
+ * IM group may hold people from outside, so nothing about the computer Halo
+ * runs on goes out: no path, no program.
  * Hardcoded Chinese like the other IM-facing notices.
  */
 
 import { isEngineSetupError, isRefusedLocalConnection } from '../../services/agent'
 import { truncateUtf16Safe } from './text-truncate'
-import { AppChatTurnInterrupted, withTurnEndingNote } from './turn-ending'
+import { AppChatTurnInterrupted, withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
 
 /** How much of an error an IM chat is shown. */
 const MAX_ERROR_CHARS = 200
@@ -72,4 +74,22 @@ export function imErrorReply(error: unknown): string {
   if (!stripped) return '⚠️ Error: Unknown error'
   const shown = truncateUtf16Safe(stripped, MAX_ERROR_CHARS)
   return `⚠️ Error: ${shown.length < stripped.length ? `${shown}…` : shown}`
+}
+
+/**
+ * A reply as an IM chat receives it after its turn ended short. A failed
+ * request is noted with the error the chat gets when nothing was written, so
+ * what was written is not taken for the whole answer.
+ */
+export function imTurnReply(content: string, ending: AppChatTurnEnding): string {
+  if (ending.kind !== 'failed') return withTurnEndingNote(content, ending)
+  const note = imErrorReply(ending.error)
+  const reason = ending.error.trim()
+  let written = content.trimEnd()
+  // Codex tells a failure only as reply text, so the last paragraph can be the
+  // reason itself; the note says it once.
+  if (reason && (written.trim() === reason || written.endsWith(`\n${reason}`))) {
+    written = written.slice(0, written.length - reason.length).trimEnd()
+  }
+  return written.trim() ? `${written}\n\n${note}` : note
 }

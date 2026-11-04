@@ -25,7 +25,7 @@ vi.mock('../../../../src/main/services/agent', async () => {
   return { isRefusedLocalConnection: actual.isRefusedLocalConnection, explainEngineError: actual.explainEngineError, isEngineSetupError: engineErrors.isEngineSetupError }
 })
 
-import { imErrorReply } from '../../../../src/main/apps/runtime/im-error-reply'
+import { imErrorReply, imTurnReply } from '../../../../src/main/apps/runtime/im-error-reply'
 import { WorkingDirectoryChangedError, WorkingDirectoryUnavailableError } from '../../../../src/main/services/agent/working-dir'
 import { AppChatTurnInterrupted, withTurnEndingNote } from '../../../../src/main/apps/runtime/turn-ending'
 import { explainEngineError } from '../../../../src/main/services/agent'
@@ -96,5 +96,46 @@ describe('what an IM chat is told when its turn failed', () => {
     const missing = Object.assign(new Error('Engine "anthropic" is unavailable: The runtime is not installed'), { name: 'EngineUnavailableError', engineId: 'anthropic' })
     expect(imErrorReply(missing)).toBe('⚠️ 暂时无法回复，请稍后再试。')
     expect(imErrorReply(new EngineSourceCompatibilityError('halo', 'delegated-requires-cc', 'This account requires Claude Code.'))).toBe('⚠️ 暂时无法回复，请稍后再试。')
+  })
+})
+
+describe('a reply whose turn ended short', () => {
+  const failed = (error: string) => ({ kind: 'failed' as const, error })
+
+  it('a request that failed after some text: the text, then the error the chat gets when nothing was written', () => {
+    const reason = "Anthropic API error (403): OAuth authentication is currently not allowed for this organization. log at '/Users/lin/space/run.log'"
+    expect(imTurnReply('First half of the answer.\n', failed(reason)))
+      .toBe(`First half of the answer.\n\n${imErrorReply(new Error(reason))}`)
+    expect(imTurnReply('First half of the answer.', failed(reason))).not.toContain('/Users')
+  })
+
+  it('a request that failed before any text: the error alone', () => {
+    expect(imTurnReply(' \n', failed('API Error: 529 overloaded'))).toBe('⚠️ Error: API Error: 529 overloaded')
+  })
+
+  it('a refused local connection after some text reads as it does alone, with no program named', () => {
+    const told = imTurnReply('Partial', failed('API Error: Unable to connect to API (EACCES)'))
+    expect(told).toBe(`Partial\n\n${imErrorReply(new Error('API Error: Unable to connect to API (EACCES)'))}`)
+    expect(told).toContain('安全软件拦截了本机连接')
+  })
+
+  it('the step limit and a cut-off turn keep their own notes', () => {
+    expect(imTurnReply('Partial', { kind: 'interrupted' })).toBe(withTurnEndingNote('Partial', { kind: 'interrupted' }))
+    expect(imTurnReply('Partial', { kind: 'max_turns', limit: 3 })).toBe(withTurnEndingNote('Partial', { kind: 'max_turns', limit: 3 }))
+  })
+
+  it('a failure the engine told only as reply text says its reason once', () => {
+    const reason = 'stream disconnected before completion'
+    expect(imTurnReply(reason, failed(reason))).toBe(`⚠️ Error: ${reason}`)
+    expect(imTurnReply(' Codex turn failed\n', failed('Codex turn failed '))).toBe('⚠️ Error: Codex turn failed')
+    const afterAnswer = imTurnReply(`First half of the answer.\n\n${reason}`, failed(reason))
+    expect(afterAnswer).toBe(`First half of the answer.\n\n⚠️ Error: ${reason}`)
+    expect(afterAnswer.split(reason)).toHaveLength(2)
+  })
+
+  it('an answer that only mentions the reason keeps all its text', () => {
+    const answer = 'The upstream said 529 overloaded, so here is what I had so far.'
+    expect(imTurnReply(answer, failed('529 overloaded'))).toBe(`${answer}\n\n⚠️ Error: 529 overloaded`)
+    expect(imTurnReply('Retried: 529 overloaded', failed('529 overloaded'))).toBe('Retried: 529 overloaded\n\n⚠️ Error: 529 overloaded')
   })
 })

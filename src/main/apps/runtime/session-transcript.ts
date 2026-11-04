@@ -150,6 +150,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
   let pendingResultText = ''
   let pendingResultTs = ''
   let pendingError: string | undefined
+  let pendingErrorTs = ''
   let snapshotUsage: TokenUsage | undefined
 
   // File line of the event that first put something into the pending assistant
@@ -202,7 +203,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
       content,
       ...(pendingError ? { error: pendingError } : {}),
       ...(snapshotUsage ? { tokenUsage: snapshotUsage } : {}),
-      timestamp: lastTextThought?.timestamp || lastThoughtTs || pendingResultTs || new Date().toISOString(),
+      timestamp: lastTextThought?.timestamp || lastThoughtTs || pendingResultTs || pendingErrorTs || new Date().toISOString(),
     }
 
     const thoughts = pendingThoughts.filter(thought => thought !== lastTextThought)
@@ -223,6 +224,7 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
     pendingResultText = ''
     pendingResultTs = ''
     pendingError = undefined
+    pendingErrorTs = ''
     snapshotUsage = undefined
     turnFirstLine = null
   }
@@ -509,6 +511,19 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
       const content = event.message?.content
       if (!Array.isArray(content)) continue
 
+      // A failed model request the engine told as an assistant message carrying
+      // `error`: the turn's error, never its answer. A sub-agent's reaches the
+      // turn through the result of the tool that ran it.
+      if (typeof event.error === 'string' && event.error) {
+        const reason = extractTextContent(content)
+        if (reason && event.parent_tool_use_id == null) {
+          turnFirstLine ??= lineOf(index)
+          pendingError = reason
+          pendingErrorTs = ts
+        }
+        continue
+      }
+
       // Blocks join the accumulator in their order; text blocks within one
       // envelope concatenate without a separator.
       let textSeparator = '\n\n'
@@ -568,7 +583,9 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
     // turn's final text in `result.result`; adopt it when no text block was
     // reconstructed. Engine-agnostic: Claude carries text in assistant events,
     // so `lastTextThought` is already set and this stays inert. Error results are
-    // skipped — emitTerminalError already surfaces the message as assistant text.
+    // skipped: a stopped turn ends with one too, and a failure is told before it
+    // — as an assistant message carrying `error` (read above), or as Codex's
+    // emitTerminalError text. dsh tells it nowhere else, so its record keeps none.
     if (event.type === 'result') {
       if (event.is_error !== true) {
         const resultText = typeof event.result === 'string' ? event.result : ''

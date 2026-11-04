@@ -189,6 +189,25 @@ describe('woken front-desk turn — the IM route is resolved in full', () => {
     expect(pushToChat).toHaveBeenCalledWith(CHAT_ID, "⚠️ Error: ENOENT: no such file or directory, open '<local path>'", 'direct')
   })
 
+  it('tells the chat what a woken turn wrote before its request failed, then the failure; the team gets the failure', async () => {
+    turn.reply = 'half of the analysis'
+    turn.ending = { kind: 'failed', error: 'API Error: 529 overloaded' }
+
+    await expect(wake(storeWithEpoch())).rejects.toThrow('API Error: 529 overloaded')
+
+    expect(pushToChat.mock.calls).toEqual([[CHAT_ID, 'half of the analysis\n\n⚠️ Error: API Error: 529 overloaded', 'direct']])
+  })
+
+  it('leaves that failure to the caller sending the reply when the woken turn joined another turn', async () => {
+    turn.reply = 'half of the analysis'
+    turn.ending = { kind: 'failed', error: 'API Error: 529 overloaded' }
+    turn.joined = true
+
+    await expect(wake(storeWithEpoch())).rejects.toThrow('API Error: 529 overloaded')
+
+    expect(pushToChat).not.toHaveBeenCalled()
+  })
+
   it('logs a push the chat would not take, and does not try again', async () => {
     pushToChat.mockReturnValueOnce(false)
     const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})

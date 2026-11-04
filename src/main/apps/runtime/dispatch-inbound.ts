@@ -43,8 +43,8 @@ import { setImStreamHandle, getImStreamHandle, clearImStreamHandle } from './im-
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
 import { truncateUtf16Safe } from './text-truncate'
-import { withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
-import { imErrorReply } from './im-error-reply'
+import type { AppChatTurnEnding } from './turn-ending'
+import { imErrorReply, imTurnReply } from './im-error-reply'
 import { getSpace, getSpaceDir } from '../../services/space.service'
 import {
   getPendingRelayStore,
@@ -1201,7 +1201,7 @@ export async function dispatchInboundMessage(
         // Handed over whole: what one message can carry is the channel's to
         // know, and it sends a longer answer in parts.
         const replyText = ending
-          ? withTurnEndingNote(finalContent, ending)
+          ? imTurnReply(finalContent, ending)
           : finalContent.trim() ? finalContent : EMPTY_RESPONSE_NOTICE
         const sendFn = reply.streaming
           ? () => reply.streaming!.finish(replyText)

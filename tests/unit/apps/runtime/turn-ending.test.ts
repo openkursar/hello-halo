@@ -45,6 +45,14 @@ describe('turnEndingOf', () => {
   it('does not treat a stop the person asked for as one', () => {
     expect(turnEndingOf(result({ wasAborted: true, isInterrupted: true }))).toBeUndefined()
     expect(turnEndingOf(result({ wasAborted: true, reachedMaxTurns: true }))).toBeUndefined()
+    expect(turnEndingOf(result({ wasAborted: true, hasErrorThought: true, errorThought: { type: 'error', content: 'Operation was aborted' } as StreamResult['errorThought'] }))).toBeUndefined()
+  })
+
+  it('names a failed model request with the engine\'s reason, or a fallback when it gave none', () => {
+    const reason = 'Anthropic API error (403): OAuth authentication is currently not allowed for this organization.'
+    expect(turnEndingOf(result({ hasErrorThought: true, errorThought: { type: 'error', content: reason } as StreamResult['errorThought'] })))
+      .toEqual({ kind: 'failed', error: reason })
+    expect(turnEndingOf(result({ hasErrorThought: true, isInterrupted: true }))).toEqual({ kind: 'failed', error: 'The model response was interrupted.' })
   })
 })
 

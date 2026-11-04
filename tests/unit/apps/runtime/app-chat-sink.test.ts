@@ -40,7 +40,11 @@ vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
 const { stopGeneration } = vi.hoisted(() => ({ stopGeneration: vi.fn(async () => {}) }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({ stopGeneration }))
-vi.mock('../../../../src/main/services/agent', () => ({ listResidentSessions: () => [], hasPendingSessionInput: () => false }))
+vi.mock('../../../../src/main/services/agent', () => ({
+  listResidentSessions: () => [], hasPendingSessionInput: () => false,
+  // What an IM chat reads of a failure is im-error-reply.test's.
+  isRefusedLocalConnection: () => false, isEngineSetupError: () => false,
+}))
 
 import {
   getAppChatSink,
@@ -291,6 +295,30 @@ describe('app-chat sink turn ownership', () => {
     await expect(round.done).rejects.toThrow(/interrupted/i)
   })
 
+  it('fails a round whose turn the engine ended by telling a failed model request', async () => {
+    const sink = makeSink()
+    const onReply = vi.fn()
+    const round = sink.beginRound({ onReply })
+    const reason = 'Anthropic API error (403): OAuth authentication is currently not allowed for this organization.'
+
+    sink.onTurnStart()
+    sink.onRawMessage({ type: 'assistant', error: 'authentication_failed', message: { model: '<synthetic>', content: [{ type: 'text', text: reason }] } })
+    sink.onTurnComplete(makeResult({ hasMeaningfulContent: false, hasErrorThought: true, errorThought: { type: 'error', content: reason } }))
+
+    await expect(round.done).rejects.toThrow(reason)
+    expect(onReply).not.toHaveBeenCalled()
+  })
+
+  it('pushes nothing for a turn of its own that the engine ended by telling a failed request', () => {
+    const sink = makeSink()
+
+    sink.onTurnStart()
+    sink.onRawMessage({ type: 'assistant', error: 'rate_limit', message: { content: [{ type: 'text', text: 'API Error: 429 limit reached' }] } })
+    sink.onTurnComplete(makeResult({ hasMeaningfulContent: false, hasErrorThought: true, errorThought: { type: 'error', content: 'API Error: 429 limit reached' } }))
+
+    expect(pushToChat).not.toHaveBeenCalled()
+  })
+
   it('resolves an aborted turn without replying — the caller stopped it on purpose', async () => {
     const sink = makeSink()
     const onReply = vi.fn()
@@ -421,6 +449,49 @@ describe('app-chat sink: a turn that stopped short', () => {
     sink.onTurnComplete(makeResult({ isInterrupted: true, hasMeaningfulContent: false }))
 
     await expect(round.done).rejects.toBeInstanceOf(AppChatTurnInterrupted)
+  })
+
+  it('hands over what was written before a request failed, once, with the failure as its ending', async () => {
+    const sink = makeSink()
+    const onReply = vi.fn()
+    const onResult = vi.fn()
+    const round = sink.beginRound({ onReply, onResult })
+    const reason = 'Anthropic API error (403): OAuth authentication is currently not allowed for this organization.'
+
+    sink.onTurnStart()
+    feedText(sink, 'first half of the work')
+    sink.onRawMessage({ type: 'assistant', error: 'authentication_failed', message: { model: '<synthetic>', content: [{ type: 'text', text: reason }] } })
+    sink.onTurnComplete(makeResult({ hasErrorThought: true, errorThought: { type: 'error', content: reason } }))
+
+    await expect(round.done).resolves.toBeUndefined()
+    expect(onReply.mock.calls).toEqual([['first half of the work', { kind: 'failed', error: reason }]])
+    expect(onResult.mock.calls).toEqual([['first half of the work', { kind: 'failed', error: reason }]])
+  })
+
+  it('pushes a turn of its own that failed after writing something with the failure after the text', () => {
+    const sink = makeSink()
+
+    sink.onTurnStart()
+    feedText(sink, 'background half')
+    sink.onTurnComplete(makeResult({ hasErrorThought: true, errorThought: { type: 'error', content: 'API Error: 529 overloaded' } }))
+
+    expect(pushToChat).toHaveBeenCalledWith('room-1', 'background half\n\n⚠️ Error: API Error: 529 overloaded', 'group')
+  })
+
+  it('says a failure Codex told only as reply text once, after what was written before it', () => {
+    const reason = 'stream disconnected before completion'
+    for (const before of [[], ['background half']]) {
+      pushToChat.mockClear()
+      const sink = makeSink()
+
+      sink.onTurnStart()
+      for (const text of before) feedText(sink, text)
+      // Codex's terminal error: the reason as plain text, then an error result with the same reason.
+      feedText(sink, reason)
+      sink.onTurnComplete(makeResult({ hasErrorThought: true, errorThought: { type: 'error', content: reason } }))
+
+      expect(pushToChat.mock.calls).toEqual([['room-1', [...before, `⚠️ Error: ${reason}`].join('\n\n'), 'group']])
+    }
   })
 
   it('adds no ending to a finished answer, nor to one the person stopped', () => {

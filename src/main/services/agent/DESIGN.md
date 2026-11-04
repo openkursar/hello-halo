@@ -191,6 +191,7 @@ starting an empty session or changing the previous binding.
   | `stream_event` (message_start / content_block_* / message_delta / message_stop) | Token-level | UI streaming deltas; `message_start.message.id` + `message_delta.usage` are also the per-call token accounting an adapter MUST carry when its provider reports usage only at stream end (see `context-usage.ts extractStreamDeltaUsage`) |
   | `assistant` (aggregate) | At each block boundary | One content block in final form. **For `tool_use` blocks this MUST precede the corresponding `user.tool_result`** so id-based linking works during JSONL replay. |
   | `user` (tool_result) | When a tool item completes | `tool_use_id`, content, is_error |
+  | `assistant` (failure notice) | When a model request fails for good, before the error `result` | One text block with the reason, `error` set (e.g. `authentication_failed`), model `<synthetic>` — Claude Code's API error message and Halo SDK's alike. Consumers show it as the turn's error, never as its answer (apps/runtime transcript, reply and run output). Not every engine sends it yet: Codex's `emitTerminalError` sends plain text without `error`, and dsh only the error `result`, so a digital-human chat on dsh keeps no failure in its record. |
   | `result` | Once at turn end | stop_reason, cumulative usage |
 
   Adding a new engine = implement an adapter under `services/agent/<engine>/` that produces this exact frame sequence. Do NOT add engine-specific branches in consumers; if a consumer needs engine awareness, the adapter contract is wrong.

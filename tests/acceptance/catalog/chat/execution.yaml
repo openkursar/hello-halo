@@ -76,6 +76,32 @@ scenarios:
     expected:
       - en: The failure is visible; the draft/history is recoverable and a successful answer is not duplicated.
         zh: 错误可见；草稿或记录可恢复，成功回复不重复。
+  - id: chat.execution.digital-human-provider-error
+    title:
+      en: See why a digital human's model request was refused
+      zh: 看到数字人的模型请求被拒绝的原因
+    verifies:
+      - failure
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A digital human chats on the Halo SDK engine, and its only model account is a local endpoint that answers every request with HTTP 403 permission_error, as a blocked account is answered, until the endpoint is restored.
+        zh: 数字人在 Halo SDK 引擎上聊天，唯一的模型账号是一个本地端点；在恢复之前，它对每个请求都返回 HTTP 403 permission_error，与账号被封时收到的回复相同。
+    steps:
+      - en: In a new chat with the digital human send a message and wait until the turn has ended; then restore the endpoint and send a follow-up.
+        zh: 在与该数字人的新对话中发送一条消息，等待本轮结束；然后恢复端点并发送一条追问。
+    expected:
+      - en: After the turn has ended the chat still shows the failure with the provider's reason, the record keeps it as the turn's error rather than as an answer, and only one request was made for it; the follow-up gets its answer, the failure stays in the history, and the follow-up's request does not carry the failure text.
+        zh: 本轮结束后，对话仍显示失败及服务给出的原因；记录中它是本轮的错误而不是回答，并且只发出了一次请求；追问得到回答，失败仍留在历史中，追问的请求中不带该失败文字。
+    notes:
+      en: A blocked Claude account (403 "OAuth authentication is currently not allowed for this organization.") left a digital human's chat blank on the Halo SDK engine, while Claude Code showed the reason. The real app runs with only the model endpoint scripted, reached through the app's own model router; the reason text is the one that account received. Claude Code, IM chats, automation runs, team members, errors that are retried and the space conversation (chat.execution.provider-error) are not covered here.
+      zh: 一个被封的 Claude 账号（403 "OAuth authentication is currently not allowed for this organization."）在 Halo SDK 引擎下让数字人对话一片空白，而 Claude Code 能显示原因。真实应用运行，仅替换模型端点，并经应用自身的模型路由访问；原因文字取自该账号收到的回复。此处不覆盖 Claude Code、IM 对话、自动化运行、团队成员、会被重试的错误及空间对话（chat.execution.provider-error）。
   - id: chat.execution.limit
     title:
       en: Reach a declared context or turn limit
