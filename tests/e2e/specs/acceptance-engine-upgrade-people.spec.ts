@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { test, expect, acceptance, sendAcceptanceMessage } from '../fixtures/acceptance-app'
 import { seedDigitalHumanChat, type SeededDigitalHumanChat } from '../fixtures/seed-digital-human-chat'
-import { openManagedPerson } from '../fixtures/acceptance-management'
+import { navigateToChat, openDigitalHumanConversation } from '../fixtures/helpers'
 import { test as automationTest, openAutomation, startAutomation, waitForAutomationResult } from '../fixtures/acceptance-automation'
 import { modelTool } from '../fixtures/acceptance-model'
 
@@ -34,11 +34,13 @@ test('a historical digital human receives its prior chat on Halo', acceptance('m
     received.push(request.text.includes(seeded.turns[0].user) && request.text.includes(seeded.turns[2].reply))
     return { text: 'The earlier conversation is retained.' }
   })
-  await openManagedPerson(page, seeded.name)
-  await page.getByRole('button', { name: 'Chat', exact: true }).click()
-  await expect(page.locator('textarea').first()).toBeVisible()
+  await navigateToChat(page)
+  await openDigitalHumanConversation(page, seeded.name, seeded.turns[2].reply.slice(0, 20))
+  await expect(page.locator('.message-user').first()).toContainText(seeded.turns[0].user)
+  await expect(page.locator('.message-assistant').last()).toContainText(seeded.turns[2].reply)
   await assertNoCcRecoveryNotice(page)
-  await sendAcceptanceMessage(page, 'Continue using my first question and your last answer.')
+  const turn = await sendAcceptanceMessage(page, 'Continue using my first question and your last answer.')
+  expect(turn.conversationId).toBe(seeded.conversationId)
   await expect(page.locator('.message-assistant').last()).toContainText('The earlier conversation is retained.')
   await expect.poll(() => JSON.parse(readFileSync(mapFile, 'utf8')).chat?.engineId).toBe('halo')
   expect(received).toEqual([true])

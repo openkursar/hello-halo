@@ -79,7 +79,7 @@ for (const history of ['native', 'transcript'] as const) {
     expect(logs).not.toMatch(/External CC migration|\[CcRuntime\].*(?:Discovery|Discovering|Scanning)/i)
     if (history === 'native') expect(logs).not.toContain('continuing from Halo\'s recorded context')
     else expect(logs).toContain('continuing from Halo\'s recorded context')
-    await assertEngineDiscovery(acceptanceApp, info, [config.agent.ccRuntime.selectedPath])
+    await assertEngineDiscovery(acceptanceApp, info)
     await info.attach('upgrade-routing', { body: JSON.stringify({ history, received, binding: stored.engineBinding, archiveUnchanged: true }), contentType: 'application/json' })
   })
 }

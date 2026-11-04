@@ -87,6 +87,8 @@ scenarios:
     requirements: [halo-sdk]
     variants:
       history: [native, transcript]
+    expected:
+      - Without a recorded explicit CC choice or currently selected claude-cli delegated account, availability reports CC as unconfigured and never inspects saved runtime paths, including when engine options are opened. Explicit selection, installation and user-triggered discovery remain available.
     notes: Source-build startup observation delegates filesystem calls unchanged and records runtime candidate reads and discovery traversal. Synthetic historical ownership over a real saved Halo-compatible session does not establish historical external CC writer compatibility or packaged-app behavior.
   - id: models.engines.explicit-missing
     title: Preserve an explicitly selected missing Claude Code installation
