@@ -134,7 +134,7 @@ export function McpCard({ app, sdkEntry, spaceMap, declaredBy, onOpen, tags = []
       role="button"
       tabIndex={0}
       onClick={onOpen}
-      onKeyDown={e => { if (e.key === 'Enter') onOpen() }}
+      onKeyDown={e => { if (e.key === 'Enter' && e.target === e.currentTarget) onOpen() }}
       className={`group relative text-left bg-card border rounded-lg p-4 transition-all cursor-pointer
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary
         ${isUninstalled
