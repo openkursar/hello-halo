@@ -24,12 +24,13 @@ itself, that one covers the spec syntax.
 Both are installed the same way (see §2) and follow the **same scope rule** everywhere in the
 codebase: **`spaceId: null` = global; `spaceId: <uuid>` = space-scoped.** For MCP servers a
 space-scoped item overrides a global one with the same identifier (`listEffectiveByType()` in
-`src/main/apps/manager/service.ts`). **Skills are the opposite at runtime:** when a global and a
-space skill share a folder name, the engine loads the **global** one — it reads user (global)
-skills before project (space) ones and takes the first match. Halo's skill listing and publishing
-follow the engine (`listAvailableSkills()` / `listLoadableSkills()` in
-`src/main/apps/skill-discovery.ts`). To use a customized copy in one space, give it a different
-name.
+`src/main/apps/manager/service.ts`). Skills follow the same direction: when a global and a space
+skill share a folder name (case-insensitive), Halo's default engine loads the **space** one — it
+searches the space's skills before the global ones and takes the first match. Halo's skill listing
+and publishing use the same space-first order (`listAvailableSkills()` / `listLoadableSkills()` in
+`src/main/apps/skill-discovery.ts`). An external engine the user switched to may resolve a shared
+name differently (the official Claude Code engine prefers the global copy), so to be safe across
+engines, give a customized copy a different name.
 
 **A real asymmetry between the two once scope is resolved:** access to *user-installed* MCP
 servers is least-privilege and declared for scheduled/triggered automation runs (only the ones
@@ -159,9 +160,9 @@ parent package, non-bundled entries are separately fetched from the store.
 - **Skill installed and visible?** Call `skill_manage` is not needed for checking — ask the agent
   to read the skill (via the normal skill-invocation path) or check **Capability library ›
   Skills**.
-  Remember: when a global and a space skill share a name, the **global** one runs (§1) — if an
-  edit to a space skill "doesn't take effect," check whether a global skill of the same name is
-  shadowing it.
+  Remember: when a global and a space skill share a name, the **space** one runs on Halo's default
+  engine (§1) — if an edit to a global skill "doesn't take effect" in one space, check whether that
+  space has a skill of the same name shadowing it.
 - **MCP server connected?** The Settings UI runs a manual connection test
   (`testMcpConnections()`/`runMcpConnectionTest()`, `src/main/services/agent/mcp-manager.ts:247-387`)
   that spins up a throwaway session and reports per-server status, cached and broadcast over IPC

@@ -5,8 +5,8 @@ import { usePeopleViewStore, type TeamNavigationTarget } from '../stores/people-
 import { useTeamStore } from '../stores/team.store'
 import { useAppStore } from '../stores/app.store'
 
-export function openPersonTeam(target: TeamNavigationTarget) {
-  usePeopleViewStore.setState({ teamTarget: target })
+export function openPersonTeam(target: TeamNavigationTarget, returnPerson: string | null = null) {
+  usePeopleViewStore.setState({ teamTarget: target, returnPerson, returnInbox: useAppsPageStore.getState().currentTab === 'inbox', returnTeam: null })
   useTeamStore.getState().selectTeam(target.teamId)
   useAppsPageStore.getState().setCurrentTab('team')
   useAppStore.getState().navigate('apps')
@@ -35,7 +35,8 @@ export async function openWorkNotification(target: WorkNavigationTarget) {
   }
   useAppsPageStore.getState().setInitialAppId(null)
   if (target.teamId) {
-    openPersonTeam({ teamId: target.teamId, epochId: target.epochId, appId: target.appId, entryId: target.entryId, decision })
+    const current = useAppsPageStore.getState()
+    openPersonTeam({ teamId: target.teamId, epochId: target.epochId, appId: target.appId, entryId: target.entryId, decision }, current.currentTab === 'my-digital-humans' ? current.selectedAppId : null)
     return
   }
   useAppsPageStore.getState().setCurrentTab('my-digital-humans')

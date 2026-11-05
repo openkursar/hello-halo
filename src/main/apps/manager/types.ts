@@ -539,8 +539,7 @@ export interface AppManagerService {
   /**
    * List effective Skill apps for a space.
    * Returns global skills + space-scoped skills, with space-scoped overriding
-   * global when they share the same specId — an installed-resource view: the
-   * engine loads the global skill folder when both scopes hold the name.
+   * global when they share the same specId.
    */
   listEffectiveSkillApps(spaceId: string): InstalledApp[]
 

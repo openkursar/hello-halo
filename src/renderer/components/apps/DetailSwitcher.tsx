@@ -2,14 +2,14 @@
  * DetailSwitcher — the list beside one item's detail page (a digital human, a
  * skill, an MCP server), so moving to a sibling is one click instead of a
  * round trip through the card wall. Callers keep a stable order: rows must not
- * shift under the cursor while switching. Resizable by its right edge (mouse,
- * touch or arrow keys) and folds to an icon strip past the narrow end; width
- * and fold state are one preference shared by every detail page.
+ * shift under the cursor while switching. Resizable by its right edge and
+ * folds to an icon strip (by button, or by dragging it narrow); width and
+ * fold state are one preference shared by every detail page.
  */
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Search } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
 import { cn } from '../../lib/utils'
@@ -20,8 +20,6 @@ const MIN_WIDTH = 180
 const MAX_WIDTH = 320
 /** Dragged narrower than this, the list folds to its icon strip. */
 const DRAG_COLLAPSE_THRESHOLD = 100
-/** Width change per arrow key press on the resize handle. */
-const KEY_STEP = 20
 
 export interface DetailSwitcherItem {
   id: string
@@ -55,102 +53,50 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
   const { t } = useTranslation()
   const collapsed = useAppsPageStore(s => s.switcherCollapsed)
   const storedWidth = useAppsPageStore(s => s.switcherWidth)
+  const setCollapsed = (value: boolean) => useAppsPageStore.setState({ switcherCollapsed: value })
   const [query, setQuery] = useState('')
 
   // Live width while dragging; committed to the persisted store on release.
   const containerRef = useRef<HTMLDivElement>(null)
   const [dragWidth, setDragWidth] = useState<number | null>(null)
   const dragWidthRef = useRef<number | null>(null)
-  // The pointer driving the drag; other pointers (a second finger) are ignored.
-  const [dragPointer, setDragPointer] = useState<number | null>(null)
-  const isDragging = dragPointer !== null
-  const listId = useId()
-  const width = dragWidth ?? Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, storedWidth))
-
-  const dragTo = (clientX: number) => {
-    const next = clientX - (containerRef.current?.getBoundingClientRect().left ?? 0)
-    // The store persists on every set; only write when the fold flips.
-    const shouldCollapse = next < DRAG_COLLAPSE_THRESHOLD
-    if (useAppsPageStore.getState().switcherCollapsed !== shouldCollapse) {
-      useAppsPageStore.setState({ switcherCollapsed: shouldCollapse })
-    }
-    if (shouldCollapse) return
-    const clamped = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, next))
-    dragWidthRef.current = clamped
-    setDragWidth(clamped)
-  }
-  // On the document, not the handle: folding mid-drag swaps the layout and
-  // remounts the handle, and the same drag may unfold it again.
+  const [isDragging, setIsDragging] = useState(false)
   useEffect(() => {
-    if (dragPointer === null) return
-    const move = (e: PointerEvent) => { if (e.pointerId === dragPointer) dragTo(e.clientX) }
-    const end = (e: PointerEvent) => {
-      if (e.pointerId !== dragPointer) return
-      setDragPointer(null)
+    if (!isDragging) return
+    const handleMouseMove = (e: MouseEvent) => {
+      const left = containerRef.current?.getBoundingClientRect().left ?? 0
+      const next = e.clientX - left
+      // The store persists on every set; only write when the fold flips.
+      const shouldCollapse = next < DRAG_COLLAPSE_THRESHOLD
+      if (useAppsPageStore.getState().switcherCollapsed !== shouldCollapse) {
+        useAppsPageStore.setState({ switcherCollapsed: shouldCollapse })
+      }
+      if (shouldCollapse) return
+      const clamped = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, next))
+      dragWidthRef.current = clamped
+      setDragWidth(clamped)
+    }
+    const handleMouseUp = () => {
+      setIsDragging(false)
       if (dragWidthRef.current !== null) useAppsPageStore.setState({ switcherWidth: dragWidthRef.current })
       dragWidthRef.current = null
       setDragWidth(null)
     }
-    document.addEventListener('pointermove', move)
-    document.addEventListener('pointerup', end)
-    document.addEventListener('pointercancel', end)
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
     return () => {
-      document.removeEventListener('pointermove', move)
-      document.removeEventListener('pointerup', end)
-      document.removeEventListener('pointercancel', end)
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [dragPointer])
-
-  // Folding swaps the layout and remounts the handle; keep keyboard focus on it.
-  const handleRef = useRef<HTMLDivElement>(null)
-  const refocusHandle = useRef(false)
-  useEffect(() => {
-    if (!refocusHandle.current) return
-    refocusHandle.current = false
-    handleRef.current?.focus()
-  }, [collapsed])
-
-  // The keyboard path to the same folds and widths: arrows step the width and
-  // fold past the narrow end, Enter or Space toggles the fold.
-  const onHandleKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    const fold = (value: boolean) => {
-      refocusHandle.current = true
-      useAppsPageStore.setState({ switcherCollapsed: value })
-    }
-    if (e.key === 'Enter' || e.key === ' ') fold(!collapsed)
-    else if (e.key === 'ArrowRight') {
-      if (collapsed) fold(false)
-      else useAppsPageStore.setState({ switcherWidth: Math.min(MAX_WIDTH, width + KEY_STEP) })
-    } else if (e.key === 'ArrowLeft') {
-      if (!collapsed && width - KEY_STEP < MIN_WIDTH) fold(true)
-      else if (!collapsed) useAppsPageStore.setState({ switcherWidth: width - KEY_STEP })
-    } else return
-    e.preventDefault()
-  }
+  }, [isDragging])
+  const width = dragWidth ?? Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, storedWidth))
   const dragHandle = (
     <div
-      ref={handleRef}
-      role="separator"
-      aria-orientation="vertical"
-      aria-label={t('Resize the list: drag, or use the arrow keys; Enter folds it')}
-      aria-controls={listId}
-      aria-valuemin={collapsed ? 0 : MIN_WIDTH}
-      aria-valuemax={MAX_WIDTH}
-      aria-valuenow={collapsed ? 0 : Math.round(width)}
-      tabIndex={0}
       className={cn(
-        'absolute right-0 top-0 bottom-0 z-20 w-1.5 cursor-col-resize touch-none select-none transition-colors hover:bg-primary/50',
-        // A 24px target for a finger, without widening the strip a mouse sees.
-        'after:absolute after:inset-y-0 after:inset-x-0 [@media(pointer:coarse)]:after:-inset-x-[9px]',
-        'focus-visible:bg-primary/50 focus-visible:outline-none',
+        'absolute right-0 top-0 bottom-0 z-20 w-1.5 cursor-col-resize transition-colors hover:bg-primary/50',
         isDragging && 'bg-primary/50'
       )}
-      onPointerDown={e => {
-        // Not for a mouse: that would also cancel the mousedown that closes open menus.
-        if (e.pointerType !== 'mouse') e.preventDefault()
-        setDragPointer(e.pointerId)
-      }}
-      onKeyDown={onHandleKey}
+      onMouseDown={e => { e.preventDefault(); setIsDragging(true) }}
       title={t('Drag to resize width')}
     />
   )
@@ -235,8 +181,17 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
 
   if (collapsed) {
     return (
-      <div ref={containerRef} id={listId} className="relative flex w-14 flex-shrink-0 flex-col items-center border-r border-border-faint">
-        <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto pt-3 pb-1">
+      <div ref={containerRef} className="relative flex w-14 flex-shrink-0 flex-col items-center border-r border-border-faint">
+        <button
+          type="button"
+          onClick={() => setCollapsed(false)}
+          title={t('Expand')}
+          aria-label={t('Expand')}
+          className="mt-2 mb-1 flex h-8 w-8 items-center justify-center rounded-sm text-faint-foreground hover:bg-secondary hover:text-foreground transition-colors ease-halo"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+        <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto py-1">
           {items.map(item => {
             const active = item.id === selectedId
             // The open item is the only one at full size and opacity; the rest
@@ -280,11 +235,20 @@ export function DetailSwitcher({ title, searchPlaceholder, items, selectedId, on
   }
 
   return (
-    <div ref={containerRef} id={listId} className="relative flex flex-shrink-0 flex-col border-r border-border-faint" style={{ width }}>
+    <div ref={containerRef} className="relative flex flex-shrink-0 flex-col border-r border-border-faint" style={{ width }}>
       <div className="flex items-center gap-2 px-3 pt-3 pb-2">
         <span className="flex-1 text-xs font-medium text-subtle-foreground">
           {title} <span className="tabular-nums">{items.length}</span>
         </span>
+        <button
+          type="button"
+          onClick={() => setCollapsed(true)}
+          title={t('Collapse')}
+          aria-label={t('Collapse')}
+          className="flex h-7 w-7 items-center justify-center rounded-sm text-faint-foreground hover:bg-secondary hover:text-foreground transition-colors ease-halo"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
       </div>
       {items.length >= SEARCH_MIN_ITEMS && (
         <div className="px-2.5 pb-2">

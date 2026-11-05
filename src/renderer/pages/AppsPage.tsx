@@ -29,6 +29,7 @@ import { CapabilitySwitcher } from '../components/apps/CapabilitySwitcher'
 import { PersonTeams } from '../components/apps/PersonTeams'
 import { SkillCardWall } from '../components/apps/SkillCardWall'
 import { McpCardWall } from '../components/apps/McpCardWall'
+import { usePeopleViewStore } from '../stores/people-view.store'
 import { AutomationHeader } from '../components/apps/AutomationHeader'
 import { AppBotSessionsView } from '../components/apps/AppBotSessionsView'
 import { AppSessionsView } from '../components/apps/AppSessionsView'
@@ -194,8 +195,10 @@ export function AppsPage() {
     || ((currentTab === 'my-skills' || currentTab === 'my-mcp') && !!selectedApp)
   )
 
-  // Switching people keeps the tab being viewed.
+  // Switching people keeps the tab being viewed. The "return to requests /
+  // team task" link belonged to the person the user arrived at, so it goes.
   const switchPerson = useCallback((appId: string) => {
+    usePeopleViewStore.setState({ returnInbox: false, returnTeam: null })
     const page = useAppsPageStore.getState()
     switch (page.detailView?.type) {
       case 'app-config': page.openAppConfig(appId); break
@@ -336,12 +339,13 @@ export function AppsPage() {
       ) : currentTab === 'inbox' ? (
         <PeopleInbox />
       ) : currentTab === 'my-digital-humans' ? (
-        selectedAppId && !selectedApp ? <div className="flex-1 p-6"><button onClick={clearSelection} className="mb-5 inline-flex min-h-9 items-center gap-1.5 text-sm text-muted-foreground transition-colors ease-halo hover:text-primary"><ArrowLeft className="w-4 h-4" />{t('Back')}</button>{detailFailed ? <p role="alert" className="text-sm text-destructive">{t('Could not load this digital human.')} <button onClick={() => setDetailRevision(value => value + 1)} className="underline">{t('Retry')}</button></p> : <p role="status" className="text-sm text-muted-foreground">{t('Loading…')}</p>}</div> : selectedAppId && selectedApp ? <div className="flex min-h-0 flex-1">
+        selectedAppId && !selectedApp ? <div className="flex-1 p-6"><button onClick={clearSelection} className="mb-5 min-h-9 text-sm text-primary">{t('All digital humans')}</button>{detailFailed ? <p role="alert" className="text-sm text-destructive">{t('Could not load this digital human.')} <button onClick={() => setDetailRevision(value => value + 1)} className="underline">{t('Retry')}</button></p> : <p role="status" className="text-sm text-muted-foreground">{t('Loading…')}</p>}</div> : selectedAppId && selectedApp ? <div className="flex min-h-0 flex-1">
           <div className="hidden md:flex"><PeopleSwitcher selectedAppId={selectedAppId} onSelect={switchPerson} /></div>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {/* A run's breadcrumb already leads back to its person. */}
             {!isSessionDetail && <div className="flex shrink-0 flex-wrap items-center gap-3 px-6 pt-3 text-sm sm:px-10">
-              <button onClick={clearSelection} className="inline-flex min-h-8 items-center gap-1.5 text-muted-foreground transition-colors ease-halo hover:text-primary"><ArrowLeft className="w-4 h-4" />{t('Back')}</button>
+              <button onClick={clearSelection} className="inline-flex min-h-8 items-center gap-1.5 text-muted-foreground transition-colors ease-halo hover:text-primary"><ArrowLeft className="w-4 h-4" />{t('All digital humans')}</button>
+              <PersonReturnLink />
             </div>}
             {isSessionDetail ? <SessionBreadcrumb appName={selectedAppName ?? ''} runId={(detailView as { runId: string }).runId} onBack={() => openActivityThread(selectedApp.id)} /> : !isUninstalledDetail && <AutomationHeader appId={selectedAppId} spaceName={selectedApp.spaceId ? spaceMap[selectedApp.spaceId] : t('Global')} />}
             {showLoginNotice && resolvedSpec?.browser_login && detailView?.type === 'activity-thread' && <LoginNoticeBar browserLogin={resolvedSpec.browser_login} onDismiss={() => void updateAppOverrides(selectedAppId, { loginNoticeDismissed: true })} onOpenBrowser={(url, label) => api.openLoginWindow(url, label)} />}
@@ -366,7 +370,7 @@ export function AppsPage() {
                   className="inline-flex min-h-8 items-center gap-1.5 text-muted-foreground transition-colors ease-halo hover:text-primary"
                 >
                   <ArrowLeft className="w-4 h-4" />
-                  {t('Back')}
+                  {t('Back to capability library')}
                 </button>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto">{renderDetail()}</div>
@@ -514,3 +518,11 @@ function SessionBreadcrumb({ appName, runId, label, onBack }: SessionBreadcrumbP
   )
 }
 
+function PersonReturnLink() {
+  const { t } = useTranslation()
+  const target = usePeopleViewStore(state => state.returnTeam)
+  const inbox = usePeopleViewStore(state => state.returnInbox)
+  if (inbox) return <button onClick={() => { usePeopleViewStore.setState({ returnInbox: false }); useAppsPageStore.getState().setCurrentTab('inbox') }} className="min-h-8 text-primary">{t('Return to requests')}</button>
+  if (!target) return null
+  return <button onClick={() => { usePeopleViewStore.setState({ teamTarget: target, returnTeam: null, returnPerson: null }); useTeamStore.getState().selectTeam(target.teamId); useAppsPageStore.getState().setCurrentTab('team') }} className="min-h-8 text-primary">{t('Return to team task')}</button>
+}

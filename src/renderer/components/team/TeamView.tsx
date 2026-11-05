@@ -189,6 +189,7 @@ export function TeamView({ detail: teamDetail, onBack, spaceEntry = false }: { d
         }} className="flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs">{detail.team.currentEpochId ? <Pause size={14} /> : <Play size={14} />}{detail.team.currentEpochId ? t('Pause') : t('Run')}</button>
       </div>}
       {settingsMember && ownedMemberIds.includes(settingsMember) && <button onClick={() => {
+        usePeopleViewStore.setState({ returnTeam: { teamId: detail.team.id, epochId: selectedId ?? undefined, appId: selectedMemberId ?? undefined }, returnPerson: null })
         useAppsPageStore.getState().openActivityThread(settingsMember)
         useAppsPageStore.getState().setCurrentTab('my-digital-humans')
       }} className="m-3 min-h-10 rounded-lg border border-border px-3 text-sm text-primary">{t('Open digital human profile')}</button>}

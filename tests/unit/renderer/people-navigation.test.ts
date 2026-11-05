@@ -14,12 +14,15 @@ it('resolves the canonical team task and decision instead of opening an unrelate
   await openWorkNotification({ appId: 'person', entryId: 'question', teamId: 'old-team' })
   expect(state.upsert).toHaveBeenCalledWith('person', entry)
   expect(state.people.teamTarget).toEqual({ teamId: 'real-team', epochId: 'real-task', appId: 'person', entryId: 'question', decision: true })
+  expect(state.people.returnPerson).toBe('previous')
   expect(state.page.openActivityThread).not.toHaveBeenCalled()
 })
-it('keeps a report an activity anchor', async () => {
+it('keeps a report an activity anchor and preserves an inbox return destination', async () => {
+  state.page.currentTab = 'inbox'
   state.api.appGetActivityEntry.mockResolvedValue({ success: true, data: { type: 'output', content: { source: { kind: 'team', teamId: 'team', epochId: 'task' } } } })
   await openWorkNotification({ appId: 'person', entryId: 'report' })
   expect(state.people.teamTarget).toMatchObject({ entryId: 'report', decision: false })
+  expect(state.people.returnInbox).toBe(true)
 })
 it('opens an exact independent request and preserves app-only legacy notification behavior', async () => {
   state.api.appGetActivityEntry.mockResolvedValue({ success: true, data: { type: 'escalation', content: { source: { kind: 'automation' } } } })
