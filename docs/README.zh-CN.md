@@ -198,7 +198,7 @@ npm run dev
   <img src="./assets/wechat_qr.jpg" width="200" alt="个人微信二维码">
 </p>
 <p align="center">
-  <em>任何反馈和交流，欢迎添加微信：go2halo，备注 "Halo"</em>
+  <em>任何反馈进 AI 交流群，欢迎添加微信：go2halo，备注 "Halo"。</em>
 </p>
 
 ---

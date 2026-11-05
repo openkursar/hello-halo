@@ -198,7 +198,7 @@ Details findest du in [CONTRIBUTING.md](../CONTRIBUTING.md).
   <img src="./assets/wechat_qr.jpg" width="200" alt="Persönlicher WeChat-QR-Code">
 </p>
 <p align="center">
-  <em>Für Feedback oder Austausch füge auf WeChat go2halo hinzu, mit dem Vermerk „Halo“</em>
+  <em>Für Feedback tritt der KI-Austauschgruppe bei. Füge auf WeChat go2halo hinzu, mit dem Vermerk „Halo“.</em>
 </p>
 
 ---

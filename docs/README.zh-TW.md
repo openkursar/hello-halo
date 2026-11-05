@@ -198,7 +198,7 @@ npm run dev
   <img src="./assets/wechat_qr.jpg" width="200" alt="個人微信 QR Code">
 </p>
 <p align="center">
-  <em>任何回饋和交流，歡迎加微信：go2halo，備註 "Halo"</em>
+  <em>任何回饋進 AI 交流群組，歡迎加微信：go2halo，備註 "Halo"。</em>
 </p>
 
 ---

@@ -198,7 +198,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
   <img src="./docs/assets/wechat_qr.jpg" width="200" alt="Personal WeChat QR Code">
 </p>
 <p align="center">
-  <em>For any feedback or discussion, add WeChat: go2halo with the note "Halo"</em>
+  <em>For any feedback, join the AI discussion group. Add WeChat: go2halo with the note "Halo".</em>
 </p>
 
 ---

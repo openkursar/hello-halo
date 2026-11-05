@@ -198,7 +198,7 @@ npm run dev
   <img src="./assets/wechat_qr.jpg" width="200" alt="個人 WeChat QR コード">
 </p>
 <p align="center">
-  <em>フィードバックや交流は、WeChat: go2halo を「Halo」というメモ付きで追加してください</em>
+  <em>フィードバックは AI 交流グループへ。WeChat: go2halo を「Halo」というメモ付きで追加してください。</em>
 </p>
 
 ---
