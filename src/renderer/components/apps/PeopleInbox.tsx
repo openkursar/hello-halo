@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, ArrowUpRight, ChevronLeft } from 'lucide-react'
+import { AlertCircle, ArrowLeft, ArrowUpRight } from 'lucide-react'
 import type { ActivityEntry, AutomationAppState, BlockedPerson, BlockedReason, PendingDecisionQuery } from '../../../shared/apps/app-types'
 import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
@@ -74,7 +74,7 @@ export function PeopleInbox() {
     return () => { ++generation.current; off.forEach(unsubscribe => unsubscribe()); if (timer) clearTimeout(timer) }
   }, [load])
   return <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-8"><div className="mx-auto max-w-3xl">
-    <button onClick={() => useAppsPageStore.getState().setCurrentTab('my-digital-humans')} className="mb-4 flex min-h-8 items-center gap-1 text-sm text-muted-foreground hover:text-primary"><ChevronLeft size={15} />{t('All digital humans')}</button>
+    <button onClick={() => useAppsPageStore.getState().setCurrentTab('my-digital-humans')} className="mb-4 inline-flex min-h-8 items-center gap-1.5 text-sm text-muted-foreground transition-colors ease-halo hover:text-primary"><ArrowLeft className="w-4 h-4" />{t('Back')}</button>
     <header className="mb-6"><h1 className="text-2xl font-semibold">{t('Needs my attention')} {total !== null && <span className="text-base font-normal text-muted-foreground">{total}</span>}</h1><p className="mt-2 text-sm text-muted-foreground">{t('Requests from your digital humans and teams. Answering continues only the original work.')}</p></header>
     {failed && <p role="alert" className="mb-4 rounded-lg border border-destructive/30 p-3 text-sm text-destructive">{t('Could not load requests.')} <button onClick={() => void load()} className="underline">{t('Retry')}</button></p>}
     {received && <p role="status" className="mb-4 rounded-lg bg-halo-success/10 p-3 text-sm text-halo-success">{t('Your answer was received. Follow the original work for continuation status.')}</p>}
@@ -83,12 +83,12 @@ export function PeopleInbox() {
     {/* Stopped people lead: nothing of theirs runs until they are resumed,
         while a pending question only holds up the run that asked it. */}
     {blocked.map(person => <article key={person.appId} className="mb-4 rounded-xl border border-border border-l-[3px] border-l-halo-error/60 p-4">
-      <button onClick={() => { usePeopleViewStore.setState({ returnInbox: true, returnTeam: null }); useAppsPageStore.getState().openActivityThread(person.appId); useAppsPageStore.getState().setCurrentTab('my-digital-humans') }} className="mb-3 flex min-h-9 items-center gap-2 text-sm"><AutomationAvatar name={person.name} size={28} /><span>{person.name}</span><ArrowUpRight size={13} className="text-muted-foreground" /></button>
+      <button onClick={() => { useAppsPageStore.getState().openActivityThread(person.appId); useAppsPageStore.getState().setCurrentTab('my-digital-humans') }} className="mb-3 flex min-h-9 items-center gap-2 text-sm"><AutomationAvatar name={person.name} size={28} /><span>{person.name}</span><ArrowUpRight size={13} className="text-muted-foreground" /></button>
       <BlockedCard appId={person.appId} reason={person.reason} message={person.message} onResumed={() => void load()} />
     </article>)}
     {entries.filter(isPendingDecision).map(entry => {
       const app = apps.find(item => item.id === entry.appId)
-      return <article key={entry.id} className="mb-4 rounded-xl border border-border border-l-[3px] border-l-halo-warning/60 p-4"><button onClick={() => { usePeopleViewStore.setState({ returnInbox: true, returnTeam: null, focusEntry: { appId: entry.appId, entryId: entry.id } }); useAppsPageStore.getState().openActivityThread(entry.appId); useAppsPageStore.getState().setCurrentTab('my-digital-humans') }} className="mb-3 flex min-h-9 items-center gap-2 text-sm"><AutomationAvatar name={names[entry.appId] ?? app?.spec.name ?? entry.appId} size={28} /><span>{names[entry.appId] ?? app?.spec.name ?? t('Digital human')}</span><ArrowUpRight size={13} className="text-muted-foreground" /></button><ActivitySource entry={entry} /><EscalationCard entry={entry} appId={entry.appId} onResolved={() => { setReceived(true); void load() }} /></article>
+      return <article key={entry.id} className="mb-4 rounded-xl border border-border border-l-[3px] border-l-halo-warning/60 p-4"><button onClick={() => { usePeopleViewStore.setState({ focusEntry: { appId: entry.appId, entryId: entry.id } }); useAppsPageStore.getState().openActivityThread(entry.appId); useAppsPageStore.getState().setCurrentTab('my-digital-humans') }} className="mb-3 flex min-h-9 items-center gap-2 text-sm"><AutomationAvatar name={names[entry.appId] ?? app?.spec.name ?? entry.appId} size={28} /><span>{names[entry.appId] ?? app?.spec.name ?? t('Digital human')}</span><ArrowUpRight size={13} className="text-muted-foreground" /></button><ActivitySource entry={entry} /><EscalationCard entry={entry} appId={entry.appId} onResolved={() => { setReceived(true); void load() }} /></article>
     })}
     {cursor && <button disabled={loading} onClick={() => void load(cursor)} className="min-h-10 w-full rounded-lg border border-border text-sm disabled:opacity-50">{loading ? t('Loading…') : t('Load more requests')}</button>}
   </div></div>

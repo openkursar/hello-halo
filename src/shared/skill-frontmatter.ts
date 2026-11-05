@@ -133,6 +133,17 @@ export function getSkillMdContent(
   return spec.skill_files?.['SKILL.md'] ?? spec.skill_content ?? ''
 }
 
+/**
+ * A skill spec's files: `skill_files` when it has any (registry installs),
+ * else a lone SKILL.md from `skill_content` (skills written in Halo).
+ */
+export function skillFilesOf(
+  spec: { skill_files?: Record<string, string>; skill_content?: string }
+): Record<string, string> {
+  if (spec.skill_files && Object.keys(spec.skill_files).length > 0) return spec.skill_files
+  return spec.skill_content ? { 'SKILL.md': spec.skill_content } : {}
+}
+
 /** Quote a value for a YAML `key: value` line only when it would otherwise be
  * mis-parsed (colon, comment marker, indicator chars, edge whitespace). */
 function yamlScalar(value: string): string {
@@ -173,6 +184,19 @@ export function withSkillMdName<T extends { skill_files?: Record<string, string>
     return { ...spec, skill_content: setSkillMdName(spec.skill_content, name) }
   }
   return spec
+}
+
+/**
+ * SKILL.md declaring `name`, whatever frontmatter it had: set in an existing
+ * block, filled into an empty one, or added as a new block at the top.
+ */
+export function ensureSkillMdName(content: string, name: string): string {
+  const set = setSkillMdName(content, name)
+  if (set !== content || /^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.test(content)) return set
+  const line = `name: ${yamlScalar(name)}`
+  const empty = content.match(/^---[ \t]*\r?\n---[ \t]*(?:\r?\n|$)/)
+  if (empty) return `---\n${line}\n---\n${content.slice(empty[0].length)}`
+  return `---\n${line}\n---\n\n${content}`
 }
 
 /**

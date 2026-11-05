@@ -23,9 +23,6 @@ interface PeopleViewState {
   drafts: Record<string, EscalationAnswer[]>
   focusEntry: { appId: string; entryId: string } | null
   teamTarget: TeamNavigationTarget | null
-  returnInbox: boolean
-  returnPerson: string | null
-  returnTeam: TeamNavigationTarget | null
   setFilters: (patch: Partial<Pick<PeopleViewState, 'query' | 'team' | 'space' | 'page'>>) => void
   saveScroll: (key: string, top: number) => void
   saveTranscriptPosition: (key: string, position: TranscriptPosition) => void
@@ -35,7 +32,7 @@ interface PeopleViewState {
 
 export const usePeopleViewStore = create<PeopleViewState>()(persist((set) => ({
   query: '', team: '', space: '', page: 1,
-  directoryScroll: 0, scrolls: {}, transcriptPositions: {}, drafts: {}, focusEntry: null, teamTarget: null, returnInbox: false, returnPerson: null, returnTeam: null,
+  directoryScroll: 0, scrolls: {}, transcriptPositions: {}, drafts: {}, focusEntry: null, teamTarget: null,
   setFilters: patch => set({ ...patch, page: patch.page ?? 1 }),
   saveScroll: (key, top) => set(state => ({ scrolls: { ...state.scrolls, [key]: top } })),
   saveTranscriptPosition: (key, position) => set(state => ({ transcriptPositions: { ...state.transcriptPositions, [key]: position } })),

@@ -39,9 +39,11 @@ import {
   getStoreCapabilities as resolveStoreCapabilities,
   getStoreIdentity as resolveStoreIdentity,
   getStoreSignInStatus as resolveStoreSignInStatus,
+  inspectSkillDeps,
 } from '../store'
 import type { StoreIdentity } from '../store/backend/identity'
-import type { StoreSignInStatus } from '../../shared/store/store-types'
+import type { SkillDepInspection, StoreSignInStatus } from '../../shared/store/store-types'
+import type { AppSpec } from '../apps/spec'
 import { getAppManager } from '../apps/manager'
 import { getAppRuntime } from '../apps/runtime'
 import { resolveInstallSpaceId } from '../../shared/apps/install-scope'
@@ -598,4 +600,26 @@ function normalizeStoreQuery(
   }
 
   return Object.keys(normalized).length > 0 ? normalized : undefined
+}
+
+/**
+ * How publishing would handle each skill a digital human depends on: for an
+ * installed app in its own space, or for a spec not installed yet against
+ * global skills only.
+ */
+export function inspectAppSkillDeps(
+  target: { appId: string } | { spec: AppSpec },
+): StoreControllerResponse<SkillDepInspection[]> {
+  try {
+    const manager = getAppManager()
+    if (!manager) return { success: false, error: APP_MANAGER_NOT_READY }
+    if ('spec' in target) return { success: true, data: inspectSkillDeps(target.spec, manager, null) }
+    const app = manager.getApp(target.appId)
+    if (!app) return { success: false, error: `App not found: ${target.appId}` }
+    return { success: true, data: inspectSkillDeps(app.spec, manager, app.spaceId) }
+  } catch (error) {
+    const err = error as Error
+    console.error('[StoreController] inspectAppSkillDeps error:', err.message)
+    return { success: false, error: err.message }
+  }
 }

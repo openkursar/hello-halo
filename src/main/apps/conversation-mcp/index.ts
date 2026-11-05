@@ -23,7 +23,11 @@ import type { ActivityEntry } from '../runtime'
 import { ConcurrencyLimitError } from '../runtime/errors'
 import { truncateUtf16Safe } from '../runtime/text-truncate'
 import { validateAppSpec } from '../spec'
-import { installFromStore, installRequiredSkills } from '../../store/registry.service'
+import { listLoadableSkills, normalizeSkillDependencies } from '../skill-discovery'
+import {
+  createFailureHint, notInstalledSkillsNote, prepareCreatedSkills, reviewUpdatedSkills, undeclaredSkillsNote, unknownSkillsNote,
+} from './skill-dependencies'
+import { findSkillListing, installFromStore, installRequiredSkills } from '../../store'
 import { CREATE_GUIDE_PATH } from '../../services/official-docs-mcp'
 
 // ============================================
@@ -142,7 +146,8 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
     '  - Ask the user for the schedule interval or cron expression. Never assume one.\n' +
     '  - A digital human triggered by WeCom/IM messages needs NO subscriptions: inbound routing comes from binding a channel instance to the app in Settings, not from the spec.\n' +
     '  - Never create config_schema fields for passwords, cookies, or session tokens. Declare login-gated sites in browser_login instead; the app runs in the user\'s own browser session.\n' +
-    '  - Any task touching the web must declare permissions ["ai-browser"] and instruct the agent to use AI Browser tools — never HTTP fetch.\n\n' +
+    '  - Any task touching the web must declare permissions ["ai-browser"] and instruct the agent to use AI Browser tools — never HTTP fetch.\n' +
+    '  - Declare every skill the system_prompt relies on in requires.skills, by the skill\'s folder name; skip Halo\'s own (docx, pdf, pptx, xlsx). Publishing packages only declared skills, so an undeclared one is missing for everyone who installs it. Halo does not add them for you; tell the user which you declared.\n\n' +
     'spec fields: name*, description*, system_prompt* (the sole driver of every run — write it so the ' +
     'agent can execute end to end without improvising; it receives no other context), subscriptions?, ' +
     'config_schema?, requires?, filters?, memory_schema?, output?, escalation?, permissions?, ' +
@@ -193,19 +198,30 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
         } catch (e) {
           return textResult(`Spec validation failed: ${(e as Error).message}`, true)
         }
+        // Narrows the spec union for the automation-only fields below.
+        if (validatedSpec.type !== 'automation') {
+          return textResult('Spec validation failed: type must be "automation".', true)
+        }
+
+        const prepared = prepareCreatedSkills(validatedSpec, listLoadableSkills(spaceId, manager))
+        validatedSpec = prepared.spec
+        const { toInstall, undeclared } = prepared
 
         const appId = await manager.install(spaceId, validatedSpec, {})
 
         // Dependency failure rolls back the app — never leave a partial install.
+        // Skills this space already loads need no install, and a local-only one
+        // has no store listing to install from.
         try {
-          await installRequiredSkills(validatedSpec, spaceId)
+          await installRequiredSkills({ ...validatedSpec, requires: { ...validatedSpec.requires, skills: toInstall } }, spaceId)
         } catch (depErr) {
           try {
             // deleteApp() only accepts 'uninstalled' apps — soft-delete first
             await manager.uninstall(appId, { reason: 'system' })
             await manager.deleteApp(appId)
           } catch { /* rollback is best-effort; the original error matters more */ }
-          return textResult(`App creation failed: ${(depErr as Error).message}`, true)
+          const hint = createFailureHint(toInstall, id => findSkillListing(id) !== null)
+          return textResult(`App creation failed: ${(depErr as Error).message}${hint}`, true)
         }
 
         let activationWarning = ''
@@ -218,7 +234,7 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
           }
         }
 
-        return textResult(`App created successfully. ID: ${appId}.${activationWarning}`)
+        return textResult(`App created successfully. ID: ${appId}.${undeclaredSkillsNote(undeclared)}${activationWarning}`)
       } catch (e) {
         if (e instanceof AppAlreadyInstalledError) {
           return textResult(
@@ -411,7 +427,9 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
     '    filters?: array | null — Filter rules\n' +
     '    memory_schema?: object | null — Memory schema\n' +
     '    escalation?: object | null — Escalation config\n' +
-    '    permissions?: string[] — Permission list\n\n' +
+    '    permissions?: string[] — Permission list\n' +
+    '    requires?: object — Dependencies, e.g. {"requires": {"skills": [{"id": "my-skill"}]}}; skills is replaced as a whole. ' +
+    'Declare every skill the system_prompt relies on, by folder name; Halo does not add them for you.\n\n' +
     'Examples:\n' +
     '  Change frequency: {"frequency": "30m"}\n' +
     '  Change prompt: {"system_prompt": "New instructions..."}\n' +
@@ -494,11 +512,35 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
         }
         delete specPatch.type // Never allow type change via update
 
+        // Malformed entries are left for updateSpec's schema validation to report.
+        const patchedSkills = (specPatch.requires as { skills?: unknown } | null | undefined)?.skills
+        const wellFormedSkills = Array.isArray(patchedSkills) &&
+          patchedSkills.every(dep => typeof dep === 'string' || typeof (dep as { id?: unknown } | null)?.id === 'string')
+        if (wellFormedSkills) {
+          const loadable = listLoadableSkills(app.spaceId, manager)
+          specPatch.requires = { ...(specPatch.requires as object), skills: normalizeSkillDependencies(patchedSkills, loadable) }
+        }
+
         // Apply JSON Merge Patch to spec
         try {
           manager.updateSpec(args.app_id, specPatch)
         } catch (e) {
           return textResult(`Update failed: ${(e as Error).message}`, true)
+        }
+
+        // Only flags: whether a named skill is a dependency is the caller's call.
+        let review = { undeclared: [] as string[], notInstalled: [] as string[], unknown: [] as string[] }
+        const updated = manager.getApp(args.app_id)
+        const promptChanged = typeof specPatch.system_prompt === 'string'
+        if (updated?.spec.type === 'automation' && (promptChanged || wellFormedSkills)) {
+          review = reviewUpdatedSkills({
+            previousPrompt: app.spec.type === 'automation' ? app.spec.system_prompt : '',
+            spec: updated.spec,
+            promptChanged,
+            skillsChanged: wellFormedSkills,
+            loadable: listLoadableSkills(updated.spaceId, manager),
+            isListed: id => findSkillListing(id) !== null,
+          })
         }
 
         // Hot-sync subscriptions if subscriptions or frequency changed.
@@ -510,7 +552,7 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
 
         // Build summary of what changed
         const changedFields = Object.keys(updates).filter(k => updates[k] !== undefined)
-        return textResult(`App ${args.app_id} updated successfully. Changed: ${changedFields.join(', ')}.`)
+        return textResult(`App ${args.app_id} updated successfully. Changed: ${changedFields.join(', ')}.${undeclaredSkillsNote(review.undeclared)}${unknownSkillsNote(review.unknown)}${notInstalledSkillsNote(review.notInstalled)}`)
       } catch (e) {
         return textResult(`Error updating app: ${(e as Error).message}`, true)
       }

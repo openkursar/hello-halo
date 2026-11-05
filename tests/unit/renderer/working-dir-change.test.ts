@@ -5,7 +5,7 @@
  * remote page, which has no folder picker, says where to do it instead.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { create } from 'zustand'
 
 const env = vi.hoisted(() => ({
@@ -37,6 +37,10 @@ vi.mock('react', async original => ({
   useState: (initial: unknown) => env.runner.state(initial),
   useCallback: (fn: unknown) => fn,
   useEffect: () => {},
+}))
+vi.mock('react-dom', async original => ({
+  ...await original<typeof import('react-dom')>(),
+  createPortal: (node: unknown) => node,
 }))
 vi.mock('../../../src/renderer/api', () => ({
   api: {
@@ -149,6 +153,14 @@ describe('WorkingDirUnavailableNotice', () => {
 
 describe('the workspace dialog', () => {
   const space = { id: 'space-1', name: 'Project', icon: 'folder', path: '/halo/spaces/space-1', isTemp: false, workingDir: '/Users/me/Desktop/Halo folder' } as Space
+
+  beforeEach(() => {
+    vi.stubGlobal('document', { body: {} })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
 
   it('shows the working directory and changes it at once', async () => {
     const runner = new HookRunner()

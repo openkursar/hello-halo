@@ -11,13 +11,15 @@
  * publish flow (author/version/category/review) rather than a second inline one.
  */
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { X, Share2, Loader2, AlertCircle, CheckCircle2, Bot, BookOpen, Puzzle, Wrench, Download } from 'lucide-react'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import { isElectron } from '../../api/transport'
+import { UndeclaredSkillsNotice } from './UndeclaredSkillsNotice'
+import { withDeclaredSkills } from '../../../shared/apps/skill-references'
 import type { AppType } from '../../../shared/apps/spec-types'
 
 export interface ShareCurrentAppDialogProps {
@@ -55,6 +57,27 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
 
   const [exporting, setExporting] = useState(false)
   const [feedback, setFeedback] = useState<Feedback | null>(null)
+
+  // Export packages only declared skills, so surface the ones the prompt
+  // mentions without declaring before the user saves a package missing them.
+  const updateAppSpec = useAppsStore(s => s.updateAppSpec)
+  const [undeclaredSkillIds, setUndeclaredSkillIds] = useState<string[]>([])
+  const [untickedSkills, setUntickedSkills] = useState<string[]>([])
+  const spec = app?.spec
+  useEffect(() => {
+    setUndeclaredSkillIds([])
+    if (spec?.type !== 'automation') return
+    let cancelled = false
+    void api.storeInspectSkillDeps(appId).then(res => {
+      if (!cancelled && res.success && res.data) setUndeclaredSkillIds(res.data.filter(d => !d.declared).map(d => d.id))
+    })
+    return () => { cancelled = true }
+  }, [appId, spec])
+
+  const declareUndeclaredSkills = useCallback(async (ids: string[]) => {
+    if (spec?.type !== 'automation') return false
+    return updateAppSpec(appId, { requires: withDeclaredSkills(spec.requires, ids) })
+  }, [appId, spec, updateAppSpec])
 
   const handleShareToMarket = useCallback(() => {
     if (!app) return
@@ -106,9 +129,8 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
     )
   }
 
-  const spec = app.spec
-  const Icon = iconForType(spec.type)
-  const label = typeLabel(spec.type, t)
+  const Icon = iconForType(app.spec.type)
+  const label = typeLabel(app.spec.type, t)
 
   return (
     <div
@@ -116,11 +138,11 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
       onMouseDown={onClose}
     >
       <div
-        className="relative w-full max-w-md bg-background border border-border rounded-xl shadow-xl flex flex-col"
+        className="relative w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-hidden bg-background border border-border rounded-xl shadow-xl flex flex-col"
         onMouseDown={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <div className="flex shrink-0 items-center justify-between px-4 py-3 border-b border-border">
           <div className="flex items-center gap-2 min-w-0">
             <Share2 className="w-4 h-4 text-primary flex-shrink-0" />
             <h2 className="text-sm font-semibold truncate">{t('Share')}</h2>
@@ -135,19 +157,19 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
         </div>
 
         {/* Body */}
-        <div className="px-4 py-4 space-y-3">
+        <div className="min-h-0 overflow-y-auto px-4 py-4 space-y-3">
           <div className="flex items-start gap-3 p-3 bg-secondary/60 rounded-lg border border-border">
             <Icon className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-foreground truncate">{spec.name}</p>
+              <p className="text-sm font-medium text-foreground truncate">{app.spec.name}</p>
               <p className="text-xs text-muted-foreground truncate">
                 {label}
-                {spec.version && <> · v{spec.version}</>}
-                {spec.author && <> · {t('by')} {spec.author}</>}
+                {app.spec.version && <> · v{app.spec.version}</>}
+                {app.spec.author && <> · {t('by')} {app.spec.author}</>}
               </p>
-              {spec.description && (
+              {app.spec.description && (
                 <p className="text-xs text-muted-foreground/80 mt-1 line-clamp-3">
-                  {spec.description}
+                  {app.spec.description}
                 </p>
               )}
             </div>
@@ -156,6 +178,10 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
           <p className="text-xs text-muted-foreground">
             {t('Share opens the store publish dialog pre-filled with this app, where you review and publish it.')}
           </p>
+
+          {undeclaredSkillIds.length > 0 && (
+            <UndeclaredSkillsNotice skillIds={undeclaredSkillIds} unticked={untickedSkills} onUntickedChange={setUntickedSkills} onDeclare={declareUndeclaredSkills} />
+          )}
 
           {feedback && (
             <div className={`flex items-start gap-2 px-3 py-2 rounded-lg border text-xs ${
@@ -172,7 +198,7 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border">
+        <div className="flex shrink-0 items-center justify-end gap-2 px-4 py-3 border-t border-border">
           {isElectron() && (
             <button
               onClick={handleExport}

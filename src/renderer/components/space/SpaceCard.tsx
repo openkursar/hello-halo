@@ -106,7 +106,13 @@ export function SpaceCard({ space, onOpen }: SpaceCardProps) {
       role="button"
       tabIndex={0}
       onClick={onOpen}
-      onKeyDown={(e) => { if (e.key === 'Enter') onOpen() }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' || e.target !== e.currentTarget) return
+        // The opened space focuses its composer within this same keypress,
+        // which would otherwise receive the Enter as a newline.
+        e.preventDefault()
+        onOpen()
+      }}
       className={`group relative flex h-full flex-col text-left bg-card border rounded-lg p-4 transition-all cursor-pointer
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary
         ${space.isMissing

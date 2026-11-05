@@ -84,7 +84,6 @@ export function PeopleDirectory({ spaceMap, onCreate }: { spaceMap: Record<strin
   const filtering = !!(prefs.query || prefs.team || prefs.space)
   useEffect(() => { if (!loading && data && page > 1 && data.total <= (page - 1) * 24) prefs.setFilters({ page: Math.max(1, Math.ceil(data.total / 24)) }) }, [data, loading, page, prefs.setFilters])
   const open = (app: PeopleDirectorySummary, chat = false) => {
-    usePeopleViewStore.setState({ returnInbox: false, returnTeam: null })
     if (app.status === 'uninstalled') useAppsPageStore.getState().selectApp(app.id, 'uninstalled')
     else if (chat && app.spaceId) void openDigitalHumanChat(app.id, app.spaceId)
     else useAppsPageStore.getState().openActivityThread(app.id)
