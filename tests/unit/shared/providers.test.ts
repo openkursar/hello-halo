@@ -86,3 +86,30 @@ describe('Cheaper Inference built-in provider', () => {
     ])
   })
 })
+
+describe('Runcrate built-in provider', () => {
+  it('registers an OpenAI-compatible provider with dynamic model discovery', () => {
+    const provider = getBuiltinProvider('runcrate')
+
+    expect(provider).toMatchObject({
+      id: 'runcrate',
+      authType: 'api-key',
+      apiUrl: 'https://api.runcrate.ai/v1',
+      modelsUrl: 'https://api.runcrate.ai/v1/models',
+      region: 'global'
+    })
+    expect(provider?.recommended).toBeUndefined()
+    expect(getAllProviderIds()).toContain('runcrate')
+  })
+
+  it('defaults to DeepSeek V4.1 Flash, with organization-prefixed model ids', () => {
+    expect(getDefaultModel('runcrate')).toBe('deepseek-ai/DeepSeek-V4.1-Flash')
+    expect(getBuiltinProvider('runcrate')?.models.map(model => model.id)).toEqual([
+      'deepseek-ai/DeepSeek-V4.1-Flash',
+      'moonshotai/Kimi-K2.6',
+      'zai-org/GLM-5.3',
+      'Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo',
+      'openai/gpt-oss-120b'
+    ])
+  })
+})
