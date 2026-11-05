@@ -195,7 +195,7 @@ Consulta [CONTRIBUTING.md](../CONTRIBUTING.md) para más detalles.
 - [GitHub Issues](https://github.com/openkursar/hello-halo/issues)
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/500aa749-50d9-4587-986d-338b1ed899f1" width="200" alt="Código QR de WeChat personal">
+  <img src="./assets/wechat_qr.jpg" width="200" alt="Código QR de WeChat personal">
 </p>
 <p align="center">
   <em>Para cualquier comentario o conversación, agrega en WeChat: go2halo con la nota "Halo"</em>

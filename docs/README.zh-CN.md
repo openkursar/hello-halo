@@ -195,7 +195,7 @@ npm run dev
 - [GitHub Issues](https://github.com/openkursar/hello-halo/issues)
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/500aa749-50d9-4587-986d-338b1ed899f1" width="200" alt="个人微信二维码">
+  <img src="./assets/wechat_qr.jpg" width="200" alt="个人微信二维码">
 </p>
 <p align="center">
   <em>任何反馈和交流，欢迎添加微信：go2halo，备注 "Halo"</em>
