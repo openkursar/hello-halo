@@ -35,6 +35,7 @@ export interface ViewerProps {
   onContentChange?: (content: string) => void
   onSaveComplete?: (content: string) => void
   onRevert?: () => void
+  onExitEditMode?: () => void
   onResolveDiskConflict?: (keep: 'disk' | 'mine') => void
   onEditRequest?: () => void
 }
