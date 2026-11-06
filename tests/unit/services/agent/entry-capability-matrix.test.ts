@@ -270,10 +270,6 @@ vi.mock('../../../../src/main/apps/runtime/notify-availability', () => ({
   }),
 }))
 vi.mock('../../../../src/main/apps/runtime/file-export-gate', () => ({ FileExportGate: vi.fn().mockImplementation(() => ({})) }))
-vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
-  createPersonContextMcpServer: () => ({ _isMcpServer: true, name: 'halo-person-context' }),
-  personContextPrompt: () => 'person-context',
-}))
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
   createReportToolServer: () => ({ _isMcpServer: true, name: 'halo-report' }),
 }))
@@ -558,23 +554,23 @@ const EXPECTED_SERVERS: Record<Row, readonly string[]> = {
   'space chat': ['capabilities', 'halo-apps', 'halo-conversations', 'halo-docs', 'web-search'],
   // Operating Halo is no switch for a digital human: the owner's own turns and runs hold it.
   'digital human chat (owner)': [
-    'ai-browser', 'halo-api-ref', 'halo-apps', 'halo-docs', 'halo-notify', 'halo-person-context', 'halo-reminders', 'ocr', 'web-search',
+    'ai-browser', 'halo-api-ref', 'halo-apps', 'halo-docs', 'halo-notify', 'halo-reminders', 'ocr', 'web-search',
   ],
   // Only what the strict policy classes as safe survives the guest filter
   // (reminders included: a guest is offered no switch for them).
   'digital human chat (IM guest)': ['web-search'],
   'team member': [
-    'ai-browser', 'halo-api-ref', 'halo-apps', 'halo-docs', 'halo-notify', 'halo-person-context', 'halo-report',
+    'ai-browser', 'halo-api-ref', 'halo-apps', 'halo-docs', 'halo-notify', 'halo-report',
     'halo-team', 'ocr', 'web-search',
   ],
   // Like halo-apps, operating Halo would create what outlives the team.
   'team member (disposable)': [
-    'ai-browser', 'halo-docs', 'halo-notify', 'halo-person-context', 'halo-report', 'halo-team', 'ocr', 'web-search',
+    'ai-browser', 'halo-docs', 'halo-notify', 'halo-report', 'halo-team', 'ocr', 'web-search',
   ],
   // The same guest filter, plus the team channel the member is reached on.
   'team-fronted IM chat (guest)': ['halo-report', 'halo-team', 'web-search'],
   'automation run': [
-    'ai-browser', 'halo-api-ref', 'halo-docs', 'halo-notify', 'halo-person-context', 'halo-report', 'ocr', 'web-search',
+    'ai-browser', 'halo-api-ref', 'halo-docs', 'halo-notify', 'halo-report', 'ocr', 'web-search',
   ],
 }
 

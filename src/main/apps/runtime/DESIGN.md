@@ -2047,32 +2047,39 @@ Team turn edges republish the state through `onMemberWorkChanged` →
 (`personRuntimeStatus` in the renderer).
 
 
-### Read-only identity and team awareness
+### Team guidance
 
-`person-context` resolves current identity, membership and role from trusted runtime
-context. Owners can query their digital human's visible teams; a borrowed team turn
-is limited to its current team/task; guests do not receive the tool. A single narrow
-schema exposes this read on demand without waking a team or injecting histories.
-The space assistant's `halo-apps` read tool may query an authorized named digital
-human but does not claim that person's identity. Links use stable team/task/member
-identifiers and the renderer's guarded navigation path.
+One section, `prompt/team-guidance.ts`, tells a digital human what a team is.
+Two kinds, named the way people say them: an *agent team* is an ad hoc team it
+spins up for one job (the `halo-team` coordinator tools; the guide lives with
+them in `conversation-mcp/team-mcp.ts` and is shared with space conversations),
+and a *standing team* is a lasting group of digital humans it belongs to, whose
+work happens in its own conversations. The team tools always act on the team of
+the conversation they are in, so no sentence has to explain them away.
 
-A person can ask a digital human about its team work from any chat — its own, an
-IM chat bound to it, or a team-bound one — without knowing how Halo separates
-those conversations. A digital human that holds Operate Halo and serves on saved
-teams gets `prompt/team-awareness.ts`: the teams by name, id and role (ten at
-most), which conversation this chat is (and that its own team tools serve that
-one), and the Operate Halo calls that list a team's conversations, read one's
-board and a member's messages there, and message a member in a named
-conversation. Only stable facts are in it, so every turn of a session carries the
-same words whether a person or a teammate started it — a fragment that followed
-the trigger would rebuild the warm session and drop its prompt cache each time
-the two alternate. Joining, leaving or renaming a team changes it once, and the
-next turn of each warm chat rebuilds. Guests and requests from outside get none
-of it, because they hold no Operate Halo. Every one of those calls names its
-conversation: the team routes refuse a member message, transcript read or stop
-without `epochId` and list recent conversations instead, because choosing one for
-the caller once filed a reply into an unrelated task.
+A digital human that holds Operate Halo and serves on standing teams also gets
+the teams by name, id and role (ten at most), which conversation this chat is,
+and three read-only Operate Halo calls (list a team's conversations, read one's
+board, read a member's messages) as ready-to-run commands to pick from, not a
+procedure. Messaging a member is left to the Operate Halo manual, whose route
+notes carry its rules (name the conversation, ask before reopening a completed
+one); the guidance neither waits for a member nor teaches the call. Who it is (name and id) is one line of
+`prompt/self-identity.ts`; there is no tool for reading one's own identity or
+memberships. Only stable facts are in the section, so every turn of a session
+carries the same words whether a person or a teammate started it — a fragment
+that followed the trigger would rebuild the warm session and drop its prompt
+cache each time the two alternate. Joining, leaving or renaming a team changes
+it once, and the next turn of each warm chat rebuilds. Guests and requests from
+outside get none of it, because they hold no Operate Halo. Every one of those
+calls names its conversation: the team routes refuse a member message,
+transcript read or stop without `epochId` and list recent conversations
+instead, because choosing one for the caller once filed a reply into an
+unrelated task. A work request is done by the digital human itself; an agent
+team costs tokens and loses detail at each handoff, so it is started only when a
+part can be briefed in writing and separating it buys isolation, parallel work
+or teammates working together. The guide states that criterion, not a list of
+cases, and leaves the decision to the model. A standing team is turned to only
+when the person names it, asks about its work, or asks to hand it a job.
 
 Changing the default space uses the runtime facade, pins provable legacy run/session
 environments and rebinds future subscriptions without deactivating current work.

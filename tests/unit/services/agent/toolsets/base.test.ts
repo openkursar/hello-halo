@@ -58,9 +58,9 @@ describe('buildBaseToolset', () => {
     warn.mockRestore()
   })
 
-  it('scopes halo-apps to the space and passes the caller\'s person-context choice through', () => {
-    buildBaseToolset({ spaceId: 'space-9', omitPersonContext: true })
-    expect(bridge.createHaloAppsMcpServer).toHaveBeenCalledWith('space-9', expect.any(Function), { omitPersonContext: true })
+  it('scopes halo-apps to the space and passes the caller\'s skill-management choice through', () => {
+    buildBaseToolset({ spaceId: 'space-9', omitSkillManagement: true })
+    expect(bridge.createHaloAppsMcpServer).toHaveBeenCalledWith('space-9', expect.any(Function), { omitSkillManagement: true })
   })
 
   it('builds fresh instances on every call', () => {

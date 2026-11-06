@@ -21,7 +21,6 @@ vi.mock('../../../../src/main/apps/skills', () => ({ getSkillLibrary: () => libr
 vi.mock('../../../../src/main/apps/manager', () => ({ getAppManager: () => manager }))
 vi.mock('../../../../src/main/apps/runtime', () => ({
   getAppRuntime: () => null,
-  createPersonContextTool: () => ({ name: 'read_digital_human_context' }),
 }))
 vi.mock('../../../../src/main/store', () => ({ installFromStore: vi.fn() }))
 vi.mock('../../../../src/main/store/registry.service', () => ({ installRequiredSkills: vi.fn() }))
@@ -92,24 +91,23 @@ describe('skill management in the assembled Halo Apps server', () => {
     expect(tool.description).toContain('never arbitrary paths')
   })
 
-  it('preserves automation tools, the per-session authoring gate, person-context options and team exports', async () => {
+  it('preserves automation tools, the per-session authoring gate and team exports', async () => {
     const server = createHaloAppsMcpServer('space', () => docs.consulted) as unknown as ObservedServer
     expect(server.tools.map(tool => tool.name)).toEqual([
       'list_automation_apps', 'create_automation_app', 'update_automation_app', 'delete_automation_app',
       'get_automation_status', 'pause_automation_app', 'resume_automation_app', 'trigger_automation_app',
-      'skill_manage', 'read_digital_human_context',
+      'skill_manage',
     ])
     const create = server.tools.find(tool => tool.name === 'create_automation_app')!
     expect((await create.handler({ spec: '{}' })).content[0].text).toContain('Read the authoring guide first')
     expect(manager.install).not.toHaveBeenCalled()
     docs.consulted = true
     expect((await create.handler({ spec: '{}' })).content[0].text).toContain('Spec validation failed')
-    const other = createHaloAppsMcpServer('space', () => false, { omitPersonContext: true }) as unknown as ObservedServer
-    expect(other.tools.some(tool => tool.name === 'read_digital_human_context')).toBe(false)
+    const other = createHaloAppsMcpServer('space', () => false) as unknown as ObservedServer
     expect((await other.tools.find(tool => tool.name === 'create_automation_app')!.handler({ spec: '{}' })).content[0].text)
       .toContain('Read the authoring guide first')
     expect(createSpaceTeamMcpServer).toBeTypeOf('function')
-    expect(TEAM_TOOLSET_GUIDE).toContain('Team collaboration is enabled')
+    expect(TEAM_TOOLSET_GUIDE).toContain('## Agent teams and standing teams')
   })
 
   it.each([undefined, 'global'] as const)('lists the requested %s scope with opaque references and pagination', async scope => {
@@ -181,16 +179,15 @@ describe('skill management in the assembled Halo Apps server', () => {
 })
 
 describe('existing origin and policy boundary around the assembled server', () => {
-  it('retains skill management for the local digital-human owner base without duplicate person-context tools', () => {
+  it('retains skill management for the local digital-human owner base with its own tool list', () => {
     expect(isBorrowedTeamTurn({ kind: 'message' }, false)).toBe(false)
-    const servers = buildBaseToolset({ spaceId: 'space', omitPersonContext: true })
+    const servers = buildBaseToolset({ spaceId: 'space' })
     expect((skillTool(servers).schema.action as z.ZodEnum<[string, ...string[]]>).options).toEqual(actions)
-    expect((servers['halo-apps'] as ObservedServer).tools.some(tool => tool.name === 'read_digital_human_context')).toBe(false)
   })
 
   it.each(['guest', 'colleague'] as const)('removes actual management actions from a restricted %s turn', origin => {
     expect(isBorrowedTeamTurn({ kind: 'message', origin }, false)).toBe(true)
-    const servers = buildBaseToolset({ spaceId: 'space', omitPersonContext: true })
+    const servers = buildBaseToolset({ spaceId: 'space' })
     expect(skillTool(servers).name).toBe('skill_manage')
     const sdkOptions: Record<string, unknown> = { mcpServers: servers }
     const policy: CapabilityPolicy = origin === 'guest' ? {} : { allowedTools: ['Read'] }
@@ -204,13 +201,13 @@ describe('existing origin and policy boundary around the assembled server', () =
 
   it('also filters a direct IM guest whose authority comes from the channel, not a borrowed team turn', () => {
     expect(isBorrowedTeamTurn({ kind: 'human_message', origin: 'guest' }, true)).toBe(false)
-    const servers = buildBaseToolset({ spaceId: 'space', omitPersonContext: true })
+    const servers = buildBaseToolset({ spaceId: 'space' })
     const applied = applyCapabilityPolicy({}, { policy: {}, mode: 'strict', mcpServers: servers, dbMcpServers: null })
     expect(applied.mcpServers).not.toHaveProperty('halo-apps')
   })
 
   it('retains other granted app tools but leaves shared-file management out for an outside turn', () => {
-    const servers = buildBaseToolset({ spaceId: 'space', omitPersonContext: true, omitSkillManagement: true })
+    const servers = buildBaseToolset({ spaceId: 'space', omitSkillManagement: true })
     const applied = applyCapabilityPolicy({}, {
       policy: { allowApps: true }, mode: 'strict', mcpServers: servers, dbMcpServers: null,
     })

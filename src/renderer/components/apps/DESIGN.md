@@ -142,10 +142,6 @@ update existing records across surfaces. Notification links first resolve the
 record when possible, then navigate to its source and exact activity anchor.
 Source snapshots retain historical team and task titles when a target is gone.
 
-The authorized `read_digital_human_context` tool can return structured team
-references. The tool-result renderer validates their shape and offers navigation
-buttons; prose and arbitrary tool output never become application commands.
-
 `PersonTeamWork` queries only the currently open person's memberships, six teams
 at a time and at most three requests concurrently. It projects roster busy labels
 and epoch IDs supplied by the team service, never infers a person's activity from

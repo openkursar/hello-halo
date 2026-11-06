@@ -203,9 +203,16 @@ export abstract class BaseStreamHandler {
     // (state.finished is set when finish_reason is received, but we still need to send final events)
     if (this.writer.isClosed) return
 
+    // A stream that errored already holds pendingError, so this is a clean
+    // close. Some gateways send no stop events at all; parseable tool input
+    // is then whole, and only closing brackets would be guesswork.
+    let stopInferred = false
     if (!this.pendingError && this.state.stopReason === null) {
       if (this.toolCallMap.size === 0) this.state.stopReason = 'end_turn'
-      else this.writeError('The model response ended before completion. Please retry.', 'missing_completion')
+      else if (this.hasOnlyCompleteToolInputs()) {
+        this.state.stopReason = 'tool_use'
+        stopInferred = true
+      } else this.writeError('The model response ended before completion. Please retry.', 'missing_completion')
     }
 
     if (!this.pendingError) {
@@ -246,7 +253,8 @@ export abstract class BaseStreamHandler {
         const dropped = this.droppedToolCallWhitespace
           ? ` (dropped ${this.droppedToolCallWhitespace} whitespace text chunks inside tool calls)`
           : ''
-        console.log(`[LLM] model=${this.state.model} stop=${this.state.stopReason} → tool_calls=[${tools.join(',')}]${dropped}`)
+        const inferred = stopInferred ? ' (upstream sent no stop reason)' : ''
+        console.log(`[LLM] model=${this.state.model} stop=${this.state.stopReason}${inferred} → tool_calls=[${tools.join(',')}]${dropped}`)
         if (this.debug) {
           for (const [idx, tc] of this.toolCallMap) {
             console.log(`[LLM] tool[${idx}] ${tc.name} args (${tc.arguments.length} chars): ${tc.arguments}`)
@@ -404,6 +412,13 @@ export abstract class BaseStreamHandler {
     } catch {
       return false
     }
+  }
+
+  private hasOnlyCompleteToolInputs(): boolean {
+    for (const tool of this.toolCallMap.values()) {
+      if (!tool.complete && !this.hasCompleteToolInput(tool)) return false
+    }
+    return true
   }
 
   /** Normal stops may omit closing brackets, but never part of a value. */

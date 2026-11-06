@@ -20,7 +20,7 @@ test('requesting a disabled capability leaves it off until the user enables it f
     if (request.lastUserText.includes('The capability is enabled. List my teams now.')) {
       const result = request.toolResults.find(result => result.id === 'list-enabled-teams')
       if (!result) return { tools: [modelTool(request, 'team_list', {}, 'list-enabled-teams')] }
-      expect(result.text).toBe('No saved teams exist in this space yet.')
+      expect(result.text).toBe('No standing teams exist in this space yet.')
       listed = true
       return { text: 'There are no saved teams in this workspace yet.' }
     }

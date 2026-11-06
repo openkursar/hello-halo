@@ -110,7 +110,8 @@ export interface TeamMcpContext {
 export type ResolveTeamMcpContext = () => TeamMcpContext | null
 
 const NO_TEAM_CONTEXT =
-  'No active team collaboration is bound to this conversation. Start one with collab_start first.'
+  'No agent team has been started in this chat. Start one with collab_start. These tools act only on the agent team of this chat; ' +
+  'for a standing team\'s work, use the Operate Halo calls in your instructions.'
 
 const TASK_STATUS_VALUES = ['pending', 'in_progress', 'done', 'rejected', 'blocked'] as const
 
@@ -303,7 +304,8 @@ function buildSendTool(resolve: ResolveTeamMcpContext) {
 function buildPostTaskTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.postTask,
-    'Create a blackboard task and assign it to a teammate. Tasks should be ' +
+    'Create a task on the team board and assign it to a teammate. This only records the work: ' +
+      'it does not notify the teammate, so message them with team_send. Tasks should be ' +
       'self-contained — a member must be able to execute one without the global ' +
       'context.\n\n' +
       'Example: { "title": "Scrape competitors", "assignee": "researcher" }',
@@ -349,7 +351,7 @@ function buildPostTaskTool(resolve: ResolveTeamMcpContext) {
 function buildUpdateTaskTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.updateTask,
-    'Update a blackboard task: set its status, attach the file it produced, or ' +
+    'Update a task on the team board: set its status, attach the file it produced, or ' +
       'add a note. Update your own task when you finish it; the lead ' +
       'may update any task.\n\n' +
       'Example: { "taskId": "...", "status": "done", "resultRef": "competitors.md" }',
@@ -418,7 +420,7 @@ function buildUpdateTaskTool(resolve: ResolveTeamMcpContext) {
 function buildPostFindingTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.postFinding,
-    'Append a shared finding to the blackboard (append-only; any member may ' +
+    'Append a shared finding to the team board (append-only; any member may ' +
       'add). Use it to share an observation or a produced artifact with the ' +
       'whole team.\n\n' +
       'Provide at least one of content or ref.\n\n' +
@@ -475,7 +477,7 @@ function buildPostFindingTool(resolve: ResolveTeamMcpContext) {
 function buildReadBoardTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.readBoard,
-    'Read the team blackboard: tasks, findings, and the member roster. Use this ' +
+    'Read the team board: tasks, findings, and the member roster. Use this ' +
       'to reconcile state instead of relying on your own (compactable) context.\n\n' +
       'Each roster member also reports: `presence` ("online" | "offline" — check ' +
       'this before dispatching so you skip/reassign offline teammates), `owner` ' +
@@ -783,7 +785,7 @@ function parseScheduleInput(input: { every?: string; cron?: string; once?: strin
 function buildCompleteTool(resolve: ResolveTeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.complete,
-    'End the team run. Call this ONLY when the whole goal is achieved and every ' +
+    'End the team run (for an agent team: close it, it is not used again). Call this ONLY when the whole goal is achieved and every ' +
       'required task is verified done. Provide a concise summary of what the team ' +
       'produced and where the artifacts are. Only the team lead may call this.\n\n' +
       'Example: { "summary": "Daily competitor brief produced at brief.md" }',

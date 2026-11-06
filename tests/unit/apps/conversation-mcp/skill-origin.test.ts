@@ -88,7 +88,7 @@ vi.mock('../../../../src/main/apps/runtime/team/team-prompt', () => ({
   buildRestrictionNotice: () => '', buildTeamEntry: () => '', buildTeamConstraints: () => [], buildTeamImBridge: () => '',
 }))
 vi.mock('../../../../src/main/apps/runtime/index', () => ({
-  getAppRuntime: () => null, createPersonContextTool: () => ({ name: 'read_digital_human_context' }),
+  getAppRuntime: () => null,
   getAppMemoryService: () => ({}), getActivityStore: () => ({}),
 }))
 vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
@@ -122,12 +122,9 @@ vi.mock('../../../../src/main/apps/runtime/delegation-gate', () => ({
 }))
 vi.mock('../../../../src/main/apps/runtime/prompt/identity', () => ({ buildIdentityFragments: () => [] }))
 vi.mock('../../../../src/main/apps/runtime/prompt/capabilities', () => ({ buildDisabledCapabilitiesGuidance: () => '', buildUnconfiguredCapabilitiesGuidance: () => '' }))
-vi.mock('../../../../src/main/apps/runtime/prompt/team-awareness', () => ({ buildTeamAwarenessPrompt: () => null }))
+vi.mock('../../../../src/main/apps/runtime/prompt/team-guidance', () => ({ buildTeamGuidance: () => null }))
 vi.mock('../../../../src/main/apps/runtime/live-instances', () => ({ describeSelfInstance: () => ({}), formatInstanceTag: () => 'fixture' }))
-vi.mock('../../../../src/main/apps/runtime/person-context', () => ({ listPersonTeams: () => [] }))
-vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
-  createPersonContextMcpServer: () => ({ name: 'halo-person-context' }), personContextPrompt: () => '',
-}))
+vi.mock('../../../../src/main/apps/runtime/standing-teams', () => ({ listStandingTeams: () => [] }))
 vi.mock('../../../../src/main/apps/runtime/conversation-collab', () => ({ resolveConversationCollab: () => null, createConversationCollabMcpServer: vi.fn() }))
 vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({ createNotifyToolServer: () => ({ name: 'halo-notify' }) }))
 vi.mock('../../../../src/main/apps/runtime/notify-availability', () => ({ resolveNotifyAvailability: () => ({}) }))

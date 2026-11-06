@@ -33,7 +33,7 @@ import { MessageImages } from './ImageAttachmentPreview'
 import { TokenUsageIndicator } from './TokenUsageIndicator'
 import { truncateText, getToolFriendlyFormat } from './thought-utils'
 import type { Message, Thought, ThoughtsSummary } from '../../types'
-import { agentErrorText } from './agent-error-text'
+import { TurnErrorBubble } from './TurnErrorBubble'
 import { useTranslation } from '../../i18n'
 import { useChatStore, selectActiveConversationId } from '../../stores/chat.store'
 import { SourceChips } from './SourceChips'
@@ -347,17 +347,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
   // Message bubble content
   const bubble = isErrorOnly ? (
     <div className={`${!isInContainer ? 'w-[85%]' : 'w-full'}`}>
-      <div className="rounded-2xl px-4 py-3 bg-destructive/10 border border-destructive/30">
-        <div className="flex items-center gap-2 text-destructive">
-          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="8" x2="12" y2="12" />
-            <line x1="12" y1="16" x2="12.01" y2="16" />
-          </svg>
-          <span className="text-sm font-medium">{t('Something went wrong')}</span>
-        </div>
-        <p className="mt-1.5 text-sm text-destructive/80">{agentErrorText(message.error ?? '', t)}</p>
-      </div>
+      <TurnErrorBubble error={message.error ?? ''} />
     </div>
   ) : (
     <div
@@ -409,19 +399,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
       )}
 
       {/* Persisted error - shown for assistant messages that failed (e.g., 429 rate limit) */}
-      {!isUser && message.error && (
-        <div className="mt-2 rounded-xl px-3 py-2.5 bg-destructive/10 border border-destructive/30">
-          <div className="flex items-center gap-2 text-destructive">
-            <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
-              <line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
-            <span className="text-sm font-medium">{t('Something went wrong')}</span>
-          </div>
-          <p className="mt-1.5 text-sm text-destructive/80">{agentErrorText(message.error, t)}</p>
-        </div>
-      )}
+      {!isUser && message.error && <TurnErrorBubble error={message.error} inline />}
 
       {/* A user message that failed to send carries a compact red marker so a
           non-delivery is never mistaken for delivered — the bubble itself shows the

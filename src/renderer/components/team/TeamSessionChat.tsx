@@ -11,7 +11,7 @@ import { invalidateTeamSessionHistory, loadTeamSessionHistory, matchesTeamHistor
  */
 
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
-import { Loader2, AlertCircle, LockKeyhole, MessageSquareMore } from 'lucide-react'
+import { Loader2, LockKeyhole, MessageSquareMore } from 'lucide-react'
 import { api } from '../../api'
 import { injectTeamSessionMessage } from './session-input'
 import { mergeArrivingMessages, withoutLiveInputs, withStoppedInputs } from '../../utils/live-inputs'
@@ -23,6 +23,7 @@ import { CompactNotice } from '../chat/CompactNotice'
 import { StreamingSection } from '../chat/StreamingSection'
 import { useBrowserToolCalls } from '../chat/useBrowserToolCalls'
 import { InterruptedBubble } from '../chat/InterruptedBubble'
+import { TurnErrorBubble } from '../chat/TurnErrorBubble'
 import { InputArea } from '../chat/InputArea'
 import { useConversationDetail } from '../../hooks/useConversationDetail'
 import { useTranslation } from '../../i18n'
@@ -590,18 +591,14 @@ export function TeamSessionChat({
             {!isGenerating && error && errorType !== 'interrupted' && isRemote && (
               <div className="flex justify-start pb-4">
                 <div className="w-[85%] rounded-2xl border border-halo-warning/30 bg-halo-warning/5 px-4 py-3">
-                  <p className="text-sm text-foreground">{error}</p>
+                  <p className="text-sm text-foreground whitespace-pre-wrap [overflow-wrap:anywhere]">{error}</p>
                 </div>
               </div>
             )}
             {!isGenerating && error && errorType !== 'interrupted' && !isRemote && (
               <div className="flex justify-start pb-4">
-                <div className="w-[85%] rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3">
-                  <div className="flex items-center gap-2 text-destructive">
-                    <AlertCircle className="h-4 w-4" />
-                    <span className="text-sm font-medium">{t('Something went wrong')}</span>
-                  </div>
-                  <p className="mt-2 text-sm text-destructive/80">{error}</p>
+                <div className="w-[85%]">
+                  <TurnErrorBubble error={error} />
                 </div>
               </div>
             )}

@@ -18,7 +18,7 @@ import { z } from 'zod'
 import { tool, createSdkMcpServer } from '../../services/agent/resolved-sdk'
 import { getAppManager } from '../manager'
 import { AppAlreadyInstalledError } from '../manager/errors'
-import { getAppRuntime, createPersonContextTool } from '../runtime'
+import { getAppRuntime } from '../runtime'
 import type { ActivityEntry } from '../runtime'
 import { ConcurrencyLimitError } from '../runtime/errors'
 import { truncateUtf16Safe } from '../runtime/text-truncate'
@@ -591,9 +591,8 @@ function buildTools(spaceId: string, guideConsulted: () => boolean) {
  * @param spaceId - The current space ID (captured via closure by all tools)
  * @param guideConsulted - the `halo-docs` session's authoring-guide gate
  */
-export function createHaloAppsMcpServer(spaceId: string, guideConsulted: () => boolean, options?: { omitPersonContext?: boolean; omitSkillManagement?: boolean }) {
+export function createHaloAppsMcpServer(spaceId: string, guideConsulted: () => boolean, options?: { omitSkillManagement?: boolean }) {
   const allTools = buildTools(spaceId, guideConsulted).filter(tool => !options?.omitSkillManagement || tool.name !== 'skill_manage')
-  if (!options?.omitPersonContext) allTools.push(createPersonContextTool({ authority: 'owner' }))
 
   return createSdkMcpServer({
     name: 'halo-apps',

@@ -45,8 +45,6 @@ export type McpAppsChangeHandler = (spaceId: string | null, change?: McpAppChang
 
 /** How a session wants the halo-apps server shaped. */
 export interface HaloAppsServerOptions {
-  /** The session mounts its own person-context tool; leave this server's out. */
-  omitPersonContext?: boolean
   omitSkillManagement?: boolean
 }
 

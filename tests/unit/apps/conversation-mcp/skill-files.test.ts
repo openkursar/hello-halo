@@ -55,7 +55,7 @@ describe('assembled skill management with real scoped files', () => {
       }),
       trash, openFolder: vi.fn(),
     })
-    const server = createHaloAppsMcpServer('space', () => false, { omitPersonContext: true }) as unknown as {
+    const server = createHaloAppsMcpServer('space', () => false) as unknown as {
       tools: Array<{ name: string; handler: typeof invoke }>
     }
     invoke = server.tools.find(tool => tool.name === 'skill_manage')!.handler

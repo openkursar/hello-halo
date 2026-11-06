@@ -91,10 +91,6 @@ vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   validateEnvironmentConnections: vi.fn(),
   missingConnections: vi.fn(() => []),
 }))
-vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
-  createPersonContextMcpServer: vi.fn(() => ({ name: 'halo-person-context' })),
-  personContextPrompt: vi.fn(() => ''),
-}))
 
 vi.mock('../../../../src/main/services/space.service', () => ({
   getSpace: vi.fn().mockReturnValue({ id: 'space-1', path: '/tmp/space-1' }),

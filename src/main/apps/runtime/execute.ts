@@ -17,7 +17,7 @@ import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 import { getAppManager, type InstalledApp } from '../manager'
 import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
-import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
+import { buildSelfIdentityPrompt } from './prompt/self-identity'
 import { addRunTokenUsage, resolvePermission, type RunTokenUsage } from '../../../shared/apps/app-types'
 import { resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
 import type { ActivityStore } from './store'
@@ -423,7 +423,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         imContactsAvailable: notifyAvail.imContactsAvailable,
       }) ?? undefined,
       notifyToolsAvailable: notifyAvail.anyNotifyToolAvailable,
-    }) + '\n\n' + personContextPrompt({ authority: 'owner', appId: app.id })
+    }) + '\n\n' + buildSelfIdentityPrompt(app.id, app.spec.name)
 
     console.log(
       `[Runtime][${runTag}] ── SYSTEM PROMPT ──────────────────────────\n` +
@@ -567,7 +567,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         ...requiredMcpServers,              // declared MCP dependencies
         'halo-report': reportMcpServer,     // built-in: completion signal
         'halo-notify': notifyMcpServer,     // built-in: user notification
-        'halo-person-context': createPersonContextMcpServer({ authority: 'owner', appId: app.id, environmentSpaceId: app.spaceId!, capabilityMode: 'automation' }),
         ...baseToolset,                     // built-in: web search, Halo documentation
         'ocr': createOcrMcpServer(),              // built-in: on-device image OCR
         ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),

@@ -12,7 +12,7 @@ story:
 basis: documented
 references:
   - src/main/apps/runtime/DESIGN.md
-  - src/main/apps/runtime/prompt/team-awareness.ts
+  - src/main/apps/runtime/prompt/team-guidance.ts
   - src/main/http/routes/team.routes.meta.ts
   - src/main/services/agent/toolsets/DESIGN.md
   - tests/e2e/specs/acceptance-team-awareness.spec.ts

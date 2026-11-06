@@ -1224,8 +1224,8 @@ Two facts about a member are per-TEAM and owner-authored, and they live on the
   their own digital humans on this machine and the runtime waking one of them
   are not held to it at all. The person in an IM chat a member fronts is held to
   that chat's owner/guest rules instead (see "Team as an IM backend"). The
-  team's own coordination servers (`halo-team`, `halo-report`,
-  `halo-person-context`) are never withheld — they are the channel the turn
+  team's own coordination servers (`halo-team`, `halo-report`)
+  are never withheld — they are the channel the turn
   arrived on, not a capability lent.
 
 ### Where a request came from

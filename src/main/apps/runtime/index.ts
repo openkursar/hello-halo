@@ -118,7 +118,6 @@ export {
 
 // Re-export concurrency for testing
 export { Semaphore } from './concurrency'
-export { createPersonContextTool } from './person-context-tool'
 
 // Re-export app chat functions
 export {
@@ -290,7 +289,7 @@ export async function initAppRuntime(
   registerToolset({
     id: TEAM_MCP_SERVER_NAME,
     displayName: 'Team Collaboration',
-    summary: 'Assemble a team of AI members to work in parallel, coordinate them, and delegate to saved teams.',
+    summary: 'Spin up an agent team of AI teammates to work in parallel, coordinate them, and hand jobs to standing teams.',
     usageGuide: TEAM_TOOLSET_GUIDE,
     isAvailable: () => true,
     createServer: (scope) =>

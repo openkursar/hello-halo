@@ -1030,7 +1030,7 @@ listener (`src/main/http/self-api/`) reached with curl.
   settings). Decided per caller, not per app: never for an IM guest, a request
   from outside or a disposable team member. A digital human in a team also gets
   a short list of its teams and the calls that read their conversations
-  (`apps/runtime/prompt/team-awareness.ts`) wherever it holds Operate Halo.
+  (`apps/runtime/prompt/team-guidance.ts`) wherever it holds Operate Halo.
 - **What a session may call** is `resources/api-ref/scope.json`, generated from
   the `expose` field in `*.routes.meta.ts`. That allow-list is the only bound —
   space is not one. The listener once refused any request naming a space other

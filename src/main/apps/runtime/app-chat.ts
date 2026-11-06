@@ -152,10 +152,9 @@ import { prepareAppEngineSession, resolveAppSessionEngine } from './engine-selec
 import type { Thought, TranscriptMessage, TranscriptPageRequest, TranscriptProvenance } from '../../../shared/types/transcript'
 import { getAppMemoryService, getActivityStore } from './index'
 import { resolveExecutionEnvironment, validateExecutionEnvironment, legacySessionEnvironmentKey, resolveChatEnvironment, appChatRunId, validateEnvironmentConnections } from './execution-environment'
-import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
-import { listPersonTeams } from './person-context'
-import { buildTeamAwarenessPrompt } from './prompt/team-awareness'
-import type { PersonContextCaller } from '../../../shared/apps/person-context'
+import { listStandingTeams } from './standing-teams'
+import { buildSelfIdentityPrompt } from './prompt/self-identity'
+import { buildTeamGuidance } from './prompt/team-guidance'
 import {
   prepareMemoryForTurn,
   requestAppMemoryConsolidation,
@@ -196,7 +195,7 @@ export { getAppChatConversationId, buildImSessionKey }
  * capability the owner lends out: withholding them would not restrict a teammate,
  * it would cut the digital human off from the conversation it was woken for.
  */
-const TEAM_CHANNEL_MCP: ReadonlySet<string> = new Set([TEAM_MCP_SERVER_NAME, 'halo-report', 'halo-person-context'])
+const TEAM_CHANNEL_MCP: ReadonlySet<string> = new Set([TEAM_MCP_SERVER_NAME, 'halo-report'])
 
 /** Session creation context of a session whose hooks record its tool calls (delegation-gate). */
 const RECORDED_SESSION = 'delegation-audit'
@@ -744,17 +743,6 @@ async function runAppChatTurn(
   // in a chat a member fronts answers to the chat's rules instead.
   const borrowedTeamTurn = !!teamContext && isBorrowedTeamTurn(teamContext, !!imSession)
 
-  // permCtx (fixed at the top) shapes both the system prompt (ownerIds) and the
-  // SDK options (guest tool restrictions); undefined for native Halo chat.
-  const personCaller: PersonContextCaller = {
-    appId,
-    capabilityMode: 'chat',
-    environmentSpaceId: spaceId,
-    authority: permCtx?.isOwner === false ? 'guest'
-      : teamContext && (!!origin || teamContext.kind !== undefined || !!imSession) ? 'team' : 'owner',
-    ...(teamContext ? { teamId: teamContext.teamId, epochId: teamContext.epochId } : {}),
-  }
-
   // Not a switch: operating Halo is how a digital human perceives its own
   // environment — its teams, its people, its settings.
   //
@@ -797,7 +785,7 @@ async function runAppChatTurn(
       imContactsAvailable: notifyAvail.imContactsAvailable,
     }) ?? undefined,
   })
-  if (personCaller.authority !== 'guest') identity.push(personContextPrompt(personCaller))
+  if (permCtx?.isOwner !== false) identity.push(buildSelfIdentityPrompt(app.id, app.spec.name))
 
   if (teamContext) {
     // Every team turn (user/IM/teammate) stamps the epoch's activity, and wakes
@@ -841,20 +829,17 @@ async function runAppChatTurn(
     && parseNativeChatKey(conversationId)?.appId === appId && getActiveTeamRuntime()
     ? getToolset(TEAM_MCP_SERVER_NAME)
     : undefined
-  if (teamToolset) entry = `${entry}\n\n${teamToolset.usageGuide}`
   // Whoever started the turn, a person or a teammate: a fragment that came and
   // went with the trigger would rebuild the warm session and drop its prompt
   // cache every time the two alternate in one conversation.
-  const teamAwareness = usesHaloApi
-    ? buildTeamAwarenessPrompt({
-        teams: listPersonTeams(appId),
-        ...(teamPromptCtx && teamContext
-          ? { current: { teamName: teamPromptCtx.teamName, epochId: teamContext.epochId, viaIm: !!imSession } }
-          : {}),
-        collaborationToolsHere: !!teamToolset,
-      })
-    : null
-  if (teamAwareness) identity.push(teamAwareness)
+  const teamGuidance = buildTeamGuidance({
+    ...(teamToolset ? { agentTeamGuide: teamToolset.usageGuide } : {}),
+    teams: usesHaloApi ? listStandingTeams(appId) : [],
+    ...(teamPromptCtx && teamContext
+      ? { current: { teamName: teamPromptCtx.teamName, epochId: teamContext.epochId, viaIm: !!imSession } }
+      : {}),
+  })
+  if (teamGuidance) entry = `${entry}\n\n${teamGuidance}`
   const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
 
   // ── 4. Build MCP servers ─────────────────────────────
@@ -971,12 +956,9 @@ async function runAppChatTurn(
   const mcpServers: Record<string, any> = {
     ...(dbMcpServers ?? {}),
     'halo-notify': notifyMcpServer,
-    ...(personCaller.authority !== 'guest' ? { 'halo-person-context': createPersonContextMcpServer(personCaller) } : {}),
     ...buildBaseToolset({
       spaceId,
       exclude: [...(disposableMember ? ['halo-apps' as const] : []), ...webSearch.servers],
-      // Mounted above for the caller's own authority.
-      omitPersonContext: true,
       omitSkillManagement: permCtx?.isOwner === false || Boolean(origin),
     }),
     'ocr': createOcrMcpServer(),

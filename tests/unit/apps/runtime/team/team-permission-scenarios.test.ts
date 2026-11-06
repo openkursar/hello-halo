@@ -360,10 +360,6 @@ vi.mock('../../../../../src/main/apps/runtime/notify-tool', () => ({
 vi.mock('../../../../../src/main/apps/runtime/reminders/tool', () => ({
   createRemindersMcpServer: () => ({ _isMcpServer: true, name: 'halo-reminders' }),
 }))
-vi.mock('../../../../../src/main/apps/runtime/person-context-tool', () => ({
-  createPersonContextMcpServer: () => ({ _isMcpServer: true, name: 'halo-person-context' }),
-  personContextPrompt: () => 'person-context',
-}))
 vi.mock('../../../../../src/main/apps/runtime/im-session-registry', () => ({
   getImSessionRegistry: () => null,
 }))
@@ -918,7 +914,7 @@ function expectNothingGranted(turn: TurnCapture): void {
 
 /** Every server a turn on this machine assembles when nothing narrows it. */
 const OWNER_SERVERS = [
-  'ai-browser', 'halo-api-ref', 'halo-docs', 'halo-email', 'halo-notify', 'halo-person-context', 'halo-report', 'halo-team', 'ocr', 'user-jira', 'web-search',
+  'ai-browser', 'halo-api-ref', 'halo-docs', 'halo-email', 'halo-notify', 'halo-report', 'halo-team', 'ocr', 'user-jira', 'web-search',
 ]
 
 /** A teammate elsewhere with everything saved: the owner's servers, never operating Halo. */
@@ -929,23 +925,23 @@ const BEFORE = {
   readOnly: {
     withheld: ['Agent', 'AskUserQuestion', 'Bash', 'CronCreate', 'CronDelete', 'CronList', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Skill', 'Task', 'TaskOutput', 'TaskStop'],
     autoAllowed: ['TodoWrite', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
-    servers: ['halo-person-context', 'halo-report', 'halo-team', 'web-search'],
+    servers: ['halo-report', 'halo-team', 'web-search'],
   },
   workspace: {
     withheld: ['AskUserQuestion', 'Bash', 'CronCreate', 'CronDelete', 'CronList', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Skill', 'TaskOutput', 'TaskStop'],
     autoAllowed: ['TodoWrite', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Agent', 'Write', 'Edit', 'NotebookEdit'],
-    servers: ['halo-person-context', 'halo-report', 'halo-team', 'ocr', 'web-search'],
+    servers: ['halo-report', 'halo-team', 'ocr', 'web-search'],
   },
   nothing: {
     withheld: ['Agent', 'AskUserQuestion', 'Bash', 'CronCreate', 'CronDelete', 'CronList', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Skill', 'Task', 'TaskOutput', 'TaskStop', 'WebFetch', 'WebSearch'],
     autoAllowed: ['TodoWrite'],
-    servers: ['halo-person-context', 'halo-report', 'halo-team', 'web-search'],
+    servers: ['halo-report', 'halo-team', 'web-search'],
   },
   /** A stranger reaching a member whose owner saved "everything". */
   strangerEverything: {
     withheld: ['AskUserQuestion', 'CronCreate', 'CronDelete', 'CronList', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Skill', 'TaskOutput', 'TaskStop'],
     autoAllowed: ['TodoWrite', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Agent', 'Write', 'Edit', 'NotebookEdit', 'Bash'],
-    servers: ['ai-browser', 'halo-email', 'halo-notify', 'halo-person-context', 'halo-report', 'halo-team', 'ocr', 'web-search'],
+    servers: ['ai-browser', 'halo-email', 'halo-notify', 'halo-report', 'halo-team', 'ocr', 'web-search'],
   },
   /** The front desk serving the guest under the chat's guest policy. */
   desk: {

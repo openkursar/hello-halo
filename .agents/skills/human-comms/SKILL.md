@@ -88,7 +88,8 @@ works once you know how this repo is built explains nothing.
 ## Explaining a behavior
 
 Whenever the question is how the product behaves, or what a change does to that
-behavior, open with a scenario table before any mechanism:
+behavior, open with a scenario table before any mechanism — each row a user story
+step from the section below:
 
 | What the user does | What they see (concrete values) | Same before and after? |
 |---|---|---|
@@ -104,12 +105,39 @@ behavior, open with a scenario table before any mechanism:
 - **Mechanism only when asked.** The table usually answers the question. Explain
   why only if they ask why.
 
+## Drive every explanation with a user story
+
+Always explain by walking a user story through real interface interactions —
+for a behavior, a design, a change, and above all an incident. Go as fine as an
+end-to-end test script when you can: which page, which button, what is typed,
+what appears. One step per actor, each step a place in the product they know:
+
+> Alice → digital-human page, picks "Scout" → starts a new conversation → asks it
+> to finish the ticket and tell the team's tester → Scout sends the message
+> without naming a task → Bob's computer files it under the newest task
+
+- **The owner knows the product better than you; what they lack is which path
+  this was.** Without it they assume the most common one, and every sentence after
+  contradicts the picture in their head. One missing path once cost thirty minutes
+  of re-explaining; stated first, it lands in ten seconds.
+- **Only entry points the product really has.** If a step goes through something
+  the UI does not offer under that name ("private chat", "1:1", "outside the
+  team"), they will try to find it in the product, fail, and lose the thread.
+- **Say whose computer and whose account** each step runs on when the path
+  crosses people or machines.
+- Then mark where it went wrong, what is proven and what is inferred, and your
+  recommendation. Log lines and code hang off the path; they never replace it.
+  You found it by reading logs — that is your route, not theirs.
+
 ## When it is not landing
 
 If they say they do not understand, do not re-explain in more detail — detail is
-usually what lost them. Drop a level of abstraction instead: cut every mechanism,
-keep only *what they observe* and *what it means for them*. Then rebuild upward
-only if they ask.
+usually what lost them. First check whether they have the concrete scenario: who
+did what, where in the product. A missing scenario is the most common cause, and
+an analogy (offices, mail) does not supply it — it adds a second model to
+translate. Otherwise drop a level of abstraction: cut every mechanism, keep only
+*what they observe* and *what it means for them*. Then rebuild upward only if
+they ask.
 
 ## Before writing code
 
