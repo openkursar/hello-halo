@@ -133,6 +133,30 @@ scenarios:
     expected:
       - en: The UI explains the limit and retains previous work for the supported continuation.
         zh: 界面说明限制，并为支持的继续方式保留之前工作。
+  - id: chat.execution.cache-wire
+    title: Retain reusable context throughout offline scripted work and recovery
+    verifies: [context-continuity, compact-safety, compact-recovery, budget]
+    platforms: *a1
+    profiles: [fast, regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      scenario: [append-small, append-200k-large-output, compact-reported, compact-absent, compact-zero, compact-output-only, compact-low-output, compact-thinking-clamped, recovery-empty, recovery-truncated, recovery-tool-use, recovery-retry, recovery-overflow, recovery-checkpoint, recovery-cancel, arrivals, resume, concurrent-isolation, wire-negative-history, wire-negative-marker, summary-merge, fixed-capacity, output-exhausted, child-agent, arrivals-across-compaction, configuration-switch, skill-mcp, breakpoint-envelope]
+    preconditions:
+      - An isolated public SDK uses its real Anthropic provider against a local scripted HTTP/SSE endpoint. External fetch destinations and redirects are refused.
+      - An independent synthetic cache tracks actual serialized request content, breakpoints and expiry; it never assumes the requested hit outcome.
+    steps:
+      - Run the named scenario through ordinary work, repeated summarization, fault recovery, live input or persisted reopening as applicable.
+      - Compare successive wire requests and independently derived simulated cache usage, executed observations, checkpoints and usage totals.
+    expected:
+      - Ordinary append-only work preserves the previously cached input; after a successful summary the new history becomes reusable without repeated accidental rewrites.
+      - Recovery does not execute summary tools, repeat numbered observations, exceed configured output reservations or report successful work after failed checkpoint persistence.
+      - Missing usage remains distinct from reported synthetic accounting, and every reported response contributes once.
+      - Reopening retains the original transcript and saved handover; concurrent conversations never receive one another's private fixture data.
+      - Deliberately corrupting old evidence or removing message breakpoints is detected even when scripted work completes successfully.
+    notes: Integration evidence through the built SDK public API and real provider serialization, not Electron E2E. Cache units and capacity counts are synthetic, not vendor tokenization, real cache hits, pricing or summary quality. Large-payload 200K/500K/1M and 300-tool-call stress variants run in the SDK matrix profile separately; a fast pass does not establish those results.
   - id: chat.execution.append-only-context
     title: Keep prior observations intact during ordinary work
     verifies:

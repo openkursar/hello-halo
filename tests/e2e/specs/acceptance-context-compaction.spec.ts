@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { test as base, expect } from '@playwright/test'
 import type {
   ContentBlock, LlmProvider, Message, Options, ProviderRequest, ProviderResponse,
@@ -30,6 +31,29 @@ const test = base.extend<{ sdk: Sdk; profile: string }>({
   },
 })
 test.setTimeout(30000)
+
+const cacheCaseIds = [
+  'append-small', 'append-200k-large-output', 'compact-reported', 'compact-absent', 'compact-zero', 'compact-output-only',
+  'compact-low-output', 'compact-thinking-clamped', 'recovery-empty', 'recovery-truncated', 'recovery-tool-use',
+  'recovery-retry', 'recovery-overflow', 'recovery-checkpoint', 'recovery-cancel', 'arrivals', 'resume', 'concurrent-isolation',
+  'wire-negative-history', 'wire-negative-marker', 'summary-merge', 'fixed-capacity', 'output-exhausted', 'child-agent', 'arrivals-across-compaction', 'configuration-switch', 'skill-mcp', 'breakpoint-envelope',
+]
+for (const scenario of cacheCaseIds) {
+  test(`offline wire cache regression: ${scenario}`, {
+    annotation: binding('chat.execution.cache-wire', { scenario }),
+  }, async ({ sdk }, info) => {
+    const fixture = pathToFileURL(join(process.cwd(), 'src/sdk/halo-sdk/validation/cache-scenarios.mjs')).href
+    const { runCacheCase, cacheCases } = await import(fixture)
+    expect(cacheCases('fast').map((item: { id: string }) => item.id).sort()).toEqual([...cacheCaseIds].sort())
+    let detail: unknown
+    try {
+      const result = await runCacheCase(sdk, scenario, { emit: (value: unknown) => { detail = value } })
+      expect(result.passed).toBe(true)
+    } finally {
+      await info.attach('offline-cache-evidence', { body: JSON.stringify(detail ?? { scenario, incomplete: true }), contentType: 'application/json' })
+    }
+  })
+}
 
 function binding(caseId: string, variant: Record<string, string> = {}) {
   return { type: 'acceptance', description: JSON.stringify({ caseId, evidence: 'integration', mode: 'scripted', variant }) }
