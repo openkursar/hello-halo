@@ -404,7 +404,9 @@ export function TeamSessionChat({
             default: return t('Couldn\u2019t send your message just now. Please try again.')
           }
         }
-        const reason = isRemote ? remoteReason() : String(res.error || t('Failed to send message'))
+        const reason = res.code === 'PAYLOAD_TOO_LARGE'
+          ? res.error || t('Failed to send message')
+          : isRemote ? remoteReason() : String(res.error || t('Failed to send message'))
         useChatStore.getState().setSessionError(convId, reason)
         markSendFailed(userMsg.id, reason)
         return false

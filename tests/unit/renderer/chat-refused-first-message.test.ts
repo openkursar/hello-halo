@@ -72,6 +72,22 @@ it('shows the error of a refused first message in an empty conversation', async 
   expect(html).toContain('Failed to send message')
 })
 
+it('shows the oversized-message reason and returns an unsent image draft', async () => {
+  const error = 'Request is too large. Reduce the attachment size or shorten the text.'
+  apiMock.sendMessage.mockResolvedValueOnce({ success: false, code: 'PAYLOAD_TOO_LARGE', error })
+  const store = create<ChatState>((set, get) => ({
+    spaceStates: new Map([['s', { conversations: [meta], currentConversationId: 'c' }]]),
+    conversationCache: new Map([['c', conversation]]),
+    sessions: new Map(),
+    currentSpaceId: 's',
+    ...createMessagingSlice(set as never, get as never),
+    ...createGettersSlice(set as never, get as never),
+  }) as unknown as ChatState)
+  expect(await store.getState().sendMessage('inspect', [{ id: 'img', type: 'image', mediaType: 'image/png', data: 'AAAA' }])).toBe(false)
+  expect(store.getState().conversationCache.get('c')!.messages).toHaveLength(0)
+  expect(store.getState().sessions.get('c')).toMatchObject({ error, isGenerating: false })
+})
+
 it('keeps the empty state for a conversation with nothing to show', () => {
   expect(showsMessageList({ messageCount: 0, hasStreamingContent: false, isThinking: false, error: null })).toBe(false)
 })

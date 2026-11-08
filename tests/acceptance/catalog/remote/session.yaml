@@ -54,6 +54,31 @@ scenarios:
     requirements:
       - halo-sdk
       - chromium-browser
+  - id: remote.session.images
+    title:
+      en: Send images from a remote browser and reopen the conversation
+      zh: 通过远程浏览器发图并重新打开对话
+    verifies: [chat]
+    platforms: *a1
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk, chromium-browser]
+    variants:
+      images: [single, multiple]
+    preconditions:
+      - en: An isolated Halo desktop exposes authenticated HTTP and WebSocket routes to a real browser and uses a local scripted vision model. Synthetic PNGs contain independently checked pixels; the composed request exceeds 100 KiB.
+        zh: 隔离 Halo 桌面向真实浏览器提供认证 HTTP 与 WebSocket，使用本地脚本视觉模型。合成 PNG 的像素经过独立解码核对，组合后的请求超过 100 KiB。
+    steps:
+      - en: Sign in, select one image in a desktop-width browser or two images at phone width, and send from the composer. For the two-image variant each individual base64 payload stays below 100 KiB while their combined request exceeds it. Reload the browser and reopen the saved conversation.
+        zh: 登录后，在桌面宽度浏览器选择单图，或在手机宽度选择两张图，通过输入框发送。双图变体中每张图的 base64 小于 100 KiB，但组合请求超过该值。刷新浏览器并重新打开已保存对话。
+    expected:
+      - en: The send succeeds; the model receives the same ordered image bytes submitted by the composer. The actual conversation file retains both text and every image, and after refresh the same user message and decoded images are readable without a duplicate model request.
+        zh: 消息发送成功，模型按相同顺序收到输入框提交的图片字节。实际对话文件保留文字和全部图片；刷新后同一条用户消息和解码后的图片仍可读，不产生重复模型请求。
+    notes:
+      en: This uses real application handlers and the unchanged built renderer over loopback. It proves image transport and persistence, not vendor image understanding, native mobile behavior, LAN connectivity or a public tunnel.
+      zh: 使用真实应用处理器及原样构建界面，通过回环网络验证。它证明图片传输与持久化，不代表厂商图片理解、原生手机、局域网连通或公网隧道已经验证。
   - id: remote.session.desktop-only
     title:
       en: Use a desktop-only action remotely

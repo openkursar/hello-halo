@@ -232,7 +232,9 @@ async function send(ctx: BackendContext, conversationId: string, request: SendRe
     if (response && response.success === false) {
       console.error(`[ChatStore] Message refused for ${conversationId}: ${response.error ?? 'unknown error'}`)
       // A goal send reports its own failure.
-      withdraw(goal ? null : i18n.t('Failed to send message'))
+      withdraw(goal ? null : response.code === 'PAYLOAD_TOO_LARGE'
+        ? response.error ?? i18n.t('Failed to send message')
+        : i18n.t('Failed to send message'))
       return false
     }
     return true

@@ -31,6 +31,7 @@ import { useComposerToolsets } from './composer-menu/useComposerToolsets'
 import { sortToolsets, toolsetDescription, toolsetIcon, toolsetLabel } from './composer-menu/toolset-display'
 import { canAttachPath, type AttachedPath, type PickedLocalEntry } from '../../../shared/attached-paths'
 import { MAX_UPLOAD_FILE_SIZE } from '../../../shared/constants/artifact-upload'
+import { MAX_IMAGES, MAX_IMAGE_SIZE } from '../../../shared/constants/chat-attachments'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { useComposerReferences, useComposerReferencesStore } from '../../stores/composer-references.store'
 import { useSpaceStore } from '../../stores/space.store'
@@ -242,10 +243,6 @@ const inputDrafts = new Map<string, InputDraft>()
 const draftRecoverySubscribers = new Map<string, Set<(draft: InputDraft) => void>>()
 // Cards of a composer with no draft key live under a key of its own, gone with it.
 let composerInstanceSeq = 0
-
-// Image constraints
-const MAX_IMAGE_SIZE = 20 * 1024 * 1024  // 20MB max per image (before compression)
-const MAX_IMAGES = 10  // Max images per message
 
 const COMPOSER_MAX_HEIGHT = 180
 
