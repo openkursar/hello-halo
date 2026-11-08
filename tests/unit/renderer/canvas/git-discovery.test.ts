@@ -3,12 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const discover = vi.hoisted(() => vi.fn())
 vi.mock('../../../../src/renderer/api', () => ({ api: { gitDiscoverRepository: discover } }))
 import { GitDiscovery } from '../../../../src/renderer/services/git-discovery'
+import { useNotificationStore } from '../../../../src/renderer/stores/notification.store'
 
+const repository = { root: '/space/sdk', name: 'sdk', relativePath: 'sdk' }
+const recordError = { code: 'GIT_FAILED' as const, error: 'disk full' }
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
 
 describe('opened-file repository discovery', () => {
   beforeEach(() => {
     discover.mockReset().mockResolvedValue({ success: true, data: null })
+    useNotificationStore.getState().clear()
   })
 
   it('does no work until a file is activated and deduplicates its directory', async () => {
@@ -36,11 +40,71 @@ describe('opened-file repository discovery', () => {
     discovery.noteFile('a', '/space/sdk/file.ts')
     await flush()
     expect(listener).not.toHaveBeenCalled()
-    finish({ success: true, data: { root: '/space/sdk' } })
+    finish({ success: true, data: { repository, remembered: true } })
     await flush()
-    expect(listener).toHaveBeenCalledWith({ root: '/space/sdk' })
+    expect(listener).toHaveBeenCalledWith({ ...repository, remembered: true })
     expect(other).not.toHaveBeenCalled()
     expect(released).not.toHaveBeenCalled()
+  })
+
+  it('publishes unremembered paths and warns even when no changes view is mounted', async () => {
+    const discovery = new GitDiscovery()
+    discover.mockResolvedValue({ success: true, data: { repository, remembered: false, recordError } })
+    const show = vi.spyOn(useNotificationStore.getState(), 'show')
+    try {
+      discovery.noteFile('a', '/space/sdk/one/file.ts')
+      discovery.noteFile('a', '/space/sdk/two/file.ts')
+      await flush()
+      expect(show).toHaveBeenCalledTimes(1)
+      expect(show).toHaveBeenCalledWith(expect.objectContaining({ variant: 'warning', body: expect.stringContaining('could not be remembered') }))
+      const listener = vi.fn()
+      discovery.subscribe('a', listener)
+      discovery.noteFile('a', '/space/sdk/three/file.ts')
+      await flush()
+      expect(listener).toHaveBeenCalledWith({ ...repository, remembered: false })
+      expect(show).toHaveBeenCalledTimes(1)
+      discovery.noteFile('b', '/space/sdk/file.ts')
+      await flush()
+      expect(show).toHaveBeenCalledTimes(2)
+    } finally {
+      show.mockRestore()
+    }
+  })
+
+  it('bounds record-failure history and releases it when a space is forgotten', () => {
+    const discovery = new GitDiscovery()
+    const show = vi.spyOn(useNotificationStore.getState(), 'show')
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      for (let i = 0; i < 129; i++) discovery.reportRecordFailure('a', `/space/${i}`, recordError)
+      discovery.reportRecordFailure('a', '/space/128', recordError)
+      expect(show).toHaveBeenCalledTimes(129)
+      discovery.reportRecordFailure('a', '/space/0', recordError)
+      expect(show).toHaveBeenCalledTimes(130)
+      discovery.forget('a')
+      discovery.reportRecordFailure('a', '/space/128', recordError)
+      expect(show).toHaveBeenCalledTimes(131)
+      expect(useNotificationStore.getState().toasts).toHaveLength(1)
+      expect(warning).toHaveBeenCalledTimes(131)
+    } finally {
+      show.mockRestore()
+      warning.mockRestore()
+    }
+  })
+
+  it('invalidates held discoveries before they can publish or warn', async () => {
+    let finish!: (value: unknown) => void
+    discover.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const discovery = new GitDiscovery()
+    const listener = vi.fn()
+    discovery.subscribe('a', listener)
+    discovery.noteFile('a', '/space/sdk/file.ts')
+    await flush()
+    discovery.invalidateProbes('a')
+    finish({ success: true, data: { repository, remembered: false, recordError } })
+    await flush()
+    expect(listener).not.toHaveBeenCalled()
+    expect(useNotificationStore.getState().toasts).toEqual([])
   })
 
   it('isolates spaces and releases directory history', async () => {

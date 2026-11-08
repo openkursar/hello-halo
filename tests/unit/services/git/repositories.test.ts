@@ -49,13 +49,14 @@ describe('listRepositories', () => {
     mkdirSync(join(dir, 'plain'))
     symlinkSync(join(dir, 'alpha'), join(dir, 'linked'))
 
-    const list = await listRepositories('space-1')
+    const list = await listRepositories('space-1', { shallow: true })
     expect(list.git.available).toBe(true)
     expect(list.repositories.map((repo) => repo.relativePath)).toEqual(['', 'alpha', 'beta', 'wt'])
-    expect(list.repositories[0]).toMatchObject({ root: dir, relativePath: '', branch: 'main', unborn: true, head: null })
-    expect(list.repositories[1]).toMatchObject({ name: 'alpha', branch: 'main', unborn: false, upstream: null, ahead: 0, behind: 0 })
-    expect(list.repositories[1].head).toMatch(/^[0-9a-f]{7}$/)
-    expect(list.repositories[3]).toMatchObject({ name: 'wt', branch: 'wt-branch', unborn: false })
+    expect(list.repositories[0]).toEqual({ root: dir, name: dir.split('/').pop(), relativePath: '', remembered: false })
+    expect(list.repositories[1]).toMatchObject({ name: 'alpha', remembered: false })
+    expect(list.repositories.every((repo) => !('branch' in repo) && !('head' in repo))).toBe(true)
+    expect(list.repositories[3]).toMatchObject({ name: 'wt', remembered: false })
+    expect(await resolveRepository('space-1', alpha.root)).toMatchObject({ branch: 'main', unborn: false, head: expect.stringMatching(/^[0-9a-f]{7}$/) })
   })
 
   it('returns no repositories for a space folder without any', async () => {

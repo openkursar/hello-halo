@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { BookMarked, ChevronDown, FolderOpen } from 'lucide-react'
-import type { GitRepository, GitRepositoryList } from '../../../../../../shared/types/git'
+import type { GitRepository, GitRepositoryEntry, GitRepositoryPath } from '../../../../../../shared/types/git'
 import { api } from '../../../../../api'
 import { useTranslation } from '../../../../../i18n'
 import { failureOf } from '../state/git-client'
@@ -9,8 +9,9 @@ import { Menu, MenuItem, MenuLabel, MenuNote, MenuSeparator } from '../shared/Me
 import { RepositoryPathDialog } from './RepositoryPathDialog'
 
 export interface RepositoryPickerProps {
-  repositories: GitRepository[]
-  savedRepositories: NonNullable<GitRepositoryList['savedRepositories']>
+  repositories: GitRepositoryEntry[]
+  unavailableRoots: ReadonlySet<string>
+  selectedRepository: GitRepositoryPath | null
   repo: GitRepository | null
   disabled: boolean
   onSelectRepository: (root: string) => void
@@ -20,7 +21,7 @@ export interface RepositoryPickerProps {
   touch?: boolean
 }
 
-export function RepositoryPicker({ repositories, savedRepositories, repo, disabled, onSelectRepository, onOpenRepository, onForgetRepository, compact, touch }: RepositoryPickerProps) {
+export function RepositoryPicker({ repositories, unavailableRoots, selectedRepository, repo, disabled, onSelectRepository, onOpenRepository, onForgetRepository, compact, touch }: RepositoryPickerProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [pathDialog, setPathDialog] = useState(false)
@@ -87,14 +88,13 @@ export function RepositoryPicker({ repositories, savedRepositories, repo, disabl
       if (alive.current) setPending(false)
     }
   }
-  const savedRoots = new Set(savedRepositories.map((item) => item.root))
-  const availableRoots = new Set(repositories.map((item) => item.root))
   const removal = (root: string) => (
     <MenuItem disabled={busy} onSelect={() => void forget(root)} description={t('No files will be deleted.')}>
       {t('Remove from list')}
     </MenuItem>
   )
-  const branch = repo?.branch ?? (repo?.head ? t('Detached at {{commit}}', { commit: repo.head }) : t('No commits yet'))
+  const summary = repo?.root === selectedRepository?.root ? repo : null
+  const branch = summary ? summary.branch ?? (summary.head ? t('Detached at {{commit}}', { commit: summary.head }) : t('No commits yet')) : null
 
   return (
     <>
@@ -105,13 +105,13 @@ export function RepositoryPicker({ repositories, savedRepositories, repo, disabl
         onClick={() => { setError(null); setOpen((value) => !value) }}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={repo ? t('Repository: {{name}}', { name: repo.name }) : t('Open repository…')}
-        title={repo?.root}
+        aria-label={selectedRepository ? t('Repository: {{name}}', { name: selectedRepository.name }) : t('Open repository…')}
+        title={selectedRepository?.root}
         className={`inline-flex min-w-0 max-w-[220px] shrink-[0.3] items-center gap-1.5 rounded-sm px-1.5 text-[13px] text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50 ${touch ? 'h-10' : 'h-10 sm:h-7'}`}
       >
         {!compact && <BookMarked size={14} className="shrink-0 text-faint-foreground" aria-hidden />}
-        <span className="truncate font-semibold text-foreground">{repo?.name ?? t('Open repository…')}</span>
-        {repo && !compact && <span className="hidden truncate text-[12px] text-subtle-foreground min-[460px]:inline">{branch}</span>}
+        <span className="truncate font-semibold text-foreground">{selectedRepository?.name ?? t('Open repository…')}</span>
+        {branch && !compact && <span className="hidden truncate text-[12px] text-subtle-foreground min-[460px]:inline">{branch}</span>}
         <ChevronDown size={12} className="shrink-0" aria-hidden />
       </button>
       <Menu open={open} onClose={close} anchorRef={anchorRef} label={t('Repositories in this space')} className="[&_[role^=menuitem]]:min-h-10 [&_[role^=menuitem]]:sm:min-h-8">
@@ -119,19 +119,11 @@ export function RepositoryPicker({ repositories, savedRepositories, repo, disabl
         {repositories.map((item) => (
           <div key={item.root} role="group" aria-label={item.root}>
             <MenuItem
-              checked={item.root === repo?.root}
+              checked={item.root === selectedRepository?.root}
               disabled={busy}
-              description={<span className="break-all">{item.root}</span>}
+              description={<span className="break-all">{item.root}{unavailableRoots.has(item.root) && <span className="ml-2 text-halo-warning">{t('Unavailable')}</span>}</span>}
               onSelect={() => { close(); onSelectRepository(item.root) }}
             >{item.name}</MenuItem>
-            {savedRoots.has(item.root) && removal(item.root)}
-          </div>
-        ))}
-        {savedRepositories.filter((item) => !availableRoots.has(item.root)).map((item) => (
-          <div key={item.root} role="group" aria-label={item.root}>
-            <MenuItem disabled onSelect={() => {}} description={<span className="break-all">{item.root}</span>}>
-              {t('Unavailable')}
-            </MenuItem>
             {removal(item.root)}
           </div>
         ))}

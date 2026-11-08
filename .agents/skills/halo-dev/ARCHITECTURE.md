@@ -99,8 +99,7 @@ Foundation Layer (src/main/foundation)  ← bedrock, zero upward deps
 ## 3) Engineering Baseline (Non-Negotiable)
 
 - **Modularity and boundary clarity are mandatory.**
-- **High quality and maintainability are first priority.**
-- **Performance must be preserved or improved** — no startup/runtime/memory regressions.
+- **Preserve quality and maintainability; assess performance before implementation** under the `product-principles` §1 human-approval gate.
 - Essential startup path remains minimal; heavy work stays in extended/lazy flows.
 
 ## 4) Directory Structure
@@ -159,7 +158,7 @@ src/
 │       │                              #   conversation, built-in review task, latest review per
 │       │                              #   repository. See code-review/DESIGN.md
 │       ├── email-mcp/                 # Email-as-MCP tool server
-│       ├── git/                       # git CLI for a space's repositories (shallow discovery + opened-file/manual deep roots):
+│       ├── git/                       # git CLI for a space's repositories (remembered paths + shallow/opened-file discovery):
 │       │                              #   status, change lists for four compare scopes, file sides,
 │       │                              #   working-tree snapshots, stage/discard/commit/sync. Reads take
 │       │                              #   no index lock. No agent/conversation deps. See git/DESIGN.md

@@ -129,12 +129,19 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
   const { showConfirm, DialogComponent } = useConfirmDialog()
   const notify = useNotificationStore((s) => s.show)
   const workDir = useSpaceStore((s) => (s.currentSpace?.id === source.spaceId ? s.currentSpace.workingDir ?? s.currentSpace.path : null))
+  const previousWorkDir = useRef(workDir)
+  useEffect(() => {
+    if (!workDir || previousWorkDir.current === workDir) return
+    const previous = previousWorkDir.current
+    previousWorkDir.current = workDir
+    if (previous) void controller.resetWorkingDirectory()
+  }, [controller, workDir])
 
   const phase = useGit(controller, (s) => s.phase)
   const revealReadiness = useGit(controller, gitRevealReadiness)
   const git = useGit(controller, (s) => s.git)
   const repositories = useGit(controller, (s) => s.repositories)
-  const savedRepositories = useGit(controller, (s) => s.savedRepositories)
+  const unavailableRoots = useGit(controller, (s) => s.unavailableRoots)
   const repositoryBusy = useGit(controller, (s) => s.repositoryBusy)
   const repoRoot = useGit(controller, (s) => s.repoRoot)
   const status = useGit(controller, (s) => s.status)
@@ -148,7 +155,8 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
   const recount = useGit(controller, (s) => s.recount)
   const busyPaths = useGit(controller, (s) => s.busyPaths)
   const operation = useGit(controller, (s) => s.operation)
-  const repo = status?.repo ?? repositories.find((r) => r.root === repoRoot) ?? null
+  const selectedRepository = repositories.find((repository) => repository.root === repoRoot) ?? null
+  const repo = status?.repo.root === repoRoot ? status.repo : null
   const writesDisabled = repositoryBusy || refreshing || operation !== null
 
   // Lifetime: load on mount (opening or coming back to the tab), on window focus, on file events (hint only).
@@ -178,7 +186,7 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
     if (!active || active === document.body) rootRef.current?.focus({ preventScroll: true })
   }, [])
 
-  const repoName = repo?.name
+  const repoName = selectedRepository?.name
   useEffect(() => {
     setTabTitle(tabIdRef.current, repoName ? `${t('Changes')} · ${repoName}` : t('Changes'))
   }, [repoName, setTabTitle, t])
@@ -540,11 +548,6 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
     }
     if (!reveal.path || revealReadiness === 'pending') return
     const path = reveal.path
-    if (revealReadiness === 'unavailable' || !repoRoot) {
-      consume()
-      void revealFileAt(path, fileTarget(reveal))
-      return
-    }
     const owner = deepestRootOf(repositories.map((r) => r.root), path)
     if (owner && owner !== repoRoot) {
       if (switchingFor.current === reveal.seq) {
@@ -561,6 +564,11 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
         consume()
         void revealFileAt(path, fileTarget(reveal))
       })
+      return
+    }
+    if (revealReadiness === 'unavailable' || !repoRoot) {
+      consume()
+      void revealFileAt(path, fileTarget(reveal))
       return
     }
     consume()
@@ -623,7 +631,8 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
 
   const repositoryPicker = {
     repositories,
-    savedRepositories,
+    unavailableRoots,
+    selectedRepository,
     repo,
     disabled: repositoryBusy || operation !== null || busyPaths.size > 0,
     onSelectRepository: (root: string) => { void controller.selectRepository(root) },

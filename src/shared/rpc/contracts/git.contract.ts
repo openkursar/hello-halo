@@ -16,7 +16,9 @@ import type {
   GitFileContentsRequest,
   GitGraphQuery,
   GitRepository,
+  GitRepositoryDiscovery,
   GitRepositoryList,
+  GitRepositoryListOptions,
   GitRevisionOption,
   GitSnapshot,
   GitSyncResult,
@@ -30,11 +32,11 @@ export interface GitRpcResponse<T> extends RpcResponse<T> {
 type InRepo = [spaceId: string, repoRoot: string]
 
 export const gitRpc = {
-  gitListRepositories: rawRpcMethod<[spaceId: string], GitRpcResponse<GitRepositoryList>>('git:list-repositories'),
-  gitDiscoverRepository: rawRpcMethod<[spaceId: string, filePath: string], GitRpcResponse<GitRepository | null>>('git:discover-repository'),
+  gitListRepositories: rawRpcMethod<[spaceId: string, options?: GitRepositoryListOptions], GitRpcResponse<GitRepositoryList>>('git:list-repositories'),
+  gitDiscoverRepository: rawRpcMethod<[spaceId: string, filePath: string], GitRpcResponse<GitRepositoryDiscovery | null>>('git:discover-repository'),
   gitOpenRepository: rawRpcMethod<InRepo, GitRpcResponse<GitRepository>>('git:open-repository'),
   gitForgetRepository: rawRpcMethod<InRepo, GitRpcResponse<void>>('git:forget-repository'),
-  gitGetStatus: rawRpcMethod<InRepo, GitRpcResponse<GitWorkingTreeStatus>>('git:get-status'),
+  gitGetStatus: rawRpcMethod<[...InRepo, remember?: boolean], GitRpcResponse<GitWorkingTreeStatus>>('git:get-status'),
   gitGetChanges: rawRpcMethod<[...InRepo, scope: GitCompareScope], GitRpcResponse<GitChangeList>>('git:get-changes'),
   gitGetFileContents: rawRpcMethod<[...InRepo, request: GitFileContentsRequest], GitRpcResponse<GitFileContents>>('git:get-file-contents'),
   gitListRevisionOptions: rawRpcMethod<InRepo, GitRpcResponse<GitRevisionOption[]>>('git:list-revision-options'),

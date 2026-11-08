@@ -31,7 +31,7 @@ is a user action (open, refresh, click).
 | `locate.ts` | Which git binary, decided on first use and cached (§4). |
 | `context.ts` | `RepoContext` (a validated repository) and `run/read/exec` helpers. |
 | `repositories.ts` | Shallow and opened-file discovery, the request gate (`requireRepository`), branch summaries. |
-| `repository-store.ts` | Bounded, versioned manual repository records in space data; serialized atomic writes. |
+| `repository-store.ts` | Bounded, versioned remembered/dismissed paths in space data; serialized atomic writes. |
 | `paths.ts` | Repository-relative path validation, symlink-safe worktree resolution, argv batching. |
 | `parse.ts` | Pure parsers for git's `-z` formats. |
 | `files.ts` | What git does not print: untracked line counts, binary sniffing, `linguist-generated`. |
@@ -135,7 +135,7 @@ new git is picked up at once). A failure is otherwise re-checked after 60 s rath
   startup work, polling or watcher is added.
 - Every request names `spaceId` + `repoRoot`. `requireRepository` revalidates the space boundary and
   every directory component below it, at any depth: no dot-folders, dot traversal segments, symlink
-  directories or `.git` internals. Listing/opening verifies Git's top-level and metadata identity;
+  directories or `.git` internals. Discovery, opening and selected status reads verify Git's top-level and metadata identity;
   every request using a gitfile also verifies metadata identifying this worktree (linked-worktree backpointer or configured worktree).
   A separate git directory without a reverse pointer follows Git's gitfile binding; legitimate external metadata is allowed.
   The cache is never authorization. Full space-relative paths distinguish similarly named deep roots.
@@ -143,19 +143,28 @@ new git is picked up at once). A failure is otherwise re-checked after 60 s rath
   space. At most four probes run, 128 wait; excess gets `GIT_BUSY`. Session-discovered roots survive
   view unmount, bounded to 64 roots per space; space state is LRU-evicted at 32 spaces and invalidated
   when its working directory changes. No timers keep this state alive.
-- Manual roots live in `<space data>/.halo/git/repositories.json` (temporary spaces omit `.halo`):
-  `{ version: 1, workingDir, roots }`, at most 64 absolute roots, at most 1 MiB read asynchronously.
+- Verified file discoveries and explicitly opened roots share `<space data>/.halo/git/repositories.json`
+  (temporary spaces omit `.halo`): `{ version: 2, workingDir, roots, dismissedRoots }`. There are at most
+  64 remembered roots, 256 explicitly dismissed roots and 1 MiB of input. Version 1 manual records are
+  read into the same model; the next actual mutation writes version 2. Reads never rewrite records.
   Writes serialize per file and rename an exclusive temporary file atomically. Only pending writes
-  are resident (32 files / 128 writes); damaged/unreadable stores fail visibly and are never overwritten.
-  A different working-directory identity ignores old roots. Opening reads the summary before saving.
-- Lists combine shallow, session-discovered and saved roots without duplicates, reading summaries in
-  batches of eight. Optional `savedRepositories` retains `{ root, available }` even for unavailable
-  paths; listing never rewrites records. Skips warn once per root while unavailable (bounded to 128
-  warning keys per cached space). `forgetRepository` removes the saved and transient records, clears
-  probes so in-flight work cannot re-register them, and never touches repository files or metadata.
-- Summaries (`readRepositorySummary`) come from refs only — `symbolic-ref`, `for-each-ref` with
-  `%(upstream:track)` — so listing repositories costs the same in a huge repository as a small one.
-  Ahead/behind are as last fetched; nothing here touches the network.
+  are resident (32 files / 128 writes); damaged/unreadable stores are reported and never overwritten.
+  A different working-directory identity ignores old records. Repeated discovery does not write again.
+- Lists return path identities, never branch summaries or a precomputed availability flag. A known-list
+  request reads remembered/session roots and checks only the space root's `.git`; an explicit shallow
+  request also examines direct children. The view loads the selected repository independently while
+  shallow discovery supplements the list. Unselected remembered paths are not touched; they remain
+  selectable/removable when missing, and a failed selected load marks them unavailable until retried.
+  Selecting an unremembered shallow path requests remembering only after its status loads successfully;
+  routine status refreshes do not read or write repository records.
+- Removal persists a dismissal and invalidates probes, so neither shallow discovery nor late file
+  discoveries can restore it. Explicit opening clears that dismissal only after validation and saving.
+  Record failures leave file viewing and session discovery usable, but surface a user-visible warning.
+  Recorded paths never replace the request gate, and no operation changes repository files or metadata
+  merely to remember, restore or remove an entry.
+- Explicit opening and resolving read summaries (`readRepositorySummary`) from refs only —
+  `symbolic-ref`, `for-each-ref` with `%(upstream:track)`. Selected status carries its own branch
+  summary; listing reads none. Ahead/behind are as last fetched; nothing here touches the network.
 - Client paths are repository-relative, forward-slash, normalized: no absolute path, no `.`/`..`/empty
   segment, no NUL, nothing under `.git` (its config can hold credentials). Before the working tree is
   read or an item is trashed, the parent directory's real path must lie inside the repository's real
@@ -270,7 +279,7 @@ Median of 7 runs through the service (spawn + parse included). This repository: 
 
 | Operation | This repo | Synthetic 30k files (300 modified, 50 untracked) |
 |---|---|---|
-| list repositories (space with 11 repos) | 61 ms | 26 ms (1 repo) |
+| list repositories (historical eager summaries, 11 repos) | 61 ms | 26 ms (1 repo) |
 | status | 54 ms | 122 ms |
 | change list, uncommitted | 63 ms | 112 ms |
 | change list, staged | 31 ms | — |

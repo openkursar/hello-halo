@@ -98,16 +98,11 @@ function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf-8'))
 }
 
-// Write JSON file
-function writeJson(filePath, data) {
-  // Sort by key
-  const sorted = Object.keys(data)
-    .sort()
-    .reduce((obj, key) => {
-      obj[key] = data[key]
-      return obj
-    }, {})
-  fs.writeFileSync(filePath, JSON.stringify(sorted, null, 2) + '\n')
+// Extraction owns key order; translation only replaces values in that catalog.
+export function writeJson(filePath, data) {
+  const content = JSON.stringify(data, null, 2) + '\n'
+  if (fs.readFileSync(filePath, 'utf-8') === content) return
+  fs.writeFileSync(filePath, content)
 }
 
 // Find keys that need translation
@@ -421,7 +416,9 @@ async function main() {
   console.log(`🎉 Translation complete! ${totalTranslated} keys translated.\n`)
 }
 
-main().catch((err) => {
-  console.error('❌ Error:', err.message)
-  process.exit(1)
-})
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error('Error:', err.message)
+    process.exit(1)
+  })
+}

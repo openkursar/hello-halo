@@ -17,7 +17,9 @@ import type {
   GitFileContentsRequest,
   GitGraphQuery,
   GitRepository,
+  GitRepositoryEntry,
   GitRepositoryList,
+  GitRepositoryListOptions,
   GitReviewRecord,
   GitRevisionOption,
   GitSyncResult,
@@ -51,15 +53,26 @@ export function failureOf(error: unknown): GitFailure {
 }
 
 export const gitClient = {
-  listRepositories: (spaceId: string): Promise<GitRepositoryList> => unwrap(api.gitListRepositories(spaceId)),
-  onRepositoryDiscovered: (spaceId: string, listener: (repository: GitRepository) => void): (() => void) =>
+  listRepositories: async (spaceId: string, options?: GitRepositoryListOptions): Promise<GitRepositoryList> => {
+    const found = await unwrap(api.gitListRepositories(spaceId, options))
+    if (found.recordError) gitDiscovery.reportRecordFailure(spaceId, null, found.recordError)
+    return found
+  },
+  onRepositoryDiscovered: (spaceId: string, listener: (repository: GitRepositoryEntry) => void): (() => void) =>
     gitDiscovery.subscribe(spaceId, listener),
+  invalidateDiscovery: (spaceId: string): void => gitDiscovery.forget(spaceId),
   openRepository: (spaceId: string, repoRoot: string): Promise<GitRepository> =>
     unwrap(api.gitOpenRepository(spaceId, repoRoot)),
-  forgetRepository: (spaceId: string, repoRoot: string): Promise<void> =>
-    unwrap(api.gitForgetRepository(spaceId, repoRoot)),
-  getStatus: (spaceId: string, repoRoot: string): Promise<GitWorkingTreeStatus> =>
-    unwrap(api.gitGetStatus(spaceId, repoRoot)),
+  forgetRepository: async (spaceId: string, repoRoot: string): Promise<void> => {
+    gitDiscovery.invalidateProbes(spaceId)
+    await unwrap(api.gitForgetRepository(spaceId, repoRoot))
+    gitDiscovery.invalidateProbes(spaceId)
+  },
+  getStatus: async (spaceId: string, repoRoot: string, remember?: boolean): Promise<GitWorkingTreeStatus> => {
+    const status = await unwrap(remember === undefined ? api.gitGetStatus(spaceId, repoRoot) : api.gitGetStatus(spaceId, repoRoot, remember))
+    if (status.recordError) gitDiscovery.reportRecordFailure(spaceId, repoRoot, status.recordError)
+    return status
+  },
   getChanges: (spaceId: string, repoRoot: string, scope: GitCompareScope): Promise<GitChangeList> =>
     unwrap(api.gitGetChanges(spaceId, repoRoot, scope)),
   getFileContents: (spaceId: string, repoRoot: string, request: GitFileContentsRequest): Promise<GitFileContents> =>

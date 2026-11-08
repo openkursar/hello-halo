@@ -119,6 +119,7 @@ function ScopePicker({ spaceId, repo, scope, review, snapshotMissing, onScope, l
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
+        disabled={!repo}
         aria-label={t('Compare: {{scope}}', { scope: scopeLabel(scope, t) })}
         title={scopeLabel(scope, t)}
         className={`${TRIGGER} ${triggerHeight(layout)} min-w-[64px]`}

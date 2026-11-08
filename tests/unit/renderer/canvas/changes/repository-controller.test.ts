@@ -1,19 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { GitRepository, GitRepositoryList } from '../../../../../src/shared/types/git'
+import type { GitRepository, GitRepositoryEntry, GitRepositoryList } from '../../../../../src/shared/types/git'
 
 const api = vi.hoisted(() => ({
-  gitListRepositories: vi.fn(), gitOpenRepository: vi.fn(), gitForgetRepository: vi.fn(),
+  gitListRepositories: vi.fn(), gitDiscoverRepository: vi.fn(), gitOpenRepository: vi.fn(), gitForgetRepository: vi.fn(),
   gitGetStatus: vi.fn(), gitGetChanges: vi.fn(), codeReviewGetLatest: vi.fn(),
   gitStage: vi.fn(), gitCommit: vi.fn(), gitSync: vi.fn(),
 }))
 vi.mock('../../../../../src/renderer/api', () => ({ api }))
 import { createGitChangesController, gitRevealReadiness, type GitChangesController } from '../../../../../src/renderer/components/canvas/viewers/changes/state/git-changes-store'
 import { createViewMemory } from '../../../../../src/renderer/components/canvas/viewers/changes/state/view-memory'
+import { gitDiscovery } from '../../../../../src/renderer/services/git-discovery'
 
+const entry = (root: string): GitRepositoryEntry => ({ root, name: root.split('/').pop()!, relativePath: root, remembered: true })
 const repo = (root: string): GitRepository => ({ root, name: root.split('/').pop()!, relativePath: root, branch: 'main', head: 'abc', unborn: false, upstream: null, ahead: 0, behind: 0 })
-const first = repo('/space/a')
-const second = repo('/space/deep/b')
-const third = repo('/space/c')
+const first = entry('/space/a')
+const second = entry('/space/deep/b')
+const third = entry('/space/c')
 const ok = <T>(data: T) => ({ success: true, data })
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -30,45 +32,113 @@ function create() {
 }
 beforeEach(() => {
   vi.resetAllMocks()
+  gitDiscovery.forget()
   listed = { git: { available: true, version: '2.45' }, repositories: [first] }
   api.gitListRepositories.mockImplementation(async () => ok(listed))
   api.gitGetStatus.mockImplementation(async (_space, root) => ok({ repo: repo(root), staged: [], unstaged: [], conflicted: [], operation: null, truncated: false }))
   api.gitGetChanges.mockImplementation(async (_space, root, scope) => ok({ repoRoot: root, scope, beforeRevision: 'abc', files: [], truncated: false }))
   api.codeReviewGetLatest.mockResolvedValue(ok(null))
   api.gitOpenRepository.mockImplementation(async (_space, root) => {
-    const opened = repo(root)
-    listed = { ...listed, repositories: [...listed.repositories, opened], savedRepositories: [{ root, available: true }] }
-    return ok(opened)
+    listed = { ...listed, repositories: [...listed.repositories.filter((item) => item.root !== root), entry(root)] }
+    return ok(repo(root))
   })
   api.gitForgetRepository.mockImplementation(async (_space, root) => {
-    listed = { ...listed, repositories: listed.repositories.filter((item) => item.root !== root), savedRepositories: [] }
+    listed = { ...listed, repositories: listed.repositories.filter((item) => item.root !== root) }
     return ok(undefined)
   })
 })
 afterEach(() => {
   controllers.splice(0).forEach((controller) => controller.dispose())
+  gitDiscovery.forget()
 })
 
 describe('manual repositories in a mounted changes view', () => {
-  it('defaults legacy saved rows to empty and selects the opened root after relisting', async () => {
+  it('keeps path-only rows and selects the opened root after relisting', async () => {
     const { controller, memory } = create()
     await controller.load()
-    expect(controller.store.getState().savedRepositories).toEqual([])
+    expect(controller.store.getState().repositories).toEqual([first])
     expect(await controller.openRepository(second.root)).toBeNull()
     expect(api.gitOpenRepository).toHaveBeenCalledWith('space', second.root)
-    expect(api.gitListRepositories).toHaveBeenCalledTimes(2)
+    expect(api.gitListRepositories.mock.calls).toEqual([
+      ['space', { shallow: false }], ['space', { shallow: true }],
+      ['space', { shallow: false }], ['space', { shallow: true }],
+    ])
     expect(memory.repoRoot).toBe(second.root)
-    expect(controller.store.getState()).toMatchObject({ repoRoot: second.root, savedRepositories: [{ root: second.root, available: true }] })
+    expect(controller.store.getState()).toMatchObject({ repoRoot: second.root, repositories: [first, second] })
+    expect(controller.store.getState().repositories.every((item) => !('branch' in item))).toBe(true)
   })
 
-  it('keeps unavailable saved rows with zero available repositories and removes only their records', async () => {
-    listed = { ...listed, repositories: [], savedRepositories: [{ root: second.root, available: false }] }
+  it('remembers only a selected shallow path and skips record requests on ordinary reloads', async () => {
+    listed = { ...listed, repositories: [first, { ...second, remembered: false }] }
+    api.gitGetStatus.mockImplementation(async (_space, root, remember) => ok({ repo: repo(root), staged: [], unstaged: [], conflicted: [], operation: null, truncated: false, ...(remember ? { remembered: true } : {}) }))
     const { controller } = create()
     await controller.load()
-    expect(controller.store.getState()).toMatchObject({ phase: 'no-repo', savedRepositories: listed.savedRepositories })
+    expect(api.gitGetStatus.mock.calls).toEqual([['space', first.root]])
+    await controller.selectRepository(second.root)
+    expect(api.gitGetStatus).toHaveBeenLastCalledWith('space', second.root, true)
+    expect(controller.store.getState().repositories.find((item) => item.root === second.root)?.remembered).toBe(true)
+    await controller.load()
+    expect(api.gitGetStatus).toHaveBeenLastCalledWith('space', second.root)
+    expect(controller.store.getState().repoRoot).toBe(second.root)
+  })
+
+  it('keeps a failed selected path removable even with no usable repositories', async () => {
+    listed = { ...listed, repositories: [second] }
+    api.gitGetStatus.mockResolvedValueOnce({ success: false, code: 'GIT_NOT_A_REPOSITORY' })
+    const { controller } = create()
+    await controller.load()
+    expect(controller.store.getState()).toMatchObject({ phase: 'error', repoRoot: second.root, repositories: [second] })
+    expect(controller.store.getState().unavailableRoots).toEqual(new Set([second.root]))
     await controller.forgetRepository(second.root)
     expect(api.gitForgetRepository).toHaveBeenCalledWith('space', second.root)
-    expect(controller.store.getState()).toMatchObject({ phase: 'no-repo', savedRepositories: [] })
+    expect(controller.store.getState()).toMatchObject({ phase: 'no-repo', repoRoot: null, repositories: [], unavailableRoots: new Set() })
+  })
+
+  it('clears old repository memory when its last entry is removed before another repository opens', async () => {
+    const { controller, memory } = create()
+    await controller.load()
+    memory.scope = { kind: 'commit', revision: 'old-commit' }
+    memory.detail = { kind: 'file', items: ['old.ts'], index: 0 }
+    memory.forced = ['old.ts']
+    await controller.forgetRepository(first.root)
+    expect(memory).toMatchObject({ repoRoot: undefined, detail: null, forced: [], scope: { kind: 'uncommitted' } })
+    await controller.openRepository(second.root)
+    expect(api.gitGetChanges).toHaveBeenLastCalledWith('space', second.root, { kind: 'uncommitted' })
+  })
+
+  it('invalidates old paths and results when the same space changes its working directory', async () => {
+    const { controller, memory } = create()
+    await controller.load()
+    const status = deferred<ReturnType<typeof ok<unknown>>>()
+    api.gitGetStatus.mockReturnValueOnce(status.promise)
+    const stale = controller.load()
+    listed = { ...listed, repositories: [second] }
+    memory.scope = { kind: 'commit', revision: 'old-commit' }
+    memory.detail = { kind: 'file', items: ['old.ts'], index: 0 }
+    memory.forced = ['old.ts']
+    await controller.resetWorkingDirectory()
+    const state = controller.store.getState()
+    status.resolve(ok({ repo: repo(first.root) }))
+    await stale
+    expect(controller.store.getState()).toBe(state)
+    expect(state).toMatchObject({ phase: 'ready', repoRoot: second.root, repositories: [second] })
+    expect(memory).toMatchObject({ repoRoot: second.root, detail: null, forced: [], scope: { kind: 'uncommitted' } })
+  })
+
+  it('ignores a manual opening that finishes after the working directory was replaced', async () => {
+    const { controller, memory } = create()
+    await controller.load()
+    const opening = deferred<ReturnType<typeof ok<GitRepository>>>()
+    api.gitOpenRepository.mockReturnValueOnce(opening.promise)
+    const stale = controller.openRepository(second.root)
+    listed = { ...listed, repositories: [third] }
+    await controller.resetWorkingDirectory()
+    const state = controller.store.getState()
+    opening.resolve(ok(repo(second.root)))
+    await stale
+    expect(controller.store.getState()).toBe(state)
+    expect(memory.repoRoot).toBe(third.root)
+    expect(state.repositoryBusy).toBe(false)
   })
 
   it('reads remembered rows again after a viewer remount', async () => {
@@ -77,7 +147,8 @@ describe('manual repositories in a mounted changes view', () => {
     controller.dispose()
     const remounted = create().controller
     await remounted.load()
-    expect(remounted.store.getState().savedRepositories).toEqual([{ root: second.root, available: true }])
+    expect(remounted.store.getState().repositories).toEqual([first, second])
+    expect(remounted.store.getState().repositories.find((item) => item.root === second.root)?.remembered).toBe(true)
   })
 
   it('preserves detail, forced files and commit scope when the same tab remounts', async () => {
@@ -161,15 +232,16 @@ describe('manual repositories in a mounted changes view', () => {
     expect(gitRevealReadiness(controller.store.getState())).toBe('unavailable')
   })
 
-  it('preserves selection when forgetting another root or one still discovered automatically', async () => {
-    listed = { ...listed, repositories: [first, second], savedRepositories: [{ root: second.root, available: true }] }
+  it('preserves selection when forgetting another root and respects removal of automatic discoveries', async () => {
+    listed = { ...listed, repositories: [first, { ...second, remembered: false }] }
     const { controller, memory } = create()
     await controller.load()
     await controller.forgetRepository(second.root)
     expect(memory.repoRoot).toBe(first.root)
-    api.gitForgetRepository.mockImplementationOnce(async () => { listed = { ...listed, savedRepositories: [] }; return ok(undefined) })
+    expect(controller.store.getState().repositories).toEqual([first])
     await controller.forgetRepository(first.root)
-    expect(memory.repoRoot).toBe(first.root)
+    expect(memory.repoRoot).toBeUndefined()
+    expect(controller.store.getState()).toMatchObject({ phase: 'no-repo', repoRoot: null, repositories: [] })
   })
 
   it('drops the selected removed root and its stale data, even if the replacement cannot load', async () => {
@@ -180,6 +252,80 @@ describe('manual repositories in a mounted changes view', () => {
     await controller.forgetRepository(first.root)
     expect(memory.repoRoot).toBe(second.root)
     expect(controller.store.getState()).toMatchObject({ repoRoot: second.root, list: null, status: null, repositories: [second] })
+  })
+
+  it('touches only the selected path and keeps a failed target selected until a successful retry', async () => {
+    listed = { ...listed, repositories: [first, second, third] }
+    const { controller, memory } = create()
+    await controller.load()
+    expect(api.gitGetStatus.mock.calls.map((call) => call[1])).toEqual([first.root])
+    expect(api.gitGetChanges.mock.calls.map((call) => call[1])).toEqual([first.root])
+    expect(api.codeReviewGetLatest.mock.calls.map((call) => call[1])).toEqual([first.root])
+    api.gitGetStatus.mockResolvedValueOnce({ success: false, code: 'GIT_NOT_A_REPOSITORY', error: 'gone' })
+    await controller.selectRepository(second.root)
+    expect(memory.repoRoot).toBe(second.root)
+    expect(controller.store.getState()).toMatchObject({ phase: 'error', repoRoot: second.root, repositories: [first, second, third], status: null, list: null })
+    expect(controller.store.getState().unavailableRoots).toEqual(new Set([second.root]))
+    expect(api.gitGetStatus.mock.calls.map((call) => call[1])).toEqual([first.root, second.root])
+    await controller.selectRepository(second.root)
+    expect(controller.store.getState()).toMatchObject({ phase: 'ready', repoRoot: second.root, unavailableRoots: new Set() })
+    expect(api.gitListRepositories).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops the displayed status and diff when reloading the same selected repository fails', async () => {
+    const { controller, memory } = create()
+    await controller.load()
+    memory.detail = { kind: 'file', items: ['a.ts'], index: 0 }
+    memory.forced = ['a.ts']
+    memory.scope = { kind: 'commit', revision: 'abc' }
+    api.gitGetStatus.mockResolvedValueOnce({ success: false, code: 'GIT_FAILED', error: 'unreadable' })
+    await controller.load()
+    expect(controller.store.getState()).toMatchObject({ phase: 'error', repoRoot: first.root, status: null, list: null })
+    expect(memory).toMatchObject({ repoRoot: first.root, detail: { kind: 'file' }, forced: ['a.ts'], scope: { kind: 'commit', revision: 'abc' } })
+    expect(gitRevealReadiness(controller.store.getState())).toBe('unavailable')
+  })
+
+  it('prunes unavailable markers when paths leave the current list and does not mark scope failures unavailable', async () => {
+    listed = { ...listed, repositories: [first, second] }
+    const { controller } = create()
+    await controller.load()
+    api.gitGetStatus.mockResolvedValueOnce({ success: false, code: 'GIT_FAILED' })
+    await controller.selectRepository(second.root)
+    await controller.selectRepository(first.root)
+    expect(controller.store.getState().unavailableRoots).toEqual(new Set([second.root]))
+    await controller.forgetRepository(second.root)
+    expect(controller.store.getState().unavailableRoots).toEqual(new Set())
+    api.gitGetChanges.mockResolvedValueOnce({ success: false, code: 'GIT_REVISION_NOT_FOUND' })
+    await controller.setScope({ kind: 'revision', revision: 'gone', mergeBase: false })
+    expect(controller.store.getState()).toMatchObject({ phase: 'ready', unavailableRoots: new Set(), list: null, listError: { code: 'GIT_REVISION_NOT_FOUND' } })
+    expect(controller.store.getState().status?.repo.root).toBe(first.root)
+  })
+
+  it('invalidates held opened-file probes when removing a path, without reviving it on late completion', async () => {
+    listed = { ...listed, repositories: [first, second] }
+    const { controller } = create()
+    await controller.load()
+    const discovery = deferred<ReturnType<typeof ok<unknown>>>()
+    api.gitDiscoverRepository.mockReturnValueOnce(discovery.promise)
+    gitDiscovery.noteFile('space', '/space/deep/b/file.ts')
+    await Promise.resolve()
+    await controller.forgetRepository(second.root)
+    discovery.resolve(ok({ repository: { root: second.root, name: second.name, relativePath: second.relativePath }, remembered: true }))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(controller.store.getState().repositories).toEqual([first])
+    expect(controller.store.getState().repoRoot).toBe(first.root)
+  })
+
+  it('invalidates older shallow listings when removal completes', async () => {
+    listed = { ...listed, repositories: [first, second] }
+    const shallow = deferred<ReturnType<typeof ok<GitRepositoryList>>>()
+    api.gitListRepositories.mockImplementationOnce(async () => ok(listed)).mockReturnValueOnce(shallow.promise)
+    const { controller } = create()
+    await controller.load()
+    await controller.forgetRepository(second.root)
+    shallow.resolve(ok({ git: listed.git, repositories: [first, second] }))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(controller.store.getState().repositories).toEqual([first])
   })
 
   it('surfaces open failures without changing selection', async () => {
@@ -200,7 +346,7 @@ describe('manual repositories in a mounted changes view', () => {
     const pending = controller.openRepository(second.root)
     await controller.selectRepository(third.root)
     listed = { ...listed, repositories: [first, second, third] }
-    opening.resolve(ok(second))
+    opening.resolve(ok(repo(second.root)))
     await pending
     expect(memory.repoRoot).toBe(third.root)
     expect(controller.store.getState().repositories).toEqual([first, second, third])
@@ -216,7 +362,7 @@ describe('manual repositories in a mounted changes view', () => {
     const opening = controller.openRepository(second.root)
     await vi.waitFor(() => expect(controller.store.getState().repositories).toHaveLength(3))
     await controller.selectRepository(third.root)
-    status.resolve(ok({ repo: second }))
+    status.resolve(ok({ repo: repo(second.root) }))
     await opening
     expect(controller.store.getState().repositories).toHaveLength(3)
     expect(controller.store.getState().repoRoot).toBe(third.root)
@@ -243,11 +389,11 @@ describe('manual repositories in a mounted changes view', () => {
     const pending = operation === 'open' ? controller.openRepository(second.root) : controller.forgetRepository(first.root)
     controller.dispose()
     const state = controller.store.getState()
-    request.resolve(ok(operation === 'open' ? second : undefined))
+    request.resolve(ok(operation === 'open' ? repo(second.root) : undefined))
     await pending
     expect(memory.repoRoot).toBe(first.root)
     expect(controller.store.getState()).toBe(state)
-    expect(api.gitListRepositories).toHaveBeenCalledTimes(1)
+    expect(api.gitListRepositories).toHaveBeenCalledTimes(2)
   })
 
   it('does not let a stale review read rewrite the current scope or start old-repository reads', async () => {
@@ -262,6 +408,37 @@ describe('manual repositories in a mounted changes view', () => {
     await stale
     expect(memory.scope).toEqual({ kind: 'staged' })
     expect(api.gitGetChanges).toHaveBeenCalledTimes(reads)
+  })
+
+  it('does not rewrite the retained scope from a late review after the selected status failed', async () => {
+    const { controller, memory } = create()
+    await controller.load()
+    const review = deferred<ReturnType<typeof ok<null>>>()
+    api.codeReviewGetLatest.mockReturnValueOnce(review.promise)
+    api.gitGetStatus.mockResolvedValueOnce({ success: false, code: 'GIT_NOT_A_REPOSITORY' })
+    await controller.setScope({ kind: 'since-review' })
+    const reads = api.gitGetChanges.mock.calls.length
+    review.resolve(ok(null))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(memory.scope).toEqual({ kind: 'since-review' })
+    expect(api.gitGetChanges).toHaveBeenCalledTimes(reads)
+    expect(controller.store.getState()).toMatchObject({ phase: 'error', status: null, list: null })
+  })
+
+  it('clears a selected unavailable marker as soon as its retried status succeeds', async () => {
+    const { controller } = create()
+    await controller.load()
+    api.gitGetStatus.mockResolvedValueOnce({ success: false, code: 'GIT_FAILED' })
+    await controller.load()
+    const list = deferred<ReturnType<typeof ok<unknown>>>()
+    api.gitGetChanges.mockReturnValueOnce(list.promise)
+    const retrying = controller.selectRepository(first.root)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(controller.store.getState().unavailableRoots).toEqual(new Set())
+    expect(gitRevealReadiness(controller.store.getState())).toBe('pending')
+    list.resolve(ok({ scope: { kind: 'uncommitted' }, beforeRevision: 'abc', files: [], truncated: false }))
+    await retrying
+    expect(gitRevealReadiness(controller.store.getState())).toBe('ready')
   })
 
   it('does not publish a list that arrives after disposal', async () => {
@@ -302,7 +479,7 @@ describe('manual repositories in a mounted changes view', () => {
     expect(await controller.stage(['a.ts'])).toEqual({ code: 'GIT_BUSY' })
     expect(await controller.commit({ message: 'test', amend: false, push: false })).toEqual({ failure: { code: 'GIT_BUSY' } })
     expect(await controller.sync()).toEqual({ failure: { code: 'GIT_BUSY' } })
-    request.resolve(ok(first))
+    request.resolve(ok(repo(first.root)))
     await pending
   })
 })

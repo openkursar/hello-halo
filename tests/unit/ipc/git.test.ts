@@ -102,22 +102,23 @@ describe('git transport', () => {
     expect(before.data.repositories.map((entry: { root: string }) => entry.root)).not.toContain(repoRoot)
 
     const discovered = await handlers.get('git:discover-repository')!({}, 's', filePath)
-    expect(discovered).toMatchObject({ success: true, data: { root: repoRoot, relativePath: 'projects/nested/repo with spaces' } })
+    expect(discovered).toMatchObject({ success: true, data: { repository: { root: repoRoot, relativePath: 'projects/nested/repo with spaces' }, remembered: true } })
     expect(await post('/api/git/discover-repository', { spaceId: 's', filePath })).toEqual(discovered)
 
     const opened = await handlers.get('git:open-repository')!({}, 's', repoRoot)
-    expect(opened).toEqual(discovered)
+    expect(opened).toMatchObject({ success: true, data: { ...discovered.data.repository, branch: 'main' } })
     expect(await post('/api/git/open-repository', { spaceId: 's', repoRoot })).toEqual(opened)
     const listed = await handlers.get('git:list-repositories')!({}, 's')
-    expect(listed.data.savedRepositories).toEqual([{ root: repoRoot, available: true }])
+    expect(listed.data.repositories).toContainEqual({ ...discovered.data.repository, remembered: true })
+    expect(listed.data.repositories.every((entry: object) => !('branch' in entry))).toBe(true)
     expect(await post('/api/git/repositories', { spaceId: 's' })).toEqual(listed)
 
     expect(await handlers.get('git:forget-repository')!({}, 's', repoRoot)).toEqual({ success: true, data: undefined })
     expect(await post('/api/git/open-repository', { spaceId: 's', repoRoot })).toEqual(opened)
     expect(await post('/api/git/forget-repository', { spaceId: 's', repoRoot })).toEqual({ success: true })
     const forgotten = await post('/api/git/repositories', { spaceId: 's' })
-    expect(forgotten.data.savedRepositories ?? []).toEqual([])
     expect(forgotten.data.repositories.map((entry: { root: string }) => entry.root)).not.toContain(repoRoot)
+    expect(await post('/api/git/discover-repository', { spaceId: 's', filePath })).toEqual({ success: true, data: null })
     expect(readFileSync(filePath, 'utf8')).toBe('export const value = 1\n')
     expect(readFileSync(join(repoRoot, '.git', 'index'))).toEqual(index)
     expect(existsSync(join(repoRoot, '.git', 'HEAD'))).toBe(true)
@@ -129,10 +130,40 @@ describe('git transport', () => {
     expect(await post('/api/git/open-repository', { spaceId: 's', repoRoot })).toMatchObject({ success: true })
     rmSync(repoRoot, { recursive: true, force: true })
     const listed = await handlers.get('git:list-repositories')!({}, 's')
-    expect(listed.data.savedRepositories).toEqual([{ root: repoRoot, available: false }])
+    expect(listed.data.repositories).toContainEqual({ root: repoRoot, name: 'repo', relativePath: 'projects/unavailable/repo', remembered: true })
+    expect(await post('/api/git/status', { spaceId: 's', repoRoot })).toMatchObject({ success: false, code: 'GIT_NOT_A_REPOSITORY' })
     expect(await post('/api/git/repositories', { spaceId: 's' })).toEqual(listed)
     expect(await handlers.get('git:forget-repository')!({}, 's', repoRoot)).toEqual({ success: true, data: undefined })
     expect(await post('/api/git/forget-repository', { spaceId: 's', repoRoot })).toEqual({ success: true })
+  })
+
+  it('remembers a selected shallow repository through identical status options on either transport', async () => {
+    const root = join(dir, 'selected-child')
+    const child = initRepo(root)
+    child.write('a.txt', 'a\n')
+    const ipc = await handlers.get('git:get-status')!({}, 's', root, true)
+    expect(ipc).toMatchObject({ success: true, data: { repo: { root }, remembered: true } })
+    expect(await post('/api/git/status', { spaceId: 's', repoRoot: root, remember: true })).toEqual(ipc)
+    expect((await post('/api/git/repositories', { spaceId: 's' })).data.repositories).toContainEqual({ root, name: 'selected-child', relativePath: 'selected-child', remembered: true })
+    expect(await post('/api/git/status', { spaceId: 's', repoRoot: root, remember: 'yes' })).toMatchObject({ success: false, code: 'GIT_INVALID_ARGUMENT' })
+    await post('/api/git/forget-repository', { spaceId: 's', repoRoot: root })
+    expect(await post('/api/git/status', { spaceId: 's', repoRoot: root, remember: true })).toMatchObject({ success: true, data: { remembered: false } })
+    expect((await post('/api/git/repositories', { spaceId: 's', options: { shallow: true } })).data.repositories.some((entry: { root: string }) => entry.root === root)).toBe(false)
+  })
+
+  it('keeps known and shallow path listing identical across transports', async () => {
+    const nested = initRepo(join(dir, 'shallow-only'))
+    for (const shallow of [false, true]) {
+      const options = { shallow }
+      const ipc = await handlers.get('git:list-repositories')!({}, 's', options)
+      expect(await post('/api/git/repositories', { spaceId: 's', options })).toEqual(ipc)
+      expect(ipc.data.repositories.some((entry: { root: string }) => entry.root === nested.root)).toBe(shallow)
+    }
+    for (const options of [null, {}, { shallow: 'yes' }, 1]) {
+      const ipc = await handlers.get('git:list-repositories')!({}, 's', options)
+      expect(ipc).toMatchObject({ success: false, code: 'GIT_INVALID_ARGUMENT' })
+      expect(await post('/api/git/repositories', { spaceId: 's', options })).toEqual(ipc)
+    }
   })
 
   it('returns null discovery results without turning them into failures', async () => {

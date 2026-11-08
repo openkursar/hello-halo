@@ -1,5 +1,7 @@
 import { api } from '../api'
-import type { GitRepository } from '../../shared/types/git'
+import i18n from '../i18n'
+import { useNotificationStore } from '../stores/notification.store'
+import type { GitRepositoryEntry, GitRepositoryRecordFailure } from '../../shared/types/git'
 
 const MAX_PROBES = 128
 const RETRY_AFTER_MS = 60_000
@@ -14,9 +16,29 @@ interface Probe {
 export class GitDiscovery {
   private probes = new Map<string, Probe>()
   private pendingCount = 0
-  private listeners = new Map<string, Set<(repository: GitRepository) => void>>()
+  private listeners = new Map<string, Set<(repository: GitRepositoryEntry) => void>>()
+  private recordFailures = new Map<string, string>()
 
-  subscribe(spaceId: string, listener: (repository: GitRepository) => void): () => void {
+  /** List and file discovery share one bounded notification history, keyed by space and root. */
+  reportRecordFailure(spaceId: string, root: string | null, failure?: GitRepositoryRecordFailure): void {
+    if (!failure) return
+    const key = JSON.stringify([spaceId, root])
+    if (this.recordFailures.has(key)) return
+    this.recordFailures.set(key, spaceId)
+    if (this.recordFailures.size > MAX_PROBES) this.recordFailures.delete(this.recordFailures.keys().next().value!)
+    console.warn('[GitDiscovery] Repository paths were not remembered:', { spaceId, root, code: failure.code })
+    useNotificationStore.getState().show({
+      id: 'git-repository-record-failed',
+      title: i18n.t('Repository paths could not be remembered'),
+      body: root
+        ? i18n.t('{{path}} is available for this session, but could not be remembered. Your files are unaffected.', { path: root })
+        : i18n.t('Discovered repositories are available for this session, but could not be remembered. Your files are unaffected.'),
+      variant: 'warning',
+      duration: 8000,
+    })
+  }
+
+  subscribe(spaceId: string, listener: (repository: GitRepositoryEntry) => void): () => void {
     const listeners = this.listeners.get(spaceId) ?? new Set()
     listeners.add(listener)
     this.listeners.set(spaceId, listeners)
@@ -51,7 +73,10 @@ export class GitDiscovery {
       if (!response.success) {
         console.warn('[GitDiscovery] Opened-file repository could not be discovered:', response.code, response.error)
       } else if (response.data && this.probes.get(key) === probe) {
-        for (const listener of this.listeners.get(spaceId) ?? []) listener(response.data)
+        const { repository, remembered, recordError } = response.data
+        this.reportRecordFailure(spaceId, repository.root, recordError)
+        const entry: GitRepositoryEntry = { ...repository, remembered }
+        for (const listener of this.listeners.get(spaceId) ?? []) listener(entry)
       }
     }).catch((error: unknown) => {
       console.warn('[GitDiscovery] Opened-file repository request failed:', error)
@@ -62,9 +87,16 @@ export class GitDiscovery {
     })
   }
 
-  forget(spaceId?: string): void {
+  invalidateProbes(spaceId?: string): void {
     for (const [key, probe] of this.probes) {
       if (!spaceId || probe.spaceId === spaceId) this.probes.delete(key)
+    }
+  }
+
+  forget(spaceId?: string): void {
+    this.invalidateProbes(spaceId)
+    for (const [key, owner] of this.recordFailures) {
+      if (!spaceId || owner === spaceId) this.recordFailures.delete(key)
     }
   }
 }

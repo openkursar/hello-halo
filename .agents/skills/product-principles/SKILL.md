@@ -5,24 +5,32 @@ description: Halo's product design principles. Halo is a performance-sensitive E
 
 # Product design principles
 
-Halo is a performance-sensitive Electron app. Startup speed and UI
-responsiveness come first; features come second. Design starts from restraint
-(the VS Code philosophy): a feature ships only if it is clearly necessary, or
-its cost is low.
+Halo is a performance-sensitive Electron app. Protect startup and interaction
+responsiveness through restrained scope and simple, on-demand, bounded work.
+Performance trade-offs are explicit human decisions, not a license for premature
+optimization.
 
-## 1. Price every feature before building or keeping it
+## 1. Review performance before building or approving
 
-Two costs, both counted:
+Every change, however small, must weigh user benefit against runtime costs
+(CPU, memory, disk/network I/O) and upkeep. Check cold/warm startup **to usable**,
+interaction/high-frequency work, background/resident costs and growth with heavy
+user data across affected desktop, remote web and mobile scenarios — including
+when the feature is unused. Stay within the requested scope.
 
-- **Runtime cost** — main-thread time, disk I/O, memory, and how it scales. Judge
-  it at the scale of heavy users (tens to hundreds of spaces, thousands of
-  conversations, many installed apps), not a fresh install.
-- **Upkeep cost** — state that must stay in sync and correct forever (a cached
-  count, a mirror of files on disk, a derived index), plus the code paths that
-  maintain it.
+**Human approval:** Before implementing or approving added startup work, ongoing
+overhead, data-size-dependent computation or a plausible responsiveness regression,
+state the benefit, affected scenarios, cost, evidence/uncertainty, cheaper alternative
+and recommendation; obtain explicit human approval. Do not decide that the cost
+is acceptable for the owner.
 
-Decision rule: **low benefit + ongoing upkeep → remove it, don't optimize it.**
-Optimizing a feature nobody needs is still paying for it.
+Local, bounded work outside these cases needs no extra performance approval.
+Reuse explicit prior approval unless its scope is exceeded. Match measurement to
+impact; code inspection alone is not runtime evidence.
+
+**Low benefit + recurring cost → recommend simplifying, omitting or removing,
+not optimizing by default.** Humans decide; never use performance to justify
+unapproved feature removal or bypassing architecture, correctness or safety.
 
 ## 2. Deferred is not free
 
@@ -88,7 +96,6 @@ its own turn right after.
 
 ## 8. When recommending to the owner
 
-State the benefit to the user and both costs in plain product terms, then give
-a recommendation. When benefit is low and cost is medium or higher, the default
-recommendation is to remove. For anything a person interacts with, also say what
-they must learn to use it — the answer should be nothing.
+Apply §1's benefit/cost decision rule in plain product terms. For anything a
+person interacts with, also say what they must learn to use it — the answer
+should be nothing.

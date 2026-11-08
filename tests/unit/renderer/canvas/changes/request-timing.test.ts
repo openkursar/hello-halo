@@ -151,7 +151,7 @@ const file = { key: 'src/a.ts', path: 'src/a.ts', absPath: '/w/repo/src/a.ts', s
 describe('git changes controller timing', () => {
   beforeEach(() => {
     for (const fn of Object.values(gitApi)) fn.mockReset()
-    gitApi.gitListRepositories.mockImplementation(() => ok({ git: { available: true, version: '2.45.0' }, repositories: [status().repo] }))
+    gitApi.gitListRepositories.mockImplementation(() => ok({ git: { available: true, version: '2.45.0' }, repositories: [{ root: '/w/repo', name: 'repo', relativePath: '', remembered: true }] }))
     gitApi.gitGetStatus.mockImplementation(() => ok(status()))
     gitApi.gitGetChanges.mockImplementation((_s: string, _r: string, scope: unknown) => ok({ scope, beforeRevision: 'abc', files: [changed('src/a.ts')], truncated: false }))
     gitApi.codeReviewGetLatest.mockImplementation(() => ok(null))

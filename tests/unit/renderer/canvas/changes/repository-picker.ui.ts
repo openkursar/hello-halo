@@ -18,6 +18,7 @@ beforeAll(async () => {
         import React from 'react';
         import { createRoot } from 'react-dom/client';
         import { RepositoryPicker } from './src/renderer/components/canvas/viewers/changes/top-bar/RepositoryPicker';
+        import { TopBar } from './src/renderer/components/canvas/viewers/changes/top-bar/TopBar';
         const root = createRoot(document.getElementById('root'));
         window.mountPicker = (options = {}) => {
           window.calls = [];
@@ -25,14 +26,20 @@ beforeAll(async () => {
           window.failure = null;
           window.remote = !!options.remote;
           const repo = { root: '/space/repo', name: 'repo', branch: 'main', head: 'abc', unborn: false, relativePath: '', upstream: null, ahead: 0, behind: 0 };
+          const entry = { root: repo.root, name: repo.name, relativePath: repo.relativePath, remembered: !!options.remembered };
+          const repositories = options.repositories ?? (options.empty ? [] : [entry]);
           const props = {
-            repositories: options.empty ? [] : [repo], repo: options.empty ? null : repo,
-            savedRepositories: options.saved ?? [], disabled: !!options.disabled,
+            repositories, selectedRepository: options.empty ? null : repositories[0],
+            repo: options.empty || options.noStatus ? null : options.summary ?? repo,
+            unavailableRoots: new Set(options.unavailable ?? []), disabled: !!options.disabled,
             onSelectRepository: path => window.calls.push(['select', path]),
             onOpenRepository: async path => { window.calls.push(['open', path]); return window.failure },
             onForgetRepository: async path => { window.calls.push(['forget', path]); return window.failure },
           };
-          root.render(React.createElement(RepositoryPicker, { ...props, key: Math.random() }));
+          const topBar = { spaceId: 'space', scope: { kind: 'uncommitted' }, review: null, snapshotMissing: false,
+            onScope: scope => window.calls.push(['scope', scope]), totals: null, page: 'changes', onPage: () => {},
+            tools: null, toolsShown: false, panelToggle: null, layout: { stacked: true, hideMinorStats: true } };
+          root.render(React.createElement(options.topBar ? TopBar : RepositoryPicker, { ...props, ...topBar, key: Math.random() }));
         };
         window.unmountPicker = () => root.render(null);
       `,
@@ -43,10 +50,10 @@ beforeAll(async () => {
     plugins: [{
       name: 'picker-fixtures',
       setup(builder) {
-        builder.onResolve({ filter: /^\.\.\/.*\/(api|i18n)$/ }, ({ path }) => ({ path: path.endsWith('/api') ? 'api' : 'i18n', namespace: 'fixture' }))
+        builder.onResolve({ filter: /^(\.\.\/)+(api|i18n)$/ }, ({ path }) => ({ path: path.endsWith('/api') ? 'api' : 'i18n', namespace: 'fixture' }))
         builder.onLoad({ filter: /.*/, namespace: 'fixture' }, ({ path }) => ({ contents: path === 'api'
           ? `export const api = { isRemoteMode: () => window.remote, selectFolder: async () => { window.calls.push(['picker']); return window.pick } };`
-          : `const t = (key, values = {}) => key.replace(/\\{\\{(\\w+)\\}\\}/g, (_, name) => values[name] ?? ''); export const useTranslation = () => ({ t });` }))
+          : `const t = (key, values = {}) => key.replace(/\\{\\{(\\w+)\\}\\}/g, (_, name) => values[name] ?? ''); export default { t }; export const useTranslation = () => ({ t, i18n: { language: 'en' } });` }))
       },
     }],
   })
@@ -110,7 +117,7 @@ describe('repository picker (isolated browser UI, mocked application API)', () =
   })
 
   it('renders removable unavailable rows without nested buttons or file deletion actions', async () => {
-    await mount({ empty: true, saved: [{ root: '/space/gone', available: false }] })
+    await mount({ repositories: [{ root: '/space/gone', name: 'gone', relativePath: 'gone', remembered: true }], unavailable: ['/space/gone'], noStatus: true })
     await menu()
     const group = page.getByRole('group', { name: '/space/gone' })
     expect(await group.innerText()).toContain('Unavailable')
@@ -122,7 +129,7 @@ describe('repository picker (isolated browser UI, mocked application API)', () =
   })
 
   it('keeps removal failures inline and makes available remembered roots removable too', async () => {
-    await mount({ saved: [{ root: '/space/repo', available: true }] })
+    await mount({ remembered: true })
     await page.evaluate(() => { (window as any).failure = { code: 'GIT_FAILED', error: 'disk full' } })
     await menu()
     await page.getByRole('group', { name: '/space/repo' }).getByRole('menuitem', { name: /Remove from list/ }).click()
@@ -130,6 +137,44 @@ describe('repository picker (isolated browser UI, mocked application API)', () =
     expect(await page.getByRole('alert').innerText()).toContain('disk full')
     expect(await page.getByRole('menu').count()).toBe(1)
     expect(await calls()).toEqual([['forget', '/space/repo']])
+  })
+
+  it('keeps unavailable paths selectable for a retry and retains the selected path label without a branch', async () => {
+    await page.setViewportSize({ width: 800, height: 844 })
+    await mount({ noStatus: true, unavailable: ['/space/repo'] })
+    const trigger = page.getByRole('button', { name: 'Repository: repo' })
+    expect(await trigger.innerText()).toBe('repo')
+    expect(await trigger.getAttribute('title')).toBe('/space/repo')
+    await menu()
+    const group = page.getByRole('group', { name: '/space/repo' })
+    const retry = group.getByRole('menuitemradio')
+    expect(await retry.isEnabled()).toBe(true)
+    expect(await retry.innerText()).toContain('Unavailable')
+    await retry.click()
+    expect(await calls()).toEqual([['select', '/space/repo']])
+  })
+
+  it('does not invent a branch or show the previous repository summary for a selected path', async () => {
+    await page.setViewportSize({ width: 800, height: 844 })
+    await mount({ summary: { root: '/space/previous', branch: 'previous-branch', head: 'abc' } })
+    expect(await page.getByRole('button', { name: 'Repository: repo' }).innerText()).toBe('repo')
+    await mount()
+    expect(await page.getByRole('button', { name: 'Repository: repo' }).innerText()).toContain('main')
+  })
+
+  it('offers removal for session discoveries as well as remembered paths', async () => {
+    await mount({ remembered: false })
+    await menu()
+    await page.getByRole('group', { name: '/space/repo' }).getByRole('menuitem', { name: /Remove from list/ }).click()
+    expect(await calls()).toEqual([['forget', '/space/repo']])
+  })
+
+  it('keeps scope choices disabled until a real selected repository status is available', async () => {
+    await mount({ topBar: true, noStatus: true })
+    expect(await page.getByRole('button', { name: /Compare:/ }).isDisabled()).toBe(true)
+    expect(await page.getByRole('button', { name: 'Repository: repo' }).isEnabled()).toBe(true)
+    await mount({ topBar: true })
+    expect(await page.getByRole('button', { name: /Compare:/ }).isEnabled()).toBe(true)
   })
 
   it('drops a folder-picker result when its viewer is unmounted', async () => {

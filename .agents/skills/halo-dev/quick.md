@@ -5,10 +5,10 @@
 
 ## 1) Hard Rules (Must Follow)
 
-1. **Modularity, quality, and maintainability are first priority.**
+1. **Preserve modularity, quality, and maintainability; assess performance up front.**
    - Keep responsibilities isolated by module and layer.
    - Do not use quick fixes that create long-term architecture debt.
-   - Every change must preserve or improve performance (startup, runtime latency, memory).
+   - Apply the `product-principles` §1 human-approval gate to performance costs, including small changes.
    - If there is a trade-off conflict (quick fix vs architecture quality), request explicit user approval before proceeding.
 
 2. **No hardcoded user text in renderer.** Use `t('English text')`.

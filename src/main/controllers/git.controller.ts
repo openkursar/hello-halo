@@ -37,7 +37,9 @@ import type {
   GitFileContentsRequest,
   GitGraphQuery,
   GitRepository,
+  GitRepositoryDiscovery,
   GitRepositoryList,
+  GitRepositoryListOptions,
   GitRevisionOption,
   GitSnapshot,
   GitSyncResult,
@@ -57,11 +59,11 @@ async function respond<T>(operation: string, task: () => Promise<T>): Promise<Gi
   }
 }
 
-export function listGitRepositories(spaceId: unknown): Promise<GitRpcResponse<GitRepositoryList>> {
-  return respond('list repositories', () => listRepositories(spaceId as string))
+export function listGitRepositories(spaceId: unknown, options?: unknown): Promise<GitRpcResponse<GitRepositoryList>> {
+  return respond('list repositories', () => listRepositories(spaceId as string, options as GitRepositoryListOptions | undefined))
 }
 
-export function discoverGitRepository(spaceId: unknown, filePath: unknown): Promise<GitRpcResponse<GitRepository | null>> {
+export function discoverGitRepository(spaceId: unknown, filePath: unknown): Promise<GitRpcResponse<GitRepositoryDiscovery | null>> {
   return respond('discover repository', () => discoverRepository(spaceId as string, filePath as string))
 }
 
@@ -73,8 +75,8 @@ export function forgetGitRepository(spaceId: unknown, repoRoot: unknown): Promis
   return respond('forget repository', () => forgetRepository(spaceId as string, repoRoot as string))
 }
 
-export function getGitStatus(spaceId: unknown, repoRoot: unknown): Promise<GitRpcResponse<GitWorkingTreeStatus>> {
-  return respond('status', () => getWorkingTreeStatus(spaceId as string, repoRoot as string))
+export function getGitStatus(spaceId: unknown, repoRoot: unknown, remember?: unknown): Promise<GitRpcResponse<GitWorkingTreeStatus>> {
+  return respond('status', () => getWorkingTreeStatus(spaceId as string, repoRoot as string, remember as boolean | undefined))
 }
 
 export function getGitChanges(spaceId: unknown, repoRoot: unknown, scope: unknown): Promise<GitRpcResponse<GitChangeList>> {

@@ -16,13 +16,14 @@ beforeAll(async () => {
         import { GitChangesView } from './src/renderer/components/canvas/viewers/changes/GitChangesView';
         import { createViewMemory } from './src/renderer/components/canvas/viewers/changes/state/view-memory';
         const root = createRoot(document.getElementById('root'));
+        const entry = root => ({ root, name: root, relativePath: root, remembered: true });
         const repo = root => ({ root, name: root, relativePath: root, branch: 'main', head: 'abc', unborn: false, upstream: null, ahead: 0, behind: 0 });
         const file = { path: 'target.ts', state: 'modified', additions: 1, deletions: 0, binary: false };
         const ok = data => ({ success: true, data });
         const list = (root, scope) => ({ repoRoot: root, scope, beforeRevision: 'abc', files: [file], truncated: false });
         window.calls = [];
         window.api = {
-          gitListRepositories: async () => ok({ git: { available: true }, repositories: [repo('/a'), repo('/b')] }),
+          gitListRepositories: async () => ok({ git: { available: true }, repositories: [entry('/a'), entry('/b')] }),
           gitGetStatus: async (space, root) => window.failStatus && root === '/b'
             ? { success: false, code: 'GIT_FAILED' }
             : ok({ repo: repo(root), staged: [], unstaged: [file], conflicted: [], operation: null, truncated: false }),
@@ -44,6 +45,7 @@ beforeAll(async () => {
           },
         };
         window.reveal = (seq, path = '/b/target.ts') => { tab = { ...tab, reveal: { seq, path, side: 'before', range: { startLine: 7, endLine: 7 } } }; render() };
+        window.failCurrent = () => { window.api.gitGetStatus = async (space, root) => root === '/a' ? { success: false, code: 'GIT_NOT_A_REPOSITORY' } : ok({ repo: repo(root), staged: [], unstaged: [file], conflicted: [], operation: null, truncated: false }); window.dispatchEvent(new Event('focus')); };
         window.unmount = () => root.unmount();
         render();
       `,
@@ -95,8 +97,13 @@ beforeAll(async () => {
 beforeEach(async () => {
   page = await browser.newPage({ viewport: { width: 390, height: 844 } })
   await page.setContent('<div id="root"></div>')
-  await page.addScriptTag({ content: script })
-  await page.getByTestId('stack').filter({ hasText: '/a/target.ts' }).waitFor()
+  const errors: string[] = []
+  page.on('console', (message) => { if (message.type() === 'error' || message.type() === 'warning') errors.push(message.text()) })
+  const pageFailure = new Promise<never>((_, reject) => page.once('pageerror', reject))
+  await Promise.race([
+    page.addScriptTag({ content: script }).then(() => page.getByTestId('stack').filter({ hasText: '/a/target.ts' }).waitFor({ timeout: 5000 })),
+    pageFailure,
+  ]).catch(async (error) => { throw new Error(`${String(error)}\n${errors.join('\n')}\n${JSON.stringify(await page.evaluate(() => ({ calls: (window as any).calls, body: document.body.innerText })))}`) })
 })
 afterEach(async () => { await page?.close() })
 afterAll(async () => { await browser?.close() })
@@ -118,6 +125,18 @@ describe('cross-repository reveal (real view/controller, stubbed API and diff ed
     expect((await calls()).filter(([kind]: string[]) => kind === 'fallback')).toEqual([])
     expect((await calls()).find(([kind]: string[]) => kind === 'editor')[1]).toContain('/b/')
     expect((await calls()).find(([kind]: string[]) => kind === 'diff')[1].range).toEqual({ startLine: 7, endLine: 7 })
+  })
+
+  it('loads a healthy target diff even when the previously selected repository is unavailable', async () => {
+    await page.waitForTimeout(2100)
+    await page.evaluate(() => (window as any).failCurrent())
+    await page.getByTestId('stack').waitFor({ state: 'detached' })
+    await revealTarget()
+    expect((await calls()).filter(([kind]: string[]) => kind === 'fallback')).toEqual([])
+    await page.evaluate(() => (window as any).finishList(false))
+    await page.waitForFunction(() => (window as any).calls.some(([kind]: string[]) => kind === 'diff'))
+    expect((await calls()).filter(([kind]: string[]) => kind === 'consume')).toEqual([['consume', 1]])
+    expect((await calls()).filter(([kind]: string[]) => kind === 'fallback')).toEqual([])
   })
 
   it.each(['status', 'list'])('falls back once when the target %s fails instead of keeping a pending reference', async (failure) => {

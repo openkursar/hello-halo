@@ -3,20 +3,23 @@
  *
  * Paths inside a repository are repository-relative with forward slashes;
  * repository roots are absolute. Every request names the space it comes from,
- * and the main process only serves repositories it discovered in that space.
+ * and every operation revalidates the repository inside that space.
  */
 
 export type GitAvailability =
   | { available: true; version: string }
   | { available: false; reason: 'not-installed' | 'not-runnable'; detail?: string }
 
-export interface GitRepository {
+export interface GitRepositoryPath {
   /** Absolute root. */
   root: string
   /** Folder name, for display. */
   name: string
   /** Root relative to the space folder; '' for the space folder itself. */
   relativePath: string
+}
+
+export interface GitRepository extends GitRepositoryPath {
   /** Current branch; null when HEAD is detached. */
   branch: string | null
   /** Abbreviated HEAD commit; null before the first commit. */
@@ -29,12 +32,32 @@ export interface GitRepository {
   behind: number
 }
 
+export interface GitRepositoryRecordFailure {
+  code: GitErrorCode
+  error: string
+}
+
+export interface GitRepositoryEntry extends GitRepositoryPath {
+  /** Remembered path, not proof that the repository is currently accessible. */
+  remembered: boolean
+}
+
+export interface GitRepositoryDiscovery {
+  repository: GitRepositoryPath
+  remembered: boolean
+  recordError?: GitRepositoryRecordFailure
+}
+
+export interface GitRepositoryListOptions {
+  /** Include direct child folders; false reads known paths and the space root only. */
+  shallow: boolean
+}
+
 export interface GitRepositoryList {
   git: GitAvailability
-  /** The space folder's own repository first, then nested ones by name. */
-  repositories: GitRepository[]
-  /** Manually opened roots, including those that are currently unavailable. */
-  savedRepositories?: Array<{ root: string; available: boolean }>
+  /** Path identities only; branch, status and availability load when selected. */
+  repositories: GitRepositoryEntry[]
+  recordError?: GitRepositoryRecordFailure
 }
 
 export type GitFileState =
@@ -62,6 +85,9 @@ export interface GitChangedFile {
 
 export interface GitWorkingTreeStatus {
   repo: GitRepository
+  /** Set when selection explicitly requested remembering this verified path. */
+  remembered?: boolean
+  recordError?: GitRepositoryRecordFailure
   staged: GitChangedFile[]
   /** Unstaged changes, untracked files included (state 'untracked'). */
   unstaged: GitChangedFile[]

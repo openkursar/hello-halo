@@ -5,12 +5,14 @@
  */
 
 import { stat } from 'fs/promises'
-import { join } from 'path'
+import { join, resolve } from 'path'
+import { getSpace, getSpaceDir } from '../space.service'
 import { GIT_LIMITS, type GitChangedFile, type GitWorkingTreeStatus } from '../../../shared/types/git'
 import { read, type RepoContext } from './context'
+import { GitError } from './errors'
 import { isNestedRepositoryEntry, markGenerated, measureUntracked, untrackedFile } from './files'
 import { parsePorcelainV2, parseRawAndNumstat, stateFromLetter, type NumstatEntry } from './parse'
-import { repositoryFromBranch, requireRepository } from './repositories'
+import { rememberRepository, repositoryFromBranch, requireRepository } from './repositories'
 
 /**
  * `--ignore-submodules=dirty`: a submodule counts as changed when its commit
@@ -104,6 +106,15 @@ export async function readWorkingTreeStatus(ctx: RepoContext): Promise<GitWorkin
   return { repo: repositoryFromBranch(ctx, branch), staged, unstaged, conflicted, operation, truncated }
 }
 
-export async function getWorkingTreeStatus(spaceId: string, repoRoot: string): Promise<GitWorkingTreeStatus> {
-  return readWorkingTreeStatus(await requireRepository(spaceId, repoRoot))
+export async function getWorkingTreeStatus(spaceId: string, repoRoot: string, remember = false): Promise<GitWorkingTreeStatus> {
+  if (typeof remember !== 'boolean') throw new GitError('GIT_INVALID_ARGUMENT', 'Repository remembering requires a boolean')
+  const dataPath = remember ? getSpace(spaceId)?.path : undefined
+  const workingDir = remember ? getSpaceDir(spaceId) : undefined
+  const ctx = await requireRepository(spaceId, repoRoot, true)
+  const status = await readWorkingTreeStatus(ctx)
+  if (!remember) return status
+  if (!workingDir || resolve(workingDir) !== ctx.spaceDir || getSpaceDir(spaceId) !== workingDir || getSpace(spaceId)?.path !== dataPath) {
+    throw new GitError('GIT_INVALID_ARGUMENT', 'The space changed while selecting a repository')
+  }
+  return { ...status, ...await rememberRepository(spaceId, ctx) }
 }

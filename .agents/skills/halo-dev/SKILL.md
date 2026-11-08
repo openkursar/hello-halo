@@ -28,8 +28,8 @@ If a change conflicts with the documented architecture, update the architecture 
 
 ## Development Priority (Non-Negotiable)
 
-- **Modularity, quality, and maintainability come first.**
-- **Performance must not regress** (startup, runtime latency, memory).
+- **Performance is a design/review prerequisite**, even for small changes; follow the `product-principles` §1 human-approval gate.
+- **Preserve modularity, quality, and maintainability.**
 - **Responsive design is mandatory** — every UI change must work at mobile width (< 640px).
 - **No hardcoded colors** — use only CSS variable-based theme tokens.
 - If a quick fix conflicts with architecture quality, choose the maintainable modular solution and request explicit user approval before proceeding.

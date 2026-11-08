@@ -118,6 +118,31 @@ export function describeRest(health: GroupMemberHealth, now: number, language: s
   }
 }
 
+/** The composer names both sides of a switch without repeating the chat's loading indicator. */
+export function describeSwitchNotice(route: GroupRouteInfo | null, t: Translate, live: boolean): string | null {
+  if (!live || route?.state !== 'switching' || !route.member) return null
+  const previous = route.previous
+  if (!previous) return t('Trying another model: {{model}}', { model: route.member.label.model })
+
+  const sameName = previous.member.label.model === route.member.label.model
+  const differentAccount = previous.member.sourceId !== route.member.sourceId
+  const showAccount = sameName && differentAccount
+  const label = (member: typeof route.member) => showAccount
+    ? `${member.label.account} / ${member.label.model}`
+    : member.label.model
+  const values = { previous: label(previous.member), next: label(route.member) }
+
+  // Only known router reasons get specific wording; unknown reasons remain generic.
+  switch (previous.reason) {
+    case 'is limiting requests':
+      return t('{{previous}} is rate limited. Trying {{next}}.', values)
+    case 'did not answer in time':
+      return t('{{previous}} timed out. Trying {{next}}.', values)
+    default:
+      return t('{{previous}} is temporarily unavailable. Trying {{next}}.', values)
+  }
+}
+
 export type RouteView =
   | { kind: 'idle'; caption: string }
   | { kind: 'serving'; caption: string; member: { account: string; model: string } }

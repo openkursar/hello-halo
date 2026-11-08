@@ -172,8 +172,46 @@ describe('the line shown while Halo switches models', () => {
     env.routes = { c1: report() }
     env.generating = true
     const html = render()
-    expect(html).toContain('Trying another model: Backup / Sonnet')
+    expect(html).toContain('Trying another model: Sonnet')
+    expect(html).not.toContain('Backup /')
+    expect(html).not.toContain('animate-spin')
+    expect(html).not.toContain('<svg')
+    expect(html).not.toContain('truncate')
     expect(html).toContain('role="status"')
+  })
+
+  it.each([
+    ['is limiting requests', 'First is rate limited. Trying Sonnet.'],
+    ['did not answer in time', 'First timed out. Trying Sonnet.'],
+    ['reported an error', 'First is temporarily unavailable. Trying Sonnet.'],
+    ['unknown future reason', 'First is temporarily unavailable. Trying Sonnet.'],
+  ])('explains the previous failure without claiming the replacement succeeded: %s', (reason, expected) => {
+    env.group = { id: 'g1' }
+    env.generating = true
+    env.routes = { c1: report({ previous: {
+      member: { key: 'old', sourceId: 'a', modelId: 'first', label: { account: 'Primary', model: 'First' } },
+      reason,
+    } }) }
+    const html = render()
+    expect(html).toContain(expected)
+    expect(html).not.toContain('Primary /')
+    expect(html).not.toContain('Backup /')
+    expect(html).not.toContain('animate-spin')
+    env.generating = false
+    expect(render()).not.toContain(expected)
+    env.generating = true
+    env.routes = { c1: report({ state: 'serving' }) }
+    expect(render()).not.toContain(expected)
+  })
+
+  it('names accounts only when switching between accounts with the same model name', () => {
+    env.group = { id: 'g1' }
+    env.generating = true
+    env.routes = { c1: report({ previous: {
+      member: { key: 'old', sourceId: 'a', modelId: 'm', label: { account: 'Primary', model: 'Sonnet' } },
+      reason: 'did not answer in time',
+    } }) }
+    expect(render()).toContain('Primary / Sonnet timed out. Trying Backup / Sonnet.')
   })
 
   it('says nothing once the wait is over, even if the last report was a switch', () => {
@@ -218,7 +256,7 @@ describe('the line shown while Halo switches models', () => {
     const cached = vi.spyOn(env.conversationCache, 'get')
     env.routes = { 'native-cc': report({ sessionKey: 'native-cc' }) }
     env.generating = true
-    expect(render()).toContain('Trying another model: Backup / Sonnet')
+    expect(render()).toContain('Trying another model: Sonnet')
     env.runner.commit()
     expect(env.load).toHaveBeenCalledWith([env.activeId, 'native-cc'])
     expect(cached).toHaveBeenCalledTimes(1)

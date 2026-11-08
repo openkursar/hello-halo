@@ -17,7 +17,9 @@ import type {
   GitFileContentsRequest,
   GitGraphQuery,
   GitRepository,
+  GitRepositoryDiscovery,
   GitRepositoryList,
+  GitRepositoryListOptions,
   GitRevisionOption,
   GitSnapshot,
   GitSyncResult,
@@ -25,12 +27,12 @@ import type {
 } from '../../shared/types/git'
 
 export const gitApi = {
-  gitListRepositories: async (spaceId: string): Promise<GitRpcResponse<GitRepositoryList>> => {
-    if (isElectron()) return window.halo.gitListRepositories(spaceId)
-    return httpRequest('POST', '/api/git/repositories', { spaceId })
+  gitListRepositories: async (spaceId: string, options?: GitRepositoryListOptions): Promise<GitRpcResponse<GitRepositoryList>> => {
+    if (isElectron()) return window.halo.gitListRepositories(spaceId, options)
+    return httpRequest('POST', '/api/git/repositories', { spaceId, options })
   },
 
-  gitDiscoverRepository: async (spaceId: string, filePath: string): Promise<GitRpcResponse<GitRepository | null>> => {
+  gitDiscoverRepository: async (spaceId: string, filePath: string): Promise<GitRpcResponse<GitRepositoryDiscovery | null>> => {
     if (isElectron()) return window.halo.gitDiscoverRepository(spaceId, filePath)
     return httpRequest('POST', '/api/git/discover-repository', { spaceId, filePath })
   },
@@ -45,9 +47,9 @@ export const gitApi = {
     return httpRequest('POST', '/api/git/forget-repository', { spaceId, repoRoot })
   },
 
-  gitGetStatus: async (spaceId: string, repoRoot: string): Promise<GitRpcResponse<GitWorkingTreeStatus>> => {
-    if (isElectron()) return window.halo.gitGetStatus(spaceId, repoRoot)
-    return httpRequest('POST', '/api/git/status', { spaceId, repoRoot })
+  gitGetStatus: async (spaceId: string, repoRoot: string, remember?: boolean): Promise<GitRpcResponse<GitWorkingTreeStatus>> => {
+    if (isElectron()) return window.halo.gitGetStatus(spaceId, repoRoot, remember)
+    return httpRequest('POST', '/api/git/status', { spaceId, repoRoot, remember })
   },
 
   gitGetChanges: async (spaceId: string, repoRoot: string, scope: GitCompareScope): Promise<GitRpcResponse<GitChangeList>> => {
