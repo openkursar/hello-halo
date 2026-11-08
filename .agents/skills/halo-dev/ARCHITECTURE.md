@@ -159,7 +159,7 @@ src/
 │       │                              #   conversation, built-in review task, latest review per
 │       │                              #   repository. See code-review/DESIGN.md
 │       ├── email-mcp/                 # Email-as-MCP tool server
-│       ├── git/                       # git CLI for a space's repositories (its folder + direct sub-folders):
+│       ├── git/                       # git CLI for a space's repositories (shallow discovery + opened-file/manual deep roots):
 │       │                              #   status, change lists for four compare scopes, file sides,
 │       │                              #   working-tree snapshots, stage/discard/commit/sync. Reads take
 │       │                              #   no index lock. No agent/conversation deps. See git/DESIGN.md

@@ -30,7 +30,8 @@ is a user action (open, refresh, click).
 | `cli.ts` | The one place git is spawned: argv, environment, deadline, output cap. |
 | `locate.ts` | Which git binary, decided on first use and cached (§4). |
 | `context.ts` | `RepoContext` (a validated repository) and `run/read/exec` helpers. |
-| `repositories.ts` | Discovery, the request gate (`requireRepository`), branch summaries. |
+| `repositories.ts` | Shallow and opened-file discovery, the request gate (`requireRepository`), branch summaries. |
+| `repository-store.ts` | Bounded, versioned manual repository records in space data; serialized atomic writes. |
 | `paths.ts` | Repository-relative path validation, symlink-safe worktree resolution, argv batching. |
 | `parse.ts` | Pure parsers for git's `-z` formats. |
 | `files.ts` | What git does not print: untracked line counts, binary sniffing, `linguist-generated`. |
@@ -128,9 +129,30 @@ new git is picked up at once). A failure is otherwise re-checked after 60 s rath
 - Its repositories: the folder itself and its **direct** sub-folders holding a `.git` (directory, or
   file for worktrees and submodules). Dot-folders and symlinked folders are skipped; at most 1,000
   sub-folders are examined. Order: the folder itself, then by name.
-- Every request names `spaceId` + `repoRoot`. `requireRepository` re-derives the answer in O(1):
-  `repoRoot` must be the space folder or a direct non-dot, non-symlink child of it, with a `.git`.
-  Nothing else is ever run.
+- Deep roots enter the list only through `discoverRepository(spaceId, filePath)` (the opened file's
+  parent, `rev-parse --show-toplevel`, nearest root) or `openRepository(spaceId, repoRoot)` (exact root,
+  never recursive search). Discovery returns null for outside/non-repository paths. No deeper scan,
+  startup work, polling or watcher is added.
+- Every request names `spaceId` + `repoRoot`. `requireRepository` revalidates the space boundary and
+  every directory component below it, at any depth: no dot-folders, dot traversal segments, symlink
+  directories or `.git` internals. Listing/opening verifies Git's top-level and metadata identity;
+  every request using a gitfile also verifies metadata identifying this worktree (linked-worktree backpointer or configured worktree).
+  A separate git directory without a reverse pointer follows Git's gitfile binding; legitimate external metadata is allowed.
+  The cache is never authorization. Full space-relative paths distinguish similarly named deep roots.
+- Opened-file probes share concurrent work and expire after 60 seconds, bounded to 128 directories per
+  space. At most four probes run, 128 wait; excess gets `GIT_BUSY`. Session-discovered roots survive
+  view unmount, bounded to 64 roots per space; space state is LRU-evicted at 32 spaces and invalidated
+  when its working directory changes. No timers keep this state alive.
+- Manual roots live in `<space data>/.halo/git/repositories.json` (temporary spaces omit `.halo`):
+  `{ version: 1, workingDir, roots }`, at most 64 absolute roots, at most 1 MiB read asynchronously.
+  Writes serialize per file and rename an exclusive temporary file atomically. Only pending writes
+  are resident (32 files / 128 writes); damaged/unreadable stores fail visibly and are never overwritten.
+  A different working-directory identity ignores old roots. Opening reads the summary before saving.
+- Lists combine shallow, session-discovered and saved roots without duplicates, reading summaries in
+  batches of eight. Optional `savedRepositories` retains `{ root, available }` even for unavailable
+  paths; listing never rewrites records. Skips warn once per root while unavailable (bounded to 128
+  warning keys per cached space). `forgetRepository` removes the saved and transient records, clears
+  probes so in-flight work cannot re-register them, and never touches repository files or metadata.
 - Summaries (`readRepositorySummary`) come from refs only — `symbolic-ref`, `for-each-ref` with
   `%(upstream:track)` — so listing repositories costs the same in a huge repository as a small one.
   Ahead/behind are as last fetched; nothing here touches the network.
@@ -183,7 +205,8 @@ Change lists, one tree-ish against the working tree or the index, read with
   (≤ 6 git processes); up to 32 more wait in arrival order; the 33rd is refused at once. A waiting read
   leaves the line after 15 s, or when its caller goes away (the HTTP route aborts on a closed
   connection; an IPC call cannot be cancelled). Every refusal is `GIT_BUSY` — nothing ran, retrying is
-  safe. Validation and the repository check happen before the line, so a bad request never waits.
+  safe. Argument validation happens before the line; repository validation runs inside it so gitfile
+  identity checks cannot bypass the subprocess bound.
   At ~30 ms per read (§11) a full line drains in about a third of a second. Status, change lists and
   writes are one request per user action and are not gated.
 

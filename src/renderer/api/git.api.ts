@@ -16,6 +16,7 @@ import type {
   GitFileContents,
   GitFileContentsRequest,
   GitGraphQuery,
+  GitRepository,
   GitRepositoryList,
   GitRevisionOption,
   GitSnapshot,
@@ -27,6 +28,21 @@ export const gitApi = {
   gitListRepositories: async (spaceId: string): Promise<GitRpcResponse<GitRepositoryList>> => {
     if (isElectron()) return window.halo.gitListRepositories(spaceId)
     return httpRequest('POST', '/api/git/repositories', { spaceId })
+  },
+
+  gitDiscoverRepository: async (spaceId: string, filePath: string): Promise<GitRpcResponse<GitRepository | null>> => {
+    if (isElectron()) return window.halo.gitDiscoverRepository(spaceId, filePath)
+    return httpRequest('POST', '/api/git/discover-repository', { spaceId, filePath })
+  },
+
+  gitOpenRepository: async (spaceId: string, repoRoot: string): Promise<GitRpcResponse<GitRepository>> => {
+    if (isElectron()) return window.halo.gitOpenRepository(spaceId, repoRoot)
+    return httpRequest('POST', '/api/git/open-repository', { spaceId, repoRoot })
+  },
+
+  gitForgetRepository: async (spaceId: string, repoRoot: string): Promise<GitRpcResponse<void>> => {
+    if (isElectron()) return window.halo.gitForgetRepository(spaceId, repoRoot)
+    return httpRequest('POST', '/api/git/forget-repository', { spaceId, repoRoot })
   },
 
   gitGetStatus: async (spaceId: string, repoRoot: string): Promise<GitRpcResponse<GitWorkingTreeStatus>> => {

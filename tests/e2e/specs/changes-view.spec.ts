@@ -8,7 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '../fixtures/electron-with-git-workspace'
-import { BASELINE, EXPECTED_STATUS } from '../fixtures/git-workspace'
+import { BASELINE, EXPECTED_STATUS, createGitWorkspace } from '../fixtures/git-workspace'
 import { setTheme } from '../fixtures/helpers'
 import {
   chooseScope,
@@ -30,6 +30,38 @@ async function sortedGroups(window: Parameters<typeof panelGroups>[0]): Promise<
   const groups = await panelGroups(window)
   return Object.fromEntries(Object.entries(groups).map(([name, files]) => [name, sorted(files)]))
 }
+
+test.describe('opened-file repository discovery', () => {
+  test.use({
+    workspace: async ({}, use) => {
+      const workspace = createGitWorkspace(1, () => '[SDK source](packages/sdk/deep-repo/sdk.ts)')
+      const nested = path.join(workspace.repoRoot, 'packages/sdk/deep-repo')
+      fs.mkdirSync(nested, { recursive: true })
+      fs.appendFileSync(path.join(workspace.repoRoot, '.gitignore'), '\npackages/\n')
+      workspace.git('-C', nested, 'init', '-q')
+      fs.writeFileSync(path.join(nested, 'sdk.ts'), 'export const sdk = true\n')
+      try {
+        await use(workspace)
+      } finally {
+        workspace.cleanup()
+      }
+    },
+  })
+
+  test('discovers a deep ignored repository after the outer repository is loaded', { annotation: { type: 'acceptance', description: '{"caseId":"changes.inspect.opened-file-repository","evidence":"app-e2e","mode":"none","variant":{}}' } }, async ({ window, workspace }) => {
+    await openChangesWithShortcut(window)
+    await expect(window.getByRole('button', { name: /acme-app/ }).first()).toBeVisible()
+    const before = await window.evaluate(async (spaceId) => globalThis.window.halo.gitListRepositories(spaceId), workspace.spaceId)
+    expect(before.data?.repositories.some((repo) => repo.name === 'deep-repo')).toBe(false)
+    await window.locator('.markdown-content').getByText('SDK source', { exact: true }).click()
+    await expect(window.locator('[title="sdk.ts"]')).toBeVisible()
+    await openChangesWithShortcut(window)
+    await window.getByRole('button', { name: /acme-app/ }).first().click()
+    await window.getByRole('menuitemradio', { name: /deep-repo/ }).click()
+    await expect(window.locator('[data-file-key="sdk.ts"]')).toBeVisible()
+    await expect(window.locator('[data-file-key="src/app.ts"]')).toHaveCount(0)
+  })
+})
 
 test.describe('changes view', () => {
   let pageErrors: string[]

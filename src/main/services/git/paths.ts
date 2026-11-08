@@ -8,8 +8,8 @@
  * whenever the file system is touched.
  */
 
-import { realpath } from 'fs/promises'
-import { dirname, isAbsolute, join, relative, sep } from 'path'
+import { lstat, realpath } from 'fs/promises'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { GitError } from './errors'
 
 const MAX_PATH_CHARS = 4_096
@@ -78,6 +78,32 @@ export async function resolveWorktreePath(root: string, repoPath: string): Promi
   }
   if (!isInside(await realpath(root), realParent)) throw invalid(`Path leaves the repository: ${repoPath}`)
   return absolute
+}
+
+/** Validate a directory below the space without following any child directory symlinks. */
+export async function requireSpaceDirectory(spaceDir: string, value: unknown): Promise<string> {
+  if (typeof value !== 'string' || !value || value.length > MAX_PATH_CHARS || value.includes('\0') || !isAbsolute(value)) {
+    throw invalid('An absolute directory path is required')
+  }
+  const denied = new GitError('GIT_NOT_A_REPOSITORY', `Not a repository directory of this space: ${value}`)
+  const rawSegments = process.platform === 'win32' ? value.split(/[\\/]/) : value.split(sep)
+  if (rawSegments.some((segment) => segment === '.' || segment === '..')) throw denied
+  const root = resolve(value)
+  if (!isInside(spaceDir, root)) throw denied
+  const rel = relative(spaceDir, root)
+  const segments = rel ? rel.split(sep) : []
+  if (segments.some((segment) => segment.startsWith('.') || namesGitDir(segment))) throw denied
+  let current = spaceDir
+  try {
+    for (const segment of segments) {
+      current = join(current, segment)
+      if (!(await lstat(current)).isDirectory()) throw denied
+    }
+    if (!isInside(await realpath(spaceDir), await realpath(root))) throw denied
+  } catch {
+    throw denied
+  }
+  return root
 }
 
 /** Split paths into argv-sized batches (Windows caps a command line at 32K characters). */

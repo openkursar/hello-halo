@@ -23,6 +23,7 @@ interface CommitBoxProps {
   /** Every edit of the draft, to keep it for the tab; the view does not re-render for it. */
   onDraftChange: (message: string) => void
   operation: 'commit' | 'push' | 'sync' | null
+  disabled?: boolean
   /** Resolves true when the commit was made, and the draft is cleared. */
   onCommit: (options: { amend: boolean; push: boolean; message: string }) => Promise<boolean>
   onSync: () => void
@@ -32,13 +33,13 @@ interface CommitBoxProps {
 
 const COMMIT_KEY = isMacPlatform ? '⌘↵' : 'Ctrl+Enter'
 
-export function CommitBox({ repo, stagedCount, viewedSubject, initialMessage, onDraftChange, operation, onCommit, onSync, error, onDismissError }: CommitBoxProps) {
+export function CommitBox({ repo, stagedCount, viewedSubject, initialMessage, onDraftChange, operation, disabled = false, onCommit, onSync, error, onDismissError }: CommitBoxProps) {
   const { t } = useTranslation()
   const [message, setMessage] = useState(initialMessage)
   const [menuOpen, setMenuOpen] = useState(false)
   const [showOutput, setShowOutput] = useState(false)
   const moreRef = useRef<HTMLButtonElement>(null)
-  const busy = operation !== null
+  const busy = disabled || operation !== null
   const hasMessage = message.trim() !== ''
   const canCommit = !busy && stagedCount > 0 && hasMessage
   const disabledReason = stagedCount === 0 ? t('Stage files to commit') : !hasMessage ? t('Enter a commit message') : undefined
@@ -176,7 +177,7 @@ export function CommitBox({ repo, stagedCount, viewedSubject, initialMessage, on
             {t('Commit and push')}
           </MenuItem>
           <MenuItem
-            disabled={repo.unborn}
+            disabled={busy || repo.unborn}
             description={t('Keeps its message if the box is empty')}
             onSelect={() => {
               setMenuOpen(false)

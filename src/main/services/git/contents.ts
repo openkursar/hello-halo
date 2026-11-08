@@ -154,6 +154,8 @@ export async function readFileContents(
 ): Promise<GitFileContents> {
   // Checked before the line, so a malformed request never waits in it.
   const checked = checkContentsRequest(request)
-  const ctx = await requireRepository(spaceId, repoRoot)
-  return contentReads.run(() => readContents(ctx, checked), signal)
+  return contentReads.run(async () => {
+    const ctx = await requireRepository(spaceId, repoRoot)
+    return readContents(ctx, checked)
+  }, signal)
 }

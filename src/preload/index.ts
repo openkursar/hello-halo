@@ -798,6 +798,9 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
 
   // Git (changes view): repositories of a space, status, change lists, writes
   gitListRepositories: GitRpcClient['gitListRepositories']
+  gitDiscoverRepository: GitRpcClient['gitDiscoverRepository']
+  gitOpenRepository: GitRpcClient['gitOpenRepository']
+  gitForgetRepository: GitRpcClient['gitForgetRepository']
   gitGetStatus: GitRpcClient['gitGetStatus']
   gitGetChanges: GitRpcClient['gitGetChanges']
   gitGetFileContents: GitRpcClient['gitGetFileContents']

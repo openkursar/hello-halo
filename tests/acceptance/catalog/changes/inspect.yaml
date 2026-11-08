@@ -28,6 +28,50 @@ promises:
     en: A reply’s recorded edits open read-only and remain distinct from current staging operations.
     zh: 某轮回复记录的编辑以只读方式打开，与当前暂存操作区分。
 scenarios:
+  - id: changes.inspect.opened-file-repository
+    title:
+      en: Discover the nearest repository from an opened file
+      zh: 从已打开文件发现最近的仓库
+    verifies: [scopes]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    steps:
+      - en: With the outer repository already listed, open a file inside an ignored third-level independent repository, then return to Changes.
+        zh: 外层仓库已经列出时，打开被忽略的三级独立仓库内的文件，然后返回变更。
+    expected:
+      - en: The repository picker includes the deep repository; selecting it shows its own changes rather than the outer repository's.
+        zh: 仓库选择器包含深层仓库，选择后展示其自身修改而非外层修改。
+  - id: changes.inspect.deep-repositories
+    title:
+      en: Open and remember a deep repository without recursive discovery
+      zh: 无需递归扫描即可打开并记住深层仓库
+    verifies:
+      - scopes
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A space contains an ignored independent repository three directories deep.
+        zh: 空间包含位于三级目录、被外层忽略的独立仓库。
+    steps:
+      - en: Open a file in the deep repository and return to Changes; select that repository.
+        zh: 打开深层仓库中的文件，返回变更视图并选择该仓库。
+      - en: Explicitly open its folder, reopen the application, then remove the saved entry.
+        zh: 手动打开其文件夹，重启应用，再移除保存的记录。
+      - en: Try an ordinary folder and a repository outside the space; inspect an unavailable saved entry.
+        zh: 尝试打开普通文件夹、空间外仓库，并查看不可用的保存记录。
+    expected:
+      - en: File-based discovery finds the nearest repository even when the outer repository is already listed; its diff does not mix with the outer repository.
+        zh: 即使外层仓库已经列出，基于文件的发现仍定位最近仓库，差异不与外层混淆。
+      - en: Manual roots survive restart; removing a record never deletes files. Invalid selections leave the current repository unchanged and unavailable records remain removable.
+        zh: 手动路径在重启后保留；移除记录不删除文件。无效选择不改变当前仓库，不可用记录仍可移除。
+      - en: Opening and canceling the picker do not scan the project recursively or modify its files.
+        zh: 打开和取消选择器不递归扫描项目，也不修改项目文件。
   - id: changes.inspect.scopes
     title:
       en: Switch comparison scopes

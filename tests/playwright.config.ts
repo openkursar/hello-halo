@@ -90,7 +90,7 @@ export default defineConfig({
       // (fixtures/git-workspace.ts). Each test seeds a fresh repository and
       // boots its own app instance.
       name: 'changes-view',
-      testMatch: ['**/changes-view.spec.ts', '**/references.spec.ts'],
+      testMatch: ['**/changes-view.spec.ts', '**/changes-repositories.spec.ts', '**/references.spec.ts'],
       timeout: 90000,
       use: { actionTimeout: 15000 }
     },

@@ -1,6 +1,6 @@
 /**
- * A space's repositories are its folder and its direct sub-folders with a
- * `.git`; a request may name only those. Summaries come from refs alone.
+ * Default discovery stays shallow; validated requests may name deeper roots.
+ * Summaries come from refs alone.
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest'
@@ -13,6 +13,7 @@ import { cloneWithRemote, initRepo, isolateGit, makeTempDir, openRepo } from './
 const { spaces } = vi.hoisted(() => ({ spaces: new Map<string, string>() }))
 vi.mock('../../../../src/main/services/space.service', () => ({
   getSpaceDir: (spaceId: string) => spaces.get(spaceId) ?? '',
+  getSpace: (spaceId: string) => spaces.has(spaceId) ? { path: spaces.get(spaceId), isTemp: false } : null,
 }))
 
 let restoreGit: () => void
@@ -120,7 +121,8 @@ describe('resolveRepository', () => {
     dirs.push(elsewhere)
     initRepo(elsewhere)
 
-    for (const root of [join(dir, 'deep', 'grandchild'), join(dir, 'plain'), join(dir, '.hidden'), elsewhere, dir]) {
+    expect(await resolveRepository('space-1', join(dir, 'deep', 'grandchild'))).toMatchObject({ relativePath: 'deep/grandchild' })
+    for (const root of [join(dir, 'plain'), join(dir, '.hidden'), elsewhere, dir]) {
       await expect(resolveRepository('space-1', root)).rejects.toMatchObject({ code: 'GIT_NOT_A_REPOSITORY' })
     }
     await expect(resolveRepository('space-1', '')).rejects.toMatchObject({ code: 'GIT_INVALID_ARGUMENT' })

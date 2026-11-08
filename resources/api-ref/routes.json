@@ -1402,6 +1402,18 @@
   },
   {
     "method": "POST",
+    "path": "/api/git/discover-repository"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/open-repository"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/forget-repository"
+  },
+  {
+    "method": "POST",
     "path": "/api/git/status"
   },
   {

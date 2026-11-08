@@ -49,11 +49,12 @@ export function NoChangesState({ scope }: { scope: StoredCompareScope }) {
   )
 }
 
-export function NoRepositoryState() {
+export function NoRepositoryState({ children }: { children?: ReactNode }) {
   const { t } = useTranslation()
   return (
     <Shell icon={<FolderX size={20} />} title={t('This space isn\'t a Git repository')}>
-      <p className="text-[13px] text-subtle-foreground">{t('Halo looks for a repository in the space folder and the folders directly inside it.')}</p>
+      <p className="text-[13px] text-subtle-foreground">{t('Open a repository folder within this space to view its changes.')}</p>
+      {children}
     </Shell>
   )
 }

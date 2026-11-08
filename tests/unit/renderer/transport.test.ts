@@ -1,16 +1,15 @@
 /**
- * Unit tests for the pure platform-detection + URL-derivation helpers in
- * renderer/api/transport.ts.
- *
- * Scope is limited to isElectron / isCapacitor / isRemoteClient and
- * getRemoteServerUrl derivation. The WebSocket lifecycle is out of scope.
+ * Unit tests for platform detection, URL derivation and Git repository API
+ * routing through the desktop, remote-browser and Capacitor transports.
+ * The WebSocket lifecycle is out of scope.
  *
  * The test env is node, so window/document/Capacitor are stubbed on globalThis
  * per-test and torn down afterwards. The module reads these globals at call
  * time (not import time), so a plain static import is sufficient.
  */
 
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { gitApi } from '../../../src/renderer/api/git.api'
 import {
   isElectron,
   isCapacitor,
@@ -29,12 +28,51 @@ function setGlobal(key: string, value: unknown): void {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const key of installed) {
     delete (globalThis as Record<string, unknown>)[key]
   }
   installed.clear()
   // Reset the module's pending-URL singleton so tests don't leak state.
   clearServerUrl()
+})
+
+describe('Git repository API routing', () => {
+  const operations = [
+    { method: 'gitDiscoverRepository', route: 'discover-repository', field: 'filePath' },
+    { method: 'gitOpenRepository', route: 'open-repository', field: 'repoRoot' },
+    { method: 'gitForgetRepository', route: 'forget-repository', field: 'repoRoot' },
+  ] as const
+
+  it.each(operations)('routes $method directly through the desktop bridge', async ({ method }) => {
+    const response = { success: false, code: 'GIT_INVALID_ARGUMENT', error: 'Invalid path' }
+    const invoke = vi.fn().mockResolvedValue(response)
+    setGlobal('window', { halo: { [method]: invoke } })
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    expect(await gitApi[method]('s', '/host/repo with spaces')).toBe(response)
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith('s', '/host/repo with spaces')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  describe.each(['remote', 'capacitor'] as const)('%s', (mode) => {
+    it.each(operations)('posts $method with host paths and preserves error codes', async ({ method, route, field }) => {
+      setGlobal('window', mode === 'capacitor' ? { Capacitor: { isNativePlatform: () => true } } : {})
+      setGlobal('document', { baseURI: 'https://remote.example.com/halo/' })
+      setGlobal('localStorage', { getItem: () => 'test-token' })
+      if (mode === 'capacitor') setServerUrl('https://desktop.example.com')
+      const response = { success: false, code: 'GIT_NOT_A_REPOSITORY', error: 'Not a repository' }
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(response)))
+      expect(await gitApi[method]('s', '/host/repo with spaces')).toEqual(response)
+      const base = mode === 'capacitor' ? 'https://desktop.example.com' : 'https://remote.example.com/halo'
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(fetchSpy).toHaveBeenCalledWith(`${base}/api/git/${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-token' },
+        body: JSON.stringify({ spaceId: 's', [field]: '/host/repo with spaces' }),
+      })
+    })
+  })
 })
 
 describe('isElectron', () => {

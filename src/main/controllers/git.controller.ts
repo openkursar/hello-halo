@@ -12,12 +12,15 @@ import {
   countChangedSince,
   createSnapshot,
   discardPaths,
+  discoverRepository,
+  forgetRepository,
   getChangeList,
   getCommitGraph,
   getWorkingTreeStatus,
   isGitError,
   listRepositories,
   listRevisionOptions,
+  openRepository,
   readFileContents,
   stagePaths,
   syncBranch,
@@ -33,6 +36,7 @@ import type {
   GitFileContents,
   GitFileContentsRequest,
   GitGraphQuery,
+  GitRepository,
   GitRepositoryList,
   GitRevisionOption,
   GitSnapshot,
@@ -55,6 +59,18 @@ async function respond<T>(operation: string, task: () => Promise<T>): Promise<Gi
 
 export function listGitRepositories(spaceId: unknown): Promise<GitRpcResponse<GitRepositoryList>> {
   return respond('list repositories', () => listRepositories(spaceId as string))
+}
+
+export function discoverGitRepository(spaceId: unknown, filePath: unknown): Promise<GitRpcResponse<GitRepository | null>> {
+  return respond('discover repository', () => discoverRepository(spaceId as string, filePath as string))
+}
+
+export function openGitRepository(spaceId: unknown, repoRoot: unknown): Promise<GitRpcResponse<GitRepository>> {
+  return respond('open repository', () => openRepository(spaceId as string, repoRoot as string))
+}
+
+export function forgetGitRepository(spaceId: unknown, repoRoot: unknown): Promise<GitRpcResponse<void>> {
+  return respond('forget repository', () => forgetRepository(spaceId as string, repoRoot as string))
 }
 
 export function getGitStatus(spaceId: unknown, repoRoot: unknown): Promise<GitRpcResponse<GitWorkingTreeStatus>> {

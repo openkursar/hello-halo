@@ -45,7 +45,7 @@ const FAILURE_PATTERNS: Array<[GitErrorCode, RegExp]> = [
     'GIT_NETWORK',
     /Could not resolve host|Could not read from remote repository|unable to access|Connection (timed out|refused|reset)|Network is unreachable|Operation timed out|Could not connect/i,
   ],
-  ['GIT_NOT_A_REPOSITORY', /not a git repository/i],
+  ['GIT_NOT_A_REPOSITORY', /not a git repository|invalid gitfile format|invalid line in gitfile|no path in gitfile/i],
 ]
 
 /** Longest message carried to the client; git's last lines hold the reason. */

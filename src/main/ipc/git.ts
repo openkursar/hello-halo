@@ -14,6 +14,9 @@ import { registerRawRpcHandlers } from './rpc'
 export function registerGitHandlers(): void {
   const handlers: RpcHandlers<typeof gitRpc> = {
     gitListRepositories: (spaceId) => gitController.listGitRepositories(spaceId),
+    gitDiscoverRepository: (spaceId, filePath) => gitController.discoverGitRepository(spaceId, filePath),
+    gitOpenRepository: (spaceId, repoRoot) => gitController.openGitRepository(spaceId, repoRoot),
+    gitForgetRepository: (spaceId, repoRoot) => gitController.forgetGitRepository(spaceId, repoRoot),
     gitGetStatus: (spaceId, repoRoot) => gitController.getGitStatus(spaceId, repoRoot),
     gitGetChanges: (spaceId, repoRoot, scope) => gitController.getGitChanges(spaceId, repoRoot, scope),
     gitGetFileContents: (spaceId, repoRoot, request) => gitController.getGitFileContents(spaceId, repoRoot, request),

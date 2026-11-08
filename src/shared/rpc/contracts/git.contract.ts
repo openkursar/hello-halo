@@ -15,6 +15,7 @@ import type {
   GitFileContents,
   GitFileContentsRequest,
   GitGraphQuery,
+  GitRepository,
   GitRepositoryList,
   GitRevisionOption,
   GitSnapshot,
@@ -30,6 +31,9 @@ type InRepo = [spaceId: string, repoRoot: string]
 
 export const gitRpc = {
   gitListRepositories: rawRpcMethod<[spaceId: string], GitRpcResponse<GitRepositoryList>>('git:list-repositories'),
+  gitDiscoverRepository: rawRpcMethod<[spaceId: string, filePath: string], GitRpcResponse<GitRepository | null>>('git:discover-repository'),
+  gitOpenRepository: rawRpcMethod<InRepo, GitRpcResponse<GitRepository>>('git:open-repository'),
+  gitForgetRepository: rawRpcMethod<InRepo, GitRpcResponse<void>>('git:forget-repository'),
   gitGetStatus: rawRpcMethod<InRepo, GitRpcResponse<GitWorkingTreeStatus>>('git:get-status'),
   gitGetChanges: rawRpcMethod<[...InRepo, scope: GitCompareScope], GitRpcResponse<GitChangeList>>('git:get-changes'),
   gitGetFileContents: rawRpcMethod<[...InRepo, request: GitFileContentsRequest], GitRpcResponse<GitFileContents>>('git:get-file-contents'),

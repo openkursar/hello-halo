@@ -28,6 +28,7 @@ vi.mock('../../../../src/renderer/api', () => ({
     onArtifactChangedBatch: () => () => {},
     onMemoryPressure: () => () => {},
     getMemoryPressure: async () => 'normal',
+    gitDiscoverRepository: vi.fn(async () => ({ success: true, data: null })),
     readArtifactContent: (path: string) => readArtifactContent(path),
     isRemoteMode: () => false,
     createBrowserView: (id: string, url: string) => createBrowserView(id, url),
@@ -42,6 +43,7 @@ vi.mock('../../../../src/renderer/api', () => ({
 vi.mock('../../../../src/renderer/i18n', () => ({ default: { t: (key: string) => key } }))
 
 const { canvasLifecycle } = await import('../../../../src/renderer/services/canvas-lifecycle')
+const { api } = await import('../../../../src/renderer/api')
 
 const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(resolve => setTimeout(resolve, 0)) }
 const tabOf = (id: string) => canvasLifecycle.getTab(id)!
@@ -72,6 +74,18 @@ beforeEach(async () => {
 })
 
 describe('switching spaces', () => {
+  it('discovers activated file directories in their own space without blocking file display', async () => {
+    const discover = vi.mocked(api.gitDiscoverRepository)
+    discover.mockClear()
+    await openFile('/a/sdk/src/a.ts', 'a')
+    await openFile('/a/sdk/src/b.ts', 'b')
+    expect(discover).toHaveBeenCalledTimes(1)
+    expect(discover).toHaveBeenCalledWith('space-a', '/a/sdk/src/a.ts')
+    await canvasLifecycle.enterSpace('space-b')
+    await openFile('/b/sdk/c.ts', 'c')
+    expect(discover).toHaveBeenLastCalledWith('space-b', '/b/sdk/c.ts')
+  })
+
   it('keeps each space\'s tabs, active tab and open state', async () => {
     const a = await openFile('/a/a.ts', 'a')
     const b = await openFile('/a/b.ts', 'b')

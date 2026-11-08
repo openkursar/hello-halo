@@ -96,9 +96,18 @@ as diffs. `openChanges(source, { reveal })` keeps one tab per source:
 
 | Source | Tab | Shows |
 |---|---|---|
-| `{ kind: 'git', spaceId, repoRoot? }` | one per space | the space's Git repositories (the space folder and the folders directly inside it): compare scope, "Changes", "Graph" and "Overview & review" sub-pages, file list, staging and commit |
+| `{ kind: 'git', spaceId, repoRoot? }` | one per space | the space's Git repositories (shallow discovery plus opened-file and manually selected deep roots): compare scope, "Changes", "Graph" and "Overview & review" sub-pages, file list, staging and commit |
 | `{ kind: 'message', spaceId, conversationId, messageId, title, replyAt }` | one per reply | what one AI reply wrote with its file tools ("View changes" under the reply); no repository, scope or commit |
 
+- **Repository discovery.** Activating a file tab supplies its path and current space to
+  `services/git-discovery.ts`; it never waits for Git to display the file. Directory
+  probes are deduplicated for 60 seconds, bounded to 128 entries and released when a
+  space is forgotten or the lifecycle is destroyed. Main owns repository discovery
+  and validates every path. The changes list loads known repositories immediately;
+  mounted consumers receive completed discoveries for their space and append new roots
+  without reloading the displayed diff or changing selection. Subscriptions end on disposal.
+  The picker can open an exact repository folder and remove saved records without
+  deleting files; manual roots persist in space data, unavailable roots stay removable.
 - **Data per mounted viewer.** Each git tab's viewer creates its own vanilla
   store (`state/git-changes-store.ts`) and disposes it on unmount. It loads on
   mount (opening or returning to the tab), on window focus, after the user's

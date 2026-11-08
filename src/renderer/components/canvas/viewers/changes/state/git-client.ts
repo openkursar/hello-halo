@@ -5,6 +5,7 @@
  */
 
 import { api } from '../../../../../api'
+import { gitDiscovery } from '../../../../../services/git-discovery'
 import type { CodeReviewAvailability, CodeReviewStartRequest, CodeReviewStartResult } from '../../../../../../shared/types/code-review'
 import type {
   GitChangeList,
@@ -15,6 +16,7 @@ import type {
   GitFileContents,
   GitFileContentsRequest,
   GitGraphQuery,
+  GitRepository,
   GitRepositoryList,
   GitReviewRecord,
   GitRevisionOption,
@@ -49,8 +51,13 @@ export function failureOf(error: unknown): GitFailure {
 }
 
 export const gitClient = {
-  listRepositories: (spaceId: string): Promise<GitRepositoryList> =>
-    unwrap(api.gitListRepositories(spaceId)),
+  listRepositories: (spaceId: string): Promise<GitRepositoryList> => unwrap(api.gitListRepositories(spaceId)),
+  onRepositoryDiscovered: (spaceId: string, listener: (repository: GitRepository) => void): (() => void) =>
+    gitDiscovery.subscribe(spaceId, listener),
+  openRepository: (spaceId: string, repoRoot: string): Promise<GitRepository> =>
+    unwrap(api.gitOpenRepository(spaceId, repoRoot)),
+  forgetRepository: (spaceId: string, repoRoot: string): Promise<void> =>
+    unwrap(api.gitForgetRepository(spaceId, repoRoot)),
   getStatus: (spaceId: string, repoRoot: string): Promise<GitWorkingTreeStatus> =>
     unwrap(api.gitGetStatus(spaceId, repoRoot)),
   getChanges: (spaceId: string, repoRoot: string, scope: GitCompareScope): Promise<GitChangeList> =>

@@ -47,6 +47,11 @@ export function describeGitError(failure: GitFailure, t: Translate, revision?: s
   }
 }
 
+export function repositorySelectionError(failure: GitFailure, t: Translate): string {
+  if (failure.code === 'GIT_NOT_A_REPOSITORY') return t('Choose a Git repository folder inside this space. Parent folders and folders outside the space cannot be opened.')
+  return gitErrorMessage(failure, t)
+}
+
 /** The message alone, for places with no room for git's output. */
 export function gitErrorMessage(failure: GitFailure, t: Translate, revision?: string): string {
   return describeGitError(failure, t, revision).message

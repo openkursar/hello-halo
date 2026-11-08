@@ -33,6 +33,8 @@ export interface GitRepositoryList {
   git: GitAvailability
   /** The space folder's own repository first, then nested ones by name. */
   repositories: GitRepository[]
+  /** Manually opened roots, including those that are currently unavailable. */
+  savedRepositories?: Array<{ root: string; available: boolean }>
 }
 
 export type GitFileState =

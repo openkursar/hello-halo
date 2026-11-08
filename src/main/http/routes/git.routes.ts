@@ -17,6 +17,21 @@ export function registerGitRoutes(app: Express): void {
     res.json(await gitController.listGitRepositories(body(req).spaceId))
   })
 
+  app.post('/api/git/discover-repository', async (req: Request, res: Response) => {
+    const { spaceId, filePath } = body(req)
+    res.json(await gitController.discoverGitRepository(spaceId, filePath))
+  })
+
+  app.post('/api/git/open-repository', async (req: Request, res: Response) => {
+    const { spaceId, repoRoot } = body(req)
+    res.json(await gitController.openGitRepository(spaceId, repoRoot))
+  })
+
+  app.post('/api/git/forget-repository', async (req: Request, res: Response) => {
+    const { spaceId, repoRoot } = body(req)
+    res.json(await gitController.forgetGitRepository(spaceId, repoRoot))
+  })
+
   app.post('/api/git/status', async (req: Request, res: Response) => {
     const { spaceId, repoRoot } = body(req)
     res.json(await gitController.getGitStatus(spaceId, repoRoot))
