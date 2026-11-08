@@ -118,6 +118,16 @@ describe('openExternalLink', () => {
     expect(openExternal).not.toHaveBeenCalled()
   })
 
+  it('never offers a conversation reference to another app', async () => {
+    for (const url of ['conv:12345678', 'conv:12345678-1234-4234-8234-123456789abc', 'CONV:12345678', 'conv:nope']) {
+      expect(classifyExternalLink(url), url).toEqual({ kind: 'in-app' })
+      await openExternalLink(url)
+    }
+    expect(showMessageBox).not.toHaveBeenCalled()
+    expect(openExternal).not.toHaveBeenCalled()
+    expect(handleDeepLinkUrl).not.toHaveBeenCalled()
+  })
+
   it('does nothing for a refused link', async () => {
     await openExternalLink('javascript:alert(1)')
     expect(openExternal).not.toHaveBeenCalled()

@@ -1,6 +1,6 @@
 /**
- * Unit tests for platform detection, URL derivation and Git repository API
- * routing through the desktop, remote-browser and Capacitor transports.
+ * Unit tests for platform detection, URL derivation, Git repository API routing
+ * and HTTP error responses across desktop, remote-browser and Capacitor transports.
  * The WebSocket lifecycle is out of scope.
  *
  * The test env is node, so window/document/Capacitor are stubbed on globalThis
@@ -10,6 +10,8 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { gitApi } from '../../../src/renderer/api/git.api'
+
+vi.mock('../../../src/renderer/i18n', () => ({ default: { t: (text: string) => text } }))
 import {
   isElectron,
   isCapacitor,
@@ -17,6 +19,7 @@ import {
   getRemoteServerUrl,
   setServerUrl,
   clearServerUrl,
+  httpRequest,
 } from '../../../src/renderer/api/transport'
 
 // Track which globals a test installed so afterEach can remove them cleanly.
@@ -28,6 +31,7 @@ function setGlobal(key: string, value: unknown): void {
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals()
   vi.restoreAllMocks()
   for (const key of installed) {
     delete (globalThis as Record<string, unknown>)[key]
@@ -151,5 +155,41 @@ describe('getRemoteServerUrl', () => {
     setGlobal('window', {})
     setGlobal('document', { baseURI: 'https://host.example.com/' })
     expect(getRemoteServerUrl()).toBe('https://host.example.com')
+  })
+})
+
+describe('HTTP error responses', () => {
+  it.each(['text/html', 'application/json'])('reports a %s chat 413 without mistaking HTML for JSON', async contentType => {
+    setGlobal('window', {})
+    setGlobal('document', { baseURI: 'http://remote.test/' })
+    const response = new Response(contentType === 'text/html' ? '<html>Too large</html>' : '{"success":false,"code":"PAYLOAD_TOO_LARGE"}', {
+      status: 413, headers: { 'Content-Type': contentType },
+    })
+    const json = vi.spyOn(response, 'json')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+    expect(await httpRequest('POST', '/api/agent/message', { images: [] })).toEqual({
+      success: false, code: 'PAYLOAD_TOO_LARGE',
+      error: 'Request is too large. Reduce the attachment size or shorten the text.',
+    })
+    expect(json).toHaveBeenCalledTimes(contentType === 'application/json' ? 1 : 0)
+  })
+
+  it('preserves other endpoints’ structured 413 errors', async () => {
+    setGlobal('window', {})
+    setGlobal('document', { baseURI: 'http://remote.test/' })
+    const body = { success: false, code: 'TOO_LARGE', error: 'File too large' }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(body, { status: 413 })))
+    expect(await httpRequest('POST', '/api/other-import', {})).toEqual(body)
+  })
+
+  it('preserves successful responses and other JSON errors', async () => {
+    setGlobal('window', {})
+    setGlobal('document', { baseURI: 'http://remote.test/' })
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ success: true, data: { sent: true } }))
+      .mockResolvedValueOnce(Response.json({ success: false, code: 'INVALID_JSON', error: 'Invalid JSON request body' }, { status: 400 }))
+    vi.stubGlobal('fetch', fetch)
+    expect(await httpRequest('POST', '/api/agent/message', { message: 'hello' })).toEqual({ success: true, data: { sent: true } })
+    expect(await httpRequest('POST', '/api/agent/message', {})).toEqual({ success: false, code: 'INVALID_JSON', error: 'Invalid JSON request body' })
   })
 })

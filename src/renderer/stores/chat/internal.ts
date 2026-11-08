@@ -171,6 +171,7 @@ export interface ChatState {
   pendingComposerInput: {
     spaceId: string
     text: string
+    preserveDraft?: boolean
     slashPreview?: { command: string; label: string; description?: string }
   } | null
 

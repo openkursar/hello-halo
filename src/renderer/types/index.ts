@@ -401,7 +401,6 @@ export interface CreateSpaceInput {
 // Conversation Types
 // ============================================
 
-/** Agent engine that owns a conversation. Used for the EngineBadge UI. */
 export type EngineId = 'anthropic' | 'halo' | 'codex' | 'dsh';
 
 // Lightweight metadata for conversation list (no messages)

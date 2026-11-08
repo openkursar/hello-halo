@@ -31,7 +31,8 @@ vi.mock('../../../src/main/store/registry.service', () => ({
     return found && found.entry.type === 'skill' && found.registryId === 'on' ? found : null
   },
 }))
-// Disk scanning is stubbed; resolving a dependency against the listed skills is real.
+// The skill library is stubbed, as is the disk reading; resolving a dependency against the listed skills is real.
+vi.mock('../../../src/main/apps/skills', () => ({ getSkillLibrary: () => ({ runtimeCopies: () => [] }) }))
 const undeclaredSkills = vi.fn((): Array<{ id: string; folder: string }> => [])
 const loadableSkills = vi.fn((): LoadableSkill[] => [])
 const diskFiles = vi.fn((skill: LoadableSkill): Record<string, string> | null => ({ 'SKILL.md': `# ${skill.folder}\n` }))
@@ -75,10 +76,11 @@ function dhSpec(deps: AppSpec['requires']): AppSpec {
   } as unknown as AppSpec
 }
 
-function fakeManager(skillApps: { specId: string; spec: AppSpec }[]): AppManagerService {
+function fakeManager(skillApps: { specId: string; spec: AppSpec; id?: string }[]): AppManagerService {
+  const rows = skillApps.map((app, index) => ({ id: `skill-${index}`, status: 'active', spaceId: null, userOverrides: {}, ...app }))
   return {
-    listEffectiveSkillApps: () => skillApps,
-    listApps: () => skillApps,
+    listSkillRecords: (spaceId: string | null) => rows.filter(row => row.spaceId === spaceId),
+    getApp: (id: string) => rows.find(app => app.id === id) ?? null,
   } as unknown as AppManagerService
 }
 
@@ -87,6 +89,19 @@ describe('store/collectFiles', () => {
     const { files, missingSkillIds } = collectFiles(skillSpec(), fakeManager([]), null)
     expect(missingSkillIds).toEqual([])
     expect(files).toEqual({ 'SKILL.md': '# skill\n', 'scripts/run.js': 'x()' })
+  })
+
+  it('selects an explicit source slug despite namespaced identities and rejects ambiguous names', () => {
+    const a = { ...skillSpec(), store: { slug: 'one/bundled-skill', install_source: 'store', tags: [] }, skill_files: { 'SKILL.md': 'SOURCE_A' } } as AppSpec
+    const b = { ...skillSpec(), store: { slug: 'two/bundled-skill', install_source: 'store', tags: [] }, skill_files: { 'SKILL.md': 'SOURCE_B' } } as AppSpec
+    const manager = fakeManager([{ specId: 'skill:hash-a:bundled-skill', spec: a }, { specId: 'skill:hash-b:bundled-skill', spec: b }])
+    expect(() => collectFiles(dhSpec({ skills: [{ id: 'bundled-skill', bundled: true }] }), manager, null)).toThrow(/multiple installed sources/)
+    const result = collectFiles(dhSpec({ skills: [{ id: 'two/bundled-skill', bundled: true }] }), manager, null)
+    expect(result.files['skills/bundled-skill/SKILL.md']).toBe('SOURCE_B')
+    expect(JSON.stringify(result.files)).not.toContain('SOURCE_A')
+    expect(result.packagedSpec.type === 'automation' && result.packagedSpec.requires?.skills).toEqual([
+      { id: 'bundled-skill', bundled: true, files: ['SKILL.md'] },
+    ])
   })
 
   it('digital human: collects bundled skill files under skills/<id>/', () => {
@@ -114,6 +129,40 @@ describe('store/collectFiles', () => {
     expect(missingSkillIds).toEqual(['plain-dep', 'soft-dep'])
   })
 
+  it('reads current global personal content instead of the body-free list record', () => {
+    const manager = fakeManager([{ specId: 'bundled-skill', spec: skillSpec() }])
+    manager.listSkillRecords = (() => [{ id: 'skill-0', specId: 'bundled-skill', status: 'active', spaceId: null, userOverrides: {}, spec: { ...skillSpec(), skill_files: undefined } }]) as any
+    const { files } = collectFiles(dhSpec({ skills: ['bundled-skill'] }), manager, null)
+    expect(files['skills/bundled-skill/SKILL.md']).toBe('# skill\n')
+    expect(inspectSkillDeps(dhSpec({ skills: ['bundled-skill'] }), manager, null)[0]).toMatchObject({ installed: true, appId: 'skill-0' })
+  })
+
+  it('preserves binary resources through collection and package roundtrip', async () => {
+    const bytes = Buffer.from([0, 255, 128, 10, 13])
+    const spec = { ...skillSpec(), skill_assets: { 'images/probe.bin': { encoding: 'base64', content: bytes.toString('base64') } } } as AppSpec
+    const { files } = collectFiles(spec, fakeManager([]), null)
+    expect(files['images/probe.bin']).toEqual(bytes)
+    const unpacked = await unpack(await pack(spec, files))
+    expect(unpacked.files['images/probe.bin']).toEqual(bytes)
+  })
+
+  it('packages a bundled dependency binary from its current file snapshot', () => {
+    const bytes = Buffer.from([255, 0, 128])
+    const spec = { ...skillSpec(), skill_assets: { 'probe.bin': { encoding: 'base64', content: bytes.toString('base64') } } } as AppSpec
+    const { files } = collectFiles(dhSpec({ skills: [{ id: 'bundled-skill', bundled: true }] }), fakeManager([{ specId: 'bundled-skill', spec }]), 'space-1')
+    expect(files['skills/bundled-skill/probe.bin']).toEqual(bytes)
+  })
+
+  it.each(['%%%=', 'AA'])('rejects malformed base64 rather than publishing partial content', content => {
+    const spec = { ...skillSpec(), skill_assets: { 'probe.bin': { encoding: 'base64', content } } } as AppSpec
+    expect(() => collectFiles(spec, fakeManager([]), null)).toThrow(/base64/)
+  })
+
+  it('rejects escaping resource paths', () => {
+    const spec = { ...skillSpec(), skill_assets: { '../escape': { encoding: 'base64', content: 'AA==' } } } as AppSpec
+    expect(() => collectFiles(spec, fakeManager([]), null)).toThrow()
+  })
+
   it('digital human: packages a hand-placed skill folder, which has no installed app, from disk', () => {
     loadableSkills.mockReturnValueOnce([{ folder: 'report-builder', path: '/skills/report-builder', app: null }])
     const spec = dhSpec({ skills: [{ id: 'report-builder' }] })
@@ -126,7 +175,7 @@ describe('store/collectFiles', () => {
     const app = { id: 'app-image', specId: 'Image Gen', spec: { ...skillSpec(), store: { slug: 'acme/image-gen-2', install_source: 'store' } } }
     loadableSkills.mockReturnValueOnce([{ folder: 'Image_Gen', path: '/skills/Image_Gen', app } as unknown as LoadableSkill])
     const spec = dhSpec({ skills: ['acme/image-gen-2', { id: 'report-builder', reason: 'tables' }] })
-    const manager = fakeManager([app as never, { specId: 'report-builder', spec: skillSpec() }])
+    const manager = fakeManager([app as never, { specId: 'report-builder', spec: { ...skillSpec(), name: 'report-builder' } }])
     const { files, missingSkillIds, packagedSpec } = collectFiles(spec, manager, 'space-1')
     expect(missingSkillIds).toEqual([])
     expect(new Set(Object.keys(files).map(path => path.split('/')[1]))).toEqual(new Set(['Image_Gen', 'report-builder']))

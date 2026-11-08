@@ -23,6 +23,7 @@ import {
   readSync,
   closeSync,
   lstatSync,
+  statSync,
 } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
 import { sendToRenderer } from '../../foundation/window.service'
@@ -46,11 +47,18 @@ import {
   markIngestCompleted,
   collectIngestCandidates,
   clearWikiAndHashes,
+  retireRemovedSources,
+  sweepRemovedSources,
+  scanIngestSources,
+  isRetirementMigrated,
+  markRetirementMigrated,
+  generatedTextName,
+  generatedTextHeader,
   sha256,
 } from './service'
 import { extractText } from './extract'
 import { DEFAULT_INDEX_MD } from './defaults'
-import { extractionRevision, ownedTextPath } from './extraction-revision'
+import { extractionRevision, ownedTextPath, sameTextStamp, stampOf, type TextStamp } from './extraction-revision'
 import { upgradeXlsxSource } from './xlsx-upgrade'
 
 // ============================================================================
@@ -131,6 +139,9 @@ export async function triggerFullIngest(kbId: string): Promise<void> {
   const kb = getKB(kbId)
   if (!kb) return
 
+  await sweepRemovedSourcesAndIndex(kbId)
+  if (!getKB(kbId)) return
+  markRetirementMigrated(kbId)
   const candidates = collectIngestCandidates(kbId)
   enqueueFiles(kbId, candidates)
 
@@ -148,6 +159,29 @@ export async function triggerFullIngest(kbId: string): Promise<void> {
   }
 
   await processQueue(kbId)
+}
+
+function afterRetirement(kbId: string, removed: number): number {
+  if (removed > 0 && getKB(kbId)) {
+    rebuildIndexMd(kbId)
+    emitStatsUpdated(kbId)
+  }
+  return removed
+}
+
+/**
+ * The ingest walk, with recorded sources it no longer finds proven gone and
+ * retired — no second pass over the KB.
+ */
+export function collectCandidatesRetiringRemoved(kbId: string): ReturnType<typeof scanIngestSources>['candidates'] {
+  const { candidates, unseen } = scanIngestSources(kbId)
+  if (unseen.length > 0) afterRetirement(kbId, retireRemovedSources(kbId, unseen))
+  return candidates
+}
+
+/** Full reconciliation, including text left without a record ("learn everything", one-time migration). */
+export async function sweepRemovedSourcesAndIndex(kbId: string): Promise<number> {
+  return afterRetirement(kbId, await sweepRemovedSources(kbId))
 }
 
 /** True while a KB's queue is being processed (used to block clear-relearn). */
@@ -187,7 +221,14 @@ export async function migrateKBsToTextIndex(): Promise<void> {
     const current = getKB(kb.id)
     if (!current || current.status === 'paused') continue
     try {
-      const candidates = collectIngestCandidates(kb.id)
+      // Text left behind by removals before this cleanup existed is found by
+      // one full pass per KB; afterwards each scan's own walk finds removals.
+      if (!isRetirementMigrated(kb.id)) {
+        await sweepRemovedSourcesAndIndex(kb.id)
+        if (!getKB(kb.id)) continue
+        markRetirementMigrated(kb.id)
+      }
+      const candidates = collectCandidatesRetiringRemoved(kb.id)
       if (candidates.length > 0) {
         enqueueFiles(kb.id, candidates, { automatic: true })
         await processQueue(kb.id)
@@ -280,9 +321,29 @@ export async function processQueue(kbId: string): Promise<void> {
 // Extraction (the ingest unit of work)
 // ============================================================================
 
-/** text/-relative filename holding a source's extracted plaintext. */
-function textFileName(sourcePath: string): string {
-  return sha256(sourcePath).slice(0, 16) + '.txt'
+const changedNotices = new Set<string>()
+const MAX_CHANGED_NOTICES = 1000
+
+/**
+ * Bytes read for a job are committed only while the same file is still at its
+ * path: one removed, or removed and recreated, while its extraction was queued
+ * or running is not written back. Checked synchronously right before each
+ * commit; a change after the check produces a watcher event and a new scan.
+ */
+function sourceChangedDuringExtraction(job: IngestJob, read: TextStamp): boolean {
+  let current: TextStamp | null = null
+  try {
+    current = stampOf(statSync(job.absolutePath))
+  } catch { /* removed */ }
+  if (current && sameTextStamp(read, current)) return false
+  const notice = `${job.kbId}\0${job.sourcePath}\0${current ? 'replaced' : 'removed'}`
+  if (!changedNotices.has(notice)) {
+    if (changedNotices.size >= MAX_CHANGED_NOTICES) changedNotices.clear()
+    changedNotices.add(notice)
+    console.warn(`[Tlon] Source ${current ? 'replaced' : 'removed'} during extraction, not recorded: ${job.sourcePath}`)
+  }
+  job.status = 'skipped'
+  return true
 }
 
 /**
@@ -293,13 +354,15 @@ function textFileName(sourcePath: string): string {
 async function extractSource(kbId: string, job: IngestJob): Promise<void> {
   job.status = 'running'
   job.startedAt = new Date().toISOString()
-  const textPath = textFileName(job.sourcePath)
+  const textPath = generatedTextName(job.sourcePath)
   if (await upgradeXlsxSource(job, textPath, () => appendLog(job, textPath))) return
   const revision = extractionRevision(job.absolutePath)
   const version = revision === undefined ? {} : { extractorRevision: revision }
 
   let buf: Buffer
+  let read: TextStamp
   try {
+    read = stampOf(statSync(job.absolutePath))
     buf = readFileSync(job.absolutePath)
   } catch {
     job.status = 'skipped'
@@ -307,6 +370,7 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
     return
   }
   const contentHash = sha256(buf)
+  const identity = job.sourceType === 'linked' ? { ...version, sourceDev: read.dev } : version
 
   // Extraction failures propagate to processQueue, which records them on the
   // batch's error list; lastError is persisted so the UI can show why the file
@@ -316,18 +380,20 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
   try {
     fileContent = await extractText(job.absolutePath, buf)
   } catch (error) {
+    if (sourceChangedDuringExtraction(job, read)) return
     const message = error instanceof Error ? error.message : String(error)
     const hashes: IngestHashesV1 = readHashes(kbId)
-    hashes.files[job.sourcePath] = { hash: contentHash, ingestedAt: new Date().toISOString(), lastError: message, ...version }
+    hashes.files[job.sourcePath] = { hash: contentHash, ingestedAt: new Date().toISOString(), lastError: message, ...identity }
     writeHashes(kbId, hashes)
     throw error
   }
+  if (sourceChangedDuringExtraction(job, read)) return
   if (!fileContent.trim()) {
     console.warn(`[Tlon] No text extracted from ${job.sourcePath}, skipping`)
     // Record the attempt so a text-less source (e.g. an image with no text) is
     // not re-extracted on every launch; it retries only when its bytes change.
     const hashes: IngestHashesV1 = readHashes(kbId)
-    hashes.files[job.sourcePath] = { hash: contentHash, ingestedAt: new Date().toISOString(), empty: true, ...version }
+    hashes.files[job.sourcePath] = { hash: contentHash, ingestedAt: new Date().toISOString(), empty: true, ...identity }
     writeHashes(kbId, hashes)
     job.status = 'skipped'
     return
@@ -337,7 +403,7 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
   if (!existsSync(textDir)) mkdirSync(textDir, { recursive: true })
   writeFileSync(
     join(textDir, textPath),
-    `<!-- source: ${job.sourcePath} -->\n\n${fileContent}`,
+    `${generatedTextHeader(job.sourcePath)}\n\n${fileContent}`,
     'utf-8'
   )
 
@@ -348,7 +414,7 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
     hash: contentHash,
     ingestedAt: new Date().toISOString(),
     textPath,
-    ...version,
+    ...identity,
   }
   writeHashes(kbId, hashes)
 

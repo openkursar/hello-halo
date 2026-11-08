@@ -12,7 +12,8 @@ const { createSession, getActiveEngine, paths } = vi.hoisted(() => ({
 vi.mock('electron', () => ({ app: { getPath: vi.fn(() => paths.userData), getVersion: vi.fn(() => '0.0.0'), getAppPath: vi.fn(() => '/tmp/halo-resume-app'), isPackaged: false } }))
 vi.mock('os', async importOriginal => {
   const actual = await importOriginal<typeof import('os')>()
-  return { ...actual, default: { ...actual, homedir: () => paths.home } }
+  const homedir = () => paths.home || globalThis.__HALO_TEST_DIR__ || '/tmp/halo-resume-config-placeholder'
+  return { ...actual, homedir, default: { ...actual, homedir } }
 })
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ createSession, getActiveEngine }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({ analytics: { track: vi.fn(), trackErrorSurface: vi.fn() } }))
@@ -34,6 +35,7 @@ vi.mock('../../../../src/main/services/health', () => ({ registerProcess: vi.fn(
 
 import { acquireV2Session, getOrCreateV2Session, closeAllV2Sessions, stopSessionCleanup } from '../../../../src/main/services/agent/session-manager'
 import { NativeSessionResumeError } from '../../../../src/shared/types/engine-session'
+import { stopGeneration } from '../../../../src/main/services/agent/control'
 
 const directories: string[] = []
 beforeEach(() => {
@@ -70,6 +72,36 @@ function fixture() {
   }, sessionId, workDir)
   return { configDir, sessionId, transcript, save, resume }
 }
+
+it('cancels catalog preparation when the person stops before a native session exists', async () => {
+  const { registerAppBridge } = await import('../../../../src/main/services/app-bridge')
+  const { prepareSessionSkills } = await import('../../../../src/main/services/agent/skill-availability')
+  registerAppBridge({ getAppManager: () => null, createHaloAppsMcpServer: () => null, onMcpAppsChange: () => () => {} })
+  const native = { close: vi.fn(), query: { transport: { isReady: () => true, onExit: () => () => {} } } }
+  let signal!: AbortSignal
+  let started!: () => void
+  const preparing = new Promise<void>(resolve => { started = resolve })
+  createSession.mockImplementationOnce(async options => {
+    signal = options.abortController.signal
+    started()
+    await prepareSessionSkills({ ...options, workerGroup: 'space' })
+    return native
+  })
+  const conversationId = randomUUID()
+  const pending = getOrCreateV2Session('space', conversationId, { engineId: 'halo', model: 'test', systemPrompt: 'test' })
+  const stopped = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  await preparing
+  await stopGeneration(conversationId, { reason: 'user' })
+  await stopped
+  expect(signal.aborted).toBe(true)
+  expect(native.close).not.toHaveBeenCalled()
+
+  const next = await getOrCreateV2Session('space', conversationId, { engineId: 'halo', model: 'test', systemPrompt: 'test' })
+  expect(next).toBeDefined()
+  const nextSignal = createSession.mock.calls.at(-1)![0].abortController.signal
+  await stopGeneration(conversationId, { reason: 'user' })
+  expect(nextSignal.aborted).toBe(false)
+})
 
 it.each(['halo', 'anthropic'])('resumes %s history from the session config directory', async engine => {
   getActiveEngine.mockReturnValue(engine)
@@ -116,10 +148,10 @@ it('resumes directly in the Claude Code directory without copying into Halo', as
   expect(existsSync(transcript(join(paths.userData, 'claude-config')))).toBe(false)
 })
 
-it('starts fresh when no transcript exists', async () => {
+it('refuses to start empty when no transcript exists', async () => {
   const { configDir, resume } = fixture()
-  await resume(configDir)
-  expect(createSession.mock.calls[0][0]).not.toHaveProperty('resume')
+  await expect(resume(configDir)).rejects.toBeInstanceOf(NativeSessionResumeError)
+  expect(createSession).not.toHaveBeenCalled()
 })
 
 it.each(['codex', 'dsh'])('leaves %s resumption to its adapter', async engine => {
@@ -155,15 +187,10 @@ describe('continuing from the transcript when the stored record is lost', () => 
     acquired.release()
   })
 
-  it('still starts a legacy chat fresh when it has no transcript either', async () => {
+  it('refuses a legacy continuation when both history sources are unavailable', async () => {
     const { configDir, sessionId } = fixture()
-    createSession.mockResolvedValue(session())
-    const { acquired, sink } = await lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => { throw new Error('no record') } })
-    expect(createSession.mock.calls[0][0]).not.toHaveProperty('resume')
-    expect(createSession.mock.calls[0][0]).not.toHaveProperty('engineHandoffContent')
-    await acquired.send('Next question')
-    expect(sink.onContinuedFromRecord).not.toHaveBeenCalled()
-    acquired.release()
+    await expect(lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => { throw new Error('no record') } })).rejects.toThrow('no record')
+    expect(createSession).not.toHaveBeenCalled()
   })
 
   it('asks the halo engine for an exact restore and falls back to the transcript when it refuses', async () => {
@@ -177,13 +204,12 @@ describe('continuing from the transcript when the stored record is lost', () => 
     expect(createSession.mock.calls[1][0].strictResume).toBeUndefined()
   })
 
-  it('resumes a legacy record with what the engine can read when there is no transcript to fall back on', async () => {
+  it('preserves the original file when strict restore fails without fallback history', async () => {
     const { configDir, sessionId, save } = fixture()
     save(configDir)
     createSession.mockRejectedValueOnce(new NativeSessionResumeError('halo', sessionId)).mockResolvedValue(session())
-    await lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => '' })
-    expect(createSession.mock.calls[1][0]).toMatchObject({ resume: sessionId })
-    expect(createSession.mock.calls[1][0].strictResume).toBeUndefined()
+    await expect(lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => '' })).rejects.toBeInstanceOf(NativeSessionResumeError)
+    expect(createSession).toHaveBeenCalledOnce()
   })
 
   it('does not ask other engines for a strict restore', async () => {

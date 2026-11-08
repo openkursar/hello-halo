@@ -9,6 +9,18 @@ not here:
 operations on this page:
   POST   /api/apps/<appId>/upgrade-strategy                          Set how a store-installed digital human handles version upgrades
   GET    /api/skills/command-name                                    Preview the slash-command name a skill title would install under
+  POST   /api/skills/copy                                            Create an independent personal skill copy under a new name
+  POST   /api/skills/delete                                          Trash one skill package on the host computer   !! destructive - narrower: /api/skills/set-enabled
+  POST   /api/skills/delete-legacy                                   Permanently discard one recoverable legacy skill package   !! destructive
+  POST   /api/skills/export                                          Export one discovered skill package as base64 ZIP bytes
+  POST   /api/skills/import                                          Import a complete personal skill package into an explicit scope   !! destructive
+  POST   /api/skills/list                                            List skill copies available in one workspace and global scope
+  POST   /api/skills/move                                            Move one complete skill package to the selected scope
+  POST   /api/skills/move-preview                                    Preview a skill scope move without changing any files
+  POST   /api/skills/read                                            Read one discovered skill copy and its current file revision
+  POST   /api/skills/restore-legacy                                  Recover an explicitly selected legacy removed skill
+  POST   /api/skills/save                                            Save one skill instruction file against the revision just read   !! destructive
+  POST   /api/skills/set-enabled                                     Enable or disable one skill copy without deleting its files
   GET    /api/store/app-document                                     Get a listing's SKILL.md/README document
   GET    /api/store/apps                                             List store listings (legacy, non-paginated; prefer POST /api/store/query)
   GET    /api/store/apps/<slug>                                      Get full detail for one store listing by slug
@@ -49,6 +61,128 @@ GET    /api/skills/command-name                                    Preview the s
      curl -s "$HALO_API_URL/api/skills/command-name" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {success:true,data:string}  // e.g. "My Skill" -> "my-skill"
      # note: Query: ?name=. A missing name returns an empty string, not a 400. Pure string transform — it does not check whether that name is already taken.
+
+POST   /api/skills/copy                                            Create an independent personal skill copy under a new name
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/skills/copy" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"ref":{"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"},"spaceId":"$HALO_SPACE_ID","name":"my-copy"}'
+     # body: {"ref":{"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"},"spaceId":"$HALO_SPACE_ID","name":"my-copy"}
+     # out: {success:true,data:<SkillCopy>} or {success:false,error}
+     # note: Destination spaceId is required and used exactly as supplied; null means global. name is required and at most 128 characters; service filename/command validation also applies. Optional content replaces the copied SKILL.md (at most 1 MiB UTF-8); supporting files are copied with the package.
+
+POST   /api/skills/delete                                          Trash one skill package on the host computer
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     !! If the user meant something smaller, use /api/skills/set-enabled instead.
+     curl -sX POST "$HALO_API_URL/api/skills/delete" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"ref":{"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"},"revision":"<revision from read>"}'
+     # body: {"ref":{"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"},"revision":"<revision from read>"}
+     # out: {success:true} or {success:false,error}
+     # note: Requires the current revision and deletes only this copy. The host computer recycle bin/trash receives the files, not the remote client. There is no API undo; disabling instead preserves all files. A lower-priority copy may become effective.
+
+POST   /api/skills/delete-legacy                                   Permanently discard one recoverable legacy skill package
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX POST "$HALO_API_URL/api/skills/delete-legacy" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"appId":"<UUID from list.legacyRemoved>"}'
+     # body: {"appId":"<UUID from list.legacyRemoved>"}
+     # out: {success:true} or {success:false,error}
+     # note: Discards the stored legacy content and recovery option. Requires an explicitly selected appId from legacyRemoved; it does not trash a current discovered file package.
+
+POST   /api/skills/export                                          Export one discovered skill package as base64 ZIP bytes
+     curl -sX POST "$HALO_API_URL/api/skills/export" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"}'
+     # body: {"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"}
+     # out: {success:true,data:{filename,base64}} or {success:false,error}
+     # note: Send the ref directly. Returns the complete package, including binary resources; does not write to a caller-selected host path. Opening a host folder is desktop-only and is refused over HTTP.
+
+POST   /api/skills/import                                          Import a complete personal skill package into an explicit scope
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX POST "$HALO_API_URL/api/skills/import" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"spaceId":"$HALO_SPACE_ID","requestId":"<stable request ID>","spec":{"type":"skill","name":"my-skill","version":"1.0","description":"What it does","skill_content":"<complete SKILL.md>"}}'
+     # body: {"spaceId":"$HALO_SPACE_ID","requestId":"<stable request ID>","spec":{"type":"skill","name":"my-skill","version":"1.0","description":"What it does","skill_content":"<complete SKILL.md>"}}
+     # out: {success:true,data:<SkillCopy>} or {success:false,error}
+     # note: spaceId is required and used exactly as supplied. null means global; another workspace ID writes there. Only SkillSpec is accepted; importing a digital human uses its dedicated creation tool instead.
+     # note: requestId is required: 8–128 ASCII letters, digits, underscores or hyphens. Reuse it only when retrying the same import. Supply package bytes, never a client path or arbitrary host filePath.
+     # note: Multi-file specs use skill_files for relative UTF-8 resources and skill_assets for {encoding:"base64",content:"..."} binary resources. Service validation owns path containment and package limits; HTTP body limits also apply.
+     # note: An existing copy is not implicitly overwritten. Explicit replacement adds replace:{ref:{id,spaceId},revision} using a fresh read; only a personal copy in the target scope can be replaced. Replacement removes obsolete package resources and preserves its disabled choice.
+
+POST   /api/skills/list                                            List skill copies available in one workspace and global scope
+     curl -sX POST "$HALO_API_URL/api/skills/list" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"spaceId":"$HALO_SPACE_ID"}'
+     # body: {"spaceId":"$HALO_SPACE_ID"}
+     # out: {success:true,data:{groups:[{name,displayName,description,source,copies:[{id,appId?,name,displayName,description,path,scope,spaceId,source,owners,enabled,availability,error?,revision,editable,isLink}],effectiveId?,conflict}],offset,limit,total,truncated,warnings,legacyRemoved,engines}} or {success:false,error}
+     # note: spaceId is required: a workspace ID includes that workspace and global copies; null inspects only global scope. The supplied workspace is used exactly as sent, including another workspace.
+     # note: Optional q (at most 1024 characters), source (all|mine|digital-human|builtin), offset (non-negative safe integer), limit (1–100; default 50). Follow pagination and report warnings/truncation rather than treating uninspected files as absent.
+     # note: Copy IDs are opaque discovered references, not paths. A ref is {id:copy.id,spaceId:<the inspected workspace or null>}; read again before file mutations. Do not invent IDs or use a path as an ID.
+
+POST   /api/skills/move                                            Move one complete skill package to the selected scope
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/skills/move" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"ref":{"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"},"spaceId":null,"revision":"<revision from read>"}'
+     # body: {"ref":{"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"},"spaceId":null,"revision":"<revision from read>"}
+     # out: {success:true,data:<SkillCopy>} or {success:false,error}
+     # note: Preview first. Destination spaceId is used exactly as supplied; null moves globally. Requires the current revision. Preserves supporting resources and the disabled choice; success removes the old location. Use the returned copy ID for subsequent operations.
+
+POST   /api/skills/move-preview                                    Preview a skill scope move without changing any files
+     curl -sX POST "$HALO_API_URL/api/skills/move-preview" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"ref":{"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"},"spaceId":null}'
+     # body: {"ref":{"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"},"spaceId":null}
+     # out: {success:true,data:{fromPath,toPath,fromSpaceId,toSpaceId,conflict?}} or {success:false,error}
+     # note: ref.spaceId identifies where to find the source; top-level spaceId is the required destination workspace or null for global. A conflict prevents the move; showing a destination path does not authorize writing arbitrary paths.
+
+POST   /api/skills/read                                            Read one discovered skill copy and its current file revision
+     curl -sX POST "$HALO_API_URL/api/skills/read" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"id":"<copy.id from POST /api/skills/list>","spaceId":"$HALO_SPACE_ID"}'
+     # body: {"id":"<copy.id from POST /api/skills/list>","spaceId":"$HALO_SPACE_ID"}
+     # out: {success:true,data:{copy,content,revision,files:[{path,size,binary}],spec}} or {success:false,error}
+     # note: Send the ref directly, not inside a ref field. IDs accept file:<64 lowercase hex digits> or app:<installation UUID> for legacy navigation; the service resolves them again within the inspected workspace and global roots. No arbitrary filePath is accepted.
+
+POST   /api/skills/restore-legacy                                  Recover an explicitly selected legacy removed skill
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/skills/restore-legacy" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"appId":"<UUID from list.legacyRemoved>","spaceId":"$HALO_SPACE_ID"}'
+     # body: {"appId":"<UUID from list.legacyRemoved>","spaceId":"$HALO_SPACE_ID"}
+     # out: {success:true,data:<SkillCopy>} or {success:false,error}
+     # note: Use only an appId from legacyRemoved. Destination spaceId is required and used as supplied; null means global. Optional name (1–128 characters) gives the restored personal copy a new command name. A current user-deleted skill is not a legacy recovery candidate.
+
+POST   /api/skills/save                                            Save one skill instruction file against the revision just read
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX POST "$HALO_API_URL/api/skills/save" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"ref":{"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"},"content":"<complete SKILL.md>","revision":"<revision from read>"}'
+     # body: {"ref":{"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"},"content":"<complete SKILL.md>","revision":"<revision from read>"}
+     # out: {success:true,data:{copy,content,revision,files,spec}} or {success:false,error}
+     # note: Replaces the instruction file, not supporting resources. Content is capped at 1 MiB UTF-8. Revision is required (1–512 characters); a stale revision fails without overwriting external edits. Reread and reconcile rather than blindly retrying.
+
+POST   /api/skills/set-enabled                                     Enable or disable one skill copy without deleting its files
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/skills/set-enabled" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"ref":{"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"},"enabled":false}'
+     # body: {"ref":{"id":"<copy.id>","spaceId":"$HALO_SPACE_ID"},"enabled":false}
+     # out: {success:true,data:<SkillCopy>} or {success:false,error}
+     # note: enabled must be a boolean. This affects only the named copy; a lower-priority copy can become effective. Inspect list afterwards and distinguish new-session availability from context already loaded by a running conversation.
 
 GET    /api/store/app-document                                     Get a listing's SKILL.md/README document
      curl -s "$HALO_API_URL/api/store/app-document" -H "Authorization: Bearer $HALO_API_TOKEN"

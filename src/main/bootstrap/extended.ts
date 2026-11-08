@@ -71,8 +71,8 @@ import { initScheduler, shutdownScheduler } from '../platform/scheduler'
 import { combinedDisposable } from '../platform/event'
 import { initMemory } from '../platform/memory'
 import { initAppManager, shutdownAppManager } from '../apps/manager'
-import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, createDigitalHumanConversationSource, createRunConversationSource, releaseTeamEpochSessions } from '../apps/runtime'
-import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService } from '../apps/team'
+import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry, isNativeChatGone, onNativeChatDeleted, createDigitalHumanConversationSource, createRunConversationSource, releaseTeamEpochSessions, getAppRuntime } from '../apps/runtime'
+import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService, collabReportOwnership, releaseCollaboration, releaseCollaborationsOfApp } from '../apps/team'
 import type { TeamStore } from '../apps/team'
 import { initFederationStore, shutdownFederationStore, getFederationStore, getAuthorityStore } from '../apps/federation'
 import { recoverPersistedOffices } from './office-recovery'
@@ -96,6 +96,7 @@ import { installAppsSubscribers } from '../services/analytics/subscribers/apps.s
 import { runStartupSnapshot } from '../services/analytics/snapshot'
 import { analytics } from '../services/analytics/analytics.service'
 import { registerAppHandlers } from '../ipc/app'
+import { registerSkillsHandlers } from '../ipc/skills'
 import { registerTeamIpc } from '../ipc/team'
 import { registerTaskHandlers } from '../ipc/task'
 import { registerAnalyticsHandlers } from '../ipc/analytics'
@@ -342,7 +343,7 @@ async function initPlatformAndApps(): Promise<void> {
      * host→joiners only, so they have to go up the other way. No-op off a
      * federated office.
      */
-    const publishMemberProfile = (teamId: string, appId: string) => {
+    const publishMemberProfile = (teamId: string, appId: string, renamed = false) => {
       const member = teamStore.getMember(teamId, appId)
       if (!member) return
       getFederationManager()?.routeOfficeStateWrite(teamId, 'member_profile', {
@@ -351,6 +352,9 @@ async function initPlatformAndApps(): Promise<void> {
         duty: member.duty ?? null,
         acceptsChecks: member.acceptsChecks !== false,
         awaitingDecision: member.awaitingDecision === true,
+        // Only on a rename: a joined copy may hold a disambiguated name the
+        // authority must not be asked to undo on every duty edit.
+        ...(renamed ? { memberName: member.memberName } : {}),
       })
     }
 
@@ -417,8 +421,14 @@ async function initPlatformAndApps(): Promise<void> {
               duty?: string | null
               acceptsChecks?: boolean
               awaitingDecision?: boolean
+              memberName?: string
             }
             if (!p.teamId || !p.appId) return
+            // Names on a joined copy come from the roster alone; a replayed or
+            // re-resolved name here would diverge from the authority's choice.
+            if (typeof p.memberName === 'string' && getFederationManager()?.servesOffice(p.teamId)) {
+              getTeamService()?.applyMemberRename(p.teamId, p.appId, p.memberName)
+            }
             teamStore.updateMemberFields(p.teamId, p.appId, {
               duty: p.duty ?? null,
               acceptsChecks: p.acceptsChecks !== false,
@@ -1135,6 +1145,7 @@ async function initPlatformAndApps(): Promise<void> {
             turnInput: request.turnInput,
             identity: request.permissionIdentity,
             coalescingKey: request.coalescingKey,
+            ownWork: collabReportOwnership(teamStore, request.persist.metadata.teamId, request.conversationId),
             persist: {
               content: request.persist.content,
               source: 'team-message',
@@ -1167,6 +1178,8 @@ async function initPlatformAndApps(): Promise<void> {
         // coalesced roster refresh — without it a viewer's board froze on the
         // last projected status until an unrelated write refreshed the roster.
         onMemberStatusChanged: (teamId) => getFederationManager()?.scheduleRosterRefresh(teamId),
+        // Person-level status (space rail, people switcher) counts team turns too.
+        onMemberWorkChanged: (appId) => getAppRuntime()?.refreshAppState(appId),
         // "Waiting on its owner" is authored here and read by the whole office —
         // same channel a duty edit takes up to the authority.
         onMemberProfileChanged: (teamId, appId) => publishMemberProfile(teamId, appId),
@@ -1250,6 +1263,7 @@ async function initPlatformAndApps(): Promise<void> {
       // its owner, but read by the whole office — on a joined office the roster
       // only travels host→joiners, so the edit has to go up the other way.
       onMemberProfileChanged: (teamId, appId) => publishMemberProfile(teamId, appId),
+      onMemberRenamed: (teamId, appId) => publishMemberProfile(teamId, appId, true),
       onMemberRemoved: (teamId, appId) => {
         const mgr = getFederationManager()
         mgr?.projectMemberRemoved(teamId, appId)
@@ -1313,27 +1327,15 @@ async function initPlatformAndApps(): Promise<void> {
       console.warn('[Bootstrap] EventRouter unavailable; team trigger scheduler not initialized')
     }
 
-    // A space conversation that coordinated a temporary collaboration is that
+    // A conversation (space or native digital-human chat) that coordinated a temporary collaboration is that
     // collaboration's whole reason to exist: deleting the conversation
     // dissolves an ephemeral team (member apps cleaned up) and unbinds a saved
     // one, so hidden member apps can never outlive the work they were made for.
     if (teamService) {
-      onConversationDeleted((_spaceId, conversationId) => {
-        try {
-          const collabTeam = teamStore.getCollabTeamByConversation(conversationId)
-          if (!collabTeam) return
-          if (collabTeam.ephemeral) {
-            console.log(`[Bootstrap] conversation deleted → dissolving collaboration team=${collabTeam.id}`)
-            void teamService.dissolveTeam(collabTeam.id).catch((err) =>
-              console.error('[Bootstrap] collaboration cleanup failed:', err)
-            )
-          } else {
-            teamStore.setCoordinatorConversation(collabTeam.id, null)
-          }
-        } catch (err) {
-          console.error('[Bootstrap] collaboration cleanup failed:', err)
-        }
-      })
+      const release = (conversationId: string): void => releaseCollaboration(teamStore, teamService, conversationId)
+      onConversationDeleted((_spaceId, conversationId) => release(conversationId))
+      onNativeChatDeleted(release)
+      appManager.onAppUninstalled((app) => releaseCollaborationsOfApp(teamStore, teamService, app))
     }
 
     // Periodic checks share the scheduler and the same pre-start window — their
@@ -1604,6 +1606,7 @@ export function initializeExtendedServices(): void {
 
   // App management IPC handlers (app:install, app:list, etc.)
   registerAppHandlers()
+  registerSkillsHandlers()
 
   // Digital Team IPC handlers (team:list, team:create, team:run, etc.)
   registerTeamIpc()

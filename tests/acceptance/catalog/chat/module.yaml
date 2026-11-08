@@ -11,6 +11,7 @@ paths:
   - src/main/services/agent/**
   - src/main/ipc/agent.ts
   - src/main/http/routes/agent.routes.ts
+  - src/main/openai-compat-router/adapters/kiro*.ts
 dependsOn:
   - conversations
   - models

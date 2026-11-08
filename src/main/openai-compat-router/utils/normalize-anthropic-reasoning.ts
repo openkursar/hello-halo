@@ -47,7 +47,8 @@ function resolveTarget(
     const inferred = inferReasoningEffortFromBudget(thinking.budget_tokens)
     return inferred === 'off' ? OFF : { off: false, effort: inferred }
   }
-  if (thinking.type === 'disabled' && forcedThinkingLevel(profile)) return OFF
+  const rejectsDisabled = forcedThinkingLevel(profile) || (profile.anthropic?.disableType ?? 'disabled') !== 'disabled'
+  if (thinking.type === 'disabled' && rejectsDisabled) return OFF
   return undefined
 }
 

@@ -17,9 +17,9 @@ operations on this page:
   PATCH  /api/teams/<teamId>                                         Edit a team's name, goal, mode, escalation routing or lead
   DELETE /api/teams/<teamId>                                         Dissolve a team   !! destructive - narrower: DELETE /api/teams/<teamId>/members/<appId>
   GET    /api/teams/<teamId>/artifacts                               List files each member produced in the current or latest run
-  GET    /api/teams/<teamId>/chat-messages                           Read one member's transcript within a team
+  GET    /api/teams/<teamId>/chat-messages                           Read one member's transcript in one team conversation
   DELETE /api/teams/<teamId>/checks/<checkId>                        Stop one periodic check a member set inside a team   !! destructive
-  GET    /api/teams/<teamId>/conversations                           List a team's open conversations, newest first
+  GET    /api/teams/<teamId>/conversations                           List a team's conversations (its tasks and chats), newest first
   POST   /api/teams/<teamId>/conversations                           Open a new team conversation
   PATCH  /api/teams/<teamId>/conversations/<epochId>                 Rename a team conversation
   DELETE /api/teams/<teamId>/conversations/<epochId>                 Archive (close) a team conversation   !! destructive
@@ -33,8 +33,8 @@ operations on this page:
   POST   /api/teams/<teamId>/members                                 Add an existing digital human to a team
   PATCH  /api/teams/<teamId>/members/<appId>                         Rewrite what a member is responsible for in this team
   DELETE /api/teams/<teamId>/members/<appId>                         Remove a member from a team   !! destructive
-  POST   /api/teams/<teamId>/members/<appId>/send                    Send a message to one team member and wait for its reply
-  POST   /api/teams/<teamId>/members/<appId>/stop                    Stop the turn one team member is running
+  POST   /api/teams/<teamId>/members/<appId>/send                    Send a message to one team member in one conversation and wait for its reply
+  POST   /api/teams/<teamId>/members/<appId>/stop                    Stop the turn one team member is running in one conversation
   POST   /api/teams/<teamId>/pause                                   Stop the team's current run
   POST   /api/teams/<teamId>/run                                     Start a team run on its goal
   POST   /api/teams/<teamId>/save-collab                             Keep a temporary collaboration as a persistent team
@@ -91,10 +91,10 @@ GET    /api/teams/<teamId>/artifacts                               List files ea
      # out: {success:true,data:[{appId,memberName,spaceId,epochId,artifacts:[{name,type:"file"|"folder",path,relativePath,size?,createdAt}]}]}
      # note: For a specific past run use GET /api/teams/:teamId/epochs/:epochId/artifacts. Read a file with your own file tools at its path.
 
-GET    /api/teams/<teamId>/chat-messages                           Read one member's transcript within a team
-     curl -s "$HALO_API_URL/api/teams/<teamId>/chat-messages?appId=<appId — a member appId from GET /api/teams/:teamId/detail>" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+GET    /api/teams/<teamId>/chat-messages                           Read one member's transcript in one team conversation
+     curl -s "$HALO_API_URL/api/teams/<teamId>/chat-messages?appId=<appId — a member appId from GET /api/teams/:teamId/detail>&epochId=<epochId — a conversation from GET /api/teams/:teamId/conversations>" -H "Authorization: Bearer $HALO_API_TOKEN" | tail -c 4000
      # out: {success:true,data:[messages],stale?:true}
-     # note: Optional query: &epochId= (a run or conversation id from GET /api/teams/:teamId/epochs; default: the open run, else the member's own chat, else the latest), &sinceSeq= for incremental reads.
+     # note: epochId is required and is never chosen for you; without it the call fails with code halo.team.conversation_required and lists recent conversations as candidates. Optional query: &sinceSeq= for incremental reads.
      # note: A member on another computer is fetched from its owner; stale:true means a cached copy because the owner is offline, and a 502 means it is unavailable right now.
 
 DELETE /api/teams/<teamId>/checks/<checkId>                        Stop one periodic check a member set inside a team
@@ -103,9 +103,10 @@ DELETE /api/teams/<teamId>/checks/<checkId>                        Stop one peri
      # out: {success:true}
      # note: checkId comes from checks[] in GET /api/teams/:teamId/detail.
 
-GET    /api/teams/<teamId>/conversations                           List a team's open conversations, newest first
+GET    /api/teams/<teamId>/conversations                           List a team's conversations (its tasks and chats), newest first
      curl -s "$HALO_API_URL/api/teams/<teamId>/conversations" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
-     # out: {success:true,data:[{epochId,teamId,kind:"native"|"im"|"member"|"run"|"collab",label,readonly,memberAppId?,channel?,startedAt,lastActivityAt,active?,waitingUser?}]}
+     # out: {success:true,data:[{epochId,teamId,kind:"native"|"im"|"member"|"run"|"collab",label,readonly,completed,memberAppId?,channel?,summary?,startedAt,lastActivityAt,active?,waitingUser?}]}
+     # note: Each one has its own context; a member message, transcript read or stop names one by epochId. completed:true means it has ended (finished or archived). active:true means a member is working in it right now.
 
 POST   /api/teams/<teamId>/conversations                           Open a new team conversation
      # note: reversible — can be undone or corrected afterward.
@@ -115,7 +116,7 @@ POST   /api/teams/<teamId>/conversations                           Open a new te
           -d '{"title":"optional title"}'
      # body: {"title": "optional title"}
      # out: {success:true,data:{epochId}}
-     # note: Optional body: "memberAppId" to open it as a one-to-one thread with that member.
+     # note: Optional body: "memberAppId" opens it as a one-to-one thread with a member on this computer. Naming a member whose origin is "remote" in GET /api/teams/:teamId/detail (it runs on another computer) is refused; open the conversation without memberAppId and send to that member in it.
 
 PATCH  /api/teams/<teamId>/conversations/<epochId>                 Rename a team conversation
      # note: reversible — can be undone or corrected afterward.
@@ -202,26 +203,27 @@ DELETE /api/teams/<teamId>/members/<appId>                         Remove a memb
      # out: {success:true}
      # note: The digital human itself stays installed unless Halo created it only for this team.
 
-POST   /api/teams/<teamId>/members/<appId>/send                    Send a message to one team member and wait for its reply
+POST   /api/teams/<teamId>/members/<appId>/send                    Send a message to one team member in one conversation and wait for its reply
      # note: reversible — can be undone or corrected afterward.
      curl -sX POST "$HALO_API_URL/api/teams/<teamId>/members/<appId>/send" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
           -H "Content-Type: application/json" \
-          -d '{"message":"Please re-check the pricing section"}'
-     # body: {"message": "Please re-check the pricing section"}
+          -d '{"message":"Please re-check the pricing section","epochId":"<epochId — a conversation from GET /api/teams/:teamId/conversations>"}'
+     # body: {"message": "Please re-check the pricing section", "epochId": "<epochId — a conversation from GET /api/teams/:teamId/conversations>"}
      # out: {success:true,data:{ok,finalMessage,reason?,delivery?:"queued"|"mid_turn"}}
-     # note: Blocks until the member finishes its turn (can take minutes) and returns its final message. delivery "queued"/"mid_turn" means the member was busy: the message was accepted but no reply exists yet — read it later with GET /api/teams/:teamId/chat-messages.
-     # note: Optional body: "epochId" to address a specific run or conversation. Works for members on other computers too.
+     # note: epochId is required: the message lands in that conversation and no other is chosen for you. Pick it by label; if more than one could be meant, ask the user using the labels. Without it the call fails with code halo.team.conversation_required and lists recent conversations as candidates.
+     # note: Sending into a conversation marked completed reopens it — ask the user first. A member with no conversation yet: open one with POST /api/teams/:teamId/conversations, then send into it. Pass memberAppId there only for a member on this computer: naming one whose origin is "remote" in GET /api/teams/:teamId/detail is refused, so for such a member open the conversation without it.
+     # note: Blocks until the member finishes its turn (can take minutes) and returns its final message. delivery "queued"/"mid_turn" means the member was busy: the message was accepted but no reply exists yet — read it later with GET /api/teams/:teamId/chat-messages. ok:false with reason UNDELIVERED means it never arrived; reason CONVERSATION_NOT_FOUND means that epochId is not a conversation of this team — list conversations again. Works for members on other computers too.
 
-POST   /api/teams/<teamId>/members/<appId>/stop                    Stop the turn one team member is running
+POST   /api/teams/<teamId>/members/<appId>/stop                    Stop the turn one team member is running in one conversation
      # note: reversible — can be undone or corrected afterward.
      curl -sX POST "$HALO_API_URL/api/teams/<teamId>/members/<appId>/stop" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
           -H "Content-Type: application/json" \
-          -d '{}'
-     # body: {}
+          -d '{"epochId":"<epochId — a conversation from GET /api/teams/:teamId/conversations>"}'
+     # body: {"epochId": "<epochId — a conversation from GET /api/teams/:teamId/conversations>"}
      # out: {success:true,data:{ok,stopped,reason?}}  — stopped:false means nothing was running
-     # note: Optional body: "epochId". To stop the whole team run instead, POST /api/teams/:teamId/pause.
+     # note: epochId is required, as for send. To stop the whole team run instead, POST /api/teams/:teamId/pause.
 
 POST   /api/teams/<teamId>/pause                                   Stop the team's current run
      # note: reversible — can be undone or corrected afterward.

@@ -1,0 +1,56 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+const { library, store } = vi.hoisted(() => ({ library: { list: vi.fn(), read: vi.fn(), import: vi.fn(), setEnabled: vi.fn(), movePreview: vi.fn(), move: vi.fn(), save: vi.fn(), delete: vi.fn() }, store: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ tool: (name: string, description: string, schema: unknown, handler: Function) => ({ name, description, schema, handler }) }))
+vi.mock('../../../../src/main/apps/skills', () => ({ getSkillLibrary: () => library }))
+vi.mock('../../../../src/main/store', () => ({ installFromStore: store }))
+vi.mock('../../../../src/main/apps/spec', () => ({ validateAppSpec: (value: unknown) => value }))
+import { createSkillManagementTool } from '../../../../src/main/apps/conversation-mcp/skill-tools'
+const invoke = (args: Record<string, unknown>) => (createSkillManagementTool('space') as any).handler(args)
+const ref = { id: 'app:legacy-id', spaceId: 'space' }
+beforeEach(() => { vi.clearAllMocks() })
+describe('skill management tool', () => {
+  it('lists a bounded current-space page with usable references', async () => {
+    library.list.mockReturnValue({ groups: [{ copies: [{ id: ref.id, spaceId: 'space' }] }] })
+    const response = await invoke({ action: 'list' })
+    expect(library.list).toHaveBeenCalledWith({ spaceId: 'space', limit: 20, q: undefined, offset: undefined })
+    expect(JSON.parse(response.content[0].text).groups[0].copies[0].ref).toEqual(ref)
+  })
+  it('reads a text window and revision without exposing binary packages', async () => {
+    library.read.mockReturnValue({ copy: {}, revision: 'rev', content: 'x'.repeat(15000), files: [], spec: { skill_assets: { private: 'BINARY' } } })
+    const response = await invoke({ action: 'read', skill_id: 'legacy-id' })
+    expect(library.read).toHaveBeenCalledWith(ref)
+    const data = JSON.parse(response.content[0].text)
+    expect(data.content.length).toBe(12000)
+    expect(data.revision).toBe('rev')
+    expect(data.nextOffset).toBe(12000)
+    expect(response.content[0].text).not.toContain('BINARY')
+  })
+  it('refuses another space before resolving the reference', async () => {
+    const response = await invoke({ action: 'delete', ref: { ...ref, spaceId: 'other' }, revision: 'rev' })
+    expect(response.isError).toBe(true)
+    expect(library.delete).not.toHaveBeenCalled()
+  })
+  it('requires a read revision even for the legacy uninstall alias', async () => {
+    expect((await invoke({ action: 'uninstall', skill_id: 'legacy-id' })).isError).toBe(true)
+    expect(library.delete).not.toHaveBeenCalled()
+    await invoke({ action: 'uninstall', skill_id: 'legacy-id', revision: 'rev' })
+    expect(library.delete).toHaveBeenCalledWith({ ref, revision: 'rev' })
+  })
+  it('routes availability and move preview through the library', async () => {
+    library.setEnabled.mockReturnValue({})
+    library.movePreview.mockReturnValue({})
+    await invoke({ action: 'disable', ref })
+    expect(library.setEnabled).toHaveBeenCalledWith({ ref, enabled: false })
+    await invoke({ action: 'move', ref, target_scope: 'global' })
+    expect(library.movePreview).toHaveBeenCalledWith({ ref, spaceId: null })
+    expect(library.move).not.toHaveBeenCalled()
+  })
+  it('keeps store install and manual copy imports on their owning paths', async () => {
+    store.mockResolvedValue('id')
+    await invoke({ action: 'install', slug: 'weekly', scope: 'global' })
+    expect(store).toHaveBeenCalledWith('weekly', null)
+    library.import.mockResolvedValue({})
+    await invoke({ action: 'install', spec: JSON.stringify({ name: 'weekly', description: 'Weekly' }) })
+    expect(library.import).toHaveBeenCalledWith({ spaceId: 'space', spec: expect.objectContaining({ type: 'skill', name: 'weekly' }), requestId: expect.any(String) })
+  })
+})

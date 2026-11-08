@@ -170,7 +170,7 @@ for (const [sdkEngine, caseId] of [
   ['halo', 'terminal.environment.packaged-tools-halo'],
 ] as const) {
   test.describe(`Packaged tools with ${sdkEngine === 'anthropic' ? 'Claude Code' : 'Halo'}`, () => {
-    test.use({ sdkEngine, hostCommands: 'system-only' })
+    test.use({ sdkEngine, hostCommands: 'system-only', explicitClaudeCode: sdkEngine === 'anthropic' })
 
     const discovery = sdkEngine === 'anthropic' ? 'project agents and commands' : 'project commands'
     test(`the packaged AI can search files, run the bundled ripgrep and Office runtime, read large images, and sees ${discovery}`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId, evidence: 'app-e2e', mode: 'scripted', variant: {} }) } }, async ({ electronApp, window }, testInfo) => {

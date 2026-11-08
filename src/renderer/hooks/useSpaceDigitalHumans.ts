@@ -15,9 +15,11 @@ import type { InstalledApp } from '../../shared/apps/app-types'
 interface Options {
   /** Keep soft-deleted apps, which surfaces still holding their conversations need. */
   includeUninstalled?: boolean
+  /** Keep team coordinators, for surfaces that show people rather than offer recipients. */
+  includeCoordinators?: boolean
 }
 
-export function useSpaceDigitalHumans(spaceId: string | null, { includeUninstalled = false }: Options = {}): InstalledApp[] {
+export function useSpaceDigitalHumans(spaceId: string | null, { includeUninstalled = false, includeCoordinators = false }: Options = {}): InstalledApp[] {
   const apps = useAppsStore(s => s.apps)
   const loadApps = useAppsStore(s => s.loadApps)
   const teams = useTeamStore(s => s.teams)
@@ -32,12 +34,12 @@ export function useSpaceDigitalHumans(spaceId: string | null, { includeUninstall
     if (!spaceId) return []
     // Coordinators and ephemeral-collaboration members are team-internal — a
     // person never addresses them directly.
-    const hidden = new Set([...ephemeralMemberIds(teams), ...coordinatorIds(teams)])
+    const hidden = new Set([...ephemeralMemberIds(teams), ...(includeCoordinators ? [] : coordinatorIds(teams))])
     return apps.filter(a =>
       a.spec.type === 'automation'
       && a.spaceId === spaceId
       && (includeUninstalled || a.status !== 'uninstalled')
       && !hidden.has(a.id)
     )
-  }, [apps, teams, spaceId, includeUninstalled])
+  }, [apps, teams, spaceId, includeUninstalled, includeCoordinators])
 }

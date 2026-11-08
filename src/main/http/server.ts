@@ -23,6 +23,8 @@ import {
 import { ACCESS_CODE_MIN_SUBMIT_LENGTH, PASSWORD_MAX_LENGTH } from '../../shared/auth/password-policy'
 import { initWebSocket, shutdownWebSocket, getClientCount } from './websocket'
 import { getInvitePage } from './invite-page'
+import { isSkillRequest, parseSkillBody } from './skills-body'
+import { isChatRequest, parseChatBody } from './chat-body'
 import { serveRendererAssets } from './renderer-assets'
 import { getTeamStore } from '../apps/team'
 import { getLocalIdentity } from './identity/index'
@@ -183,7 +185,9 @@ export async function startHttpServer(
   attachWebhookIngress(expressApp)
 
   // Middleware
-  expressApp.use(express.json())
+  const parseJson = express.json()
+  expressApp.use((req, res, next) =>
+    isSkillRequest(req.path) || isChatRequest(req.method, req.path) ? next() : parseJson(req, res, next))
   expressApp.use(express.urlencoded({ extended: true }))
 
   // CORS for remote access
@@ -240,6 +244,8 @@ export async function startHttpServer(
 
   // Auth middleware for API routes
   expressApp.use('/api', authMiddleware)
+  expressApp.use(parseChatBody)
+  expressApp.use('/api/skills', parseSkillBody)
 
   // Register API routes
   registerApiRoutes(expressApp)

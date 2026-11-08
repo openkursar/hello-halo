@@ -184,6 +184,10 @@ describe('deliverReminder', () => {
     // A turn cut off before it finished says so, as every IM reply does.
     request.onReply('Time is', { kind: 'interrupted' })
     expect(pushToChat).toHaveBeenLastCalledWith('g-1', expect.stringMatching(/^Time is\n\n（.+）$/), 'group')
+
+    // So does one whose request failed partway, with the error it would have had alone.
+    request.onReply('Time is', { kind: 'failed', error: 'API Error: 529 overloaded' })
+    expect(pushToChat).toHaveBeenLastCalledWith('g-1', 'Time is\n\n⚠️ Error: API Error: 529 overloaded', 'group')
   })
 
   it('tells an IM chat when the reminder\'s turn failed, as the chat is told of a turn of its own', async () => {

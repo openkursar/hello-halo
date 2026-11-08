@@ -87,6 +87,51 @@ describe('built-in defaults', () => {
   })
 })
 
+describe('modern family budgets', () => {
+  it.each([
+    'deepseek-future', 'qwen-future', 'kimi-future', 'minimax-future',
+    'grok-future', 'mistral-future', 'llama-future', 'unknown-future'
+  ])('uses 200K / 64K for %s without inventing a model-specific limit', (id) => {
+    expect(modelCapabilitiesService.resolve(id)).toMatchObject({
+      contextWindow: 200_000, maxOutputTokens: 64_000
+    })
+  })
+
+  it.each([
+    ['deepseek-chat', 128_000, 8192],
+    ['deepseek-reasoner', 128_000, 65536],
+    ['qwen-max', 32768, 8192],
+    ['kimi-k2', 131072, 32768],
+    ['grok-3', 131072, 16384],
+    ['mistral-large-latest', 200_000, 8192],
+    ['llama-3.3-70b-versatile', 128_000, 32768],
+    ['claude-3-opus-20240229', 200_000, 4096]
+  ])('preserves the known limits of %s', (id, contextWindow, maxOutputTokens) => {
+    expect(modelCapabilitiesService.resolve(id)).toMatchObject({ contextWindow, maxOutputTokens })
+  })
+
+  it('preserves a lower provider limit for an otherwise unknown family member', () => {
+    expect(modelCapabilitiesService.resolve('deepseek-future', undefined, {
+      contextWindow: 128_000, maxOutputTokens: 8192
+    })).toMatchObject({ contextWindow: 128_000, maxOutputTokens: 8192 })
+  })
+
+  it.each([
+    'deepseek-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash',
+    'deepseek-v4-flash-vision-exp', 'Pro/deepseek-ai/DeepSeek-V4.1-Flash'
+  ])('uses the standard budget and multimodal reasoning capabilities for %s', (id) => {
+    expect(modelCapabilitiesService.resolve(id)).toMatchObject({
+      contextWindow: 200_000, maxOutputTokens: 64_000, vision: true, thinking: true
+    })
+  })
+
+  it('preserves explicit user budgets and capability choices', () => {
+    const id = 'deepseek-v4.1-flash'
+    const override = { contextWindow: 208_000, maxOutputTokens: 8192, vision: false, thinking: false }
+    expect(modelCapabilitiesService.resolve(id, { [id]: override })).toMatchObject(override)
+  })
+})
+
 describe('catalogCapability (provider-declared, live /models data)', () => {
   it('overrides the built-in default for a model with no preset', () => {
     // The reported bug: a custom OpenRouter model id with no bundled preset
@@ -116,18 +161,17 @@ describe('catalogCapability (provider-declared, live /models data)', () => {
     }
   })
 
-  // Catalog data fills what nothing else knows; it does not restate curated
-  // ones. Many OpenAI-compatible proxies report one blanket limit for every
-  // model they front, so letting that outrank a deliberate per-model entry
-  // would silently downgrade a known model to the proxy's house number.
-  it('loses to a built-in exact preset', () => {
+  // The account's server knows its own deployment; a preset is Halo's guess
+  // about the bare id, so the server's value wins even over an exact entry.
+  it('outranks a built-in exact preset', () => {
+    expect(modelCapabilitiesService.getPreset('deepseek-chat')).not.toBeNull()
     const cap = modelCapabilitiesService.resolve(
       'deepseek-chat',
       undefined,
       { contextWindow: 999_000, maxOutputTokens: 4096 }
     )
-    expect(cap.contextWindow).toBe(modelCapabilitiesService.getPreset('deepseek-chat')!.contextWindow)
-    expect(cap.maxOutputTokens).toBe(8192)
+    expect(cap.contextWindow).toBe(999_000)
+    expect(cap.maxOutputTokens).toBe(4096)
   })
 
   it('loses to an explicit user override for the same field', () => {

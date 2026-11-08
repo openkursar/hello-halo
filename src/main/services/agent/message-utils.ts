@@ -8,6 +8,7 @@
  */
 
 import type { Thought, ImageAttachment, CanvasContext } from './types'
+import { readSkillNotice, SKILL_NOTICE_TEXT } from '../../../shared/skill-notice'
 
 // ============================================
 // Canvas Context Formatting
@@ -113,6 +114,10 @@ export function parseSDKMessage(message: any, displayModel?: string): Thought | 
 
   // System initialization
   if (message.type === 'system') {
+    const skillNotice = readSkillNotice(message)
+    if (skillNotice) {
+      return { id: generateThoughtId(), type: 'system', content: SKILL_NOTICE_TEXT[skillNotice], skillNotice, timestamp }
+    }
     if (message.subtype === 'init') {
       // Use displayModel (user's configured model) instead of SDK's internal model
       // This ensures users see the actual model they configured, not the spoofed Claude model

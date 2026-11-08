@@ -54,6 +54,8 @@ operations on this page:
   POST   /api/apps/<appId>/upgrade-strategy                          Set how a store-installed digital human handles version upgrades
   POST   /api/apps/import-spec                                       Install a digital human (or other app type) from a YAML definition (spec) string
   POST   /api/apps/install                                           Install a digital human (or other app type) from its full definition (spec) object
+  GET    /api/apps/tags                                              List the user's tags on one list (digital humans, skills or MCP servers), with how many items carry each
+  POST   /api/apps/tags/rename                                       Rename or remove one of the user's tags across a list (digital humans, skills or MCP servers)   !! destructive
   GET    /api/im-sessions                                            List every chat thread a digital human has, its own and IM ones
   GET    /api/im-sessions/linked                                     List the IM chats a digital human pushes to through another digital human's bot
   POST   /api/im-sessions/remove                                     Remove a chat binding from the IM session registry
@@ -238,7 +240,7 @@ PATCH  /api/apps/<appId>/overrides                                 Merge-patch p
           -d '{"notificationLevel":"important"}'
      # body: {"notificationLevel": "important"}
      # out: {success:true}
-     # note: Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space's memory topics), chatReasoningEffort (off|minimal|low|medium|high|xhigh|max — how hard it thinks everywhere: its chats, IM replies and scheduled or manual runs; unset, the model's configured effort applies), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object), disabledTools (MCP servers only: tool names, as the server lists them, to leave out of every session — the whole list each time; [] or null turns them all back on). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). A modelSourceId naming an account that no longer exists is not rejected either: the digital human runs on the current global account until the override is changed. The run schedule is NOT set here — use POST /:appId/frequency.
+     # note: Other fields you can set the same way: modelSourceId, modelId, spaceMemoryAccess (true lets the digital human read its space's memory topics), chatReasoningEffort (off|minimal|low|medium|high|xhigh|max — how hard it thinks everywhere: its chats, IM replies and scheduled or manual runs; unset, the model's configured effort applies), memory ({enabled, autoConsolidate, cadence: "diligent"|"balanced"|"economical"} — sent as a whole object), disabledTools (MCP servers only: tool names, as the server lists them, to leave out of every session — the whole list each time; [] or null turns them all back on), tags (the user's own labels for sorting their lists — the whole list each time, at most 12; rename or remove one everywhere with POST /api/apps/tags/rename). JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). A modelSourceId naming an account that no longer exists is not rejected either: the digital human runs on the current global account until the override is changed. The run schedule is NOT set here — use POST /:appId/frequency.
 
 POST   /api/apps/<appId>/pause                                     Pause a digital human (stops scheduling)
      # note: reversible — can be undone or corrected afterward.
@@ -374,6 +376,21 @@ POST   /api/apps/install                                           Install a dig
      # use create_automation_app instead — a raw call would skip: the authoring-guide gate, forcing type to "automation", and automatic required-skill install with rollback on failure.
      # If that tool is not available to you, this capability is switched off in this build's settings —
      # say that, and do not say Halo cannot do it.
+
+GET    /api/apps/tags                                              List the user's tags on one list (digital humans, skills or MCP servers), with how many items carry each
+     curl -s "$HALO_API_URL/api/apps/tags" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true, data:[{name:"patrol", count:5}]}
+     # note: Query: ?type=automation|skill|mcp (required). Most used first. Removed items do not count. Tags match whatever their (ASCII) letter case.
+
+POST   /api/apps/tags/rename                                       Rename or remove one of the user's tags across a list (digital humans, skills or MCP servers)
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX POST "$HALO_API_URL/api/apps/tags/rename" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"type":"automation","from":"patrol","to":"monitoring"}'
+     # body: {"type": "automation", "from": "patrol", "to": "monitoring"}
+     # out: {success:true, data:{changed:3}}
+     # note: type is automation, skill or mcp — the list the tag belongs to. to: null removes the tag from every item in that list, and renaming to a tag that already exists merges the two — neither can be undone, so confirm with the person first. Tags match whatever their (ASCII) letter case. A tag over 32 characters is refused, not cut. To tag a single item, PATCH /:appId/overrides with {"tags": ["..."]} (the whole list each time, at most 12, each at most 32 characters; [] or null removes them).
 
 GET    /api/im-sessions                                            List every chat thread a digital human has, its own and IM ones
      curl -s "$HALO_API_URL/api/im-sessions" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000

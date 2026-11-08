@@ -1,0 +1,30 @@
+version: 1
+id: workspaces.skill-context
+module: workspaces
+title: Keep project skill files with their actual project
+story: I can change or remove a workspace without accidentally moving project skills or deleting shared files.
+basis: documented
+references:
+  - tests/acceptance/skills-requirements.md
+promises:
+  identity: Project skills follow the real working directory while private installations follow the workspace record; changing or deleting a workspace accurately preserves external/shared files and unrelated scopes.
+scenarios:
+  - id: workspaces.skill-context.repoint
+    title: Repoint and remove a workspace without moving external skill files
+    verifies: [identity]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    variants:
+      directory: [external-project, halo-owned, shared-real-directory]
+    preconditions:
+      - Controlled workspaces have different project skills, private installed skills and global controls; the shared-directory fixture has two workspace records resolving to the same directory.
+    steps:
+      - Change the working directory and a person's default workspace at their supported safe boundary, inspect fresh effective skills and both old/new files, then cancel and confirm workspace deletion as applicable.
+    expected:
+      - New work uses new project files without moving old files; private installed skills remain attached to workspace identity and are not written into the new project.
+      - Removing a project workspace preserves external skills; deleting Halo-owned data explicitly confirms its skill impact. Globals and other private installations remain untouched.
+      - Shared real directories expose shared file/edit/move/delete impact and one file's disable state, not fictitious independent copies; changing a person's environment moves no skills and changes no peers' files.

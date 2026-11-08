@@ -11,6 +11,7 @@ basis: observed
 references:
   - src/renderer/components/chat/TokenUsageIndicator.tsx
   - tests/e2e/specs/token-usage-popup.spec.ts
+  - tests/e2e/specs/acceptance-context-compaction.spec.ts
 promises:
   display:
     en: Usage details correspond to the selected reply and stay attached to their visible anchor while open.
@@ -18,6 +19,9 @@ promises:
   meaning:
     en: Context usage and reported cost are not conflated with an independent provider invoice.
     zh: 上下文用量及报告费用不被等同于独立的服务商账单。
+  compaction-accounting:
+    en: Reported usage includes summary requests as well as ordinary work. Missing usage never becomes an invalid number or a locally estimated provider charge; context-size estimates are kept separate from billing totals.
+    zh: 报告的用量包含总结请求及普通工作。缺失用量不会变成无效数字，也不会用本地估算伪造服务费用；上下文大小估算与计费总量分开。
 scenarios:
   - id: chat.usage.popup
     title:
@@ -65,3 +69,25 @@ scenarios:
     expected:
       - en: Displayed values follow the documented calculation and missing price data is not a fabricated invoice.
         zh: 显示符合文档计算，缺失价格数据不伪造账单。
+  - id: chat.usage.compaction-accounting
+    title: Count summary usage without billing local context estimates
+    verifies:
+      - compaction-accounting
+      - meaning
+    platforms: *a1
+    profiles: [fast, regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      usage: [reported, absent]
+    preconditions:
+      - A scripted SDK turn includes a tool exchange, automatic summary and successful continuation, with a controlled model price table.
+      - The provider reports known uncached input, cache, and output usage for each request, or omits usage for every request.
+    steps:
+      - Complete the turn and inspect its public aggregate and per-model usage and cost result.
+    expected:
+      - With reported usage, totals include the summary exactly once alongside both ordinary requests, and costs use only those reported counts and the supplied prices.
+      - Without usage, context compaction still works through local estimation, but reported token totals and cost remain finite zero values rather than NaN or an estimated invoice.
+    notes: Standalone integration from the built SDK's public API. Zero means no reported billable usage in this fixture, not a claim that a provider charged nothing. Renderer display, application analytics persistence and an independent invoice remain unverified.

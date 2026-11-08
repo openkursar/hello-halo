@@ -23,6 +23,7 @@ acceptance workflow, *Run workflow*, and fill what you need:
 
 | Input | Meaning |
 | --- | --- |
+| `source_repository` | Blank: the controller's configured source. Otherwise only the configured [private development source](#private-development-source) is accepted |
 | `source_ref` | Branch of the source repository to test. Blank: the default branch |
 | `modules`, `cases` | Comma-separated module or scenario ids. Blank: select by impact, or everything |
 | `profile` | `regression` (everything applicable; the default, and the profile the nightly baseline is recorded under) or `fast` (a small core that keeps a baseline of its own) |
@@ -221,8 +222,12 @@ Configure these repository variables as needed:
 | `HALO_SOURCE_REPOSITORY` | Source `owner/repository` | Controller repository |
 | `HALO_SOURCE_REF` | Default source branch: what the nightly run tests, and the branch other branches are compared with | `main` |
 | `HALO_ALLOWED_SOURCE_BRANCHES` | Optional JSON array that narrows which branches of the source repository may run | Absent: any branch of the configured source repository |
+| `HALO_PRIVATE_SOURCE_REPOSITORY` | Optional private development `owner/repository`, testable by manual dispatch only (see [Private development source](#private-development-source)) | Absent: no private source |
+| `HALO_ALLOWED_PRIVATE_SOURCE_BRANCHES` | Optional JSON array that narrows which branches of the private development source may run | Absent: any branch |
 | `HALO_ACCEPTANCE_PROFILE` | `fast` or `regression` | `regression` |
 | `HALO_ACCEPTANCE_RUNNER` | JSON runner label array | `["self-hosted","acceptance","macOS"]` |
+| `HALO_ACCEPTANCE_CLAUDE_CLI` | Absolute path of the external Claude Code executable the scenarios of the Claude Code engine use (see [External Claude Code](#external-claude-code)) | Absent: those scenarios are reported as blocked |
+| `HALO_CI_TOOLS_ROOT` | Directory the [runner tools workflow](../tests/acceptance/ci/runner-tools.yml) installs tools under | `/Users/Shared/halo-ci-tools` |
 | `HALO_ACCEPTANCE_ARCHIVE_ROOT` | Dedicated absolute local evidence archive directory, outside checkout, workspace and runner temporary storage | `~/.halo-acceptance-archives` under the runner account |
 | `HALO_SDK_REPOSITORY` | Optional separately authorized SDK repository | Absent |
 | `HALO_SDK_REF` | SDK branch to follow; its head is resolved at run time and recorded in the result | Absent |
@@ -244,12 +249,16 @@ secrets. Checkout does not persist credentials. The workflow token has only
 service. Do not attach unrestricted external PRs to a personal-machine runner.
 
 Manual input can select a source branch, an SDK branch or commit, a profile,
-modules, cases and a full selection. The controller rejects a different source
-repository, an unsupported branch name, a branch that does not exist and, when
-`HALO_ALLOWED_SOURCE_BRANCHES` is set, a branch outside it, all before checking
-out any source code. Only branches of the configured repository are admitted;
-pull-request refs and forks are not, so write access to that repository is the
-trust boundary. With `HALO_SDK_REPOSITORY` set the SDK follows `HALO_SDK_REF`
+modules, cases and a full selection. The controller rejects a source repository
+other than the configured one (or the configured private development source), an
+unsupported branch name and, when `HALO_ALLOWED_SOURCE_BRANCHES` (or, for the
+private source, `HALO_ALLOWED_PRIVATE_SOURCE_BRANCHES`) is set, a branch outside
+it, all before checking out any source code. For the configured source a branch
+that does not exist or lacks the acceptance harness is also refused before
+checkout; for the private source the checkout and the verification step right
+after it report those. Only branches of those repositories are admitted;
+pull-request refs and forks are not, so write access to them is the trust
+boundary. With `HALO_SDK_REPOSITORY` set the SDK follows `HALO_SDK_REF`
 (or the manual `sdk_ref`, which must be a branch name or a commit of that
 repository, never a `refs/` path) and the commit actually checked out is what
 the result records; without a branch the pinned `HALO_SDK_REVISION` is used, and
@@ -288,6 +297,137 @@ A run that stays queued although its runner is online lost the job assignment
 while the connection dropped, and nothing can restart it from inside: cancel it
 and dispatch again.
 
+## Private development source
+
+The nightly schedule and the default manual run test the configured source
+repository, normally the public one. While a change is still unreviewed it may not
+belong there yet, so the controller can also be given **one** private development
+repository: a mirror of the source that keeps its full history, so commit ids
+match the public ones, and that developers push branches to like any other
+remote. A manual run can then test a branch there without publishing it.
+
+The two sources are independent:
+
+- The schedule never runs the private source. The workflow computes the source of
+  a scheduled run from the repository variable alone, and the source step also
+  refuses the private repository for any event other than a manual dispatch.
+- A manual run names its source with `source_repository`. Only the configured
+  source and the configured private development source are accepted; a third
+  repository stops the run before any checkout. Without `source_repository` the
+  run tests the configured source exactly as before.
+- Public-source checks and checkout are unchanged. The private source is read
+  over SSH with its own read-only deploy key, because the workflow token cannot
+  read a repository other than the controller.
+
+Set it up once, with a repository administrator:
+
+1. Create a private repository (`owner/hello-halo-dev` in the examples below) and
+   push the source branches you want to test from, with their history.
+2. Create an SSH key pair used for nothing else and add its public half to that
+   repository as a deploy key with write access **disabled**. GitHub allows a
+   deploy key on one repository only, so the SDK key cannot be reused.
+3. Store the private half in the controller as the secret
+   `HALO_PRIVATE_SOURCE_READ_SSH_KEY`, delete the local key files, and set the
+   variable `HALO_PRIVATE_SOURCE_REPOSITORY=owner/hello-halo-dev`.
+4. Optionally narrow the branches with `HALO_ALLOWED_PRIVATE_SOURCE_BRANCHES`.
+   `HALO_ALLOWED_SOURCE_BRANCHES` applies to the configured source only.
+
+Dispatch with the helper's `--private` flag, which reads the repository from
+`git config halo.acceptancePrivateSource owner/hello-halo-dev` (or
+`HALO_ACCEPTANCE_CI_PRIVATE_SOURCE`):
+
+```bash
+node scripts/acceptance/ci-dispatch.mjs --private --source-ref feat/topic --module chat
+node scripts/acceptance/ci-dispatch.mjs --private --source-ref feat/topic --module chat --execute
+```
+
+Preview and execution both print which repository and branch is under test. The
+commit is the branch head when the run starts; the run summary and the artifacts
+record it. Push the branch before dispatching.
+
+What differs from a public-source run:
+
+- **Comparison, never publication.** A private run is compared with the latest
+  baseline of the branch that `HALO_SOURCE_REF` names in the configured source,
+  the nightly lineage, so its findings read *new*, *fixed* and *still failing*
+  as usual; the mirror shares that history. It only reads that lineage: a
+  private run publishes no baseline whatever it covers, and its own branch never
+  has one. The change-based selection needs a baseline of the run's own
+  repository and branch, so an unscoped private run selects the full profile,
+  as a new public branch does; use `--module` for a quick run. If the nightly
+  lineage has no baseline yet, or cannot be fetched, the findings say so.
+- **Key handling.** The key is read by the checkout step alone, which deletes
+  the key file and its SSH configuration when it finishes (`persist-credentials:
+  false`), so scripts of the tested branch, which run in later steps, cannot read
+  it. The optional SDK checkout is configured the same way.
+- **Trust boundary.** Write access to the private repository is the same grant as
+  write access to the configured source: a pushed branch's scripts run on the
+  build host. Give the deploy key and the repository the same care.
+- **Evidence stays private**, as for every run of this controller.
+
+To stop using it, delete the variable. The secret and the deploy key can then be
+removed; no workflow change is needed.
+
+## External Claude Code
+
+Scenarios whose variant uses the Claude Code engine need a real Claude Code
+executable that is not part of the application. Without one they are reported as
+*blocked* (an environment gap, not a failure). The build host gets one through a
+manual maintenance workflow instead of a hand installation:
+
+1. Copy [the runner tools template](../tests/acceptance/ci/runner-tools.yml) to
+   `.github/workflows/runner-tools.yml` in the controller and run it from the
+   Actions tab. It runs only when started by hand, on the acceptance runner, with
+   read-only repository permissions and no secret.
+2. It downloads the **pinned** release for macOS on Apple silicon from the
+   official release host, requires the host's manifest and the downloaded file to
+   both match the pinned SHA-256, runs it with `--version` in an empty home
+   directory and an empty environment, and only then publishes it, atomically, to
+   `<tools root>/claude-code/<version>/claude` (default tools root
+   `/Users/Shared/halo-ci-tools`). Nothing is installed globally, the runner
+   account's own `~/.claude` is not touched and no account is signed in. An
+   existing file or directory that is not the pinned executable is reported and
+   never replaced.
+3. Set the controller variable `HALO_ACCEPTANCE_CLAUDE_CLI` to the printed path.
+   The acceptance workflow passes it to the run; with the variable unset nothing
+   differs from a host without Claude Code.
+
+The pin (version and checksum, one block at the top of the template) follows the
+release Halo has verified on that platform, `RECOMMENDED_VERSION` in
+`src/main/services/cc-runtime/policy.ts`; a test keeps them equal and never
+follows a moving `latest`. To upgrade: verify the new release as that policy
+describes, change the version and checksum together (take the checksum from the
+release's manifest, `platforms.darwin-arm64.checksum`), update the controller
+copy, run the workflow again and point `HALO_ACCEPTANCE_CLAUDE_CLI` at the new
+directory. Older installed versions stay where they are.
+
+The executable is only the engine under test. Acceptance scenarios drive it
+against a local scripted endpoint; a scenario that finds Claude Code asking for a
+login or a real model is reported as blocked or failed as it happens, never
+worked around. Because the downloaded file runs on the build host with the
+runner account's rights, treat the pin like any other code the controller
+executes: change it deliberately.
+
+## Processes left on the build host
+
+A scenario that fails to close its application is ended by force, and helpers
+the application started (the file-watcher worker, crash handlers) can outlive
+it as orphans adopted by `launchd`. GitHub's runner stops what a job started when
+the job ends; within a job they stay until then.
+
+To look at the host without a run, copy [the diagnostics template](../tests/acceptance/ci/runner-diagnostics.yml)
+to `.github/workflows/runner-diagnostics.yml` of the **private** controller (it
+refuses to list anything otherwise: its output names the runner account,
+directories and command lines). Started by hand it lists the
+account's acceptance-related processes by class, orphan or not, with the oldest
+age, load average, memory pressure and swap use; `cleanup: true` additionally
+stops those that are provably the CI's own: same account, parent `launchd`,
+command line inside the runner's work directory or the account's temporary
+`halo-*` / `acceptance-*` directories, older than ten minutes, never runner
+infrastructure; SIGTERM first, SIGKILL after ten seconds only for an unchanged
+command. An account that is short of memory makes
+closings slow, so check swap use before blaming a scenario.
+
 ## Baselines and honest outcomes
 
 Each run ends in one of two ways. It is **complete** when everything it executed
@@ -309,7 +449,9 @@ known result of every scenario instance. It serves two purposes:
   full profile runs. A baseline is a cursor, not evidence that every behavior
   passed.
 - *Comparison.* The run is compared with the baseline of its own branch, or with
-  the default branch when the branch has none, regardless of SDK or catalog
+  the default branch when the branch has none (a run of the [private development
+  source](#private-development-source) only with the default branch of the
+  configured source), regardless of SDK or catalog
   differences. Without any earlier result nothing is called new. The lookup
   waits out a short loss of connection; if the earlier result still cannot be
   fetched, the run selects the full profile and its findings say the earlier
@@ -625,7 +767,9 @@ Without `--profile` the workflow's default applies, so a run is compared with th
 nightly baseline; a `fast` run is compared only with earlier `fast` runs.
 
 `--ref` chooses the controller workflow ref; `--source-ref` chooses the source
-branch under test and `--sdk-ref` the SDK branch or commit. `--full` requests a
+branch under test, `--private` the [private development
+source](#private-development-source) instead of the configured one, and
+`--sdk-ref` the SDK branch or commit. `--full` requests a
 complete profile sweep. Dispatch requires the
 repository's GitHub publishing rules and appropriate authorization. The helper
 does not create repositories, enable schedules, alter runner permissions, publish
@@ -689,9 +833,12 @@ the receipt before deciding whether another dispatch is appropriate. Exit code
 2 means an incomplete lookup; a complete lookup returns 0 even when it finds
 zero or multiple matches.
 
-The self-hosted template executes only its configured source repository. Any
-branch of that repository may run unless `HALO_ALLOWED_SOURCE_BRANCHES` (a JSON
-array) narrows the choice. It resolves the branch through the API before checkout
-and then checks out the fixed SHA. Pull request refs and arbitrary forks are not
-admitted to a personal runner; keep write access to the source repository limited
-to people whose code may run there.
+The self-hosted template executes only its configured source repository and,
+for manual runs, the configured private development source. Any branch of the
+configured repository may run unless `HALO_ALLOWED_SOURCE_BRANCHES` (a JSON array)
+narrows the choice. It resolves the branch through the API before checkout and
+then checks out the fixed SHA. The private development source is checked out over
+SSH by branch, and the checkout is verified to be a full commit that contains the
+acceptance harness before anything runs. Pull request refs and arbitrary forks
+are not admitted to a personal runner; keep write access to both repositories
+limited to people whose code may run there.

@@ -32,6 +32,7 @@ import type {
   AppInstalledHandler,
   AppUninstalledHandler,
   SpecUpgradedHandler,
+  AppRenamedHandler,
   AppUninstallReason,
   Unsubscribe,
   UninstallOptions,
@@ -52,10 +53,11 @@ import { isMcpCommandBlocked } from '../../services/security-policy'
 import { seedAppKnowledgeBases, unbindAppFromAllKBs } from '../../services/tlon'
 import { getTaskStateService } from '../../platform/task-state'
 import type { McpAppChange } from '../../services/app-bridge'
-import { syncSkillToFilesystem, removeSkillFromFilesystem } from './skill-sync'
-import { withSkillMdName } from '../../../shared/skill-frontmatter'
+import { createSkillLifecycle, readPersonalSkill } from './skill-lifecycle'
+import { classifySkillSource } from '../../services/skills'
 import { isBuiltinApp } from './types'
 import { sanitizeMemorySettings } from '../../../shared/types/memory'
+import { cleanTag, normalizeTags, requireTag } from '../../../shared/apps/app-tags'
 import { compareDotVersions } from '../../../shared/store/version-compare'
 import type { SpecUpgradeOutcome } from '../../../shared/apps/app-types'
 import { authorVersionPatch, mergeAuthorUpgrade } from './spec-upgrade'
@@ -168,6 +170,9 @@ export interface AppManagerDeps {
    * Global apps store work data at `{haloDir}/apps/{appId}/`.
    */
   getGlobalAppDir: () => string
+
+  /** Injectable OS trash for isolated tests; production uses Electron shell. */
+  trashItem?: (path: string) => Promise<void>
 }
 
 /**
@@ -178,6 +183,7 @@ export interface AppManagerDeps {
  */
 export function createAppManagerService(deps: AppManagerDeps): AppManagerService {
   const { store, getSpacePath, getAppDataPath, getGlobalAppDir } = deps
+  const skills = createSkillLifecycle(deps)
 
   // Status change event listeners
   const statusChangeHandlers: StatusChangeHandler[] = []
@@ -188,6 +194,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
   const appInstalledHandlers: AppInstalledHandler[] = []
   const appUninstalledHandlers: AppUninstalledHandler[] = []
   const specUpgradedHandlers: SpecUpgradedHandler[] = []
+  const appRenamedHandlers: AppRenamedHandler[] = []
 
   /**
    * Notify all registered status change handlers.
@@ -236,6 +243,17 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     }
   }
 
+  function notifyRenamed(appId: string, previousName: string, name: string): void {
+    if (previousName === name) return
+    for (const handler of appRenamedHandlers) {
+      try {
+        handler(appId, previousName, name)
+      } catch (error) {
+        console.error('[AppManager] Rename handler error:', error)
+      }
+    }
+  }
+
   /**
    * What an author's new version makes of an App, without writing anything.
    * A digital human is merged over the user's edits (spec-upgrade.ts); any
@@ -248,6 +266,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
   } {
     const next = validateAppSpec(authorSpec)
     const fromVersion = app.spec.version
+    if (app.spec.type === 'skill' && next.type === 'skill' &&
+      (classifySkillSource(app.spec) === 'personal' || app.userOverrides.skill?.customized || app.userOverrides.skill?.deleted || app.status === 'uninstalled'
+        || skills.editedOutside(app))) {
+      return { next, merged: null, outcome: { fromVersion, toVersion: fromVersion, kept: ['skill_files', 'skill_assets', 'skill_content'], editsKnown: true } }
+    }
     if (next.type !== 'automation' || app.spec.type !== 'automation') {
       return { next, merged: null, outcome: { fromVersion, toVersion: next.version, kept: [], editsKnown: true } }
     }
@@ -372,17 +395,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     return effective
   }
 
-  /**
-   * Two skill records are the same skill when they publish under the same
-   * registry slug, or — for unpublished ones — when their authored names match.
-   * An occupant of another type is never the same skill: installing over it
-   * would replace an MCP or automation record with skill content.
-   */
+  /** Only different authored names may receive a derived-name collision suffix. */
   function isSameSkill(occupant: InstalledApp, spec: SkillSpec): boolean {
     if (occupant.spec.type !== 'skill') return false
     const occupantSpec = occupant.spec
-    const slug = spec.store?.slug
-    if (slug && occupantSpec.store?.slug) return occupantSpec.store.slug === slug
     return (occupantSpec.display_name ?? occupantSpec.name) === (spec.display_name ?? spec.name)
   }
 
@@ -446,12 +462,20 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         }
       }
 
+      if (installSpec.type === 'skill') {
+        const result = skills.install(spaceId, installSpec, userConfig)
+        if (!result.reused) notifyInstalled(result.app)
+        console.log(`[AppManager] ${result.reused ? 'Reused' : 'Installed'} skill ${result.app.id}`)
+        return result.app.id
+      }
+
       const authorSpec = hasUpgradeSource(installSpec) ? installSpec : null
 
       // Check for duplicate installation
       const specId = installSpec.name // Use spec name as the canonical spec identifier
       const existing = store.getBySpecAndSpace(specId, spaceId)
       if (existing) {
+        if (existing.spec.type === 'skill') throw new AppAlreadyInstalledError(specId, spaceId)
         // If the existing record is uninstalled, reinstall it with the new spec
         if (existing.status === 'uninstalled') {
           // Update spec in case it changed
@@ -476,28 +500,6 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
             seedKnowledgeIfNeeded(reinstalled)
             notifyInstalled(reinstalled)
           }
-          return existing.id
-        }
-
-        // Skills are content-only artifacts (prompt + files on disk) with no
-        // runtime state; reinstalling the same skill should refresh content
-        // rather than fail. Automation/MCP apps retain userConfig, memory,
-        // schedule overrides and runtime sessions, so duplicates still throw
-        // and the caller must explicitly uninstall before reinstalling.
-        // The refresh only applies between two skills; an occupant of another
-        // type would be replaced wholesale by skill content.
-        if (installSpec.type === 'skill' && existing.spec.type === 'skill') {
-          store.updateSpec(existing.id, installSpec)
-          if (userConfig) {
-            store.updateConfig(existing.id, userConfig)
-          }
-          const refreshed = store.getById(existing.id)
-          if (refreshed) {
-            syncSkillToFilesystem(refreshed, getSpacePath)
-          }
-          console.log(
-            `[AppManager] Overwrote existing skill '${specId}' (${existing.id})`
-          )
           return existing.id
         }
 
@@ -558,11 +560,6 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         `[AppManager] Installed app '${specId}' (${appId}) in ${scope}`
       )
 
-      // Sync skill file to filesystem for Claude Code auto-loading
-      if (installSpec.type === 'skill') {
-        syncSkillToFilesystem(app, getSpacePath)
-      }
-
       // Notify session-manager to invalidate affected sessions
       if (installSpec.type === 'mcp') {
         emitMcpChange(spaceId, { appId, specId, action: 'installed' })
@@ -601,6 +598,14 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
     async uninstall(appId: string, options?: UninstallOptions): Promise<void> {
       const app = requireApp(appId)
+      if (app.spec.type === 'skill') {
+        await skills.trash(app)
+        if (app.status !== 'uninstalled') {
+          notifyStatusChange(appId, app.status, 'uninstalled')
+          notifyUninstalled(app, options?.reason ?? 'user')
+        }
+        return
+      }
 
       // Soft-delete: transition to 'uninstalled' status and record timestamp
       const oldStatus = app.status
@@ -614,39 +619,9 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       store.updateUninstalledAt(appId, Date.now())
       notifyStatusChange(appId, oldStatus, newStatus)
 
-      // Remove skill file from filesystem on uninstall
-      if (app.spec.type === 'skill') {
-        removeSkillFromFilesystem(app, getSpacePath)
-      }
-
       // Notify session-manager to invalidate affected sessions
       if (app.spec.type === 'mcp') {
         emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'uninstalled' })
-      }
-
-      // Cascade-delete bundled skills when parent is uninstalled.
-      // Bundled skills exist solely as dependencies of this app. Removing
-      // them prevents stale DB records from blocking future reinstallation.
-      const skills = app.spec.requires?.skills
-      if (skills) {
-        for (const dep of skills) {
-          if (typeof dep === 'string' || !dep.bundled) continue
-
-          const skillApp = store.getBySpecAndSpace(dep.id, app.spaceId)
-          if (!skillApp) continue
-
-          // Remove skill files from filesystem
-          if (skillApp.spec.type === 'skill') {
-            removeSkillFromFilesystem(skillApp, getSpacePath)
-          }
-
-          // Hard-delete the DB record so reinstall gets a clean slate
-          store.delete(skillApp.id)
-
-          console.log(
-            `[AppManager] Cascade-deleted bundled skill "${dep.id}" (${skillApp.id})`
-          )
-        }
       }
 
       console.log(
@@ -667,16 +642,13 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         throw new InvalidStatusTransitionError(appId, oldStatus, newStatus)
       }
 
-      store.updateStatus(appId, newStatus, null, null)
-      store.updateUninstalledAt(appId, null)
-      notifyStatusChange(appId, oldStatus, newStatus)
-
-      // Re-sync skill file to filesystem on reinstall. `app` is the
-      // pre-transition snapshot, so hand the sync the new status — it refuses to
-      // write for a record that still reads 'uninstalled'.
       if (app.spec.type === 'skill') {
-        syncSkillToFilesystem({ ...app, status: newStatus }, getSpacePath)
+        skills.reinstall(app)
+      } else {
+        store.updateStatus(appId, newStatus, null, null)
+        store.updateUninstalledAt(appId, null)
       }
+      notifyStatusChange(appId, oldStatus, newStatus)
 
       // Notify session-manager to invalidate affected sessions
       if (app.spec.type === 'mcp') {
@@ -688,6 +660,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
     async deleteApp(appId: string, options?: DeleteAppOptions): Promise<void> {
       const app = requireApp(appId)
+      if (app.spec.type === 'skill') {
+        await service.uninstall(appId)
+        return
+      }
 
       // Built-in apps are bundled with the build itself and cannot be permanently
       // deleted by user-initiated paths — the loader would just re-create them on
@@ -705,11 +681,6 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
           'uninstalled' as AppStatus,
           'App must be uninstalled before permanent deletion'
         )
-      }
-
-      // Ensure skill file is removed from filesystem (idempotent)
-      if (app.spec.type === 'skill') {
-        removeSkillFromFilesystem(app, getSpacePath)
       }
 
       // The row is gone after this, so any KB still bound to it would be a
@@ -746,14 +717,9 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         throw new InvalidStatusTransitionError(appId, oldStatus, newStatus)
       }
 
+      if (app.spec.type === 'skill') skills.setAvailability(app, false)
       store.updateStatus(appId, newStatus, null, null)
       notifyStatusChange(appId, oldStatus, newStatus)
-
-      // Skills live as .md files on disk that the SDK auto-loads.
-      // Removing the file is the only way to prevent injection when paused.
-      if (app.spec.type === 'skill') {
-        removeSkillFromFilesystem(app, getSpacePath)
-      }
 
       // MCP paused = no longer available in sessions
       if (app.spec.type === 'mcp') {
@@ -772,16 +738,14 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         throw new InvalidStatusTransitionError(appId, oldStatus, newStatus)
       }
 
+      if (app.spec.type === 'skill') {
+        skills.assertAvailable(app)
+        skills.setAvailability(app, true)
+      }
+
       // Clear error-related fields on resume
       store.updateStatus(appId, newStatus, null, null)
       notifyStatusChange(appId, oldStatus, newStatus)
-
-      // Restore the skill file so the SDK picks it up again. `app` is the
-      // pre-transition snapshot, so hand the sync the new status — it refuses to
-      // write for a record that still reads 'paused'.
-      if (app.spec.type === 'skill') {
-        syncSkillToFilesystem({ ...app, status: newStatus }, getSpacePath)
-      }
 
       // MCP resumed = available again in sessions
       if (app.spec.type === 'mcp') {
@@ -798,6 +762,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     ): void {
       const app = requireApp(appId)
       const oldStatus = app.status
+      if (app.spec.type === 'skill') {
+        if (status === 'uninstalled') throw new Error('Use skill deletion to remove a skill')
+        if (status === 'active') skills.assertAvailable(app)
+      }
 
       if (oldStatus === status) {
         // No-op: already in the target status.
@@ -882,6 +850,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     },
 
     updateOverrides(appId: string, partial: Partial<InstalledApp['userOverrides']>): void {
+      if (Object.hasOwn(partial, 'skill')) {
+        console.warn('[AppManager] External skill installation metadata was rejected', { appId })
+        throw new Error('Skill installation metadata cannot be changed through user overrides')
+      }
       const app = requireApp(appId)
       // JSON Merge Patch semantics: null or undefined removes the key.
       // This ensures both the IPC path (undefined via structured clone) and the
@@ -899,6 +871,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
           delete merged[key]
         } else if (key === 'chatReasoningEffort' && !isReasoningEffortLevel(value)) {
           throw new Error(`Invalid chatReasoningEffort: ${String(value)}`)
+        } else if (key === 'tags') {
+          const tags = normalizeTags(value)
+          if (tags.length > 0) merged[key] = tags
+          else delete merged[key]
         } else if (key === 'disabledTools') {
           if (
             !Array.isArray(value) || value.length > MAX_DISABLED_TOOLS ||
@@ -957,6 +933,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
     updateSpec(appId: string, specPatch: Record<string, unknown>): void {
       const app = requireApp(appId)
+      if (app.spec.type === 'skill') {
+        skills.update(app, specPatch)
+        return
+      }
+      if (specPatch.type === 'skill') throw new Error('Install a skill independently instead of changing an app type')
 
       // JSON Merge Patch: merge top-level fields, null = delete
       const currentSpec = app.spec as unknown as Record<string, unknown>
@@ -983,38 +964,8 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         }
       }
 
-      // Renaming a skill repoints its identity: the directory moves and the
-      // slash command changes with it. The target name must therefore be free,
-      // and the shipped SKILL.md must declare it — the SDK reads the command
-      // from that frontmatter and would otherwise keep answering to the old
-      // one from a directory that no longer exists.
-      const renamedSkill =
-        validatedSpec.type === 'skill' &&
-        app.spec.type === 'skill' &&
-        app.specId !== validatedSpec.name
-
-      let nextSpec = validatedSpec
-      if (renamedSkill) {
-        const occupant = store.getBySpecAndSpace(validatedSpec.name, app.spaceId)
-        if (occupant && occupant.id !== appId) {
-          throw new AppAlreadyInstalledError(validatedSpec.name, app.spaceId)
-        }
-        nextSpec = withSkillMdName(validatedSpec, validatedSpec.name)
-      }
-
-      // Persist
-      store.updateSpec(appId, nextSpec)
-
-      // Re-sync skill file so Claude Code auto-loads the updated content, and
-      // drop the directory the rename vacated — the SDK would otherwise keep
-      // loading it as a second, stale skill.
-      if (nextSpec.type === 'skill') {
-        if (renamedSkill) {
-          removeSkillFromFilesystem(app, getSpacePath)
-        }
-        const updatedApp = { ...app, specId: nextSpec.name, spec: nextSpec } as InstalledApp
-        syncSkillToFilesystem(updatedApp, getSpacePath)
-      }
+      store.updateSpec(appId, validatedSpec)
+      notifyRenamed(appId, app.spec.name, validatedSpec.name)
 
       // MCP server definition may have changed (command/args/env/etc.):
       // invalidate affected sessions so they reconnect with the new config.
@@ -1025,10 +976,33 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       console.log(`[AppManager] Updated spec for app ${appId}`)
     },
 
+    updateSkillRecord(appId, change): void {
+      const app = requireApp(appId)
+      skills.updateRecord(app, change)
+      if (change.status && change.status !== app.status) notifyStatusChange(appId, app.status, change.status)
+    },
+
+    listSkillRecords(spaceId): InstalledApp[] {
+      return store.listSkillRecords(spaceId)
+    },
+
+    getSkillRecord(appId): InstalledApp | null {
+      const app = store.getById(appId)
+      return app?.spec.type === 'skill' ? app : null
+    },
+
     upgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome {
-      const { next, merged, outcome } = planUpgrade(requireApp(appId), authorSpec)
-      if (merged) {
+      const app = requireApp(appId)
+      const { next, merged, outcome } = planUpgrade(app, authorSpec)
+      if (app.spec.type === 'skill') {
+        if (outcome.kept.length > 0) {
+          console.log('[AppManager] Kept customized or deleted skill at its current version', { appId, version: app.spec.version })
+          return outcome
+        }
+        skills.update(app, next as unknown as Record<string, unknown>, true)
+      } else if (merged) {
         store.updateSpecAndAuthorSpec(appId, merged, next)
+        notifyRenamed(appId, app.spec.name, merged.name)
         const keptNote = outcome.kept.length > 0
           ? ` keeping ${outcome.editsKnown ? 'edited' : 'undetermined'} fields: ${outcome.kept.join(', ')}`
           : ''
@@ -1036,6 +1010,23 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       } else {
         service.updateSpec(appId, next as unknown as Record<string, unknown>)
       }
+      notifySpecUpgraded(appId, outcome)
+      return outcome
+    },
+
+    replaceSkillFromAuthor(appId: string, authorSpec: SkillSpec): SpecUpgradeOutcome {
+      const app = requireApp(appId)
+      const next = validateAppSpec(authorSpec)
+      if (app.spec.type !== 'skill' || next.type !== 'skill' || classifySkillSource(app.spec) === 'personal') {
+        console.warn('[AppManager] Author package replacement requires a managed skill', { appId })
+        throw new Error('Only a managed skill can take an author package replacement')
+      }
+      if (app.status === 'uninstalled' || app.userOverrides.skill?.deleted) {
+        console.warn('[AppManager] Author package replacement refused a deleted skill', { appId })
+        throw new Error('This skill was deleted. Explicitly reinstall it before changing its files.')
+      }
+      skills.update(app, next as unknown as Record<string, unknown>, true)
+      const outcome = { fromVersion: app.spec.version, toVersion: next.version, kept: [], editsKnown: true }
       notifySpecUpgraded(appId, outcome)
       return outcome
     },
@@ -1108,6 +1099,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         }
       }
 
+      if (app.spec.type === 'skill') {
+        skills.move(app, newSpaceId)
+        return
+      }
+
       // Guard: reject if the same specId is already installed (and active) in the target scope.
       // Uninstalled records are ignored — moving an app to a scope with an uninstalled
       // record of the same specId would first require hard-deleting that record, but
@@ -1118,6 +1114,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       }
       // If there's an uninstalled conflict, hard-delete it first to make room
       if (conflict && conflict.status === 'uninstalled') {
+        if (conflict.spec.type === 'skill') throw new AppAlreadyInstalledError(app.specId, newSpaceId)
         store.delete(conflict.id)
         console.log(
           `[AppManager] Removed stale uninstalled record '${conflict.specId}' (${conflict.id}) to make room for move`
@@ -1131,23 +1128,8 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         store.pinDataPath(appId, resolveWorkDir(appId, oldSpaceId))
       }
 
-      // For skill apps: remove from the old FS location before updating the DB.
-      // If the DB update fails below, the skill file is already gone — this is
-      // acceptable because the DB is authoritative; a re-sync can restore the file.
-      // We do it in this order so the file never exists in two locations simultaneously.
-      if (app.spec.type === 'skill') {
-        removeSkillFromFilesystem(app, getSpacePath)
-      }
-
       // Persist the new spaceId. The DB unique-index guards against races.
       store.updateSpaceId(appId, newSpaceId)
-
-      // For skill apps: write files to the new location.
-      // Build a synthetic InstalledApp with the updated spaceId for the sync call.
-      if (app.spec.type === 'skill') {
-        const movedApp: InstalledApp = { ...app, spaceId: newSpaceId }
-        syncSkillToFilesystem(movedApp, getSpacePath)
-      }
 
       // For MCP apps: notify both old and new scopes so session-manager
       // can invalidate the affected sessions on both sides.
@@ -1181,12 +1163,23 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     // ── Queries ───────────────────────────────
 
     getApp(appId: string): InstalledApp | null {
-      return store.getById(appId)
+      const app = store.getById(appId)
+      return app ? readPersonalSkill(app) : null
     },
 
     getStudioSummary(language, excludeIds) { return store.getStudioSummary(language, excludeIds) },
 
     listPeopleDirectory(filter) { return store.listPeopleDirectory(filter) },
+    listTagCounts(type, excludeIds) { return store.listTagCounts(type, excludeIds) },
+
+    renameTag(type, from, to) {
+      const source = cleanTag(from)
+      if (!source) throw new Error('Name the tag to change')
+      const target = to == null ? null : requireTag(to)
+      const changed = store.renameTag(type, source, target)
+      if (changed > 0) console.log(`[AppManager] Tag ${target ? 'renamed' : 'removed'} on ${changed} ${type} item(s)`)
+      return changed
+    },
 
     listPersonIdsByStatus(statuses) { return store.listPersonIdsByStatus(statuses) },
 
@@ -1199,7 +1192,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     },
 
     listEffectiveSkillApps(spaceId: string): InstalledApp[] {
-      return listEffectiveByType('skill', spaceId)
+      const local = store.listSkillRecords(spaceId).filter(app => app.status === 'active' && !app.userOverrides.skill?.deleted)
+      const names = new Set(local.map(app => app.spec.name))
+      return [...local, ...store.listSkillRecords(null).filter(app =>
+        app.status === 'active' && !app.userOverrides.skill?.deleted && !names.has(app.spec.name))]
+        .map(app => service.getApp(app.id)!)
     },
 
     // ── Permissions ───────────────────────────
@@ -1333,6 +1330,14 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       }
     },
 
+    onAppRenamed(handler: AppRenamedHandler): Unsubscribe {
+      appRenamedHandlers.push(handler)
+      return () => {
+        const index = appRenamedHandlers.indexOf(handler)
+        if (index > -1) appRenamedHandlers.splice(index, 1)
+      }
+    },
+
     // ── Space Cleanup ────────────────────────
 
     async deleteAppsInSpace(spaceId: string): Promise<number> {
@@ -1354,10 +1359,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
           // outcome of destroying a space.
           if (isBuiltinApp(app)) builtinCount++
 
-          // Remove skill files from filesystem
-          if (app.spec.type === 'skill') {
-            removeSkillFromFilesystem(app, getSpacePath)
-          }
+          // A skill's files sit in the user's own skill folder, so only its record goes with the space.
 
           // Purge the work directory
           try {

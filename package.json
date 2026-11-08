@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "3.2.0",
+  "version": "3.2.0-rc.1",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.cjs",
@@ -186,7 +186,7 @@
     "sax": "1.4.3",
     "setimmediate": "^1.0.5",
     "shiki": "^3.22.0",
-    "sm-crypto": "^0.4.0",
+    "sm-crypto": "^0.5.8",
     "streamdown": "^2.2.0",
     "tailwind-merge": "^2.2.0",
     "tesseract.js": "^5.1.1",

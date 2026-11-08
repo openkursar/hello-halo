@@ -38,6 +38,7 @@ import {
   assertConsistentRoster,
   assertConsistentBoard,
   chatOnAll,
+  latestRunEpochId,
   killNode,
   reviveNode,
   Reporter,
@@ -612,6 +613,8 @@ async function categoryG(host, joiner, hasModel) {
   const office = await buildOffice(host, [joiner], 'G')
   const hostMs = await members(host, office.officeId)
   const remote = hostMs.find((m) => m.origin === 'remote')
+  // The run each history read names; G3 reads whichever ran last.
+  let historyEpochId = null
 
   if (want('G1')) {
     if (!remote) {
@@ -623,8 +626,9 @@ async function categoryG(host, joiner, hasModel) {
       // office reusable for G2), then assert owner-served consistency.
       await apiOk(host, 'POST', `/api/teams/${office.officeId}/run`)
       await sleep(1500)
+      historyEpochId = await latestRunEpochId(host, office.officeId)
       await apiOk(host, 'POST', `/api/teams/${office.officeId}/pause`).catch(() => {})
-      const chats = await chatOnAll([host, joiner], office.officeId, remote.appId)
+      const chats = await chatOnAll([host, joiner], office.officeId, remote.appId, historyEpochId)
       const noNotFound = chats.every((c) => !(c.error && /not.?found/i.test(String(c.error))))
       const bothReturn = chats.every((c) => c.status === 200 && Array.isArray(c.messages))
       // owner-served: both nodes should yield the same transcript (possibly empty)
@@ -642,11 +646,12 @@ async function categoryG(host, joiner, hasModel) {
     } else {
       await apiOk(host, 'POST', `/api/teams/${office.officeId}/run`)
       await sleep(2000)
+      historyEpochId = await latestRunEpochId(host, office.officeId)
       const marker = `[G2 history ${randomUUID()}]`
-      const send = await api(host, 'POST', `/api/teams/${office.officeId}/members/${remote.appId}/send`, { message: `${marker} Hello, please reply briefly.` })
+      const send = await api(host, 'POST', `/api/teams/${office.officeId}/members/${remote.appId}/send`, { message: `${marker} Hello, please reply briefly.`, epochId: historyEpochId })
       const accepted = send.status === 200 && send.json?.success !== false
       const persisted = accepted && await pollUntil(async () => {
-        const chats = await chatOnAll([host, joiner], office.officeId, remote.appId)
+        const chats = await chatOnAll([host, joiner], office.officeId, remote.appId, historyEpochId)
         return consistentReplyAfter(chats, marker)
       }, { timeoutMs: 90_000, intervalMs: 3000 })
       reporter[persisted ? 'pass' : 'fail']('G2', persisted ? `current message+assistant reply content-consistent, both nodes read ${persisted.lengths[0]} msgs, replyChars=${persisted.replyChars}` : `no consistent assistant reply after current message (send status=${send.status})`)
@@ -666,7 +671,8 @@ async function categoryG(host, joiner, hasModel) {
       killNode(joiner)
       await sleep(2000)
       const t0 = Date.now()
-      const r = await api(host, 'GET', `/api/teams/${office.officeId}/chat-messages?appId=${remote.appId}`)
+      // A run nobody started here still names a conversation: the read must fail fast and neutrally.
+      const r = await api(host, 'GET', `/api/teams/${office.officeId}/chat-messages?appId=${remote.appId}&epochId=${historyEpochId ?? 'never-ran'}`)
       const dt = Date.now() - t0
       const quick = dt < 12_000
       const replicaServed =
@@ -702,16 +708,18 @@ async function categoryH(host, joiners, hasModel) {
   const office = await buildOffice(host, parts, 'H')
   await apiOk(host, 'POST', `/api/teams/${office.officeId}/run`)
   await sleep(2000)
+  // Every dispatch below names this run, the conversation it is about.
+  const runEpochId = await latestRunEpochId(host, office.officeId)
   const hostMs = await members(host, office.officeId)
   const remoteA = hostMs.find((m) => m.origin === 'remote') // owned by joiner A
   const localHost = hostMs.find((m) => m.origin !== 'remote' && !m.isLead) ?? hostMs.find((m) => m.origin !== 'remote')
 
   async function dispatchAndCheck(senderNode, targetAppId, label) {
     const marker = `[${label} ${randomUUID()}]`
-    const send = await api(senderNode, 'POST', `/api/teams/${office.officeId}/members/${targetAppId}/send`, { message: `${marker} Please acknowledge briefly.` })
+    const send = await api(senderNode, 'POST', `/api/teams/${office.officeId}/members/${targetAppId}/send`, { message: `${marker} Please acknowledge briefly.`, epochId: runEpochId })
     if (send.status !== 200 || send.json?.success === false) return { ok: false, why: `send status=${send.status} err=${send.json?.error}` }
     const got = await pollUntil(async () => {
-      const chats = await chatOnAll([host, ...parts], office.officeId, targetAppId)
+      const chats = await chatOnAll([host, ...parts], office.officeId, targetAppId, runEpochId)
       return consistentReplyAfter(chats, marker)
     }, { timeoutMs: 90_000, intervalMs: 3000 })
     return { ok: !!got, why: got ? `current message+assistant reply content-consistent len=${got.lengths[0]} across nodes, replyChars=${got.replyChars}` : 'no consistent assistant reply after current message within 90s' }
@@ -740,13 +748,13 @@ async function categoryH(host, joiners, hasModel) {
     if (!remoteA) reporter.skip('H7', 'no remote member')
     else {
       const t0 = Date.now()
-      const send = await api(host, 'POST', `/api/teams/${office.officeId}/members/${remoteA.appId}/send`, { message: 'H7 echo probe' })
+      const send = await api(host, 'POST', `/api/teams/${office.officeId}/members/${remoteA.appId}/send`, { message: 'H7 echo probe', epochId: runEpochId })
       const dt = Date.now() - t0
       reporter[send.status === 200 && dt < 20_000 ? 'pass' : 'partial']('H7', `send acked in ${dt}ms status=${send.status} (server-side dispatch ack; true UI optimistic echo is renderer-only)`)
     }
   }
   if (want('H4')) {
-    // After epoch seal, 1:1 send must still get a reply (not dropped as epoch-sealed).
+    // After epoch seal, a send naming that run must still get a reply (not dropped as epoch-sealed).
     if (!remoteA) reporter.skip('H4', 'no remote member')
     else {
       await api(host, 'POST', `/api/teams/${office.officeId}/pause`) // seal epoch
@@ -762,7 +770,7 @@ async function categoryH(host, joiners, hasModel) {
     // Joiner sees its OWN member's execution + retained transcript after run.
     if (!remoteA || parts.length < 1) reporter.skip('H6', 'no remote member')
     else {
-      const chats = await chatOnAll([parts[0]], office.officeId, remoteA.appId)
+      const chats = await chatOnAll([parts[0]], office.officeId, remoteA.appId, runEpochId)
       const ok = chats[0]?.status === 200 && Array.isArray(chats[0]?.messages)
       reporter[ok ? 'pass' : 'fail']('H6', ok ? `joiner reads its own member transcript (len=${chats[0].messages.length})` : `joiner cannot read own member: status=${chats[0]?.status}`)
     }
@@ -874,7 +882,7 @@ async function categoryK(host, joiners, hasModel) {
       const N = 50
       const t0 = Date.now()
       const sends = await Promise.all(
-        Array.from({ length: N }, (_, i) => api(host, 'POST', `/api/teams/${off.officeId}/members/${remote.appId}/send`, { message: `concurrent #${i}` })),
+        Array.from({ length: N }, (_, i) => api(host, 'POST', `/api/teams/${off.officeId}/members/${remote.appId}/send`, { message: `concurrent #${i}`, epochId: runEpochId })),
       )
       const elapsedMs = Date.now() - t0
       // Concurrent sends to one member coalesce into the turn already running:

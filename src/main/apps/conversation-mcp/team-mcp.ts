@@ -49,29 +49,47 @@ type TeamMcpResult = { content: Array<{ type: 'text'; text: string }>; isError?:
 const LOG_TAG = '[SpaceTeamMcp]'
 
 /** System prompt appended while this toolset is enabled (registry usageGuide). */
-export const TEAM_TOOLSET_GUIDE =
-  'Team collaboration is enabled. You can assemble a temporary team of AI members and coordinate ' +
-  'them yourself, or delegate work to a saved team.\n\n' +
-  'Temporary collaboration (you are the coordinator):\n' +
-  '- Use it only when the work benefits from parallel execution, distinct specialties, or ' +
-  'independent review. For ordinary tasks, just do the work yourself.\n' +
-  '- `collab_start` creates the team; then dispatch with `team_send` / `team_post_task`. Each ' +
-  'dispatch must be self-contained: the member sees none of this conversation, so include the ' +
-  'goal, the inputs, the success criteria and the expected output form.\n' +
-  '- Sending a message is not completion. Members work in the background and their replies and ' +
-  'turn-end notices arrive after your current tool call, without ending your turn; reconcile with `team_read_board` instead of ' +
-  'guessing, read deliverables with `team_read_artifact`, and check what a member actually did ' +
-  'with `team_read_member`.\n' +
-  '- Never claim work is done that a member has not reported done. When the goal is met, call ' +
-  '`team_complete` with a summary. If the user wants to keep the team, call `collab_save`.\n' +
-  '- The user can watch the whole collaboration in the Team view (Content Canvas); mention it ' +
-  'once when a collaboration starts.\n\n' +
-  'Saved teams (delegation):\n' +
-  '- `team_list` shows the saved teams of this space. Prefer reusing one over assembling a ' +
-  'similar temporary team.\n' +
-  '- `team_run` hands a run brief to the team\u2019s own lead and returns immediately; the team ' +
-  'works autonomously. Do not poll — check `team_status` when the user asks how it is going.\n' +
-  '- Creating or saving a persistent team is only done when the user explicitly asks for it.'
+export const TEAM_TOOLSET_GUIDE = [
+  '## Agent teams and standing teams',
+  '',
+  'You can work with others in two ways.',
+  '',
+  'An agent team is an ad hoc team you spin up for the job in front of you. You bring in AI teammates, each working in its own context, ' +
+    'give each a part, coordinate them and combine what they return. When the job is done, close it with `team_complete`: ' +
+    'it is not used again, and what it produced lives on in your result.',
+  '',
+  'A standing team is a lasting group of digital humans in Halo, each with a role, pursuing its own goal over time. ' +
+    'It works in its own conversations, not in this chat. Turn to one only when the person names it or asks about its work. ' +
+    'Hand a standing team a job (`team_run`), or keep an agent team as one (`collab_save`), only when asked for exactly that.',
+  '',
+  '### When to start an agent team',
+  'An agent team costs extra tokens, and each handoff loses detail. By default, do the work yourself in this chat.',
+  '',
+  'Start a team only when both are true:',
+  '- A teammate can finish a part from a written brief alone.',
+  '- Separating it pays off. It keeps bulky details out of this chat, or it can run in parallel with other parts, ' +
+    'or it needs teammates to work with each other: to divide the work, share findings, or check each other\'s results.',
+  '',
+  'Do not start one when you will keep working with the raw details afterwards, when the work needs a lot of background ' +
+    'that is hard to write down, when each step needs the one before it, or when one read or search is enough. ' +
+    'If you are not sure, do it yourself.',
+  '',
+  'People rarely ask for an agent team by name, so the decision is yours. If they do ask, do it.',
+  '',
+  '### Running an agent team',
+  '1. Call `collab_start` with the roles you need.',
+  '2. Brief each teammate with `team_send`. They cannot see this chat, so write down: the goal and what counts as done; ' +
+    'what you know and what is ruled out; the limits (read-only, or may change files); ' +
+    'and what to send back — conclusions with evidence, and what is still unconfirmed.',
+  '3. Keep working. Replies reach you after your current tool call.',
+  '4. A part is done when its teammate says so. Treat their findings as input, not as the answer: check them and form your own view ' +
+    'before you reply. When everything is done, call `team_complete` with a summary. Run one agent team at a time.',
+  'The person can follow it in the Team view; mention that once when you start one.',
+  '',
+  '### Handing a job to a standing team',
+  '`team_list` shows the standing teams of this space. `team_run` gives one a brief and returns at once; the team works on its own, ' +
+    'so do not poll — `team_status` tells you how it is going when the person asks. Create or save a standing team only when asked.',
+].join('\n')
 
 function textResult(text: string, isError = false): TeamMcpResult {
   return {
@@ -144,15 +162,16 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
 
   const collab_start = tool(
     SPACE_TEAM_TOOL_NAMES.collabStart,
-    'Assemble a temporary team for the current piece of work and become its coordinator. ' +
-      'Members are AI agents created for this collaboration only (they do not appear in the ' +
-      'people directory). After this succeeds, dispatch work with team_send or team_post_task ' +
-      'in this same turn — replies arrive after your current tool call while you continue working.\n\n' +
-      'Use only when the task genuinely benefits from parallel roles. One collaboration per ' +
-      'conversation: finish the current one (team_complete) before starting another.',
+    'Start an ad hoc agent team: teammates that each work on one part of the job in their own context, ' +
+      'while you brief and coordinate them. Teammates cost extra tokens and each handoff loses detail, ' +
+      'so do the work yourself by default. Start a team only when a part can be finished from a written brief ' +
+      'and separating it pays off: it keeps bulky details out of this chat, it can run in parallel with other parts, ' +
+      'or it needs teammates to work with each other.\n\n' +
+      'Teammates are AI agents made for this job; they are not digital humans. After this succeeds, brief them with team_send. ' +
+      'One agent team per conversation: finish the current one (team_complete) before starting another.',
     {
-      name: z.string().min(1).describe('Short human-readable name for this collaboration, in the user\u2019s language.'),
-      goal: z.string().min(1).describe('The outcome this collaboration must deliver.'),
+      name: z.string().min(1).describe('Short human-readable name for this agent team, in the user\u2019s language.'),
+      goal: z.string().min(1).describe('The outcome this agent team must deliver.'),
       members: z
         .array(
           z.object({
@@ -204,9 +223,9 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
 
   const collab_save = tool(
     SPACE_TEAM_TOOL_NAMES.collabSave,
-    'Save the current members, responsibilities and team configuration as a separate ordinary team ' +
-      'with its own lead. Do not transfer the current task, conversation, progress or results. ' +
-      'The original collaboration continues here. Call only when the user asks to keep the team.',
+    'Keep this agent team as a standing team: its roles and configuration are saved as a separate team ' +
+      'with its own lead. The current task, conversation, progress and results are not transferred, ' +
+      'and the agent team continues here. Call only when the user asks to keep the team.',
     {
       name: z.string().optional().describe('Optional new team name; defaults to the collaboration name.'),
     },
@@ -220,7 +239,7 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
         const team = await service.saveCollab(collab.teamId, name)
         return textResult(
           `Saved configuration as team "${team.name}" (id: ${team.id}). It has its own lead and no task history. ` +
-            'Continue the current work here; use the saved team for new tasks.'
+            'Continue the current work here; use the standing team for new tasks.'
         )
       } catch (error) {
         console.error(`${LOG_TAG} collab_save failed: team=${collab.teamId}`, error)
@@ -234,15 +253,14 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
 
   const team_list = tool(
     SPACE_TEAM_TOOL_NAMES.list,
-    'List the saved teams of this space (id, members, status). Check here before assembling a ' +
-      'temporary team that duplicates an existing one.',
+    'List the standing teams of this space (id, members, status).',
     {},
     async () => {
       const service = getTeamService()
       if (!service) return textResult(NOT_READY, true)
       try {
         const teams = persistentTeams(service)
-        if (teams.length === 0) return textResult('No saved teams exist in this space yet.')
+        if (teams.length === 0) return textResult('No standing teams exist in this space yet.')
         return textResult(
           teams
             .map((team) => `- ${team.name} (id: ${team.id}) — ${team.memberCount} members, status: ${team.status}`)
@@ -257,11 +275,12 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
 
   const team_run = tool(
     SPACE_TEAM_TOOL_NAMES.run,
-    'Delegate a run to a saved team: its own lead receives the brief, dispatches the members and ' +
+    'Hand a job to a standing team: its own lead receives the brief, dispatches the members and ' +
       'finishes autonomously. Returns as soon as the run starts — do not wait or poll; use ' +
-      'team_status when the user asks for progress. Use team_list first when the user names a team.',
+      'team_status when the user asks for progress. Only when the person asks to give the job to that team; ' +
+      'use team_list first when they name it.',
     {
-      teamId: z.string().min(1).describe('The saved team id from team_list.'),
+      teamId: z.string().min(1).describe('The standing team id from team_list.'),
       instruction: z
         .string()
         .optional()
@@ -276,8 +295,8 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
       }
       if (team.ephemeral) {
         return textResult(
-          'That is the current temporary collaboration — you coordinate it directly with team_send; ' +
-            'team_run is for saved teams.',
+          'That is the current agent team — you coordinate it directly with team_send; ' +
+            'team_run is for standing teams.',
           true
         )
       }
@@ -296,7 +315,7 @@ export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
 
   const team_status = tool(
     SPACE_TEAM_TOOL_NAMES.status,
-    'Bounded progress snapshot of a saved team\u2019s latest run: member states, task counts, open ' +
+    'Bounded progress snapshot of a standing team\u2019s latest run: member states, task counts, open ' +
       'tasks, latest findings and any decision waiting on the user.',
     {
       teamId: z.string().min(1).describe('The team id from team_list or team_run.'),

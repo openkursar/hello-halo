@@ -7,8 +7,13 @@
  * addresses `SKILL.md` exactly. Import has to absorb that, not reject it.
  */
 
-import { describe, it, expect } from 'vitest'
-import { parseSkillFiles } from '../../../src/renderer/components/apps/skill-import-utils'
+import { describe, it, expect, vi } from 'vitest'
+import { zipSync } from 'fflate'
+import { parseSkillFiles, processZipFile, processFileListAsFolder, processDirectoryEntry, processMdFile, withMetadata, MAX_SKILL_BYTES, MAX_SKILL_FILES } from '../../../src/renderer/components/apps/skill-import-utils'
+import { setSkillMdName } from '../../../src/shared/skill-frontmatter'
+import { parseSkillMetadata } from '../../../src/main/services/skills/discovery'
+
+vi.mock('i18next', () => ({ t: (text: string) => text }))
 
 const SKILL_MD = `---
 name: my-skill
@@ -17,6 +22,98 @@ description: Does a thing.
 
 # My Skill
 `
+
+const encoder = new TextEncoder()
+
+function file(name: string, bytes: Uint8Array, relativePath = ''): File {
+  return { name, size: bytes.length, webkitRelativePath: relativePath,
+    arrayBuffer: async () => bytes.slice().buffer } as File
+}
+
+function directory(files: Record<string, Uint8Array>): FileSystemDirectoryEntry {
+  const entries: FileSystemEntry[] = []
+  const folders = new Map<string, Record<string, Uint8Array>>()
+  for (const [path, bytes] of Object.entries(files)) {
+    const slash = path.indexOf('/')
+    if (slash < 0) {
+      entries.push({ name: path, isFile: true, isDirectory: false,
+        file: (resolve: (value: File) => void) => resolve(file(path, bytes)) } as FileSystemFileEntry)
+    } else {
+      const name = path.slice(0, slash)
+      if (!folders.has(name)) folders.set(name, {})
+      folders.get(name)![path.slice(slash + 1)] = bytes
+    }
+  }
+  for (const [name, children] of folders) entries.push({ ...directory(children), name })
+  return { name: 'fixture', isDirectory: true, isFile: false, createReader: () => {
+    let done = false
+    return { readEntries: (resolve: (values: FileSystemEntry[]) => void) => {
+      resolve(done ? [] : entries)
+      done = true
+    } }
+  } } as FileSystemDirectoryEntry
+}
+
+const importers = {
+  zip: (files: Record<string, Uint8Array>) => processZipFile(file('fixture.zip', zipSync(files))),
+  fileList: (files: Record<string, Uint8Array>) => processFileListAsFolder(
+    Object.entries(files).map(([path, bytes]) => file(path, bytes, `fixture/${path}`)) as unknown as FileList),
+  directory: (files: Record<string, Uint8Array>) => processDirectoryEntry(directory(files)),
+}
+
+for (const [source, load] of Object.entries(importers)) {
+  describe(`${source} byte fidelity`, () => {
+    it('preserves binary, BOM, Unicode, empty and nested files through one wrapper', async () => {
+      const files = {
+        'wrapped/skill.md': encoder.encode('\uFEFF' + SKILL_MD),
+        'wrapped/assets/template.docx': new Uint8Array([80, 75, 0, 255, 128, 3]),
+        'wrapped/assets/valid-utf8-binary.bin': new Uint8Array([0, 1, 2]),
+        'wrapped/references/guide.md': encoder.encode('\uFEFF中文\r\n'),
+        'wrapped/empty.txt': new Uint8Array(),
+        '__MACOSX/._wrapped': new Uint8Array([255]),
+        'wrapped/.DS_Store': new Uint8Array([255]),
+      }
+      const result = await load(files)
+      expect(result.name).toBe('my-skill')
+      expect(result.skillFiles['SKILL.md']).toBe('\uFEFF' + SKILL_MD)
+      for (const [path, bytes] of Object.entries(files)) {
+        if (!path.startsWith('wrapped/') || path.endsWith('.DS_Store')) continue
+        const key = path.slice(8).replace(/^skill.md$/, 'SKILL.md')
+        const actual = result.skillAssets?.[key]
+          ? new Uint8Array(Buffer.from(result.skillAssets[key].content, 'base64'))
+          : encoder.encode(result.skillFiles[key])
+        expect(actual).toEqual(bytes)
+      }
+      expect(Object.keys(result.skillAssets!)).toHaveLength(2)
+      expect(Object.keys(result.skillFiles)).toHaveLength(3)
+    })
+
+    it('rejects malformed UTF-8 in SKILL.md rather than replacing bytes', async () => {
+      await expect(load({ 'SKILL.md': new Uint8Array([255]) })).rejects.toThrow(/UTF-8/)
+    })
+
+    it.each(['../escape', '/absolute', 'C:/drive', 'a\\escape', 'a/../escape', 'a/./escape', 'a\0bad'])(
+      'rejects unsafe path %s', async path => {
+        await expect(load({ 'SKILL.md': encoder.encode(SKILL_MD), [path]: new Uint8Array([255]) })).rejects.toThrow(/unsafe|safe root/)
+      })
+
+    it('rejects oversized expanded content', async () => {
+      await expect(load({ 'SKILL.md': encoder.encode(SKILL_MD), 'large.bin': new Uint8Array(MAX_SKILL_BYTES) }))
+        .rejects.toThrow(/10 MB/)
+    })
+
+    it('rejects excessive file counts', async () => {
+      const files: Record<string, Uint8Array> = { 'SKILL.md': encoder.encode(SKILL_MD) }
+      for (let i = 0; i < MAX_SKILL_FILES; i++) files[`file-${i}`] = new Uint8Array()
+      await expect(load(files)).rejects.toThrow(/2000/)
+    })
+  })
+}
+
+it('preserves BOM in a standalone markdown import', async () => {
+  const content = '\uFEFF' + SKILL_MD
+  expect((await processMdFile(file('test.md', encoder.encode(content)))).skillFiles['SKILL.md']).toBe(content)
+})
 
 describe('parseSkillFiles', () => {
   it('accepts a misspelled entry file and ships it canonically', () => {
@@ -60,5 +157,36 @@ describe('parseSkillFiles', () => {
 
   it('rejects a tree with no entry file', () => {
     expect(() => parseSkillFiles({ 'readme.md': 'a' }, 'folder')).toThrow(/SKILL\.md not found/)
+  })
+})
+
+describe('completing the header of an imported Markdown file', () => {
+  it('turns a file without frontmatter into a header the install step accepts, with a single name line', () => {
+    const completed = withMetadata('# Review notes\n\nSummarize the review.\n', { name: 'review-notes', description: 'Summarize: the review' })
+    expect(completed).toBe('---\nname: review-notes\ndescription: "Summarize: the review"\n---\n# Review notes\n\nSummarize the review.\n')
+    const installed = setSkillMdName(completed, 'review-notes')
+    expect(installed.match(/^name\s*:/gm)).toHaveLength(1)
+    expect(parseSkillMetadata(installed, 'review-notes')).toEqual({ name: 'review-notes', description: 'Summarize: the review', argumentHint: undefined, whenToUse: undefined })
+  })
+
+  it('keeps every other key and the whole body of a file that already has frontmatter', () => {
+    const original = '---\nname: old-name\nargument-hint: <file>\ncustom: keep-me\n---\n\n# Body\n\nUnchanged text.\n'
+    const completed = withMetadata(original, { name: 'new-name', description: 'Added description' })
+    expect(completed).toBe('---\nname: new-name\nargument-hint: <file>\ncustom: keep-me\ndescription: Added description\n---\n\n# Body\n\nUnchanged text.\n')
+    expect(parseSkillMetadata(setSkillMdName(completed, 'new-name'), 'new-name').error).toBeUndefined()
+  })
+
+  it('treats a header holding only a blank line like a missing one instead of writing a one-line mapping', () => {
+    const completed = withMetadata('---\n\n---\nBody\n', { name: 'blank-header', description: 'Described' })
+    expect(completed).toBe('---\nname: blank-header\ndescription: Described\n---\nBody\n')
+    expect(parseSkillMetadata(setSkillMdName(completed, 'blank-header'), 'blank-header').error).toBeUndefined()
+  })
+
+  it('sets only the fields it is given', () => {
+    expect(withMetadata('---\nname: a\ndescription: keep\n---\nBody', { name: 'b' })).toBe('---\nname: b\ndescription: keep\n---\nBody')
+  })
+
+  it('refuses a header that is not valid YAML instead of overwriting it', () => {
+    expect(() => withMetadata('---\nname: [unterminated\n---\nBody', { name: 'x' })).toThrow()
   })
 })

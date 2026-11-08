@@ -24,6 +24,7 @@ import { SubAgentTimeline } from './SubAgentTimeline'
 import { ArrivalCard, arrivalIcon } from './ArrivalCard'
 import { isArrivalThought, workSeconds } from './transcript'
 import { ErrorContent } from './ErrorContent'
+import { SkillNotice } from './SkillNotice'
 import {
   getThoughtIcon,
   getThoughtLabelKey,
@@ -400,10 +401,11 @@ export function ThoughtPanel({
   // While running, the task in progress names what the reply is doing better than its latest tool.
   const currentTask = isThinking ? todos?.find(item => item.status === 'in_progress') : undefined
   // A running reply shows its header before its first step; some turns never emit one.
-  if (!hasBody && !isThinking) return null
+  if (!hasBody && !isThinking && model.notices.length === 0) return null
 
   return (
     <div className={className}>
+      {model.notices.map(notice => <SkillNotice key={notice.id} code={notice.skillNotice!} />)}
       <ThoughtPanelHeader
         label={isThinking ? (currentTask ? currentTask.activeForm || currentTask.content : activity) ?? t('Already thought') : t('Already thought')}
         isThinking={isThinking}

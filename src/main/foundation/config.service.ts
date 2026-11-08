@@ -24,7 +24,11 @@ import { getGroupEnvelopeSignature, normalizeGroups } from '../../shared/ai-grou
 import type { CcRuntimeConfig } from '../../shared/types/cc-runtime'
 import { BUILTIN_PROVIDERS, getBuiltinProvider } from '../../shared/constants'
 import { applyNewToolsetDefaults } from '../../shared/constants/toolsets'
-import { DEFAULT_MAX_TURNS, LEGACY_DEFAULT_MAX_TURNS } from '../../shared/constants/agent-limits'
+import {
+  DEFAULT_MAX_TURNS,
+  LEGACY_DEFAULT_MAX_TURNS,
+  LEGACY_TEAM_DEFAULT_FORWARD_DEPTH,
+} from '../../shared/constants/agent-limits'
 import { decryptString } from './secure-storage.service'
 import {
   encryptConfigFields,
@@ -426,6 +430,55 @@ function upgradeLegacyMaxTurnsOnDisk(): void {
 }
 
 // ============================================================================
+// LEGACY TEAM FORWARD DEPTH CLEANUP
+// ============================================================================
+// Settings used to write both team circuit limits on every blur, so touching
+// either field stored the then-default 8 without the user choosing it. That
+// value is removed once so it follows the new default; any other stored value
+// is a real choice and stays. The marker keeps a later choice of 8 untouched.
+// ============================================================================
+
+function clearLegacyTeamForwardDepthOnDisk(): void {
+  const configPath = getConfigPath()
+  if (!existsSync(configPath)) return
+
+  let parsed: Record<string, any>
+  try {
+    parsed = JSON.parse(readFileSync(configPath, 'utf-8'))
+  } catch {
+    return
+  }
+
+  if (parsed.teamForwardDepthDefaultCleared) return
+
+  const agent = parsed.agent && typeof parsed.agent === 'object' ? parsed.agent : {}
+  const limits = agent.teamCircuitLimits && typeof agent.teamCircuitLimits === 'object'
+    ? agent.teamCircuitLimits
+    : undefined
+  const cleared = limits?.maxForwardDepth === LEGACY_TEAM_DEFAULT_FORWARD_DEPTH
+
+  if (cleared && limits) {
+    const { maxForwardDepth: _removed, ...rest } = limits
+    if (Object.keys(rest).length > 0) {
+      parsed.agent = { ...agent, teamCircuitLimits: rest }
+    } else {
+      const { teamCircuitLimits: _emptied, ...agentRest } = agent
+      parsed.agent = agentRest
+    }
+  }
+  parsed.teamForwardDepthDefaultCleared = true
+
+  try {
+    writeFileSync(configPath, JSON.stringify(parsed, null, 2))
+    if (cleared) {
+      console.log(`[Config Migration] Cleared legacy team maxForwardDepth ${LEGACY_TEAM_DEFAULT_FORWARD_DEPTH}`)
+    }
+  } catch (error) {
+    console.error('[Config Migration] Failed to clear legacy team maxForwardDepth:', error)
+  }
+}
+
+// ============================================================================
 // EMAIL CHANNEL SEED
 // ============================================================================
 // Enterprise builds declare their corporate SMTP endpoint in product.json
@@ -726,6 +779,11 @@ interface HaloConfig {
    * (`applyNewToolsetDefaultsOnDisk`).
    */
   toolsetDefaultsSeen?: string[]
+  /**
+   * Set once the legacy team chain-depth default has been cleared at startup
+   * (`clearLegacyTeamForwardDepthOnDisk`).
+   */
+  teamForwardDepthDefaultCleared?: boolean
   permissions: {
     fileAccess: 'allow' | 'ask' | 'deny'
     commandExecution: 'allow' | 'ask' | 'deny'
@@ -1351,6 +1409,8 @@ export async function initializeApp(): Promise<void> {
   applyNewToolsetDefaultsOnDisk()
 
   upgradeLegacyMaxTurnsOnDisk()
+
+  clearLegacyTeamForwardDepthOnDisk()
 
   // Seed the email channel from product.json on first run (enterprise builds)
   seedEmailChannelDefaults()

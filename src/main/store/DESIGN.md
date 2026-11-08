@@ -232,8 +232,11 @@ original that upgrades are compared against (`apps/manager/DESIGN.md` §2.13),
 and `previewUpgrade`, which reads the next version for the update dialog to
 name what will keep the user's version: neither installs anything. An upgrade
 itself downloads through `acquireSpec` and hands the spec to
-`AppManager.upgradeSpec`, never `updateSpec`, so the user's edits survive it;
-rescheduling and the activity note are the runtime's reaction to that call.
+`AppManager.upgradeSpec`, never `updateSpec`, so the user's edits survive it.
+An explicitly confirmed complete replacement of a customized managed skill uses
+`replaceSkillFromAuthor`: it replaces the package and author baseline together,
+clears customization and retains availability. Rescheduling and the activity note
+are the runtime's reaction to the manager's upgrade outcome.
 
 `installs` therefore means *authorised* downloads: an order is opened before the
 transfer, so one that then fails locally still counts. A delivery receipt would

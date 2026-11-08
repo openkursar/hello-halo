@@ -315,7 +315,10 @@ export interface TeamStore {
    */
   updateMemberFields(teamId: string, appId: string, fields: MemberFieldUpdate): void
   listMembersByTeam(teamId: string): TeamMember[]
+  /** Team-unique addressing; a renamed member still answers to its former names until restart. */
   getMemberByName(teamId: string, memberName: string): TeamMember | null
+  /** Change a member's addressing name, keeping the old one as an alias. False when unchanged. */
+  renameMember(teamId: string, appId: string, memberName: string): boolean
   getMember(teamId: string, appId: string): TeamMember | null
   listMembersByAppId(appId: string): TeamMember[]
   listDirectoryMemberships(): import('../../../shared/apps/people-directory').DirectoryMembership[]

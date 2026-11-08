@@ -138,17 +138,16 @@ never shown — and there is no second gate behind it, since `canUseTool` only f
 for interactive tools and `disallowedTools` covers built-ins, not MCP servers.
 Injection IS the grant.
 
-**One exception to default-ON: `halo-api-ref` ("Operate Halo").** It is resolved
-with `resolvePermission(app, 'halo-api-ref', false)` at both call sites, and is
-withheld from IM guests entirely. It operates Halo's own configuration and data
-rather than the outside world, and its tool schema plus usage guide would
-otherwise be a permanent per-run token cost for every digital human that never
-needs it. Deliberately absent from `prompt/capabilities.ts`
-`TOGGLEABLE_CAPABILITIES`: listing an off-by-default capability there would make
-the "disabled capabilities" fragment render on every run, which is the same cost
-by another route. If you add another default-off capability, pass the matching
-default at *every* `resolvePermission` call for it — the renderer switch included,
-or the panel shows the opposite of what the session loaded.
+**`halo-api-ref` ("Operate Halo") is not a switch for a digital human.** It is
+how a digital human perceives its own environment — the teams it serves, their
+conversations, its own settings — so chat and runs mount it without consulting a
+permission, and the Capabilities panel lists it as always on. It is decided by
+who is asking instead: never for an IM guest or a request from outside
+(`origin`), whose switches do not include it and whose turns the policy filter
+would strip of it anyway, and never for a disposable team member, which goes
+without `halo-apps` for the same reason. A stored grant or denial for it is
+inert. The cost is its tool schema plus usage guide (about 1K tokens) on every
+digital-human turn and run; keep both as short as they can be.
 
 ## 7) Session rebuild contract
 

@@ -63,6 +63,39 @@ describe('which skill a call means', () => {
     expect(call(guest, '/weekly-report')).toEqual({ allow: true })
   })
 
+  it('honors an unambiguous legacy directory grant for the current canonical command', () => {
+    const borrowed = access([skill('Ledger App'), skill('Other App')], { allowedSkills: ['Ledger_App'] })
+    expect(call(borrowed, 'Ledger App')).toEqual({ allow: true })
+    expect(call(borrowed, '/Ledger App')).toEqual({ allow: true })
+    expect(call(borrowed, 'Other App').allow).toBe(false)
+    expect(call(borrowed, 'Ledger_App').allow).toBe(false)
+    expect(grantedSkillFolders(borrowed)).toEqual(['/skills/Ledger App'])
+  })
+
+  it('does not spread a legacy alias across unrelated commands or an exact namesake', () => {
+    const first = skill('Ledger App')
+    const other = { ...skill('Ledger@App'), path: '/other-source/ledger' }
+    const ambiguous = access([first, other], { allowedSkills: ['Ledger_App'] })
+    expect(call(ambiguous, 'Ledger App').allow).toBe(false)
+    expect(call(ambiguous, 'Ledger@App').allow).toBe(false)
+    expect(grantedSkillFolders(ambiguous)).toEqual([])
+    const exact = access([first, skill('Ledger_App')], { allowedSkills: ['Ledger_App'] })
+    expect(call(exact, 'Ledger App').allow).toBe(false)
+    expect(call(exact, 'Ledger_App')).toEqual({ allow: true })
+    expect(grantedSkillFolders(exact)).toEqual(['/skills/Ledger_App'])
+    const canonical = access([first, other], { allowedSkills: ['Ledger App'] })
+    expect(call(canonical, 'Ledger App')).toEqual({ allow: true })
+    expect(call(canonical, 'Ledger@App').allow).toBe(false)
+  })
+
+  it('checks every copy and pre-approval even when its grant uses the legacy name', () => {
+    const plain = skill('Ledger App')
+    const reaching = { ...skill('Ledger App', 'allowed-tools: Bash\n'), path: '/other-source/ledger', scope: 'space' as const }
+    const borrowed = access([plain, reaching], { ...LISTED_COMMANDS, allowedSkills: ['Ledger_App'] })
+    expect(call(borrowed, 'Ledger App').allow).toBe(false)
+    expect(grantedSkillFolders(borrowed)).toEqual([])
+  })
+
   it('refuses one the owner did not allow, and says which ones it may use', () => {
     const decision = call(guest, 'place-order')
 

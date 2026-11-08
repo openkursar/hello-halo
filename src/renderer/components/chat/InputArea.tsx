@@ -31,6 +31,7 @@ import { useComposerToolsets } from './composer-menu/useComposerToolsets'
 import { sortToolsets, toolsetDescription, toolsetIcon, toolsetLabel } from './composer-menu/toolset-display'
 import { canAttachPath, type AttachedPath, type PickedLocalEntry } from '../../../shared/attached-paths'
 import { MAX_UPLOAD_FILE_SIZE } from '../../../shared/constants/artifact-upload'
+import { MAX_IMAGES, MAX_IMAGE_SIZE } from '../../../shared/constants/chat-attachments'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { useComposerReferences, useComposerReferencesStore } from '../../stores/composer-references.store'
 import { useSpaceStore } from '../../stores/space.store'
@@ -41,6 +42,7 @@ import { ImageAttachmentPreview } from './ImageAttachmentPreview'
 import { KnowledgeBaseButton } from './KnowledgeBaseButton'
 import { processImage, isValidImageType, formatFileSize } from '../../utils/imageProcessor'
 import { startDigitalHumanConversation } from '../../utils/conversation-navigation'
+import { completeSlashCommand, prefillSkillCommand } from '../../utils/skill-command'
 import type { ImageAttachment } from '../../types'
 import type { FileQueryItem } from '../../../shared/types/artifact'
 import { normalizePathLike } from '../../../shared/file-path-match'
@@ -242,10 +244,6 @@ const draftRecoverySubscribers = new Map<string, Set<(draft: InputDraft) => void
 // Cards of a composer with no draft key live under a key of its own, gone with it.
 let composerInstanceSeq = 0
 
-// Image constraints
-const MAX_IMAGE_SIZE = 20 * 1024 * 1024  // 20MB max per image (before compression)
-const MAX_IMAGES = 10  // Max images per message
-
 const COMPOSER_MAX_HEIGHT = 180
 
 function base64ToFile(data: string, name: string, mediaType: string): File {
@@ -412,7 +410,9 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     const slashPreview = pendingComposerInput.slashPreview
     useChatStore.setState({ pendingComposerInput: null })
     composerOriginRef.current = takeComposerOrigin()
-    setContent(text)
+    setContent(current => pendingComposerInput.preserveDraft
+      ? prefillSkillCommand(current, text, slashPreviewOverride ? [...slashCommands, slashPreviewOverride] : slashCommands)
+      : text)
     // A prefilled slash command (skill "use" actions always fill one) opens
     // the same autocomplete menu the user would see typing it — it's the
     // only surface that shows the skill's argument hint, and it doubles as
@@ -440,7 +440,13 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
       ta.focus()
       ta.setSelectionRange(ta.value.length, ta.value.length)
     })
-  }, [pendingComposerInput, currentSpaceId, draftKey])
+  }, [pendingComposerInput, currentSpaceId, draftKey, slashCommands, slashPreviewOverride])
+
+  // A draft restored at mount puts the caret after its text, so typing continues it.
+  useEffect(() => {
+    const textarea = textareaRef.current
+    if (textarea) textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+  }, [])
 
   // Auto-clear error after 3 seconds
   useEffect(() => {
@@ -998,8 +1004,7 @@ export const InputArea = memo(function InputArea({ onSend, onInject, onStop, isG
     }
     // A command is not a goal.
     if (goalMode) goal?.exit()
-    const newContent = item.command + ' '
-    setContent(newContent)
+    setContent(current => completeSlashCommand(current, item.command))
     setSlashMenuOpen(false)
     setSlashSelectedIndex(0)
     // Restore focus

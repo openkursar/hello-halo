@@ -15,8 +15,9 @@ import {
   getMessageThoughts as serviceGetMessageThoughts,
   toggleStarConversation as serviceToggleStarConversation
 } from '../services/conversation.service'
-import { closeV2Session, resolveDefaultEngine, ensureEngineAvailable, assertEngineSourceSelection, getLegacyEngine } from '../services/agent'
+import { closeV2Session, resolveDefaultEngine, ensureEngineAvailable, assertEngineSourceSelection, getLegacyEngine, getConversationEngineMetadata } from '../services/agent'
 import { isEngineId } from '../../shared/types/engine'
+import { getConfig } from '../foundation/config.service'
 import { getTaskStateService } from '../platform/task-state'
 
 export interface ControllerResponse<T = unknown> {
@@ -30,7 +31,11 @@ export interface ControllerResponse<T = unknown> {
  */
 export function listConversations(spaceId: string): ControllerResponse {
   try {
-    const conversations = serviceListConversations(spaceId)
+    const config = getConfig()
+    const conversations = serviceListConversations(spaceId).map(conversation => ({
+      ...conversation,
+      resolvedEngineId: getConversationEngineMetadata(conversation, config)
+    }))
     return { success: true, data: conversations }
   } catch (error: unknown) {
     const err = error as Error
@@ -65,7 +70,7 @@ export function getConversation(spaceId: string, conversationId: string, fromMes
       ? serviceGetConversationFrom(spaceId, conversationId, fromMessageId)
       : serviceGetConversation(spaceId, conversationId)
     if (conversation) {
-      return { success: true, data: conversation }
+      return { success: true, data: { ...conversation, resolvedEngineId: getConversationEngineMetadata(conversation) } }
     }
     return { success: false, error: 'Conversation not found' }
   } catch (error: unknown) {

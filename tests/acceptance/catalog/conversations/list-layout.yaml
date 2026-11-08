@@ -1,0 +1,79 @@
+version: 1
+id: conversations.list-layout
+module: conversations
+title:
+  en: Keep the conversation list the way I left it
+  zh: 会话列表保持我设定的样子
+story:
+  en: Whether or not the canvas is open, once I fold the conversation list to its dots or drag it open, it stays that way as I move around Halo and after a restart.
+  zh: 无论画布是否打开，我把会话列表收成圆点或拖开后，在 Halo 里来回切换以及重启后它都保持这样。
+basis: observed
+references:
+  - src/renderer/components/chat/ConversationList.tsx
+  - src/renderer/stores/conversation-list-prefs.store.ts
+  - src/renderer/pages/SpacePage.tsx
+  - tests/unit/renderer/conversation-list-fold.test.ts
+  - tests/e2e/specs/acceptance-conversation-list-layout.spec.ts
+promises:
+  remembered:
+    en: With the canvas open and without it, the list keeps the form and width I last dragged it to; visiting other pages, maximizing the canvas, switching workspaces and restarting do not change it.
+    zh: 画布打开和未打开时，列表都保持我上次拖动设定的形态和宽度；访问其他页面、最大化画布、切换空间和重启都不会改变它。
+  separate:
+    en: Until I choose otherwise, the list folds while the canvas is open and is open without it; a choice made in one of these situations leaves the other unchanged.
+    zh: 在我另作选择前，画布打开时列表收起、未打开时列表展开；在其中一种情况下的选择不影响另一种情况。
+scenarios:
+  - id: conversations.list-layout.beside-files
+    title:
+      en: Keep the list open beside files through navigation and restart
+      zh: 文件旁拖开的列表在切换和重启后保持展开
+    verifies:
+      - remembered
+      - separate
+    platforms: &a1
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A desktop-width window shows a stored conversation; the workspace holds a text file, and a second workspace has nothing open in its canvas.
+        zh: 桌面宽度窗口显示一个已保存对话；空间中有一个文本文件，另一个空间的画布没有打开任何内容。
+    steps:
+      - en: Open the file and drag the folded list open; visit Digital Humans and return, maximize and restore the canvas, switch to the other workspace and back, collapse and expand the canvas, then restart Halo and open the file again.
+        zh: 打开文件并把收起的列表拖开；进入数字人页再返回，最大化后还原画布，切到另一空间再切回，收起再展开画布，然后重启 Halo 并再次打开文件。
+      - en: Drag the list back to its dots beside the file, visit Digital Humans and return, then collapse the canvas.
+        zh: 在文件旁把列表拖回圆点，进入数字人页再返回，然后收起画布。
+    expected:
+      - en: The list folds when the file first opens, then stays open at the dragged width after every step, including the restart.
+        zh: 首次打开文件时列表收起，此后每一步（包括重启后）都按拖开的宽度保持展开。
+      - en: Folded again beside the file, it is still folded after returning, and it shows open at its earlier width once the canvas is collapsed.
+        zh: 在文件旁再次收起后，返回时仍是收起状态；收起画布后列表按原来的宽度展开。
+  - id: conversations.list-layout.without-files
+    title:
+      en: Keep the list folded with the canvas closed through navigation and restart
+      zh: 画布未打开时收起的列表在切换和重启后保持收起
+    verifies:
+      - remembered
+      - separate
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A desktop-width window shows a stored conversation with the canvas closed; the workspace holds a text file.
+        zh: 桌面宽度窗口显示一个已保存对话且画布未打开；空间中有一个文本文件。
+    steps:
+      - en: Drag the list to its dots, visit Digital Humans and return, then restart Halo.
+        zh: 把列表拖成圆点，进入数字人页再返回，然后重启 Halo。
+      - en: Drag the list open again, open the file, then collapse the canvas.
+        zh: 再把列表拖开，打开文件，然后收起画布。
+    expected:
+      - en: The list stays folded after returning and after the restart.
+        zh: 返回后以及重启后，列表都保持收起。
+      - en: Dragged open, it shows at the dragged width; it still folds beside the opened file and is open at that width again once the canvas is collapsed.
+        zh: 拖开后按拖动的宽度显示；打开文件时它仍在文件旁收起，收起画布后又按该宽度展开。

@@ -1,29 +1,24 @@
 /**
- * Where Halo's installed skills live on disk.
+ * The skill folders an engine that is handed explicit paths should read.
  *
- * `apps/manager/skill-sync.ts` writes a skill to one of two roots — the shared
- * config directory for a global skill, the space for a space-scoped one — and
- * the default engine reads them back implicitly, by way of the Claude Code
- * SDK's own `settingSources` discovery. An engine that runs in a child process
- * has no such discovery: it has to be told the paths.
- *
- * Naming them here rather than in each adapter keeps the layout a single fact.
- * The alternative is every new engine re-deriving `.claude/skills`, which is
- * exactly the kind of duplicated convention that stops being true after the
- * first change to it.
+ * Skills of every origin live in the user's own `.agents/skills` (global and per workspace);
+ * older `.claude/skills` folders are still honored. An engine that runs in a child process
+ * has no discovery of its own and has to be told the paths. Naming them here rather than in
+ * each adapter keeps the layout a single fact.
  */
 
 import path from 'path'
 import { resolveClaudeConfigDir } from '../../foundation/config.service'
+import { skillSearchRoots } from '../skills'
 
 /**
  * The skill roots for a session working in `workDir`, outermost first.
- *
- * The global root follows the user's configured config-directory mode, so an
- * engine reading these agrees with what the default engine loads. Neither path
- * is created here — a root that does not exist yet is a root with no skills,
+ * None is created here: a root that does not exist yet is a root with no skills,
  * which every consumer already handles.
  */
 export function getSkillRoots(workDir: string): string[] {
-  return [path.join(resolveClaudeConfigDir(), 'skills'), path.join(workDir, '.claude', 'skills')]
+  const roots = skillSearchRoots(workDir).filter(root => path.basename(root.path) === 'skills')
+  const global = roots.filter(root => root.scope === 'global').map(root => root.path)
+  const space = roots.filter(root => root.scope === 'space').map(root => root.path)
+  return [...new Set([...global, path.join(resolveClaudeConfigDir(), 'skills'), ...space].map(root => path.resolve(root)))]
 }

@@ -13,6 +13,7 @@ references:
   - tests/e2e/specs/people-settings.spec.ts
   - src/main/apps/manager/service.ts
   - tests/e2e/specs/acceptance-people.spec.ts
+  - src/main/apps/team/service.ts
 promises:
   save:
     en: Unsaved settings remain identifiable until saved or cancelled.
@@ -26,7 +27,61 @@ promises:
   validation:
     en: Invalid required identity fields are explained without replacing the last saved person definition.
     zh: 无效必填身份字段有说明，不替换最后保存的数字人定义。
+  team-name:
+    en: A renamed digital human appears under its new name in every team where its name followed the person name, while a name chosen for a team stays and teammates addressing the old name still reach it.
+    zh: 数字人改名后，在其名称跟随数字人名称的每个团队中都显示新名；为团队单独取的名称保持不变，队友按旧名称寻址仍能送达。
+  web-search:
+    en: Web search can be switched off for one digital human; while off it does not search the web in its chats, IM chats, team work or scheduled runs, and nobody it works for can turn it back on. Opening a page it is given and the AI Browser are separate and stay as they are. Memory stays on.
+    zh: 可以为某位数字人关闭网页搜索；关闭后它在自己的对话、IM 对话、团队协作和定时运行中都不再搜索网页，它服务的任何人都无法重新打开。打开给定的网页链接和 AI 浏览器是独立能力，不受影响。记忆始终开启。
 scenarios:
+  - id: people.settings.team-name
+    title:
+      en: Rename a person who belongs to teams
+      zh: 为已加入团队的数字人改名
+    verifies:
+      - team-name
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A person belongs to two teams under its own name and to a third under a name chosen for that team.
+        zh: 某数字人以自身名称加入两个团队，并以单独取的名称加入第三个团队。
+    steps:
+      - en: Rename the person in its settings, then open each team’s member list.
+        zh: 在设置中改名，然后打开每个团队的成员列表。
+    expected:
+      - en: The first two teams show the new name (made unique if a teammate already holds it); the third keeps its chosen name.
+        zh: 前两个团队显示新名称（若已有队友同名则自动区分）；第三个团队保留单独取的名称。
+  - id: people.settings.web-search-off
+    title:
+      en: Switch web search off for one digital human
+      zh: 为一位数字人关闭网页搜索
+    verifies:
+      - web-search
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    preconditions:
+      - en: A digital human with default capabilities and a scheduled task.
+        zh: 一位能力为默认设置并有定时任务的数字人。
+    steps:
+      - en: Open its Settings → Capabilities, expand “Other”, switch Web Search off, then ask it in chat to look something up online, ask it to summarise a link you paste, and run its scheduled task.
+        zh: 打开它的设置 → 能力，展开「其他」，关闭网页搜索，然后在对话中让它上网查资料，再贴一个链接让它总结，并运行它的定时任务。
+    expected:
+      - en: Neither the chat nor the run searches the web; the AI says web search is off and where to turn it on. The pasted link is still opened and summarised. Memory shows as always on with no switch.
+        zh: 对话和运行都不搜索网页；AI 说明网页搜索已关闭以及在哪里打开。贴的链接仍能打开并总结。记忆显示为始终开启且没有开关。
   - id: people.settings.unsaved
     title:
       en: Save one settings group

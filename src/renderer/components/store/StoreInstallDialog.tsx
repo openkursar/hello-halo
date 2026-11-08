@@ -9,6 +9,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Loader2, Check, ChevronDown } from 'lucide-react'
 import { useSpaceStore } from '../../stores/space.store'
+import { offeredInstallSpaces } from '../../utils/store-install-state'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useOnlineStatus } from '../../hooks/useOnlineStatus'
@@ -26,9 +27,11 @@ interface StoreInstallDialogProps {
   lockScope?: boolean
   /** If true, adds "Global (all spaces)" as the first scope option */
   showGlobalOption?: boolean
+  /** Workspaces offered as targets; all when omitted. */
+  availableSpaceIds?: string[]
 }
 
-export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOption, initialSpaceId, lockScope }: StoreInstallDialogProps) {
+export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOption, initialSpaceId, lockScope, availableSpaceIds }: StoreInstallDialogProps) {
   const { t } = useTranslation()
   const installFromStore = useAppsPageStore(state => state.installFromStore)
   // Install downloads spec+files from the registry; block it while offline so it
@@ -36,8 +39,12 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
   const online = useOnlineStatus()
 
   // Spaces
-  const haloSpace = useSpaceStore(state => state.haloSpace)
-  const spaces = useSpaceStore(state => state.spaces)
+  const storeHaloSpace = useSpaceStore(state => state.haloSpace)
+  const storeSpaces = useSpaceStore(state => state.spaces)
+  const { haloSpace, spaces } = useMemo(
+    () => offeredInstallSpaces(storeHaloSpace, storeSpaces, availableSpaceIds),
+    [storeHaloSpace, storeSpaces, availableSpaceIds],
+  )
 
   const allSpaces = useMemo(() => {
     const result: Array<{ id: string; name: string; icon: string }> = []

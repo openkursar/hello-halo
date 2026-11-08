@@ -5,7 +5,8 @@
  * Consumed by apps/runtime, IPC handlers, and renderer (via shared types).
  */
 
-import type { AppSpec, AppType, McpSpec } from '../spec'
+import type { AppSpec, AppType, McpSpec, SkillSpec } from '../spec'
+import type { SkillInstallationState } from '../../../shared/types/skills'
 import { isBuiltinApp } from '../../../shared/apps/app-types'
 import type { SpecUpgradeOutcome } from '../../../shared/apps/app-types'
 
@@ -88,10 +89,14 @@ export interface InstalledApp {
      * turn. Off by default.
      */
     spaceMemoryAccess?: boolean
+    /** The user's own labels for sorting their lists; see the shared InstalledApp. */
+    tags?: string[]
     /** This digital human's memory: on/off, auto-consolidation, cadence. */
     memory?: import('../../../shared/types/memory').MemorySettings
     /** MCP servers only: tools turned off on the card; see the shared InstalledApp. */
     disabledTools?: string[]
+    /** Internal file authority; never writable through updateOverrides. */
+    skill?: SkillInstallationState
   }
 
   /** Permission grants and denials */
@@ -180,6 +185,9 @@ export type AppUninstalledHandler = (app: InstalledApp, reason: AppUninstallReas
 /** Callback fired after an author's new version was applied with `upgradeSpec`. */
 export type SpecUpgradedHandler = (appId: string, outcome: SpecUpgradeOutcome) => void
 
+/** Callback fired after a spec change gave an App a different `name`. */
+export type AppRenamedHandler = (appId: string, previousName: string, name: string) => void
+
 /** Unsubscribe function returned by event registration */
 export type Unsubscribe = () => void
 
@@ -262,10 +270,8 @@ export interface AppManagerService {
   importMcpConnection(spaceId: string | null, spec: McpSpec, userConfig: Record<string, unknown>): Promise<string>
 
   /**
-   * Uninstall an App (soft-delete).
-   *
-   * Sets the App status to 'uninstalled' and records uninstalled_at timestamp.
-   * The App remains in the database and can be reinstalled or permanently deleted.
+   * Uninstall an App. Skills go to OS trash and retain a deleted tombstone.
+   * Other app types retain their reversible soft-delete lifecycle.
    *
    * @throws AppNotFoundError if the App does not exist
    */
@@ -284,8 +290,9 @@ export interface AppManagerService {
   /**
    * Permanently delete an uninstalled App from the database.
    *
-   * Only allowed when the App is in 'uninstalled' status. Removes the record
-   * from SQLite and optionally purges the work directory.
+   * Skills use the same one-step trash lifecycle as uninstall and keep the
+   * deletion tombstone. Other types must be uninstalled before removing the
+   * record and purging their work directory.
    *
    * Built-in apps (spec.store.install_source === 'builtin') are protected:
    * the call rejects with `BuiltinAppProtectedError` unless the caller passes
@@ -313,8 +320,8 @@ export interface AppManagerService {
   /**
    * Garbage collect old uninstalled apps.
    *
-   * Permanently deletes apps that have been in 'uninstalled' status for longer
-   * than the retention period. Called during startup and periodically.
+   * Permanently deletes non-skill apps uninstalled beyond the retention period.
+   * Skill recovery records and deleted tombstones are never pruned.
    *
    * @param retentionMs - Retention period in milliseconds (default: 30 days)
    * @returns Number of apps pruned
@@ -407,20 +414,39 @@ export interface AppManagerService {
    */
   updateSpec(appId: string, specPatch: Record<string, unknown>): void
 
+  /** Internal record-only commit after a validated file operation; performs no file writes. */
+  updateSkillRecord(appId: string, change: {
+    spec?: SkillSpec
+    skill?: SkillInstallationState
+    spaceId?: string | null
+    status?: AppStatus
+  }): void
+
+  /** Only this scope, including migration records/tombstones, without package bodies. */
+  listSkillRecords(spaceId: string | null): InstalledApp[]
+
+  /** Stored package for migration; never hydrates or rewrites personal files. */
+  getSkillRecord(appId: string): InstalledApp | null
+
   /**
    * Apply an author's new version — a store or bundled upgrade — without
    * overwriting the user's edits. For a digital human, a field the user changed
    * since the author's original keeps the user's value, every other field takes
-   * the new version, and the new version becomes the recorded original. Other
-   * App types are replaced as `updateSpec` would.
+   * the new version, and the new version becomes the recorded original.
+   * Customized skills retain their complete package and current version; other
+   * managed skills take a complete replacement without changing availability.
    *
-   * The single entry for every upgrade path; user and AI edits keep using
-   * `updateSpec`, which never touches the original.
+   * Normal upgrades use this entry; explicit whole skill replacement uses
+   * `replaceSkillFromAuthor`. User and AI edits keep using `updateSpec`,
+   * which never touches the original.
    *
    * @throws AppNotFoundError if the App does not exist
    * @throws AppSpecValidationError if the author's spec is invalid
    */
   upgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome
+
+  /** Replace files and the stored package baseline, reset customization and emit the upgrade outcome; preserve pause, source and deletion guards. */
+  replaceSkillFromAuthor(appId: string, authorSpec: SkillSpec): SpecUpgradeOutcome
 
   /** What `upgradeSpec` would keep for this author's spec, without applying it. */
   previewUpgradeSpec(appId: string, authorSpec: AppSpec): SpecUpgradeOutcome
@@ -456,9 +482,8 @@ export interface AppManagerService {
   /**
    * Move an App to a different space (or to/from global scope).
    *
-   * For skill apps: atomically removes the skill files from the current
-   * filesystem location and writes them to the new location so Claude Code
-   * auto-loads them from the correct path.
+   * Skills move their current complete files after revision and destination
+   * checks; a failed record commit restores their previous location.
    *
    * For MCP apps: emits an MCP change notification for both the old and new
    * spaceId so affected sessions are invalidated.
@@ -519,6 +544,13 @@ export interface AppManagerService {
    */
   getStudioSummary(language?: string, excludeIds?: string[]): import('../../../shared/apps/people-directory').StudioSummary
   listPeopleDirectory(filter: import('../../../shared/apps/people-directory').PersonDirectoryFilter): { items: import('../../../shared/apps/people-directory').PersonDirectoryRecord[]; total: number; offset: number; limit: number }
+  /**
+   * Rename a tag (merging into an existing one), or remove it with `to` null,
+   * on every installed app of `type` carrying it. Returns how many changed.
+   */
+  renameTag(type: import('../../../shared/apps/spec-types').AppType, from: string, to: string | null): number
+  /** The tags on one kind of installed app, with how many carry each; removed and excluded items do not count. */
+  listTagCounts(type: import('../../../shared/apps/spec-types').AppType, excludeIds?: readonly string[]): import('../../../shared/apps/app-tags').TagCount[]
 
   /**
    * Ids of digital humans currently in one of the given statuses, without
@@ -599,4 +631,10 @@ export interface AppManagerService {
    * upgraded the App. Returns an unsubscribe function.
    */
   onAppSpecUpgraded(handler: SpecUpgradedHandler): Unsubscribe
+
+  /**
+   * Register a callback fired after `updateSpec` or `upgradeSpec` changed the
+   * App's name. Returns an unsubscribe function.
+   */
+  onAppRenamed(handler: AppRenamedHandler): Unsubscribe
 }

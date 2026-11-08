@@ -638,6 +638,16 @@
   },
   {
     "method": "GET",
+    "path": "/api/apps/tags",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/tags/rename",
+    "group": "digital-human"
+  },
+  {
+    "method": "GET",
     "path": "/api/apps/pending-inbox"
   },
   {
@@ -1471,5 +1481,69 @@
   {
     "method": "GET",
     "path": "/api/code-review/availability"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/list",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/read",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/save",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/import",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/set-enabled",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/move-preview",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/move",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/copy",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/delete",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/open-folder"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/export",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/restore-legacy",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/delete-legacy",
+    "group": "store"
   }
 ]

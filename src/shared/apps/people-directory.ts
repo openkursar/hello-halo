@@ -7,6 +7,8 @@ export interface PeopleDirectoryQuery {
   teamId?: string
   attention?: boolean
   removed?: boolean
+  /** Only people carrying this tag (any letter case). */
+  tag?: string
   limit?: number
   offset?: number
 }
@@ -19,6 +21,8 @@ export interface AppDirectoryRecord {
   spaceId: string | null
   status: AppStatus
   installedAt: number
+  /** The user's own tags on it; filled where a list shows them. */
+  tags?: string[]
 }
 
 export type PersonDirectoryRecord = AppDirectoryRecord

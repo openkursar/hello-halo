@@ -10,7 +10,7 @@
  */
 
 import { execSync } from 'child_process'
-import { clusterStart, clusterStop, apiOk, api, pollUntil, sleep, Reporter } from './_lib.mjs'
+import { clusterStart, clusterStop, apiOk, api, pollUntil, sleep, Reporter, latestRunEpochId } from './_lib.mjs'
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a)
 const report = new Reporter()
@@ -116,11 +116,12 @@ try {
     // many rapid message sends without waiting per-send, then measure the
     // read-back latency (the actual thing 5.3 cares about: sub-second open, smooth scroll).
     const N = 40
+    const epochId = await latestRunEpochId(node, team.id)
     for (let i = 0; i < N; i++) {
-      await api(node, 'POST', `/api/teams/${team.id}/members/${member.appId}/send`, { message: `entry-${i}` })
+      await api(node, 'POST', `/api/teams/${team.id}/members/${member.appId}/send`, { message: `entry-${i}`, epochId })
     }
     const t0 = Date.now()
-    const history = await apiOk(node, 'GET', `/api/teams/${team.id}/chat-messages?appId=${member.appId}`)
+    const history = await apiOk(node, 'GET', `/api/teams/${team.id}/chat-messages?appId=${member.appId}&epochId=${epochId}`)
     const elapsedMs = Date.now() - t0
     mark(elapsedMs < 5000 && Array.isArray(history) ? 'PASS' : 'FAIL',
       `messagesSent=${N} historyLen=${history?.length} readLatencyMs=${elapsedMs} (checklist literal is "hundreds" — this drives 40 real sends, a representative but smaller N given session time budget)`)
@@ -154,7 +155,7 @@ try {
       return d.team.status === 'idle' ? d : null
     }, { timeoutMs: 150_000, intervalMs: 2000 })
     const d = await apiOk(node, 'GET', `/api/teams/${team.id}/detail`)
-    const leadHistory = await apiOk(node, 'GET', `/api/teams/${team.id}/chat-messages?appId=${d.team.leadAppId}`)
+    const leadHistory = await apiOk(node, 'GET', `/api/teams/${team.id}/chat-messages?appId=${d.team.leadAppId}&epochId=${await latestRunEpochId(node, team.id)}`)
     // Transcript messages are raw SDK session frames: per-turn totals live on
     // the `result` frame (`usage.input_tokens/output_tokens`, `total_cost_usd`),
     // not a renderer-side `tokenUsage` field.

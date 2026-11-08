@@ -20,7 +20,7 @@ const group = (members: Array<[string, string]>): AIGroup => ({
 })
 
 const capabilities = (extra: Partial<ResolvedModelCapabilities> = {}): ResolvedModelCapabilities =>
-  ({ maxOutputTokens: 32_000, contextWindow: 200_000, maxOutputTokensConfigured: true, adaptiveThinking: false, ...extra })
+  ({ maxOutputTokens: 32_000, contextWindow: 200_000, adaptiveThinking: false, ...extra })
 
 function depsWith(sources: AISource[], facts: Record<string, Partial<ResolvedModelCapabilities>> = {}): GroupCredentialDeps {
   return {
@@ -56,30 +56,33 @@ describe('credentials for a group', () => {
       })
     )
     expect(credentials.capabilities).toEqual({
-      contextWindow: 128_000, maxOutputTokens: 16_000, maxOutputTokensConfigured: true, adaptiveThinking: true,
+      contextWindow: 128_000, maxOutputTokens: 16_000, adaptiveThinking: true,
     })
   })
 
-  it('does not mistake an unknown model\'s fallback for a declared output limit', () => {
+  it.each([true, false])('includes an unknown model\'s working budget in the group limit (known first: %s)', knownFirst => {
+    const members: Array<[string, string]> = [['a', 'm1'], ['b', 'm1']]
     const credentials = resolveGroupCredentials(
-      group([['a', 'm1'], ['b', 'm1']]),
+      group(knownFirst ? members : members.reverse()),
       depsWith([account('a'), account('b')], {
         'a/m1': { maxOutputTokens: 128_000 },
-        'b/m1': { maxOutputTokens: 64_000, maxOutputTokensConfigured: false },
+        'b/m1': { maxOutputTokens: 64_000 },
       })
     )
-    expect(credentials.capabilities).toMatchObject({ maxOutputTokens: 128_000, maxOutputTokensConfigured: true })
+    expect(credentials.capabilities?.maxOutputTokens).toBe(64_000)
   })
 
-  it('leave the engine default alone when no member declares an output limit', () => {
+  it('uses the resolved working budget when every member is unknown', () => {
     const credentials = resolveGroupCredentials(
       group([['a', 'm1'], ['b', 'm1']]),
       depsWith([account('a'), account('b')], {
-        'a/m1': { maxOutputTokensConfigured: false },
-        'b/m1': { maxOutputTokensConfigured: false },
+        'a/m1': { maxOutputTokens: 64_000 },
+        'b/m1': { maxOutputTokens: 64_000 },
       })
     )
-    expect(credentials.capabilities?.maxOutputTokensConfigured).toBe(false)
+    expect(credentials.capabilities).toEqual({
+      maxOutputTokens: 64_000, contextWindow: 200_000, adaptiveThinking: false,
+    })
   })
 
   it('claim adaptive thinking only if every member has it', () => {

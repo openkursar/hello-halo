@@ -17,6 +17,7 @@ import type { GoalInput } from './goal'
 import type { ImageAttachment } from './image-attachment'
 import type { MessageTask } from './message-task'
 import type { KBSource } from './tlon'
+import type { SkillNotice } from './skills'
 
 // ============================================
 // Thought process
@@ -40,6 +41,7 @@ export interface Thought {
   type: ThoughtType
   content: string
   timestamp: string
+  skillNotice?: SkillNotice
   toolName?: string
   toolInput?: Record<string, unknown>
   toolOutput?: string
@@ -66,6 +68,7 @@ export interface Thought {
 export interface ThoughtsSummary {
   count: number
   types: Partial<Record<ThoughtType, number>>
+  skillNotices?: SkillNotice[]
   /** Wall-clock seconds between the first and last thought; absent for a single thought. */
   duration?: number
 }

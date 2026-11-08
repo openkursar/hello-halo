@@ -46,7 +46,8 @@ import { ReplyTextAccumulator } from './reply-accumulator'
 import { ProgressEventParser } from './progress-formatter'
 import { TurnCutPoint } from './escalation-cut'
 import { openSessionWriter, saveChatSessionId, saveChatEngineBinding, type RecordedPush, type SessionWriter } from './session-store'
-import { AppChatTurnInterrupted, turnEndingOf, withTurnEndingNote, type AppChatTurnEnding } from './turn-ending'
+import { AppChatTurnInterrupted, turnEndingOf, type AppChatTurnEnding } from './turn-ending'
+import { imTurnReply } from './im-error-reply'
 import { stopGeneration } from '../../services/agent/control'
 import { listResidentSessions, hasPendingSessionInput } from '../../services/agent'
 
@@ -533,9 +534,7 @@ class AppChatSink implements TurnSink {
     // failure — the caller already tore its transport down. A cut-off turn says
     // so in a way its caller can tell from a model error.
     if (!result.wasAborted && (result.hasErrorThought || result.isInterrupted)) {
-      round.reject(result.hasErrorThought
-        ? new Error(result.errorThought?.content || 'The model response was interrupted.')
-        : new AppChatTurnInterrupted())
+      round.reject(ending?.kind === 'failed' ? new Error(ending.error) : new AppChatTurnInterrupted())
       return
     }
 
@@ -718,7 +717,7 @@ class AppChatSink implements TurnSink {
   private deliverAutonomous(replyContent: string, ending: AppChatTurnEnding | undefined): void {
     const written = replyContent.trim()
     if (!written) return
-    const text = ending ? withTurnEndingNote(written, ending) : written
+    const text = ending ? imTurnReply(written, ending) : written
 
     const parsed = parseAppChatKey(this.conversationId)
     if (!parsed || classifySessionSource(parsed.channel) !== 'im') return

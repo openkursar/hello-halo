@@ -1,0 +1,161 @@
+version: 1
+id: capabilities.skill-files
+module: capabilities
+title: Maintain skill files without losing work
+story: I can create, import, edit, move and delete a concrete skill while keeping my files authoritative and unrelated work safe.
+basis: documented
+references:
+  - tests/acceptance/skills-requirements.md
+promises:
+  create: Simple and Markdown editors create valid standard skill files in the selected user-owned directory, preserve drafts and never claim success after failed saving.
+  import: Import is a complete independent copy of supported Markdown, folder or ZIP content, including binary and nested resources; source files are unchanged and unsafe or unsupported input is refused explicitly.
+  replace: Reimport offers replace, save-as or cancel with no default overwrite; replacement is complete, preserves disabled state and never overwrites another ownership class by name.
+  truth: Existing supported files are directly discoverable without rewriting; saving and reopening use their real content, preserve valid metadata/resources and protect concurrent edits.
+  health: Missing, unreadable and invalid files are distinguished without resurrecting stale content or harming healthy skills.
+  move: Scope change explicitly moves one complete resource with disabled state preserved, never silently syncs or overwrites another copy.
+  delete: One copy-specific confirmation sends only selected content to the host recycle bin; cancellation or unavailable trash never becomes permanent deletion.
+  failure: Failed, interrupted or stale operations preserve drafts, original files and unrelated resources and report actionable errors.
+scenarios:
+  - id: capabilities.skill-files.create
+    title: Create a localized skill and recover cancelled or failed drafts
+    verifies: [create, truth, failure]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    variants:
+      scope: [workspace, global]
+      editor: [simple, markdown]
+    steps:
+      - Enter a localized display name and instructions; inspect default scope, cancel retaining draft, reopen, induce a failed save, then save successfully and restart.
+    expected:
+      - Valid command identity is generated without requiring technical syntax. Scope is explicit; draft survives cancel/failure without creating an installation.
+      - Exactly one valid standard file appears in the selected user directory, in My skills and enabled for new sessions; restart never restores stale database instructions.
+  - id: capabilities.skill-files.import
+    title: Copy a supported package completely and exactly once
+    verifies: [import, failure]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    variants:
+      format: [markdown, directory, zip, wrapped-zip]
+      resources: [single-file, nested-text, binary]
+      scope: [workspace, global]
+    steps:
+      - Preview source content and destination, complete missing metadata for plain Markdown, cancel once, then confirm with a repeated transport request and restart.
+    expected:
+      - Preview explains independent copying, exactly one complete valid package is created and binary bytes match the source; source and control skills remain unchanged.
+      - Unsupported content, damaged or oversized packages and unsafe paths fail explicitly without partial-success reporting or executing package scripts.
+  - id: capabilities.skill-files.replace
+    title: Replace or save a same-name import without losing the old package
+    verifies: [replace, import, failure]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    variants:
+      decision: [replace, save-as, cancel, self-import]
+      state: [enabled, disabled]
+    steps:
+      - Reimport a revised package missing an old script; inspect explicit destination and choices, exercise the decision, then retry with a controlled write failure.
+    expected:
+      - Replace yields exactly the new complete package without obsolete files, preserving disabled state; save-as is independent; cancellation/failure preserves original bytes.
+      - Self-import explains direct availability without overwrite or duplication. Maintained installations are never overwritten solely by name.
+  - id: capabilities.skill-files.discover
+    title: Discover project and compatibility formats without adopting or rewriting them
+    verifies: [truth, health]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    variants:
+      format: [standard-agents, compatible-claude, legacy-command, optional-fields]
+    steps:
+      - Open a workspace containing existing files and a canonical alias; search, open a new conversation and invoke the skill, then compare original file bytes.
+    expected:
+      - Existing readable formats work without import/registration; aliases count once, no metadata is inserted and files are not reformatted.
+      - Files outside the supported skill folders do not become active skills; no arbitrary folder-link or watcher feature is added.
+  - id: capabilities.skill-files.edit-external
+    title: Reconcile file edits with an unsaved editor draft
+    verifies: [truth, failure]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    steps:
+      - Save an edit, reopen after an external change, then change disk content while an unsaved draft is open and attempt saving; inspect desktop open-file/folder targets.
+    expected:
+      - Saved content goes to the real file and refresh/reopen shows current content. Unknown valid metadata and untouched supporting bytes survive.
+      - Concurrent changes trigger reread/reconciliation instead of last-writer overwrite; both draft and disk survive. No promise of live page synchronization is made.
+  - id: capabilities.skill-files.file-health
+    title: Distinguish renamed, missing, inaccessible and invalid files
+    verifies: [truth, health]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    variants:
+      change: [body, display-name, folder-name, removed, inaccessible, invalid]
+    steps:
+      - Disable one controlled file, apply the external change, refresh and start new work with a healthy control; restore the file and refresh again.
+    expected:
+      - Same-file display-name changes preserve disable choice; moved files are rediscovered without guessing identity from a name.
+      - Missing is not transient unreadability; no stale body is restored and no disable settings are cleared on read failure. Invalid resources explain why, healthy skills/chat work and repaired resources recover.
+  - id: capabilities.skill-files.move
+    title: Move a whole skill with explicit sharing and safe destination handling
+    verifies: [move, failure]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    variants:
+      direction: [global-workspace, workspace-global, workspace-workspace]
+      condition: [normal, collision, readonly, symbolic-link, cross-volume]
+    steps:
+      - Inspect source/destination and shared impact, cancel once, confirm moving a disabled multi-file resource, then restart and inspect both locations and controls.
+    expected:
+      - Successful move preserves resources and disable choice with no hidden source copy or multi-scope binding; independent versions require explicit Copy.
+      - Conflict or unsafe move fails without losing original content or dereferencing a link destructively; cross-volume completion must be verified before source removal.
+    notes: Cross-volume and link variants remain unverified when the execution environment cannot supply isolated safe fixtures.
+  - id: capabilities.skill-files.delete
+    title: Trash one concrete skill without deleting originals or link targets
+    verifies: [delete, failure]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    variants:
+      source: [user-file, store, builtin, dependency, symbolic-link]
+      trash: [available, unavailable]
+    steps:
+      - Inspect the one confirmation naming selected directory/resources/shared scope, cancel, then delete and restart; restore a user file from trash or explicitly reinstall maintained content.
+    expected:
+      - Cancellation changes nothing; available trash receives only the selected copy/link, never the import source, link target or unrelated files. Unavailable trash fails without permanent fallback.
+      - A restored file is rediscovered. Deleted built-ins do not reappear on restart/update without explicit reinstall.
+      - Existing context may retain instructions; later missing-resource reads fail honestly rather than promising uninterrupted execution.
+  - id: capabilities.skill-files.failure
+    title: Preserve data under interrupted, concurrent and stale operations
+    verifies: [failure, import, truth, health]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    variants:
+      fault: [readonly, interrupted-import, concurrent-edit, replaced-target, escaping-package, late-workspace-response]
+    steps:
+      - Trigger the controlled fault during real save/import/update/move/delete or while switching/closing the scope view; inspect files, draft, settings and healthy controls.
+    expected:
+      - Mutation revalidates target identity and links; package paths cannot escape the target and scripts never execute during import.
+      - Errors are actionable with old version/draft/unrelated files intact; no false success, late stale view overwrite or one-bad-skill failure of healthy operations occurs.

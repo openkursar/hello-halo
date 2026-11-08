@@ -35,7 +35,9 @@ for (const action of ['skip', 'overwrite', 'rename'] as const) {
   test(`CLI skill migration applies ${action} without changing either source or unrelated files`, cliAcceptance('capabilities.migrate.skills', { action }), async ({ cliMigration }, testInfo) => {
     const { profile, window, paths } = cliMigration
     const source = join(paths.ccDefault, 'skills')
-    const destination = join(paths.haloDefault, 'skills')
+    const destination = join(profile, '.agents', 'skills')
+    const legacyDestination = join(paths.haloDefault, 'skills')
+    const legacyBefore = cliTree(profile, legacyDestination)
     const collision = 'migration-collision'
     const omitted = 'migration-unselected'
     const fresh = 'migration-new'
@@ -68,8 +70,14 @@ for (const action of ['skip', 'overwrite', 'rename'] as const) {
     await expect(resultRow(panel, fresh).getByText('Migrated', { exact: true })).toBeVisible()
     const assertFiles = () => {
       expect(cliTree(profile, source)).toEqual(sourceBefore)
-      expect(cliTree(profile, join(destination, destinationName))).toEqual(action === 'skip' ? collisionBefore : cliTree(profile, join(source, collision)))
-      if (action === 'rename') expect(cliTree(profile, join(destination, collision))).toEqual(collisionBefore)
+      const expectedPackage = action === 'skip' ? collisionBefore : { ...cliTree(profile, join(source, collision)) }
+      if (action === 'rename') {
+        const originalContent = Buffer.from(expectedPackage['SKILL.md'], 'base64').toString('utf8')
+        expectedPackage['SKILL.md'] = Buffer.from(originalContent.replace(`name: ${collision}\n`, `name: ${destinationName}\n`)).toString('base64')
+        expect(cliTree(profile, join(destination, collision))).toEqual(collisionBefore)
+      }
+      expect(cliTree(profile, join(destination, destinationName))).toEqual(expectedPackage)
+      expect(cliTree(profile, legacyDestination)).toEqual(legacyBefore)
       expect(cliTree(profile, join(destination, `${collision}-cc`))).toEqual(renamedControl)
       expect(cliTree(profile, join(destination, unrelated))).toEqual(unrelatedBefore)
       expect(cliTree(profile, join(destination, omitted))).toEqual({})

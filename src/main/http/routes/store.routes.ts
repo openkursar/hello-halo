@@ -69,7 +69,7 @@ export function registerStoreRoutes(app: Express): void {
   // GET /api/store/apps/:slug — get store app detail
   app.get('/api/store/apps/:slug', async (req: Request, res: Response) => {
     try {
-      const result = await storeController.getStoreAppDetail(req.params.slug)
+      const result = await storeController.getStoreAppDetail(req.params.slug as string)
       res.json(result)
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -266,7 +266,7 @@ export function registerStoreRoutes(app: Express): void {
   // DELETE /api/store/registries/:registryId — remove a registry source
   app.delete('/api/store/registries/:registryId', async (req: Request, res: Response) => {
     try {
-      const result = storeController.removeStoreRegistry(req.params.registryId)
+      const result = storeController.removeStoreRegistry(req.params.registryId as string)
       res.json(result)
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -281,7 +281,7 @@ export function registerStoreRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing required field: enabled' })
         return
       }
-      const result = storeController.toggleStoreRegistry(req.params.registryId, enabled)
+      const result = storeController.toggleStoreRegistry(req.params.registryId as string, enabled)
       res.json(result)
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -296,7 +296,7 @@ export function registerStoreRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Request body must be a JSON object' })
         return
       }
-      const result = storeController.updateStoreRegistryAdapterConfig(req.params.registryId, adapterConfig)
+      const result = storeController.updateStoreRegistryAdapterConfig(req.params.registryId as string, adapterConfig)
       res.json(result)
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -322,7 +322,7 @@ export function registerStoreRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing appId' })
         return
       }
-      const result = await applyUpgrade(appId, mode ?? 'force')
+      const result = await applyUpgrade(appId as string, mode ?? 'force')
       res.json({ success: true, data: result })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -332,7 +332,7 @@ export function registerStoreRoutes(app: Express): void {
   // GET /api/store/updates/:appId/preview — what the available update would keep at the user's version
   app.get('/api/store/updates/:appId/preview', async (req: Request, res: Response) => {
     try {
-      res.json({ success: true, data: await previewUpgrade(req.params.appId) })
+      res.json({ success: true, data: await previewUpgrade(req.params.appId as string) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

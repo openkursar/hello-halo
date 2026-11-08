@@ -346,6 +346,8 @@ export class TeamStore implements ITeamStore {
 
   /** Duties of members that left a joined office, kept beside the database file. */
   private readonly retainedDuties: RetainedDuties
+  /** Per team: a renamed member's former names → its appId, so in-flight addressing still lands. */
+  private readonly formerNames = new Map<string, Map<string, string>>()
 
   constructor(private readonly db: Database.Database) {
     this.retainedDuties = createRetainedDuties(db.memory ? null : join(dirname(db.name), RETAINED_DUTIES_FILE))
@@ -878,7 +880,25 @@ export class TeamStore implements ITeamStore {
 
   getMemberByName(teamId: string, memberName: string): TeamMember | null {
     const row = this.stmtGetMemberByName.get(teamId, memberName) as TeamMemberRow | undefined
-    return row ? rowToMember(row) : null
+    if (row) return rowToMember(row)
+    const formerOwner = this.formerNames.get(teamId)?.get(memberName)
+    return formerOwner ? this.getMember(teamId, formerOwner) : null
+  }
+
+  renameMember(teamId: string, appId: string, memberName: string): boolean {
+    const current = this.getMember(teamId, appId)
+    if (!current || current.memberName === memberName) return false
+    this.db.prepare(`UPDATE team_members SET member_name = ? WHERE team_id = ? AND app_id = ?`)
+      .run(memberName, teamId, appId)
+    this.rememberFormerName(teamId, appId, current.memberName, memberName)
+    return true
+  }
+
+  private rememberFormerName(teamId: string, appId: string, former: string, current: string): void {
+    let names = this.formerNames.get(teamId)
+    if (!names) this.formerNames.set(teamId, names = new Map())
+    names.delete(current)
+    names.set(former, appId)
   }
 
   getMember(teamId: string, appId: string): TeamMember | null {
@@ -1022,8 +1042,14 @@ export class TeamStore implements ITeamStore {
       // their duty and delegated policy are authored here, and a snapshot taken
       // before the owner's latest edit reached the authority must not undo it.
       const ownRows = new Map<string, TeamMemberRow>()
+      const priorNames = new Map<string, string>()
       for (const row of this.stmtListMembersByTeam.all(officeId) as TeamMemberRow[]) {
         if (row.owner_node_id === SELF_NODE_ID) ownRows.set(row.app_id, row)
+        priorNames.set(row.app_id, row.member_name)
+      }
+      for (const m of snapshot.members) {
+        const prior = priorNames.get(m.appId)
+        if (prior && prior !== m.memberName) this.rememberFormerName(officeId, m.appId, prior, m.memberName)
       }
 
       this.db.prepare(`DELETE FROM team_members WHERE team_id = ?`).run(officeId)

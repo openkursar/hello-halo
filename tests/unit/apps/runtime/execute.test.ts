@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import * as engineSelection from '../../../../src/main/apps/runtime/engine-selection'
 
 // ── Agent SDK + electron-touching dependencies (mirrors runtime.test.ts) ──
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
@@ -90,10 +91,6 @@ vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
   validateEnvironmentConnections: vi.fn(),
   missingConnections: vi.fn(() => []),
 }))
-vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
-  createPersonContextMcpServer: vi.fn(() => ({ name: 'halo-person-context' })),
-  personContextPrompt: vi.fn(() => ''),
-}))
 
 vi.mock('../../../../src/main/services/space.service', () => ({
   getSpace: vi.fn().mockReturnValue({ id: 'space-1', path: '/tmp/space-1' }),
@@ -153,6 +150,7 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   ...(await vi.importActual('../../../../src/main/services/agent/engine-handoff')),
   ensureEngineAvailable: vi.fn(async () => {}),
   getLegacyEngine: () => 'halo',
+  resolveHistoricalEngine: (engine: string) => engine,
   hasLiveTurn: () => false,
   resolveDefaultEngine: async () => 'halo',
   toEngineSystemPrompt: (prompt: string) => prompt,
@@ -164,6 +162,12 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   )).explainEngineError,
   ...(await import('../../../../src/main/services/agent/session-manager')),
   getSessionEngineId: () => undefined,
+}))
+
+// Every run holds Operate Halo; its server is built by its own module and tested there.
+vi.mock('../../../../src/main/services/api-ref', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../src/main/services/api-ref')>()),
+  createApiRefMcpServer: () => ({ _isMcpServer: true, name: 'halo-api-ref' }),
 }))
 
 // The fake session used by createSession — swapped per test via nextSession.
@@ -424,6 +428,7 @@ describe('executeRun — guards', () => {
 
 describe('executeRun — per-person engines', () => {
   it.each(['halo', 'anthropic', 'codex', 'dsh'] as const)('uses %s for credentials, prompt and session creation', async engineId => {
+    const prepare = vi.spyOn(engineSelection, 'prepareAppEngineSession')
     nextSession = new FakeSession({ script: [systemInit('engine-session'), assistantReport()] })
     vi.mocked(createSession).mockClear()
     vi.mocked(resolveCredentialsForSdk).mockClear()
@@ -434,6 +439,8 @@ describe('executeRun — per-person engines', () => {
     expect(buildAppSystemPrompt).toHaveBeenLastCalledWith(expect.objectContaining({ engineId }))
     expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ engineId }))
     expect(saveChatEngineBinding).toHaveBeenCalledWith('/tmp/space-1', 'app-1', result.runId, { version: 1, engineId, sessionId: 'engine-session' }, { routingEngine: engineId })
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ engineId, explicitEngine: true }))
+    prepare.mockRestore()
   })
 
   it('fails an unavailable explicit engine before credentials or a replacement session', async () => {
@@ -523,6 +530,21 @@ describe('executeRun — completion branches', () => {
       result.runId,
       expect.objectContaining({ status: 'error', errorMessage: 'model rate-limited' }),
     )
+  })
+
+  it('records a failed model request the engine told as an assistant message as the error, never as output', async () => {
+    const reason = 'Anthropic API error (403): OAuth authentication is currently not allowed for this organization.'
+    nextSession = new FakeSession({
+      script: [
+        assistantReport(),
+        { type: 'assistant', error: 'authentication_failed', message: { model: '<synthetic>', content: [{ type: 'text', text: reason }] } },
+        { type: 'result', subtype: 'error_during_execution', is_error: true, result: reason },
+      ],
+    })
+    const result = await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toBe(reason)
+    expect(result.finalText).toBe('All done.')
   })
 
   it('adds up what the model processed over the run, cache included, beside the input and output total', async () => {
@@ -956,6 +978,35 @@ describe('executeRun — MCP wiring', () => {
     expect(Object.keys(sdkOptions.mcpServers)).toEqual(
       expect.arrayContaining(['halo-report', 'halo-notify', 'web-search', 'ocr'])
     )
+  })
+})
+
+describe('executeRun — web search switch', () => {
+  it('runs without Halo web search and the engine\'s own search, but can still open a given page, when the owner switched it off', async () => {
+    vi.mocked(createSession).mockClear()
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    await executeRun({
+      app: makeApp({ permissions: { granted: [], denied: ['web-search'] } }),
+      trigger: baseTrigger,
+      store: makeStore(),
+      memory: makeMemory(),
+    })
+
+    const sdkOptions = vi.mocked(createSession).mock.calls[0][0] as { mcpServers: Record<string, unknown>; disallowedTools?: string[] }
+    expect(Object.keys(sdkOptions.mcpServers)).not.toContain('web-search')
+    expect(Object.keys(sdkOptions.mcpServers)).toEqual(expect.arrayContaining(['halo-report', 'halo-notify', 'ocr']))
+    expect(sdkOptions.disallowedTools).toEqual(expect.arrayContaining(['WebSearch']))
+    expect(sdkOptions.disallowedTools).not.toContain('WebFetch')
+  })
+
+  it('keeps web search by default', async () => {
+    vi.mocked(createSession).mockClear()
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    await executeRun({ app: makeApp(), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
+
+    const sdkOptions = vi.mocked(createSession).mock.calls[0][0] as { mcpServers: Record<string, unknown>; disallowedTools?: string[] }
+    expect(Object.keys(sdkOptions.mcpServers)).toContain('web-search')
+    expect(sdkOptions.disallowedTools ?? []).not.toContain('WebFetch')
   })
 })
 

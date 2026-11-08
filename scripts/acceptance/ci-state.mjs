@@ -76,8 +76,18 @@ export function baselineName(context) {
   return `acceptance-baseline-v3-${hash(JSON.stringify(scope)).slice(0, 24)}`
 }
 
+/**
+ * A run of a source other than the reference repository (the private development
+ * source) is compared with the reference repository's default branch and never
+ * adds to any lineage.
+ */
+export function usesReferenceLineage(context, referenceRepository) {
+  return Boolean(referenceRepository) && referenceRepository !== context.repository
+}
+
 /** Lineages worth reading for this run: its own branch first, then the default branch. */
-export function baselineLineages(context, defaultRef) {
+export function baselineLineages(context, defaultRef, referenceRepository) {
+  if (usesReferenceLineage(context, referenceRepository)) return defaultRef ? [baselineName({ ...context, repository: referenceRepository, ref: defaultRef })] : []
   const names = [baselineName(context)]
   if (defaultRef && defaultRef !== context.ref) names.push(baselineName({ ...context, ref: defaultRef }))
   return names
@@ -130,8 +140,13 @@ export function makeBaseline(context, run, frozen, previous = null) {
  * and platform, from this branch or the default one. The SDK and the catalog may
  * differ; selecting changes from the baseline is stricter than comparing results.
  */
-export function comparableBaseline(baseline, context, defaultRef) {
+export function comparableBaseline(baseline, context, defaultRef, referenceRepository) {
   if (!baseline || baseline.version !== 3 || !baseline.runId || !baseline.results || typeof baseline.results !== 'object' || Array.isArray(baseline.results) || !Object.keys(baseline.results).length) return null
+  if (usesReferenceLineage(context, referenceRepository)) {
+    if (baseline.repository !== referenceRepository || baseline.ref !== defaultRef) return null
+    for (const key of ['profile', 'platform', 'architecture']) if (baseline[key] !== context[key]) return null
+    return baseline
+  }
   for (const key of ['repository', 'profile', 'platform', 'architecture']) if (baseline[key] !== context[key]) return null
   if (baseline.ref !== context.ref && baseline.ref !== defaultRef) return null
   return baseline
@@ -226,7 +241,7 @@ async function main() {
     const workflowPath = process.env.GITHUB_WORKFLOW_REF?.slice(repository.length + 1).split('@')[0]
     if (!workflowPath || !process.env.GH_TOKEN) throw new Error('Baseline lookup requires the controller workflow identity and an Actions read token.')
     try {
-      const found = await findBaselineLineage({ names: baselineLineages(context, process.env.HALO_DEFAULT_SOURCE_REF), repository, workflowPath, token: process.env.GH_TOKEN, apiUrl: process.env.GITHUB_API_URL })
+      const found = await findBaselineLineage({ names: baselineLineages(context, process.env.HALO_DEFAULT_SOURCE_REF, process.env.HALO_COMPARISON_REPOSITORY), repository, workflowPath, token: process.env.GH_TOKEN, apiUrl: process.env.GITHUB_API_URL })
       if (found) { output('run-id', found.runId); output('artifact-name', found.artifactName) }
       output('lookup', found ? 'found' : 'none')
       console.log(found ? `[Acceptance CI] Found retained baseline run ${found.runId}.` : '[Acceptance CI] No retained baseline; selecting full regression.')

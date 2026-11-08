@@ -157,8 +157,10 @@ function validationFailureMessage(error: unknown, timedOut: boolean): string {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
   const name = error instanceof Error ? error.name : ''
   if (timedOut || name === 'AbortError' || /aborted|timeout|timed out/i.test(message)) return 'Connection timeout - server may be slow or unreachable'
-  if (/\b401\b|unauthorized|authentication_failed|invalid api key/i.test(message)) return 'Invalid API key'
+  // Before the 401 check: an engine's failure notice calls a 403 `authentication_failed`
+  // too, and only the provider's own text tells the two apart.
   if (/\b403\b|forbidden|permission_denied/i.test(message)) return 'Access denied - check API key permissions'
+  if (/\b401\b|unauthorized|authentication_failed|invalid api key/i.test(message)) return 'Invalid API key'
   if (/model.{0,80}(?:not found|not available|unavailable|does not exist)|(?:unknown|invalid) model|model_not_found/i.test(message)) return 'Requested model is not available'
   if (/\b404\b|not found/i.test(message)) return 'API endpoint not found - check URL'
   if (/\b429\b|rate.?limit/i.test(message)) return 'Rate limited - try again later'

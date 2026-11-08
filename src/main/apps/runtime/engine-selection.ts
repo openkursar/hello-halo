@@ -3,6 +3,7 @@ import type { EngineSessionBinding, EngineSessionState } from '../../../shared/t
 import {
   ensureEngineAvailable,
   getLegacyEngine,
+  resolveHistoricalEngine,
   getSessionEngineId,
   isSessionBusy,
   resolveDefaultEngine,
@@ -23,7 +24,8 @@ interface AppEngineSelection {
 export async function resolveAppSessionEngine(selection: AppEngineSelection): Promise<EngineId> {
   const resident = selection.conversationId ? getSessionEngineId(selection.conversationId) : undefined
   if (resident && selection.conversationId && isSessionBusy(selection.conversationId)) return resident
-  const engineId = selection.engineId ?? resident ?? selection.binding?.engineId ?? selection.routingEngine
+  const historical = selection.binding?.engineId ?? selection.routingEngine
+  const engineId = selection.engineId ?? resident ?? (historical ? resolveHistoricalEngine(historical) : undefined)
       ?? (selection.legacySessionId ? getLegacyEngine() : await resolveDefaultEngine())
   await ensureEngineAvailable(engineId)
   return engineId
@@ -31,6 +33,7 @@ export async function resolveAppSessionEngine(selection: AppEngineSelection): Pr
 
 export function prepareAppEngineSession(options: {
   engineId: EngineId
+  explicitEngine?: boolean
   state: EngineSessionState
   legacySessionId?: string
   spacePath: string
@@ -51,6 +54,7 @@ export function prepareAppEngineSession(options: {
     legacySessionId,
     sourceEngine: options.state.binding?.engineId ?? options.state.routingEngine ?? (legacySessionId ? getLegacyEngine() : undefined),
     hasHistory: Boolean(legacySessionId || options.state.binding || resolveTranscriptPath(options.spacePath, options.appId, options.runId)),
+    compatibleNativeResume: !options.explicitEngine && resolveHistoricalEngine('anthropic') === 'halo',
   })
   const readHandoff = () => {
     const history = readChatHandoffHistory(options.spacePath, options.appId, options.runId, { excludeInputIds: [...options.excludeInputIds ?? [], ...options.readPendingInputIds?.() ?? []] })
@@ -70,7 +74,7 @@ export function prepareAppEngineSession(options: {
     }
   }
   const recoverNativeSession = () => readHandoff().text
-  if (plan.kind === 'resume' && options.state.binding) return { resumeSessionId: plan.resumeSessionId, strictNativeResume: true, recoverNativeSession }
+  if (plan.kind === 'resume') return { resumeSessionId: plan.resumeSessionId, strictNativeResume: options.state.binding?.engineId === options.engineId, recoverNativeSession }
   if (plan.kind !== 'handoff') return { resumeSessionId: plan.resumeSessionId, ...(plan.resumeSessionId ? { recoverNativeSession } : {}) }
   const handoff = readHandoff()
   // No record of which session holds a chat that was already answered: that record was lost.

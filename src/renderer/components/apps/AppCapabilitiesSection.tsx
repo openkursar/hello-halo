@@ -4,7 +4,7 @@
  * Built-in capabilities for an automation digital human, rendered as toggles.
  *
  * These map to Halo-native, always-present tool servers gated by per-app
- * permissions (resolvePermission): AI Browser, AI Terminal, Operate Halo,
+ * permissions (resolvePermission): AI Browser, AI Terminal,
  * Conversation Collaboration, Email, IM Push.
  * They are distinct from MCP dependencies (external, may be missing) — the
  * visual language here is a plain on/off switch, because the capability is
@@ -15,9 +15,10 @@
  * amber hint links to Settings when the underlying channel is missing —
  * intent and availability are kept as separate concerns.
  *
- * A collapsed "always available" row surfaces the two capabilities that are
- * never toggleable (web search, memory) so the user sees the full picture
- * without adding noise to the default view.
+ * A collapsed "Other" group holds web search (on by default, with its own
+ * switch), and memory and operating Halo (always on), so the user sees the full
+ * picture without adding noise to the default view. It opens by itself while
+ * web search is off.
  */
 
 import { useState, useEffect } from 'react'
@@ -29,7 +30,7 @@ import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppStore } from '../../stores/app.store'
 import { useTranslation } from '../../i18n'
-import { CONVERSATION_COLLAB_PERMISSION, isConversationCollabEnabled, resolvePermission } from '../../../shared/apps/app-types'
+import { CONVERSATION_COLLAB_PERMISSION, WEB_SEARCH_PERMISSION, isConversationCollabEnabled, isWebSearchEnabled, resolvePermission } from '../../../shared/apps/app-types'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import { Switch } from '../ui/Switch'
 
@@ -77,6 +78,20 @@ function ToggleRow({ icon: Icon, label, description, checked, disabled, dimmed, 
   )
 }
 
+/** The user's own open/closed pick for the "Other" group, remembered per digital human. */
+export interface OtherGroupChoice {
+  appId: string
+  open: boolean
+}
+
+/**
+ * Opens by default while web search is off so the switch is in view; the
+ * component is reused across people, so another person's pick does not carry over.
+ */
+export function isOtherGroupOpen(choice: OtherGroupChoice | null, appId: string, webSearchOn: boolean): boolean {
+  return choice?.appId === appId ? choice.open : !webSearchOn
+}
+
 export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapabilitiesSectionProps) {
   const { t } = useTranslation()
   const { grantPermission, revokePermission } = useAppsStore()
@@ -84,7 +99,7 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
 
   const [emailConfigured, setEmailConfigured] = useState(false)
   const [hasImInstances, setHasImInstances] = useState(false)
-  const [alwaysExpanded, setAlwaysExpanded] = useState(false)
+  const [otherChoice, setOtherChoice] = useState<OtherGroupChoice | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -117,10 +132,9 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
   const aiTerminalOn = resolvePermission(app, 'ai-terminal')
   const emailOn = resolvePermission(app, 'email')
   const imPushOn = resolvePermission(app, 'im-push')
-  // Off unless granted — must pass the same default the runtime uses
-  // (apps/runtime/execute.ts), or the switch shows the opposite of reality.
-  const haloApiOn = resolvePermission(app, 'halo-api-ref', false)
   const conversationCollabOn = isConversationCollabEnabled(app)
+  const webSearchOn = isWebSearchEnabled(app)
+  const otherExpanded = isOtherGroupOpen(otherChoice, app.id, webSearchOn)
 
   return (
     <div className="space-y-4">
@@ -140,15 +154,6 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
         description={t('Allow this app to run shell commands and interactive terminals')}
         checked={aiTerminalOn}
         onToggle={next => setPermission('ai-terminal', next)}
-      />
-
-      {/* Operate Halo */}
-      <ToggleRow
-        icon={Settings2}
-        label={t('Operate Halo')}
-        description={t('Allow this app to manage Halo itself: spaces, digital humans, knowledge bases and settings')}
-        checked={haloApiOn}
-        onToggle={next => setPermission('halo-api-ref', next)}
       />
 
       {/* Conversation Collaboration */}
@@ -198,24 +203,32 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
         </button>
       )}
 
-      {/* Always-available capabilities — collapsed by default to reduce noise */}
+      {/* Other built-in capabilities — collapsed by default to reduce noise */}
       <div>
         <button
-          onClick={() => setAlwaysExpanded(v => !v)}
+          onClick={() => setOtherChoice({ appId: app.id, open: !otherExpanded })}
+          aria-expanded={otherExpanded}
           className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
         >
-          <ChevronRight className={`w-3.5 h-3.5 transition-transform ${alwaysExpanded ? 'rotate-90' : ''}`} />
-          {t('Always available: web search, memory')}
+          <ChevronRight className={`w-3.5 h-3.5 transition-transform ${otherExpanded ? 'rotate-90' : ''}`} />
+          {t('Other: web search, memory, operate Halo')}
         </button>
-        {alwaysExpanded && (
+        {otherExpanded && (
           <div className="mt-2 pl-5 space-y-2">
+            <ToggleRow
+              icon={Search}
+              label={t('Web Search')}
+              description={t('Search the internet for real-time information')}
+              checked={webSearchOn}
+              onToggle={next => setPermission(WEB_SEARCH_PERMISSION, next)}
+            />
             <div className="flex items-center gap-2">
-              <Search className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-              <span className="text-sm text-foreground flex-1">{t('Web Search')}</span>
+              <Settings2 className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+              <span className="text-sm text-foreground flex-1">{t('Operate Halo')}</span>
               <span className="text-xs text-muted-foreground/70">{t('Built-in · always on')}</span>
             </div>
             <p className="text-xs text-muted-foreground/70 pl-[22px] -mt-1">
-              {t('Search the internet for real-time information')}
+              {t('Look into its teams and work, and manage Halo when you ask. Not offered to IM guests or requests from other computers.')}
             </p>
             <div className="flex items-center gap-2">
               <Brain className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />

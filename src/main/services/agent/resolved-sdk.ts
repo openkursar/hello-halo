@@ -3,10 +3,11 @@ import { getConfig } from '../../foundation/config.service'
 import { installSdkLogger } from '../../foundation/logging'
 import { ENGINE_IDS, isEngineId, type EngineId } from '../../../shared/types/engine'
 import { getSdkInitialization, initializeSdkOnce, waitForSdkInitialization } from './initialization'
-import { migrateCcRuntimeSelection } from './engine-migration'
+import { resolveHistoricalEngine } from './engine-migration'
 import { getEngineAvailability } from './engine-availability'
 import { defaultCapabilitiesFor, type EngineCapabilities } from './capabilities'
 import { tool as defineTool, createSdkMcpServer as defineMcpServer } from './mcp/sdk-server'
+import { withClaudeCodeSkills } from './skill-availability'
 
 interface SdkModule {
   createSession?: (options: any) => Promise<any>
@@ -29,7 +30,7 @@ interface EngineEntry {
 }
 
 const entries = new Map<EngineId, EngineEntry>(ENGINE_IDS.map(id => [id, { id, borrowers: new Set() }]))
-const FALLBACK_ORDER: EngineId[] = ['halo', 'anthropic', 'codex']
+const FALLBACK_ORDER: EngineId[] = ['halo', 'codex']
 let defaultEngine: EngineId | null = null
 let startupEngine: EngineId | null = null
 let degradedFrom: EngineId | null = null
@@ -40,14 +41,14 @@ let shuttingDown = false
 export class EngineUnavailableError extends Error {
   readonly code = 'ENGINE_UNAVAILABLE'
   constructor(readonly engineId: EngineId, reason: string, options?: ErrorOptions) {
-    super(`Engine "${engineId}" is unavailable: ${reason}`, options)
+    super(`Engine "${defaultCapabilitiesFor(engineId).displayName}" is unavailable: ${reason}`, options)
     this.name = 'EngineUnavailableError'
   }
 }
 
 function preference(): { engineId: EngineId; key: string } {
   const agent = getConfig().agent
-  const engineId = isEngineId(agent?.sdkEngine) ? agent.sdkEngine : 'halo'
+  const engineId = resolveHistoricalEngine(isEngineId(agent?.sdkEngine) ? agent.sdkEngine : 'halo')
   return { engineId, key: JSON.stringify([engineId, agent?.ccRuntime?.selectedPath ?? '']) }
 }
 
@@ -143,7 +144,7 @@ async function resolveCurrentDefault(): Promise<EngineId> {
     const resolution = (async () => {
       for (const engineId of [...new Set([wanted.engineId, ...FALLBACK_ORDER])]) {
         try { await ensureModule(engineId) } catch (error) {
-          if (!(error instanceof EngineUnavailableError)) throw error
+          if (!(error instanceof EngineUnavailableError) || wanted.engineId === 'anthropic') throw error
           continue
         }
         if (preference().key !== wanted.key) return engineId
@@ -167,9 +168,12 @@ async function resolveCurrentDefault(): Promise<EngineId> {
 
 export function initSdk(): Promise<void> {
   return initializeSdkOnce(async () => {
-    await migrateCcRuntimeSelection()
     try { startupEngine = await resolveCurrentDefault() }
-    catch (error) { console.error('[SDK] No agent engine could be initialized:', error) }
+    catch (error) {
+      if (error instanceof EngineUnavailableError && error.engineId === 'anthropic') {
+        console.warn('[SDK] Selected Claude Code is unavailable; startup retained the selection without fallback', { engineId: error.engineId, reason: error.message })
+      } else console.error('[SDK] No agent engine could be initialized:', error)
+    }
   })
 }
 
@@ -260,7 +264,8 @@ export async function createSession(options: Record<string, any>): Promise<any> 
   try {
     const create = borrow.module.createSession ?? borrow.module.unstable_v2_createSession
     if (!create) throw new EngineUnavailableError(engineId, 'The adapter does not expose session creation')
-    const session = await create({ ...sessionOptions, abortController: borrow.controller })
+    const prepared = { ...sessionOptions, abortController: borrow.controller }
+    const session = await create(engineId === 'anthropic' ? withClaudeCodeSkills(prepared) : prepared)
     return ownSession(session, engineId, borrow)
   } catch (error) { borrow.release(); throw error }
 }
@@ -272,8 +277,10 @@ async function* queryIterable(params: any): AsyncGenerator<any> {
   const engineId = params.options?.engineId ?? await resolveDefaultEngine()
   const borrow = await borrowEngine(engineId, params.options?.abortController?.signal)
   const { engineId: _engineId, engineHandoffContent: _engineHandoffContent, engineHandoffRecovered: _engineHandoffRecovered, ...options } = params.options ?? {}
-  try { yield* borrow.module.query({ ...params, options: { ...options, abortController: borrow.controller } }) }
-  finally { borrow.release() }
+  try {
+    const prepared = { ...options, abortController: borrow.controller }
+    yield* borrow.module.query({ ...params, options: engineId === 'anthropic' ? withClaudeCodeSkills(prepared) : prepared })
+  } finally { borrow.release() }
 }
 
 /** Startup prewarms only the default; other runtimes start when a session borrows them. */

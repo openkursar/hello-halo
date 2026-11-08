@@ -36,7 +36,7 @@ vi.mock('../../../../src/main/services/agent/engine-availability', () => ({
   },
 }))
 
-vi.mock('../../../../src/main/services/agent/engine-migration', () => ({ migrateCcRuntimeSelection: async () => {} }))
+vi.mock('../../../../src/main/services/agent/engine-migration', () => ({ resolveHistoricalEngine: (engine: string) => engine }))
 vi.mock('../../../../src/main/services/agent/cc', () => ({
   createCcSdkModule: () => ({ tool: () => undefined, createSdkMcpServer: () => undefined, query: () => undefined }),
 }))
@@ -63,6 +63,14 @@ describe('startup engine resolution', () => {
     vi.resetModules()
   })
 
+  it('uses the UI engine name in failures while retaining the machine-readable identity', async () => {
+    const sdk = await initFresh()
+    const error = new sdk.EngineUnavailableError('anthropic', 'Select an installation in the Halo desktop app.')
+    expect(error.message).toBe('Engine "Claude Code" is unavailable: Select an installation in the Halo desktop app.')
+    expect(error.engineId).toBe('anthropic')
+    expect(error.code).toBe('ENGINE_UNAVAILABLE')
+  })
+
   it('loads the configured engine when this build carries it', async () => {
     const sdk = await initFresh()
 
@@ -86,15 +94,15 @@ describe('startup engine resolution', () => {
     expect(probedEngines?.[0]).toBe('dsh')
   })
 
-  it('degrades to an available engine when the configured one did not ship', async () => {
+  it('does not discover CC as a fallback when the configured engine did not ship', async () => {
     configuredEngine = 'halo'
     availability = engines({ anthropic: true })
 
     const sdk = await initFresh()
 
-    expect(sdk.isInitialized()).toBe(true)
-    expect(sdk.getActiveEngine()).toBe('anthropic')
-    expect(sdk.getDegradedFromEngine()).toBe('halo')
+    expect(sdk.isInitialized()).toBe(false)
+    expect(sdk.getActiveEngine()).toBeNull()
+    expect(probedEngines).not.toContain('anthropic')
   })
 
   it('resolves without throwing when no engine is available', async () => {
@@ -125,7 +133,7 @@ describe('startup engine resolution', () => {
 
     const sdk = await initFresh()
 
-    expect(sdk.getActiveEngine()).toBe('anthropic')
+    expect(sdk.getActiveEngine()).toBeNull()
     expect(configuredEngine).toBe('halo')
   })
   it('loads Halo without probing CC for a fresh configuration', async () => {
@@ -136,13 +144,13 @@ describe('startup engine resolution', () => {
     expect(probedEngines).toEqual(['halo'])
   })
 
-  it('keeps a missing CC preference while running Halo', async () => {
+  it('keeps an explicit missing CC preference without starting another engine', async () => {
     configuredEngine = 'anthropic'
     availability = engines({ halo: true })
     const sdk = await initFresh()
-    expect(sdk.getActiveEngine()).toBe('halo')
-    expect(sdk.getDegradedFromEngine()).toBe('anthropic')
-    expect(probedEngines).toEqual(['anthropic', 'halo'])
+    expect(sdk.getActiveEngine()).toBeNull()
+    expect(configuredEngine).toBe('anthropic')
+    expect(probedEngines).toEqual(['anthropic'])
   })
 
 })

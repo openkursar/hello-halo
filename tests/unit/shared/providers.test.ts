@@ -14,6 +14,15 @@ describe('protocol entries', () => {
   })
 })
 
+describe('DeepSeek built-in provider', () => {
+  it('defaults to the current official Flash id without advertising retired models', () => {
+    expect(getDefaultModel('deepseek')).toBe('deepseek-flash')
+    expect(getBuiltinProvider('deepseek')?.models?.map(model => model.id)).toEqual([
+      'deepseek-flash', 'deepseek-v4-pro'
+    ])
+  })
+})
+
 describe('Atlas Cloud built-in provider', () => {
   it('registers an OpenAI-compatible provider with dynamic model discovery', () => {
     const provider = getBuiltinProvider('atlascloud')

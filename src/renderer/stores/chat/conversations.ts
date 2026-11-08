@@ -64,6 +64,12 @@ function refFor(state: ChatState, conversationId: string): { spaceId: string; co
   return spaceId ? { spaceId, conversationId } : null
 }
 
+/** Title of a new conversation until its first message names it, in the UI language. */
+function defaultConversationTitle(now: Date): string {
+  const time = `${now.getMonth() + 1}-${now.getDate()} ${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`
+  return i18n.t('Chat {{time}}', { time })
+}
+
 function warnNoSpace(action: string, conversationId: string): void {
   console.warn(`[ChatStore] ${action}: space of ${conversationId} unknown, skipped`)
 }
@@ -141,7 +147,7 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
       // A new conversation starts at the last level picked anywhere, like its
       // model; set at creation so the warm-up below spawns the session at it.
       const lastLevel = useThinkingLevelStore.getState().level ?? undefined
-      const response = await api.createConversation(spaceId, undefined, lastLevel)
+      const response = await api.createConversation(spaceId, defaultConversationTitle(new Date()), lastLevel)
 
       if (response.success && response.data) {
         const newConversation = response.data as Conversation
@@ -155,9 +161,6 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'openConver
           updatedAt: newConversation.updatedAt,
           messageCount: newConversation.messages?.length || 0,
           preview: undefined,
-          // Carry the engine stamp so EngineBadge renders immediately on the
-          // newly created item — without this the badge only appears after
-          // a meta reload (e.g. switching away and back).
           engineId: newConversation.engineId
         }
 

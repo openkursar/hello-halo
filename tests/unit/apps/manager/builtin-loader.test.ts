@@ -66,7 +66,7 @@ function installedBuiltin(version: string, name = 'daily-report', slug?: string)
 function managerWith(app: InstalledApp, original: InstalledApp['spec'] | null = null) {
   return {
     listApps: vi.fn(() => [app]),
-    upgradeSpec: vi.fn(() => ({ fromVersion: app.spec.version, toVersion: '1.1.0', kept: ['system_prompt'], editsKnown: true })),
+    upgradeSpec: vi.fn((_appId: string, _spec: InstalledApp['spec']) => ({ fromVersion: app.spec.version, toVersion: '1.1.0', kept: ['system_prompt'], editsKnown: true })),
     updateSpec: vi.fn(),
     getAuthorSpec: vi.fn(() => original),
     recordAuthorSpec: vi.fn(() => true),
@@ -75,6 +75,27 @@ function managerWith(app: InstalledApp, original: InstalledApp['spec'] | null = 
     deleteApp: vi.fn(),
   }
 }
+
+describe('bundled skill source identity', () => {
+  it.each([false, true])('refreshes only its namespaced source and honors its tombstone (deleted: %s)', async deleted => {
+    writeBundle('1.0.0')
+    const dir = join(globalThis.__HALO_TEST_DIR__, 'app/resources/builtin-apps/daily-report/skills/weekly')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'SKILL.md'), '---\nname: weekly\ndescription: Weekly\n---\nWorkflow')
+    const parent = installedBuiltin('1.0.0')
+    const base = { ...parent, specId: 'skill:hash:weekly', userOverrides: { skill: { version: 1, filePath: '/fixture/SKILL.md', deleted } },
+      spec: { type: 'skill', spec_version: '1', name: 'weekly', description: 'Weekly workflow', version: '0.5', store: { slug: 'weekly', install_source: 'builtin', tags: [] } } } as InstalledApp
+    const owned = { ...base, id: 'owned' }
+    const other = { ...base, id: 'other', status: 'paused', spec: { ...base.spec, store: { ...base.spec.store, slug: 'other/weekly' } } } as InstalledApp
+    const manager = managerWith(parent)
+    const service = { ...manager, listSkillRecords: vi.fn(() => [other, owned]) } as unknown as AppManagerService
+    await loadBuiltinApps(service)
+    expect(manager.install).not.toHaveBeenCalled()
+    if (deleted) expect(manager.upgradeSpec).not.toHaveBeenCalled()
+    else expect(manager.upgradeSpec).toHaveBeenCalledWith('owned', expect.objectContaining({ name: 'weekly' }))
+    expect(manager.upgradeSpec.mock.calls.some(call => call[0] === 'other')).toBe(false)
+  })
+})
 
 describe('loadBuiltinApps upgrades', () => {
   // Rescheduling and the activity note are the runtime's reaction to the

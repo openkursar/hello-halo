@@ -1,0 +1,29 @@
+version: 1
+id: marketplace.skill-dependencies
+module: marketplace
+title: Install skills with truthful dependency origins
+story: I can install a digital human and see which skill dependencies are ready without overwriting my skills or another person's resources.
+basis: documented
+references:
+  - tests/acceptance/skills-requirements.md
+promises:
+  dependencies: Dependencies use declared sources, reuse matching source/content only, preserve explicit disable/delete choices and expose unmet dependencies rather than false readiness.
+scenarios:
+  - id: marketplace.skill-dependencies.install
+    title: Reuse matching dependencies while preserving conflicts and prior choices
+    verifies: [dependencies]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    variants:
+      dependency: [matching, different-source, different-content, disabled, deleted, fetch-failure]
+    preconditions:
+      - Two fixture digital humans declare dependencies from controlled local registries; own skills and an unrelated installation are controls.
+    steps:
+      - Install the first and then the second person, retry a controlled failure and inspect skill origins, readiness and package bytes after restart.
+    expected:
+      - Only matching source/content resources are reused without duplicate installs; every actual person origin is shown separately from built-in origin.
+      - Own skills and different-source/content dependencies are never silently overwritten. Unresolved conflicts/fetch failures are explicit unmet dependencies, not fully-ready people.
+      - Installing/updating another person never reverses a shared disable/delete without an explicit user decision; controls remain unchanged.

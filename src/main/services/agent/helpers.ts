@@ -22,7 +22,6 @@ import {
 } from '../../../shared/types/ai-sources'
 import { modelCapabilitiesService } from '../model-capabilities.service'
 import { sanitizeCatalogModelCapability } from '../../../shared/model-catalog'
-import { validateModelCapabilityOverride } from '../../../shared/model-capability-overrides'
 import { isMcpCommandBlocked } from '../security-policy'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
 import { assertDelegatedAuthReady } from './cli-auth'
@@ -207,20 +206,10 @@ function resolveCapabilitiesFromSource(
     catalogCapability,
     catalogModel?.supportsVision
   )
-  // Same validator resolve() applies, so a malformed override cannot be
-  // honoured here while being discarded there.
-  const overrideValidation = validateModelCapabilityOverride(overrides?.[modelId])
-  const userOverride = overrideValidation.valid ? overrideValidation.value : undefined
   return {
     maxOutputTokens: resolved.maxOutputTokens,
     contextWindow: resolved.contextWindow,
     reasoningEffort: resolved.reasoningEffort,
-    // Whether the number above came from somewhere that actually knows this
-    // model. When nothing does, the caller leaves CLAUDE_CODE_MAX_OUTPUT_TOKENS
-    // unset so CC applies its own default rather than Halo's guess.
-    maxOutputTokensConfigured: userOverride?.maxOutputTokens !== undefined
-      || modelCapabilitiesService.getPreset(modelId) !== null
-      || catalogCapability?.maxOutputTokens !== undefined,
     adaptiveThinking: resolved.adaptiveThinking === true,
   }
 }

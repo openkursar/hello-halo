@@ -10,7 +10,7 @@
  *
  * B. Reachable Contacts (when im-push enabled)
  *    Shows IM sessions for this app with editable display names and a
- *    per-contact "Auto-sync run result" toggle.
+ *    per-contact "Send scheduled task results here" toggle.
  *    - The toggle (proactive flag) controls whether the system pushes the
  *      assistant's final text to that contact at run completion.
  *    - These contacts also appear in the AI's notify_bot tool directory
@@ -39,6 +39,7 @@ import type { ImSessionRecord, ImChannelInstanceStatus } from '../../../shared/t
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 import { getImChannelDisplay, getImBotLabel } from './im-channel-labels'
 import { ImPushTargetPicker } from './ImPushTargetPicker'
+import { RunResultRecipientsBar } from './RunResultRecipientsBar'
 
 // ============================================
 // Types
@@ -467,7 +468,7 @@ function ContactsSection({ appId }: { appId: string }) {
 
   const hint = (
     <p className="text-xs text-muted-foreground">
-      {t('Toggle auto-sync to push the AI final reply to a contact after each run. The AI may also message any contact proactively when your prompt instructs it.')}
+      {t('Tick a contact to send it the result of every scheduled run. To hear only when something needs attention, leave it unticked and say so in the instructions, for example "message me only if the check finds a problem"; with IM Push on, the digital human sends that message itself.')}
     </p>
   )
 
@@ -519,6 +520,13 @@ function ContactsSection({ appId }: { appId: string }) {
   const filtered = sessions.filter(matches)
   const filteredLinked = linked.filter(matches)
   const botsById = new Map(instanceStatuses.map(status => [status.id, status]))
+  // A chat whose bot was removed receives nothing, so a bulk choice skips it.
+  const shownRecipients = [
+    ...filtered.map(session => ({ session, linked: false })),
+    ...filteredLinked
+      .filter(session => !botsKnown || botsById.has(session.instanceId))
+      .map(session => ({ session, linked: true })),
+  ]
 
   return (
     <div className="space-y-2">
@@ -540,6 +548,12 @@ function ContactsSection({ appId }: { appId: string }) {
           />
         </div>
       )}
+
+      <RunResultRecipientsBar
+        shown={shownRecipients}
+        isOn={r => (r.linked ? autoSyncOf(r.session) : r.session.proactive === true)}
+        onSet={(r, next) => (r.linked ? handleToggleLinkedAutoSync(r.session, next) : handleToggleProactive(r.session, next))}
+      />
 
       {/* Height-bounded scroll region so a large contact list never pushes the
           rest of the settings page far down. */}
@@ -635,7 +649,7 @@ function ContactsSection({ appId }: { appId: string }) {
               </div>
             </div>
 
-            {/* Auto-sync toggle: pushes the AI final reply to this contact at run end */}
+            {/* Run-result toggle: pushes a scheduled run's final reply to this contact */}
             <label className="flex items-start gap-2 pl-6 cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -645,10 +659,10 @@ function ContactsSection({ appId }: { appId: string }) {
               />
               <span className="flex-1 min-w-0">
                 <span className="text-xs text-foreground">
-                  {t('Auto-sync run result')}
+                  {t('Send scheduled task results here')}
                 </span>
                 <span className="block text-xs text-muted-foreground/70 mt-0.5">
-                  {t('Send the AI final reply to this contact after each successful run')}
+                  {t('After each successful scheduled or background run, its final result is sent to this chat. Replies to messages are not affected.')}
                 </span>
               </span>
             </label>
@@ -712,9 +726,9 @@ function ContactsSection({ appId }: { appId: string }) {
                     className="mt-0.5 w-3.5 h-3.5 rounded border-border accent-primary cursor-pointer"
                   />
                   <span className="flex-1 min-w-0">
-                    <span className="text-xs text-foreground">{t('Auto-sync run result')}</span>
+                    <span className="text-xs text-foreground">{t('Send scheduled task results here')}</span>
                     <span className="block text-xs text-muted-foreground/70 mt-0.5">
-                      {t('Send the AI final reply to this contact after each successful run')}
+                      {t('After each successful scheduled or background run, its final result is sent to this chat. Replies to messages are not affected.')}
                     </span>
                   </span>
                 </label>

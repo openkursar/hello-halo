@@ -70,6 +70,22 @@ describe('read-only build defaults', () => {
   })
 })
 
+describe('explicit external engine choice', () => {
+  it.each([
+    [{ sdkEngine: 'anthropic' }, true],
+    [{ sdkEngine: 'anthropic', maxTurns: 200 }, false],
+    [{ sdkEngine: 'anthropic', ccRuntime: { selectedPath: '/untrusted' } }, false],
+  ])('distinguishes a targeted choice from a settings snapshot: %j', (agent, explicit) => {
+    vi.mocked(getConfig).mockReturnValue({ agent: { sdkEngine: 'anthropic', ccRuntime: { selectedPath: '/old', discoveryCompleted: true } } } as any)
+    vi.mocked(saveConfig).mockClear()
+    vi.mocked(isConfigUnreadable).mockReturnValue(false)
+    setConfig({ agent })
+    const saved = vi.mocked(saveConfig).mock.calls[0][0]
+    expect(saved.agent?.ccRuntime?.selectionOrigin).toBe(explicit ? 'user' : undefined)
+    if (explicit) expect(saved.agent?.ccRuntime?.selectedPath).toBe('/old')
+  })
+})
+
 describe('managed account configuration writes', () => {
   const live = {
     id: 'a', name: 'Account A', authType: 'oauth', provider: 'chatgpt',

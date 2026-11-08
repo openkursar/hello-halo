@@ -1,0 +1,106 @@
+version: 1
+id: capabilities.skill-upgrade
+module: capabilities
+title: Upgrade without losing skills or prior choices
+story: I can upgrade Halo without losing edited skill files or silently reenabling removed or disabled skills.
+basis: documented
+references:
+  - tests/acceptance/skills-requirements.md
+promises:
+  origins: Migration follows real provenance rather than record existence, preserves disk edits and ambiguous external ownership, and never restores obsolete engine-directory synchronization.
+  retained: Disabled files remain disabled and legacy soft-deleted sole copies remain recoverable through a one-time explicit migration choice, not a permanent recycle feature.
+  saved-package: Before migration establishes file authority, a saved legacy package remains recoverable even when its old generated directory is absent. A mistaken missing-files migration marker is repaired while that package remains saved; paused choices stay paused. After successful migration, missing or explicitly deleted files are not recreated from stale saved content.
+scenarios:
+  - id: capabilities.skill-upgrade.legacy-db-only
+    title: Recover saved legacy packages without reviving a later deletion
+    verifies: [origins, retained, saved-package]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - Before the first application launch, prepare an isolated legacy database with saved skill packages and no generated skill directories; do not install them through the current application to establish this precondition.
+      - Include an active unmigrated record, an active record carrying the earlier version 1 missing-files migration marker, a paused record and an unrelated control. Keep the complete saved instructions and supporting text/binary files available for comparison.
+    steps:
+      - Start the real application and open the affected workspace's skill library; read the recovered instructions and inspect actual files and effective availability through the production application.
+      - Restart and verify recovery is idempotent and the paused record remains unavailable. Explicitly delete one successfully migrated active copy through its single Trash confirmation, then restart and inspect again.
+    expected:
+      - Both active records recover their complete saved packages at the appropriate user-file or maintained location; a missing old generated directory alone never makes a recoverable package permanently missing.
+      - The incorrect missing-files marker no longer blocks recovery. Paused content is recovered without enabling it, and the unrelated control remains unchanged.
+      - Successful migration establishes file authority. The later user deletion remains deleted after restart and is not repaired back into availability; recovery creates no duplicate copies or writes into obsolete engine directories.
+    notes: This is a narrow startup smoke obligation without a variants matrix. Its real-application binding is still missing; migration unit tests, a post-start install, catalog validation or test discovery do not establish this app-e2e evidence.
+  - id: capabilities.skill-upgrade.legacy-db-read-edit
+    title: Read and edit recovered legacy packages after an isolated headless upgrade
+    verifies: [origins, retained, saved-package]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - Before application launch, seed an isolated database through the real SQLite migrations with active unmigrated, active incorrectly marked missing, paused, uninstalled and explicitly deleted records. Each saved package contains instructions, supporting text and binary files; an already migrated control has its own unchanged files.
+      - Use fresh HOME, USERPROFILE, application data and browser profiles, a temporary random remote access password and random ports. Require an already installed Playwright Chromium or standard macOS Google Chrome; missing browser support is missing evidence, never a passing skip.
+    steps:
+      - Start the production main process in its existing no-window server mode. Open the unchanged built renderer in headless Chrome through the real authenticated HTTP server, then navigate from Home through Digital Humans, Capability library and Skills to the Global scope.
+      - Read both recovered active packages and inspect their actual supporting files. Open the original instructions in the library, cancel one edit, save another through its confirmation and return to the library. Open Delete and cancel without invoking system Trash.
+      - Restart the same isolated profile and read the saved instructions again. After closing the application, remove only the second migrated package inside the disposable profile to simulate an external user deletion; restart and inspect availability and files again.
+    expected:
+      - Both active packages recover once without missing-file warnings or duplicate copies; cards show neither engine-support diagnostics nor file-copy paths. Details show the original instructions, and a real revision-checked save preserves supporting bytes and survives restart.
+      - The paused package remains disabled and has no effective copy. The uninstalled saved package remains recoverable without reenabling it, the explicitly deleted guard stays absent and the unrelated control is unchanged.
+      - The externally removed migrated package remains unavailable after restart and is not recreated from stale database content. No package is synchronized into an obsolete engine directory.
+    notes: This binding is limited to startup, remote library read/edit/cancel and persistence with no model request. It does not verify desktop IPC, skill invocation, system Trash success or the legacy-db-only Trash journey, which remains planned. The fixture confines production 0.0.0.0 listeners to loopback at the test process network layer and redirects the development-only renderer proxy from port 5173 to an owned random-port static server; production handlers and authentication are unchanged. Browser readiness is checked by the fixture because the shared chromium-browser prerequisite does not recognize installed macOS Chrome.
+  - id: capabilities.skill-upgrade.missing-cleanup
+    title: Disable and remove a missing skill entry without touching other packages
+    verifies: [retained, saved-package]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - Recover a legacy package, close the isolated application and remove its directory only inside the disposable profile; restart.
+      - Disable the missing entry through its card, open details, cancel one deletion and then confirm removal of the entry. Restart again.
+    expected:
+      - Missing content has a short explanation, and Disable and Delete remain usable. No revision check demands nonexistent files; restored or unreadable files are not treated as missing.
+      - The removed entry stays absent, no package is resurrected and the unrelated control's files stay unchanged.
+    notes: Production server-mode main, authenticated HTTP and headless renderer. Since the selected root is already absent, cleanup does not call system Trash; this is not evidence of OS Trash recovery or a permission-denied filesystem journey.
+  - id: capabilities.skill-upgrade.origins
+    title: Migrate each origin safely and idempotently
+    verifies: [origins, retained]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    variants:
+      origin: [manual-record, imported-record, handwritten-owned-root, project-agents, project-claude, shared-ambiguous-root, store, builtin, dependency]
+      condition: [normal, customized, collision, readonly, cross-volume, symbolic-link, interrupted]
+    steps:
+      - Start an isolated legacy profile containing the origin and unrelated controls; inspect migration, resolve only explicit choices, retry, edit the result and restart again.
+    expected:
+      - Every origin, including store, built-in and bundled skills, ends as a file in the shared skill folder of its scope, independent of Claude Code configuration; a skill of that name already standing there is left alone and keeps working from where it is.
+      - Existing project files are not moved or reformatted. Ambiguous shared/custom paths remain untouched with an actionable location; confirmed owned handwritten files migrate safely.
+      - On-disk customization beats stale database body and is preserved with conflict explanation where needed. Sources remain recoverable until destination success is verified.
+      - Retry creates no duplicate or stale overwrite and old startup sync never writes new content back into the obsolete engine directory; controls stay unchanged.
+    notes: Cross-volume/permission/link fixtures require safe isolated support. Absence of such an environment remains missing evidence, not success for the origin matrix.
+  - id: capabilities.skill-upgrade.retained
+    title: Preserve disabled and legacy uninstalled sole-copy content
+    verifies: [retained, origins]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    variants:
+      legacy: [disabled-file-missing, soft-deleted, builtin-disabled, builtin-deleted, clean-profile]
+      choice: [save-copy, restore, delete, defer]
+    steps:
+      - Upgrade the isolated legacy profile, inspect retained-content choices and actual new SDK catalog; exercise the applicable choice, repeat migration and restart.
+    expected:
+      - Disabled records regain appropriate files but remain excluded from new SDK work; sole-copy soft-deleted bodies are neither destroyed nor silently enabled.
+      - One-time recovery permits saving user files or explicit restore/delete, absent on clean profiles. Deferral retains content; no permanent recently-deleted page or cleanup timer is added.
+      - Built-in disable/delete decisions survive restart and upgrade; reinstall requires explicit user action.

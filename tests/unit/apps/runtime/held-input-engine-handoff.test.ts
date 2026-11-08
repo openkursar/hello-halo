@@ -12,6 +12,7 @@ vi.mock('../../../../src/main/services/agent', async () => ({
   ...(await vi.importActual('../../../../src/main/services/agent/engine-handoff')),
   formatReferencesBlock: () => '', formatCanvasContext: () => '', emitAgentEvent: vi.fn(),
   onAgentEvent: () => ({ dispose: () => {} }), listResidentSessions: () => [], hasPendingSessionInput: () => false,
+  resolveHistoricalEngine: (engine: string) => engine,
   getLegacyEngine: () => 'anthropic', getSessionEngineId: () => state.active ? 'anthropic' : undefined,
   isSessionBusy: () => state.active, ensureEngineAvailable: async () => {}, resolveDefaultEngine: async () => 'halo',
 }))

@@ -14,9 +14,18 @@ paths:
   - src/main/services/agent/toolsets/**
   - src/main/services/agent/mcp-manager.ts
   - src/main/apps/manager/skill-sync.ts
+  - src/main/apps/skill-discovery.ts
+  - src/main/services/skills/**
+  - src/shared/types/skills.ts
+  - src/shared/rpc/contracts/skills.contract.ts
+  - src/main/ipc/skills.ts
+  - src/main/http/routes/skills*
+  - src/renderer/components/apps/AppSkillsSection.tsx
+  - src/renderer/stores/skills.store.ts
   - src/main/platform/memory/**
+  - tests/acceptance/skills-requirements.md
 dependsOn:
   - people
 scope:
-  en: Workspace, global and person scopes; manual skills and MCP stdio/HTTP/SSE; saved settings, enablement, reconnect and dependency sharing.
-  zh: 空间、全局及个人范围；手动技能及 MCP stdio/HTTP/SSE；保存、启用、重连和共享依赖。
+  en: Skills have global or single-workspace scope inherited by people, not per-person allocation. Every skill, whatever its origin, is a file in the shared skill folders, with complete copying, safe moves, file-preserving disable, explicit trash and recoverable migration; every engine uses the same skills. MCP retains its existing person/workspace/global settings and stdio/HTTP/SSE recovery behavior.
+  zh: 技能只有全局或单空间范围，数字人继承而非逐人分配；任何来源的技能都是共享技能目录中的文件，支持完整复制、安全移动、保留文件的停用、明确回收及可恢复迁移，所有引擎使用同一批技能；MCP 保留原有个人/空间/全局配置及 stdio/HTTP/SSE 恢复行为。

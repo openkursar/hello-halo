@@ -30,7 +30,7 @@ const ANTHROPIC_ENUM = ['low', 'medium', 'high', 'max']
 const CODEX_ENUM = ['minimal', 'low', 'medium', 'high', 'xhigh']
 
 const caps = (maxOutputTokens: number, reasoningEffort?: string): ResolvedModelCapabilities =>
-  ({ maxOutputTokens, contextWindow: 200_000, reasoningEffort, maxOutputTokensConfigured: true })
+  ({ maxOutputTokens, contextWindow: 200_000, reasoningEffort })
 
 describe('resolveRequestEffort', () => {
   it('reports off while the Deep Thinking toggle is off', () => {

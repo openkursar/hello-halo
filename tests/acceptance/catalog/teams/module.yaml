@@ -12,6 +12,8 @@ paths:
   - src/main/apps/conversation-mcp/**
   - src/renderer/components/team/**
   - src/renderer/components/chat/team-collab/**
+  - src/main/apps/runtime/prompt/team-guidance.ts
+  - src/main/http/routes/team.routes*.ts
 dependsOn:
   - people
   - chat

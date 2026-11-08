@@ -329,6 +329,8 @@ export interface AppRuntimeService {
    */
   getAppState(appId: string): AutomationAppState
   getAllAppStates(): Record<string, AutomationAppState>
+  /** Publish an app's state again after an input kept outside this service changed (team turns). */
+  refreshAppState(appId: string): void
   getDirectoryRuntimeSnapshot(): import('../../../shared/apps/people-directory').DirectoryRuntimeSnapshot
 
   // ── Escalation ──────────────────────────────

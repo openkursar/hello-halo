@@ -3,7 +3,9 @@
  * listing and reading, reference resolution, delivery routing, capability
  * gating, and turn-end wiring. The sources here are in-memory fakes; the
  * module's own state (turn gate, waits, rate windows, registry) is reloaded for
- * every test.
+ * every test. The breaker's caps are injected through its own factory so a
+ * burst stays short; the production defaults are pinned in
+ * default-limits.test.ts.
  *
  * `dh` stands for any source owned by a higher tier (ids `app-chat:*`); `notes`
  * is a second one with a different id space. The built-in space source that
@@ -11,6 +13,7 @@
  * is registered first to win its own ids — the registry is first-owner-wins.
  */
 
+import { collabReportOwnership } from '../../../../src/main/apps/team/collab-binding'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { ConversationSource, DispatchedMessage } from '../../../../src/main/services/conversation-interop/source'
 import type { TranscriptLine } from '../../../../src/main/services/conversation-interop/types'
@@ -35,6 +38,24 @@ vi.mock('../../../../src/main/services/conversation-interop/busy', () => ({
   isNativeConversationBusy: () => false,
   hasLiveNativeSession: () => false,
 }))
+
+const TEST_CIRCUIT_LIMITS = vi.hoisted(() => ({ pairLimit: 4, sourceLimit: 8 }))
+
+/**
+ * A fresh breaker with test-sized caps, registered after `vi.resetModules()` so
+ * its per-window state does not leak from the previous case.
+ */
+function mockCircuitLimits(): void {
+  vi.doMock('../../../../src/main/services/conversation-interop/circuit-breaker', async () => {
+    const actual = await vi.importActual<typeof import('../../../../src/main/services/conversation-interop/circuit-breaker')>(
+      '../../../../src/main/services/conversation-interop/circuit-breaker',
+    )
+    return {
+      ...actual,
+      circuitBreaker: actual.createCircuitBreaker({ ...actual.DEFAULT_CIRCUIT_LIMITS, ...TEST_CIRCUIT_LIMITS }),
+    }
+  })
+}
 
 interface FakeConv {
   id: string
@@ -110,6 +131,7 @@ function createFakeSource(options: FakeSourceOptions) {
     seed(id: string, title: string, updatedAt: string, lines: TranscriptLine[] = [], unavailable?: string) {
       conversations.set(id, { id, title, updatedAt, lines, ...(unavailable ? { unavailable } : {}) })
     },
+    remove(id: string) { conversations.delete(id) },
     setUnavailable(id: string, reason: string | undefined) {
       const c = conversations.get(id)
       if (!c) return
@@ -142,6 +164,7 @@ const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await Pr
 beforeEach(async () => {
   vi.useFakeTimers()
   vi.resetModules()
+  mockCircuitLimits()
   sourceModule = await import('../../../../src/main/services/conversation-interop/source')
   listRead = await import('../../../../src/main/services/conversation-interop/list-read')
   resolution = await import('../../../../src/main/services/conversation-interop/target-resolution')
@@ -440,6 +463,85 @@ describe('delivery across sources', () => {
     ).toMatchObject({ ok: false, reason: 'read_only' })
   })
 
+  describe('a report on work the target delegated itself', () => {
+    // The real ownership check, against a store whose binding the test moves.
+    let binding: string | null = 'app-chat:app-1'
+    let owned = true
+    beforeEach(() => { owned = true; binding = 'app-chat:app-1' })
+    const store = { getTeamById: (id: string) => (id === 't1' ? { coordinatorConversationId: owned ? binding : null } : null) }
+    const report = (ownWork: boolean) => delivery.deliverExternalMessage({
+      spaceId: SPACE,
+      toConversationId: 'app-chat:app-1',
+      turnInput: 'member report',
+      persist: { content: 'member report', source: 'team-message', metadata: { teamId: 't1' } },
+      ...(ownWork ? { ownWork: collabReportOwnership(store as never, 't1', 'app-chat:app-1') } : {}),
+    })
+
+    it('reaches a chat whose collaboration switch withholds it, while other conversations stay refused', async () => {
+      dh.setUnavailable('app-chat:app-1', 'switched off')
+      expect(await send('notes:1', 'app-chat:app-1')).toMatchObject({ ok: false, reason: 'unavailable', detail: 'switched off' })
+      expect(await report(false)).toMatchObject({ ok: false, reason: 'unavailable' })
+      expect(dh.dispatched).toHaveLength(0)
+
+      expect(await report(true)).toMatchObject({ ok: true, status: 'delivered' })
+      expect(dh.dispatched).toHaveLength(1)
+      expect(dh.dispatched[0].message.record.source).toBe('team-message')
+    })
+
+    it('is admitted again when it leaves the queue', async () => {
+      dh.busy.add('app-chat:app-1')
+      expect(await report(true)).toEqual({ ok: true, status: 'queued' })
+      dh.setUnavailable('app-chat:app-1', 'switched off')
+
+      dh.endTurn('app-chat:app-1')
+      await flush()
+
+      const delivered = dh.dispatched.map(item => item.message.record.content)
+      expect(delivered).toEqual(['member report'])
+    })
+
+    it('a space conversation coordinator is not given the exemption', () => {
+      expect(collabReportOwnership(store as never, 't1', 'notes:1')).toBeUndefined()
+    })
+
+    it('is refused once the collaboration moved to another chat', async () => {
+      binding = 'app-chat:app-1:local:direct:other'
+      expect(await report(true)).toMatchObject({ ok: false, reason: 'unavailable' })
+    })
+
+    it('still refuses a target that takes no messages', async () => {
+      expect(await delivery.deliverExternalMessage({
+        spaceId: SPACE,
+        toConversationId: 'archive:1',
+        turnInput: 'x',
+        persist: { content: 'x', source: 'team-message', metadata: {} },
+        ownWork: () => true,
+      })).toMatchObject({ ok: false, reason: 'read_only' })
+    })
+
+    it('is refused once the work is no longer bound to the target, also while it waited in the queue', async () => {
+      owned = false
+      expect(await report(true)).toMatchObject({ ok: false, reason: 'unavailable' })
+
+      owned = true
+      dh.busy.add('app-chat:app-1')
+      expect(await report(true)).toEqual({ ok: true, status: 'queued' })
+      owned = false
+      dh.endTurn('app-chat:app-1')
+      await flush()
+      expect(dh.dispatched).toHaveLength(0)
+    })
+
+    it('is refused when the target conversation is gone by the time the queue hands it over', async () => {
+      dh.busy.add('app-chat:app-1')
+      expect(await report(true)).toEqual({ ok: true, status: 'queued' })
+      dh.remove('app-chat:app-1')
+      dh.endTurn('app-chat:app-1')
+      await flush()
+      expect(dh.dispatched).toHaveLength(0)
+    })
+  })
+
   it('reports not_found for an id no registered source owns', async () => {
     expect(await send('notes:1', 'elsewhere:1')).toEqual({ ok: false, reason: 'not_found' })
   })
@@ -460,7 +562,10 @@ describe('delivery across sources', () => {
 
   it('writes the rate-limit notice through the SENDER\'s source, naming the target from its own', async () => {
     dh.busy.add('app-chat:app-1') // keep queueing so only the breaker limits
-    for (let i = 0; i < 22; i++) await send('notes:1', 'app-chat:app-1', `m-${i}`)
+    for (let i = 0; i < TEST_CIRCUIT_LIMITS.pairLimit; i++) await send('notes:1', 'app-chat:app-1', `m-${i}`)
+    expect(await send('notes:1', 'app-chat:app-1', 'one too many')).toEqual({ ok: false, reason: 'circuit_open' })
+    // A repeat during the cooldown stays silent.
+    expect(await send('notes:1', 'app-chat:app-1', 'again')).toEqual({ ok: false, reason: 'circuit_open' })
 
     expect(notes.notices).toHaveLength(1)
     expect(notes.notices[0].id).toBe('notes:1')
@@ -470,7 +575,10 @@ describe('delivery across sources', () => {
 
   it('a sender in another source gets its notice from that source', async () => {
     notes.busy.add('notes:1')
-    for (let i = 0; i < 22; i++) await send('app-chat:app-1', 'notes:1', `m-${i}`)
+    for (let i = 0; i < TEST_CIRCUIT_LIMITS.pairLimit; i++) await send('app-chat:app-1', 'notes:1', `m-${i}`)
+    expect(await send('app-chat:app-1', 'notes:1', 'one too many')).toEqual({ ok: false, reason: 'circuit_open' })
+    // A repeat during the cooldown stays silent.
+    expect(await send('app-chat:app-1', 'notes:1', 'again')).toEqual({ ok: false, reason: 'circuit_open' })
 
     expect(dh.notices).toHaveLength(1)
     expect(dh.notices[0].id).toBe('app-chat:app-1')
@@ -482,8 +590,10 @@ describe('delivery across sources', () => {
     try {
       notes.source.writeNotice = () => { throw new Error('disk full') }
       dh.busy.add('app-chat:app-1')
-      let last
-      for (let i = 0; i < 22; i++) last = await send('notes:1', 'app-chat:app-1', `m-${i}`)
+      for (let i = 0; i < TEST_CIRCUIT_LIMITS.pairLimit; i++) {
+        expect(await send('notes:1', 'app-chat:app-1', `m-${i}`)).toMatchObject({ ok: true })
+      }
+      const last = await send('notes:1', 'app-chat:app-1', 'one too many')
       expect(last).toEqual({ ok: false, reason: 'circuit_open' })
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('cooldown notice not written'), expect.any(Error))
     } finally {

@@ -20,8 +20,8 @@ Two rules hold across every guide here:
   screen shows, or look with AI Browser. The guides describe *mechanisms*; the user's screen is
   the authority on *contents*.
 - **You can change only part of Halo's configuration yourself.** With **Operate Halo** (操作 Halo)
-  on — from the conversation's **+** menu, or for a digital human its `halo-api-ref` permission
-  (off by default) — `halo_api_ref` gives you the HTTP operations opened to you: spaces, digital
+  — on from the conversation's **+** menu, and always on for a digital human except toward IM
+  guests and requests from other computers — `halo_api_ref` gives you the HTTP operations opened to you: spaces, digital
   humans, knowledge bases, and a few settings such as switching between model sources the user
   already configured or choosing the model. Creating a model source isn't open to you. A few
   operations can store a secret (a WeChat iLink bot token, a Store source's API key; editing a

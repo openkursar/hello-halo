@@ -99,6 +99,8 @@ export interface InstalledApp {
      * turn. Off by default.
      */
     spaceMemoryAccess?: boolean
+    /** The user's own labels for sorting their lists (see shared/apps/app-tags). */
+    tags?: string[]
     /** This digital human's memory: on/off, auto-consolidation, cadence. */
     memory?: import('../types/memory').MemorySettings
     /**
@@ -106,6 +108,8 @@ export interface InstalledApp {
      * the card lists. No session is given them, whoever it runs for.
      */
     disabledTools?: string[]
+    /** Internal skill installation metadata, not a user-editable override. */
+    skill?: import('../types/skills').SkillInstallationState
   }
 
   /** Permission grants and denials */
@@ -436,6 +440,8 @@ export interface AutomationAppState {
   pendingEscalationId?: string
   /** Set while the person is stopped and only the user can restart it. */
   blocked?: BlockedReason
+  /** Serving a team turn right now — work that `status` (its own runs) does not count. */
+  teamWorking?: boolean
 }
 
 /**
@@ -590,6 +596,17 @@ export const CONVERSATION_COLLAB_PERMISSION = 'conversation-collab'
 
 export function isConversationCollabEnabled(app: Pick<InstalledApp, 'permissions' | 'spec'>): boolean {
   return resolvePermission(app, CONVERSATION_COLLAB_PERMISSION, false)
+}
+
+/**
+ * The switch for going online to look things up: Halo's web search and the
+ * engine's own web search tool. On unless the owner turns it off; opening a
+ * given page and the AI Browser keep their own controls.
+ */
+export const WEB_SEARCH_PERMISSION = 'web-search'
+
+export function isWebSearchEnabled(app: Pick<InstalledApp, 'permissions' | 'spec'>): boolean {
+  return resolvePermission(app, WEB_SEARCH_PERMISSION)
 }
 
 /**

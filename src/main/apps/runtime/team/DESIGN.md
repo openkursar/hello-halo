@@ -489,6 +489,16 @@ seeded before any collaboration exists, so the tools look the current
 collaboration up at call time — `collab_start` and the first `team_send` work
 inside one turn, with no session rebuild between them.
 
+A digital human's own native chat (default or local session, owner turn, no
+team context, not IM) mounts the same `halo-team` toolset from the toolset
+registry, so it coordinates exactly like a space conversation: its chat id is
+the `coordinatorConversationId`, and reports land through the digital-human
+conversation source. Those deliveries carry `ownWork`, which conversation-interop
+admits even while the digital human's conversation-collaboration switch is off —
+that switch governs other conversations reaching in, not the team the chat
+started. Deleting a local session releases its collaboration like deleting a
+space conversation (`onNativeChatDeleted`).
+
 ## A person is not a member (`fromAppId === null`)
 
 A person's 1:1 message to a member travels this same bus — that is how it
@@ -729,6 +739,10 @@ team-level overridable via `circuitOverrides`:
   `TeamTriggerContext` into the woken turn and back out through the `team_send`
   that turn makes (`TeamMcpContext.forwardDepth`) — a chain restarting at 0 per
   hop is a chain this limit can never see.
+
+The defaults are deliberately extreme (999 for `maxForwardDepth`, 2000 for
+`maxMessages`): they are the last-resort stop for a runaway loop such as a model
+bug, not pace control. Team-level `circuitOverrides` can still tighten them.
 
 A person's 1:1 message charges nothing at all (see "A person is not a member").
 
@@ -1210,8 +1224,8 @@ Two facts about a member are per-TEAM and owner-authored, and they live on the
   their own digital humans on this machine and the runtime waking one of them
   are not held to it at all. The person in an IM chat a member fronts is held to
   that chat's owner/guest rules instead (see "Team as an IM backend"). The
-  team's own coordination servers (`halo-team`, `halo-report`,
-  `halo-person-context`) are never withheld — they are the channel the turn
+  team's own coordination servers (`halo-team`, `halo-report`)
+  are never withheld — they are the channel the turn
   arrived on, not a capability lent.
 
 ### Where a request came from
@@ -1292,8 +1306,8 @@ only the turn a request from outside directly drives, and what that restricted
 turn sets in motion as described above. So a colleague can have one of the
 owner's digital humans ask another for work, and that work runs with the
 owner's reach and stays off the owner's record; and what a full-reach turn sets
-in motion runs as the owner's own — Operate Halo included, where the member it
-reaches has it switched on, though the colleague's own turn never gets it.
+in motion runs as the owner's own — Operate Halo included, though the
+colleague's own turn never gets it.
 What the owner's own turns READ that came from elsewhere — a colleague's result
 in a turn-end notice, the board, findings, published artifacts — is weighed by
 a digital human running with the owner's reach, at its own judgment. A turn

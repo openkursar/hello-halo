@@ -7,6 +7,8 @@
  * 3. Remote    — neither → HTTP to window.location.origin
  */
 
+import i18n from '../i18n'
+
 // ---------------------------------------------------------------------------
 // Platform detection
 // ---------------------------------------------------------------------------
@@ -166,7 +168,7 @@ export async function httpRequest<T>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH',
   path: string,
   body?: Record<string, unknown>
-): Promise<{ success: boolean; data?: T; error?: string }> {
+): Promise<{ success: boolean; data?: T; error?: string; code?: string }> {
   const token = getAuthToken()
   const baseUrl = getRemoteServerUrl()
 
@@ -203,6 +205,20 @@ export async function httpRequest<T>(
       }
 
       return { success: false, error: 'Token expired, please login again' }
+    }
+
+    // Proxies can also return an HTML 413; preserve domain JSON errors when supplied.
+    if (response.status === 413) {
+      console.warn(`[HTTP] ${method} ${path} - 413 Payload Too Large`)
+      const data = response.headers.get('content-type')?.includes('application/json')
+        ? await response.json().catch(() => null)
+        : null
+      if (data?.success === false && data.code !== 'PAYLOAD_TOO_LARGE') return data
+      return {
+        success: false,
+        code: 'PAYLOAD_TOO_LARGE',
+        error: i18n.t('Request is too large. Reduce the attachment size or shorten the text.'),
+      }
     }
 
     const data = await response.json()

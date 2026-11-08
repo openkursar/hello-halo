@@ -66,7 +66,7 @@ describe.runIf(process.env.HALO_PEOPLE_BENCH === '1')('people-directory SQLite p
         const store = new ActivityStore(db)
         const manager = {
           listPeopleDirectory: filter => managerStore.listPeopleDirectory(filter),
-          listPersonIdsByStatus: statuses => managerStore.listPersonIdsByStatus(statuses),
+          listPersonIdsByStatus: statuses => managerStore.listPersonIdsByStatus(statuses), listTagCounts: (type, excludeIds) => managerStore.listTagCounts(type, excludeIds),
         } as AppManagerService
         // Replays the legacy directory reads, not run execution: list payload + getAllAppStates reads per person.
         const legacy = () => {

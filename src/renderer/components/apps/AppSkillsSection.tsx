@@ -1,268 +1,103 @@
-/**
- * AppSkillsSection
- *
- * Lists the skills a digital human can actually load at runtime, fetched via
- * app:list-available-skills (disk discovery — see main/apps/skill-discovery.ts
- * for why the disk, not the installed-apps table, is the source of truth).
- *
- * Skills are ambient (every skill in scope is loadable, not per-app bound), so
- * there is no per-app on/off here. Read-first: each row expands to the rendered
- * SKILL.md. When a skill corresponds to an installed skill app, we surface
- * shortcuts to open its folder / detail (where editing + lifecycle live).
- */
-
-import { useState, useEffect, useCallback } from 'react'
-import {
-  Terminal, ChevronDown, ChevronRight, Globe, ExternalLink,
-  FolderOpen, Download, Loader2, Plus, Upload, Search,
-} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ChevronRight, ExternalLink, FolderOpen, Globe, Loader2, Plus, RefreshCw, Search, Upload } from 'lucide-react'
 import { api } from '../../api'
+import { isElectron } from '../../api/transport'
+import { useTranslation, getCurrentLanguage } from '../../i18n'
+import { useSkillActions } from '../../hooks/useSkillActions'
+import { useSkillInventory } from '../../hooks/useSkillInventory'
+import { selectedSkill, skillDisplay, skillInstructions } from '../../utils/skill-presentation'
+import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import { CapabilityStoreDialog } from './CapabilityStoreDialog'
 import { ExistingSkillDialog } from './ExistingSkillDialog'
 import { SkillInstallDialog } from './SkillInstallDialog'
 import { SkillInfoCard } from './SkillInfoCard'
 import { CapabilityDialog } from './CapabilityDialog'
-import { isElectron } from '../../api/transport'
-import { useAppsStore } from '../../stores/apps.store'
-import { useTranslation } from '../../i18n'
-import { MarkdownRenderer } from '../chat/MarkdownRenderer'
-import { APP_TYPE_GLYPH } from '../store/app-type-glyph'
-import type { InstalledApp, AvailableSkill } from '../../../shared/apps/app-types'
-import { toSkillDirName } from '../../../shared/skill-naming'
+import type { SkillDetail, SkillGroup } from '../../../shared/types/skills'
 
-const SkillGlyph = APP_TYPE_GLYPH.skill
-
-interface AppSkillsSectionProps {
-  appId: string
-  /** The digital human's space — scopes which installed skill app a disk dir maps to. */
-  spaceId: string | null
-}
-
-/** Strip a leading YAML frontmatter block for clean read-only rendering. */
-function stripFrontmatter(md: string): string {
-  const m = md.match(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?/)
-  return m ? md.slice(m[0].length) : md
-}
-
-function SkillRow({
-  skill,
-  installedApp,
-  overridesGlobal,
-}: {
-  skill: AvailableSkill
-  installedApp?: InstalledApp
-  overridesGlobal?: boolean
-}) {
+function SkillRow({ group, spaceId, onOpen, onChanged }: { group: SkillGroup; spaceId: string | null; onOpen: () => void; onChanged: () => void }) {
   const { t } = useTranslation()
+  const copy = selectedSkill(group)
+  const actions = useSkillActions({ spaceId, id: copy?.id ?? '' }, onChanged)
   const [expanded, setExpanded] = useState(false)
-  const [showDetail, setShowDetail] = useState(false)
-
-  const isGlobal = skill.scope === 'global'
-  const body = stripFrontmatter(skill.content).trim()
-  // Reveal works off the on-disk path, so it's available for every skill —
-  // including disk-authored ones that have no installed-app record. Desktop-only:
-  // Web/Capacitor clients cannot open local folders.
-  const canOpenFolder = isElectron() && !!skill.path
-
-  async function openFolder() {
-    const res = await api.showArtifactInFolder(skill.path)
-    if (!res.success) console.error('[AppSkillsSection] reveal skill folder failed:', res.error)
-  }
-
-  function openDetail() {
-    if (!installedApp) return
-    setShowDetail(true)
-  }
-
-  return (
-    <div className="rounded-lg border border-border bg-secondary/40">
-      {showDetail && installedApp && <CapabilityDialog title={t('Shared skill settings')} onClose={() => setShowDetail(false)}><SkillInfoCard appId={installedApp.id} showUse={false} stickyHeader={false} /></CapabilityDialog>}
-      <div className="flex items-center gap-2.5 px-3 py-2">
+  const [detail, setDetail] = useState<SkillDetail | null>(null)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    if (!expanded || !copy) return
+    let cancelled = false
+    setDetail(null); setFailed(false)
+    api.skillsRead({ spaceId, id: copy.id }).then(result => {
+      if (cancelled) return
+      if (result.success && result.data) setDetail(result.data)
+      else { console.warn('[AppSkillsSection] Skill preview failed', { id: copy.id }); setFailed(true) }
+    }).catch(() => { if (!cancelled) { console.warn('[AppSkillsSection] Skill preview failed', { id: copy.id }); setFailed(true) } })
+    return () => { cancelled = true }
+  }, [expanded, copy?.id, spaceId])
+  if (!copy) return null
+  const display = skillDisplay(copy, getCurrentLanguage())
+  const body = detail ? skillInstructions(detail.content) : ''
+  const connections = detail?.spec.requires?.mcps?.map(mcp => typeof mcp === 'string' ? mcp : mcp.id).join(', ')
+  return <div className="rounded-lg border border-border-soft bg-secondary/40">
+    <div className="flex items-center gap-2.5 px-3 py-2">
+      <button onClick={() => setExpanded(value => !value)} aria-expanded={expanded} className="flex min-w-0 flex-1 items-center gap-1.5 text-left"><ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${expanded ? 'rotate-90' : ''}`} /><span className="truncate text-sm text-foreground">{display.name}</span></button>
+      {!copy.enabled && <span className="text-[11px] text-muted-foreground">{t('Disabled')}</span>}
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">{copy.scope === 'global' && <Globe className="h-3 w-3" />}{copy.scope === 'global' ? t('Global') : t('This workspace')}</span>
+      {isElectron() && (
         <button
-          onClick={() => setExpanded(v => !v)}
-          className="flex items-center gap-1.5 min-w-0 flex-1 text-left"
+          type="button"
+          title={t('Open skill folder')}
+          aria-label={t('Open skill folder')}
+          disabled={actions.busy || copy.availability === 'missing'}
+          onClick={event => { event.stopPropagation(); void actions.openFolder() }}
+          className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40"
         >
-          {expanded
-            ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-            : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />}
-          <SkillGlyph className="w-3.5 h-3.5 flex-shrink-0 text-app-skill" />
-          <span className="text-sm truncate text-foreground">{skill.name}</span>
+          <FolderOpen className="h-3.5 w-3.5" />
         </button>
-
-        {canOpenFolder && (
-          <button
-            onClick={openFolder}
-            title={t('Open skill folder')}
-            aria-label={t('Open skill folder')}
-            className="p-1 text-muted-foreground hover:text-foreground transition-colors rounded flex-shrink-0"
-          >
-            <FolderOpen className="w-3.5 h-3.5" />
-          </button>
-        )}
-
-        {/* Both labels share one grid cell so the badge width is constant and the folder icons line up. */}
-        <span className="grid flex-shrink-0 text-[11px] font-medium">
-          <span aria-hidden className="invisible col-start-1 row-start-1 inline-flex items-center gap-1 px-2 py-0.5 border">
-            <Globe className="w-3 h-3" />{t('Global')}
-          </span>
-          <span aria-hidden className="invisible col-start-1 row-start-1 px-2 py-0.5 border">{t('This workspace')}</span>
-          <span className={`col-start-1 row-start-1 inline-flex items-center justify-center gap-1 px-2 py-0.5 rounded-full border
-            ${isGlobal
-              ? 'bg-primary/10 text-primary border-primary/25'
-              : 'bg-muted/60 text-muted-foreground border-border/40'}`}
-          >
-            {isGlobal && <Globe className="w-3 h-3" />}
-            {isGlobal ? t('Global') : t('This workspace')}
-          </span>
-        </span>
-      </div>
-
-      {expanded && (
-        <div className="px-3 pb-3 pt-1 space-y-2.5 border-t border-border-faint">
-          {!installedApp && <p className="text-xs text-muted-foreground">{t('External file. Edit it in its source folder; it is not managed as an installed library item.')}</p>}
-          {overridesGlobal && <p className="text-xs text-muted-foreground">{t('This workspace version overrides the global skill with the same command name.')}</p>}
-          {installedApp?.spec.requires?.mcps?.length ? <p className="text-xs text-muted-foreground">{t('Required connections: {{names}}', { names: installedApp.spec.requires.mcps.map(dependency => dependency.id).join(', ') })}</p> : null}
-          {skill.description && (
-            <p className="text-xs text-muted-foreground leading-relaxed">{skill.description}</p>
-          )}
-
-          {installedApp && (
-            <div className="flex items-center justify-end">
-              <button
-                onClick={openDetail}
-                className="flex items-center gap-1 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary rounded transition-colors"
-              >
-                <ExternalLink className="w-3 h-3" />
-                {t('Open skill detail')}
-              </button>
-            </div>
-          )}
-
-          {body ? (
-            <div className="rounded-lg bg-secondary/40 border border-border/30 p-3 text-sm overflow-x-auto max-h-80 overflow-y-auto">
-              <MarkdownRenderer content={body} mode="static" />
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground italic">{t('This skill has no SKILL.md content.')}</p>
-          )}
-        </div>
       )}
     </div>
-  )
+    {actions.error && <p role="alert" className="px-3 pb-2 text-xs text-halo-error">{actions.error}</p>}
+    {expanded && <div className="space-y-2.5 border-t border-border-faint px-3 pb-3 pt-2">
+      <p className="text-xs leading-relaxed text-muted-foreground">{display.description}</p>
+      {connections && <p className="break-words text-xs text-muted-foreground">{t('Required connections: {{names}}', { names: connections })}</p>}
+      {failed ? <p className="text-xs text-halo-error">{t('Could not open this skill. Please try again.')}</p> : detail ? <div className="max-h-80 overflow-auto rounded-lg border border-border-soft bg-secondary/40 p-3 text-sm"><MarkdownRenderer content={body ?? ''} mode="static" /></div> : <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+      <button onClick={onOpen} className="inline-flex items-center gap-1 text-xs text-primary"><ExternalLink className="h-3 w-3" />{t('Open skill detail')}</button>
+    </div>}
+  </div>
 }
 
-export function AppSkillsSection({ appId, spaceId }: AppSkillsSectionProps) {
+export function AppSkillsSection({ appId, spaceId }: { appId: string; spaceId: string | null }) {
   const { t } = useTranslation()
-  const apps = useAppsStore(s => s.apps)
-
-  const [skills, setSkills] = useState<AvailableSkill[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [revision, setRevision] = useState(0)
-  const [addMode, setAddMode] = useState<'visual' | 'import' | null>(null)
   const [query, setQuery] = useState('')
+  const [offset, setOffset] = useState(0)
+  const [selected, setSelected] = useState<SkillGroup | null>(null)
+  const [addMode, setAddMode] = useState<'visual' | 'import' | null>(null)
   const [chooseExisting, setChooseExisting] = useState(false)
   const [showStore, setShowStore] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    setError(null)
-    api.appListAvailableSkills(appId)
-      .then((res) => {
-        if (cancelled) return
-        if (res.success && Array.isArray(res.data)) {
-          setSkills(res.data)
-        } else {
-          console.warn('[AppSkillsSection] Failed to load available skills', { appId })
-          setError(res.error || t('Could not load available skills.'))
-        }
-      })
-      .catch(() => { if (!cancelled) { console.warn('[AppSkillsSection] Skill discovery request failed', { appId }); setError(t('Could not load available skills.')) } })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [appId, spaceId, apps, revision, t])
-
-  // Scope must match too: the same dir name can exist as a global install and
-  // as space installs in several spaces — dirName alone would pick the wrong one.
-  const findInstalled = useCallback((skill: AvailableSkill): InstalledApp | undefined =>
-    apps.find(a =>
-      a.spec.type === 'skill' &&
-      a.status !== 'uninstalled' &&
-      (skill.scope === 'global' ? a.spaceId === null : a.spaceId === spaceId) &&
-      toSkillDirName(a.specId) === skill.dirName
-    ),
-  [apps, spaceId])
-
-  const openStore = () => setShowStore(true)
-
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-        <SkillGlyph className="w-3.5 h-3.5" />
-        {t('Available Skills')}
-        {!loading && skills.length > 0 && (
-          <span className="text-muted-foreground/60 font-normal normal-case tracking-normal">
-            ({skills.length})
-          </span>
-        )}
-      </h3>
-      <div className="flex flex-wrap gap-2">
-        <button onClick={() => setChooseExisting(true)} className="rounded-lg px-2 py-1 text-xs text-primary hover:bg-primary/10">{t('Choose existing')}</button>
-        <button onClick={() => setAddMode('visual')} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-primary hover:bg-primary/10"><Plus className="h-3.5 w-3.5" />{t('New skill')}</button>
-        <button onClick={() => setAddMode('import')} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-primary hover:bg-primary/10"><Upload className="h-3.5 w-3.5" />{t('Import')}</button>
-      </div></div>
-      <p className="text-xs text-muted-foreground">{t('Skills are inherited from this workspace and global settings. Changes can affect other digital humans in the same scope.')}</p>
-      <label className="flex items-center gap-2 rounded-lg border border-border px-3 py-2"><Search className="h-4 w-4 text-muted-foreground" /><input value={query} onChange={event => setQuery(event.target.value)} aria-label={t('Search skills')} placeholder={t('Search skills')} className="min-w-0 flex-1 bg-transparent text-sm outline-none" /></label>
-      {showStore && <CapabilityStoreDialog type="skill" spaceId={spaceId} onClose={() => setShowStore(false)} onInstalled={async () => { setRevision(value => value + 1) }} />}
-      {chooseExisting && <ExistingSkillDialog spaceId={spaceId} onClose={() => setChooseExisting(false)} onAdded={() => setRevision(value => value + 1)} />}
-      {addMode && <SkillInstallDialog draftKey={appId} initialMode={addMode} initialSpaceId={spaceId} onClose={() => setAddMode(null)} onInstalled={() => setRevision(value => value + 1)} />}
-      {error && <div role="alert" className="rounded-lg border border-destructive/30 p-3 text-xs text-destructive">{error}<button onClick={() => setRevision(value => value + 1)} className="ml-3 text-primary">{t('Retry')}</button></div>}
-      {loading ? (
-        <div className="flex items-center justify-center py-4 text-muted-foreground">
-          <Loader2 className="w-4 h-4 animate-spin" />
-        </div>
-      ) : skills.length > 0 ? (
-        <>
-          {query && !skills.some(skill => `${skill.name} ${skill.description}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())) && <p className="text-xs text-muted-foreground">{t('No skills match your search.')}</p>}
-          <div className="space-y-1.5">
-            {skills.filter(skill => `${skill.name} ${skill.description}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map(skill => (
-              <SkillRow
-                key={`${skill.scope}:${skill.dirName}`}
-                skill={skill}
-                installedApp={findInstalled(skill)}
-                overridesGlobal={skill.scope === 'space' && apps.some(app => app.spec.type === 'skill' && app.spaceId === null && app.status !== 'uninstalled' && toSkillDirName(app.specId) === skill.dirName)}
-              />
-            ))}
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] text-muted-foreground/60">
-              {t('Digital humans can use all skills installed in their workspace and globally.')}
-            </p>
-            <button
-              onClick={openStore}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-primary hover:bg-primary/10 rounded transition-colors flex-shrink-0"
-            >
-              <Download className="w-3 h-3" />
-              {t('Browse')}
-            </button>
-          </div>
-        </>
-      ) : (
-        <div className="rounded-lg border border-dashed border-border p-4 text-center space-y-2">
-          <p className="text-xs text-muted-foreground">
-            {t('No skills available in this workspace yet.')}
-          </p>
-          <button
-            onClick={openStore}
-            className="inline-flex items-center gap-1 px-2 py-1 text-xs text-primary hover:bg-primary/10 rounded transition-colors"
-          >
-            <ExternalLink className="w-3 h-3" />
-            {t('Browse skill store')}
-          </button>
-        </div>
-      )}
-    </div>
-  )
+  const contextKey = `${appId}:${spaceId}`
+  const [viewContext, setViewContext] = useState(contextKey)
+  if (viewContext !== contextKey) {
+    setViewContext(contextKey); setSelected(null); setOffset(0); setQuery('')
+    setAddMode(null); setChooseExisting(false); setShowStore(false)
+  }
+  const contextChanged = viewContext !== contextKey
+  const inventory = useSkillInventory({ spaceId, q: contextChanged ? '' : query, offset: contextChanged ? 0 : offset, limit: 50 })
+  const buttonClass = 'inline-flex items-center gap-1.5 rounded-md border border-border-soft px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40'
+  return <div className="space-y-3">
+    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold">{t('Skills')}{!!inventory.data?.total && <span className="ml-1.5 font-normal text-muted-foreground">({inventory.data.total})</span>}</h3><div className="flex flex-wrap gap-1.5"><button onClick={() => setChooseExisting(true)} className={buttonClass}>{t('Choose existing')}</button><button onClick={() => setAddMode('visual')} className={buttonClass}><Plus className="h-3.5 w-3.5" />{t('New skill')}</button><button onClick={() => setAddMode('import')} className={buttonClass}><Upload className="h-3.5 w-3.5" />{t('Import')}</button><button onClick={inventory.refresh} disabled={inventory.loading} aria-label={t('Refresh')} title={t('Refresh')} className={buttonClass}><RefreshCw className="h-3.5 w-3.5" /></button></div></div>
+    <p className="text-xs text-muted-foreground">{t('Skills in this workspace and global skills are available here.')}</p>
+    <div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><input aria-label={t('Search skills')} placeholder={t('Search skills')} value={query} onChange={event => { setQuery(event.target.value); setOffset(0) }} className="w-full rounded-lg border border-border-soft bg-background py-2 pl-8 pr-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary" /></div>
+    {inventory.error && <p role="alert" className="text-xs text-halo-error">{t('Could not load available skills.')} <button onClick={inventory.refresh} className="underline">{t('Retry')}</button></p>}
+    {inventory.loading && !inventory.data && <p role="status" className="text-xs text-muted-foreground">{t('Loading…')}</p>}
+    {inventory.data?.groups.map(group => <SkillRow key={`${contextKey}:${group.name}`} group={group} spaceId={spaceId} onOpen={() => setSelected(group)} onChanged={inventory.refresh} />)}
+    {!inventory.loading && inventory.data?.groups.length === 0 && (query.trim()
+      ? <p className="text-xs text-muted-foreground">{t('No matching skills.')}</p>
+      : <div className="space-y-2 rounded-lg border border-dashed border-border p-4 text-center">
+          <p className="text-xs text-muted-foreground">{t('No skills available in this workspace yet.')}</p>
+          <button onClick={() => setShowStore(true)} className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-primary transition-colors hover:bg-primary/10"><ExternalLink className="h-3 w-3" />{t('Browse skill store')}</button>
+        </div>)}
+    <div className="flex flex-wrap items-center gap-3">{inventory.data && inventory.data.total > 50 && <><button disabled={offset === 0 || inventory.loading} onClick={() => setOffset(value => Math.max(0, value - 50))} className={buttonClass}>{t('Previous')}</button><button disabled={offset + inventory.data.groups.length >= inventory.data.total || inventory.loading} onClick={() => setOffset(value => value + 50)} className={buttonClass}>{t('Next')}</button></>}<button onClick={() => setShowStore(true)} className="text-xs text-primary hover:underline">{t('Browse skill store')}</button></div>
+    {!contextChanged && selected && <CapabilityDialog title={t('Shared skill settings')} onClose={() => setSelected(null)}><SkillInfoCard skillRef={{ spaceId, id: selected.effectiveId ?? selected.copies[0].id }} group={selected} showUse={false} stickyHeader={false} onChanged={inventory.refresh} onDeleted={() => { setSelected(null); inventory.refresh() }} /></CapabilityDialog>}
+    {showStore && <CapabilityStoreDialog type="skill" spaceId={spaceId} onClose={() => setShowStore(false)} onInstalled={async () => inventory.refresh()} />}
+    {chooseExisting && <ExistingSkillDialog spaceId={spaceId} onClose={() => setChooseExisting(false)} onAdded={inventory.refresh} />}
+    {addMode && <SkillInstallDialog draftKey={appId} initialMode={addMode} initialSpaceId={spaceId} onClose={() => setAddMode(null)} onInstalled={inventory.refresh} />}
+  </div>
 }

@@ -7,10 +7,11 @@
  * the notice arrived.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import type { ApiRetryNotice as ApiRetryNoticeState } from '../../types'
+import { describeAgentError } from './agent-error-text'
 
 interface ApiRetryNoticeProps {
   retry: ApiRetryNoticeState
@@ -40,6 +41,11 @@ export function ApiRetryNotice({ retry, onStop }: ApiRetryNoticeProps) {
   const { t } = useTranslation()
   const remainingMs = useRemainingMs(retry.retryAt)
   const seconds = Math.ceil(remainingMs / 1000)
+  // Re-rendered every second by the countdown; the reason only changes with the error.
+  const reason = useMemo(
+    () => (retry.errorMessage ? describeAgentError(retry.errorMessage, t).text : ''),
+    [retry.errorMessage, t],
+  )
 
   const title = (() => {
     if (retry.errorStatus === null && retry.errorKind === 'unknown') return t('Could not reach the model service')
@@ -78,12 +84,12 @@ export function ApiRetryNotice({ retry, onStop }: ApiRetryNoticeProps) {
             )}
           </div>
 
-          {retry.errorMessage && (
+          {reason && (
             <p
-              className="mt-1 break-words text-xs text-muted-foreground line-clamp-2"
+              className="mt-1 text-xs text-muted-foreground line-clamp-2 [overflow-wrap:anywhere]"
               title={retry.errorMessage}
             >
-              {retry.errorMessage}
+              {reason}
             </p>
           )}
 

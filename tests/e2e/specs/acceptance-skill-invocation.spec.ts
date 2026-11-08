@@ -37,11 +37,12 @@ async function installSkill(page: Page, spaceId: string, name: string, displayNa
   return { app, content }
 }
 
-async function openSkill(page: Page, displayName: string) {
+async function openSkill(page: Page, displayName: string, spaceId: string) {
   await navigateToApps(page)
   await page.getByRole('button', { name: 'Capability library', exact: true }).click()
   await page.getByRole('button', { name: 'Skills', exact: true }).click()
-  await page.getByPlaceholder('Search Skills', { exact: true }).fill(displayName)
+  await page.getByRole('combobox', { name: 'Workspace', exact: true }).selectOption(spaceId)
+  await page.getByRole('textbox', { name: 'Search skills', exact: true }).fill(displayName)
   const card = page.locator('[role="button"]').filter({ has: page.getByRole('heading', { name: displayName, level: 3, exact: true }) })
   await expect(card).toHaveCount(1)
   await card.click()
@@ -91,8 +92,25 @@ for (const memory of ['enabled', 'disabled'] as const) {
     expect(model.exchanges).toHaveLength(0)
     await expect(window.getByRole('heading', { name: 'Workspace', exact: true, level: 1 })).toBeVisible()
     await expect(window.getByRole('heading', { name: space.name, level: 3, exact: true })).toBeVisible()
-    await openSkill(window, displayName)
-    await window.getByRole('button', { name: 'Use', exact: true }).click()
+    await openSkill(window, displayName, space.id)
+    const more = window.getByRole('button', { name: 'More', exact: true })
+    const newConversation = window.getByRole('button', { name: 'Use in a new conversation', exact: true })
+    await more.click()
+    await expect(more).toHaveAttribute('aria-expanded', 'true')
+    await expect(newConversation).toBeVisible()
+    if (memory === 'enabled') await more.click()
+    else await window.keyboard.press('Escape')
+    await expect(more).toHaveAttribute('aria-expanded', 'false')
+    await expect(newConversation).toHaveCount(0)
+    expect(await listManagedConversations(window, space.id)).toEqual([])
+    expect(model.exchanges).toHaveLength(0)
+    if (memory === 'enabled') {
+      await window.getByRole('button', { name: 'Use', exact: true }).click()
+    } else {
+      await more.click()
+      await newConversation.click()
+    }
+    await expect(window.getByRole('alertdialog')).toHaveCount(0)
     await expect(window.getByTitle(`Current workspace: ${space.name} — click to switch`, { exact: true })).toBeVisible()
     const composer = window.locator('textarea').first()
     await expect(composer).toHaveValue(`/${name} `)

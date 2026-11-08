@@ -12,7 +12,9 @@ references:
   - src/renderer/components/settings/WecomScanAuthDialog.tsx
   - src/renderer/components/settings/WeixinIlinkScanDialog.tsx
   - src/renderer/components/settings/FeishuScanAuthDialog.tsx
+  - src/renderer/components/settings/ChannelBackendSelect.tsx
   - tests/e2e/specs/people-settings.spec.ts
+  - tests/e2e/specs/acceptance-channel-backend-choices.spec.ts
 promises:
   binding:
     en: Existing bot ownership is visible and reassignment requires confirmation.
@@ -23,6 +25,9 @@ promises:
   login:
     en: Login success, cancellation and expiry leave a truthful connection state.
     zh: 登录成功、取消及过期均留下真实连接状态。
+  choices:
+    en: Choosing who answers a bot offers only digital humans and saved teams I set up, never the members a temporary collaboration built for one piece of work, unless I keep that collaboration as a team; a bot already bound to such a member still shows that binding by name.
+    zh: 为机器人选择接待者时，只列出我自己设置的数字人和保存的团队，不列出临时协作为某项工作建出的成员，除非我把该协作保留为团队；已绑定到这类成员的机器人仍按名称显示其绑定。
 scenarios:
   - id: channels.connect.transfer
     title:
@@ -222,3 +227,37 @@ scenarios:
       width:
         - "1280"
         - "375"
+  - id: channels.connect.choices
+    title:
+      en: Offer only the people I set up as a bot's backend
+      zh: 只把我设置的数字人作为机器人的接待者候选
+    verifies:
+      - choices
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: Seed a digital human, a temporary collaboration with one member, and three test bots, bound to that member on its own, to that member inside the collaboration, and to no one.
+        zh: 预置一位数字人、一个含一名成员的临时协作，以及三个测试机器人：分别单独绑定该成员、绑定协作中的该成员、未绑定。
+    steps:
+      - en: Open Settings → Message channels, expand each bot and open its backend list.
+        zh: 打开设置 → 消息通道，展开每个机器人并打开其接待者列表。
+      - en: Keep the collaboration as a team, then open every list again.
+        zh: 把协作保留为团队，再次打开每个列表。
+    expected:
+      - en: Each bound bot shows its current binding by name (the member, or the member in the collaboration), and both bindings stay unchanged throughout.
+        zh: 每个已绑定的机器人都按名称显示当前绑定（该成员，或协作中的该成员），两个绑定全程不变。
+      - en: Before keeping, every list offers the digital human and none offers the temporary collaboration or its member.
+        zh: 保留前，每个列表都提供该数字人，均不提供临时协作或其成员。
+      - en: After keeping, every list offers the member on its own and under the saved team, and still never under the temporary collaboration.
+        zh: 保留后，每个列表都单独提供该成员并在保存的团队下提供，仍不在临时协作下提供。
+    variants:
+      width:
+        - "1280"
+        - "375"
+    notes:
+      en: The collaboration is seeded through the real team store; the digital human, bots and keeping go through the application's own API. Bots stay disabled, so no messaging platform is contacted. A static-render unit test also pins the offered options but is not acceptance evidence.
+      zh: 协作通过真实团队存储预置；数字人、机器人及保留操作经应用自身接口完成。机器人保持停用，不连接任何消息平台。静态渲染单元测试同样固定了选项，但不作为验收证据。

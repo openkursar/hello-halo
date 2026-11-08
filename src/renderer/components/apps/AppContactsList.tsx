@@ -17,6 +17,7 @@ import { api } from '../../api'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 import { CHANNEL_LABELS } from './im-channel-labels'
+import { RunResultRecipientsBar } from './RunResultRecipientsBar'
 
 function formatTime(ts: number): string {
   if (!ts) return '-'
@@ -176,6 +177,12 @@ export function AppContactsList({ appId, instanceId, selectedKey, onSelect, onSe
         </div>
       )}
 
+      <RunResultRecipientsBar
+        shown={filtered}
+        isOn={s => s.proactive === true}
+        onSet={s => handleToggleProactive(s)}
+      />
+
       {filtered.length === 0 && (
         <p className="text-xs text-muted-foreground text-center py-3">
           {t('No contacts match "{{query}}"', { query })}
@@ -286,7 +293,7 @@ export function AppContactsList({ appId, instanceId, selectedKey, onSelect, onSe
                 </div>
               </div>
 
-              {/* Auto-sync toggle: pushes the AI final reply to this contact at run end.
+              {/* Run-result toggle: pushes a scheduled run's final reply to this contact.
                   Only the checkbox and its label toggle; the rest of the row
                   still selects the session. */}
               <div className="flex flex-col gap-0.5">
@@ -301,11 +308,11 @@ export function AppContactsList({ appId, instanceId, selectedKey, onSelect, onSe
                     className="w-3.5 h-3.5 rounded border-border accent-primary cursor-pointer flex-shrink-0 ring-offset-1 ring-offset-background transition-shadow ease-halo group-hover/sync:ring-2 group-hover/sync:ring-primary/40 focus-visible:ring-2 focus-visible:ring-primary"
                   />
                   <span className="text-xs text-foreground">
-                    {t('Auto-sync run result')}
+                    {t('Send scheduled task results here')}
                   </span>
                 </label>
                 <span className="text-xs text-muted-foreground/70 pl-[22px]">
-                  {t('Send the AI final reply to this contact after each successful run')}
+                  {t('After each successful scheduled or background run, its final result is sent to this chat. Replies to messages are not affected.')}
                 </span>
               </div>
             </div>

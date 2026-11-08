@@ -1,6 +1,6 @@
 import { test as base, expect, type ElectronApplication, type Page, type TestInfo } from '@playwright/test'
-import type { ChildProcess } from 'node:child_process'
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { execFile, type ChildProcess } from 'node:child_process'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createTestConfigDir, getAppEntryPath, launchElectronApp, cleanupTestConfigDir } from './electron'
@@ -19,9 +19,20 @@ export interface AcceptanceApp {
   restart(afterClose?: (profile: string) => void | Promise<void>): Promise<Page>
 }
 
+/** The single model account seeded into the isolated profile; defaults to the scripted model. */
+export interface AcceptanceSource {
+  provider: string
+  apiUrl: string
+  apiKey: string
+  model: string
+  apiType?: 'chat_completions' | 'responses' | 'anthropic_passthrough' | 'kiro'
+}
+
 interface Fixtures {
+  startupObserver: string | undefined
   diagnoseShutdown: boolean
   model: AcceptanceModel
+  aiSource: AcceptanceSource
   acceptanceApp: AcceptanceApp
   window: Page
 }
@@ -72,9 +83,9 @@ function hasExited(owned: OwnedApplication): boolean {
   return !!owned.child && (owned.child.exitCode != null || owned.child.signalCode != null)
 }
 
-async function open(entry: string, profile: string, register: (app: ElectronApplication) => void) {
+async function open(entry: string, profile: string, register: (app: ElectronApplication) => void, startupObserver?: string) {
   const project = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-  const app = await launchElectronApp(entry, profile, { bootstrapDirectory: project })
+  const app = await launchElectronApp(entry, profile, { bootstrapDirectory: project, bootstrapObserver: startupObserver })
   register(app)
   const window = await app.firstWindow()
   await window.waitForLoadState('domcontentloaded')
@@ -82,7 +93,31 @@ async function open(entry: string, profile: string, register: (app: ElectronAppl
   return { app, window }
 }
 
-async function close(owned: OwnedApplication, phase: string) {
+/**
+ * Writes the native stacks and child processes of an application that outlived
+ * its close deadline (macOS). Runs in the background so the deadline itself is
+ * unchanged; the file lands in the test output directory.
+ */
+function recordStuckApplication(pid: number | undefined, file: string) {
+  if (process.platform !== 'darwin' || !pid) return
+  const raw = `${file}.raw`
+  try { mkdirSync(dirname(file), { recursive: true }) } catch { return }
+  execFile('/usr/bin/sample', [String(pid), '2', '-file', raw], { timeout: 15000 }, () => {
+    execFile('/bin/ps', ['-A', '-o', 'pid=,ppid=,stat=,etime=,comm='], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 }, (_error, listing) => {
+      try {
+        const children = String(listing ?? '').split('\n').filter(line => line.trim().split(/\s+/)[1] === String(pid))
+        const sample = existsSync(raw) ? readFileSync(raw, 'utf8') : 'sample unavailable\n'
+        const start = sample.indexOf('Call graph:')
+        const end = sample.indexOf('Binary Images:')
+        const stacks = sample.slice(start < 0 ? 0 : start, end < 0 ? undefined : end)
+        writeFileSync(file, `pid ${pid}\nchildren (pid ppid stat etime comm):\n${children.join('\n')}\n\n${stacks}`.replaceAll(process.cwd(), '<repository>'))
+      } catch { /* Evidence is best effort and must not affect the run. */ }
+      try { rmSync(raw, { force: true }) } catch { /* best effort */ }
+    })
+  })
+}
+
+async function close(owned: OwnedApplication, phase: string, stuckEvidence?: string) {
   const { app, child } = owned
   const attempt = observe(owned, observer => observer.begin(phase, 15000))
   if (hasExited(owned)) {
@@ -107,6 +142,7 @@ async function close(owned: OwnedApplication, phase: string) {
       Promise.all([closing, exited]),
       new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => {
         if (attempt) observe(owned, observer => observer.deadline(attempt))
+        if (stuckEvidence) recordStuckApplication(child?.pid, stuckEvidence)
         reject(new Error('Acceptance application did not close within 15 seconds'))
       }, 15000) }),
     ])
@@ -125,19 +161,23 @@ async function attachEvidence(profile: string, model: AcceptanceModel, info: Tes
 }
 
 export const test = base.extend<Fixtures>({
+  startupObserver: [undefined, { option: true }],
   diagnoseShutdown: [false, { option: true }],
   model: async ({}, use) => {
     const model = await startAcceptanceModel()
     try { await use(model) } finally { await model.close() }
   },
-  acceptanceApp: async ({ model, diagnoseShutdown }, use, testInfo) => {
+  aiSource: async ({ model }, use) => {
+    await use({ provider: 'openai', apiKey: 'local-scripted-endpoint', apiUrl: model.url, model: 'gpt-4o' })
+  },
+  acceptanceApp: async ({ model, aiSource, diagnoseShutdown, startupObserver }, use, testInfo) => {
     const entry = getAppEntryPath()
     const profile = createTestConfigDir(entry, [])
     const file = join(profile, '.halo/config.json')
     const config = JSON.parse(readFileSync(file, 'utf8'))
     const now = new Date().toISOString()
-    config.api = { provider: 'openai', apiKey: 'local-scripted-endpoint', apiUrl: model.url, model: 'gpt-4o' }
-    config.aiSources = { version: 2, currentId: 'acceptance-local', sources: [{ id: 'acceptance-local', name: 'Local acceptance model', authType: 'api-key', ...config.api, availableModels: [{ id: 'gpt-4o', name: 'gpt-4o' }], createdAt: now, updatedAt: now }] }
+    config.api = { provider: aiSource.provider, apiKey: aiSource.apiKey, apiUrl: aiSource.apiUrl, model: aiSource.model }
+    config.aiSources = { version: 2, currentId: 'acceptance-local', sources: [{ id: 'acceptance-local', name: 'Local acceptance model', authType: 'api-key', ...aiSource, availableModels: [{ id: aiSource.model, name: aiSource.model }], createdAt: now, updatedAt: now }] }
     config.agent = { ...config.agent, sdkEngine: 'halo', configDirMode: 'custom', customConfigDir: join(profile, 'sdk-state'), maxTurns: 16 }
     config.imChannels = { instances: [] }
     config.notificationChannels = {}
@@ -158,7 +198,7 @@ export const test = base.extend<Fixtures>({
             try { owned.shutdown = observeAcceptanceShutdown(app, owned.child, profile) }
             catch (error) { owned.diagnosticErrors.push(error) }
           }
-        })
+        }, startupObserver)
         const owned = applications.find(owned => owned.app === opened.app)!
         if (owned.shutdown) {
           try { await owned.shutdown.installMain() } catch (error) { owned.diagnosticErrors.push(error) }
@@ -172,7 +212,7 @@ export const test = base.extend<Fixtures>({
     const closeOwned = async (app: ElectronApplication, phase: string) => {
       const owned = applications.find(owned => owned.app === app)
       if (!owned) throw new Error('Refusing to close an application outside this acceptance fixture')
-      await close(owned, phase)
+      await close(owned, phase, testInfo.outputPath(`stuck-application-${phase}-${applications.indexOf(owned)}.txt`))
     }
     const failures: unknown[] = []
     let session: AcceptanceApp | undefined
@@ -201,7 +241,7 @@ export const test = base.extend<Fixtures>({
         if (session && !session.window.isClosed()) await session.window.screenshot({ path: testInfo.outputPath('final-window.png') })
       } catch (error) { failures.push(error) }
       for (const owned of applications) {
-        try { await close(owned, 'teardown') } catch (error) { failures.push(error) }
+        try { await close(owned, 'teardown', testInfo.outputPath(`stuck-application-teardown-${applications.indexOf(owned)}.txt`)) } catch (error) { failures.push(error) }
       }
       try { await attachEvidence(profile, model, testInfo) } catch (error) { failures.push(error) }
       if (diagnoseShutdown) {

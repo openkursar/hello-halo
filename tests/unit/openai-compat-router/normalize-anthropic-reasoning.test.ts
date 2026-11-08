@@ -146,6 +146,22 @@ describe('normalizeAnthropicReasoning', () => {
     expect(result.request).toBe(original)
   })
 
+  it('repairs a `disabled` block Sonnet 5.5 would reject even when no level is set', () => {
+    for (const model of ['claude-sonnet-5-5', 'claude-sonnet-5-5[1m]', 'anthropic/claude-sonnet-5.5']) {
+      const { request: out, modified } = normalizeAnthropicReasoning(request(model, { thinking: { type: 'disabled' } }), {})
+      expect(modified, model).toBe(true)
+      expect(out.thinking, model).toEqual({ type: 'between_tools' })
+      expect(out.output_config, model).toBeUndefined()
+    }
+  })
+
+  it('keeps a `disabled` block for a model that accepts it when no level is set', () => {
+    const original = request('claude-haiku-4-5', { thinking: { type: 'disabled' } })
+    const result = normalizeAnthropicReasoning(original, {})
+    expect(result.modified).toBe(false)
+    expect(result.request).toBe(original)
+  })
+
   it('reports no change when the request already matches', () => {
     const { request: once } = reshape('claude-opus-5-5', 'high', legacyBudget)
     const again = normalizeAnthropicReasoning(once, { pickedReasoningEffort: 'high' })

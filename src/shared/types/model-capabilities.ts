@@ -6,6 +6,9 @@
  *
  * Design:
  *   - Preset data lives in src/shared/data/model-capabilities.json
+ *   - Numeric presets are Halo's working budgets, not necessarily vendor maxima.
+ *     Unknown models and broad brand defaults use 200K context / 64K output;
+ *     specific model and generation entries may retain known lower limits.
  *   - Users can override any field per-model inside their AISource config
  *   - Priority, highest first: user override > `[1m]` id suffix (contextWindow
  *     only) > exact preset entry > provider catalog data > family pattern

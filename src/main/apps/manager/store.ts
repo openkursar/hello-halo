@@ -12,6 +12,7 @@
 import type Database from 'better-sqlite3'
 import type { AppSpec, McpSpec } from '../spec'
 import type { InstalledApp, AppStatus, RunOutcome, AppListFilter, UpgradeStrategy } from './types'
+import { renameInTags } from '../../../shared/apps/app-tags'
 
 // ============================================
 // SQLite Row Type (flat DB representation)
@@ -168,16 +169,61 @@ export class AppManagerStore {
     if (filter.excludeIds?.length) { where.push('id NOT IN (SELECT value FROM json_each(?))'); params.push(JSON.stringify(filter.excludeIds)) }
     const { name, description } = directoryDisplayExpressions(filter.language)
     if (filter.q?.trim()) {
-      where.push(`(instr(lower(${name} || ' ' || ${description}), lower(?)) > 0 OR id IN (SELECT value FROM json_each(?)))`)
-      params.push(filter.q.trim(), JSON.stringify(filter.searchTeamMemberIds ?? []))
+      where.push(`(instr(lower(${name} || ' ' || ${description}), lower(?)) > 0 OR id IN (SELECT value FROM json_each(?))
+        OR EXISTS (SELECT 1 FROM json_each(user_overrides_json, '$.tags') WHERE instr(lower(value), lower(?)) > 0))`)
+      params.push(filter.q.trim(), JSON.stringify(filter.searchTeamMemberIds ?? []), filter.q.trim())
+    }
+    if (filter.tag?.trim()) {
+      where.push(`EXISTS (SELECT 1 FROM json_each(user_overrides_json, '$.tags') WHERE lower(value) = lower(?))`)
+      params.push(filter.tag.trim())
     }
     const clause = where.join(' AND ')
     const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM installed_apps WHERE ${clause}`).get(...params) as { count: number }).count
-    const items = this.db.prepare(`SELECT id, spec_id AS specId, space_id AS spaceId, status,
-      installed_at AS installedAt, ${name} AS name, ${description} AS description
+    const rows = this.db.prepare(`SELECT id, spec_id AS specId, space_id AS spaceId, status,
+      installed_at AS installedAt, ${name} AS name, ${description} AS description,
+      json_extract(user_overrides_json, '$.tags') AS tagsJson
       FROM installed_apps WHERE ${clause} ORDER BY installed_at DESC, id ASC LIMIT ? OFFSET ?`)
-      .all(...params, limit, offset) as import('../../../shared/apps/people-directory').PersonDirectoryRecord[]
+      .all(...params, limit, offset) as Array<import('../../../shared/apps/people-directory').PersonDirectoryRecord & { tagsJson: string | null }>
+    const items = rows.map(({ tagsJson, ...item }) => ({ ...item, tags: tagsJson ? JSON.parse(tagsJson) as string[] : [] }))
     return { items, total, offset, limit }
+  }
+
+  /**
+   * Rename a tag (merging into an existing one) or, with `to` null, remove it,
+   * on every installed app of one kind that carries it — removed ones too, so a
+   * reinstalled item comes back sorted the same way. One transaction.
+   *
+   * @returns how many items changed
+   */
+  renameTag(type: string, from: string, to: string | null): number {
+    const rows = this.db.prepare(`SELECT id, user_overrides_json AS json FROM installed_apps
+      WHERE json_extract(spec_json, '$.type') = ?
+        AND EXISTS (SELECT 1 FROM json_each(user_overrides_json, '$.tags') WHERE lower(value) = lower(?))`)
+      .all(type, from) as Array<{ id: string; json: string }>
+    const update = this.db.prepare('UPDATE installed_apps SET user_overrides_json = ? WHERE id = ?')
+    this.db.transaction(() => {
+      for (const row of rows) {
+        const overrides = JSON.parse(row.json) as InstalledApp['userOverrides']
+        const tags = renameInTags(overrides.tags ?? [], from, to)
+        if (tags.length > 0) overrides.tags = tags
+        else delete overrides.tags
+        update.run(JSON.stringify(overrides), row.id)
+      }
+    })()
+    return rows.length
+  }
+
+  /**
+   * The tags on one kind of installed app, most used first. Removed items and
+   * `excludeIds` do not count.
+   */
+  listTagCounts(type: string, excludeIds: readonly string[] = []): import('../../../shared/apps/app-tags').TagCount[] {
+    return this.db.prepare(`SELECT MIN(tag.value) AS name, COUNT(DISTINCT installed_apps.id) AS count
+      FROM installed_apps, json_each(installed_apps.user_overrides_json, '$.tags') AS tag
+      WHERE json_extract(spec_json, '$.type') = ? AND status != 'uninstalled'
+        AND installed_apps.id NOT IN (SELECT value FROM json_each(?))
+      GROUP BY lower(tag.value) ORDER BY count DESC, name ASC`)
+      .all(type, JSON.stringify(excludeIds)) as import('../../../shared/apps/app-tags').TagCount[]
   }
 
   constructor(private readonly db: Database.Database) {
@@ -412,6 +458,23 @@ export class AppManagerStore {
     return apps
   }
 
+  listSkillRecords(spaceId: string | null): InstalledApp[] {
+    const columns = APP_COLUMNS.replace('spec_json',
+      "json_remove(spec_json, '$.skill_files', '$.skill_assets', '$.skill_content') AS spec_json")
+    const rows = this.db.prepare(`SELECT ${columns} FROM installed_apps
+      WHERE space_id IS ? AND json_extract(spec_json, '$.type') = 'skill'
+      ORDER BY installed_at DESC, id ASC`).all(spaceId) as AppRow[]
+    return rows.map(rowToInstalledApp)
+  }
+
+  /** Commit the file operation's metadata without exposing a partly updated record. */
+  updateSkillRecord(app: InstalledApp): void {
+    this.db.prepare(`UPDATE installed_apps SET spec_json = ?, spec_id = ?,
+      user_overrides_json = ?, space_id = ?, status = ?, uninstalled_at = ? WHERE id = ?`)
+      .run(JSON.stringify(app.spec), app.specId, JSON.stringify(app.userOverrides),
+        app.spaceId, app.status, app.status === 'uninstalled' ? (app.uninstalledAt ?? Date.now()) : null, app.id)
+  }
+
   // ── Update ─────────────────────────────────────
 
   /**
@@ -577,6 +640,7 @@ export class AppManagerStore {
     const stmt = this.db.prepare(`
       DELETE FROM installed_apps
       WHERE status = 'uninstalled' AND uninstalled_at IS NOT NULL AND uninstalled_at < ?
+        AND json_extract(spec_json, '$.type') != 'skill'
     `)
     const result = stmt.run(cutoff)
     return result.changes

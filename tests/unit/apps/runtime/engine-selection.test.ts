@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
   defaultEngine: 'halo',
+  explicitCc: true,
   legacyEngine: 'anthropic',
   residentEngine: undefined as string | undefined,
   busy: false,
@@ -21,6 +22,7 @@ vi.mock('../../../../src/main/services/agent', async () => ({
     if (engineId === state.unavailable) throw new Error('Engine unavailable')
   }),
   getLegacyEngine: () => state.legacyEngine,
+  resolveHistoricalEngine: (engine: string) => engine === 'anthropic' && !state.explicitCc ? 'halo' : engine,
   getSessionEngineId: () => state.residentEngine,
   hasLiveTurn: () => state.live,
   isSessionBusy: () => state.busy,
@@ -42,6 +44,7 @@ import { prepareAppEngineSession, resolveAppSessionEngine } from '../../../../sr
 
 beforeEach(() => {
   state.defaultEngine = 'halo'
+  state.explicitCc = true
   state.legacyEngine = 'anthropic'
   state.residentEngine = undefined
   state.busy = false
@@ -65,6 +68,18 @@ describe('digital human engine selection', () => {
     expect(await resolveAppSessionEngine({ conversationId, engineId: 'anthropic' })).toBe('anthropic')
   })
 
+  it.each(['app-chat:person', 'app-chat:person:wecom:direct:contact', 'app-run:task'])('continues an automatic CC binding on Halo without reading history on %s', async conversationId => {
+    state.explicitCc = false
+    const binding = { version: 1 as const, engineId: 'anthropic' as const, sessionId: 'old-cc' }
+    expect(await resolveAppSessionEngine({ conversationId, binding })).toBe('halo')
+    const plan = prepareAppEngineSession({ conversationId, engineId: 'halo', state: { binding }, spacePath: '/space', appId: 'person', runId: 'chat' })
+    expect(plan.resumeSessionId).toBe('old-cc')
+    expect(plan.engineHandoffContent).toBeUndefined()
+    expect(state.historyReads).toBe(0)
+    expect(state.checked).toEqual(['halo'])
+    expect(await resolveAppSessionEngine({ conversationId, binding, engineId: 'anthropic' })).toBe('anthropic')
+  })
+
   it('retains a saved binding when the global default changes', async () => {
     state.defaultEngine = 'codex'
     expect(await resolveAppSessionEngine({ binding: { version: 1, engineId: 'halo', sessionId: 'saved' } })).toBe('halo')
@@ -72,12 +87,14 @@ describe('digital human engine selection', () => {
 
   it('keeps the first-start route after a failure unless the person explicitly changes its engine', async () => {
     state.defaultEngine = 'halo'
+  state.explicitCc = true
     expect(await resolveAppSessionEngine({ routingEngine: 'codex' })).toBe('codex')
     expect(await resolveAppSessionEngine({ routingEngine: 'codex', engineId: 'anthropic' })).toBe('anthropic')
   })
 
   it('keeps a legacy session on its original default', async () => {
     state.defaultEngine = 'halo'
+  state.explicitCc = true
     expect(await resolveAppSessionEngine({ legacySessionId: 'old-cc-session' })).toBe('anthropic')
   })
 

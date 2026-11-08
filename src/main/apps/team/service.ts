@@ -13,7 +13,6 @@ import { sendToRenderer } from '../../foundation/window.service'
 import {
   TEAM_EVENTS,
   AI_MEMBER_HARD_LIMIT,
-  memberChatKey,
   parseMemberChatKey,
   nativeConversationChatKey,
   spaceCollabChatKey,
@@ -115,6 +114,8 @@ export interface TeamServiceDeps {
    * other way. Absent (not federated / hosted here) → the roster hook suffices.
    */
   onMemberProfileChanged?: (teamId: string, appId: string) => void
+  /** An owner renamed one of its members → carry the new name to the office like a profile edit. */
+  onMemberRenamed?: (teamId: string, appId: string) => void
   /**
    * A run started or stopped → push the live run-state (team status + the active
    * epoch) to joiners so a remote status board goes live the instant the host
@@ -206,6 +207,19 @@ function buildRefArtifact(path: string, ref: string, spaceId: string | null, cre
  * `owner` stays null when the name has not been advertised yet; `sameMachine` is
  * the unambiguous test.
  */
+/**
+ * Whether a member name was derived from the app name — as is, or made unique
+ * with a "-N" suffix or a "·owner" tag — rather than chosen for the team.
+ */
+export function memberNameFollowsApp(memberName: string, appName: string): boolean {
+  const base = appName.trim()
+  if (!base) return false
+  if (memberName === base) return true
+  if (!memberName.startsWith(base)) return false
+  const rest = memberName.slice(base.length)
+  return /^-\d+$/.test(rest) || rest.startsWith('·')
+}
+
 function projectOwnership(member: TeamMember): Pick<RosterMember, 'owner' | 'sameMachine'> {
   const remote = isRemoteMember(member)
   return {
@@ -255,6 +269,14 @@ export interface TeamService {
    * their duty, not rewrite it.
    */
   updateMember(teamId: string, appId: string, input: UpdateTeamMemberInput): TeamMember
+  /**
+   * A digital human of this computer was renamed: every team where its member
+   * name still follows the app name takes the new one. A name chosen for the
+   * team stays.
+   */
+  followAppRename(appId: string, previousName: string, name: string): void
+  /** Apply a rename the member's owner sent from another computer. */
+  applyMemberRename(teamId: string, appId: string, preferredName: string): void
   removeMember(teamId: string, appId: string): Promise<void>
   /** Stop one periodic check outright, without going through an agent. */
   cancelCheck(teamId: string, checkId: string): void
@@ -290,8 +312,8 @@ export interface TeamService {
   /**
    * Drive ONE member turn and return its reply. Position-transparent: a
    * remote-owned target is woken on its owner node over the office link and the
-   * reply refluxes back — the caller never learns position. epochId defaults to
-   * the team's current run when omitted/empty.
+   * reply refluxes back — the caller never learns position. The caller names
+   * the conversation (epochId); none is chosen for it.
    */
   sendToMember(params: SendToMemberParams): Promise<SendToMemberResult>
   /**
@@ -355,12 +377,8 @@ export interface SendToMemberResult {
 export interface StopMemberParams {
   teamId: string
   appId: string
-  /**
-   * The session to stop. Omitted → resolved exactly as the send and history
-   * paths resolve it (open run epoch → the member's long-lived chat → the
-   * latest epoch even when sealed), so all three act on one conversation.
-   */
-  epochId?: string
+  /** The conversation whose turn to stop; never chosen on the caller's behalf. */
+  epochId: string
 }
 
 export interface StopMemberResult {
@@ -404,12 +422,16 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   // ── Member-name uniqueness ──
 
-  function uniqueMemberName(teamId: string, preferred: string): string {
+  function uniqueMemberName(teamId: string, preferred: string, selfAppId?: string): string {
     const base = (preferred || 'member').trim() || 'member'
-    if (!store.getMemberByName(teamId, base)) return base
+    const taken = (name: string) => {
+      const holder = store.getMemberByName(teamId, name)
+      return !!holder && holder.appId !== selfAppId
+    }
+    if (!taken(base)) return base
     for (let i = 2; i < 1000; i++) {
       const candidate = `${base}-${i}`
-      if (!store.getMemberByName(teamId, candidate)) return candidate
+      if (!taken(candidate)) return candidate
     }
     return `${base}-${randomUUID().slice(0, 8)}`
   }
@@ -1313,6 +1335,33 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     return updated
   }
 
+  function renameMemberLocally(teamId: string, appId: string, preferredName: string): boolean {
+    const name = uniqueMemberName(teamId, preferredName, appId)
+    if (!store.renameMember(teamId, appId, name)) return false
+    console.log(`${LOG_TAG} member renamed: team=${teamId} app=${appId}`)
+    emitUpdated(teamId, { team: requireTeam(teamId) })
+    deps.onRosterMutated?.(teamId)
+    return true
+  }
+
+  function followAppRename(appId: string, previousName: string, name: string): void {
+    for (const member of store.listMembersByAppId(appId)) {
+      if (isRemoteMember(member) || member.isSystemCoordinator) continue
+      if (!memberNameFollowsApp(member.memberName, previousName)) continue
+      try {
+        if (renameMemberLocally(member.teamId, appId, name)) deps.onMemberRenamed?.(member.teamId, appId)
+      } catch (err) {
+        console.error(`${LOG_TAG} member rename failed: team=${member.teamId} app=${appId}`, err)
+      }
+    }
+  }
+
+  function applyMemberRename(teamId: string, appId: string, preferredName: string): void {
+    const name = preferredName.trim()
+    if (!name || !store.getMember(teamId, appId)) return
+    renameMemberLocally(teamId, appId, name)
+  }
+
   function cancelCheck(teamId: string, checkId: string): void {
     requireTeam(teamId)
     const check = store.getCheckById(checkId)
@@ -1686,26 +1735,11 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const target = store.listMembersByTeam(params.teamId).find((m) => m.appId === params.appId)
     if (!target) return { ok: false, stopped: false, reason: 'MEMBER_NOT_FOUND' }
 
-    const rt = requireRuntime()
-    // Resolve the SAME epoch the send and history paths resolve, down to the
-    // last step, or stop would aim at a different conversation than the one the
-    // caller is writing to and reading from: the requested epoch, else an open
-    // run epoch, else the member's long-lived chat, else the latest epoch even
-    // when sealed. Sealing does not end a turn that is already running — a
-    // caller can send into a sealed epoch, which reopens it — so a stop that
-    // refused to look there would leave exactly that turn unstoppable.
-    //
-    // Read-only throughout: creating a conversation as a side effect of
-    // stopping nothing would be the opposite of what was asked. Resolving an
-    // epoch with no live turn costs nothing — it answers `stopped: false`.
-    const epochId =
-      params.epochId ||
-      store.getCurrentEpochForTeam(params.teamId)?.id ||
-      store.getOpenConversationEpoch(params.teamId, memberChatKey(params.appId))?.id ||
-      store.listEpochsByTeam(params.teamId)[0]?.id
-    if (!epochId) return { ok: true, stopped: false, reason: 'NO_SESSION' }
-
-    const stopped = await rt.stopMemberTurn({ appId: params.appId, teamId: params.teamId, epochId })
+    // Named by the caller, like a message: a stop aimed at a conversation picked
+    // for it could end the member's work in another one. A sealed conversation
+    // can still hold a running turn, so it stays stoppable when named.
+    if (!params.epochId) throw new Error('Name the conversation whose turn to stop.')
+    const stopped = await requireRuntime().stopMemberTurn({ appId: params.appId, teamId: params.teamId, epochId: params.epochId })
     return { ok: true, stopped }
   }
 
@@ -1724,20 +1758,19 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
     const rt = requireRuntime()
 
-    // 1:1 direct chat must NOT require first starting a run — that leaks the internal
-    // run/epoch mechanism and breaks "remote = local" (local chat needs no run). Ride
-    // an OPEN run epoch when one exists (a message mid-run lands in that context),
-    // else open/reuse a long-lived per-member 'conversation' epoch: a chat container
-    // that does NOT trigger the run orchestration (sets no currentEpochId/status). A
-    // brand-new office therefore chats fine. The history read (team:chat-messages)
-    // resolves the SAME epoch via memberChatKey.
-    const epochId =
-      params.epochId ||
-      store.getCurrentEpochForTeam(params.teamId)?.id ||
-      rt.ensureConversationEpoch(params.teamId, memberChatKey(params.appId)).id
-
+    // The caller names the conversation. Choosing one for it — a running run,
+    // the member's own chat, the newest — filed messages into work they did not
+    // belong to. A member with no conversation yet gets one opened first
+    // (`openConversation`), as the team view does; naming the member there is
+    // only for one installed on this computer.
+    if (!params.epochId) throw new Error('Name the conversation to send this message in.')
+    const epochId = params.epochId
     const epoch = store.getEpochById(epochId)
-    if (epoch && isReadonlyCollaboration(team, epoch)) {
+    if (!epoch || epoch.teamId !== params.teamId) {
+      console.warn(`${LOG_TAG} direct message refused: team=${params.teamId} epoch=${epochId} reason=conversation-not-in-team`)
+      return { ok: false, finalMessage: null, reason: 'CONVERSATION_NOT_FOUND' }
+    }
+    if (isReadonlyCollaboration(team, epoch)) {
       console.warn(`${LOG_TAG} direct message refused: team=${params.teamId} epoch=${epochId} reason=source-task-readonly`)
       throw new Error('This task is read-only.')
     }
@@ -1951,6 +1984,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     updateTeam,
     addMember,
     updateMember,
+    followAppRename,
+    applyMemberRename,
     removeMember,
     cancelCheck,
     setEdges,

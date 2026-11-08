@@ -85,6 +85,31 @@ describe('system prompt per engine', () => {
     expect(toEngineSystemPrompt(prompt)).toEqual({ type: 'preset', preset: 'default', append: prompt })
   })
 
+  it.each(['anthropic', 'halo', 'codex', 'dsh'] as const)(
+    'distinguishes personal, compatibility and managed skill locations on %s', engineId => {
+      for (const promptProfile of ['halo', 'official'] as const) {
+        const prompt = buildSystemPrompt({
+          ...ctx,
+          engineId,
+          promptProfile,
+          claudeConfigDir: '/custom/agent-config',
+        })
+
+        expect(prompt).toContain('Personal global skills: ~/.agents/skills/<skill-name>/SKILL.md')
+        expect(prompt).toContain('Personal project skills: <space-path>/.agents/skills/<skill-name>/SKILL.md')
+        expect(prompt).toContain('Existing ~/.claude/skills and <space-path>/.claude/skills remain readable for compatibility')
+        expect(prompt).toContain('create new personal skills in .agents/skills')
+        expect(prompt).toContain('Store-installed and built-in skills live in the same folders')
+        expect(prompt).toContain('Manage them with the capability library or skill_manage')
+        expect(prompt).not.toContain('private runtime skill directories')
+        expect(prompt).not.toContain('/custom/agent-config/skills')
+        expect(prompt).toMatch(/(?:Claude SDK|Agent|Agent runtime) config: \/custom\/agent-config/)
+        expect(prompt).toContain('Halo config: ')
+        expect(prompt).not.toMatch(/\{\{[A-Z_]+\}\}/)
+      }
+    },
+  )
+
   it('ignores promptProfile on the halo engine', () => {
     engine.id = 'halo'
     expect(buildSystemPrompt({ ...ctx, promptProfile: 'official' })).toBe(buildSystemPrompt(ctx))

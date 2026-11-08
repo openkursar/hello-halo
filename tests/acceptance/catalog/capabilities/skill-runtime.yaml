@@ -1,0 +1,108 @@
+version: 1
+id: capabilities.skill-runtime
+module: capabilities
+title: Use the actual effective skill catalog
+story: I can rely on the advertised skill copy and understand what changes affect new work versus existing context.
+basis: documented
+references:
+  - tests/acceptance/skills-requirements.md
+promises:
+  use: Use preserves conversation drafts and waits for sending; the SDK loads the selected effective copy and its relative resources rather than another namesake.
+  disable: Disabling preserves files and removes that copy consistently from new SDK catalogs, skill calls, commands and subagents without interrupting existing work.
+  content: Current saved files govern new work; old context may remain, explicit reload may read new content and missing old paths cannot silently resolve to a different namesake.
+  engines: Every skill in the shared skill folders works on the actual session engine without a notice, a forced engine switch, a configuration change or a concealed basic-path regression.
+  management: AI and UI management share file truth, scope, precedence and authorization, and diagnose real availability without invented certainty or background scans.
+scenarios:
+  - id: capabilities.skill-runtime.use
+    title: Reach the real model boundary using the selected effective skill
+    verifies: [use, content]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    variants:
+      entry: [command, skill-tool]
+      scope: [workspace, global]
+    preconditions:
+      - Isolated real application installations include a namesake lower-priority copy, unrelated control and relative reference/script resources.
+    steps:
+      - Use the capability-library action with a pre-existing composer draft; inspect its target and send explicitly. For an old session lacking the skill, inspect and accept or cancel the offered new conversation.
+      - Inspect actual model requests and real skill/resource reads, then restart and reopen the stored conversation.
+    expected:
+      - No auto-send, lost draft, interrupted work or erased history occurs; missing skills require user-confirmed new conversation rather than silent rebuild.
+      - Actual SDK expansion/tool loading delivers exactly the effective instructions and relative resource, not the namesake/control body. Disabled/conflicted/unreadable skills never expose false-success Use.
+      - Missing external programs/accounts/network are reported as prerequisites, not skill success. Persisted command/reply remains after restart.
+    notes: The fixture substitutes only the model endpoint, never inserts skill bodies in prompts or replaces application handlers. This establishes propagation, not guaranteed live-model obedience.
+  - id: capabilities.skill-runtime.disable
+    title: Apply file-preserving disable to every new execution entry
+    verifies: [disable, use]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    variants:
+      entry: [space-chat, person-chat, im-session, manual-run, scheduled-run, team-member, subagent]
+    steps:
+      - Keep existing work active, disable one copy, compare all package bytes, start fresh work through the entry, inspect catalog/tool/command requests, restart and reenable.
+    expected:
+      - New sessions consistently omit disabled copies with no auto-scan bypass; relative applicability follows the entry's environment. Reenable restores the effective copy.
+      - Files remain unchanged; restart and content update do not reenable. Existing/reused sessions are not interrupted and may retain old context.
+      - 'Explicit authorized file reading is still possible: disable is not a sandbox or a grant of extra permissions.'
+    notes: All required entries need their own actual invocation evidence; one space-chat test cannot establish automation, team or subagent behavior. Controlled IM fixtures must never use personal recipients.
+  - id: capabilities.skill-runtime.content
+    title: Observe saved changes without promising frozen old-session content
+    verifies: [content, use]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    variants:
+      session: [new, existing]
+      file: [edited, removed, unreadable]
+    steps:
+      - Load a skill, change its real file, reopen details and explicitly load again in the required session variant.
+    expected:
+      - Details show saved current content; new sessions use current effective files. Old loaded content need not disappear and explicit reload can see new bytes without a frozen mirror.
+      - Missing/unreadable original path produces an honest error, not another namesake. Copy explains disable timing separately from content-edit timing.
+  - id: capabilities.skill-runtime.engines
+    title: Use the same skills on every engine
+    verifies: [engines, disable]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    variants:
+      engine: [halo, claude-code, codex, dsh]
+    steps:
+      - Keep a personal skill and install a store skill and a built-in skill, start a conversation on the selected engine and invoke each by name; compare what the engine receives with the skill library and with the user's project and engine configuration.
+    expected:
+      - Every skill in the shared `.agents/skills` folders, whatever its origin, is usable on the actual conversation engine with no notice, no forced switch and no instruction to change engine.
+      - Claude Code receives the skills it cannot find in its own folders through one Halo-owned directory of links; no file in the user's project or in Claude configuration is written, removed or replaced.
+      - Claude Code and Codex do not wait for Halo's skill catalog during session creation or one-shot queries. If it is not already available, their normal first message proceeds. Halo SDK keeps its bounded readiness wait and shows a catalog-unavailable notice only when that wait fails.
+      - Turning a skill off in the library takes effect in new Halo SDK and Claude Code conversations; an engine that reads the shared folder itself may still see a turned-off file.
+      - A basic invocation regression on any engine is reported rather than waived as another engine.
+    notes: Each engine requires an installed isolated supported runtime and engine-specific model evidence. Missing engines remain blocked, never passing skips or fallback evidence.
+  - id: capabilities.skill-runtime.ai-management
+    title: Manage and explain skills through the same rules as the UI
+    verifies: [management, engines, content]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    variants:
+      action: [import, create, edit, disable, move, delete, explain]
+    steps:
+      - Ask through a conversation to perform the selected action with controlled files and inspect actual management calls, required target/replace decisions, UI refresh and filesystem changes.
+    expected:
+      - AI uses the same destination, identity and precedence, explains independent copying and asks natural-language clarification without requiring internal IDs.
+      - Diagnosis reflects scope/shadowing/disabled/readability/actual-engine/old-session status and uncertainty. File deletion/overwrite stays within explicit authorization and caller permissions.
+      - Source labels do not imply trust; no shadow instruction database, polling or historical workspace scan is created.

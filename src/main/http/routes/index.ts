@@ -24,6 +24,7 @@ import { registerTlonRoutes } from './tlon.routes'
 import { registerTaskRoutes } from './task.routes'
 import { registerGitRoutes } from './git.routes'
 import { registerCodeReviewRoutes } from './code-review.routes'
+import { registerSkillsRoutes } from './skills.routes'
 
 /**
  * Register all API routes.
@@ -46,6 +47,7 @@ export function registerApiRoutes(app: Express): void {
   registerTaskRoutes(app)
   registerGitRoutes(app)
   registerCodeReviewRoutes(app)
+  registerSkillsRoutes(app)
 
   console.log('[HTTP] API routes registered')
 }

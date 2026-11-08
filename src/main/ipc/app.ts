@@ -578,6 +578,10 @@ export function registerAppHandlers(): void {
       }
     },
 
+    // ── app:rename-tag ───────────────────────────────────────────────────────
+    appRenameTag: (input: import('../../shared/apps/app-tags').RenameTagInput) => appOperation('rename-tag', () => appController.renameTag(input)),
+    appListTags: (type: unknown) => appOperation('list-tags', () => appController.listTags(type)),
+
     // ── app:update-spec ──────────────────────────────────────────────────────
     appUpdateSpec: async (input: { appId: string; specPatch: Record<string, unknown> }) => {
       try {

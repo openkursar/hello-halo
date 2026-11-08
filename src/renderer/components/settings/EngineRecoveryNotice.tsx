@@ -14,6 +14,7 @@ import { resolveModelSelection } from '../../types'
 import type { EngineId } from '../../../shared/types/engine'
 import { engineSourceOf, getEngineSourceCompatibility } from '../../../shared/engine-source'
 import { resolveEngineIssue, resolveEngineNotice } from './engine-issue'
+import { hasExplicitCcSelection } from '../../../shared/types/cc-runtime'
 
 /**
  * What the chat says when its engine or account cannot run here, with the ways
@@ -31,6 +32,7 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
   const { t } = useTranslation()
   const engine = useEngineId(engineId)
   const requested = useAppStore(state => state.config?.agent?.sdkEngine)
+  const ccRuntime = useAppStore(state => state.config?.agent?.ccRuntime)
   const sources = useAppStore(state => state.config?.aiSources)
   const navigate = useAppStore(state => state.navigate)
   const openClaudeCodeSettings = useAppStore(state => state.openClaudeCodeSettings)
@@ -48,7 +50,7 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
   const availability = useEngineAvailability(engine === 'anthropic' || delegated || Boolean(failure), failure)
   const ccAvailable = availability ? Boolean(availability.engines.find(item => item.engineId === 'anthropic')?.available) : undefined
   const accountCompatibility = engine ? getEngineSourceCompatibility(engine, selected) : { compatible: true as const }
-  const fellBack = !engineId && requested === 'anthropic' && engine === 'halo'
+  const fellBack = !engineId && requested === 'anthropic' && hasExplicitCcSelection(ccRuntime, sources) && engine === 'halo'
   const canMove = target.kind === 'digital-human' || Boolean(spaceId && target.conversation)
 
   const issue = engine ? resolveEngineIssue({ engine, delegated, accountCompatible: accountCompatibility.compatible, group: Boolean(selection?.group), ccAvailable }) : null
@@ -79,7 +81,11 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
         : issue === 'codex-group'
           ? t('Codex cannot use a load-balancing group. Choose a single model account or another engine.')
           : issue === 'cc-missing'
-            ? t('This conversation runs on Claude Code, which is not available on this computer. Install or connect Claude Code, or continue with Halo SDK.')
+            ? !hasExplicitCcSelection(ccRuntime, sources)
+              ? api.isRemoteMode()
+                ? t('Claude Code is selected for this conversation. In the Halo desktop app on the host computer, select a Claude Code installation once under Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.')
+                : t('Claude Code is selected for this conversation. Select a Claude Code installation once in Settings > Advanced, even if the same installation is already listed. Your history and engine choice are kept.')
+              : t('This conversation runs on Claude Code, which is not available on this computer. Install or connect Claude Code, or continue with Halo SDK.')
             : notice.kind === 'failure'
               ? t('This conversation’s engine or account cannot run on this computer. Check the engine and account in Settings.')
               : t('Halo SDK is currently running. To use Claude Code, connect it in Settings > Advanced. Your chat history is kept; no restart is needed.')
@@ -94,7 +100,7 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
           {/* Claude Code is set up on the computer running Halo; remote clients have no such settings. */}
           {(issue === 'account-needs-cc' || issue === 'cc-missing') && !api.isRemoteMode() && (
             <button type="button" className={action} onClick={openClaudeCodeSettings}>
-              {issue === 'cc-missing' ? t('Install or connect Claude Code') : t('Set up Claude Code')}
+              {issue === 'cc-missing' && !hasExplicitCcSelection(ccRuntime, sources) ? t('Select Claude Code in Settings') : issue === 'cc-missing' ? t('Install or connect Claude Code') : t('Set up Claude Code')}
             </button>
           )}
           {issue === 'account-cc-ready' && canMove && (

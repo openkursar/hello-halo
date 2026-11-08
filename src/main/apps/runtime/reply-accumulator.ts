@@ -31,9 +31,11 @@ export class ReplyTextAccumulator {
    * Non-empty text blocks extend the current run; a tool_use block resets it.
    * Other block kinds (e.g. thinking) are ignored — they neither extend nor
    * reset the run, so a thinking block preceding the answer does not discard it.
+   * A message carrying `error` is the engine telling a failed model request:
+   * never part of the reply.
    */
   feed(sdkMessage: any): void {
-    if (sdkMessage?.type !== 'assistant') return
+    if (sdkMessage?.type !== 'assistant' || sdkMessage.error) return
     const content = sdkMessage.message?.content
     if (!Array.isArray(content)) return
 

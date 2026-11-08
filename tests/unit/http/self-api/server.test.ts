@@ -13,6 +13,16 @@ vi.mock('../../../../src/main/http/self-api/token-store', () => ({
   resolveSelfApiToken: vi.fn(),
 }))
 
+/** A bind the OS refuses, failing the way Express 5 does: the listen callback receives the error first. */
+function refusedBind(code: string) {
+  return (_port: number, _host: string, onListening: (error?: Error) => void) => {
+    const server = new EventEmitter()
+    server.once('error', onListening)
+    queueMicrotask(() => server.emit('error', Object.assign(new Error(`bind ${code}`), { code })))
+    return server
+  }
+}
+
 beforeEach(() => {
   vi.resetModules()
   mocks.issue.mockImplementation((spaceId: string) => `regular-${spaceId}`)
@@ -69,16 +79,20 @@ describe('self-API public listener contract', () => {
   })
 
   it('retains startup retry after failure without issuing a regular token', async () => {
-    mocks.listen.mockImplementationOnce(() => {
-      const server = new EventEmitter()
-      queueMicrotask(() => server.emit('error', Object.assign(new Error('bind refused'), { code: 'EACCES' })))
-      return server
-    })
+    mocks.listen.mockImplementationOnce(refusedBind('EACCES'))
     const { ensureSelfApiServer } = await import('../../../../src/main/http/self-api')
-    await expect(ensureSelfApiServer()).rejects.toThrow('bind refused')
+    await expect(ensureSelfApiServer()).rejects.toThrow('bind EACCES')
     expect(await ensureSelfApiServer()).toEqual({ url: 'http://127.0.0.1:4791' })
     expect(mocks.listen).toHaveBeenCalledTimes(2)
     expect(mocks.issue).not.toHaveBeenCalled()
+  })
+
+  it('hands sessions the port it actually bound when the default one is taken', async () => {
+    // Another Halo on this machine holds 4791; its tokens are not this process's.
+    mocks.listen.mockImplementationOnce(refusedBind('EADDRINUSE'))
+    const { ensureSelfApiServer } = await import('../../../../src/main/http/self-api')
+    expect(await ensureSelfApiServer('space-a')).toEqual({ url: 'http://127.0.0.1:4792', token: 'regular-space-a' })
+    expect(mocks.listen.mock.calls.map(([port]) => port)).toEqual([4791, 4792])
   })
 
   it('exports the requested generic grant API and types, but not the test reset', async () => {

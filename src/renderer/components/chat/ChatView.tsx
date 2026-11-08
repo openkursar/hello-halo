@@ -657,9 +657,14 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
                 onAtBottomStateChange={handleAtBottomStateChange}
                 onLoadEarlier={hasEarlier ? handleLoadEarlier : undefined}
                 footerExtra={isDigitalHuman
-                  ? (realMessages.length > 0 && !isGenerating && activeConversationId
-                    ? <ClearChatControl conversationId={activeConversationId} />
-                    : null)
+                  ? (
+                    <>
+                      <TeamCollabPanel conversationId={activeConversationId ?? undefined} />
+                      {realMessages.length > 0 && !isGenerating && activeConversationId
+                        ? <ClearChatControl conversationId={activeConversationId} />
+                        : null}
+                    </>
+                  )
                   : <TeamCollabPanel conversationId={activeConversationId ?? undefined} />}
               />
             </ConversationReferenceScope>

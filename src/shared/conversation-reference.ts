@@ -120,12 +120,30 @@ export function isShortConversationId(target: string): boolean {
   return new RegExp(`^[0-9a-f]{${SHORT_ID_LENGTH}}$`, 'i').test(target)
 }
 
-/** The short id a reference's link target carries (lowercase), or null when `href` is not a reference. */
-export function conversationReferenceShortId(href: string): string | null {
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * What a `conv:` link points at. A full id is matched exactly, never shortened:
+ * its short form may name a different conversation.
+ */
+export type ConversationReferenceTarget =
+  | { kind: 'short'; id: string }
+  | { kind: 'full'; id: string }
+  | { kind: 'invalid' }
+
+/**
+ * The target of a `conv:` link, or null when `href` is not one. A `conv:` link
+ * is always Halo's own, so one that cannot be read is `invalid` rather than null —
+ * null would let it fall through to the operating system.
+ */
+export function parseConversationReference(href: string): ConversationReferenceTarget | null {
   const prefix = `${CONVERSATION_REFERENCE_SCHEME}:`
   if (href.slice(0, prefix.length).toLowerCase() !== prefix) return null
   const id = href.slice(prefix.length)
-  return isShortConversationId(id) ? id.toLowerCase() : null
+  if (isShortConversationId(id)) return { kind: 'short', id: id.toLowerCase() }
+  if (UUID_PATTERN.test(id)) return { kind: 'full', id: id.toLowerCase() }
+  if (isAppChatKey(id) && !/[\s?#]/.test(id)) return { kind: 'full', id }
+  return { kind: 'invalid' }
 }
 
 /** Longest a first-message preview stands in for a chat's missing name. */

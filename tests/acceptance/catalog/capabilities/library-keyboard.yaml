@@ -1,0 +1,63 @@
+version: 1
+id: capabilities.library-keyboard
+module: capabilities
+title: Keep library keyboard actions within their intended control
+story: I can use a skill without losing my draft, decline a nested confirmation without losing its parent dialog, and add an MCP tag without navigating away.
+basis: observed
+references:
+  - src/renderer/components/chat/InputArea.tsx
+  - src/renderer/components/ui/ConfirmDialog.tsx
+  - src/renderer/components/apps/McpCard.tsx
+  - src/renderer/components/apps/McpCardWall.tsx
+promises:
+  draft: Selecting a suggested skill command retains the existing draft and waits for an explicit send.
+  confirm: A legacy-content deletion confirmation remains reachable inside its parent dialog; declining it preserves the content and parent dialog.
+  tags: Enter in an MCP tag input adds the tag rather than opening the card, and the search input remains usable at narrow widths.
+scenarios:
+  - id: capabilities.library-keyboard.skill-draft
+    title: Preserve a draft when accepting a suggested skill command
+    verifies: [draft]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - Enter a draft in the conversation, open a recovered global skill and choose Use.
+      - Accept the suggested command with Enter, then press Enter again to send.
+    expected:
+      - The draft remains after command selection, no message is sent prematurely, and the stored user message contains the command and entire draft exactly once.
+      - The real engine delivers the recovered skill instructions and receives a reply from the scripted endpoint.
+    notes: Isolated production server and headless remote renderer. This does not cover sessions that lack the newly installed skill or all skill scope variants.
+  - id: capabilities.library-keyboard.nested-confirmation
+    title: Decline or confirm deletion inside the legacy recovery dialog
+    verifies: [confirm]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - Open a removed skill's recovery dialog. Open Delete and decline with Escape, then repeat with Cancel.
+      - Open Delete again and confirm, then restart the isolated application.
+    expected:
+      - Each declined confirmation closes only itself, keeps the parent usable and leaves the stored rows unchanged.
+      - Confirmation removes only the selected legacy content, unrelated rows stay unchanged and the removed content does not reappear after restart.
+    notes: The fixture configures a scripted endpoint but this journey sends no model request. It verifies the legacy-content dialog, not every confirmation surface or the operating-system recycle bin.
+  - id: capabilities.library-keyboard.mcp-tags
+    title: Add an MCP tag without opening its detail at desktop and narrow widths
+    verifies: [tags]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - At 1280px and 375px open an MCP card's Tags menu, enter a tag and press Enter, then click the search input.
+      - Restart the isolated application and read the saved tags.
+    expected:
+      - The tag appears on the list without opening the detail, the search input has usable width and accepts a click, and both tags remain after restart.
+    notes: Isolated production server and headless remote renderer. The seeded connection deliberately has no running service; this checks tag editing, not connection success or the complete tag-management journey.

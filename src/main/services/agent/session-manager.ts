@@ -1342,14 +1342,14 @@ async function getOrCreateV2SessionInner(
     sdkOptions = { ...sdkOptions, resume: undefined, strictResume: undefined, engineHandoffContent: content, engineHandoffRecovered: true }
     console.warn(`[Agent][${conversationId}] Native ${engineId} session unavailable; continuing from Halo's recorded context`)
   }
-  // A legacy resume never fails on a lost record: without a readable
-  // transcript of its own it starts fresh (or keeps what the engine can read).
+  // Halo must not silently discard history when both recovery sources fail.
   const recoverLegacySession = async (error: unknown): Promise<boolean> => {
     try {
       await recoverNativeSession(error)
       return true
     } catch (recoveryError) {
       console.warn(`[Agent][${conversationId}] Legacy session ${sessionId} has no transcript to continue from:`, recoveryError instanceof Error ? recoveryError.message : recoveryError)
+      if (engineId === 'halo') throw recoveryError
       return false
     }
   }
@@ -1371,7 +1371,7 @@ async function getOrCreateV2SessionInner(
   }
   // The halo engine reads the stored record itself; with a transcript to fall
   // back on, it refuses a record that would come back with gaps.
-  if (effectiveSessionId && engineId === 'halo' && gates?.recoverNativeSession) {
+  if (effectiveSessionId && engineId === 'halo') {
     sdkOptions = { ...sdkOptions, strictResume: true }
   }
   const startTime = Date.now()
@@ -1387,7 +1387,12 @@ async function getOrCreateV2SessionInner(
   // resolved-sdk handles sdkEngine switch (Halo SDK vs CC SDK) transparently.
   // Mark the creation window so a toolset toggle arriving during this await is
   // not lost (see requestSessionRebuild / sessionsUnderCreation).
+  // Control imports this manager, so subscribe only while a native session is being created.
+  const { onUserStop } = await import('./control')
   sessionsUnderCreation.add(conversationId)
+  const creationAbort: AbortController = sdkOptions.abortController ?? new AbortController()
+  const stopSubscription = onUserStop(id => { if (id === conversationId) creationAbort.abort() })
+  sdkOptions = { ...sdkOptions, abortController: creationAbort }
   let session: V2SDKSession
   try {
     try {
@@ -1401,7 +1406,12 @@ async function getOrCreateV2SessionInner(
       }
       session = (await createSession(sdkOptions)) as unknown as V2SDKSession
     }
+    if (creationAbort.signal.aborted) {
+      session.close()
+      creationAbort.signal.throwIfAborted()
+    }
   } finally {
+    stopSubscription.dispose()
     sessionsUnderCreation.delete(conversationId)
   }
 

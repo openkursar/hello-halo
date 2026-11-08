@@ -55,7 +55,7 @@ import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable 
 import { acquireChatBrowserContext, bindChatBrowserSession, endChatBrowserTurn, destroyChatBrowserContext } from './app-chat-browser'
 import { buildMessageContent, formatCanvasContext } from '../../services/agent/message-utils'
 import { opensWithSlashCommand } from '../../services/agent/opening-context'
-import { acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
+import { getToolset, acquireV2Session, formatTurnAttachments, workingDirErrorDetail, engineErrorDetail, hasPendingSessionInput, hasLiveTurn, markMcpServerSettings, resolveCredentialsForSdk, buildUserSessionSdkOptions, toEngineSystemPrompt, getEngineCapabilities, getLegacyEngine, resolveHistoricalEngine, getSessionEngineId, type V2SessionLease } from '../../services/agent'
 import type { CanvasContext } from '../../services/agent/types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { messageSummaryText } from '../../../shared/content-reference'
@@ -142,17 +142,19 @@ import {
 } from './live-instances'
 import { buildBaseToolset } from '../../services/agent/toolsets/base'
 import { createOcrMcpServer } from '../../services/ocr'
-import { createApiRefMcpServer, HALO_API_TOOLSET_ID } from '../../services/api-ref'
+import { createApiRefMcpServer } from '../../services/api-ref'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { createConversationCollabMcpServer, resolveConversationCollab } from './conversation-collab'
+import { withheldWebSearch, withholdWebSearchBuiltins } from './web-search-switch'
 import { getSpace, getSpaceDir, isSpaceMemoryEnabled } from '../../services/space.service'
 import { readSessionMessages, readSessionTranscript, readSessionMessageThoughts, loadChatEngineState, saveChatEngineBinding, saveChatEngineRouting, deleteChatSessionId, copySessionJsonl } from './session-store'
 import { prepareAppEngineSession, resolveAppSessionEngine } from './engine-selection'
 import type { Thought, TranscriptMessage, TranscriptPageRequest, TranscriptProvenance } from '../../../shared/types/transcript'
 import { getAppMemoryService, getActivityStore } from './index'
 import { resolveExecutionEnvironment, validateExecutionEnvironment, legacySessionEnvironmentKey, resolveChatEnvironment, appChatRunId, validateEnvironmentConnections } from './execution-environment'
-import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
-import type { PersonContextCaller } from '../../../shared/apps/person-context'
+import { listStandingTeams } from './standing-teams'
+import { buildSelfIdentityPrompt } from './prompt/self-identity'
+import { buildTeamGuidance } from './prompt/team-guidance'
 import {
   prepareMemoryForTurn,
   requestAppMemoryConsolidation,
@@ -193,7 +195,7 @@ export { getAppChatConversationId, buildImSessionKey }
  * capability the owner lends out: withholding them would not restrict a teammate,
  * it would cut the digital human off from the conversation it was woken for.
  */
-const TEAM_CHANNEL_MCP: ReadonlySet<string> = new Set([TEAM_MCP_SERVER_NAME, 'halo-report', 'halo-person-context'])
+const TEAM_CHANNEL_MCP: ReadonlySet<string> = new Set([TEAM_MCP_SERVER_NAME, 'halo-report'])
 
 /** Session creation context of a session whose hooks record its tool calls (delegation-gate). */
 const RECORDED_SESSION = 'delegation-audit'
@@ -741,29 +743,17 @@ async function runAppChatTurn(
   // in a chat a member fronts answers to the chat's rules instead.
   const borrowedTeamTurn = !!teamContext && isBorrowedTeamTurn(teamContext, !!imSession)
 
-  // permCtx (fixed at the top) shapes both the system prompt (ownerIds) and the
-  // SDK options (guest tool restrictions); undefined for native Halo chat.
-  const personCaller: PersonContextCaller = {
-    appId,
-    capabilityMode: 'chat',
-    environmentSpaceId: spaceId,
-    authority: permCtx?.isOwner === false ? 'guest'
-      : teamContext && (!!origin || teamContext.kind !== undefined || !!imSession) ? 'team' : 'owner',
-    ...(teamContext ? { teamId: teamContext.teamId, epochId: teamContext.epochId } : {}),
-  }
-
-  // Default OFF, unlike the other built-in capabilities: this one operates
-  // Halo's own configuration and data, which is not a sensible default for a
-  // digital human the user installed to do something else.
+  // Not a switch: operating Halo is how a digital human perceives its own
+  // environment — its teams, its people, its settings.
   //
   // Never on a request from outside, however much else it may use: the
   // switches others are offered do not include it, and its credential governs
   // all of Halo. `filterMcpServersByPolicy` already withholds the server from a
   // restricted turn, so the credentials and the usage guide have to be
   // withheld here too — otherwise an outside sender gets a prompt describing a
-  // tool the session does not have.
-  const usesHaloApi =
-    resolvePermission(app, HALO_API_TOOLSET_ID, false) && permCtx?.isOwner !== false && !origin
+  // tool the session does not have. A disposable member goes without it as it
+  // goes without `halo-apps`: what it could create would outlive the team.
+  const usesHaloApi = !disposableMember && permCtx?.isOwner !== false && !origin
 
   // Off unless the owner switched it on, and never on someone else's turn (an IM
   // guest, a request from outside), in a team channel, or in an IM/HTTP session.
@@ -795,7 +785,7 @@ async function runAppChatTurn(
       imContactsAvailable: notifyAvail.imContactsAvailable,
     }) ?? undefined,
   })
-  if (personCaller.authority !== 'guest') identity.push(personContextPrompt(personCaller))
+  if (permCtx?.isOwner !== false) identity.push(buildSelfIdentityPrompt(app.id, app.spec.name))
 
   if (teamContext) {
     // Every team turn (user/IM/teammate) stamps the epoch's activity, and wakes
@@ -831,6 +821,25 @@ async function runAppChatTurn(
     entry = NATIVE_CHAT_ENTRY
     constraints = []
   }
+  // Team collaboration is built into the owner's own chats, the same toolset a
+  // space conversation opens. Not offered to anyone
+  // acting through it (IM, guests, requests from outside) nor inside a team turn,
+  // so a member can never assemble a team of its own.
+  const teamToolset = !teamContext && !imSession && permCtx?.isOwner !== false && !origin
+    && parseNativeChatKey(conversationId)?.appId === appId && getActiveTeamRuntime()
+    ? getToolset(TEAM_MCP_SERVER_NAME)
+    : undefined
+  // Whoever started the turn, a person or a teammate: a fragment that came and
+  // went with the trigger would rebuild the warm session and drop its prompt
+  // cache every time the two alternate in one conversation.
+  const teamGuidance = buildTeamGuidance({
+    ...(teamToolset ? { agentTeamGuide: teamToolset.usageGuide } : {}),
+    teams: usesHaloApi ? listStandingTeams(appId) : [],
+    ...(teamPromptCtx && teamContext
+      ? { current: { teamName: teamPromptCtx.teamName, epochId: teamContext.epochId, viaIm: !!imSession } }
+      : {}),
+  })
+  if (teamGuidance) entry = `${entry}\n\n${teamGuidance}`
   const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
 
   // ── 4. Build MCP servers ─────────────────────────────
@@ -853,7 +862,7 @@ async function runAppChatTurn(
   // for colleagues ever widens what a stranger can reach. The owner's own
   // digital humans and the runtime are held to nothing.
   let skillCopies: AvailableSkill[] | undefined
-  const loadableSkills = (): AvailableSkill[] => (skillCopies ??= listLoadableSkillCopies(spaceId))
+  const loadableSkills = (): AvailableSkill[] => (skillCopies ??= listLoadableSkillCopies(spaceId, environment.workDir))
   const delegatedPolicy = borrowedTeamTurn && teamContext
     ? getActiveTeamRuntime()?.getDelegatedPolicy(teamContext.teamId, appId) ?? null
     : null
@@ -940,17 +949,17 @@ async function runAppChatTurn(
   // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
   // Starts from the base toolset. Excluded: `halo-apps` for a disposable member,
   // whose digital-human tools would create artifacts that outlive the team
-  // (see `disposableMember`). An IM guest keeps `halo-apps` here; the capability
-  // policy below decides whether the guest may use it.
+  // (see `disposableMember`), and web search when the owner switched it off. An
+  // IM guest keeps `halo-apps` here; the capability policy below decides
+  // whether the guest may use it.
+  const webSearch = withheldWebSearch(app)
   const mcpServers: Record<string, any> = {
     ...(dbMcpServers ?? {}),
     'halo-notify': notifyMcpServer,
-    ...(personCaller.authority !== 'guest' ? { 'halo-person-context': createPersonContextMcpServer(personCaller) } : {}),
     ...buildBaseToolset({
       spaceId,
-      exclude: disposableMember ? ['halo-apps'] : [],
-      // Mounted above for the caller's own authority.
-      omitPersonContext: true,
+      exclude: [...(disposableMember ? ['halo-apps' as const] : []), ...webSearch.servers],
+      omitSkillManagement: permCtx?.isOwner === false || Boolean(origin),
     }),
     'ocr': createOcrMcpServer(),
     // A reminder returns to the conversation it was set in. A team turn has its
@@ -1001,6 +1010,16 @@ async function runAppChatTurn(
       ? {
           'halo-report': createReportToolServer(activityStore, reportContext, () => {
             peekAppChatSink(conversationId)?.noteAskedUser()
+          }),
+        }
+      : {}),
+    ...(teamToolset
+      ? {
+          [TEAM_MCP_SERVER_NAME]: teamToolset.createServer({
+            spaceId,
+            conversationId,
+            workDir,
+            modelSelection: credentials.sourceId ? { modelSourceId: credentials.sourceId, modelId: credentials.model } : undefined,
           }),
         }
       : {}),
@@ -1078,6 +1097,7 @@ async function runAppChatTurn(
 
   // Override for app chat context
   sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt, engineId)
+  withholdWebSearchBuiltins(sdkOptions, webSearch)
 
   // Non-native sessions (IM channels, etc.) are non-interactive — the user
   // cannot respond to interactive tool prompts, so deny them preemptively.
@@ -1374,7 +1394,7 @@ async function runAppChatTurn(
     // Load saved sessionId for resume when V2 session is rebuilt after idle
     // timeout, process crash, or config change (same pattern as send-message.ts)
     const sessionPlan = prepareAppEngineSession({
-      engineId, state: engineState, spacePath, appId, runId: chatRunId, conversationId,
+      engineId, explicitEngine: Boolean(app.userOverrides?.engineId), state: engineState, spacePath, appId, runId: chatRunId, conversationId,
       legacySessionId: forkResumeSessionId, excludeInputIds: request.recordedInputIds,
       readPendingInputIds: () => [
         ...chatDelivery?.pendingRecordedInputIds(conversationId) ?? [],
@@ -1445,7 +1465,7 @@ async function runAppChatTurn(
     const startedTeamSession = parseTeamSessionKey(conversationId)
     if (startedTeamSession) {
       const runtime = getActiveTeamRuntime()
-      runtime?.noteMemberStatusChanged(startedTeamSession.teamId)
+      runtime?.noteMemberStatusChanged(startedTeamSession.teamId, startedTeamSession.appId)
       // Opens the window this turn's board writes and messages are counted in,
       // so the report at the other end can say the member filed nothing without
       // guessing (see apps/runtime/team/turn-report.ts).
@@ -1521,6 +1541,8 @@ async function runAppChatTurn(
       onProgress, onMessageAccepted, onResult: request.onResult,
       onReply: (content, ending) => {
         finalReply = content
+        // Answered with what was written, but its team hears of a failure.
+        if (ending?.kind === 'failed') turnFailure = ending.error
         if (ending) onReply?.(content, ending)
         else onReply?.(content)
       },
@@ -1609,7 +1631,7 @@ async function runAppChatTurn(
       // Only bus-driven turns get orchestration's own pulse, and only a HOSTED
       // office is re-baselined periodically, so a 1:1 turn would otherwise leave
       // the member's own machine showing it as working forever.
-      getActiveTeamRuntime()?.noteMemberStatusChanged(endedTeamSession.teamId)
+      getActiveTeamRuntime()?.noteMemberStatusChanged(endedTeamSession.teamId, endedTeamSession.appId)
       // Tell the lead the member stopped. Nothing else will: the member's own
       // words reach no teammate, so a turn that ends without a team_send — the
       // ordinary shape of a model that quit early, crashed, or was stopped by
@@ -1886,7 +1908,11 @@ export function loadChatMessagesForConversation(
 export function loadChatEngineMetadata(spacePath: string, appId: string, conversationId: string): AppChatEngineMetadata {
   const path = chatRecordPath(appId, conversationId, spacePath)
   const state = loadChatEngineState(path, appId, deriveRunId(conversationId, appId))
-  const engineId = getSessionEngineId(conversationId) ?? state.binding?.engineId ?? state.routingEngine ?? (state.sessionId ? getLegacyEngine() : undefined)
+  const historical = state.binding?.engineId ?? state.routingEngine
+  const override = getAppManager()?.getApp(appId)?.userOverrides?.engineId
+  const engineId = getSessionEngineId(conversationId)
+    ?? (historical ? override ? historical : resolveHistoricalEngine(historical)
+      : override ?? (state.sessionId ? getLegacyEngine() : undefined))
   return { ...(engineId ? { engineId } : {}), ...(state.binding ? { engineBinding: state.binding } : {}) }
 }
 
@@ -2375,6 +2401,14 @@ export function forkNativeChatSession(
  * record. Only 'local'-source sessions are deletable this way; other keys are
  * rejected so the default session and IM sessions can't be removed here.
  */
+const nativeChatDeletedListeners = new Set<(conversationId: string) => void>()
+
+/** Notified after a native local session is deleted; returns its unsubscribe. */
+export function onNativeChatDeleted(listener: (conversationId: string) => void): () => void {
+  nativeChatDeletedListeners.add(listener)
+  return () => { nativeChatDeletedListeners.delete(listener) }
+}
+
 export async function deleteNativeChatSession(
   appId: string,
   spaceId: string,
@@ -2390,6 +2424,13 @@ export async function deleteNativeChatSession(
   getTaskStateService()?.remove(conversationId)
   emitSessionUpdated(appId, { channel: parsed.channel, chatId: parsed.chatId, chatType: parsed.chatType }, {})
   console.log(`[AppChat][${appId}] Native local session deleted: ${conversationId}`)
+  for (const listener of nativeChatDeletedListeners) {
+    try {
+      listener(conversationId)
+    } catch (error) {
+      console.error(`[AppChat][${appId}] Session-deleted listener failed: ${conversationId}`, error)
+    }
+  }
 }
 
 /**

@@ -1395,6 +1395,10 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       }))
     },
 
+    refreshAppState(appId: string): void {
+      if (appManager.getApp(appId)) broadcastAppStatus(appId)
+    },
+
     getAppState(appId: string): AutomationAppState {
       const app = appManager.getApp(appId)
       if (!app) {
@@ -1422,6 +1426,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         continuationCount: counts.continuations,
         pendingEscalationId: app.pendingEscalationId,
       }
+      if (getActiveTeamRuntime()?.isMemberWorking(appId)) state.teamWorking = true
 
       // Get latest run info
       const latestRun = store.getLatestRunForApp(appId)

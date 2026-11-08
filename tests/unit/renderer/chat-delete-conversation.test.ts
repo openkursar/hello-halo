@@ -23,6 +23,13 @@ const apiMock = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../src/renderer/api', () => ({ api: apiMock }))
+// Titles follow the UI language, which otherwise comes from the machine running the test.
+vi.mock('../../../src/renderer/i18n', () => ({
+  default: {
+    t: (text: string, values?: Record<string, string>) => text.replace('{{time}}', values?.time ?? ''),
+    on: () => {}, off: () => {}, language: 'en',
+  },
+}))
 
 vi.mock('../../../src/renderer/services/canvas-lifecycle', () => ({
   canvasLifecycle: { hideAllBrowserViews: vi.fn() },
@@ -109,8 +116,8 @@ describe('deleteConversation — last-conversation deletion (#294)', () => {
     const ok = await useStore.getState().deleteConversation('space-1', 'only-one')
 
     expect(ok).toBe(true)
-    // No title; no thinking level yet, since none was ever picked.
-    expect(apiMock.createConversation).toHaveBeenCalledWith('space-1', undefined, undefined)
+    // The placeholder title in the UI language; no thinking level yet, since none was ever picked.
+    expect(apiMock.createConversation).toHaveBeenCalledWith('space-1', expect.stringMatching(/^Chat \d{1,2}-\d{1,2} \d{1,2}:\d{2}$/), undefined)
     expect(useStore.getState().getCurrentConversationId()).toBe('fresh')
     expect(useStore.getState().getConversations()).toHaveLength(1)
     // The new conversation is usable end-to-end: meta + cache both seeded.

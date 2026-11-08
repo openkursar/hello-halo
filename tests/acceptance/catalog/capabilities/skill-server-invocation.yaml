@@ -1,0 +1,63 @@
+version: 1
+id: capabilities.skill-server-invocation
+module: capabilities
+title:
+  en: Use recovered skills through the real application
+  zh: 从真实应用使用恢复后的技能
+story:
+  en: After upgrading, I can open an existing skill, use it in a conversation and rely on disabled skills remaining unavailable without learning storage or engine internals.
+  zh: 升级后我能打开原有技能并在对话中使用，停用的技能保持不可用，无需理解存储和引擎内部机制。
+basis: documented
+references:
+  - tests/acceptance/skills-requirements.md
+promises:
+  invoke: The library's Use action inserts a command without sending automatically; sending it expands the actual recovered instructions through Halo SDK and preserves the response after restart.
+  tool: The real skill tool loads an enabled source and refuses a disabled name without returning its instructions or deleting its files.
+  manage: An owner can ask the real skill management tool to list, read and disable a library skill using returned references; the same state appears in the library without deleting files.
+scenarios:
+  - id: capabilities.skill-library-server.manage
+    title: Manage a skill through the real owner conversation tool
+    verifies: [manage]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - Send an owner request from the real composer. The scripted model lists the global skill, uses its returned reference to read it and disables that same reference.
+      - Return to the capability library and inspect the disabled card, real file and installation state.
+    expected:
+      - The advertised management tool performs all three actions in the production domain, returns the actual instructions and preserves the file while the library reflects disabled state.
+    notes: The model emits requests and consumes real tool responses; it does not inject domain results. This is owner space-chat evidence only. Guest/colleague exclusions are covered separately at the real toolset assembly boundary, not by this browser case.
+  - id: capabilities.skill-library-server.invoke
+    title: Use a recovered skill and read the saved response after restart
+    verifies: [invoke]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - Seed the legacy database before launching the production application in isolated server mode with a headless browser and only a loopback scripted model.
+    steps:
+      - Open the recovered skill from the real capability library, check that the preview shows instructions rather than configuration fields, click Use, verify no automatic request and send the prefilled command with input.
+      - Inspect the actual model request and persisted conversation, then restart the application with the same disposable profile.
+    expected:
+      - Exactly the selected file's instructions reach the model; disabled instructions are absent. The saved command and reply survive restart and package bytes remain unchanged.
+    notes: Real main process, HTTP, renderer and SDK; only the model endpoint is substituted. Network listeners are confined to loopback by the shared fixture. This is remote space-chat evidence, not desktop IPC, live model quality, digital humans, automation or system Trash.
+  - id: capabilities.skill-library-server.tool
+    title: Load only enabled skills through the actual SDK tool
+    verifies: [tool]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - Open a fresh conversation from the real library and send an ordinary request. The scripted model calls the advertised Skill tool for an enabled name, then for a disabled name.
+    expected:
+      - The enabled call returns the real file body. The disabled call is an error and never returns its body; files and the stored disabled choice remain unchanged.
+    notes: The script emits tool calls but never provides the skill instructions. The case validates real SDK tool execution and rejection, not probabilistic model selection or file-access isolation.

@@ -29,7 +29,6 @@ export function resolveGroupCredentials(group: AIGroup, deps: GroupCredentialDep
   }
 
   const capabilities = usable.map(({ source, modelId }) => deps.capabilitiesOf(source, modelId))
-  const knownOutputLimits = capabilities.filter(item => item.maxOutputTokensConfigured)
   const vision = usable.every(({ source, modelId }) => resolveModelVision(source, modelId))
   return {
     sourceId: group.id,
@@ -44,9 +43,8 @@ export function resolveGroupCredentials(group: AIGroup, deps: GroupCredentialDep
     visionOverride: vision,
     supportsVision: vision,
     capabilities: {
-      maxOutputTokens: Math.min(...(knownOutputLimits.length ? knownOutputLimits : capabilities).map(item => item.maxOutputTokens)),
+      maxOutputTokens: Math.min(...capabilities.map(item => item.maxOutputTokens)),
       contextWindow: Math.min(...capabilities.map(item => item.contextWindow)),
-      maxOutputTokensConfigured: knownOutputLimits.length > 0,
       adaptiveThinking: capabilities.every(item => item.adaptiveThinking === true),
     },
   }

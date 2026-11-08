@@ -72,6 +72,8 @@ export interface ThoughtPanelModel {
    * found no call to merge into.
    */
   readonly display: readonly Thought[]
+  /** Session notices stay visible outside the collapsible thought details. */
+  readonly notices: readonly Thought[]
   /** Sub-agent steps by parent step id (see `groupChildThoughts`). */
   readonly childGroups: ReadonlyMap<string, Thought[]>
   /** The latest TodoWrite call that carries its input. */
@@ -81,7 +83,7 @@ export interface ThoughtPanelModel {
 }
 
 function isTimelineStep(thought: Thought): boolean {
-  return thought.type !== 'result' && !thought.parentToolUseId && thought.toolName !== 'TodoWrite'
+  return thought.type !== 'result' && !thought.skillNotice && !thought.parentToolUseId && thought.toolName !== 'TodoWrite'
 }
 
 /**
@@ -96,7 +98,7 @@ function isTodoCall(thought: Thought): boolean {
 /** Whether `next` can replace `prev` without entering or leaving any derived list. */
 function samePlace(prev: Thought, next: Thought): boolean {
   return prev.id === next.id && prev.type === next.type && prev.toolName === next.toolName
-    && prev.parentToolUseId === next.parentToolUseId
+    && prev.parentToolUseId === next.parentToolUseId && prev.skillNotice === next.skillNotice
 }
 
 function buildThoughtPanelModel(thoughts: readonly Thought[], previousGroups?: ReadonlyMap<string, Thought[]>): ThoughtPanelModel {
@@ -109,6 +111,7 @@ function buildThoughtPanelModel(thoughts: readonly Thought[], previousGroups?: R
   return {
     thoughts,
     display: thoughts.filter(isTimelineStep),
+    notices: thoughts.filter(thought => thought.type === 'system' && thought.skillNotice),
     childGroups: groupChildThoughts(thoughts, previousGroups),
     latestTodo,
     errorCount,
@@ -127,6 +130,7 @@ export function nextThoughtPanelModel(prev: ThoughtPanelModel | null, thoughts: 
   if (!prev || thoughts.length < prev.thoughts.length) return buildThoughtPanelModel(thoughts, prev?.childGroups)
 
   let display: Thought[] | null = null
+  let notices: Thought[] | null = null
   let groups: Map<string, Thought[]> | null = null
   let latestTodo = prev.latestTodo
   let errorCount = prev.errorCount
@@ -147,7 +151,10 @@ export function nextThoughtPanelModel(prev: ThoughtPanelModel | null, thoughts: 
     const after = thoughts[i]
     if (after === before) continue
     if (!samePlace(before, after)) return buildThoughtPanelModel(thoughts, prev.childGroups)
-    if (isTimelineStep(after)) {
+    if (after.type === 'system' && after.skillNotice) {
+      notices ??= [...prev.notices]
+      notices[notices.lastIndexOf(before)] = after
+    } else if (isTimelineStep(after)) {
       const list = editDisplay()
       list[list.lastIndexOf(before)] = after
     } else if (after.parentToolUseId) {
@@ -167,13 +174,14 @@ export function nextThoughtPanelModel(prev: ThoughtPanelModel | null, thoughts: 
 
   for (let i = prev.thoughts.length; i < thoughts.length; i++) {
     const thought = thoughts[i]
-    if (isTimelineStep(thought)) editDisplay().push(thought)
+    if (thought.type === 'system' && thought.skillNotice) (notices ??= [...prev.notices]).push(thought)
+    else if (isTimelineStep(thought)) editDisplay().push(thought)
     else if (thought.parentToolUseId) editGroup(thought.parentToolUseId).push(thought)
     if (isTodoCall(thought)) latestTodo = thought
     if (thought.type === 'error') errorCount++
   }
 
-  return { thoughts, display: display ?? prev.display, childGroups: groups ?? prev.childGroups, latestTodo, errorCount }
+  return { thoughts, display: display ?? prev.display, notices: notices ?? prev.notices, childGroups: groups ?? prev.childGroups, latestTodo, errorCount }
 }
 
 // ============================================

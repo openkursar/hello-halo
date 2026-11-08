@@ -182,6 +182,9 @@ export function updateConfig(updates: Record<string, unknown>, snapshotEpoch?: n
       if (isEngineId(preferences.sdkEngine) && preferences.sdkEngine !== (storedAgent?.sdkEngine ?? 'halo') && !isEngineId(storedAgent?.legacySdkEngine)) {
         preferences.legacySdkEngine = getDefaultEngine()
       }
+      if (preferences.sdkEngine === 'anthropic' && Object.keys(agent as object).length === 1) {
+        preferences.ccRuntime = { ...(storedAgent?.ccRuntime as object), selectionOrigin: 'user' }
+      }
       updates.agent = preferences
     }
     unmaskSentinels(updates, existing)

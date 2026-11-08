@@ -14,6 +14,8 @@
  * with, so the UI can never offer a switch that does nothing.
  */
 
+import { toSkillDirName } from '../skill-naming'
+
 // ── Policy shape ──
 
 /**
@@ -29,9 +31,9 @@ export interface CapabilityPolicy {
   allowedTools?: string[]
 
   /**
-   * Skills this caller may load, by the folder name the engine registers each
-   * under. Read like the other lists: undefined grants every skill in
-   * 'permissive' mode and none in 'strict'.
+   * Skills this caller may load, by canonical command name or its legacy
+   * toSkillDirName alias. Read like the other lists: undefined grants every
+   * skill in 'permissive' mode and none in 'strict'.
    *
    * A skill grants nothing beyond itself. Each tool call it makes is judged by
    * the rest of this policy, and a skill whose own pre-approvals reach past
@@ -209,7 +211,11 @@ export const CAPABILITY_TOOL_GROUPS: readonly CapabilityToolGroup[] = ['file', '
 
 // ── MCP server universe ──
 
-/** Halo MCP servers always available: read-only, no side effects, no local reach. */
+/**
+ * Halo MCP servers a guest or teammate keeps whatever the policy says: read-only,
+ * no side effects, no local reach. Only among what the owner's own session has —
+ * a server the owner switched off is never mounted for anyone.
+ */
 export const CAPABILITY_SAFE_MCP: readonly string[] = ['web-search']
 
 /**
@@ -285,7 +291,7 @@ export function allowsBuiltin(
   return listed.includes(tool)
 }
 
-/** Whether a skill may be loaded under this policy, by the folder name the engine registers it under. */
+/** Match a canonical command or a stored legacy directory alias, never normalize the grant itself. */
 export function allowsSkill(
   policy: CapabilityPolicy | undefined,
   skill: string,
@@ -293,7 +299,7 @@ export function allowsSkill(
 ): boolean {
   const listed = policy?.allowedSkills
   if (listed === undefined) return mode === 'permissive'
-  return listed.includes(skill)
+  return listed.includes(skill) || listed.includes(toSkillDirName(skill))
 }
 
 /** Whether this policy lets the caller load any skill at all. */

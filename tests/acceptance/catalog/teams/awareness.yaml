@@ -1,0 +1,176 @@
+version: 1
+id: teams.awareness
+module: teams
+title:
+  en: Ask a digital human about its team work from any chat
+  zh: 在任何聊天里向数字人询问它的团队工作
+story:
+  en: Whether I talk to a digital human in its own chat or through an IM chat bound to it, it knows
+    which teams it serves, looks at their current work before answering, and passes my message on
+    into the conversation I mean — not into whatever is newest.
+  zh: 无论我在数字人自己的聊天里还是通过绑定它的 IM 聊天找它，它都知道自己在哪些团队，先看团队当前的工作再回答，并把我的话转进我指的那个会话，而不是最新的那个。
+basis: documented
+references:
+  - src/main/apps/runtime/DESIGN.md
+  - src/main/apps/runtime/prompt/team-guidance.ts
+  - src/main/http/routes/team.routes.meta.ts
+  - src/main/services/agent/toolsets/DESIGN.md
+  - tests/e2e/specs/acceptance-team-awareness.spec.ts
+  - tests/e2e/specs/acceptance-team-awareness-im.spec.ts
+promises:
+  know:
+    en: A digital human on saved teams knows, in its own chat and in an IM chat with its owner, which
+      teams it serves and its role in each.
+    zh: 加入了保存团队的数字人，在自己的聊天和与主人的 IM 聊天里，都知道自己在哪些团队以及各自的角色。
+  live:
+    en: Asked about team work, it can read the team's current conversations through Halo instead of
+      answering from memory.
+    zh: 被问到团队工作时，它能通过 Halo 读取团队当前的会话，而不是凭记忆回答。
+  named:
+    en: A message to a team member, a read of a member's transcript and a stop each name their
+      conversation; without one nothing is delivered, read or stopped, and the open conversations are
+      offered to choose from.
+    zh: 给团队成员发消息、读取成员记录、让成员停下，都要指明会话；没有指明时不会送达、读取或停止任何东西，并给出可选的进行中会话。
+  lands:
+    en: A message it passes on lands only in the conversation it names, never in a newer unrelated
+      one, and the member who receives it is told which conversation it is in.
+    zh: 它转达的消息只进入指明的会话，不会进入更新的无关会话，收到消息的成员也知道自己在哪个会话里。
+  guests:
+    en: An IM guest is given neither the digital human's team list nor a way to operate Halo.
+    zh: IM 访客既拿不到数字人的团队名单，也拿不到操作 Halo 的能力。
+  always-on:
+    en: Operating Halo is always available to a digital human; its settings show it as always on,
+      with no switch.
+    zh: 操作 Halo 对数字人始终可用；设置中显示为始终开启，没有开关。
+questions:
+  - en: A message a digital human relays reaches the receiving member as a person's message; only its
+      text says who relayed it. Should the receiving member see the relaying digital human as the
+      sender instead?
+    zh: 数字人转达的消息在接收成员那里显示为人发的消息，只有正文写明是谁转达。是否应让接收成员看到转达的数字人是发送者？
+scenarios:
+  - id: teams.awareness.own-chat-relay
+    title:
+      en: Relay a result from its own chat into the conversation it belongs to
+      zh: 从自己的聊天把结果转达进它所属的会话
+    verifies:
+      - know
+      - live
+      - named
+      - lands
+    platforms: &platforms
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A saved team holds the digital human as its lead and a tester, with an older conversation
+          for the requirement and a newer, unrelated one.
+        zh: 一个保存团队包含作为负责人的数字人和一名测试成员，有一个较早的需求会话和一个较新的无关会话。
+    steps:
+      - en: In the digital human's own chat, ask it to tell the tester that the requirement is done.
+          It lists the team's conversations, tries a member message, transcript read and stop without
+          naming one, then sends naming the requirement's conversation.
+        zh: 在数字人自己的聊天里让它告诉测试成员需求已完成；它列出团队会话，先不指明会话尝试发消息、读记录和停止，再指明需求会话发送。
+    expected:
+      - en: The model was given the team by name, id and role and the means to operate Halo; the
+          listing shows both conversations; each unnamed call is refused with both open conversations
+          as candidates; the message and the tester's reply are stored only in the requirement's
+          conversation, and the tester was told which conversation it was in.
+        zh: 模型拿到了团队名称、id、角色和操作 Halo 的能力；列表显示两个会话；每个未指明会话的调用都被拒绝并给出两个进行中会话作为候选；消息和测试成员的回复只保存在需求会话中，测试成员也被告知了所在会话。
+    notes: &notes
+      en: The model endpoint is scripted; the engine's shell, Halo's own API, the team service and
+        storage are real. This does not certify how a real model words its answers or whether it
+        chooses to look before answering.
+      zh: 模型端点为脚本；引擎的命令行、Halo 自身接口、团队服务和存储均为真实。不据此证明真实模型的措辞，或它是否会先查再答。
+  - id: teams.awareness.im-owner-reads
+    title:
+      en: Read the team live when the owner asks through IM
+      zh: 主人通过 IM 询问时实时读取团队
+    verifies:
+      - know
+      - live
+    platforms: *platforms
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: The digital human is bound to an isolated bot with an explicit owner and serves on a saved
+          team with two open conversations.
+        zh: 数字人绑定到一个配置了明确主人的隔离机器人，并在一个有两个进行中会话的保存团队里。
+    steps:
+      - en: The owner asks through the bot which conversations the team is working in; the digital
+          human lists them through Halo and answers.
+        zh: 主人通过机器人询问团队在哪些会话里工作；数字人通过 Halo 列出会话后回答。
+    expected:
+      - en: The owner's model context has the team by name, id and role and the means to operate
+          Halo; the listing shows both conversations; the answer is delivered once and kept in Halo
+          history.
+        zh: 主人这一轮的模型上下文包含团队名称、id、角色和操作 Halo 的能力；列表显示两个会话；回答只投递一次并保存在 Halo 历史中。
+    notes: &im-notes
+      en: The WeCom service and model endpoint are local fixtures. Channel dispatch, sender standing,
+        the engine's shell and Halo's own API remain real. This does not certify the real WeCom client
+        or natural-model behavior.
+      zh: 企业微信服务和模型端点使用本机替身；通道投递、发送者身份、引擎命令行和 Halo 自身接口均为真实。不据此证明真实企业微信客户端或真实模型行为。
+  - id: teams.awareness.im-guest-withheld
+    title:
+      en: Give a guest no team list and no way to operate Halo
+      zh: 访客拿不到团队名单和操作 Halo 的能力
+    verifies:
+      - guests
+    platforms: *platforms
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: The same bot and team; the sender is not an owner.
+        zh: 同一个机器人和团队；发送者不是主人。
+    steps:
+      - en: A guest asks through the bot what the team is working on.
+        zh: 访客通过机器人询问团队在做什么。
+    expected:
+      - en: The guest's model context has guest standing, no team list, no team id and no means to
+          operate Halo; the reply is still delivered.
+        zh: 访客这一轮的模型上下文带有访客身份，没有团队名单、团队 id 和操作 Halo 的能力；回复仍正常投递。
+    notes: *im-notes
+  - id: teams.awareness.always-on
+    title:
+      en: Show operating Halo as always on in a digital human's settings
+      zh: 在数字人设置中把操作 Halo 显示为始终开启
+    verifies:
+      - always-on
+    platforms: *platforms
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A digital human installed with no permissions declared.
+        zh: 一个未声明任何权限的数字人。
+    steps:
+      - en: Open its capabilities and settings, then expand the Other capabilities group (web search,
+          memory, operate Halo).
+        zh: 打开它的能力与设置，再展开“其他”能力组（网络搜索、记忆、操作 Halo）。
+    expected:
+      - en: No switch is offered for operating Halo; it is listed in the Other group as built in and
+          always on.
+        zh: 不提供操作 Halo 的开关；它在“其他”能力组中显示为内置、始终开启。
+    notes:
+      en: No model request is made; the settings page is the real one.
+      zh: 不发起模型请求；设置页面为真实页面。

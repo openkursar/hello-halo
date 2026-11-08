@@ -201,8 +201,9 @@ export async function openManagedConversation(page: Page, title: string, spaceId
   await expect(selector).toBeVisible()
   const expectedTitle = `Current workspace: ${displayName} — click to switch`
   if (await selector.getAttribute('title') !== expectedTitle) {
-    await selector.click()
-    const workspace = selector.locator('..').locator('[role="button"]').filter({ has: page.getByText(displayName, { exact: true }) })
+    // API-seeded spaces need a fresh list; the header dropdown throttles its reads.
+    await navigateToWorkspaces(page)
+    const workspace = workspaceCard(page, displayName)
     await expect(workspace).toHaveCount(1)
     await workspace.click()
     await expect(selector).toHaveAttribute('title', expectedTitle)

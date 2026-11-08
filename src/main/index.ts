@@ -10,7 +10,12 @@
 // This replaces console.log/warn/error globally with electron-log
 // Logs are written to: ~/Library/Logs/Halo/ (macOS), %USERPROFILE%\AppData\Roaming\Halo\logs (Windows)
 import log from 'electron-log/main.js'
-import { createNumberedArchiveFn, MAIN_LOG_ARCHIVES, MAIN_LOG_MAX_BYTES } from './foundation/logging'
+import {
+  createNumberedArchiveFn,
+  MAIN_LOG_ARCHIVES,
+  MAIN_LOG_MAX_BYTES,
+  routeUncaughtErrorsToMainLog,
+} from './foundation/logging'
 
 // Initialize for renderer process support (IPC transport)
 log.initialize()
@@ -94,6 +99,7 @@ log.errorHandler.startCatching({
     if (errorName === 'Unhandled') showUncaughtErrorNotice(error)
   }
 })
+routeUncaughtErrorsToMainLog()
 
 // Replace global console with electron-log (performance: direct replacement, no wrapper)
 Object.assign(console, log.functions)
@@ -250,7 +256,7 @@ import { isServerMode } from './foundation/runtime-mode'
 import { getConfig, initializeApp } from './foundation/config.service'
 import { startupWindowColors } from './foundation/window-startup'
 import { applyDisplayScale, currentDisplayScale, nudgeDisplayScale, setDisplayScale, DISPLAY_STEP, registerDisplayHandlers } from './services/display.service'
-import { MAC_TRAFFIC_LIGHT_POSITION } from '../shared/constants/mac-traffic-lights'
+import { macTrafficLightGeometry } from '../shared/constants/mac-traffic-lights'
 import { TITLE_BAR_OVERLAY_HEIGHT } from '../shared/constants/app-header'
 import { flushAllPendingIndexWrites } from './services/conversation.service'
 import { shutdownRemoteAccess } from './services/remote'
@@ -497,7 +503,7 @@ function createWindow(): void {
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
     // Sits in NavRail's column above the brand mark; the renderer derives its
     // clearance from the same shared geometry.
-    trafficLightPosition: isMac ? MAC_TRAFFIC_LIGHT_POSITION : undefined,
+    trafficLightPosition: isMac ? macTrafficLightGeometry(process.getSystemVersion()).position : undefined,
     // Windows/Linux: native window controls overlay in content area. App.tsx's
     // applyTheme keeps it on the live theme's tokens once the page runs.
     titleBarOverlay: !isMac ? {

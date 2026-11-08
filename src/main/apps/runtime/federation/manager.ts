@@ -468,11 +468,6 @@ export interface HistoryFetchResult {
  * What `withdrawMembers` did. Only `sent` sent anything.
  * - `last-members`: they are all this node still has in the office, so taking
  *   them out is leaving it; the caller leaves instead.
- * - `elected-authority`: the office has been served by an elected authority
- *   since its first host was lost. Such an authority applies a member-leave to
- *   its own copy only (it projects no roster), so the rest of the office would
- *   keep the member. A stopgap until governance egress follows the current
- *   authority rather than the first host (GitHub #468).
  * - `authority-offline`: the authority is confirmed offline.
  * - `refused`: the office refuses this node's join.
  * - `not-joined`: no joined office here to send it on.
@@ -480,7 +475,6 @@ export interface HistoryFetchResult {
 export type WithdrawOutcome =
   | 'sent'
   | 'last-members'
-  | 'elected-authority'
   | 'authority-offline'
   | 'refused'
   | 'not-joined'
@@ -506,6 +500,8 @@ export interface FederationManager {
    * the re-join record nor a join-request this node re-sends brings them back.
    */
   withdrawMembers(officeId: string, appIds: string[]): WithdrawOutcome
+  /** Whether this node serves the office: hosts it, or was elected its authority. */
+  servesOffice(officeId: string): boolean
   getOffice(officeId: string): Federation | null
   listHostedOffices(): string[]
   listJoinedOffices(): string[]
@@ -591,18 +587,19 @@ export interface FederationManager {
    * team running status + per-member working/idle churn + the in-progress task
    * title — converges to joiners at a bounded rate during a run, without flooding
    * the wire on every member-status flip. Fired on run start/stop and on every
-   * authoritative board write. No-op when the office is not hosted here.
+   * authoritative board write. No-op when this node does not serve the office
+   * (it hosts it, or was elected its authority).
    */
   scheduleRosterRefresh(officeId: string): void
   /**
-   * Egress: project a `member-removed` frame to every joiner of a hosted office.
-   * Wired to the team service's onMemberRemoved hook. No-op when not hosted.
+   * Egress: project a `member-removed` frame to every peer of an office this
+   * node serves. Wired to the team service's onMemberRemoved hook.
    */
   projectMemberRemoved(officeId: string, appId: string): void
   /**
-   * Egress: project an `office-dissolved` frame to every joiner of a hosted office.
-   * Wired to the team service's onOfficeDissolved hook. Call BEFORE local
-   * teardown so the frame still rides the live link. No-op when not hosted.
+   * Egress: project an `office-dissolved` frame to every peer of an office this
+   * node serves. Wired to the team service's onOfficeDissolved hook. Call BEFORE
+   * local teardown so the frame still rides the live link.
    */
   projectOfficeDissolved(officeId: string): void
   /**
@@ -1080,7 +1077,8 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   }
 
   function livenessReprojectTick(): void {
-    for (const officeId of hosted.keys()) {
+    for (const officeId of [...hosted.keys(), ...joined.keys()]) {
+      if (!servedFederation(officeId)) continue
       try {
         if (officeHasActiveMember(officeId)) {
           livenessGraceTicks.set(officeId, LIVENESS_IDLE_GRACE_TICKS)
@@ -1559,6 +1557,18 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       deps.teamStore.getTeamById(officeId)?.hostNodeId ??
       null
     )
+  }
+
+  /**
+   * The office this node currently serves: one it hosts and still holds the
+   * authority of, or one it joined and was elected the authority of. Roster,
+   * governance egress and office-state capture follow this, not the first host.
+   */
+  function servedFederation(officeId: string): Federation | undefined {
+    const host = hosted.get(officeId)
+    if (host) return !host.authority || host.authority.isAuthoritySelf() ? host.federation : undefined
+    const join = joined.get(officeId)
+    return join && !join.refusal && join.authority?.isAuthoritySelf() ? join.federation : undefined
   }
 
   /**
@@ -2227,7 +2237,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
    * roster re-broadcast + lead reassignment).
    */
   function handleMemberLeaveOnHost(officeId: string, from: NodeId, appIds: string[]): void {
-    const members = deps.teamStore.listMembersByTeam(officeId)
+    const self = deps.getLocalNodeId()
+    const members = deps.teamStore
+      .listMembersByTeam(officeId)
+      .map((m) => (m.ownerNodeId === SELF_NODE_ID ? { ...m, ownerNodeId: self } : m))
     const owned = appIds.filter((id) => members.find((m) => m.appId === id)?.ownerNodeId === from)
     if (owned.length === 0) {
       console.warn(`${LOG_TAG} member-leave from=${from} office=${officeId}: no owned members to remove`)
@@ -2272,13 +2285,18 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     const conn = deps.federationStore.listJoinedOfficeConnections().find((c) => c.officeId === officeId)
     const appIds = [...new Set([...(conn?.bringAppIds ?? []), ...ownMemberIds(officeId)])]
     if (appIds.length === 0) return
+    console.log(`${LOG_TAG} signalLeave office=${officeId} apps=${appIds.length}`)
+    // Serving the office, this node is the one that applies a member-leave.
+    if (servedFederation(officeId)) {
+      handleMemberLeaveOnHost(officeId, deps.getLocalNodeId(), appIds)
+      return
+    }
     join.federation.link.broadcast({
       kind: 'member-leave',
       officeId,
       fromNode: deps.getLocalNodeId(),
       appIds,
     })
-    console.log(`${LOG_TAG} signalLeave office=${officeId} apps=${appIds.length}`)
   }
 
   /**
@@ -2302,10 +2320,11 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       .filter((id) => !join.departed.has(id) && !appIds.includes(id))
     if (kept.length === 0) return 'last-members'
     const authority = believedAuthorityNode(officeId)
+    const servedHere = !!servedFederation(officeId)
     const refused: WithdrawOutcome | null = join.refusal
       ? 'refused'
-      : authority === deps.getLocalNodeId() || (join.authority?.getTerm() ?? 0) > 0
-        ? 'elected-authority'
+      : servedHere
+        ? null
         : !authority
           ? 'not-joined'
           : deps.federationStore.getNode(officeId, authority)?.status === 'offline'
@@ -2317,13 +2336,17 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     }
     if (conn) deps.federationStore.upsertJoinedOfficeConnection({ ...conn, bringAppIds: kept, updatedAt: Date.now() })
     forgetInJoinRequest(officeId, appIds)
+    console.log(`${LOG_TAG} withdraw office=${officeId} apps=${appIds.length} kept=${kept.length} authority=${authority}`)
+    if (servedHere) {
+      handleMemberLeaveOnHost(officeId, deps.getLocalNodeId(), appIds)
+      return 'sent'
+    }
     join.federation.link.broadcast({
       kind: 'member-leave',
       officeId,
       fromNode: deps.getLocalNodeId(),
       appIds,
     })
-    console.log(`${LOG_TAG} withdraw office=${officeId} apps=${appIds.length} kept=${kept.length} authority=${authority}`)
     return 'sent'
   }
 
@@ -2417,6 +2440,20 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     from: NodeId,
     frame: M2Frame
   ): void {
+    if (frame.kind === 'member-removed' || frame.kind === 'office-dissolved') {
+      // A newer authority's frame may be the first this node hears of it (the
+      // announcement is best effort): observe it as an announcement would be.
+      if (authority && from !== believedAuthorityNode(officeId) && frame.term > authority.getTerm()) {
+        authority.handle(from, { kind: 'authority-announce', officeId, fromNode: from, term: frame.term, fid: frame.fid })
+      }
+      // Before the first roster (or with M2 off) no authority is known yet: the
+      // frame can only have come from the host this node joined.
+      const believed = believedAuthorityNode(officeId)
+      if (believed && from !== believed) {
+        console.warn(`${LOG_TAG} ${frame.kind} refused office=${officeId} peer=${from} term=${frame.term} reason=authority-mismatch`)
+        return
+      }
+    }
     if (frame.kind === 'member-removed') {
       // If the host removed the last app this node brought to the office, this
       // node is no longer a member here → forget the re-join record so the next
@@ -2753,6 +2790,11 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         },
         getWakeAuthority: () => believedAuthorityNode(officeId),
         getRosterAuthority: () => believedAuthorityNode(officeId) ?? upstreamNodeId,
+        // Read only when this node projects the roster, after it was elected.
+        getCurrentRunEpoch: () => deps.getCurrentRunEpoch?.(officeId)?.epochId ?? null,
+        getMemberRuntimeStatus: deps.getMemberRuntimeStatus,
+        getObservableOfficeStatus: deps.getObservableOfficeStatus,
+        ...(deps.getMemberBusy ? { getMemberBusy: (appId: string) => deps.getMemberBusy!(appId, officeId) } : {}),
         canDispatchWake: (from, request) => canDispatchWake(officeId, from, request),
         onWake: deps.runLocalTurn
           ? (request) => runOrForwardWakeOnHost(officeId, request)
@@ -3377,8 +3419,8 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
 
   /** M2: route to the replication layer (assign seq, append log, fan-out to standbys). */
   function routeAuthorityWrite(record: BlackboardWriteRecord): void {
-    const host = hosted.get(record.teamId)
-    host?.authority?.captureLocalWrite(record)
+    if (servedFederation(record.teamId)) getOfficeAuthority(record.teamId)?.captureLocalWrite(record)
+    else forwardFromFormerHost(record.teamId, record.op, record.payload, record.taskId)
     // A board write coincides with a member's working/idle churn (assign, work,
     // done); coalesce a roster re-projection so joiners' topology + run banner
     // follow the run live, independent of the blackboard replication plane.
@@ -3421,12 +3463,12 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     payload: Record<string, unknown>,
     epochId = ''
   ): void {
-    const host = hosted.get(teamId)
-    if (host) {
-      host.authority?.captureLocalWrite({ teamId, epochId, op, payload })
+    if (servedFederation(teamId)) {
+      getOfficeAuthority(teamId)?.captureLocalWrite({ teamId, epochId, op, payload })
       if (op === 'epoch_upsert') scheduleRosterRefresh(teamId)
       return
     }
+    if (forwardFromFormerHost(teamId, op, payload)) return
     const join = joined.get(teamId)
     if (!join) return
     const hostNode = deps.teamStore.getTeamById(teamId)?.hostNodeId
@@ -3441,6 +3483,37 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       fid: randomUUID(),
     }
     join.federation.link.send(hostNode, frame)
+  }
+
+  /**
+   * A first host that stepped down after an election elsewhere: its owner's
+   * writes go to the current authority as a member's would. Returns whether
+   * the office is hosted here (and so handled, sent or not).
+   */
+  function forwardFromFormerHost(
+    teamId: string,
+    op: BlackboardWriteRecord['op'],
+    payload: Record<string, unknown>,
+    taskId?: string
+  ): boolean {
+    const host = hosted.get(teamId)
+    if (!host) return false
+    const authorityNode = believedAuthorityNode(teamId)
+    if (!authorityNode || authorityNode === deps.getLocalNodeId()) {
+      console.warn(`${LOG_TAG} write dropped office=${teamId} op=${op} reason=no-authority-to-forward-to authority=${authorityNode}`)
+      return true
+    }
+    host.link.send(authorityNode, {
+      kind: 'blackboard-write',
+      officeId: teamId,
+      fromNode: deps.getLocalNodeId(),
+      term: host.authority?.getTerm() ?? 0,
+      op,
+      payload,
+      ...(taskId !== undefined ? { taskId } : {}),
+      fid: randomUUID(),
+    })
+    return true
   }
 
   /** The host (authority) applies + replicates this write on receipt. */
@@ -3465,24 +3538,23 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
 
   /**
    * Converges the roster on EVERY membership mutation (edge/role change), not
-   * only on join. No-op on a joiner (it projects no roster).
+   * only on join. No-op on a node that does not serve the office.
    */
   function broadcastRosterFor(officeId: string): void {
-    const host = hosted.get(officeId)
-    if (!host) return
-    host.federation.coordinator.broadcastRoster()
+    servedFederation(officeId)?.coordinator.broadcastRoster()
   }
 
   /**
    * Throttled variant of broadcastRosterFor: coalesces bursts into one
-   * re-projection per ROSTER_REFRESH_COALESCE_MS. No-op on a joiner.
+   * re-projection per ROSTER_REFRESH_COALESCE_MS. No-op on a node that does not
+   * serve the office.
    */
   function scheduleRosterRefresh(officeId: string): void {
-    if (!hosted.has(officeId)) return
+    if (!servedFederation(officeId)) return
     if (rosterRefreshTimers.has(officeId)) return
     const timer = setTimeout(() => {
       rosterRefreshTimers.delete(officeId)
-      hosted.get(officeId)?.federation.coordinator.refreshRoster()
+      servedFederation(officeId)?.coordinator.refreshRoster()
     }, ROSTER_REFRESH_COALESCE_MS)
     if (typeof timer.unref === 'function') timer.unref()
     rosterRefreshTimers.set(officeId, timer)
@@ -3491,19 +3563,21 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   /**
    * The roster re-broadcast that follows still converges state; this dedicated
    * frame lets a joiner react immediately (drop the row) without diffing the
-   * roster. No-op when not hosted.
+   * roster. No-op on a node that does not serve the office.
    */
   function projectMemberRemoved(officeId: string, appId: string): void {
-    const host = hosted.get(officeId)
-    if (!host) return
-    host.federation.link.broadcast({
+    const served = servedFederation(officeId)
+    if (!served) return
+    served.link.broadcast({
       kind: 'member-removed',
       officeId,
       fromNode: deps.getLocalNodeId(),
-      term: host.authority?.getTerm() ?? 0,
+      term: getOfficeAuthority(officeId)?.getTerm() ?? 0,
       appId,
       fid: randomUUID(),
     })
+    const host = hosted.get(officeId)
+    if (!host) return
     // Relay cleanup after a kick: the removed row is already gone, so evict any
     // gateway-path node that now owns nothing here (it can rejoin with a fresh
     // invite). Best-effort — an unevicted idle session is harmless.
@@ -3519,13 +3593,11 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   }
 
   function projectOfficeDissolved(officeId: string): void {
-    const host = hosted.get(officeId)
-    if (!host) return
-    host.federation.link.broadcast({
+    servedFederation(officeId)?.link.broadcast({
       kind: 'office-dissolved',
       officeId,
       fromNode: deps.getLocalNodeId(),
-      term: host.authority?.getTerm() ?? 0,
+      term: getOfficeAuthority(officeId)?.getTerm() ?? 0,
       fid: randomUUID(),
     })
     // Revoke every credential this office ever issued: the office no longer exists,
@@ -3834,6 +3906,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     sendWakeToMember,
     signalLeave,
     withdrawMembers,
+    servesOffice: (officeId: string) => !!servedFederation(officeId),
     registerTurnComplete,
     isMemberRemoteBusy: (appId) => remoteBusy.isBusy(appId),
     isMemberReachable,

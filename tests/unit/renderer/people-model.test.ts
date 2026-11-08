@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { activitySourceKind, coordinatorIds, ephemeralMemberIds, isPendingDecision, mergeActivityEntries, visibleDigitalHumans } from '../../../src/renderer/utils/people-model'
+import { activitySourceKind, coordinatorIds, ephemeralMemberIds, isPendingDecision, mergeActivityEntries, pickableDigitalHumans, teamMemberCandidates, visibleDigitalHumans } from '../../../src/renderer/utils/people-model'
 import type { ActivityEntry, InstalledApp } from '../../../src/shared/apps/app-types'
 import type { TeamListItem } from '../../../src/shared/apps/team-types'
 
@@ -21,6 +21,23 @@ describe('digital human work projection', () => {
     ] as TeamListItem[]
     expect([...coordinatorIds(teams)]).toEqual(['system'])
     expect([...ephemeralMemberIds(teams)]).toEqual(['throwaway'])
+  })
+  it('keeps listing a collaboration member once the collaboration is saved as a team', () => {
+    const teams = [
+      { ephemeral: true, localMembers: [{ appId: 'kept', isLead: false }, { appId: 'throwaway', isLead: false }] },
+      { localMembers: [{ appId: 'saved-lead', isLead: true }, { appId: 'kept', isLead: false }] },
+    ] as TeamListItem[]
+    expect([...ephemeralMemberIds(teams)]).toEqual(['throwaway'])
+  })
+  it('offers for new work only listed, installed digital humans, and never a lead as a team member', () => {
+    const app = (id: string, status: InstalledApp['status'] = 'active', type = 'automation') => ({ id, status, spec: { type } }) as InstalledApp
+    const apps = [app('own'), app('paused', 'paused'), app('removed', 'uninstalled'), app('throwaway'), app('lead'), app('skill', 'active', 'skill')]
+    const teams = [
+      { leadAppId: 'lead', localMembers: [{ appId: 'lead', isLead: true }] },
+      { ephemeral: true, localMembers: [{ appId: 'throwaway', isLead: false }] },
+    ] as TeamListItem[]
+    expect(pickableDigitalHumans(apps, teams).map(a => a.id)).toEqual(['own', 'paused', 'lead'])
+    expect(teamMemberCandidates(apps, teams).map(a => a.id)).toEqual(['own', 'paused'])
   })
   it('never infers an unknown historical source from its text or available team', () => {
     expect(activitySourceKind(decision('old', { content: { summary: 'Team finance asked me' } }))).toBe('unknown')

@@ -459,11 +459,12 @@ export function SpacePage() {
         {/* Main content */}
         <div ref={mainRowRef} className="flex-1 flex overflow-hidden">
           {/* Conversation list sidebar - always visible on desktop (prototype has
-              no "fully hidden" state, only the canvas-open narrow one); width
-              drag-resize and the canvas-open collapse still apply. Unmounted
-              when the canvas is maximized (matches the chat view) or on mobile. */}
+              no "fully hidden" state, only the narrow icon strip, which it
+              starts as beside an open canvas); the list keeps its own width and
+              fold choices. Unmounted when the canvas is maximized (matches the
+              chat view) or on mobile. */}
           {!isMobile && !isCanvasMaximized && (
-            <ConversationList collapsed={isCanvasOpen} />
+            <ConversationList canvasOpen={isCanvasOpen} />
           )}
 
           {/* Desktop Layout */}

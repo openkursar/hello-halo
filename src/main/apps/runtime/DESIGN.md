@@ -38,7 +38,10 @@ permission assembly. A running session keeps its original engine; a changed
 preference applies when it becomes idle. Without an explicit preference, an
 existing session keeps its persisted engine binding, a legacy session uses the
 retained legacy default, and only a new conversation or run reads the current
-default. An unavailable explicitly selected engine fails rather than falling
+default. Historical CC bindings without a recorded user runtime selection are
+resolved to Halo by the shared agent policy; their compatible native history is
+restored lazily before considering neutral history. Explicit app overrides remain
+choices. An unavailable explicitly selected engine fails rather than falling
 back. Team and IM turns enter the same app-chat path, so their capability and
 permission checks use the resolved session engine too.
 
@@ -77,7 +80,10 @@ digital-human chat in `app-chat.ts`) rather than routing through the space chat'
 - Tools: `buildBaseToolset` (`toolsets/base.ts`) — web search, Halo documentation and,
   while digital humans are enabled, `halo-apps`. Each entry starts from it and states
   its exclusions where it builds (automation: no `halo-apps`; a disposable team
-  member: no `halo-apps`). Everything else an entry mounts — notify, report,
+  member: no `halo-apps`; web search switched off by the owner: no `web-search` and
+  the engine's `WebSearch` denied, via `web-search-switch.ts`, before any capability
+  policy narrows the turn — opening a given page and the AI browser are separate
+  capabilities and stay). Everything else an entry mounts — notify, report,
   team, browser, terminal, OCR, email, Halo API, person context, IM file send — is
   its own, granted by app permission and caller.
 - Session engine: chat acquires an `acquireV2Session` lease with a `TurnSink`
@@ -639,7 +645,8 @@ Consequences that matter:
   can tell it from a model error. Every IM exit — the person's reply
   (`dispatch-inbound`), a teammate-woken front-desk turn (`team/index.ts`), a
   reminder, an autonomous turn's push — adds the same note after the text it
-  wrote (`withTurnEndingNote`), naming the step limit the person can raise.
+  wrote (`imTurnReply`, over `withTurnEndingNote`), naming the step limit the
+  person can raise.
   Where somebody waits on the answer (all but the autonomous push) the note also
   comes alone when nothing was written, and a cut-off or a failure is told
   (`imErrorReply`, below); an autonomous turn that wrote nothing pushes nothing,
@@ -664,6 +671,21 @@ Consequences that matter:
   otherwise `⚠️ Error: …` with this computer's paths replaced by `<local path>`
   (POSIX roots, drives, network shares, file URLs — never a web address's path),
   then cut to 200 characters. An IM group may hold people from outside.
+- **A failed model request is the turn's failure, never its answer.** Claude
+  Code and the Halo SDK tell one as an `assistant` frame carrying `error`
+  (services/agent DESIGN, per-turn output contract; Codex and dsh do not yet).
+  The reply accumulator skips it: a turn that wrote nothing fails its round
+  with the turn's error, so every exit above tells a failure (a team records
+  one; an autonomous turn pushes nothing). Text written before the failure is
+  still the round's one reply, ending `failed` (`turn-ending.ts`): an IM chat
+  gets it with the error after it, as `imErrorReply` words it alone
+  (`imTurnReply`; a last paragraph that is the reason itself, as Codex writes
+  it, is said once), and its team records a failure all the same — the turn-end
+  report and the woken turn's result alike. The transcript reads the frame's
+  text as the turn's `error`, so the chat shows a failure card, under any text,
+  as a space conversation does; a run records it as its error, not its output
+  (`execute.ts`). A sub-agent's notice stays with the result of the tool that
+  ran it.
 - Those cover a session that *reports* its death. A session that simply never
   produces a turn — a resume against a transcript a crashed process left broken,
   an engine that failed to launch — reports nothing, and the caller would await a
@@ -1686,7 +1708,7 @@ src/main/apps/runtime/
   -- Interactive chat with an App (separate from automation runs):
   app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
   app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a); the record's one writer, announcing accepted inputs and pushes at arrival (§2.14a)
-  turn-ending.ts             -- A turn that stopped short (step limit, cut off): how it is recognized and the note an IM chat gets (§2.12a)
+  turn-ending.ts             -- A turn that stopped short (step limit, cut off, failed request): how it is recognized and the note an IM chat gets (§2.12a)
   im-error-reply.ts          -- What an IM chat is told when its turn failed: no path or program of this computer goes out (§2.12a)
   turn-skills.ts             -- Which skills a borrowed turn may load, what a granted skill may not bring with it, and why its message never runs as a command ("Skills on a borrowed turn")
   app-chat-browser.ts        -- The AI browser context each chat drives: resident for native chats, per-turn for IM/HTTP/team, idle/cap reaping, teardown by reason (§2.19)
@@ -2017,17 +2039,47 @@ renderer-safe contract rather than maintaining another structural copy.
 questions and accepted continuations coexist. Manual execution and answering do
 not enable automatic schedules. The legacy status field no longer closes questions
 or overwrites the user's pause intent when an execution asks for a decision.
+`status` describes the person's own runs only; a team turn it is serving is the
+separate `teamWorking` flag (from the team runtime's member status), so
+"independent execution in progress" surfaces never mistake team work for a run.
+Team turn edges republish the state through `onMemberWorkChanged` →
+`refreshAppState`, coalesced per member; person-level labels fold the two
+(`personRuntimeStatus` in the renderer).
 
 
-### Read-only identity and team awareness
+### Team guidance
 
-`person-context` resolves current identity, membership and role from trusted runtime
-context. Owners can query their digital human's visible teams; a borrowed team turn
-is limited to its current team/task; guests do not receive the tool. A single narrow
-schema exposes this read on demand without waking a team or injecting histories.
-The space assistant's `halo-apps` read tool may query an authorized named digital
-human but does not claim that person's identity. Links use stable team/task/member
-identifiers and the renderer's guarded navigation path.
+One section, `prompt/team-guidance.ts`, tells a digital human what a team is.
+Two kinds, named the way people say them: an *agent team* is an ad hoc team it
+spins up for one job (the `halo-team` coordinator tools; the guide lives with
+them in `conversation-mcp/team-mcp.ts` and is shared with space conversations),
+and a *standing team* is a lasting group of digital humans it belongs to, whose
+work happens in its own conversations. The team tools always act on the team of
+the conversation they are in, so no sentence has to explain them away.
+
+A digital human that holds Operate Halo and serves on standing teams also gets
+the teams by name, id and role (ten at most), which conversation this chat is,
+and three read-only Operate Halo calls (list a team's conversations, read one's
+board, read a member's messages) as ready-to-run commands to pick from, not a
+procedure. Messaging a member is left to the Operate Halo manual, whose route
+notes carry its rules (name the conversation, ask before reopening a completed
+one); the guidance neither waits for a member nor teaches the call. Who it is (name and id) is one line of
+`prompt/self-identity.ts`; there is no tool for reading one's own identity or
+memberships. Only stable facts are in the section, so every turn of a session
+carries the same words whether a person or a teammate started it — a fragment
+that followed the trigger would rebuild the warm session and drop its prompt
+cache each time the two alternate. Joining, leaving or renaming a team changes
+it once, and the next turn of each warm chat rebuilds. Guests and requests from
+outside get none of it, because they hold no Operate Halo. Every one of those
+calls names its conversation: the team routes refuse a member message,
+transcript read or stop without `epochId` and list recent conversations
+instead, because choosing one for the caller once filed a reply into an
+unrelated task. A work request is done by the digital human itself; an agent
+team costs tokens and loses detail at each handoff, so it is started only when a
+part can be briefed in writing and separating it buys isolation, parallel work
+or teammates working together. The guide states that criterion, not a list of
+cases, and leaves the decision to the model. A standing team is turned to only
+when the person names it, asks about its work, or asks to hand it a job.
 
 Changing the default space uses the runtime facade, pins provable legacy run/session
 environments and rebinds future subscriptions without deactivating current work.
@@ -2181,8 +2233,13 @@ Remote, tool-started and scheduled runs keep their pages in the hidden host.
 
 ## Skills on a borrowed turn
 
-An owner allows skills one by one (`CapabilityPolicy.allowedSkills`, folder
-names): a restricted caller gets none until listed; a colleague whose member
+An owner allows skills one by one (`CapabilityPolicy.allowedSkills`, canonical
+command names). Old grants using `toSkillDirName(command)` remain valid aliases,
+such as `Ledger_App` for `Ledger App`; the stored grant itself is never normalized.
+Runtime accepts an alias only when it identifies one distinct available command;
+an exact command grant does not extend to another command sharing its old alias.
+Aliases affect policy matching, not the names the engine accepts for invocation.
+A restricted caller gets none until listed; a colleague whose member
 grants everything — or was never configured — is not restricted at all. The panel offers one switch per skill the digital human can load
 (`skill-discovery`, global + space), next to the tool switches. The skill tool
 itself has no switch: it exists for a caller exactly when some skill does.
@@ -2235,4 +2292,4 @@ itself has no switch: it exists for a caller exactly when some skill does.
 
 A map that is not a JSON object can only be a torn write from an older release, which truncated before writing. It is renamed to `_session-ids.json.corrupt-<time>` (never deleted) and read as empty, so one bad file cannot stop every chat, IM reply and run of a digital human; each chat then continues from its own transcript (`prepareAppEngineSession` flags an answered chat with no recorded session as a lost record, and the chat shows the continuity notice). A read that fails for another reason (locked, permission) fails that turn and leaves the file alone. A single malformed row is still refused.
 
-`readChatHandoffHistory` reads a bounded JSONL tail only when an engine changes, without building a whole-file index. Its message IDs use byte positions for audit, not UI pagination. It excludes reasoning, keeps completed tool observations, reports omitted or malformed records explicitly, and supplies the full transcript path. Missing history rejects the change instead of silently starting empty. Ordinary transcript and native-resume paths are unchanged.
+`readChatHandoffHistory` reads a bounded JSONL tail for a deliberate engine change or after native history cannot be restored, without building a whole-file index. Its message IDs use byte positions for audit, not UI pagination. It excludes reasoning, keeps completed tool observations, reports omitted or malformed records explicitly, and supplies the full transcript path. Missing history rejects the continuation instead of silently starting empty. Historical automatic CC sessions try Halo's compatible native resume first; successful native resume does not read neutral history.

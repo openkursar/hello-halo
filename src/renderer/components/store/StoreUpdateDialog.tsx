@@ -25,8 +25,8 @@ interface StoreUpdateDialogProps {
   toVersion: string
   changelog?: string
   busy?: boolean
-  /** Set for a digital human, whose in-place update keeps what differs from the author's version. */
   preview?: UpgradePreview
+  isSkill?: boolean
   onInstallCopy: () => void
   onOverwrite: () => void
   onIgnore: () => void
@@ -39,6 +39,7 @@ interface UpdateOption {
   description: string
   onClick: () => void
   recommended?: boolean
+  disabled?: boolean
   accent: 'primary' | 'muted'
 }
 
@@ -53,7 +54,7 @@ function OptionRow({ option, busy }: { option: UpdateOption; busy?: boolean }) {
   return (
     <button
       onClick={option.onClick}
-      disabled={busy}
+      disabled={busy || option.disabled}
       className={`w-full flex items-start gap-3 text-left p-3 rounded-lg border transition-colors disabled:opacity-60 ${accent}`}
     >
       <option.Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${iconColor}`} />
@@ -79,6 +80,7 @@ export function StoreUpdateDialog({
   changelog,
   busy,
   preview,
+  isSkill = false,
   onInstallCopy,
   onOverwrite,
   onIgnore,
@@ -86,7 +88,24 @@ export function StoreUpdateDialog({
 }: StoreUpdateDialogProps) {
   const { t, i18n } = useTranslation()
 
-  const options: UpdateOption[] = [
+  const options: UpdateOption[] = isSkill ? [
+    {
+      Icon: BellOff,
+      title: t('Keep current version'),
+      description: t('Leaves the current skill package and version unchanged. This version stops prompting; newer versions still notify.'),
+      onClick: onIgnore,
+      recommended: true,
+      accent: 'primary',
+    },
+    {
+      Icon: RefreshCw,
+      title: t('Replace with new version'),
+      description: t('Replaces the entire skill package, including instructions and supporting files. Local edits will be lost; nothing is automatically merged.'),
+      onClick: onOverwrite,
+      disabled: preview?.status !== 'ready',
+      accent: 'muted',
+    },
+  ] : [
     {
       Icon: RefreshCw,
       title: preview ? t('Update in place') : t('Overwrite upgrade'),
@@ -142,10 +161,20 @@ export function StoreUpdateDialog({
         {preview?.status === 'loading' && (
           <p role="status" className="mb-4 flex items-center gap-1.5 text-xs text-muted-foreground">
             <Loader2 className="w-3 h-3 animate-spin" />
-            {t('Checking which items keep your current version…')}
+            {isSkill ? t('Checking the current skill package…') : t('Checking which items keep your current version…')}
           </p>
         )}
-        {preview?.status === 'ready' && preview.kept.length > 0 && (
+        {isSkill && preview?.status === 'unavailable' && (
+          <p role="status" className="mb-4 text-xs text-muted-foreground">
+            {t('The skill package could not be checked. Replacement is unavailable. Close this dialog and try again.')}
+          </p>
+        )}
+        {isSkill && preview?.status === 'ready' && preview.kept.length > 0 && (
+          <p className="mb-4 text-xs text-muted-foreground">
+            {t('The current skill package has changes that would be kept by a normal update. You can keep the entire current package or explicitly replace it.')}
+          </p>
+        )}
+        {!isSkill && preview?.status === 'ready' && preview.kept.length > 0 && (
           <div className="mb-4 space-y-1 rounded-lg border border-border-soft p-3 text-xs text-muted-foreground">
             <p className="text-foreground">
               {t('These differ from the author’s new version and will keep your current version: {{items}}', {

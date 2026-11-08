@@ -4,6 +4,7 @@ import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type * as WorkerSdk from '@hello-halo/agent-sdk/worker'
 import type { Options } from '@hello-halo/agent-sdk'
+import { prepareSessionSkills, withSkillNotice } from '../skill-availability'
 import { getBundledRipgrepPath } from './ripgrep'
 import { updateEnvPath } from '../../child-env'
 import { NativeSessionResumeError } from '../../../../shared/types/engine-session'
@@ -22,8 +23,10 @@ export function createHaloSdkModule(sdk: typeof WorkerSdk) {
     ? builtSetup
     : join(appPath, 'out/main/worker/halo-setup.cjs')
   const setupModule = pathToFileURL(unpack(setupPath)).href
-  const prepare = (options: Record<string, any>) => {
+  const prepare = async (options: Record<string, any>) => {
     const { haloRequestIdentity, workerGroup, ...sessionOptions } = options
+    const skills = await prepareSessionSkills(options)
+    sessionOptions.skillCatalog = skills.catalog
     if (haloRequestIdentity) delete sessionOptions.requestIdentity
     if (sessionOptions.env?.CLAUDE_CODE_GIT_BASH_PATH && !sessionOptions.env.AGENT_GIT_BASH_PATH) {
       sessionOptions.env = { ...sessionOptions.env, AGENT_GIT_BASH_PATH: sessionOptions.env.CLAUDE_CODE_GIT_BASH_PATH }
@@ -37,6 +40,7 @@ export function createHaloSdkModule(sdk: typeof WorkerSdk) {
     }
     return {
       options: sessionOptions as Options,
+      notice: skills.notice,
       placement: { group: workerGroup, setup: haloRequestIdentity ? { module: setupModule, data: haloRequestIdentity } : undefined },
     }
   }
@@ -48,9 +52,9 @@ export function createHaloSdkModule(sdk: typeof WorkerSdk) {
     close: () => runtime.close(),
     diagnostics: () => runtime.diagnostics(),
     async createSession(options: Record<string, any>) {
-      const prepared = prepare(options)
+      const prepared = await prepare(options)
       try {
-        return await runtime.createSession(prepared.options, prepared.placement)
+        return withSkillNotice(await runtime.createSession(prepared.options, prepared.placement), prepared.notice)
       } catch (error) {
         // The SDK refused a strict resume: the host continues from its own transcript.
         if (sdk.isResumeHistoryError(error) && typeof options.resume === 'string') {
@@ -60,9 +64,10 @@ export function createHaloSdkModule(sdk: typeof WorkerSdk) {
         throw error
       }
     },
-    query(params: { prompt: string; options?: Record<string, any> }) {
-      const prepared = prepare(params.options ?? {})
-      return runtime.query({ prompt: params.prompt, options: prepared.options }, prepared.placement)
+    async *query(params: { prompt: string; options?: Record<string, any> }) {
+      const prepared = await prepare(params.options ?? {})
+      const stream = runtime.query({ prompt: params.prompt, options: prepared.options }, prepared.placement)
+      yield* withSkillNotice({ stream: () => stream }, prepared.notice).stream()
     },
   }
 }

@@ -37,8 +37,8 @@ export interface BaseToolsetOptions {
    * it is passed.
    */
   exclude?: readonly BaseServerId[]
-  /** The entry mounts its own person-context tool; keep it out of `halo-apps`. */
-  omitPersonContext?: boolean
+  /** Shared skill files can only be managed on the owner's own turn. */
+  omitSkillManagement?: boolean
 }
 
 export function buildBaseToolset(options: BaseToolsetOptions): Record<string, unknown> {
@@ -57,7 +57,7 @@ export function buildBaseToolset(options: BaseToolsetOptions): Record<string, un
   if (!excluded.has('halo-apps') && isDigitalHumansEnabled()) {
     // Null until the Apps layer is wired in.
     const haloApps = createHaloAppsMcpServer(options.spaceId, guideConsulted, {
-      omitPersonContext: options.omitPersonContext,
+      omitSkillManagement: options.omitSkillManagement,
     })
     if (haloApps) record['halo-apps'] = haloApps
     else console.warn('[BaseToolset] halo-apps not mounted: the Apps layer is not wired in yet')

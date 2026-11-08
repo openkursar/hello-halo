@@ -11,7 +11,7 @@ import { invalidateTeamSessionHistory, loadTeamSessionHistory, matchesTeamHistor
  */
 
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
-import { Loader2, AlertCircle, LockKeyhole, MessageSquareMore } from 'lucide-react'
+import { Loader2, LockKeyhole, MessageSquareMore } from 'lucide-react'
 import { api } from '../../api'
 import { injectTeamSessionMessage } from './session-input'
 import { mergeArrivingMessages, withoutLiveInputs, withStoppedInputs } from '../../utils/live-inputs'
@@ -23,6 +23,7 @@ import { CompactNotice } from '../chat/CompactNotice'
 import { StreamingSection } from '../chat/StreamingSection'
 import { useBrowserToolCalls } from '../chat/useBrowserToolCalls'
 import { InterruptedBubble } from '../chat/InterruptedBubble'
+import { TurnErrorBubble } from '../chat/TurnErrorBubble'
 import { InputArea } from '../chat/InputArea'
 import { useConversationDetail } from '../../hooks/useConversationDetail'
 import { useTranslation } from '../../i18n'
@@ -399,10 +400,13 @@ export function TeamSessionChat({
             case 'TIMEOUT': return t('No reply from {{owner}} in time — they may be busy. Try again shortly.', { owner })
             case 'UNDELIVERED': return t('Couldn\u2019t reach {{owner}} — your message was not delivered. Try again when they\u2019re back online.', { owner })
             case 'MEMBER_NOT_FOUND': return t('{{owner}} is no longer in this team.', { owner })
+            case 'CONVERSATION_NOT_FOUND': return t('This conversation no longer exists in the team.')
             default: return t('Couldn\u2019t send your message just now. Please try again.')
           }
         }
-        const reason = isRemote ? remoteReason() : String(res.error || t('Failed to send message'))
+        const reason = res.code === 'PAYLOAD_TOO_LARGE'
+          ? res.error || t('Failed to send message')
+          : isRemote ? remoteReason() : String(res.error || t('Failed to send message'))
         useChatStore.getState().setSessionError(convId, reason)
         markSendFailed(userMsg.id, reason)
         return false
@@ -443,9 +447,10 @@ export function TeamSessionChat({
     try {
       // A remote member's turn runs in ITS owner's process; the local app-chat
       // abort would find no session here and report success while the member
-      // kept working. Same split as the send path above.
+      // kept working. Same split as the send path above. A conversation not
+      // created yet runs nothing to stop.
       if (isRemote) {
-        await api.teamStopMember({ teamId, appId, ...(epochId ? { epochId } : {}) })
+        if (epochId) await api.teamStopMember({ teamId, appId, epochId })
       } else {
         await api.appChatStop(appId, conversationId)
       }
@@ -588,18 +593,14 @@ export function TeamSessionChat({
             {!isGenerating && error && errorType !== 'interrupted' && isRemote && (
               <div className="flex justify-start pb-4">
                 <div className="w-[85%] rounded-2xl border border-halo-warning/30 bg-halo-warning/5 px-4 py-3">
-                  <p className="text-sm text-foreground">{error}</p>
+                  <p className="text-sm text-foreground whitespace-pre-wrap [overflow-wrap:anywhere]">{error}</p>
                 </div>
               </div>
             )}
             {!isGenerating && error && errorType !== 'interrupted' && !isRemote && (
               <div className="flex justify-start pb-4">
-                <div className="w-[85%] rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3">
-                  <div className="flex items-center gap-2 text-destructive">
-                    <AlertCircle className="h-4 w-4" />
-                    <span className="text-sm font-medium">{t('Something went wrong')}</span>
-                  </div>
-                  <p className="mt-2 text-sm text-destructive/80">{error}</p>
+                <div className="w-[85%]">
+                  <TurnErrorBubble error={error} />
                 </div>
               </div>
             )}

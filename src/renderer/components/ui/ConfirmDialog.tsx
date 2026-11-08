@@ -4,7 +4,7 @@
  */
 
 import { createPortal } from 'react-dom'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 interface ConfirmDialogProps {
   title: string
@@ -26,6 +26,21 @@ export function enterConfirms(target: Pick<HTMLElement, 'tagName' | 'isContentEd
   return !['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(target.tagName)
 }
 
+/**
+ * Where a confirmation is attached. A modal <dialog> sits in the top layer and
+ * makes the rest of the page inert, so a confirmation raised from inside one
+ * is attached to it; otherwise it goes on the page body.
+ */
+export function confirmationHost(doc: Pick<Document, 'body' | 'querySelectorAll'>): HTMLElement {
+  const open = doc.querySelectorAll<HTMLElement>('dialog[open]')
+  return open.length ? open[open.length - 1] : doc.body
+}
+
+/** A confirmation whose element has left the document (its host closed first) must not answer keys. */
+export function confirmationIsShown(root: { isConnected: boolean } | null): boolean {
+  return root !== null && root.isConnected
+}
+
 export function ConfirmDialog({
   title,
   message,
@@ -36,6 +51,7 @@ export function ConfirmDialog({
   variant = 'danger'
 }: ConfirmDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
+  const [host] = useState(() => confirmationHost(document))
   const cancelButtonRef = useRef<HTMLButtonElement>(null)
   const previouslyFocusedRef = useRef<HTMLElement | null>(null)
 
@@ -62,6 +78,7 @@ export function ConfirmDialog({
   // reached while the dialog is open.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (!confirmationIsShown(dialogRef.current)) return
       if (e.key === 'Escape') {
         // The dialog owns Esc; window-level handlers (e.g. the canvas collapsing) must not also act on it.
         e.preventDefault()
@@ -144,6 +161,6 @@ export function ConfirmDialog({
         </div>
       </div>
     </div>,
-    document.body
+    host
   )
 }

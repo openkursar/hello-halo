@@ -54,6 +54,11 @@ export interface AiRouteMeta extends RouteMetaBase {
   query?: string
   /** Response shape, read off the handler — never guessed. */
   returns?: string
+  /**
+   * The list's newest entries come last (a transcript), so the example keeps
+   * its end rather than its start when it truncates a long response.
+   */
+  newestLast?: true
   /** Error meanings and recovery hints, one per line. */
   notes?: string
   /**

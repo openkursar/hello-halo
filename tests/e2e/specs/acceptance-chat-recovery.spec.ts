@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { Page } from '@playwright/test'
+import type { HaloAPI } from '../../../src/preload'
 import {
   test, expect, acceptance, readAcceptanceConversation, readAcceptanceErrors,
   sendAcceptanceMessage, waitForAcceptanceIdle,
 } from '../fixtures/acceptance-app'
 import { modelTool } from '../fixtures/acceptance-model'
-import { openManagedConversation } from '../fixtures/acceptance-management'
+import { openManagedConversation, openManagedPerson, seedManagedPerson } from '../fixtures/acceptance-management'
 import { navigateToChat } from '../fixtures/helpers'
 
 test.setTimeout(150000)
@@ -45,6 +47,82 @@ test('a visible provider rejection retains the request and permits a successful 
   expect(completed).toHaveLength(1)
   expect(completed[0].request.lastUserText).toContain(question)
   await info.attach('provider-failure-recovery', { body: JSON.stringify({ rejectedRequests, retainedRequests: after.messages.filter(message => message.role === 'user').length, completedReplies: after.messages.filter(message => message.content === answer).length }), contentType: 'application/json' })
+})
+
+async function waitForPersonIdle(page: Page, appId: string, conversationId: string) {
+  await expect.poll(() => page.evaluate(async input => {
+    const result = await (globalThis as unknown as { halo: HaloAPI }).halo.appChatSessionState(input.appId, input.conversationId)
+    if (!result.success) throw new Error(`Could not read the real person session: ${result.error}`)
+    return (result.data as { isActive: boolean }).isActive
+  }, { appId, conversationId })).toBe(false)
+}
+
+async function readPersonChat(page: Page, appId: string, spaceId: string, conversationId: string) {
+  const saved = await page.evaluate(input => (globalThis as unknown as { halo: HaloAPI }).halo.appChatTranscript(input), { appId, spaceId, conversationId })
+  expect(saved.success, 'The person chat must be readable from its stored record').toBe(true)
+  return saved.data!.messages
+}
+
+test('a digital human chat keeps showing why a blocked account was refused after the turn ends', acceptance('chat.execution.digital-human-provider-error'), async ({ model, window }, info) => {
+  const reason = `OAuth authentication is currently not allowed for this organization. ${randomUUID()}`
+  const question = `Request from a blocked account ${randomUUID()}`
+  const followUp = `Request after the account is restored ${randomUUID()}`
+  const answer = `Answer after the account is restored ${randomUUID()}`
+  const unexpected: number[] = []
+  let restored = false
+  model.respond(request => {
+    if (!restored) return { failure: { status: 403, type: 'permission_error', message: reason } }
+    if (request.lastUserText.includes(followUp)) return { text: answer }
+    unexpected.push(request.sequence)
+    return { text: 'Unexpected request.' }
+  })
+  await navigateToChat(window)
+  const person = await seedManagedPerson(window, `Blocked account owner ${randomUUID().slice(0, 8)}`)
+  await openManagedPerson(window, person.spec.name)
+  await window.getByTitle('Opens the conversation with this digital human in the workspace chat', { exact: true }).click()
+  await expect(window.getByTitle(`Chatting with ${person.spec.name}`, { exact: true })).toBeVisible()
+  await expect(window.locator('.message-assistant')).toHaveCount(0)
+
+  const failed = await sendAcceptanceMessage(window, question)
+  expect(failed.conversationId).toMatch(new RegExp(`^app-chat:${person.id}:local:`))
+  await waitForPersonIdle(window, person.id, failed.conversationId)
+  const refused = await readPersonChat(window, person.id, failed.spaceId, failed.conversationId)
+  expect(refused.filter(message => message.role === 'user').map(message => message.content)).toEqual([question])
+  const failures = refused.filter(message => message.role === 'assistant')
+  expect(failures.map(message => ({ content: message.content, error: message.error }))).toEqual([
+    { content: '', error: expect.stringContaining(reason) },
+  ])
+  // The live error card is cleared once the finished turn is redrawn; the stored row must carry the reason.
+  const storedFailure = window.locator(`[data-message-id="${failures[0].id}"]`)
+  await expect(storedFailure.getByText('Something went wrong', { exact: true })).toBeVisible()
+  await expect(storedFailure).toContainText(reason)
+  const errors = await readAcceptanceErrors(window)
+  expect(errors.length).toBeGreaterThan(0)
+  for (const error of errors) expect(error).toMatchObject({ type: 'error', conversationId: failed.conversationId, error: expect.stringContaining(reason) })
+  expect(model.exchanges).toHaveLength(1)
+  expect(model.exchanges[0].reply?.failure?.status).toBe(403)
+
+  restored = true
+  const next = await sendAcceptanceMessage(window, followUp)
+  expect(next.conversationId).toBe(failed.conversationId)
+  await expect(window.locator('.message-assistant [data-message-content]').last()).toHaveText(answer)
+  await waitForPersonIdle(window, person.id, next.conversationId)
+  await expect(storedFailure).toContainText(reason)
+  const history = await readPersonChat(window, person.id, next.spaceId, next.conversationId)
+  expect(history.filter(message => message.role === 'user').map(message => message.content)).toEqual([question, followUp])
+  expect(history.filter(message => message.role === 'assistant').map(message => ({ content: message.content, failed: !!message.error }))).toEqual([
+    { content: '', failed: true },
+    { content: answer, failed: false },
+  ])
+  expect(unexpected).toEqual([])
+  expect(model.exchanges).toHaveLength(2)
+  const resent = model.exchanges[1].request
+  expect(resent.lastUserText).toContain(followUp)
+  expect(resent.text).toContain(question)
+  expect(resent.text).not.toContain(reason)
+  const allErrors = await readAcceptanceErrors(window)
+  for (const error of allErrors) expect(error).toMatchObject({ conversationId: failed.conversationId, error: expect.stringContaining(reason) })
+  await info.attach('person-provider-failure', { body: JSON.stringify({ appId: person.id, conversationId: failed.conversationId, errors: allErrors, refused, history }, null, 2), contentType: 'application/json' })
 })
 
 function heldCommand(profile: string, name: string) {

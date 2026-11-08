@@ -1,0 +1,89 @@
+version: 1
+id: chat.streaming
+module: chat
+title:
+  en: Read streaming replies across tool calls
+  zh: 阅读工具调用前后的流式回复
+story:
+  en: I can read the whole current reply while the AI continues after a tool call.
+  zh: AI 调用工具后继续回复时，我能读到当前段落的完整文字。
+basis: documented
+references:
+  - src/renderer/components/chat/StreamingBubble.tsx
+  - tests/e2e/specs/acceptance-streaming-bubble.spec.ts
+promises:
+  prefix:
+    en: A new text block keeps its opening text instead of losing characters from the preceding block's snapshot.
+    zh: 新段落保留开头文字，不会被上一段快照截去前几个字。
+scenarios:
+  - id: chat.streaming.block-prefix
+    title:
+      en: Continue after a tool call without truncating the new block
+      zh: 工具调用后继续回复，不截掉新段落的开头
+    verifies: [prefix]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    variants:
+      viewport: ['390', '1280']
+    steps:
+      - en: Display a reply, then a tool call, then a new text block that grows beyond the old reply's length.
+        zh: 显示一段回复和一次工具调用，再显示逐渐超过旧回复长度的新段落。
+      - en: Repeat with a first chunk already longer than the preceding reply, and with a same-block continuation.
+        zh: 再验证首批文字已经超过上一段长度，以及同段继续输出的情况。
+    expected:
+      - en: New blocks keep their entire prefix; same-block continuation still moves its prior text into history.
+        zh: 新段落完整保留开头；同段继续输出仍将此前文字移入历史。
+    notes:
+      en: Headless browser component check using production StreamingBubble with plain-text Markdown and translation substitutes. It does not verify the full app, transport, model, persistence or styled layout.
+      zh: 无头浏览器中验证真实气泡组件，Markdown 和翻译替换为纯文字；不证明完整应用、传输、模型、持久化或带样式布局。
+  - id: chat.streaming.workbench-prefix
+    title: Workbench execution surfaces retain new block prefixes
+    verifies: [prefix]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    variants:
+      viewport: ['390', '1280']
+      surface: [status, history]
+    steps:
+      - Observe a member's current execution in the task room or execution history.
+      - Continue after a tool call with an empty new-block event followed by a longer reply.
+    expected:
+      - The current paragraph retains every opening character.
+    notes: Component check with substituted state, history, Markdown and streaming-section composition; not full application or styled-layout evidence.
+  - id: chat.streaming.reused-bubble
+    title: A reused empty reply view does not truncate the next reply
+    verifies: [prefix]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    variants:
+      viewport: ['390', '1280']
+    steps:
+      - Display text and a tool call, clear the view, then start a longer reply in the same component.
+    expected:
+      - The new reply retains its opening characters without any old text in history.
+    notes: Headless component lifecycle check, not evidence that a production view survives across turns.
+  - id: chat.streaming.workbench-app-prefix
+    title: Read a team member's complete streaming reply after a real tool call
+    verifies: [prefix]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    variants:
+      viewport: ['390', '1280']
+    steps:
+      - Open a saved team's task and inspect a member's execution history.
+      - The member emits text, runs a tool, and streams a longer next paragraph.
+      - Finish the reply and reopen the execution history.
+    expected:
+      - The live paragraph starts at its first character and the persisted reply retains the full paragraph.

@@ -1,20 +1,20 @@
 {
-  "totalRoutes": 317,
+  "totalRoutes": 332,
   "expose": {
-    "ai": 194,
+    "ai": 208,
     "wrapped": 11,
-    "internal": 112,
+    "internal": 113,
     "unlabeled": 0
   },
   "groups": {
     "conversation": 12,
     "workspace": 28,
-    "digital-human": 52,
+    "digital-human": 54,
     "team": 32,
     "knowledge-base": 22,
     "channels": 22,
     "settings": 17,
-    "store": 27,
+    "store": 39,
     "terminal": 6
   },
   "files": [
@@ -34,6 +34,7 @@
     "tlon",
     "task",
     "git",
-    "code-review"
+    "code-review",
+    "skills"
   ]
 }

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
+import os from 'node:os'
+import path from 'node:path'
 import { parse } from 'yaml'
 import { spawnSync } from 'node:child_process'
 
@@ -108,6 +110,104 @@ test('another repository, an unknown branch and an unsupported branch name never
   }
 })
 
+const privateEnvironment = { HALO_SOURCE_REPOSITORY: 'example/development', HALO_CONFIGURED_PRIVATE_SOURCE: 'example/development', HALO_PRIVATE_SOURCE_KEY_PRESENT: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch', HALO_SOURCE_REF: 'feat/topic' }
+
+test('the configured private development repository is admitted for a manual run without any API lookup', async () => {
+  const resolved = await resolveBranch(privateEnvironment, {})
+  assert.deepEqual(resolved.outputs, { private: 'true' })
+  assert.deepEqual(resolved.calls, [])
+  const unrestricted = await resolveBranch({ ...privateEnvironment, HALO_ALLOWED_PRIVATE_SOURCE_BRANCHES: '' }, {})
+  assert.deepEqual(unrestricted.outputs, { private: 'true' })
+})
+
+test('a third repository is refused whether or not a private repository is configured, and a private name equal to the configured source keeps the public path', async () => {
+  await assert.rejects(resolveBranch({ ...privateEnvironment, HALO_SOURCE_REPOSITORY: 'example/third' }), /only executes its configured source repository/)
+  await assert.rejects(resolveBranch({ ...privateEnvironment, HALO_SOURCE_REPOSITORY: 'example/third', HALO_CONFIGURED_PRIVATE_SOURCE: '' }), /only executes its configured source repository/)
+  await assert.rejects(resolveBranch({ ...privateEnvironment, HALO_SOURCE_REPOSITORY: 'example/development', HALO_CONFIGURED_PRIVATE_SOURCE: '' }), /only executes its configured source repository/)
+  await assert.rejects(resolveBranch({ ...privateEnvironment, HALO_SOURCE_REPOSITORY: 'example/development', HALO_CONFIGURED_PRIVATE_SOURCE: undefined }), /only executes its configured source repository/)
+  const configured = await resolveBranch({ ...privateEnvironment, HALO_SOURCE_REPOSITORY: 'example/source', HALO_CONFIGURED_PRIVATE_SOURCE: 'example/source', HALO_SOURCE_REF: 'release_v3.2' })
+  assert.deepEqual(configured.outputs, { revision: 'a'.repeat(40) })
+})
+
+test('the private repository is tested only by a manual dispatch and only with its read key', async () => {
+  for (const eventName of ['schedule', 'push', undefined]) await assert.rejects(resolveBranch({ ...privateEnvironment, GITHUB_EVENT_NAME: eventName }, {}), /only be tested by a manual dispatch/)
+  for (const present of ['false', '', undefined]) await assert.rejects(resolveBranch({ ...privateEnvironment, HALO_PRIVATE_SOURCE_KEY_PRESENT: present }, {}), /no read key configured/)
+})
+
+test('branch names and the allowed-branch lists apply to the private repository on their own', async () => {
+  for (const ref of ['', '-flag', 'a b', 'x;y', '$(id)', 'a\nb']) {
+    const attempt = await resolveBranch({ ...privateEnvironment, HALO_SOURCE_REF: ref }, {}).then(() => 'resolved', error => error.message)
+    assert.match(attempt, /not supported/, JSON.stringify(ref))
+  }
+  assert.deepEqual((await resolveBranch({ ...privateEnvironment, HALO_ALLOWED_PRIVATE_SOURCE_BRANCHES: '["feat/topic"]' }, {})).outputs, { private: 'true' })
+  await assert.rejects(resolveBranch({ ...privateEnvironment, HALO_ALLOWED_PRIVATE_SOURCE_BRANCHES: '["other"]' }, {}), /not been authorized/)
+  await assert.rejects(resolveBranch({ ...privateEnvironment, HALO_ALLOWED_PRIVATE_SOURCE_BRANCHES: 'not json' }, {}), SyntaxError)
+  // The list that narrows the public source neither blocks nor admits private branches.
+  assert.deepEqual((await resolveBranch({ ...privateEnvironment, HALO_ALLOWED_SOURCE_BRANCHES: '["release_v3.2"]' }, {})).outputs, { private: 'true' })
+  assert.deepEqual((await resolveBranch({ HALO_SOURCE_REF: 'feat/topic', HALO_ALLOWED_PRIVATE_SOURCE_BRANCHES: '["release_v3.2"]' })).outputs, { revision: 'b'.repeat(40) })
+})
+
+test('the scheduled run can only reach the configured source, and the private checkout carries the deploy key and a fixed branch ref', () => {
+  const job = workflow.jobs.acceptance
+  assert.equal(job.env.HALO_SOURCE_REPOSITORY, '${{ inputs.source_repository || vars.HALO_SOURCE_REPOSITORY || github.repository }}')
+  assert.equal(JSON.stringify(workflow.jobs).includes('HALO_PRIVATE_SOURCE_REPOSITORY'), true)
+  assert.equal(job.env.HALO_SOURCE_REPOSITORY.includes('HALO_PRIVATE_SOURCE'), false)
+  assert.equal(workflow.concurrency.group.includes('HALO_PRIVATE_SOURCE'), false)
+  assert.equal(sourceStep.env.HALO_CONFIGURED_PRIVATE_SOURCE, '${{ vars.HALO_PRIVATE_SOURCE_REPOSITORY }}')
+  assert.equal(sourceStep.env.HALO_PRIVATE_SOURCE_KEY_PRESENT, "${{ secrets.HALO_PRIVATE_SOURCE_READ_SSH_KEY != '' }}")
+  const steps = job.steps
+  const publicCheckout = steps.find(step => step.name === 'Check out source')
+  const privateCheckout = steps.find(step => step.name === 'Check out private development source')
+  assert.equal(publicCheckout.if, "steps.source.outputs.private != 'true'")
+  assert.equal(publicCheckout.with.ref, '${{ steps.source.outputs.revision }}')
+  assert.equal(publicCheckout.with.token, '${{ secrets.HALO_SOURCE_READ_TOKEN || github.token }}')
+  assert.equal(privateCheckout.if, "steps.source.outputs.private == 'true'")
+  assert.equal(privateCheckout.uses, 'actions/checkout@v4')
+  assert.equal(privateCheckout.with['ssh-key'], '${{ secrets.HALO_PRIVATE_SOURCE_READ_SSH_KEY }}')
+  assert.equal(privateCheckout.with.ref, 'refs/heads/${{ env.HALO_SOURCE_REF }}')
+  assert.equal(privateCheckout.with.repository, '${{ env.HALO_SOURCE_REPOSITORY }}')
+  assert.equal(privateCheckout.with['persist-credentials'], false)
+  assert.equal(privateCheckout.with.token, undefined)
+  const verifyIndex = steps.findIndex(step => step.name === 'Verify the private development checkout')
+  assert(steps.indexOf(privateCheckout) < verifyIndex && verifyIndex < steps.findIndex(step => step.id === 'initial'))
+  assert.equal(steps[verifyIndex].if, "steps.source.outputs.private == 'true'")
+})
+
+test('the deploy keys are read only by their checkout steps, which remove them before any later step runs', () => {
+  const steps = workflow.jobs.acceptance.steps
+  const withKey = steps.filter(step => step.with?.['ssh-key'])
+  assert.deepEqual(withKey.map(step => step.name), ['Check out private development source', 'Check out optional SDK'])
+  for (const step of withKey) assert.equal(step.with['persist-credentials'], false, step.name)
+  const uses = JSON.stringify(workflow).match(/secrets\.HALO_PRIVATE_SOURCE_READ_SSH_KEY/g)
+  assert.equal(uses.length, 2)
+  assert.equal(JSON.stringify(steps.filter(step => step.run)).includes('secrets.'), false)
+  assert.equal(workflow.env, undefined)
+  assert.equal(JSON.stringify(workflow.jobs.acceptance.env).includes('secrets.'), false)
+})
+
+test('the private checkout is accepted only with a full commit and the acceptance harness', () => {
+  const step = workflow.jobs.acceptance.steps.find(item => item.name === 'Verify the private development checkout')
+  const attempt = harness => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'acceptance-private-checkout-'))
+    try {
+      const git = args => spawnSync('git', args, { cwd: directory, encoding: 'utf8' })
+      git(['init', '-q']); git(['config', 'user.email', 'test@example.invalid']); git(['config', 'user.name', 'test'])
+      fs.mkdirSync(path.join(directory, 'scripts/acceptance'), { recursive: true })
+      if (harness) fs.writeFileSync(path.join(directory, 'scripts/acceptance/cli.mjs'), '')
+      else fs.writeFileSync(path.join(directory, 'README.md'), 'x')
+      git(['add', '-A']); git(['commit', '-q', '-m', 'x'])
+      return spawnSync('bash', ['-c', step.run], { cwd: directory, encoding: 'utf8' })
+    } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+  }
+  assert.equal(attempt(true).status, 0)
+  const missing = attempt(false)
+  assert.equal(missing.status, 1)
+  assert.match(missing.stdout, /does not contain the acceptance harness/)
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'acceptance-private-nogit-'))
+  try { assert.notEqual(spawnSync('bash', ['-c', step.run], { cwd: outside, encoding: 'utf8', env: { ...process.env, GIT_CEILING_DIRECTORIES: path.dirname(outside) } }).status, 0) }
+  finally { fs.rmSync(outside, { recursive: true, force: true }) }
+})
+
 test('an SDK reference is refused when the controller has no SDK repository', () => {
   const steps = workflow.jobs.acceptance.steps
   const guard = steps.find(step => step.name === 'Refuse an SDK reference without an SDK repository')
@@ -133,6 +233,8 @@ test('the baseline comes from the first lineage that has one and reaches both th
   assert.equal(restore.with.name, '${{ steps.baseline.outputs.artifact-name }}')
   for (const id of ['execute', 'finalize']) assert.equal(steps.find(step => step.id === id).env.HALO_ACCEPTANCE_BASELINE, '${{ runner.temp }}/acceptance-baseline-${{ github.run_id }}/baseline.json')
   assert.equal(workflow.jobs.acceptance.env.HALO_DEFAULT_SOURCE_REF, "${{ vars.HALO_SOURCE_REF || 'main' }}")
+  assert.equal(workflow.jobs.acceptance.env.HALO_COMPARISON_REPOSITORY, '${{ vars.HALO_SOURCE_REPOSITORY || github.repository }}')
+  assert.equal(workflow.jobs.acceptance.env.HALO_COMPARISON_REPOSITORY, sourceStep.env.HALO_CONFIGURED_SOURCE)
   assert.equal(steps.find(step => step.name === 'Publish successful baseline').with.name, '${{ steps.context.outputs.artifact-name }}')
 })
 
@@ -149,7 +251,7 @@ test('local archival runs after the summary even when preparation fails, without
   assert.equal(archive.run, 'exec node scripts/acceptance/ci-archive.mjs')
   assert.equal(upload.if, "always() && steps.archive.outputs.snapshot-directory != ''")
   assert.equal(upload.uses, 'actions/upload-artifact@v4')
-  assert.equal(steps.find(step => step.name === 'Publish successful baseline').if, "success() && steps.execute.outcome == 'success' && steps.finalize.outputs.final == 'true' && steps.archive.outputs.source-final == 'true' && steps.finalize.outputs.baseline-file != ''")
+  assert.equal(steps.find(step => step.name === 'Publish successful baseline').if, "success() && steps.source.outputs.private != 'true' && steps.execute.outcome == 'success' && steps.finalize.outputs.final == 'true' && steps.archive.outputs.source-final == 'true' && steps.finalize.outputs.baseline-file != ''")
 })
 
 test('the CI owner receives signals directly and finalization precedes immutable-snapshot upload', () => {

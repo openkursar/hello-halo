@@ -14,6 +14,7 @@
  */
 
 import type { ImageMediaType } from '../types'
+import { MAX_IMAGE_DIMENSION } from '../../shared/constants/chat-attachments'
 
 export interface ProcessedImage {
   data: string          // Base64 encoded (without data: prefix)
@@ -31,9 +32,6 @@ export interface ImageProcessorOptions {
   preserveTransparency?: boolean  // Keep PNG for transparent images (default: true)
 }
 
-// Claude Vision API recommended max dimension
-const DEFAULT_MAX_DIMENSION = 1568
-
 // Quality settings
 const DEFAULT_JPEG_QUALITY = 0.85
 const HIGH_QUALITY_THRESHOLD = 0.92  // For small images
@@ -46,7 +44,7 @@ export async function processImage(
   options: ImageProcessorOptions = {}
 ): Promise<ProcessedImage> {
   const {
-    maxDimension = DEFAULT_MAX_DIMENSION,
+    maxDimension = MAX_IMAGE_DIMENSION,
     quality = DEFAULT_JPEG_QUALITY,
     preserveTransparency = true
   } = options

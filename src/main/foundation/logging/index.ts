@@ -31,6 +31,9 @@ export { isolateLogPath } from './log-isolation'
 // Synchronous logging for paths that exit the process on the next statement
 export { logFatal } from './fatal'
 
+// Keeps uncaught main-process errors in main.log
+export { routeUncaughtErrorsToMainLog } from './error-routing'
+
 // Numbered archives for the main log file
 export { createNumberedArchiveFn, MAIN_LOG_ARCHIVES, MAIN_LOG_MAX_BYTES } from './rotation'
 

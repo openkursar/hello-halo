@@ -558,6 +558,16 @@ describe('skills', () => {
     expect(allowsSkill({ allowedSkills: [] }, 'place-order', 'permissive')).toBe(false)
   })
 
+  it('accepts old directory grants without normalizing authored grants into other commands', () => {
+    expect(allowsSkill({ allowedSkills: ['Ledger_App'] }, 'Ledger App', 'strict')).toBe(true)
+    expect(allowsSkill({ allowedSkills: ['Ledger App'] }, 'Ledger App', 'strict')).toBe(true)
+    expect(allowsSkill({ allowedSkills: ['Ledger App'] }, 'Ledger_App', 'strict')).toBe(false)
+    expect(allowsSkill({ allowedSkills: ['Ledger App'] }, 'Ledger@App', 'strict')).toBe(false)
+    expect(allowsSkill({ allowedSkills: ['Ledger_App'] }, 'ledger App', 'strict')).toBe(false)
+    expect(allowsSkill({ allowedSkills: ['Ledger_App'] }, 'Other App', 'strict')).toBe(false)
+    expect(allowsSkill({ allowedSkills: ['*'] }, 'Ledger App', 'strict')).toBe(false)
+  })
+
   it('leaves a teammate with every skill until skills are listed, and enforces a list once there is one', () => {
     expect(computeDisallowedBuiltins(fullCapabilityPolicy(), 'permissive')).toEqual([])
     expect(computeDisallowedBuiltins({ allowedSkills: [] }, 'permissive')).toEqual(['Skill'])

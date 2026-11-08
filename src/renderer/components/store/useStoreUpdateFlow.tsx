@@ -35,18 +35,19 @@ export function useStoreUpdateFlow(
   entry: RegistryEntry | null | undefined,
   updateInfo: UpdateInfo | null | undefined,
   providedDetail?: StoreAppDetail | null,
+  onUpdated?: () => void,
 ): StoreUpdateFlow {
   const { t, i18n } = useTranslation()
   const [phase, setPhase] = useState<Phase>('idle')
   const [copyDetail, setCopyDetail] = useState<StoreAppDetail | null>(null)
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState<UpgradePreview | undefined>(undefined)
-  // Only a digital human keeps the user's version of what differs from the author's.
-  const keepsEdits = entry?.type === 'automation'
+  const isSkill = entry?.type === 'skill'
+  const needsPreview = entry?.type === 'automation' || isSkill
 
   const start = () => {
     setPhase('confirm')
-    if (!keepsEdits || !updateInfo) {
+    if (!needsPreview || !updateInfo) {
       setPreview(undefined)
       return
     }
@@ -70,18 +71,32 @@ export function useStoreUpdateFlow(
 
   const overwrite = async () => {
     if (!updateInfo || busy) return
+    if (isSkill && preview?.status !== 'ready') {
+      console.warn('[StoreUpdateFlow] Skill replacement blocked without preview', { appId: updateInfo.appId })
+      return
+    }
     void api.trackEvent('store.update.overwrite', { appId: entry?.slug, toVersion: updateInfo.latestVersion })
     setBusy(true)
     try {
       const res = await api.storeApplyUpgrade(updateInfo.appId, 'force')
       if (res.success) {
         refreshInstalled()
-        const outcome = (res.data as { kept?: string[]; editsKnown?: boolean } | undefined) ?? {}
+        onUpdated?.()
+        const outcome = res.data as { from?: string; to?: string; kept?: string[]; editsKnown?: boolean } | undefined
+        const unchanged = outcome?.to === outcome?.from
         useNotificationStore.getState().show({
-          title: t('Updated'),
-          body: upgradedMessage(updateInfo.latestVersion, outcome, t, i18n.language),
+          title: isSkill
+            ? !outcome?.to ? t('Update result unavailable') : unchanged ? t('Current version kept') : t('Updated')
+            : t('Updated'),
+          body: isSkill
+            ? outcome?.to
+              ? unchanged
+                ? t('Kept version {{version}}.', { version: outcome.to })
+                : t('Updated to version {{version}}.', { version: outcome.to })
+              : t('The installed version could not be confirmed. Please check the skill details.')
+            : upgradedMessage(updateInfo.latestVersion, outcome ?? {}, t, i18n.language),
           variant: 'success',
-          duration: outcome.kept?.length ? 6000 : 3000,
+          duration: outcome?.kept?.length ? 6000 : 3000,
         })
       } else {
         useNotificationStore.getState().show({
@@ -169,6 +184,7 @@ export function useStoreUpdateFlow(
           changelog={changelog}
           busy={busy}
           preview={preview}
+          isSkill={isSkill}
           onInstallCopy={installCopy}
           onOverwrite={overwrite}
           onIgnore={ignore}

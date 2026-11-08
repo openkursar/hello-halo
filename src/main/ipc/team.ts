@@ -2,7 +2,7 @@
 
 import { ipcMain } from 'electron'
 import { getTeamService } from '../apps/team'
-import { TEAM_IPC, memberChatKey } from '../../shared/apps/team-types'
+import { TEAM_IPC } from '../../shared/apps/team-types'
 import { readTeamMemberHistory } from '../apps/runtime/app-chat'
 import { getTeamStore } from '../apps/team'
 import { getFederationManager } from '../apps/runtime/federation/manager'
@@ -148,6 +148,9 @@ export function registerTeamIpc(): void {
       // else means "full transcript" rather than trusting a bogus wire value.
       const sinceSeq =
         Number.isInteger(input.sinceSeq) && (input.sinceSeq as number) > 0 ? input.sinceSeq : undefined
+      // A conversation not created yet has nothing to show; another one is never
+      // read in its place.
+      if (!input.epochId) return { success: true, data: [] }
       const teamStore = getTeamStore()
       const target = teamStore?.listMembersByTeam(input.teamId).find((m) => m.appId === input.appId)
       if (target?.origin === 'remote' && target.ownerNodeId) {
@@ -155,29 +158,18 @@ export function registerTeamIpc(): void {
         if (!manager) {
           return { success: false, error: 'Federation is not yet initialized. Please try again shortly.' }
         }
-        // Resolve the SAME epoch the send path uses so a message and its transcript
-        // never diverge: an open run epoch, else the member's long-lived conversation
-        // epoch. Read-only — never CREATE one here (that is the send path's job); if
-        // none exists yet (nothing sent), there is simply nothing to show.
-        const epochId =
-          input.epochId ||
-          teamStore?.getCurrentEpochForTeam(input.teamId)?.id ||
-          teamStore?.getOpenConversationEpoch(input.teamId, memberChatKey(input.appId))?.id
-        if (!epochId) return { success: true, data: [] }
         const result = await manager.fetchMemberHistory({
           officeId: input.teamId,
           ownerNodeId: target.ownerNodeId,
           appId: input.appId,
-          epochId,
+          epochId: input.epochId,
           sinceSeq,
         })
         // stale=true → served from cache because the owner is unreachable; the
         // renderer shows an "offline, may not be up to date" notice.
         return { success: true, data: result.messages, stale: result.stale }
       }
-      // Locally-owned member: its transcript is per-epoch on disk. No epoch yet
-      // means nothing has run for it here → empty (never an error).
-      if (!input.epochId) return { success: true, data: [] }
+      // Locally-owned member: its transcript is per-epoch on disk.
       // Rows carry seq like the remote path, so a caller holding the history
       // passes sinceSeq and receives only the tail.
       return { success: true, data: readTeamMemberHistory(input.appId, input.teamId, input.epochId, sinceSeq) }
@@ -192,7 +184,7 @@ export function registerTeamIpc(): void {
   // Host-operator surface (the local owner driving a member directly), so no
   // per-invite scope gate here — that gate is the remote HTTP boundary's job.
   // The service routes to a remote-owned target over the office link internally;
-  // epoch is resolved from the teamSessionKey when omitted.
+  // the conversation is always the caller's to name.
   ipcMain.handle(
     TEAM_IPC.sendToMember,
     async (
@@ -220,7 +212,7 @@ export function registerTeamIpc(): void {
   // button behaves the same whichever machine the member runs on.
   ipcMain.handle(
     TEAM_IPC.stopMember,
-    async (_e, input: { teamId: string; appId: string; epochId?: string }) =>
+    async (_e, input: { teamId: string; appId: string; epochId: string }) =>
       handle('team:stop-member', (s) => s.stopMember(input))
   )
 

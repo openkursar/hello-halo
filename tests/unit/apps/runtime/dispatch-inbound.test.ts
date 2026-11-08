@@ -573,6 +573,26 @@ describe('dispatchInboundMessage — a turn that stopped short', () => {
     expect(reply.send).toHaveBeenLastCalledWith('⚠️ Error: API Error: 529 overloaded')
   })
 
+  it('follows what was written before a request failed with the error it would have sent alone', async () => {
+    const reply = makeReply(false)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    replyWith('Partial answer', { kind: 'failed', error: 'API Error: 529 overloaded' })
+
+    expect(reply.send).toHaveBeenCalledTimes(1)
+    expect(reply.send).toHaveBeenLastCalledWith('Partial answer\n\n⚠️ Error: API Error: 529 overloaded')
+  })
+
+  it('finishes the stream with the text and the failure when a request failed partway', async () => {
+    instanceCfg = { ...BASE_CONFIG, streaming: true }
+    const reply = makeReply(true)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+
+    replyWith('Partial answer', { kind: 'failed', error: 'API Error: 529 overloaded' })
+
+    expect(reply.streaming!.finish).toHaveBeenCalledWith('Partial answer\n\n⚠️ Error: API Error: 529 overloaded')
+  })
+
   it('tells a chat no path of this computer, and not the program to allow when a local connection was refused', async () => {
     // The chat may hold people from outside; the explanation is for the owner, in Halo.
     sendAppChatMessageMock.mockRejectedValueOnce(new Error(

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
-import { assertBaselineRun, comparableBaseline, git, makeBaseline, readJson, renderSummary } from './ci-state.mjs'
+import { assertBaselineRun, comparableBaseline, git, makeBaseline, readJson, renderSummary, usesReferenceLineage } from './ci-state.mjs'
 import { compareResults } from './lib/quality.mjs'
 import { stoppedEvidenceProducers, freezeEvidence, verifyEvidenceSource, writeEvidenceJson, writeEvidenceText, assertOwnedEvidencePath } from './lib/ci-evidence.mjs'
 
@@ -57,16 +57,16 @@ function collectDiagnostics(root, directory, producers) {
 }
 
 /** The earlier results a run can be compared with, or null when there are none or they cannot be trusted. */
-function earlierResults(context, file, defaultRef) {
+function earlierResults(context, file, defaultRef, referenceRepository) {
   if (!file || !fs.existsSync(file)) return null
-  try { return comparableBaseline(readJson(file), context, defaultRef) }
+  try { return comparableBaseline(readJson(file), context, defaultRef, referenceRepository) }
   catch (error) {
     console.warn(`[Acceptance CI] The earlier results could not be read (${error.message}); this run is reported without a comparison.`)
     return null
   }
 }
 
-export function finalizeCi(root, { identity, stageOutcomes = {}, summaryFile, baselineFile, defaultRef } = {}) {
+export function finalizeCi(root, { identity, stageOutcomes = {}, summaryFile, baselineFile, defaultRef, referenceRepository } = {}) {
   root = fs.realpathSync(root)
   const directory = path.join(root, 'tests/acceptance/output/ci')
   assertOwnedEvidencePath(root, directory)
@@ -104,7 +104,7 @@ export function finalizeCi(root, { identity, stageOutcomes = {}, summaryFile, ba
     throw Object.assign(new Error('The completed run record is unreadable; evidence cannot be finalized', { cause: error }), { code: 'EVIDENCE_RUN_UNREADABLE' })
   }
   const unavailable = collectDiagnostics(root, directory, state.producers)
-  const previous = earlierResults(context, baselineFile, defaultRef)
+  const previous = earlierResults(context, baselineFile, defaultRef, referenceRepository)
   let quality = null
   try { quality = run ? compareResults(run, previous) : null }
   catch (error) { console.warn(`[Acceptance CI] The quality findings could not be derived from the run record (${error.message}); the summary reports the raw counts only.`) }
@@ -113,14 +113,15 @@ export function finalizeCi(root, { identity, stageOutcomes = {}, summaryFile, ba
   if (quality) writeEvidenceJson(path.join(directory, 'quality.json'), quality, { exclusive: true, mode: 0o640 })
   let baselineFailure
   const scoped = Boolean(context.modules?.length || context.cases?.length)
-  const mayAdvance = state.owner.outcome === 'passed' && (!stageOutcomes.execute || stageOutcomes.execute.outcome === 'success') && !scoped && run?.completion?.executed > 0
+  const referenced = usesReferenceLineage(context, referenceRepository)
+  const mayAdvance = !referenced && state.owner.outcome === 'passed' && (!stageOutcomes.execute || stageOutcomes.execute.outcome === 'success') && !scoped && run?.completion?.executed > 0
   if (mayAdvance) {
     try {
       assertBaselineRun(context, run)
       if (unavailable.length) throw new Error('Registered diagnostics are missing from a nominally passing run')
     } catch (error) { baselineFailure = error }
   }
-  const summary = renderSummary(context, run, stageOutcomes, quality) + `\nEvidence producers: **stopped**. CI owner outcome: **${state.owner.outcome}**.\n` + (baselineFailure ? `\nBaseline withheld: ${baselineFailure.message}\n` : '')
+  const summary = renderSummary(context, run, stageOutcomes, quality) + `\nEvidence producers: **stopped**. CI owner outcome: **${state.owner.outcome}**.\n` + (baselineFailure ? `\nBaseline withheld: ${baselineFailure.message}\n` : '') + (referenced ? '\nPrivate development source: compared with the latest baseline of the reference branch; no baseline is published from it.\n' : '')
   writeEvidenceText(path.join(directory, 'summary.md'), summary, { mode: 0o640 })
   appendJobSummary(directory, summaryFile, summary)
   const frozen = freezeEvidence(root, { identity: state.scope.identity })
@@ -140,7 +141,7 @@ export function finalizeCi(root, { identity, stageOutcomes = {}, summaryFile, ba
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const identity = process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID ? { repository: process.env.GITHUB_REPOSITORY, runId: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT || '1' } : undefined
-    const result = finalizeCi(process.cwd(), { identity, stageOutcomes: process.env.HALO_CI_STAGE_OUTCOMES ? JSON.parse(process.env.HALO_CI_STAGE_OUTCOMES) : {}, summaryFile: process.env.GITHUB_STEP_SUMMARY, baselineFile: process.env.HALO_ACCEPTANCE_BASELINE, defaultRef: process.env.HALO_DEFAULT_SOURCE_REF })
+    const result = finalizeCi(process.cwd(), { identity, stageOutcomes: process.env.HALO_CI_STAGE_OUTCOMES ? JSON.parse(process.env.HALO_CI_STAGE_OUTCOMES) : {}, summaryFile: process.env.GITHUB_STEP_SUMMARY, baselineFile: process.env.HALO_ACCEPTANCE_BASELINE, defaultRef: process.env.HALO_DEFAULT_SOURCE_REF, referenceRepository: process.env.HALO_COMPARISON_REPOSITORY })
     if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `final=true\nfreeze-sha256=${result.freezeSha256}\nbaseline-file=${result.baselineFile ?? ''}\nnew-failures=${result.quality?.newFailures.length ?? ''}\nfailing=${result.quality ? result.quality.counts.failed : ''}\n`)
     console.log(`[Acceptance CI] Evidence frozen; owner outcome ${result.outcome}. Baseline ${result.baselineFile ? 'eligible' : 'withheld'}.`)
   } catch (error) {

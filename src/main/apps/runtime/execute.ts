@@ -17,7 +17,7 @@ import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 import { getAppManager, type InstalledApp } from '../manager'
 import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
-import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
+import { buildSelfIdentityPrompt } from './prompt/self-identity'
 import { addRunTokenUsage, resolvePermission, type RunTokenUsage } from '../../../shared/apps/app-types'
 import { resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
 import type { ActivityStore } from './store'
@@ -59,10 +59,11 @@ import { admitTransientSession } from './session-budget'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { createOcrMcpServer } from '../../services/ocr'
-import { createApiRefMcpServer, HALO_API_TOOLSET_ID } from '../../services/api-ref'
+import { createApiRefMcpServer } from '../../services/api-ref'
 import { buildBaseToolset } from '../../services/agent/toolsets/base'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { createConversationCollabMcpServer, resolveConversationCollab } from './conversation-collab'
+import { withheldWebSearch, withholdWebSearchBuiltins } from './web-search-switch'
 import { buildRunSenderKey } from '../../../shared/apps/im-keys'
 import { closeRunSender, openRunSender } from './run-conversation-source'
 import { getConfig, resolveClaudeConfigDir } from '../../foundation/config.service'
@@ -367,12 +368,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
     const usesEmail = resolvePermission(app, 'email') // gated on channel config below
     const usesImPush = resolvePermission(app, 'im-push') // AI-driven IM push
-    // Default OFF, unlike every other built-in capability. This one operates
-    // Halo's own configuration and data rather than the outside world, and it
-    // costs a tool schema plus a usage guide on every scheduled run — not a
-    // sensible default for an automation that never needs it. A spec can still
-    // declare it, and the user can grant it in Capabilities.
-    const usesHaloApi = resolvePermission(app, HALO_API_TOOLSET_ID, false)
+    // Operating Halo is not a switch for a digital human, and a run is always
+    // its owner's own; the tool, its credentials and its guide follow this one value.
+    const usesHaloApi = true
     // Off unless the owner switched conversation collaboration on. A run is always
     // the owner's, and acts under its own sender key: what it sends is a one-way
     // notice, and nothing sent back can reach its digital human's chats.
@@ -425,7 +423,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         imContactsAvailable: notifyAvail.imContactsAvailable,
       }) ?? undefined,
       notifyToolsAvailable: notifyAvail.anyNotifyToolAvailable,
-    }) + '\n\n' + personContextPrompt({ authority: 'owner', appId: app.id })
+    }) + '\n\n' + buildSelfIdentityPrompt(app.id, app.spec.name)
 
     console.log(
       `[Runtime][${runTag}] ── SYSTEM PROMPT ──────────────────────────\n` +
@@ -548,8 +546,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     // Starts from the base toolset. Excluded: `halo-apps` — an unattended run
     // does not manage digital humans. Documentation stays: a run has no person
-    // to ask what a screen looks like.
-    const baseToolset = buildBaseToolset({ spaceId: app.spaceId!, exclude: ['halo-apps'] })
+    // to ask what a screen looks like. Web search goes when the owner switched it off.
+    const webSearch = withheldWebSearch(app)
+    const baseToolset = buildBaseToolset({ spaceId: app.spaceId!, exclude: ['halo-apps', ...webSearch.servers] })
 
     const sdkOptions = await buildUserSessionSdkOptions({
       engineId,
@@ -568,7 +567,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         ...requiredMcpServers,              // declared MCP dependencies
         'halo-report': reportMcpServer,     // built-in: completion signal
         'halo-notify': notifyMcpServer,     // built-in: user notification
-        'halo-person-context': createPersonContextMcpServer({ authority: 'owner', appId: app.id, environmentSpaceId: app.spaceId!, capabilityMode: 'automation' }),
         ...baseToolset,                     // built-in: web search, Halo documentation
         'ocr': createOcrMcpServer(),              // built-in: on-device image OCR
         ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
@@ -589,6 +587,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     // Override SDK options for automation context
     sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt, engineId)
+    withholdWebSearchBuiltins(sdkOptions, webSearch)
     // Token-level partials OFF: a run is headless and emits no renderer events,
     // so there is no live consumer for token frames. processStream persists one
     // aggregate block-level message (thinking / tool-call / tool-result / text) per
@@ -612,7 +611,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //   All other triggers → create a fresh session.
     const escalationResumeId = trigger.escalation?.sessionId
     const continueResumeId = trigger.continue?.sessionId
-    const sessionPlan = prepareAppEngineSession({ engineId, state: engineState, legacySessionId, spacePath: environment.spacePath, appId: app.id, runId, conversationId: sessionKey })
+    const sessionPlan = prepareAppEngineSession({ engineId, explicitEngine: Boolean(app.userOverrides?.engineId), state: engineState, legacySessionId, spacePath: environment.spacePath, appId: app.id, runId, conversationId: sessionKey })
     if (sessionPlan.engineHandoffContent) sdkOptions.engineHandoffContent = sessionPlan.engineHandoffContent
     if (sessionPlan.strictNativeResume) sdkOptions.strictNativeResume = true
     const resumeGates = sessionPlan.recoverNativeSession ? { recoverNativeSession: sessionPlan.recoverNativeSession } : undefined
@@ -1130,7 +1129,9 @@ async function processStream(
           writer.writeEvent(sdkMessage as Record<string, unknown>)
         }
 
-        if (msgType === 'assistant') {
+        // A failed model request told as an assistant message carrying `error`
+        // is the run's error, which its result reports — never its output.
+        if (msgType === 'assistant' && !(sdkMessage as { error?: unknown }).error) {
           const content = (sdkMessage as any).message?.content
           if (Array.isArray(content)) {
             for (const block of content) {

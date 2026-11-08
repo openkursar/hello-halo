@@ -31,6 +31,7 @@ import { InterruptedBubble } from './InterruptedBubble'
 import { useStickToBottom, useHistoryWindow, transcriptRowClass, estimatedRowHeight, revealRowInView, nextTranscriptRows, openerOwner, liveArrivals, type ScrollMotion, type TranscriptRows } from './transcript'
 import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion, WorkDirIssue } from '../../types'
 import { WorkingDirUnavailableNotice } from './WorkingDirUnavailableNotice'
+import { TurnErrorBubble } from './TurnErrorBubble'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 import { useAppsStore } from '../../stores/apps.store'
@@ -431,20 +432,11 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
           {!isGenerating && error && errorType !== 'interrupted' && !(errorType === 'working_dir_unavailable' && workDirIssue) && (
             <div className="flex justify-start animate-fade-in pb-4">
               <div className="w-[85%]">
-                <div className="rounded-2xl px-4 py-3 bg-destructive/10 border border-destructive/30">
-                  <div className="flex items-center gap-2 text-destructive">
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="12" y1="8" x2="12" y2="12" />
-                      <line x1="12" y1="16" x2="12.01" y2="16" />
-                    </svg>
-                    <span className="text-sm font-medium">{t('Something went wrong')}</span>
-                  </div>
-                  <p className="mt-2 text-sm text-destructive/80">{error}</p>
+                <TurnErrorBubble error={error}>
                   {errorType === 'engine_unavailable' && engineNoticeShown && (
                     <p className="mt-1 text-sm text-destructive/80">{t('The note below says what to do.')}</p>
                   )}
-                </div>
+                </TurnErrorBubble>
               </div>
             </div>
           )}

@@ -74,7 +74,7 @@ describe('getSdkApiCredentials', () => {
     const apiCredentials: ApiCredentials = {
       sourceId: 'account-a', credentialsGeneration: 'captured-a', provider: 'oauth',
       baseUrl: 'https://example.invalid/v1/responses', apiKey: 'test-a', model: 'gpt-test',
-      capabilities: { contextWindow: 272_000, maxOutputTokens: 64_000, maxOutputTokensConfigured: true },
+      capabilities: { contextWindow: 272_000, maxOutputTokens: 64_000 },
     }
     expect(getSdkApiCredentials({ apiCredentials, ...sdkOptionsWithEncodedKey({ sourceId: 'account-b' }) })).toBe(apiCredentials)
   })
@@ -268,7 +268,7 @@ describe('SDK source markers and request-local routing', () => {
   it('does not decorate or replace the Codex model when an OpenAI gateway uses a Claude name', async () => {
     const credentials: ApiCredentials = {
       provider: 'openai', apiType: 'responses', apiKey: 'selected-key', baseUrl: 'https://selected.invalid/v1/responses',
-      model: 'claude-mythos-preview', capabilities: { maxOutputTokens: 16000, maxOutputTokensConfigured: false, contextWindow: 1000000 },
+      model: 'claude-mythos-preview', capabilities: { maxOutputTokens: 16000, contextWindow: 1000000 },
     }
     const resolved = await resolveCredentialsForSdk(credentials, undefined, 'codex')
     expect(resolved.sdkModel).toBe(credentials.model)

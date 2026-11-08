@@ -27,7 +27,11 @@ import {
   copyFileSync,
   type Dirent,
   lstatSync,
+  openSync,
+  readSync,
+  closeSync,
 } from 'fs'
+import { setImmediate as yieldToMain } from 'node:timers/promises'
 import { v4 as uuidv4 } from 'uuid'
 import type {
   KnowledgeBaseId,
@@ -56,6 +60,8 @@ import {
   getKBTextDir,
   getKBIngestDir,
   getKBHashesPath,
+  getKBRetainedDir,
+  getKBRetirementMarkerPath,
 } from './paths'
 import {
   DEFAULT_INDEX_MD,
@@ -179,7 +185,7 @@ export function _resetTlonHashCache(): void {
 }
 
 /** Hash a file's content, reusing the digest while its filesystem identity is unchanged. */
-export function hashFileCached(absolutePath: string): { hash: string; size: number; binary: boolean } {
+export function hashFileCached(absolutePath: string): { hash: string; size: number; binary: boolean; dev: number } {
   const st = statSync(absolutePath)
   const cached = hashCache.get(absolutePath)
   if (cached && cached.mtimeMs === st.mtimeMs && cached.ctimeMs === st.ctimeMs && cached.ino === st.ino && cached.dev === st.dev && cached.size === st.size) {
@@ -430,6 +436,7 @@ export async function deleteKB(kbId: string): Promise<boolean> {
     }
     lastCapWarnStatus.delete(getKBRawDir(kbId))
     lastCapWarnStatus.delete(getKBTextDir(kbId))
+    forgetRetirement(kbId)
 
     const dir = getKBDir(kbId)
     if (existsSync(dir)) {
@@ -871,18 +878,340 @@ export function removeRawFile(kbId: string, relativePath: string): boolean {
   if (!abs || !existsSync(abs)) return false
   try {
     rmSync(abs)
-    // Drop the learned-status entry so counts stay correct.
-    const hashes = readHashes(kbId)
-    if (hashes.files[relativePath]) {
-      delete hashes.files[relativePath]
-      writeHashes(kbId, hashes)
-    }
-    refreshStats(kbId)
-    return true
   } catch (error) {
     console.error(`[Tlon] Failed to remove raw file ${relativePath}:`, error)
     return false
   }
+  if (retireRemovedSources(kbId, [relativePath]) > 0) {
+    import('./ingest')
+      .then(({ rebuildIndexMd }) => rebuildIndexMd(kbId))
+      .catch(err => console.error(`[Tlon] Index rebuild after removing ${relativePath} failed:`, err))
+  } else {
+    refreshStats(kbId)
+  }
+  return true
+}
+
+// ============================================================================
+// Source retirement — generated text of a removed source leaves the corpus
+// ============================================================================
+
+/** text/ filename holding a source's extracted plaintext. */
+export function generatedTextName(sourcePath: string): string {
+  return sha256(sourcePath).slice(0, 16) + '.txt'
+}
+
+/** First line of every generated text file; names the source it was extracted from. */
+export function generatedTextHeader(sourcePath: string): string {
+  return `<!-- source: ${sourcePath} -->`
+}
+
+const HEADER_READ_BYTES = 8192
+const HEADER_PATTERN = /^<!-- source: (.+) -->$/
+const SWEEP_BATCH = 200
+
+/** The source a regular text file declares it was generated from, or null. */
+function generatedSourceOf(absTextPath: string): string | null {
+  try {
+    if (!lstatSync(absTextPath).isFile()) return null
+    const fd = openSync(absTextPath, 'r')
+    try {
+      const buf = Buffer.alloc(HEADER_READ_BYTES)
+      const bytesRead = readSync(fd, buf, 0, HEADER_READ_BYTES, 0)
+      const firstLine = buf.toString('utf-8', 0, bytesRead).split('\n', 1)[0]
+      return HEADER_PATTERN.exec(firstLine)?.[1] ?? null
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return null
+  }
+}
+
+/** lstat outcome that only calls a path gone when the filesystem says so. */
+function pathState(path: string): 'present' | 'missing' | 'unknown' {
+  try {
+    lstatSync(path)
+    return 'present'
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unknown'
+  }
+}
+
+function isWithin(dir: string, path: string): boolean {
+  const rel = relative(dir, path)
+  return !!rel && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
+type DirProbe = { kind: 'dir'; dev: number } | { kind: 'missing' } | { kind: 'unknown' }
+type RetainReason = 'edited' | 'unowned' | 'unproven' | 'unwatched' | 'unknown-origin'
+
+/** One retirement pass; directory probes are memoized across the files it checks. */
+class Retirement {
+  private readonly dirs = new Map<string, DirProbe>()
+  readonly retained = new Map<RetainReason, number>()
+  readonly failures = new Map<string, { count: number; first: string }>()
+
+  fail(kind: string, error: unknown): void {
+    const current = this.failures.get(kind)
+    if (current) current.count++
+    else this.failures.set(kind, { count: 1, first: error instanceof Error ? error.message : String(error) })
+  }
+
+  constructor(readonly entry: KnowledgeBaseEntry) {}
+
+  keep(reason: RetainReason): void {
+    this.retained.set(reason, (this.retained.get(reason) ?? 0) + 1)
+  }
+
+  private probe(dir: string): DirProbe {
+    let probe = this.dirs.get(dir)
+    if (!probe) {
+      try {
+        const st = statSync(dir)
+        probe = st.isDirectory() ? { kind: 'dir', dev: st.dev } : { kind: 'unknown' }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        probe = code === 'ENOENT' || code === 'ENOTDIR' ? { kind: 'missing' } : { kind: 'unknown' }
+      }
+      this.dirs.set(dir, probe)
+    }
+    return probe
+  }
+
+  /**
+   * Whether a recorded source is provably removed. Short of proof it is
+   * 'unknown' and keeps its knowledge: an unreadable path, a missing watched
+   * folder, a surviving folder on another device than the source was learned
+   * on (an unmounted drive's mount point, nested or not), a watched source
+   * learned before devices were recorded, and sources of folders no longer
+   * watched — unlinking stops watching but keeps what was learned.
+   */
+  presence(key: string, sourceDev: number | undefined): 'present' | 'gone' | 'unknown' {
+    if (!isAbsolute(key)) {
+      const rawDir = getKBRawDir(this.entry.id)
+      const abs = resolveWithinDir(rawDir, key)
+      if (!abs || this.probe(rawDir).kind !== 'dir') return 'unknown'
+      const state = pathState(abs)
+      return state === 'missing' ? 'gone' : state
+    }
+    const root = this.entry.linkedDirs.find(d => isWithin(d.path, key))?.path
+    if (!root) return 'unknown'
+    const state = pathState(key)
+    if (state !== 'missing') return state
+    // The nearest surviving folder must still be the volume the source lived on.
+    let dir = dirname(key)
+    let found: DirProbe = this.probe(dir)
+    while (found.kind === 'missing' && dir !== root && isWithin(root, dir)) {
+      dir = dirname(dir)
+      found = this.probe(dir)
+    }
+    // Without the device it was learned on, nothing proves the source was not
+    // on a volume that is merely unmounted now.
+    return found.kind === 'dir' && sourceDev !== undefined && found.dev === sourceDev ? 'gone' : 'unknown'
+  }
+}
+
+const lastRetainedSummary = new Map<KnowledgeBaseId, string>()
+const lastFailureSummary = new Map<KnowledgeBaseId, string>()
+
+/** One line per KB when what is kept changes — never one line per file or per scan. */
+function reportRetained(kbId: string, run: Retirement): void {
+  const summary = [...run.retained].map(([reason, count]) => `${reason}=${count}`).sort().join(', ')
+  if ((lastRetainedSummary.get(kbId) ?? '') !== summary) {
+    if (summary) lastRetainedSummary.set(kbId, summary)
+    else lastRetainedSummary.delete(kbId)
+    if (summary) console.warn(`[Tlon] Kept knowledge of removed or unprovable sources in ${kbId}: ${summary}`)
+  }
+  const failed = [...run.failures].map(([kind, f]) => `${kind}=${f.count}`).sort().join(', ')
+  if ((lastFailureSummary.get(kbId) ?? '') === failed) return
+  if (failed) lastFailureSummary.set(kbId, failed)
+  else lastFailureSummary.delete(kbId)
+  if (failed) console.error(`[Tlon] Removed-source cleanup failed in ${kbId}, retrying on later scans: ${failed}; first: ${[...run.failures.values()][0].first}`)
+}
+
+function recordPath(kbId: string, key: string): string {
+  return isAbsolute(key) ? key : join(getKBRawDir(kbId), key)
+}
+
+/**
+ * Delete the generated text and record of each key that is still provably
+ * gone, re-checked synchronously against the current hashes.json so a
+ * concurrent extraction's write is never lost or undone.
+ */
+function commitRetirement(kbId: string, run: Retirement, keys: string[], orphans: string[]): number {
+  const textDir = getKBTextDir(kbId)
+  const hashes = readHashes(kbId)
+  let retired = 0
+  let retained = 0
+  for (const key of keys) {
+    const record = hashes.files[key]
+    if (!record || run.presence(key, record.sourceDev) !== 'gone') continue
+    const abs = record.textPath ? ownedTextPath(textDir, record.textPath) : null
+    // Text still there but not Halo's own (a linked file or text/): keep the record.
+    if (!abs && record.textPath && pathState(join(textDir, record.textPath)) !== 'missing') {
+      run.keep('unowned')
+      continue
+    }
+    if (record.protection) {
+      if (abs && !moveOutOfSearch(kbId, abs, run)) continue
+      delete hashes.files[key]
+      if (abs) retained++
+      else retired++
+      continue
+    }
+    if (abs) {
+      if (generatedSourceOf(abs) !== key) {
+        run.keep('edited')
+        continue
+      }
+      try {
+        rmSync(abs)
+      } catch (error) {
+        run.fail('remove-text', error)
+        continue
+      }
+    }
+    delete hashes.files[key]
+    retired++
+  }
+  if (retired + retained > 0) writeHashes(kbId, hashes)
+
+  const referenced = new Set(Object.values(hashes.files).flatMap(r => r.textPath ? [r.textPath] : []))
+  let leftovers = 0
+  for (const name of orphans) {
+    if (referenced.has(name)) continue
+    const abs = ownedTextPath(textDir, name)
+    const source = abs ? generatedSourceOf(abs) : null
+    if (!abs || !source || generatedTextName(source) !== name || run.presence(source, undefined) !== 'gone') continue
+    try {
+      rmSync(abs)
+      leftovers++
+    } catch (error) {
+      run.fail('remove-leftover', error)
+    }
+  }
+
+  if (retired + retained + leftovers > 0) {
+    console.log(`[Tlon] Retired ${retired} removed source(s) and ${leftovers} leftover text file(s) from ${kbId}; moved ${retained} owner-maintained text(s) out of search`)
+    refreshStats(kbId)
+  }
+  reportRetained(kbId, run)
+  return retired + retained + leftovers
+}
+
+/**
+ * Owner-maintained text of a removed source is kept, not deleted: it moves to
+ * a folder inside the KB that knowledge-base chats do not search.
+ */
+function moveOutOfSearch(kbId: string, absTextPath: string, run: Retirement): boolean {
+  const dir = getKBRetainedDir(kbId)
+  const name = absTextPath.split(/[\\/]/).pop() as string
+  try {
+    mkdirSync(dir, { recursive: true })
+    let target = join(dir, name)
+    for (let n = 2; existsSync(target); n++) target = join(dir, `${name.slice(0, -4)}-${n}.txt`)
+    renameSync(absTextPath, target)
+    return true
+  } catch (error) {
+    run.fail('move-retained', error)
+    return false
+  }
+}
+
+/**
+ * Retire the recorded sources at or under the given paths (absolute, or
+ * raw-relative keys) that are proven gone. Cost follows the paths, not the
+ * knowledge base: used for an explicit removal and for the sources a scan no
+ * longer finds. Callers rebuild index.md when this returns a non-zero count.
+ */
+export function retireRemovedSources(kbId: string, removedPaths: string[]): number {
+  const entry = getRegistry().get(kbId)
+  if (!entry || removedPaths.length === 0) return 0
+  const byPath = new Map(Object.keys(readHashes(kbId).files).map(key => [recordPath(kbId, key), key]))
+  const keys = new Set<string>()
+  const folders: string[] = []
+  for (const p of removedPaths) {
+    const target = recordPath(kbId, p)
+    const exact = byPath.get(target)
+    if (exact !== undefined) keys.add(exact)
+    else folders.push(target)
+  }
+  // Only a path that is not itself a record (a removed folder) needs a prefix match.
+  if (folders.length > 0) {
+    for (const [abs, key] of byPath) if (folders.some(t => isWithin(t, abs))) keys.add(key)
+  }
+  if (keys.size === 0) return 0
+  return commitRetirement(kbId, new Retirement(entry), [...keys], [])
+}
+
+/**
+ * Full reconciliation: every record plus generated text left without a
+ * record by earlier removals. Probes run in batches that yield to the event
+ * loop; deletion is re-verified in one synchronous commit. For an explicit
+ * "learn everything" and each KB's one-time migration, never per scan.
+ */
+export async function sweepRemovedSources(kbId: string): Promise<number> {
+  const entry = getRegistry().get(kbId)
+  if (!entry) return 0
+  const run = new Retirement(entry)
+  const gone: string[] = []
+  const records = Object.entries(readHashes(kbId).files)
+  for (let i = 0; i < records.length; i++) {
+    if (i > 0 && i % SWEEP_BATCH === 0) await yieldToMain()
+    const [key, record] = records[i]
+    const presence = run.presence(key, record.sourceDev)
+    if (presence === 'gone') gone.push(key)
+    else if (presence === 'unknown') run.keep(isAbsolute(key) && !entryWatches(entry, key) ? 'unwatched' : 'unproven')
+  }
+
+  const textDir = getKBTextDir(kbId)
+  const referenced = new Set(records.flatMap(([, r]) => r.textPath ? [r.textPath] : []))
+  const orphans: string[] = []
+  let dirents: Dirent[] = []
+  try {
+    // A linked text/ is not Halo's own output; it is never listed or cleaned.
+    const directory = lstatSync(textDir)
+    if (directory.isDirectory() && !directory.isSymbolicLink()) dirents = readdirSync(textDir, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') console.warn(`[Tlon] Cannot list text of ${kbId} for removed sources:`, error)
+  }
+  for (let i = 0; i < dirents.length; i++) {
+    if (i > 0 && i % SWEEP_BATCH === 0) await yieldToMain()
+    const name = dirents[i].name
+    if (!dirents[i].isFile() || !name.endsWith('.txt') || referenced.has(name)) continue
+    const source = generatedSourceOf(join(textDir, name))
+    if (!source || generatedTextName(source) !== name) run.keep('unknown-origin')
+    else if (run.presence(source, undefined) === 'gone') orphans.push(name)
+    else if (isAbsolute(source) && pathState(source) !== 'present') run.keep(entryWatches(entry, source) ? 'unproven' : 'unwatched')
+  }
+
+  if (!getRegistry().get(kbId)) return 0
+  return commitRetirement(kbId, run, gone, orphans)
+}
+
+/** Whether this KB's one-time cleanup of text left by earlier removals has run. */
+export function isRetirementMigrated(kbId: string): boolean {
+  return existsSync(getKBRetirementMarkerPath(kbId))
+}
+
+export function markRetirementMigrated(kbId: string): void {
+  try {
+    writeFileSync(getKBRetirementMarkerPath(kbId), JSON.stringify({ version: 1, at: new Date().toISOString() }), 'utf-8')
+  } catch (error) {
+    console.error(`[Tlon] Failed to record removed-source migration for ${kbId}:`, error)
+  }
+}
+
+function entryWatches(entry: KnowledgeBaseEntry, path: string): boolean {
+  return entry.linkedDirs.some(d => isWithin(d.path, path))
+}
+
+/** Forget per-KB retirement notices (deleted KB). */
+function forgetRetirement(kbId: string): void {
+  lastRetainedSummary.delete(kbId)
+  lastFailureSummary.delete(kbId)
 }
 
 // ============================================================================
@@ -1316,28 +1645,49 @@ export function markIngestCompleted(kbId: string): void {
   persistIndex(getRegistry())
 }
 
+type IngestCandidate = { sourcePath: string; absolutePath: string; sourceType: 'raw' | 'linked' }
+
 /** Compute the full list of changed raw + linked source files for a KB. */
-export function collectIngestCandidates(kbId: string): Array<{
-  sourcePath: string
-  absolutePath: string
-  sourceType: 'raw' | 'linked'
-}> {
+export function collectIngestCandidates(kbId: string): IngestCandidate[] {
+  return scanIngestSources(kbId).candidates
+}
+
+/**
+ * One walk of a KB's sources: what changed, plus the recorded sources the walk
+ * did not find in a folder it listed completely. Those are only suspects —
+ * retireRemovedSources proves each one gone before acting — but finding them
+ * costs nothing beyond the walk itself.
+ */
+export function scanIngestSources(kbId: string): { candidates: IngestCandidate[]; unseen: string[] } {
   const entry = getRegistry().get(kbId)
-  if (!entry) return []
+  if (!entry) return { candidates: [], unseen: [] }
   const hashes = readHashes(kbId)
   const textDir = getKBTextDir(kbId)
-  const candidates: Array<{ sourcePath: string; absolutePath: string; sourceType: 'raw' | 'linked' }> = []
+  const candidates: IngestCandidate[] = []
+  const seen = new Set<string>()
+  const listedRoots: string[] = []
+
+  let backfilled = 0
 
   const consider = (sourcePath: string, absolutePath: string, sourceType: 'raw' | 'linked') => {
+    seen.add(sourcePath)
     if (!isAcceptedSourceFile(absolutePath)) return
     let current: string
+    let dev: number
     try {
       const info = hashFileCached(absolutePath)
       // PDF/Office are binary by nature — only text files get the NUL-byte guard.
       if (!isExtractable(absolutePath) && info.binary) return
       current = info.hash
+      dev = info.dev
     } catch { return }
     const recorded = hashes.files[sourcePath]
+    // Records learned before devices were kept gain one while their file is
+    // still here, so a later removal can be told from an unmounted drive.
+    if (sourceType === 'linked' && recorded && recorded.hash === current && recorded.sourceDev === undefined) {
+      recorded.sourceDev = dev
+      backfilled++
+    }
     if (recorded && unchangedProtection(absolutePath, current, recorded, textDir)) return
     // Skip when the revision and bytes are current and already handled: either
     // the extracted text still exists, or extraction was attempted and yielded
@@ -1353,11 +1703,13 @@ export function collectIngestCandidates(kbId: string): Array<{
     const sourcePath = rel.split(sep).join('/')
     consider(sourcePath, join(rawDir, rel), 'raw')
   }
+  const rawListed = !rawWalk.truncated && existsSync(rawDir)
 
   for (const linked of entry.linkedDirs) {
     if (!existsSync(linked.path)) continue
     const sources = listLinkedSourceFiles(entry, linked)
     if (sources === null) continue
+    listedRoots.push(linked.path)
     for (const rel of sources) {
       const absolutePath = join(linked.path, rel)
       // Linked files are keyed by absolute path in hashes.json.
@@ -1365,5 +1717,9 @@ export function collectIngestCandidates(kbId: string): Array<{
     }
   }
 
-  return candidates
+  if (backfilled > 0) writeHashes(kbId, hashes)
+
+  const unseen = Object.keys(hashes.files).filter(key => !seen.has(key)
+    && (isAbsolute(key) ? listedRoots.some(root => isWithin(root, key)) : rawListed))
+  return { candidates, unseen }
 }

@@ -29,7 +29,7 @@ import {
 import { cn } from '@/lib/utils'
 import { api } from '@/api'
 import { useChatStore, selectActiveConversationId } from '@/stores/chat.store'
-import { useSpaceStore } from '@/stores/space.store'
+import { useSpaceStore, useSpaceNameResolver } from '@/stores/space.store'
 import { useAppStore } from '@/stores/app.store'
 import { useAppsPageStore, tabForAppType } from '@/stores/apps-page.store'
 import { useTlonStore } from '@/stores/tlon.store'
@@ -86,6 +86,9 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
   } = useSearchStore()
 
   const candidates = useQuickJumpCandidates()
+  const spaceName = useSpaceNameResolver()
+  const currentSpaceName = currentSpaceId ? spaceName(currentSpaceId) : ''
+  const recentLabel = currentSpaceName ? t('Recent in {{space}}', { space: currentSpaceName }) : t('Recent')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [scopeMenuOpen, setScopeMenuOpen] = useState(false)
 
@@ -499,7 +502,7 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
               {recentConversations.length > 0 && (
                 <>
                   <div className="px-[10px] pt-[10px] pb-1 flex items-center justify-between text-[11px] font-semibold text-subtle-foreground">
-                    {t('Recent')}
+                    <span className="min-w-0 truncate" title={recentLabel}>{recentLabel}</span>
                   </div>
                   {recentConversations.map((item, i) => {
                     const idx = quickActions.length + i
@@ -529,7 +532,7 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                   const group = quickHits.filter(h => h.type === type)
                   if (!group.length) return null
                   const typeLabel: Record<QuickJumpType, string> = {
-                    conv: t('Conversations'),
+                    conv: currentSpaceName ? t('Conversations in {{space}}', { space: currentSpaceName }) : t('Conversations'),
                     agent: t('Digital Humans'),
                     task: t('Tasks'),
                     kb: t('Knowledge Bases'),
@@ -537,7 +540,8 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
                   return (
                     <div key={type}>
                       <div className="px-[10px] pt-[10px] pb-1 flex items-center justify-between text-[11px] font-semibold text-subtle-foreground">
-                        {typeLabel[type]}<span>{group.length}</span>
+                        <span className="min-w-0 truncate" title={typeLabel[type]}>{typeLabel[type]}</span>
+                        <span className="flex-shrink-0">{group.length}</span>
                       </div>
                       {group.map(item => {
                         const idx = quickHits.indexOf(item)

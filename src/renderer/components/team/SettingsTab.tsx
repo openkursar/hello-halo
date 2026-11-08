@@ -6,12 +6,13 @@ import {
   Trash2, Plus, Info, Crown, Star, LogOut, Users, Network,
 } from 'lucide-react'
 import type { TeamDetail, TeamTrigger, TeamScheduleConfig, TeamTriggerInput } from '../../../shared/apps/team-types'
-import { isRemoteMember, leadAppIdSet } from '../../../shared/apps/team-types'
+import { isRemoteMember } from '../../../shared/apps/team-types'
 import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
 import type { CapabilityPresetId } from '../../../shared/apps/capability-policy'
 import { useTeamStore } from '../../stores/team.store'
 import { useOfficeSkin, useTeamViewPrefsStore } from '../../stores/team-view-prefs.store'
 import { useAppsStore } from '../../stores/apps.store'
+import { teamMemberCandidates } from '../../utils/people-model'
 import { useTranslation } from '../../i18n'
 import { useAutosaveDraft } from '../../hooks/useAutosaveDraft'
 import { api } from '../../api'
@@ -330,9 +331,6 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   const teams = useTeamStore(s => s.teams)
   const allApps = useAppsStore(s => s.apps)
   const appMap = useMemo(() => new Map(allApps.map(a => [a.id, a])), [allApps])
-  // Lead apps are an internal coordination role, never addable as a member
-  // (mirrors the same exclusion in TeamCreateDialog).
-  const leadAppIds = useMemo(() => leadAppIdSet(teams), [teams])
   const [showAdd, setShowAdd] = useState(false)
   const [showInlineCreate, setShowInlineCreate] = useState(false)
   // Asked again for every member added to a team that reaches other computers:
@@ -379,17 +377,9 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
       : withdrawMemberConfirm(detail.team.name, withdrawTarget.name, t)
     : null
 
-  // Apps not already in this team (candidates for adding). Excludes uninstalled
-  // apps and every team's lead — both would otherwise slip through despite
-  // being unusable/forbidden, the same gap TeamCreateDialog already closes.
   const candidates = useMemo(() =>
-    allApps.filter(a =>
-      a.spec.type === 'automation' &&
-      a.status !== 'uninstalled' &&
-      !leadAppIds.has(a.id) &&
-      !detail.members.some(m => m.appId === a.id)
-    ),
-  [allApps, leadAppIds, detail.members])
+    teamMemberCandidates(allApps, teams).filter(a => !detail.members.some(m => m.appId === a.id)),
+  [allApps, teams, detail.members])
 
   return (
     <Section title={t('Members')}>

@@ -8,12 +8,13 @@
 import { stringify as stringifyYaml } from 'yaml'
 import { getAppManager } from '../apps/manager'
 import { AppAlreadyInstalledError, McpCommandBlockedError } from '../apps/manager/errors'
-import { getAppRuntime } from '../apps/runtime'
+import { getAppRuntime, listAppTags } from '../apps/runtime'
 import { parseAndValidateAppSpec, AppSpecValidationError, type AppSpec } from '../apps/spec'
 import { MCP_COMMAND_BLOCKED_MESSAGE } from '../services/security-policy'
 import { assertEngineSourceSelection, resolveDefaultEngine } from '../services/agent'
 import { isEngineId } from '../../shared/types/engine'
 import type { InstalledApp } from '../../shared/apps/app-types'
+import { TAGGABLE_APP_TYPES, type RenameTagInput, type TagCount, type TaggableAppType } from '../../shared/apps/app-tags'
 
 /**
  * Both install entry points here (a pre-built spec object, or a pasted/dropped
@@ -90,6 +91,36 @@ export async function updateOverrides(appId: string, partial: Record<string, unk
   } catch (error) {
     console.warn('[AppController] App preferences were rejected', { appId, error: error instanceof Error ? error.message : 'Unknown error' })
     return { success: false, error: error instanceof Error ? error.message : 'The engine selection could not be saved. Please try again.', code: 'VALIDATION_FAILED' }
+  }
+}
+
+/** The tags on one list, with how many items carry each. */
+export function listTags(type: unknown): AppControllerResponse<TagCount[]> {
+  if (typeof type !== 'string' || !(TAGGABLE_APP_TYPES as readonly string[]).includes(type)) {
+    return { success: false, error: 'Name the list: automation, skill or mcp', code: 'VALIDATION_FAILED' }
+  }
+  try {
+    return { success: true, data: listAppTags(type as TaggableAppType) }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error), code: 'NOT_INITIALIZED' }
+  }
+}
+
+/**
+ * Rename a tag across one list (merging into an existing one), or remove it
+ * with `to` null.
+ */
+export function renameTag(input: unknown): AppControllerResponse<{ changed: number }> {
+  const manager = getAppManager()
+  if (!manager) return { success: false, error: 'App Manager is not yet initialized. Please try again shortly.', code: 'NOT_INITIALIZED' }
+  const { type, from, to } = (input ?? {}) as Partial<RenameTagInput>
+  if (!type || !(TAGGABLE_APP_TYPES as readonly string[]).includes(type) || typeof from !== 'string' || (to !== null && typeof to !== 'string')) {
+    return { success: false, error: 'Name the list (automation, skill or mcp), the tag, and its new name or null', code: 'VALIDATION_FAILED' }
+  }
+  try {
+    return { success: true, data: { changed: manager.renameTag(type, from, to) } }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error), code: 'VALIDATION_FAILED' }
   }
 }
 

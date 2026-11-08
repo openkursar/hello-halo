@@ -11,6 +11,9 @@ paths:
   - src/shared/types/content-reference.ts
   - src/main/services/agent/references.ts
   - src/renderer/components/chat/open-table-context.ts
+  - src/shared/conversation-reference.ts
+  - src/renderer/components/chat/cross-conversation/**
+  - src/main/services/external-link.service.ts
 dependsOn:
   - files
   - chat

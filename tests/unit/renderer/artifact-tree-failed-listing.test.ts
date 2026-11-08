@@ -175,6 +175,15 @@ async function openFilesPanel() {
   const folder = (path: string): ArtifactTreeNode => render().props.data.find((node: ArtifactTreeNode) => node.path === path)
   return {
     folder,
+    /** What a row renders, child components expanded, given react-arborist's drag handle. */
+    row(path: string, dragHandle: unknown, isEditing = false) {
+      const tree = render()
+      const data: ArtifactTreeNode = tree.props.data.find((node: ArtifactTreeNode) => node.path === path)
+      const node = { id: data.id, data, tree: arborist, isEditing, isSelected: false, isLeaf: data.type !== 'folder', isOpen: false, reset: () => {}, submit: () => {} }
+      const expand = (element: any): any[] => elements(element).flatMap(child =>
+        typeof child.type === 'function' && child.type !== Tree ? expand(new Runner().render(() => child.type(child.props))) : [child])
+      return expand(new Runner().render(() => tree.props.children({ node, style: {}, dragHandle })))
+    },
     isOpen: (path: string) => arborist.isOpen(folder(path).id),
     /** Click the folder's row, as a person expanding or collapsing it. */
     async click(path: string) {
@@ -264,5 +273,57 @@ describe('a folder opened while it could not be read', () => {
     expect(listed()).toEqual([ROOT, LOCKED])
     expect(names(panel.folder(LOCKED))).toEqual(['a.txt'])
     expect(names(panel.folder(CLOSED))).toEqual([])
+  })
+})
+
+describe('renaming a file in the tree', () => {
+  it('leaves the row undraggable while its name is being edited, so a mouse drag selects text', async () => {
+    const panel = await openFilesPanel()
+    const dragHandle = vi.fn()
+
+    expect(panel.row(`${ROOT}/readme.md`, dragHandle).some(element => element.ref === dragHandle)).toBe(true)
+    const editing = panel.row(`${ROOT}/readme.md`, dragHandle, true)
+    expect(editing.some(element => element.type === 'input')).toBe(true)
+    expect(editing.some(element => element.ref === dragHandle)).toBe(false)
+  })
+})
+
+describe('a space folder that cannot be listed when the panel opens', () => {
+  /** The panel rendered as React would, with its visible text and buttons. */
+  async function openPanel() {
+    const runner = new Runner()
+    const view = () => {
+      const all = elements(runner.render(() => ArtifactTree({ spaceId: SPACE })))
+      return {
+        text: all.flatMap(element => [element.props?.children].flat(Infinity)).filter(child => typeof child === 'string').join('|'),
+        tree: all.find(element => element.type === Tree),
+        button: (label: string) => all.find(element => element.type === 'button' && [element.props.children].flat(Infinity).includes(label)),
+      }
+    }
+    view()
+    await settle()
+    return view
+  }
+
+  it('shows the reason and a Retry that lists it again, not "No files"', async () => {
+    env.api.listArtifactsTree.mockResolvedValueOnce({ success: false, error: "EBUSY: resource busy or locked, scandir '/space'" })
+    const view = await openPanel()
+
+    expect(view().text).toContain("Couldn't read this folder")
+    expect(view().text).toContain("EBUSY: resource busy or locked, scandir '/space'")
+    expect(view().text).not.toContain('No files')
+
+    view().button('Retry').props.onClick()
+    await settle()
+
+    expect(view().tree.props.data.map((node: ArtifactTreeNode) => node.name)).toEqual(['closed', 'locked', 'readme.md'])
+  })
+
+  it('still says "No files" for a folder that was read and is empty', async () => {
+    env.api.listArtifactsTree.mockResolvedValueOnce({ success: true, data: { workspaceRoot: ROOT, nodes: [] } })
+    const view = await openPanel()
+
+    expect(view().text).toContain('No files')
+    expect(view().text).not.toContain("Couldn't read this folder")
   })
 })

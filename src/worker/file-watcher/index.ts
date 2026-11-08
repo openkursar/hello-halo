@@ -35,8 +35,9 @@ import {
 // --- Messaging ---
 
 function send(message: WorkerToMainMessage): void {
-  if (process.send) {
-    process.send(message)
+  if (process.send && process.connected) {
+    // A write can still fail while the channel is closing; the disconnect handler then exits.
+    process.send(message, undefined, undefined, () => {})
   }
 }
 
@@ -173,6 +174,14 @@ process.on('SIGINT', async () => {
   log('info', 'Received SIGINT, shutting down...')
   await stopAll()
   process.exit(0)
+})
+
+// The IPC channel closes without SIGTERM when main crashes or is force-quit;
+// the active watchers would otherwise keep this process alive as an orphan.
+// Non-zero, so a host that is somehow still alive restarts the watcher.
+process.on('disconnect', async () => {
+  await stopAll().catch(() => undefined)
+  process.exit(1)
 })
 
 log('info', 'File watcher worker started')

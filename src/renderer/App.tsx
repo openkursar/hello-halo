@@ -33,7 +33,7 @@ import { CredentialAlertBanner } from './components/settings/CredentialAlertBann
 import { ConfigUnreadableBanner } from './components/settings/ConfigUnreadableBanner'
 import { NavRail } from './components/layout/NavRail'
 import { HeaderShell, usePlatform } from './components/layout/Header'
-import { MAC_TRAFFIC_LIGHT_BOTTOM, MAC_TRAFFIC_LIGHT_POSITION } from '../shared/constants/mac-traffic-lights'
+import { macTrafficLightGeometry } from '../shared/constants/mac-traffic-lights'
 import { TaskPanel } from './components/layout/TaskPanel'
 import { useTaskPanelStore } from './stores/taskPanel.store'
 import { useNotificationStore } from './stores/notification.store'
@@ -80,11 +80,12 @@ function BootSplashRelease() {
 
 // Page loading fallback - minimal spinner that matches app style
 function PageLoader() {
+  const { t } = useTranslation()
   return (
     <div className="h-full w-full flex items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-4">
         <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-        <span className="text-sm text-muted-foreground">Loading...</span>
+        <span className="text-sm text-muted-foreground">{t('Loading...')}</span>
       </div>
     </div>
   )
@@ -156,7 +157,8 @@ function applyTheme(theme: ThemeSetting) {
 
 // Draggable strip holding the macOS traffic lights on views without the rail,
 // with the same margin below the lights as above them.
-const MAC_WINDOW_CONTROLS_BAND_PX = MAC_TRAFFIC_LIGHT_BOTTOM + MAC_TRAFFIC_LIGHT_POSITION.y
+const macLights = macTrafficLightGeometry(globalThis.window?.platform?.systemVersion)
+const MAC_WINDOW_CONTROLS_BAND_PX = macLights.bottom + macLights.position.y
 
 export default function App() {
   const browserHostRef = useRef<HTMLDivElement>(null)

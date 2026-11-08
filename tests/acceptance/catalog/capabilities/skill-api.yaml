@@ -1,0 +1,111 @@
+version: 1
+id: capabilities.skill-api
+module: capabilities
+title: Preserve skill files through application management APIs
+story: I can rely on the same real skill storage operations underneath UI and AI management without treating backend checks as complete UI journeys.
+basis: documented
+references:
+  - tests/acceptance/skills-requirements.md
+  - tests/e2e/specs/acceptance-skill-files.spec.ts
+promises:
+  discovery: Selected workspace and global files are discoverable without rewriting or automatically adopting files outside the supported folders.
+  import: An import request creates one complete package including binary assets in its selected user-file root, persisting through restart.
+  edits: Stale revision writes fail without overwriting external edits; successful save preserves metadata and supporting resources.
+  replace: Explicit replacement removes obsolete package files and preserves disabled choice; an unapproved collision cannot change the old package.
+  move: Preview is nonmutating, successful move preserves the entire package and disabled choice, independent copies stop sharing edits, and conflicts preserve both originals.
+  sdk: New Halo SDK conversation requests omit disabled personal copies while retained effective commands expand actual file instructions without changing package bytes.
+scenarios:
+  - id: capabilities.skill-api.discovery
+    title: Query real selected-scope discovery without adopting unsupported folders
+    verifies: [discovery]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    steps:
+      - Create isolated project/global/compatibility files and unrelated controls in unsupported folders; query list and search through production preload, restart and compare bytes.
+    expected:
+      - Only selected/global supported files appear as personal effective copies; compatibility search works and all source bytes stay unchanged.
+    notes: This exercises real preload and application storage, not UI scope controls, SDK invocation, scan-count budgets or remote HTTP.
+  - id: capabilities.skill-api.import
+    title: Import binary resources once through production management
+    verifies: [import]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    variants:
+      scope: [workspace, global]
+    steps:
+      - Import a multi-file spec through production preload, repeat its requestId, inspect file bytes/detail and restart.
+    expected:
+      - Exactly one personal package exists in the selected user root with matching text/nested/binary bytes, correct file metadata and restart persistence.
+    notes: Does not establish native file-picker/ZIP parsing, preview, cancellation or remote upload.
+  - id: capabilities.skill-api.edit-conflict
+    title: Reject stale file saves and preserve supporting resources
+    verifies: [edits]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    steps:
+      - Read revision, externally edit the real file, attempt stale save, reread, explicitly save reconciled content and restart.
+    expected:
+      - Stale save fails preserving external bytes; refreshed revision differs, explicit current save persists and unknown metadata/nested/binary resources remain intact.
+    notes: Does not establish editor draft retention or reconciliation UI.
+  - id: capabilities.skill-api.replace
+    title: Replace a complete package without reenabling it
+    verifies: [replace]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    steps:
+      - Import a package containing an obsolete script, attempt an unapproved collision, disable, explicitly replace with a new complete package and restart.
+    expected:
+      - Collision fails without mutation; explicit replacement removes obsolete files, preserves binary resources and disabled choice, and remains excluded from the effective inventory after restart.
+    notes: Does not establish replacement-choice UI, native input parsing or actual SDK exclusion.
+  - id: capabilities.skill-api.move-copy
+    title: Move a disabled package and create a truly independent copy
+    verifies: [move]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    steps:
+      - Import globally, disable, preview and move into a workspace; copy back under a new name, edit the moved original and restart.
+    expected:
+      - Preview leaves bytes unchanged; move removes old location and retains complete package and disable state. Copy has its own command identity and unchanged resources despite later original edits.
+    notes: Does not establish scope confirmation/cancel UI, cross-volume or link behavior.
+  - id: capabilities.skill-api.move-conflict
+    title: Refuse a scope collision without changing either package
+    verifies: [move]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    steps:
+      - Import distinct global and local same-name versions, preview and attempt a move into the occupied scope, then restart.
+    expected:
+      - Preview shows conflict, mutation fails and both complete packages survive with local effective precedence.
+    notes: Does not establish conflict confirmation UI or actual model invocation.
+  - id: capabilities.skill-api.sdk-disable
+    title: Observe file-preserving disable at the actual Halo SDK model boundary
+    verifies: [sdk]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - Import two personal packages through production management, disable one without removing files, invoke the other command through a new real conversation, restart and send another fresh conversation request.
+    expected:
+      - Actual Halo SDK requests contain the enabled catalog entry and selected command body but no disabled name or body; disabled state survives restart and all supporting package bytes remain unchanged.
+    notes: The model endpoint is scripted and never injects instructions. This is new space-conversation command/catalog evidence only, not Skill-tool refusal, subagents, people, IM, automation, team entries or old-session behavior.

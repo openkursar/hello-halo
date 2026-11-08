@@ -20,12 +20,13 @@ export function fixture(context, options = {}) {
   const tree = git(['write-tree'])
   const revision = git(['commit-tree', tree, '-m', 'Isolated CI fixture'])
   git(['update-ref', 'HEAD', revision])
-  write('tests/acceptance/output/ci/context.json', { version: 1, repository: 'example/application', ref: 'main', revision, dirty: false, profile: 'fast', platform: process.platform, architecture: process.arch, sdk: { state: 'absent' }, ...(options.scoped ? { modules: ['example'] } : {}) })
+  write('tests/acceptance/output/ci/context.json', { version: 1, repository: options.privateSource ? 'example/development' : 'example/application', ref: options.privateSource ? 'topic' : 'main', revision, dirty: false, profile: 'fast', platform: process.platform, architecture: process.arch, sdk: { state: 'absent' }, ...(options.scoped ? { modules: ['example'] } : {}) })
   write('out/.acceptance-build.json', { version: 2, id: 'current-controlled-build' })
   write('out/.acceptance-package.json', { version: 1, id: 'previous-package', executable: 'old/application' })
   write('fixture.json', { plan: selection(['packaged-app']), ...options })
   if (options.previousStatus) {
-    const { modules: _scope, ...context } = JSON.parse(fs.readFileSync(path.join(root, 'tests/acceptance/output/ci/context.json'), 'utf8'))
+    const { modules: _scope, ...current } = JSON.parse(fs.readFileSync(path.join(root, 'tests/acceptance/output/ci/context.json'), 'utf8'))
+    const context = options.privateSource ? { ...current, repository: 'example/application', ref: 'main' } : current
     const cases = selection([]).cases.map(item => ({ caseId: item.caseId, variant: item.variant, module: 'example', title: { en: 'Example journey' }, status: options.previousStatus }))
     const previous = { version: 1, id: 'previous-run', finishedAt: '2026-01-01T00:00:00Z', revision: { commit: context.revision, dirty: false, worktreeHash: 'fixture' }, profile: context.profile, platform: context.platform, catalogHash: 'catalog', manifestHash: 'manifest', selectedCount: cases.length, excluded: [], cases, evidenceIntegrity: { version: 1, valid: true, reasons: [] }, completion: { complete: true, executed: cases.length, reasons: [] } }
     const frozen = { freezeSha256: 'f'.repeat(64), receipt: { revision: context.revision, completion: { outcome: 'passed' }, payload: { files: [{ path: 'run/run.json' }] } }, documents: { context, run: previous } }
@@ -87,7 +88,7 @@ const configuration=JSON.parse(fs.readFileSync('fixture.json','utf8'));
 fs.appendFileSync('tests/acceptance/output/ci/invocations.jsonl',JSON.stringify({command:'browser',args:process.argv.slice(2),packaged:process.env.HALO_E2E_PACKAGED_APP??null,browserCache:process.env.PLAYWRIGHT_BROWSERS_PATH??null})+'\\n');
 if(configuration.browserFailure)process.exit(12);
 `)
-  const environment = () => ({ ...process.env, GITHUB_REPOSITORY: 'example/controller', GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', HALO_E2E_PACKAGED_APP: path.join(root, 'unrelated-old-package'), PLAYWRIGHT_BROWSERS_PATH: path.join(root, 'unrelated-browser-data'), HALO_ACCEPTANCE_BASELINE: options.previousStatus ? path.join(root, 'previous/baseline.json') : '', HALO_ACCEPTANCE_FULL: String(options.full ?? !options.previousStatus), HALO_DEFAULT_SOURCE_REF: 'main' })
+  const environment = () => ({ ...process.env, GITHUB_REPOSITORY: 'example/controller', GITHUB_RUN_ID: '100', GITHUB_RUN_ATTEMPT: '1', HALO_E2E_PACKAGED_APP: path.join(root, 'unrelated-old-package'), PLAYWRIGHT_BROWSERS_PATH: path.join(root, 'unrelated-browser-data'), HALO_ACCEPTANCE_BASELINE: options.previousStatus ? path.join(root, 'previous/baseline.json') : '', HALO_ACCEPTANCE_FULL: String(options.full ?? !options.previousStatus), HALO_DEFAULT_SOURCE_REF: 'main', ...(options.comparisonRepository ? { HALO_COMPARISON_REPOSITORY: options.comparisonRepository } : {}) })
   const finalize = outcome => spawnSync(process.execPath, [finalizer], { cwd: root, encoding: 'utf8', env: { ...environment(), HALO_CI_STAGE_OUTCOMES: JSON.stringify({ ...options.stages, execute: { outcome } }) }, timeout: 20000 })
   return { root, directory: path.join(root, 'tests/acceptance/output/ci'), environment, finalize, start() {
     return spawn(process.execPath, [source], { cwd: root, env: environment(), stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })

@@ -17,9 +17,38 @@ promises:
     en: The default engine for new conversations changes without restarting the application, and each existing conversation keeps the engine it runs on until it is moved explicitly.
     zh: 新对话使用的默认引擎无需重启应用即可切换，已有对话保持其所用引擎，直到被明确迁移。
   fallback:
-    en: A missing configured engine is distinguished from the engine actually running, and its saved choice is retained.
-    zh: 配置引擎缺失时，显示实际运行引擎与回退情况，并保留原配置选择。
+    en: A missing explicitly selected Claude Code installation fails without selecting another installation or engine; other engine fallback retains the saved choice.
+    zh: 明确选择的 Claude Code 安装不可用时失败，不选择其他安装或引擎；其他引擎的回退保留保存的选择。
+  task-tracking:
+    en: Claude Code conversations retain the task checklist on non-Claude models when the tool is allowed; an explicitly disabled checklist tool remains unavailable.
+    zh: Claude Code 对话在非 Claude 模型上仍保留待办清单能力；用户明确禁用清单工具时，它保持不可用。
+  upgrade:
+    en: An ordinary upgrade never discovers Claude Code or rewrites all history. Ambiguous historical defaults and paths use Halo, while recorded user choices and a currently selected Claude Code delegated account remain selected. Compatible history resumes silently; unsafe recovery preserves history and fails.
+    zh: 普通升级不发现 Claude Code、不批量改写历史。来源不明的旧默认值和路径使用 Halo，有记录的主动选择及当前选中的 Claude Code 委托账户保留。兼容历史正常恢复不提示；无法安全恢复时保留历史并失败。
 scenarios:
+  - id: models.engines.cc-task-tracking
+    title:
+      en: Keep the task checklist when using a non-Claude model on Claude Code
+      zh: Claude Code 使用非 Claude 模型时仍可使用待办清单
+    verifies: [task-tracking]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk, local-claude-code]
+    variants:
+      model: [deepseek-v4.1-flash, gpt-6-astra]
+      permission: [allowed, disabled]
+    preconditions:
+      - An isolated application selects an external Claude Code installation and a local scripted OpenAI-compatible model account.
+    steps:
+      - Start a conversation with the checklist tool allowed or explicitly disabled.
+      - If allowed, discover the checklist tool when deferred, write a completed task and reopen the conversation.
+    expected:
+      - When allowed, the model receives TodoWrite's parameter schema, the actual tool succeeds, and the saved conversation displays the task checklist after reopening.
+      - When explicitly disabled, neither TodoWrite nor the replacement Task tools are advertised; no checklist is executed.
+    notes: The real external runtime and the application's model router execute against a local scripted endpoint. This does not establish live provider compatibility or coverage of every external Claude Code version.
   - id: models.engines.global-selection
     title:
       en: Apply a default engine choice to new conversations
@@ -71,5 +100,109 @@ scenarios:
       - en: Start a disposable build configured for an absent engine with another supported engine installed.
         zh: 启动一个配置引擎缺失、但装有其他受支持引擎的可丢弃构建。
     expected:
-      - en: The application remains usable and identifies both the unavailable choice and actual fallback without rewriting the saved preference.
-        zh: 应用仍可使用，说明不可用选择与实际回退，不改写保存偏好。
+      - en: The application remains usable without rewriting the saved preference. An explicit Claude Code choice reports its unavailable installation without selecting another engine; other engine fallback identifies the actual engine.
+        zh: 应用仍可使用，不改写保存偏好。明确选择 Claude Code 时报告安装不可用，不自动切换引擎；其他引擎回退说明实际引擎。
+  - id: models.engines.upgrade-space
+    title: Continue a historical space conversation on Halo
+    verifies: [upgrade]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      history: [native, transcript]
+    expected:
+      - Without a recorded explicit CC choice or currently selected claude-cli delegated account, availability reports CC as unconfigured and never inspects saved runtime paths, including when engine options are opened. Explicit selection, installation and user-triggered discovery remain available.
+    notes: Source-build startup observation delegates filesystem calls unchanged and records runtime candidate reads and discovery traversal. Synthetic historical ownership over a real saved Halo-compatible session does not establish historical external CC writer compatibility or packaged-app behavior.
+  - id: models.engines.explicit-missing
+    title: Preserve an explicitly selected missing Claude Code installation
+    verifies: [fallback]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+  - id: models.engines.upgrade-person
+    title: Continue historical digital-human chat on Halo
+    verifies: [upgrade]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+  - id: models.engines.upgrade-automation
+    title: Start an independent task on Halo after an ordinary upgrade
+    verifies: [upgrade]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+  - id: models.engines.explicit-installed
+    title: Keep an explicitly selected external Claude Code installation
+    verifies: [fallback]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk, local-claude-code]
+    notes: Requires a real external Claude Code process to finish one turn against the local scripted model, not a live model or delegated login. HOME, USERPROFILE and the custom SDK config are isolated; owner credentials must not be supplied. If the selected CLI requires login despite the scripted API-key route, record the prerequisite as blocked rather than borrowing an account or counting a skip as passed.
+  - id: models.engines.upgrade-delegated
+    title: Retain Claude Code for the currently selected historical delegated account
+    verifies: [upgrade, fallback]
+    platforms: [darwin]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk, local-claude-code]
+    variants:
+      runtime: [installed, missing]
+    notes: Seeds the real persisted delegated-source shape and checks engine selection without logging in or sending a model request. The installed variant requires a real isolated external CC runtime; absence is blocked. This does not establish delegated login or successful authenticated inference. Only the currently selected claude-cli delegated source counts as active choice; other historical defaults still use Halo.
+  - id: models.engines.reselect-automatic-installation
+    title: Reuse the same automatically recorded installation after an explicit conversation or digital-human CC choice
+    verifies: [upgrade, selection, fallback]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk, local-claude-code]
+    variants:
+      entry: [space-chat, digital-human, automation]
+    preconditions:
+      - A historical profile has an automatically saved valid CC path without selectionOrigin and an explicit conversation or digital-human CC override.
+    steps:
+      - Try a turn or run, read the setup explanation, open Settings > Advanced, and select the same listed installation without downloading another version. Retry the conversation or task.
+    expected:
+      - The initial attempt stays on CC and fails with an explanation to select an installation once in Settings; automation retains the reason in its failed-run record. No automatic runtime check or fallback occurs.
+      - The same installation is selectable. Explicit selection checks it, records user intent, and makes CC available; the next turn or run uses CC while history and the override remain intact.
+    notes: Three executable bindings use the real installation selector and Advanced engine controls, persist user selection, and require an external Claude Code process to complete against a local scripted endpoint without fallback. Missing HALO_ACCEPTANCE_CLAUDE_CLI is blocked; no owner credentials or delegated login may be used. Binding and discovery alone are not evidence that these journeys passed.
+  - id: models.engines.ordinary-upgrade
+    title:
+      en: Continue old conversations without discovering external runtimes
+      zh: 不发现外部运行时即可继续旧对话
+    verifies: [upgrade]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    variants:
+      entry: [space-chat, digital-human, im, automation-followup]
+    preconditions:
+      - en: An isolated profile has historical Claude Code defaults, paths and automatic bindings without recorded user selection, and synthetic saved history.
+        zh: 隔离资料包含没有主动选择记录的旧 Claude Code 默认值、路径和自动绑定，以及合成历史。
+    steps:
+      - en: Start the app and continue the old conversation. Repeat with missing native history and then with neither recovery source available.
+        zh: 启动应用并继续旧对话；分别测试原生历史缺失，以及两个恢复来源都不可用。
+    expected:
+      - en: Startup and continuation discover no external installation and perform no bulk rewrite. Compatible history reaches Halo without a migration notice or tool replay. Bounded fallback is disclosed; unrecoverable history remains intact and the turn fails. Conversation rows have no historical engine badge.
+        zh: 启动与续聊不发现外部安装、不批量改写。兼容历史进入 Halo，不显示迁移提示、不重放工具。有损回退如实说明；不可恢复时历史保留且本轮失败。对话列表不显示历史引擎标签。

@@ -15,6 +15,8 @@ references:
   - tests/e2e/specs/digital-human-chat.spec.ts
   - tests/e2e/specs/chat.spec.ts
   - tests/e2e/specs/acceptance-chat-recovery.spec.ts
+  - tests/e2e/specs/acceptance-chat-slash-text.spec.ts
+  - src/main/services/agent/opening-context.ts
 promises:
   persist:
     en: Messages and completed replies remain readable after restart and support a follow-up.
@@ -25,6 +27,12 @@ promises:
   separate:
     en: Separate conversations do not receive each other’s replies or supplements.
     zh: 不同对话不会收到彼此的回复或补充。
+  slash-text:
+    en: A message that starts with "/" but is not an available command, such as a file path, reaches the AI unchanged and gets its reply instead of an "Unknown command" error.
+    zh: 以“/”开头但不是可用命令的消息（如文件路径）原样送达 AI 并得到回复，不会报“Unknown command”。
+  slash-command:
+    en: An available command typed in the composer still runs as a command rather than being sent to the AI as text.
+    zh: 在输入框输入的可用命令仍按命令执行，不会作为文字发给 AI。
 scenarios:
   - id: chat.messages.persist
     title:
@@ -178,3 +186,57 @@ scenarios:
     notes:
       en: This evidence checks visible sequential replies; it does not independently prove cross-restart context.
       zh: 证据检查界面连续回复，不独立证明重启后的上下文。
+  - id: chat.messages.slash-text
+    title:
+      en: Send slash-leading text that is not a command
+      zh: 发送以“/”开头但不是命令的文字
+    verifies:
+      - slash-text
+    platforms: *a1
+    profiles:
+      - fast
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A fresh isolated workspace on the Halo SDK engine uses a scripted model, and a conversation already has one completed turn.
+        zh: 隔离空间使用 Halo SDK 引擎与脚本化模型，对话已完成一轮。
+    steps:
+      - en: In the same conversation send "/uer/dsds", "/tmp/example.txt" and "/Users/me/app.log 看一下这个日志", waiting for each reply.
+        zh: 在同一对话中依次发送“/uer/dsds”“/tmp/example.txt”和“/Users/me/app.log 看一下这个日志”，逐条等待回复。
+    expected:
+      - en: Each message causes exactly one model request whose newest user text equals the message, the model's reply is shown and saved, and no error or "Unknown command" appears.
+        zh: 每条消息只产生一次模型请求，其最新用户文字与消息完全一致；模型回复被显示并保存，不出现错误或“Unknown command”。
+    notes:
+      en: Fixes https://github.com/openkursar/hello-halo/issues/510. The real app runs with only the model endpoint scripted. The messages are follow-ups so each one opens the engine's payload; on a new conversation's first turn the space memory may ride ahead of the text, which this does not exercise. Other engines and digital-human chats are not covered.
+      zh: 修复 https://github.com/openkursar/hello-halo/issues/510。真实应用，仅替换模型端点。消息均为追问，使其位于引擎输入开头；新对话首轮可能先带空间记忆，此处未覆盖。其他引擎与数字人对话未覆盖。
+  - id: chat.messages.slash-command
+    title:
+      en: Run an available command from the composer
+      zh: 在输入框执行可用命令
+    verifies:
+      - slash-command
+    platforms: *a1
+    profiles:
+      - fast
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A fresh isolated workspace on the Halo SDK engine uses a scripted model, and a conversation already has one completed turn.
+        zh: 隔离空间使用 Halo SDK 引擎与脚本化模型，对话已完成一轮。
+    steps:
+      - en: Type "/help", confirm the command menu offers it, then send it with the send button.
+        zh: 输入“/help”，确认命令菜单提供该命令，然后用发送按钮发送。
+    expected:
+      - en: The model receives no request, and the reply shows and saves the command's list of available commands without an error.
+        zh: 模型未收到请求，回复显示并保存该命令列出的可用命令，且无错误。
+    notes:
+      en: Exercises a built-in command answered locally by the engine. Choosing the command from the menu with Enter, commands that expand into a prompt (skills, /compact) and commands the app handles itself are not covered.
+      zh: 验证由引擎本地应答的内置命令；用回车从菜单选择命令、展开为提示词的命令（技能、/compact）及应用自行处理的命令未覆盖。

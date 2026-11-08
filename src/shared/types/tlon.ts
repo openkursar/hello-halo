@@ -88,6 +88,8 @@ export interface IngestHashesV1 {
     lastError?: string
     /** Format-specific extractor revision; absent entries predate versioned extraction. */
     extractorRevision?: number
+    /** Device of a watched-folder source when learned; tells an emptied folder from an unmounted volume. */
+    sourceDev?: number
     protection?: {
       revision: number
       sourceHash: string

@@ -47,7 +47,7 @@ const BACKEND_RETRY_HINTS = ['retry-after', 'retry-after-ms', 'x-should-retry']
  * because providers report them under generic statuses (usually 429).
  */
 const QUOTA_EXHAUSTED_PATTERN =
-  /quota|usage[\s_-]?limit|billing|insufficient[\s_-]?(balance|credit|funds|quota)|credit balance|payment required|余额不足|额度|配额/i
+  /quota|usage[\s_-]?limit|billing|insufficient[\s_-]?(balance|credit|funds|quota)|credit balance|credits?[\s_-]?limit[\s_-]?exceeded|budget(?:[\s_-]+has[\s_-]+been)?[\s_-]?exceeded|exceeded[\s_-]?budget|payment required|余额不足|额度|配额/i
 
 function getErrorTypeFromStatus(status: number): string {
   return STATUS_ERROR_MAP[status] || 'api_error'

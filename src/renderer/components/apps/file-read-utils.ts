@@ -6,6 +6,65 @@
  * import handlers so none of them carry their own copy.
  */
 
+import { t } from 'i18next'
+
+export function readFileBytes(file: File): Promise<Uint8Array> {
+  if (typeof file.arrayBuffer === 'function') {
+    return file.arrayBuffer().then(buffer => new Uint8Array(buffer))
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer))
+    reader.onerror = () => reject(new Error(`Failed to read file: ${file.name}`))
+    reader.readAsArrayBuffer(file)
+  })
+}
+
+export interface ByteReadOptions {
+  include: (path: string, size: number) => boolean
+}
+
+export async function readDirectoryEntryToBytes(
+  entry: FileSystemDirectoryEntry,
+  options: ByteReadOptions,
+): Promise<Record<string, Uint8Array>> {
+  const files: Record<string, Uint8Array> = Object.create(null)
+  async function walk(directory: FileSystemDirectoryEntry, prefix: string): Promise<void> {
+    for (const child of await readAllEntries(directory.createReader())) {
+      const path = prefix + child.name
+      if (child.isFile) {
+        const file = await new Promise<File>((resolve, reject) =>
+          (child as FileSystemFileEntry).file(resolve, reject))
+        if (options.include(path, file.size)) files[path] = await readFileBytes(file)
+      } else if (child.isDirectory) {
+        await walk(child as FileSystemDirectoryEntry, path + '/')
+      }
+    }
+  }
+  await walk(entry, '')
+  return files
+}
+
+export async function readFileListToBytes(
+  fileList: FileList,
+  options: ByteReadOptions,
+): Promise<{ files: Record<string, Uint8Array>; folderName: string }> {
+  const files: Record<string, Uint8Array> = Object.create(null)
+  let folderName = ''
+  for (const file of Array.from(fileList)) {
+    const relative = file.webkitRelativePath || file.name
+    const slash = relative.indexOf('/')
+    const root = slash > 0 ? relative.slice(0, slash) : ''
+    if (!folderName) folderName = root || file.name
+    if (root === '.' || root === '..' || /[\\:\u0000-\u001f]/.test(root) || (root && root !== folderName)) {
+      throw new Error(t('Files must share one safe root folder.'))
+    }
+    const path = slash > 0 ? relative.slice(slash + 1) : relative
+    if (options.include(path, file.size)) files[path] = await readFileBytes(file)
+  }
+  return { files, folderName }
+}
+
 /** Read a File as UTF-8 text via the FileReader API. */
 export function readFileText(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

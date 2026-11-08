@@ -15,8 +15,11 @@ references:
   - tests/e2e/specs/acceptance-input.spec.ts
 promises:
   image:
-    en: Attached images reach the selected model and remain part of the conversation.
-    zh: 附图会传给选定模型，并保留在对话记录中。
+    en: Attached images reach a selected vision-capable model and remain part of the conversation; model aliases and routing prefixes do not silently remove supported images.
+    zh: 附图会传给所选的视觉模型，并保留在对话记录中；模型别名与路由前缀不会导致支持的图片被静默移除。
+  vision-choice:
+    en: Known text-only models and explicit user choices to disable Vision do not receive raw image blocks; the application follows its existing non-vision attachment handling rather than silently enabling Vision.
+    zh: 已知纯文本模型与用户明确关闭视觉的模型不会收到原始图片块；应用遵守既有非视觉附件处理方式，而非静默开启视觉。
   files:
     en: Attached file references point to the selected file in the working context.
     zh: 文件引用指向工作上下文中选定的文件。
@@ -24,6 +27,56 @@ promises:
     en: Removing a pending attachment prevents it from being sent.
     zh: 发送前移除附件后，该附件不会发送。
 scenarios:
+  - id: chat.attachments.deepseek-flash
+    title:
+      en: Deliver images through DeepSeek Flash aliases
+      zh: 通过 DeepSeek Flash 别名传递图片
+    verifies: [image]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      model: [deepseek-flash, deepseek-v4.1-flash, deepseek-v4-flash, deepseek-v4-flash-vision-exp, Pro/deepseek-ai/DeepSeek-V4.1-Flash]
+    preconditions:
+      - en: An isolated local provider accepts the chosen wire model ID, supplies no vision override and records incoming image content. Prepare a synthetic image with a unique marker.
+        zh: 隔离本地服务接受所选传输模型 ID，不提供视觉覆盖值，并记录收到的图片内容；准备带唯一标记的合成图片。
+    steps:
+      - en: Configure the model through Settings without manually enabling Vision, then attach the image in a conversation and send it.
+        zh: 通过设置配置模型，不手动开启视觉，然后在对话中附图发送。
+    expected:
+      - en: Model Config identifies Vision as enabled, the actual model request contains the image, and saved conversation history retains the attachment with the selected model unchanged.
+        zh: 模型配置识别为支持视觉，实际模型请求含图片，保存的对话历史保留附件，所选模型不变。
+    notes:
+      en: The scripted endpoint proves image transport, not the vendor model's image-understanding quality.
+      zh: 脚本端点证明图片传输，不代表厂商模型的图片理解质量。
+  - id: chat.attachments.vision-disabled
+    title:
+      en: Keep raw images away from a text-only or explicitly disabled model
+      zh: 不向纯文本或明确关闭视觉的模型发送原图
+    verifies: [vision-choice]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      model: [deepseek-chat, deepseek-reasoner, deepseek-v4-pro, deepseek-v4.1-flash]
+    preconditions:
+      - en: Use an isolated local provider. Leave the legacy text-only models at their defaults; for deepseek-v4.1-flash explicitly disable Vision in Model Config, save and restart. Do not enable OCR or any external service for this case.
+        zh: 使用隔离本地服务。纯文本旧型号保持默认；对 deepseek-v4.1-flash 在模型配置中明确关闭视觉，保存并重启。本例不启用 OCR 或任何外部服务。
+    steps:
+      - en: Open the conversation, inspect its image-input guidance and attempt to supply a synthetic image through the composer.
+        zh: 打开对话，检查图片输入提示，并尝试通过输入框提供合成图片。
+    expected:
+      - en: The application does not present the model as accepting raw images; any model request contains no raw image blocks, and the saved Vision choice is not silently changed.
+        zh: 应用不将该模型显示为可接收原图；任何模型请求均不含原始图片块，保存的视觉选择不会被静默更改。
+    notes:
+      en: This is a negative raw-image transport check. It does not establish OCR extraction or alternative file-reading success.
+      zh: 本例仅验证不会传输原图，不证明 OCR 提取或替代文件读取成功。
   - id: chat.attachments.image
     title:
       en: Send an image from the composer
@@ -40,8 +93,8 @@ scenarios:
     mode: scripted
     automation: automated
     preconditions:
-      - en: Use a synthetic image with a unique marker.
-        zh: 准备带唯一标记的合成图片。
+      - en: Use a vision-capable model and a synthetic image with a unique marker.
+        zh: 使用支持视觉的模型，准备带唯一标记的合成图片。
     steps:
       - en: Attach it in the composer and submit a message.
         zh: 在输入框添加图片并发送。

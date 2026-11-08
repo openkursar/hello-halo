@@ -107,19 +107,16 @@ export function findModelPresetMatch(modelId: string): ModelPresetMatch | null {
 function inferVisionSupport(modelId: string): boolean {
   const lower = modelId.toLowerCase()
 
-  // A per-model statement that names the complete id wins outright — it is
-  // how a multimodal variant inside a text-only family (glm-5.3-flash inside
-  // glm-5) is expressed. The lookup also tries the id with its routing prefix
-  // stripped, so a gateway id like "Pro/zai-org/GLM-5.3-Flash" still resolves
-  // to the same statement as the bare id. That stripped prefix is discarded
-  // only when it is itself inert: a prefix carrying its own blocklist signal
-  // ("deepseek-proxy/gpt-4o") means the id was rewritten into another
-  // family's name space, and that signal must still be honored.
+  // Exact variants override their family's blocklist, including same-family
+  // routing prefixes (deepseek-ai/deepseek-flash). An unrelated family signal
+  // in the prefix (deepseek-proxy/gpt-4o) still takes precedence.
   const normalized = normalizeModelId(modelId)
   const full = normalisedModels.get(normalized)
   if (full) {
     const prefix = lower.slice(0, lower.length - normalized.length)
-    const prefixCarriesBlocklistSignal = preset.vision?.blocklist.some(p => prefix.includes(p))
+    const prefixCarriesBlocklistSignal = preset.vision?.blocklist.some(
+      p => prefix.includes(p) && !normalized.includes(p)
+    )
     if (!prefixCarriesBlocklistSignal) return full.vision
   }
 

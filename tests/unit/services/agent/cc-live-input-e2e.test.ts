@@ -71,7 +71,7 @@ afterEach(async () => {
 })
 
 async function startHarness(overrides: Record<string, unknown> = {}) {
-  const plan: Step[] = []
+  const plan: Array<Step | ((request: any) => Step)> = []
   const modelRequests: any[] = []
   let seq = 0
   const server = http.createServer(async (req, res) => {
@@ -87,7 +87,7 @@ async function startHarness(overrides: Record<string, unknown> = {}) {
     if (main) modelRequests.push(json)
     const step = main ? plan.shift() ?? { text: 'done' } : { text: 'aux' }
     res.writeHead(200, { 'content-type': 'text/event-stream' })
-    await stream(res, step, ++seq)
+    await stream(res, typeof step === 'function' ? step(json) : step, ++seq)
     res.end()
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -119,7 +119,13 @@ async function startHarness(overrides: Record<string, unknown> = {}) {
     executable: 'node',
     env: {
       PATH: process.env.PATH,
-      HOME: process.env.HOME,
+      HOME: configDir,
+      USERPROFILE: configDir,
+      XDG_CONFIG_HOME: configDir,
+      XDG_CACHE_HOME: configDir,
+      XDG_DATA_HOME: configDir,
+      APPDATA: configDir,
+      LOCALAPPDATA: configDir,
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
       ANTHROPIC_API_KEY: 'sk-test',
       CLAUDE_CONFIG_DIR: configDir,
@@ -180,6 +186,38 @@ async function startHarness(overrides: Record<string, unknown> = {}) {
 const slowFinalAnswer: Step = { chunks: Array.from({ length: 12 }, (_, i) => `part${i} `), chunkDelayMs: 120 }
 
 describe.skipIf(!enabled)('Claude Code live input (real CLI)', () => {
+  it.each(['deepseek-v4.1-flash', 'gpt-6-astra', 'claude-sonnet-4-5'])('discovers and executes TodoWrite for %s', async model => {
+    const h = await startHarness({ model })
+    const todos = [{ content: 'Verify task tracking', status: 'completed', activeForm: 'Verifying task tracking' }]
+    const write: Step = { toolUse: { name: 'TodoWrite', input: { todos } } }
+    h.plan.push(request => {
+      if (request.tools.some((tool: any) => tool.name === 'TodoWrite' && tool.defer_loading !== true)) return write
+      h.plan.unshift(request => request.tools.some((tool: any) => tool.name === 'TodoWrite') ? write : { text: 'Task tool unavailable' })
+      return { toolUse: { name: 'ToolSearch', input: { query: 'select:TodoWrite', max_results: 1 } } }
+    }, { text: 'done' })
+    await h.session.send('Track the work with the task checklist.')
+    await h.waitForResults(1)
+    expect(h.results()[0]).toMatchObject({ subtype: 'success', is_error: false })
+    const init = h.frames.find(frame => frame.type === 'system' && frame.subtype === 'init')
+    expect(init.tools).toContain('TodoWrite')
+    expect(init.tools).not.toEqual(expect.arrayContaining(['TaskCreate']))
+    expect(h.modelRequests.some(request => request.tools.some((tool: any) => tool.name === 'TodoWrite' && tool.input_schema?.properties?.todos))).toBe(true)
+    const results = h.frames.filter(frame => frame.type === 'user').flatMap(frame => frame.message?.content ?? [])
+    expect(results.some(block => block.type === 'tool_result' && !block.is_error && String(block.content).includes('Todos have been modified successfully'))).toBe(true)
+  }, 60000)
+
+  it('does not re-enable an explicitly disallowed TodoWrite', async () => {
+    const h = await startHarness({ model: 'deepseek-v4.1-flash', disallowedTools: ['TodoWrite'] })
+    h.plan.push({ text: 'done' })
+    await h.session.send('Reply without tools.')
+    await h.waitForResults(1)
+    expect(h.results()[0]).toMatchObject({ subtype: 'success', is_error: false })
+    expect(h.modelRequests.length).toBeGreaterThan(0)
+    const init = h.frames.find(frame => frame.type === 'system' && frame.subtype === 'init')
+    expect(init.tools).not.toContain('TodoWrite')
+    expect(h.modelRequests.every(request => request.tools.every((tool: any) => !['TodoWrite', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate'].includes(tool.name)))).toBe(true)
+  }, 60000)
+
   it('merges input at the tool boundary and acknowledges it', async () => {
     const h = await startHarness()
     h.plan.push({ toolUse: { name: 'mcp__h__slow', input: { ms: 1500 } } }, { text: 'final' })

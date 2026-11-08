@@ -156,6 +156,40 @@ describe('partial turn checkpoints', () => {
   })
 })
 
+describe('a failed model request the engine told as an assistant message', () => {
+  const reason = 'Anthropic API error (403): OAuth authentication is currently not allowed for this organization.'
+  const failure = (n: number, extra: Record<string, unknown> = {}): StoredEvent => ({
+    _ts: ts(n), type: 'assistant', error: 'authentication_failed', ...extra,
+    message: { role: 'assistant', model: '<synthetic>', content: [text(reason)] } as StoredEvent['message'],
+  })
+  const failedResult = (n: number): StoredEvent => ({ _ts: ts(n), type: 'result', is_error: true, result: reason })
+  const init = (n: number): StoredEvent => ({ _ts: ts(n), type: 'system', subtype: 'init' })
+
+  it('is the turn\'s error, not its answer, and keeps its id and time as the log grows', () => {
+    const events = [user('hello', 1), init(2), failure(3), failedResult(4)]
+    const messages = convertEventsToMessages(events)
+    expect(messages).toHaveLength(2)
+    expect(messages[1]).toMatchObject({ id: 'session-msg-3', role: 'assistant', content: '', error: reason, timestamp: ts(3) })
+    expect(convertEventsToMessages([...events, user('try again', 5), init(6)])[1]).toEqual(messages[1])
+  })
+
+  it('keeps what was written before it as the answer it cut short', () => {
+    const messages = convertEventsToMessages([user('hello', 1), init(2), assistant([text('partial answer')], 3), failure(4), failedResult(5)])
+    expect(messages[1]).toMatchObject({ content: 'partial answer', error: reason })
+  })
+
+  it('leaves a sub-agent\'s failed request to the result of the tool that ran it', () => {
+    const messages = convertEventsToMessages([
+      user('hello', 1), init(2), assistant([toolUse('task-1', 'Agent')], 3),
+      failure(4, { parent_tool_use_id: 'task-1' }), toolResult('task-1', 5),
+      assistant([text('done without it')], 6), result('done without it', 7),
+    ])
+    expect(messages.at(-1)).toMatchObject({ content: 'done without it' })
+    expect(messages.at(-1)?.error).toBeUndefined()
+    expect(JSON.stringify(messages)).not.toContain(reason)
+  })
+})
+
 describe('message id stability', () => {
   it('keeps every already-visible message id (and role) in every longer prefix of the log', () => {
     const events = sampleRun()

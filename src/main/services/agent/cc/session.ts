@@ -87,6 +87,9 @@ export class CcSession {
     const env = Object.fromEntries(Object.entries({ ...this.options.env, ...this.launch.env })
       .filter(([, value]) => value != null).map(([key, value]) => [key, String(value)]))
     env.DISABLE_AUTOUPDATER = '1'
+    // Halo's progress UI consumes TodoWrite; newer CC gates it by model and defaults to Tasks.
+    env.CLAUDE_CODE_ENABLE_TODO_TOOLS = 'true'
+    env.CLAUDE_CODE_ENABLE_TASKS = 'false'
     delete env.NODE_OPTIONS
     if (this.launch.kind === 'native') delete env.ELECTRON_RUN_AS_NODE
     // The entry point must match Halo's delegated authentication flow, not the SDK package.

@@ -12,7 +12,7 @@
  * old behavior unchanged.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest'
 import type { AISource } from '../../../../src/shared/types/ai-sources'
 
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
@@ -99,6 +99,9 @@ function deferred<T>() {
 
 const flush = () => new Promise((r) => setTimeout(r, 0))
 
+// Production has already loaded the control module; a cold test import must not look like a creation delay.
+beforeAll(async () => { await import('../../../../src/main/services/agent/control') })
+
 afterEach(() => {
   closeAllV2Sessions()
   activeSessions.clear()
@@ -164,6 +167,51 @@ describe('getOrCreateV2Session in-flight sharing', () => {
     await expect(creator).resolves.toBe(s1)
     await expect(latecomer).resolves.toBe(s1)
     expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('a user stop of the conversation aborts the one shared creation for every waiter and leaves no session behind', async () => {
+    const { stopGeneration } = await import('../../../../src/main/services/agent/control')
+    const conv = 'conv-stop-shared'
+    const s1 = fakeSession('s1')
+    const first = deferred<any>()
+    createSession.mockImplementationOnce(() => first.promise)
+
+    const creator = getOrCreateV2Session('space', conv, { systemPrompt: 'same', model: 'm' })
+    await flush()
+    const latecomer = getOrCreateV2Session('space', conv, { systemPrompt: 'same', model: 'm' })
+    const settled = Promise.allSettled([creator, latecomer])
+    const abortController = createSession.mock.calls[0][0].abortController as AbortController
+
+    await stopGeneration(conv, { reason: 'user' })
+    expect(abortController.signal.aborted).toBe(true)
+    first.resolve(s1)
+
+    const [creatorResult, latecomerResult] = await settled
+    expect(creatorResult.status).toBe('rejected')
+    expect(latecomerResult.status).toBe('rejected')
+    expect(createSession).toHaveBeenCalledTimes(1)
+    expect(s1.close).toHaveBeenCalledOnce()
+    expect(v2Sessions.has(conv)).toBe(false)
+  })
+
+  it('stopping a different conversation does not cancel a shared creation in flight', async () => {
+    const { stopGeneration } = await import('../../../../src/main/services/agent/control')
+    const conv = 'conv-stop-other'
+    const s1 = fakeSession('s1')
+    const first = deferred<any>()
+    createSession.mockImplementationOnce(() => first.promise)
+
+    const creator = getOrCreateV2Session('space', conv, { systemPrompt: 'same', model: 'm' })
+    await flush()
+    const latecomer = getOrCreateV2Session('space', conv, { systemPrompt: 'same', model: 'm' })
+    await stopGeneration('another-conversation', { reason: 'user' })
+    expect((createSession.mock.calls[0][0].abortController as AbortController).signal.aborted).toBe(false)
+
+    first.resolve(s1)
+    await expect(creator).resolves.toBe(s1)
+    await expect(latecomer).resolves.toBe(s1)
+    expect(createSession).toHaveBeenCalledTimes(1)
+    expect(s1.close).not.toHaveBeenCalled()
   })
 
   it('a NON-gated latecomer shares even when its options differ (pre-existing behavior)', async () => {

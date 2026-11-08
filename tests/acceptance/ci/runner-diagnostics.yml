@@ -1,0 +1,186 @@
+name: Runner diagnostics
+
+# Manual. Reports the processes acceptance runs leave behind on the build host.
+# With cleanup=true it also stops the orphans that are provably the CI's own.
+on:
+  workflow_dispatch:
+    inputs:
+      cleanup:
+        description: Also stop orphaned acceptance processes (parent is launchd, inside the CI work directory or its temporary directories, older than the minimum age)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  controller:
+    name: Verify private controller
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require private repository visibility
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            let controller;
+            try {
+              const response = await github.rest.repos.get(context.repo);
+              controller = response.data;
+            } catch (error) {
+              const status = Number.isInteger(error.status) ? ` (HTTP ${error.status})` : '';
+              throw new Error(`Could not verify controller repository visibility${status}; nothing was listed.`);
+            }
+            if (controller?.private !== true || controller.visibility !== 'private') {
+              throw new Error('This workflow requires a private controller repository. It reports account names, directories and command lines of the build host.');
+            }
+  processes:
+    name: Processes left on the build host
+    needs: controller
+    runs-on: ${{ fromJSON(vars.HALO_ACCEPTANCE_RUNNER || '["self-hosted","acceptance","macOS"]') }}
+    timeout-minutes: 10
+    env:
+      HALO_CLEANUP: ${{ inputs.cleanup }}
+      HALO_MINIMUM_AGE_SECONDS: '600'
+    steps:
+      - name: Report and optionally clean up
+        shell: bash
+        run: |
+          set -uo pipefail
+          export LC_ALL=C
+          case "$RUNNER_TEMP" in /*/_work/_temp) ;; *) echo "::error::Unexpected runner temporary directory; the CI work directory cannot be determined"; exit 1;; esac
+          work_root="$(dirname "$RUNNER_TEMP")"
+          tmp_root="${TMPDIR:-/tmp}"; tmp_root="${tmp_root%/}"
+          minimum="${HALO_MINIMUM_AGE_SECONDS:-600}"
+          case "$minimum" in ''|*[!0-9]*) echo "::error::The minimum age must be a number of seconds"; exit 1;; esac
+          grace="${HALO_TERM_GRACE_SECONDS:-10}"
+          case "$grace" in ''|*[!0-9]*) echo "::error::The grace period must be a number of seconds"; exit 1;; esac
+          me="$(id -u)"
+
+          ancestors=" $$ "
+          walk=$$
+          while [ "$walk" -gt 1 ]; do
+            walk="$(ps -o ppid= -p "$walk" 2>/dev/null | tr -d ' ')"
+            [ -n "$walk" ] || break
+            ancestors="$ancestors$walk "
+          done
+
+          snapshot() {
+            ps -axo uid=,pid=,ppid=,pgid=,etime=,stat=,%cpu=,rss=,command= | awk -v me="$me" -v work="$work_root/" -v tmp="$tmp_root/" -v ancestors="$ancestors" '
+              function seconds(value,   days, rest, parts, count) {
+                days = 0; rest = value
+                if (index(value, "-")) { days = substr(value, 1, index(value, "-") - 1); rest = substr(value, index(value, "-") + 1) }
+                count = split(rest, parts, ":")
+                if (count == 3) return days * 86400 + parts[1] * 3600 + parts[2] * 60 + parts[3]
+                if (count == 2) return days * 86400 + parts[1] * 60 + parts[2]
+                return days * 86400 + parts[1]
+              }
+              function inside(command, root,   other) {
+                other = root; sub(/^\/private/, "", other)
+                return index(command, root) > 0 || index(command, "/private" root) > 0 || index(command, other) > 0
+              }
+              {
+                if ($1 != me) next
+                pid = $2; ppid = $3; pgid = $4; age = seconds($5); stat = $6; cpu = $7; rss = $8
+                command = $0
+                for (i = 1; i <= 8; i++) sub(/^[ \t]*[^ \t]+/, "", command)
+                sub(/^[ \t]+/, "", command)
+                if (index(ancestors, " " pid " ")) next
+                if (command ~ /Runner\.(Listener|Worker)|RunnerService\.js|runsvc|provjobd/) next
+                class = ""
+                if (command ~ /crashpad_handler/) class = "crashpad"
+                else if (command ~ /Electron|Helper\.app\/Contents\/MacOS\//) class = "electron"
+                else if (command ~ /\/claude( |$)/) class = "claude"
+                else if (command ~ /halo-node/) class = "halo-node"
+                else if (command ~ /(^|\/)dsh( |$)/) class = "dsh"
+                else if (command ~ /playwright/) class = "playwright"
+                else if (command ~ /(^|\/)node( |$)/) class = "node"
+                if (class == "") next
+                owned = inside(command, work) || inside(command, tmp "halo-") || inside(command, tmp "acceptance-")
+                shown = substr(command, 1, 170)
+                gsub(/\t/, " ", shown)
+                printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", pid, ppid, pgid, age, stat, cpu, rss, class, (owned ? "ci" : "other"), shown
+              }'
+          }
+
+          report() {
+            local title="$1" file="$2"
+            {
+              echo "### $title"
+              echo
+              echo "Work directory: \`$work_root\` · temporary directory: \`$tmp_root\` · account $(id -un) (uid $me)"
+              echo
+              echo "| Class | Parent | Count | Oldest (min) | Total RSS (MB) |"
+              echo "| --- | --- | ---: | ---: | ---: |"
+              awk -F'\t' '{ key = $8 "\t" ($2 == 1 ? "orphan (ppid 1)" : "has parent"); count[key]++; if ($4 > oldest[key]) oldest[key] = $4; rss[key] += $7 }
+                END { for (key in count) { split(key, p, "\t"); printf "| %s | %s | %d | %d | %d |\n", p[1], p[2], count[key], oldest[key] / 60, rss[key] / 1024 } }' "$file" | sort
+              echo
+              echo "Orphans inside the CI directories: $(awk -F'\t' '$2 == 1 && $9 == "ci"' "$file" | wc -l | tr -d ' ') · other orphans of this account: $(awk -F'\t' '$2 == 1 && $9 != "ci"' "$file" | wc -l | tr -d ' ')"
+              echo
+              echo "<details><summary>Processes (pid, ppid, age in minutes, class, scope, command)</summary>"
+              echo
+              echo '```'
+              sort -t$'\t' -k2,2n -k4,4nr "$file" | awk -F'\t' '{ printf "%s %s %dm %s %s %s\n", $1, $2, $4 / 60, $8, $9, $10 }'
+              echo '```'
+              echo "</details>"
+              echo
+            }
+          }
+
+          current="$(mktemp "$RUNNER_TEMP/processes.XXXXXX")"
+          snapshot > "$current"
+          {
+            echo "## Runner diagnostics"
+            echo
+            echo "Load average: \`$(uptime | sed 's/.*load averages*: //')\` · memory: $(memory_pressure 2>/dev/null | tail -1) · swap: $(sysctl -n vm.swapusage 2>/dev/null)"
+            echo
+            report "Before" "$current"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          if [ "$HALO_CLEANUP" != "true" ]; then
+            echo "Read-only run: nothing was stopped."
+            echo "Read-only run: nothing was stopped." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          candidates="$(mktemp "$RUNNER_TEMP/candidates.XXXXXX")"
+          awk -F'\t' -v minimum="$minimum" '$2 == 1 && $9 == "ci" && $4 >= minimum' "$current" > "$candidates"
+          {
+            echo "### Cleanup"
+            echo
+            echo "Conditions: parent is launchd (ppid 1), the command is inside \`$work_root\` or this account's temporary \`halo-*\` / \`acceptance-*\` directories, age at least $minimum s, runner processes and this job's own ancestry excluded. SIGTERM, then SIGKILL after $grace s."
+            echo
+            if [ ! -s "$candidates" ]; then echo "No process met all conditions."; fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          results="$(mktemp "$RUNNER_TEMP/results.XXXXXX")"
+          while IFS=$'\t' read -r pid ppid pgid age stat cpu rss class scope shown; do
+            kill -TERM "$pid" 2>/dev/null && echo "$pid"$'\t'"$class"$'\t'"$shown" >> "$results" || echo "$pid already gone before SIGTERM"
+          done < "$candidates"
+          if [ -s "$results" ]; then
+            sleep "$grace"
+            {
+              echo "| pid | class | result | command |"
+              echo "| ---: | --- | --- | --- |"
+              while IFS=$'\t' read -r pid class shown; do
+                still="$(ps -p "$pid" -o command= 2>/dev/null | cut -c1-170)"
+                if [ -z "$still" ]; then result="stopped by SIGTERM"
+                elif [ "$still" = "$shown" ]; then
+                  kill -KILL "$pid" 2>/dev/null; sleep 1
+                  if ps -p "$pid" >/dev/null 2>&1; then result="STILL RUNNING after SIGKILL"; else result="stopped by SIGKILL"; fi
+                else result="pid reused by another command; left alone"; fi
+                echo "| $pid | $class | $result | \`${shown//|/ }\` |"
+              done < "$results"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+          after="$(mktemp "$RUNNER_TEMP/processes.XXXXXX")"
+          snapshot > "$after"
+          { echo; report "After" "$after"; } | tee -a "$GITHUB_STEP_SUMMARY"
+          rm -f "$current" "$candidates" "$results" "$after"

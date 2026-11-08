@@ -24,9 +24,25 @@ stops one by its key, the form the remote transport accepts for it, and offers n
 clear: its context belongs to the backend calling it.
 
 Capability surfaces are two-level: a wall is the first level and one card opens a
-full-width detail behind a back link. The walls carry the scope and install-source
-filters; the disk-scanned "unmanaged" group stays unfiltered by design, since
-those skills have no install record to filter on. The settings tab groups its
+detail behind a back link, with the existing searchable, resizable/foldable
+`DetailSwitcher` beside it on desktop. Skill rows use the same scoped inventory
+as the wall; opening a detail never scans every workspace for the switcher.
+The switcher's explicit paging and search keep large libraries bounded. Skills use the shared `skills` inventory,
+not installed-app records: one selected workspace plus global files, paged and
+searched together. `useSkillInventory` discards obsolete responses without polling
+or scanning other workspaces. Cards retain the existing scope badge, quick enable
+control, resource menu and version/update row, grouped by source. One command may
+have several file sources, but paths, copy counts and engine compatibility tables
+are not everyday library content. Details retain the author/version/scope header,
+Use action and rendered instruction/editor hierarchy. Alternate sources appear
+only under Other versions. `useSkillActions` owns the shared card/detail mutations
+and their concise scope/fallback/Trash confirmations; saves carry the read revision.
+Backend diagnostics stay in logs, while an affected skill offers a localized,
+actionable error rather than exposing filesystem exceptions. Legacy removed
+content has a recovery entry only when present. Digital-human settings retain
+inline instruction previews and load content only after expansion. Copies between
+workspaces are independent, not a per-person binding.
+The settings tab groups its
 sections behind `AppSettingsNav`, whose entries double as a status board (dirty
 edits, empty required config, trigger interval) — a group id is the anchor a deep
 link (`openAppConfigAt`) scrolls to. `RunsSummaryBand` at the top of
@@ -126,10 +142,6 @@ update existing records across surfaces. Notification links first resolve the
 record when possible, then navigate to its source and exact activity anchor.
 Source snapshots retain historical team and task titles when a target is gone.
 
-The authorized `read_digital_human_context` tool can return structured team
-references. The tool-result renderer validates their shape and offers navigation
-buttons; prose and arbitrary tool output never become application commands.
-
 `PersonTeamWork` queries only the currently open person's memberships, six teams
 at a time and at most three requests concurrently. It projects roster busy labels
 and epoch IDs supplied by the team service, never infers a person's activity from
@@ -143,3 +155,14 @@ must not prepopulate the full installed-app cache before the directory opens.
 the full inventory only after a consumer has actually requested that inventory.
 The global request inbox receives page-local display names with its entries, so
 opening it does not require loading every person's complete specification.
+
+The extensions lists share one tagging ability (`components/tags/`, rules in
+`shared/apps/app-tags`). A tag is the user's own label stored on the install
+(`userOverrides.tags`) — never in the spec, an export or the store. Each list
+has its own vocabulary: the directory reads it through its own call
+(`appListTags`, one grouped SQL query, fetched on open and after a tag change —
+not per page) and filters/searches tags server-side; a wall that already holds
+its apps counts them itself. Letter case is folded for ASCII only, everywhere,
+matching SQLite's lower(). Rename and delete act on one list in one transaction
+(`appRenameTag`). The tag row appears only once a tag exists. Tags stay with a
+removed item and come back if it is reinstalled; deleting it for good drops them.

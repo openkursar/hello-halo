@@ -21,9 +21,8 @@ const EXPLICIT_1M_CONTEXT_WINDOW = 1_000_000
  * no catalog entry. 200K matches CC's own assumption for an unrecognised
  * model, so it neither inflates nor shrinks what CC would have done.
  *
- * `maxOutputTokens` here is a guess and is deliberately never injected as
- * CLAUDE_CODE_MAX_OUTPUT_TOKENS — see `maxOutputTokensConfigured` in
- * agent/types.ts. It exists so the Model Config panel has a number to show.
+ * These defaults drive both Model Config and runtime limits; engines must
+ * not substitute their own defaults for unknown models.
  *
  * No `vision`: that field is owned by the id chain (see `resolve`).
  */
@@ -59,11 +58,9 @@ class ModelCapabilitiesService {
   ): ResolvedModelCapability {
     const match = findModelPresetMatch(modelId)
     const catalog = sanitizeCatalogModelCapability(catalogCapability)
-    // Lowest to highest. A family `pattern` sits below the provider's live
-    // catalog: Codex slugs have no entry of their own and land on `gpt-5`,
-    // whose 200K window is not theirs. A deliberate per-model `exact` entry
-    // sits above it — those are curated, and many proxies report one blanket
-    // limit for every model they front.
+    // Lowest to highest: Halo's preset, then what the account's server
+    // reports, then the user's own settings. The server knows its deployment;
+    // a preset is only Halo's guess about the bare id.
     //
     // Spread rather than alias: the preset table hands back a shared object
     // and this result is handed to callers.
@@ -71,9 +68,8 @@ class ModelCapabilitiesService {
       displayName: modelId,
       provider: 'unknown',
       ...DEFAULT_CAPABILITY,
-      ...(match?.kind === 'pattern' ? match.capability : {}),
+      ...match?.capability,
       ...catalog,
-      ...(match?.kind === 'exact' ? match.capability : {}),
       // The id chain also reads allow/blocklist substring signals no preset
       // blob can express, and the router and the renderer input gate both
       // answer through it. A disagreement here strips images the UI calls fine.

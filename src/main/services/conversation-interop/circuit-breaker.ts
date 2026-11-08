@@ -55,11 +55,13 @@ export interface CircuitLimits {
 }
 
 export const DEFAULT_CIRCUIT_LIMITS: CircuitLimits = {
-  pairLimit: 20,
-  sourceLimit: 60,
+  // Last-resort stops for a runaway loop (e.g. a model bug), not pace control:
+  // ordinary back-and-forth is left to the models.
+  pairLimit: 999,
+  sourceLimit: 999,
   windowMs: 10 * 60 * 1000,
   cooldownMs: 5 * 60 * 1000,
-  maxForwardDepth: 6,
+  maxForwardDepth: 999,
   maxMessageChars: 32_000,
 }
 

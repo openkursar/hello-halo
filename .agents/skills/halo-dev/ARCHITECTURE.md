@@ -17,7 +17,8 @@ Transport (src/main/ipc, src/main/http, src/preload)
 
 Apps Layer (src/main/apps)
   - spec            : App YAML parse + validate
-  - manager         : install/config/status persistence + skill-sync
+  - manager         : install/config/status persistence + skill lifecycle
+  - skills          : scoped skill inventory, effective copies, file-oriented management and legacy migration
   - runtime         : activation/execution/activity/escalation
                       + im-channels/ (IM provider plugins)
                       + sources/ (file-watcher, schedule-bridge, webhook event sources)
@@ -29,7 +30,8 @@ Apps Layer (src/main/apps)
 Services Layer (src/main/services)
   - domain services: agent, ai-browser, ai-sources, space, conversation,
     artifact, analytics, remote, git, etc.
-  - app-bridge.ts   : DI seam so services reach Apps data without importing up
+  - skills         : bounded file discovery, canonical identities, per-file preferences and safe package operations
+  - app-bridge.ts   : DI seam so services reach Apps data and the effective skill catalog without importing up
   - memory-consolidation: background agent that reorganises an oversized memory
                     (digital human or space) into topics; space turns reach it
                     via the onAgentEvent turn-end signal, never from services/agent
@@ -642,7 +644,7 @@ thing the cap exists to prevent.
 
 ### Interface Layout
 
-- **Left sidebar**: Conversation list (collapsible)
+- **Left sidebar**: Conversation list (collapsible). Folded to its icon strip or open is the user's last dragged choice, kept per layout (with / without an open canvas; folded by default only with one) in `stores/conversation-list-prefs.store.ts` — an open canvas does not by itself mean a folded list
 - **Center**: Chat Stream (conversation flow)
 - **Right**: Content Canvas (content preview) + Artifact Rail (file list)
 
@@ -1010,11 +1012,14 @@ engine. `services/agent/cc` implements the stream-json adapter; the app bundles
 neither the upstream Claude Agent SDK nor the Claude Code executable. Halo SDK
 is a required dependency and the default when no user preference exists.
 
-Only a legacy explicit CC preference triggers one bounded discovery attempt.
-Engine initialization has a shared readiness promise; the window and essential
-settings become available before external checks, and AI entry points await the
-same selection. Missing or unusable CC falls back to Halo without overwriting
-the user's preference. CC-only delegated accounts retain their credentials and
+Startup never discovers CC. A recorded user runtime selection checks only its saved
+installation; old defaults and automatically selected paths do not prove intent and
+route to Halo without rewriting history. A currently selected `claude-cli` delegated
+account also proves intent because Halo records it only after delegated login;
+this never authorizes discovery or substitutes another installation. Engine initialization has a shared readiness
+promise; the window and essential settings become available before external checks,
+and AI entry points await the same selection. An explicitly selected unavailable CC
+fails without switching engines or overwriting the user's preference. CC-only delegated accounts retain their credentials and
 receive a recovery notice; the app never silently selects a different account.
 CC and Halo saved transcripts are reconciled through `agent/stored-session`.
 
@@ -1052,14 +1057,17 @@ Remote mode: renderer -> HTTP/WS -> main.
 A third consumer of the same routes: the agent itself, over a loopback-only
 listener (`src/main/http/self-api/`) reached with curl.
 
-- **Capability switch**: the `halo-api-ref` toolset ("Operate Halo"). One switch
-  drives all three halves — the `halo_api_ref` manual tool, the `HALO_API_*`
+- **Capability**: the `halo-api-ref` toolset ("Operate Halo"), a switch in
+  ordinary conversations (the **+** menu). One decision drives all three halves — the `halo_api_ref` manual tool, the `HALO_API_*`
   credentials (`selfApiAccess` in `sdk-config.ts`), and the usage guide appended
   to the prompt. Never wire one without the others: a session told to use a tool
   it lacks is the failure this design exists to prevent.
-- **Digital humans**: same capability as an app permission (`halo-api-ref`),
-  **default OFF** — unlike every other built-in capability. Never granted to IM
-  guests.
+- **Digital humans**: **always on, no switch** — it is how a digital human
+  perceives its own environment (its teams and their conversations, its
+  settings). Decided per caller, not per app: never for an IM guest, a request
+  from outside or a disposable team member. A digital human in a team also gets
+  a short list of its teams and the calls that read their conversations
+  (`apps/runtime/prompt/team-guidance.ts`) wherever it holds Operate Halo.
 - **What a session may call** is `resources/api-ref/scope.json`, generated from
   the `expose` field in `*.routes.meta.ts`. That allow-list is the only bound —
   space is not one. The listener once refused any request naming a space other

@@ -82,15 +82,14 @@ try {
 
   const team = await apiOk(node, 'POST', '/api/teams', { input: { name: 'Evidence relations team', goal: 'Do not run unsolicited work.', owningSpaceId: target.id, memberSourcing: 'manual', collabMode: 'structured', escalationRouting: 'user' } })
   await apiOk(node, 'POST', `/api/teams/${team.id}/members`, { appId, memberName: 'Evidence reviewer', role: 'Evidence reviewer' })
-  await apiOk(node, 'POST', `${base}/chat/send`, { spaceId: target.id, message: 'Use read_digital_human_context with section teams to retrieve your current team memberships. Report the team name and your role exactly. Do not use any other tool or ask for approval.' })
+  await apiOk(node, 'POST', `${base}/chat/send`, { spaceId: target.id, message: 'Which teams do you belong to? Report the team name and your role exactly, using your instructions. Do not ask for approval.' })
   const context = await pollUntil(async () => {
     const messages = await apiOk(node, 'GET', `${base}/chat/messages`)
     return messages.some(message => message.role === 'assistant' && message.content?.includes('Evidence relations team')) ? messages : null
   }, { timeoutMs: 180000, intervalMs: 1000 })
   assert(context, 'Real model did not answer using its current relationship')
-  assert(JSON.stringify(context).includes('read_digital_human_context'), 'Relationship tool was not called')
-  assert(JSON.stringify(context).includes(team.id), 'Structured team reference is absent')
-  passed('private chat queries real memberships through the read-only tool and persists a structured team reference')
+  assert(JSON.stringify(context).includes('Evidence reviewer'), 'The role it was given is absent from the answer')
+  passed('private chat answers its real memberships from the team list in its instructions')
 
   const unauthenticated = await fetch(`${node.baseUrl}/api/apps/pending-inbox`)
   assert.equal(unauthenticated.status, 401)

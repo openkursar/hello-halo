@@ -54,6 +54,9 @@ export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electro
 
 echo "[build:mac-signed] 架构=$ARCH  签名源=$HALO_MAC_SIGN_SRC  TeamID=$APPLE_TEAM_ID"
 
+echo "[build:mac-signed] 重建 Halo SDK (src/sdk/halo-sdk)..."
+node scripts/lib/halo-sdk-build.cjs
+
 # ── 准备目标架构的平台二进制 ──────────────────────────────────────────────────
 # afterPack 会校验 cloudflared / better-sqlite3 / codex 等原生二进制, 缺失即 throw
 # 中断打包。build:mac / release 都在打包前跑 prepare, 签名构建同样必须。只备目标

@@ -12,7 +12,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Loader2, Check, LogIn, Eye, Lock, Plus } from 'lucide-react'
-import type { InstalledApp } from '../../../shared/apps/app-types'
 import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
 import type { CapabilityPresetId } from '../../../shared/apps/capability-policy'
 import { DelegationPresetPicker } from '../capability/DelegationPresetPicker'
@@ -20,6 +19,7 @@ import { api } from '../../api'
 import { requestUpdateCheck } from '../../services/request-update-check'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTeamStore } from '../../stores/team.store'
+import { teamMemberCandidates } from '../../utils/people-model'
 import { useTranslation } from '../../i18n'
 
 interface TeamJoinDialogProps {
@@ -78,20 +78,7 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
   const parsed = useMemo(() => parseInviteLink(link), [link])
   const linkError = submitted && link.trim().length > 0 && !parsed
 
-  // Lead apps are an internal coordination role — never bring them as members.
-  const leadAppIds = useMemo(
-    () => new Set(teams.map(tm => tm.leadAppId).filter((id): id is string => !!id)),
-    [teams],
-  )
-
-  const bringable = useMemo<InstalledApp[]>(
-    () => apps.filter(a =>
-      a.spec.type === 'automation' &&
-      a.status !== 'uninstalled' &&
-      !leadAppIds.has(a.id),
-    ),
-    [apps, leadAppIds],
-  )
+  const bringable = useMemo(() => teamMemberCandidates(apps, teams), [apps, teams])
 
   const toggle = (appId: string) =>
     setSelectedAppIds(ids => ids.includes(appId) ? ids.filter(id => id !== appId) : [...ids, appId])

@@ -37,7 +37,7 @@ import { previewAppSpaceChange, changeAppDefaultSpace, retainAppEnvironments } f
 import { readSessionMessages } from './session-store'
 import { RunProcessClearedError } from './errors'
 import { buildAppCapabilityInventory } from './capability-inventory'
-import { buildPeopleDirectory } from './people-directory'
+import { buildPeopleDirectory, directoryExcludedIds } from './people-directory'
 import { getTeamStore } from '../team'
 import type { SchedulerService } from '../../platform/scheduler'
 import type { MemoryService } from '../../platform/memory'
@@ -71,6 +71,7 @@ import { onMcpAppsChange } from '../manager/service'
 import { createHaloAppsMcpServer, createSpaceTeamMcpServer, TEAM_TOOLSET_GUIDE } from '../conversation-mcp'
 import { TEAM_MCP_SERVER_NAME } from '../../../shared/apps/team-types'
 import { registerAppBridge } from '../../services/app-bridge'
+import { getSkillLibrary } from '../skills'
 import { registerToolset } from '../../services/agent/toolsets/registry'
 import { handleMcpAppsChange } from '../../services/agent/session-manager'
 import { handleMcpAppsChangeForStatus } from '../../services/agent/mcp-probe'
@@ -117,7 +118,6 @@ export {
 
 // Re-export concurrency for testing
 export { Semaphore } from './concurrency'
-export { createPersonContextTool } from './person-context-tool'
 
 // Re-export app chat functions
 export {
@@ -142,6 +142,7 @@ export {
   createNativeChatSession,
   forkNativeChatSession,
   deleteNativeChatSession,
+  onNativeChatDeleted,
   isNativeChatGone,
   renameChatSession,
 } from './app-chat'
@@ -273,6 +274,7 @@ export async function initAppRuntime(
     getAppManager,
     createHaloAppsMcpServer,
     onMcpAppsChange,
+    getEffectiveSkillCatalog: (spaceId, workDir) => getSkillLibrary().effectiveCatalog(spaceId, workDir),
     getImChannelStatuses: () => getActiveImChannelManager()?.getAllStatuses() ?? [],
   })
   onMcpAppsChange(handleMcpAppsChange)
@@ -287,7 +289,7 @@ export async function initAppRuntime(
   registerToolset({
     id: TEAM_MCP_SERVER_NAME,
     displayName: 'Team Collaboration',
-    summary: 'Assemble a team of AI members to work in parallel, coordinate them, and delegate to saved teams.',
+    summary: 'Spin up an agent team of AI teammates to work in parallel, coordinate them, and hand jobs to standing teams.',
     usageGuide: TEAM_TOOLSET_GUIDE,
     isAvailable: () => true,
     createServer: (scope) =>
@@ -539,6 +541,18 @@ export function getStudioSummary(language?: string) {
     .filter(member => member.ephemeral)
     .map(member => member.appId) ?? []
   return manager.getStudioSummary(language, ephemeral)
+}
+
+/**
+ * The tags on one list, with how many items carry each. Its own read: the
+ * counts span the whole list, whatever page, search or filter is showing.
+ */
+export function listAppTags(type: import('../../../shared/apps/app-tags').TaggableAppType) {
+  const manager = getAppManager()
+  if (!manager) throw new Error('App manager is not initialized')
+  // The directory's own exclusion, so the counts match the people it lists.
+  const excluded = type === 'automation' ? [...directoryExcludedIds(getTeamStore()?.listDirectoryMemberships() ?? [])] : []
+  return manager.listTagCounts(type, excluded)
 }
 
 export function listPeopleDirectory(query: import('../../../shared/apps/people-directory').PeopleDirectoryQuery = {}) {

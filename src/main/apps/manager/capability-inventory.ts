@@ -9,7 +9,7 @@ export function getCapabilityInventory(manager: AppManagerService, retained: Ret
   const resources = apps.filter(app => app.spec.type === 'mcp' || app.spec.type === 'skill')
   const scopedResources = new Set(resources.filter(resource => resource.spaceId !== null &&
     (resource.spec.type !== 'skill' || resource.status === 'active')).map(resource =>
-    JSON.stringify([resource.spaceId, resource.spec.type, resource.spec.type === 'skill' ? toSkillDirName(resource.specId) : resource.specId])))
+    JSON.stringify([resource.spaceId, resource.spec.type, resource.spec.type === 'skill' ? toSkillDirName(resource.spec.name) : resource.specId])))
   const retainedByInstance = new Map<string, Set<string>>()
   const peopleById = new Map(people.map(person => [person.id, person]))
   for (const work of retained) {
@@ -28,7 +28,7 @@ export function getCapabilityInventory(manager: AppManagerService, retained: Ret
       const consumers: CapabilityConsumer[] = []
       for (const person of people) {
         if (resource.spaceId !== null && resource.spaceId !== person.spaceId) continue
-        const key = resource.spec.type === 'skill' ? toSkillDirName(resource.specId) : resource.specId
+        const key = resource.spec.type === 'skill' ? toSkillDirName(resource.spec.name) : resource.specId
         const overridden = resource.spaceId === null && person.spaceId !== null &&
           scopedResources.has(JSON.stringify([person.spaceId, resource.spec.type, key]))
         if (overridden) continue

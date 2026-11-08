@@ -24,10 +24,11 @@ import { parse as parseYaml } from 'yaml'
 import { allowsSkill, canonicalBuiltinTool } from '../../../shared/apps/capability-policy'
 import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
 import type { AvailableSkill } from '../../../shared/apps/app-types'
+import { toSkillDirName } from '../../../shared/skill-naming'
 
 /** A skill the engine can load for this turn. */
 export interface TurnSkill {
-  /** Its folder name: what the engine registers it as, and what a policy lists */
+  /** Its registered command name; older callers may still supply a folder name. */
   dirName: string
   /** Its frontmatter name, which the engine answers to as well */
   name: string
@@ -79,8 +80,20 @@ export function turnSkillAccess(
     return content !== undefined && allowed.has(`${tool}(${content})`)
   }
 
+  const legacyNames = new Map<string, Set<string>>()
+  if (policy?.allowedSkills) {
+    for (const skill of available) {
+      const alias = toSkillDirName(skill.dirName)
+      const names = legacyNames.get(alias) ?? new Set<string>()
+      names.add(skill.dirName)
+      legacyNames.set(alias, names)
+    }
+  }
   const skills = available.map((skill): TurnSkill => {
+    const exact = policy?.allowedSkills?.includes(skill.dirName)
+    const unambiguous = legacyNames.get(toSkillDirName(skill.dirName))?.size === 1
     const granted = allowsSkill(policy, skill.dirName, mode)
+      && (policy?.allowedSkills === undefined || exact || unambiguous)
     return {
       dirName: skill.dirName,
       name: skill.name,

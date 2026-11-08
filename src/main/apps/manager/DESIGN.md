@@ -213,32 +213,44 @@ for runtime to record execution results. This is cleaner than overloading `updat
 
 ### 2.11a Install Conflict — Skill vs Automation/MCP
 
-**Decision**: `install()` overwrites an existing **active** skill of the same
-`(specId, spaceId)` in place, but still rejects same-name `automation` /
-`mcp` installs with `AppAlreadyInstalledError`.
+**Decision**: `install()` reuses a skill only when its provenance, command name
+and complete current package bytes match. Different content from that same source
+at the same name/scope is an `AppAlreadyInstalledError`, never an implicit upgrade.
+Every origin shares one skill folder per scope, so a different source (or the
+user's own skill) at the same command name in the same scope is likewise refused
+and never overwritten; an identical package already standing there that no live
+installation owns is adopted. Reuse preserves status, configuration and version. Derived
+localized command-name collisions between different authored names retain their
+numeric suffix behavior. Automation/MCP duplicate installations remain conflicts.
 
-**Rationale**: Skills are content-only artifacts — a prompt plus optional
-files on disk — with no runtime state. Treating a re-install as an
-overwrite matches how skill authors actually iterate: drop the same name
-again with new content and expect the disk + DB to reflect the latest
-version. Forcing an explicit uninstall first creates friction with zero
-safety benefit.
+`spec.name` is the command name; `specId` is the installation key under the existing
+scope uniqueness constraint. New managed keys use `skill:<source-sha256>:<name>`.
+The source hash covers classified origin, slug, registry ID and repository, never
+content or version. Bundled dependencies without a slug share an origin, so unequal
+same-name packages conflict rather than being merged. The built-in skill slug
+namespace remains a separate origin. Personal records use the name unless a legacy
+managed record occupies it, in which case the personal source gets its own namespace.
+Old name-keyed records remain readable and reusable without rewriting their keys;
+matching scans only lightweight records in the requested scope. Edits and moves
+preserve keys unless the command is explicitly renamed or a legacy bare key would
+collide with another source in the destination. Either transition keeps or assigns
+the source namespace. Same-source/name target records, including tombstones and
+legacy keys, block moves. The skill library's stricter name-wide move preview remains
+unchanged.
 
-Automation apps (and MCP apps) carry state the user does not want to
-lose silently:
+Explicit skill replacement is a separate product operation in `apps/skills`:
+validate a selected file and revision, replace the complete package, then commit
+its metadata with `updateSkillRecord`. Legacy `updateSpec` still supports explicit
+edits/replacement. Skill folders are named by command name, never by `specId` or
+installation ID. Effective command priority belongs to `apps/skills`, not to the
+persistence key.
 
-- `userConfig` values entered through the UI
-- Runtime memory and run history
-- Per-subscription `userOverrides` (schedule, frequency)
-- Active sessions, pending escalations
-
-Overwriting those silently would discard work the user did, so the
-conflict gate still throws and the caller (UI / IPC / MCP tool) must
-surface a clear message asking the user to uninstall or rename first.
-
-**Uninstalled records** continue to follow the existing "soft-deleted →
-reinstall on next install" path for both skills and apps — that branch
-predates this decision and is unchanged.
+An explicit reinstall may recreate a deleted managed package from its stored
+content, or install an incoming package into an absent destination. A personal
+record never recreates missing files from SQLite. Registry dependency installation
+checks inactive/deleted choices before calling install, so installing another
+person cannot silently revive them. Unmigrated active records must first pass
+through scope-bounded migration.
 
 An explicit import of an MCP connection is different from another `install()`.
 `importMcpConnection(spaceId, spec, userConfig)` takes a normalized MCP spec and
@@ -321,6 +333,58 @@ controlled disable) with zero changes to those callers.
 (N = number of bundled apps, typically ≤10). For unchanged builds this is
 ~10–20ms total, all of which runs in the idle queue and never blocks the UI.
 
+### Skill file authority and lifecycle
+
+`skill-lifecycle.ts` owns manager skill file mutations through the public
+`services/skills` API. It writes complete bounded packages before publishing an
+installation record; database failures roll back newly created files or restore the
+previous package. Editing instructions alone uses the content-only writer and
+leaves supporting files untouched. Scope changes move current files with revision
+checks and restore their old location if the record write fails.
+
+Every skill lives in the user's `.agents/skills` of its scope (home for global, the
+workspace folder for a workspace); Halo keeps no private skill folder. Personal skills
+(`manual`, or no slug/source) record metadata only: no `skill_content`, `skill_files`
+or `skill_assets`. `getApp` reads current personal files for legacy detail/publishing;
+missing/unreadable files return metadata with a warning, never stale instructions.
+Store, digital-human dependency and built-in packages also retain their contents in
+the record, so an explicit reinstall can recreate a deleted package. The installation
+state carries a `digest` of the files Halo last wrote; an author upgrade treats files
+that no longer match it as the user's own edit and keeps them. A skill recorded under
+the retired private roots (`<Halo data>/skills`, `<space>/.halo/skills`) is relocated
+lazily by `apps/skills` migration when its scope is read.
+
+`userOverrides.skill` is versioned internal installation metadata. Public
+`updateOverrides` rejects the field, including null; external clients cannot inject
+file paths. `updateSkillRecord(appId, { spec?, skill?, spaceId?, status? })` is a
+record-only atomic commit for `apps/skills` after its validated file operation.
+`listSkillRecords(spaceId)` returns exactly one scope, including tombstones and
+legacy recovery records, with package bodies removed in SQL before deserialization.
+Neither operation scans directories or reads package bodies.
+
+Pause/resume changes availability without deleting or rewriting files. Skill
+uninstall/delete sends only its recorded file/package/link to OS trash, once per
+in-flight deletion, then retains a deleted tombstone; trash failure never falls
+back to permanent deletion. Legacy records without file ownership must use recovery
+before deletion, and no skill record is automatically pruned. Deleting a space
+keeps every skill file, since they sit in the user's folders; only the records go.
+Removing a digital human never cascades into its skill dependencies; recorded
+owner labels may remain as provenance.
+
+Customized managed packages keep their entire current version during
+`upgradeSpec`/built-in refresh, with `toVersion` unchanged. Untouched packages take
+the complete author package, never a mixture, without changing paused status.
+`replaceSkillFromAuthor(appId, authorSpec)` is the explicit whole-package
+replacement for a customized managed skill: it validates the same source, retains
+paused status, refuses deleted/uninstalled or personal skills, and commits files
+and the retained package together while clearing customization. User edits still
+use `updateSpec`; skill baselines remain their retained packages, not the
+automation-only field-merge original.
+Built-in skill seeding honors deletion/customization/unmigrated records and retains
+packages no longer shipped rather than erasing their tombstones. A shipped skill
+whose name a user skill already holds is left to the user. Manager startup never
+touches live skill files; migration belongs to `apps/skills` and is requested-scope only.
+
 ### 2.12 Knowledge Base Seeding: Once Per App, Ever
 
 **Decision**: An automation app's knowledge-base bindings (space-bound KBs +
@@ -362,7 +426,8 @@ reinstalled app without its knowledge bases.
 
 **Decision**: an author's new version — a store upgrade (automatic, manual, or
 "check for upgrades") or a bundled one — is applied with `upgradeSpec`, never
-`updateSpec`. For a digital human it is merged against the **author's
+`updateSpec`. The explicit managed-skill whole-package replacement uses
+`replaceSkillFromAuthor` instead. For a digital human it is merged against the **author's
 original**: the spec as the author last shipped it, kept in `author_spec_json`,
 written at install and replaced at every upgrade (`spec-upgrade.ts`).
 
@@ -404,8 +469,8 @@ once silently outranked the schedule the settings showed — migration 7).
 
 **Who has one**: digital humans with an upgrade source — `store.slug` (store)
 or `install_source: 'builtin'` (bundle). Locally created ones are never
-upgraded; MCP servers and skills are upgraded as before (`upgradeSpec`
-delegates to `updateSpec`). It is not part of `InstalledApp`: `listApps()`
+upgraded; MCP servers use `updateSpec` on upgrade. Skills use whole-package
+replacement unless customization/deletion requires keeping the current version. It is not part of `InstalledApp`: `listApps()`
 parses every row, so the row reads name their columns and leave it out, and
 only an upgrade reads it (`getAuthorSpec`).
 
@@ -495,7 +560,8 @@ src/main/apps/manager/
   service.ts          -- AppManagerService implementation (state machine, builtin guard)
   spec-upgrade.ts     -- Merging an author's new version over the user's edits (pure; see 2.13)
   errors.ts           -- Custom error types (incl. BuiltinAppProtectedError)
-  skill-sync.ts       -- Filesystem sync for skill apps (SDK-discoverable .md files)
+  skill-lifecycle.ts  -- File-authoritative skill installation, edits, moves and trash
+  skill-sync.ts       -- Conservative legacy compatibility; no startup relocation
   seed.ts             -- One-shot "Halo 助手" placeholder when no apps exist
   builtin-loader.ts   -- Built-in (bundled) digital human loader; runs as Tier-3 idle task
   builtin-skills.ts   -- Repo-authored global skills seeder; Tier-3 idle task
@@ -524,6 +590,7 @@ interface AppManagerService {
   recordAuthorSpec(appId: string, authorSpec: AppSpec): boolean                // original for an earlier install
   listStoreInstallsWithoutAuthorSpec(): string[]
   onAppSpecUpgraded(handler: SpecUpgradedHandler): Unsubscribe                 // after every upgradeSpec
+  onAppRenamed(handler: AppRenamedHandler): Unsubscribe                       // spec name changed (updateSpec / upgradeSpec)
   updateStatus(appId: string, status: AppStatus, extra?: { errorMessage?: string; pendingEscalationId?: string }): void
   updateLastRun(appId: string, outcome: RunOutcome, errorMessage?: string): void
   getApp(appId: string): InstalledApp | null

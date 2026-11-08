@@ -1,0 +1,100 @@
+version: 1
+id: capabilities.skill-library
+module: capabilities
+title: Understand available skills
+story: I can find my skills and understand the exact copy available in my selected workspace without scanning every project.
+basis: documented
+references:
+  - tests/acceptance/skills-requirements.md
+promises:
+  sources: My skills appear first; digital-human and built-in origins are separate collapsed groups, and searching includes all current-scope sources without duplicate cards or invented ownership.
+  presentation: Familiar cards retain scope pills, quick enable controls, More actions and version/update information. Details prioritize author/version, use and instruction content; alternate versions are collapsed and scope changes use a popover. Everyday lists do not display engine compatibility tables, technical engine/path warnings, raw filesystem paths or copy counts.
+  actions: Card and detail actions share the same behavior. Ordinary enable/disable needs no confirmation; disabling a workspace copy that reveals a global version explains that fallback first. Delete has one copy-specific Trash confirmation and Save retains its confirmation. Dismissing a menu changes nothing; explicitly choosing a new conversation creates it without a redundant confirmation or automatic send.
+  scope: Selecting any workspace inspects only that workspace and global skills; uninspected or inaccessible locations are not presented as empty.
+  precedence: Command identity determines grouping; workspace precedes global, then user files precede maintained content. Equal-rank distinct copies conflict rather than selecting by scan order; canonical aliases count once.
+  transport: Supported desktop and remote management share host data and authorization, while host-only operations and host recycle-bin impact are explicit.
+  cost: Skill management adds no always-on watcher, polling, unbounded cache, all-space scan or eager resource-body loading.
+scenarios:
+  - id: capabilities.skill-library.sources
+    title: Find every current-scope source through grouped cards and search
+    verifies: [sources, scope, presentation, actions]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - Own files, personally installed store skills, built-ins and shared dependencies have distinct and overlapping command identities.
+    steps:
+      - Open skills in workspace A; inspect default groups, card scope pills, quick toggle and More actions, then search by name and description including collapsed groups.
+      - Open a skill, read its instructions and author/version/update information, expand Other versions and open the scope popover. Inspect custom copy, new conversation and refresh under More.
+      - Dismiss More by its toggle and Escape without choosing an action; then explicitly choose a new conversation without sending the prefilled command.
+      - In a digital human's settings, expand the skill's named row to read its inline preview, then choose Open skill detail.
+    expected:
+      - My skills leads; each identity appears once. Own/store copies take grouping precedence; disabled/error/conflict/update are markers rather than separate state groups. True origins and alternate versions remain inspectable without cluttering cards.
+      - Lists retain familiar quick actions and scope/version information, with no engine table, technical engine/path warnings, raw paths or copy counts. A partial-load failure offers a concise actionable message and healthy skills remain usable.
+      - Detail keeps use, description and instructions prominent; Other versions is initially collapsed, workspace changes use a popover rather than an inline select, and the digital-human row retains its inline preview before detail.
+      - Closing More creates no conversation or model request. Explicit new-conversation selection creates one intended conversation directly, prefills without sending and does not interrupt existing work.
+      - Selected workspace, applicable scope and new-session availability are distinct from already loaded conversation context.
+  - id: capabilities.skill-library.workspace-selection
+    title: Select an unregistered or inaccessible workspace without scanning others
+    verifies: [scope, cost]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    steps:
+      - Select B with no registered installs, then an inaccessible workspace, then A; inspect filesystem reads and visible scope.
+    expected:
+      - Every workspace is selectable; only selected/global locations are checked. Failure is local and does not erase healthy results.
+      - Any aggregate view exposes incomplete inspection and explicitly loads additional scopes; no exact historical consumer counts are fabricated.
+  - id: capabilities.skill-library.precedence
+    title: Resolve copies deterministically and disclose fallback before mutation
+    verifies: [precedence, sources, actions]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    variants:
+      collision: [workspace-global, own-maintained, equal-rank, canonical-alias, display-name-only]
+      action: [disable, delete, reenable]
+    steps:
+      - Inspect copies and selected content; act on an explicit copy and create a new conversation to inspect the actual effective catalog and invocation.
+    expected:
+      - Priority follows scope then ownership; equal-rank conflicts block only the affected command. Distinct command names with the same display name remain distinct.
+      - Actions never silently mutate every copy; fallback to global is disclosed beforehand, reenable restores priority, and no name-wide block exists. Ordinary toggles have no confirmation; the fallback confirmation can be cancelled without changing either copy.
+      - Card and detail actions use the same copy-specific behavior. Delete asks once and explains Trash and supporting-file impact without requiring a raw disk path; Save retains its shared-change confirmation.
+  - id: capabilities.skill-library.transports
+    title: Manage host skills from desktop and narrow remote screens
+    verifies: [transport, sources, presentation, actions]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    variants:
+      client: [desktop, remote]
+      width: ['320', '375']
+      theme: [light, dark]
+    steps:
+      - Query, edit, change scope and toggle a controlled skill; upload client bytes, inspect host-only actions and delete confirmation, then cancel using the keyboard.
+    expected:
+      - Both clients reflect the same host files and authorization; upload never treats client paths as host paths and file-access reach is unchanged.
+      - Host folder/editor actions explain remote limitations; trash names the host computer. Names, scope pills, quick actions, detail content, errors and empty states remain readable and reachable without raw paths or technical warnings in the ordinary list. Any location needed for a file operation remains accessible in that operation's context.
+  - id: capabilities.skill-library.cost
+    title: Measure bounded discovery and cleanup with many unrelated workspaces
+    verifies: [cost, scope]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: integration
+    mode: none
+    automation: planned
+    steps:
+      - Record scan scope, file reads, metadata parsing and resources on startup and repeated open/close with increasing unrelated workspace counts.
+      - Change a skill body without changing parent directory timestamp, then refresh and request one supporting resource.
+    expected:
+      - Default scans stay within current/global roots; unchanged content is not repeatedly parsed, changed body is detected and unrelated supporting bodies are not eagerly read.
+      - No lingering watchers, polling or unbounded caches accumulate and new management work does not block first screen.

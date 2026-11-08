@@ -126,8 +126,10 @@ export function mergeTeamSessionHistory(shown: readonly Message[], batch: readon
 }
 
 /** Chat, reports and the inspector share one incremental transcript source. */
-export function loadTeamSessionHistory(...args: Parameters<typeof api.teamChatMessages>) {
+export function loadTeamSessionHistory(...args: Parameters<typeof api.teamChatMessages>): Promise<HistoryResult> {
   const [appId, spaceId, teamId, epochId] = args
+  // A conversation not created yet has no history, and no other one stands in for it.
+  if (!epochId) return Promise.resolve({ success: true, data: [] })
   const key = keyFor(appId, spaceId, teamId, epochId)
   const source = sourceFor(key)
   if (source.pending) return source.pending

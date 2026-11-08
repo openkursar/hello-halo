@@ -1,8 +1,15 @@
 import type { AppManagerService } from '../manager'
 import type { ActivityStore } from './store'
 import type { AppRuntimeService } from './types'
+import { getActiveTeamRuntime } from './team'
 import { BLOCKED_STATUSES, automaticEnabled, blockedReason, deriveRuntimeStatus } from './app-state'
 import type { DirectoryMembership, PeopleDirectoryPage, PeopleDirectoryQuery } from '../../../shared/apps/people-directory'
+
+/** People the directory leaves out: members of temporary collaborations only. */
+export function directoryExcludedIds(memberships: DirectoryMembership[]): Set<string> {
+  const retained = new Set(memberships.filter(member => !member.ephemeral).map(member => member.appId))
+  return new Set(memberships.filter(member => member.ephemeral && !retained.has(member.appId)).map(member => member.appId))
+}
 
 export function buildPeopleDirectory(
   manager: AppManagerService,
@@ -16,8 +23,7 @@ export function buildPeopleDirectory(
   // directory is the only place its model and capabilities can be set, so
   // hiding it left a digital human the person owns with no way to configure it.
   const persistent = memberships.filter(member => !member.ephemeral)
-  const retained = new Set(persistent.map(member => member.appId))
-  const excluded = new Set(memberships.filter(member => member.ephemeral && !retained.has(member.appId)).map(member => member.appId))
+  const excluded = directoryExcludedIds(memberships)
   const counts = store.getDirectoryDecisionCounts()
   // A stop needs the owner exactly as much as an unanswered question does, so
   // it counts towards the badge and survives the attention filter.
@@ -37,7 +43,7 @@ export function buildPeopleDirectory(
   let removedIncludeIds: string[] | undefined
   if (query.teamId) removedIncludeIds = memberships.filter(member => member.teamId === query.teamId).map(member => member.appId)
   const removedTotal = manager.listPeopleDirectory({
-    q: query.q, language: query.language, spaceId: query.spaceId, includeIds: removedIncludeIds,
+    q: query.q, language: query.language, spaceId: query.spaceId, tag: query.tag, includeIds: removedIncludeIds,
     excludeIds: [...excluded], searchTeamMemberIds, removed: true, limit: 1,
   }).total
   const live = runtime.getDirectoryRuntimeSnapshot()
@@ -72,6 +78,7 @@ export function buildPeopleDirectory(
         lastRunAtMs: latest?.startedAt, lastDurationMs: latest?.durationMs ?? undefined,
         lastStatus: latest && ['ok', 'error', 'skipped'].includes(latest.status) ? latest.status as 'ok' | 'error' | 'skipped' : undefined,
         ...(latest?.status === 'running' ? { runningAtMs: latest.startedAt, runningRunId: latest.runId, runningSessionKey: latest.sessionKey } : {}),
+        ...(getActiveTeamRuntime()?.isMemberWorking(person.id) ? { teamWorking: true } : {}),
       } }
     }),
   }

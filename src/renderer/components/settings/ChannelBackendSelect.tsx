@@ -10,15 +10,18 @@ import { useRef, useState } from 'react'
 import { Bot } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
+import { pickableDigitalHumans } from '../../utils/people-model'
+import type { AppStatus } from '../../../shared/apps/app-types'
 import type { TeamListItem } from '../../../shared/apps/team-types'
 
 /** A team as this picker needs it: its name and the members it can offer. */
-export type ChannelBackendTeam = Pick<TeamListItem, 'id' | 'name' | 'localMembers'>
+export type ChannelBackendTeam = Pick<TeamListItem, 'id' | 'name' | 'localMembers' | 'ephemeral'>
 
 /** A digital human as this picker needs it. */
 export interface ChannelBackendApp {
   id: string
-  spec: { name: string }
+  status: AppStatus
+  spec: { name: string; type: string }
 }
 
 /** The instance fields this control owns. */
@@ -29,8 +32,9 @@ export interface ChannelBackendValue {
 
 interface CommonProps {
   value: ChannelBackendValue
+  /** Every digital human, so a binding is named even when its target is no longer offered. */
   automationApps: ChannelBackendApp[]
-  /** Teams with at least one member on this machine are offerable. */
+  /** Saved teams with at least one member on this machine are offerable. */
   teams: ChannelBackendTeam[]
 }
 
@@ -56,9 +60,12 @@ function decodeTarget(raw: string): ChannelBackendValue {
   return { appId: '', teamId: undefined }
 }
 
-/** Teams that can actually back a channel from this machine. */
+/**
+ * Teams that can back a channel from this machine. A temporary collaboration is
+ * left out: it exists for one piece of work the person never set up as a team.
+ */
 function offerableTeams(teams: ChannelBackendTeam[]): ChannelBackendTeam[] {
-  return teams.filter((tm) => tm.localMembers.length > 0)
+  return teams.filter((tm) => !tm.ephemeral && tm.localMembers.length > 0)
 }
 
 /**
@@ -130,15 +137,19 @@ export function ChannelBackendSelect({
     }
   }
 
+  const offeredApps = pickableDigitalHumans(automationApps, teams)
   const selectable = offerableTeams(teams)
   const selected = encodeTarget(value)
-  const boundTeam = value.teamId ? selectable.find((tm) => tm.id === value.teamId) : undefined
+  const boundTeam = value.teamId ? teams.find((tm) => tm.id === value.teamId) : undefined
   const boundMember = boundTeam?.localMembers.find((m) => m.appId === value.appId)
-  // A binding can outlive its target (member removed, app uninstalled). Carry it
-  // as a disabled option so the control shows what is bound instead of falling
-  // back to the placeholder, which reads as "nothing is bound".
-  const danglingBinding = selected !== '' && (
-    value.teamId ? !boundMember : !automationApps.some((a) => a.id === value.appId)
+  // A binding can outlive its target (member removed, app uninstalled) or point
+  // at one no longer offered (a temporary collaboration's member). Carry it as a
+  // disabled option under its own name so the control shows what is bound
+  // instead of falling back to the placeholder, which reads as "nothing is bound".
+  const bindingNotOffered = selected !== '' && (
+    value.teamId
+      ? !boundMember || !selectable.some((tm) => tm.id === value.teamId)
+      : !offeredApps.some((a) => a.id === value.appId)
   )
 
   return (
@@ -155,14 +166,14 @@ export function ChannelBackendSelect({
           className="w-full bg-secondary border border-transparent rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-primary appearance-none cursor-pointer"
         >
           <option value="">{t('Select a digital human or team member')}</option>
-          {danglingBinding && (
+          {bindingNotOffered && (
             <option value={selected} disabled>
-              {t('Binding unavailable')}
+              {backendName({ value, automationApps, teams }, t)}
             </option>
           )}
-          {automationApps.length > 0 && (
+          {offeredApps.length > 0 && (
             <optgroup label={t('Digital Humans')}>
-              {automationApps.map((app) => (
+              {offeredApps.map((app) => (
                 <option key={app.id} value={`app:${app.id}`}>
                   {app.spec.name}
                 </option>

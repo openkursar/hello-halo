@@ -11,6 +11,7 @@ import { ArrowLeft, ChevronDown, ChevronUp, Loader2, Check, Download, AlertCircl
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsStore } from '../../stores/apps.store'
+import { useSpaceNameResolver } from '../../stores/space.store'
 import { useStoreCategories, categoryDisplay } from '../../hooks/useStoreCategories'
 import { getEntryVersions, getEntryInstalls } from '../../../shared/store/store-meta'
 import { useStoreEntryInstallState } from '../../hooks/useStoreEntryInstallState'
@@ -96,7 +97,14 @@ export function StoreDetail() {
   const registryId = storeSelectedDetail?.registryId
   const isBundlePackage = entry?.format === 'bundle'
 
-  const { installedApp, updateInfo } = useStoreEntryInstallState(entry, registryId)
+  const { installedApp, installedApps, installableSpaceIds, updateInfo } = useStoreEntryInstallState(entry, registryId)
+  const spaceName = useSpaceNameResolver()
+  const placeName = (spaceId: string | null) => spaceId === null ? t('Global (all workspaces)') : spaceName(spaceId)
+  const installedWhere = installedApps.map(app => placeName(app.spaceId)).join(', ')
+  // Copies are updated one per click; naming the copy keeps a second Update from reading as a retry.
+  const updatingApp = updateInfo && installedApps.length > 1
+    ? installedApps.find(app => app.id === updateInfo.appId)
+    : undefined
 
   const { start: startUpdate, busy: updating, dialogs: updateDialogs } = useStoreUpdateFlow(
     entry,
@@ -294,7 +302,7 @@ export function StoreDetail() {
 
               {/* Install / Installed / Update button — right-aligned, pinned to the
                   bottom of the title/meta column so it sits level with the meta row */}
-              <div className="flex-shrink-0 self-end flex items-center gap-3">
+              <div className="flex-shrink-0 self-end flex flex-wrap justify-end items-center gap-3">
               {!isBundlePackage ? (
                 <button
                   disabled
@@ -323,7 +331,9 @@ export function StoreDetail() {
                       className="flex items-center gap-1.5 px-4 py-2 text-sm bg-halo-success text-white rounded-lg hover:bg-halo-success/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {updating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                      {t('Update to')} v{updateInfo.latestVersion}
+                      {updatingApp
+                        ? t('Update in {{place}} to v{{version}}', { place: placeName(updatingApp.spaceId), version: updateInfo.latestVersion })
+                        : <>{t('Update to')} v{updateInfo.latestVersion}</>}
                     </button>
                   ) : installedApp ? (
                     <button
@@ -352,6 +362,17 @@ export function StoreDetail() {
                       {installVerb(t, entry.type)}
                     </button>
                   )}
+                  {installedApp && entry.type !== 'mcp' && installableSpaceIds.length > 0 && (
+                    <button
+                      onClick={() => setShowInstallDialog(true)}
+                      disabled={!online}
+                      title={online ? undefined : offlineHint}
+                      className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium border border-border-soft bg-background text-foreground rounded-lg hover:border-muted-foreground/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Download className="w-4 h-4" />
+                      {t('Add to another workspace')}
+                    </button>
+                  )}
                 </>
               )}
               </div>
@@ -362,6 +383,12 @@ export function StoreDetail() {
           <div className="max-w-[880px] mx-auto px-4 sm:px-6 pt-[22px] pb-8">
             <div className="flex flex-col sm:flex-row gap-6 sm:gap-7">
             <div className="flex-1 min-w-0 space-y-6">
+          {installedWhere && (
+            <p className="text-xs text-muted-foreground">
+              {t('Installed in {{places}}', { places: installedWhere })}
+            </p>
+          )}
+
           {/* Description */}
           <div className="space-y-2">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -589,7 +616,8 @@ export function StoreDetail() {
           detail={storeSelectedDetail}
           onClose={() => setShowInstallDialog(false)}
           onInstalled={handleInstalled}
-          showGlobalOption={entry?.type === 'mcp' || entry?.type === 'skill'}
+          showGlobalOption={!installedApp && (entry?.type === 'mcp' || entry?.type === 'skill')}
+          availableSpaceIds={installedApp ? installableSpaceIds : undefined}
         />
       )}
 

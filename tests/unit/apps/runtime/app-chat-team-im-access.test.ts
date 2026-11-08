@@ -212,10 +212,6 @@ vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({
 vi.mock('../../../../src/main/apps/runtime/reminders/tool', () => ({
   createRemindersMcpServer: () => ({ _isMcpServer: true, name: 'halo-reminders' }),
 }))
-vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
-  createPersonContextMcpServer: () => ({ _isMcpServer: true, name: 'halo-person-context' }),
-  personContextPrompt: () => 'person-context',
-}))
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
   createReportToolServer: () => ({ _isMcpServer: true, name: 'halo-report' }),
 }))
@@ -645,6 +641,23 @@ describe('a member reports its own ending with the origin it ran under', () => {
     await sendAppChatMessage(imTurn(chat))
 
     expect(noteMemberTurnEnded.mock.calls.at(-1)![0]).not.toHaveProperty('origin')
+  })
+
+  it('a turn whose request failed after it wrote something ends as a failure, with the reason', async () => {
+    const chat = teamChat()
+    setImPermissionContext(chat.conversationId, listedOwner)
+    const reason = 'Anthropic API error (403): OAuth authentication is currently not allowed for this organization.'
+    // The sink answers the round with what was written and the failure as its ending.
+    sink.beginRound.mockImplementationOnce((...args: unknown[]) => {
+      const hooks = args[0] as { onReply: (content: string, ending: { kind: 'failed'; error: string }) => void }
+      return {
+        done: Promise.resolve().then(() => hooks.onReply('Half of the answer', { kind: 'failed', error: reason })),
+        cancel: vi.fn(), noteAskedUser: vi.fn(), onProgress: undefined, onMessageAccepted: undefined, onReply: undefined,
+      }
+    })
+    await sendAppChatMessage(imTurn(chat))
+
+    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ fate: { kind: 'error', message: reason } }))
   })
 })
 

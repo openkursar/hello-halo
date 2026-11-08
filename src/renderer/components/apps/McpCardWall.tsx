@@ -23,6 +23,9 @@ import { matchesInstallSource, type InstallSourceFilter } from '../../utils/inst
 import { deriveMcpHealth } from '../../utils/mcpStatus'
 import { api } from '../../api'
 import { McpCard } from './McpCard'
+import { countTags, hasTag, tagsMatchSearch } from '../../../shared/apps/app-tags'
+import { TagFilterRow } from '../tags/TagFilterRow'
+import { useTagActions } from '../tags/useTagActions'
 
 interface McpCardWallProps {
   spaceMap: Record<string, string>
@@ -47,6 +50,9 @@ export function McpCardWall({ spaceMap, onBrowseStore, onManualAdd }: McpCardWal
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [scopeFilter, setScopeFilter] = useState('all')
   const [sourceFilter, setSourceFilter] = useState<InstallSourceFilter>('all')
+  const [tagFilter, setTagFilter] = useState('')
+  const loadApps = useAppsStore(s => s.loadApps)
+  const tagActions = useTagActions('mcp', loadApps)
   const inventory = useCapabilityInventory()
   // Tracks which collapsible groups the user opened, rather than which they
   // closed. Seeded with 'uninstalled' so that one group starts expanded —
@@ -54,6 +60,10 @@ export function McpCardWall({ spaceMap, onBrowseStore, onManualAdd }: McpCardWal
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['uninstalled']))
 
   const mcpApps = useMemo(() => apps.filter(a => a.spec.type === 'mcp'), [apps])
+  const tagCounts = useMemo(
+    () => countTags(mcpApps.filter(a => a.status !== 'uninstalled').map(a => a.userOverrides.tags)),
+    [mcpApps],
+  )
 
   // Cold-start probe: an MCP server that has never been probed this session
   // (no sdkEntry) reads as "unprobed" until something triggers a probe.
@@ -93,13 +103,15 @@ export function McpCardWall({ spaceMap, onBrowseStore, onManualAdd }: McpCardWal
       if (scopeFilter === 'global' && app.spaceId !== null) return false
       if (scopeFilter !== 'all' && scopeFilter !== 'global' && app.spaceId !== scopeFilter) return false
       if (!matchesInstallSource(app, sourceFilter)) return false
+      if (!hasTag(app.userOverrides.tags, tagFilter)) return false
       if (!q) return true
       const { name, description } = resolveSpecI18n(app.spec, getCurrentLanguage())
       if (name.toLowerCase().includes(q) || (description ?? '').toLowerCase().includes(q)) return true
+      if (app.userOverrides.tags?.length && tagsMatchSearch(app.userOverrides.tags, q)) return true
       const sdkEntry = mcpStatus.find(s => s.name === app.specId)
       return sdkEntry?.tools?.some(tool => tool.toLowerCase().includes(q)) ?? false
     })
-  }, [mcpApps, debouncedSearch, scopeFilter, sourceFilter, mcpStatus])
+  }, [mcpApps, debouncedSearch, scopeFilter, sourceFilter, tagFilter, mcpStatus])
 
   /** Digital humans each server is declared by, from the usage inventory. */
   const usageByAppId = useMemo(() => {
@@ -171,7 +183,7 @@ export function McpCardWall({ spaceMap, onBrowseStore, onManualAdd }: McpCardWal
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="flex-shrink-0 flex flex-wrap items-center gap-2 py-2.5 px-6 sm:px-10">
-        <div className="relative flex-1 min-w-0">
+        <div className="relative w-full min-w-0 sm:w-auto sm:flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
           <input
             type="text"
@@ -215,10 +227,14 @@ export function McpCardWall({ spaceMap, onBrowseStore, onManualAdd }: McpCardWal
       </div>
 
       <div className="flex-1 overflow-y-auto py-3">
+        <div className="px-6 sm:px-10">
+          <TagFilterRow tags={tagCounts} value={tagFilter} onChange={setTagFilter} onRename={tagActions.rename} onDelete={tagActions.remove} />
+        </div>
+        {tagActions.DialogComponent}
         {isEmptyFiltered ? (
           <div className="flex flex-col items-center justify-center gap-2 py-12 text-center px-6 sm:px-10">
             <p className="text-sm text-foreground">{t('No matching MCP servers')}</p>
-            <button onClick={() => { setSearch(''); setScopeFilter('all'); setSourceFilter('all') }} className="text-xs text-primary hover:underline">
+            <button onClick={() => { setSearch(''); setScopeFilter('all'); setSourceFilter('all'); setTagFilter('') }} className="text-xs text-primary hover:underline">
               {t('Clear filters')}
             </button>
           </div>
@@ -251,6 +267,8 @@ export function McpCardWall({ spaceMap, onBrowseStore, onManualAdd }: McpCardWal
                         spaceMap={spaceMap}
                         declaredBy={usageByAppId.get(app.id)}
                         onOpen={() => selectApp(app.id, app.spec.type)}
+                        tags={tagCounts}
+                        onPickTag={setTagFilter}
                       />
                     ))}
                   </div>

@@ -44,6 +44,7 @@ import {
   type ResolvedSdkCredentials,
 } from '../../../../src/main/services/agent/sdk-config'
 import { generatePromptInstructions, resolveMemoryLayout } from '../../../../src/main/platform/memory'
+import { modelCapabilitiesService } from '../../../../src/main/services/model-capabilities.service'
 import { DEFAULT_MAX_TURNS } from '../../../../src/shared/constants/agent-limits'
 import { DEFAULT_DISABLED_TOOLS, TEAM_TOOLS } from '../../../../src/shared/constants/disabled-tools'
 
@@ -89,7 +90,7 @@ describe('buildUserSessionSdkOptions', () => {
     const halo = await buildUserSessionSdkOptions({ ...params(), engineId: 'halo' })
     expect(cc.engineId).toBe('anthropic')
     expect(typeof cc.systemPrompt).toBe('string')
-    expect(cc).not.toHaveProperty('workerGroup')
+    expect(cc.workerGroup).toBe('space-1')
     expect(cc).not.toHaveProperty('haloRequestIdentity')
     expect(halo.engineId).toBe('halo')
     expect(halo.systemPrompt).toMatchObject({ type: 'preset', preset: 'default' })
@@ -125,7 +126,7 @@ describe('buildUserSessionSdkOptions', () => {
     const apiCredentials = {
       sourceId: 'account-a', credentialsGeneration: 'captured-before-async', provider: 'oauth' as const,
       baseUrl: 'https://example.invalid', apiKey: 'test-a', model: 'test-model',
-      capabilities: { contextWindow: 100_000, maxOutputTokens: 64_000, maxOutputTokensConfigured: true },
+      capabilities: { contextWindow: 100_000, maxOutputTokens: 64_000 },
       customHeaders: { 'ChatGPT-Account-Id': 'workspace-a' },
     }
     const snapshot = { ...credentials, sourceId: 'account-a', credentialsGeneration: 'captured-before-async', apiCredentials }
@@ -205,6 +206,22 @@ describe('buildInternalTaskSdkOptions', () => {
   })
 })
 
+describe('resolved fallback limits', () => {
+  it.each(['halo', 'anthropic'] as const)('passes unknown-model defaults to %s through both entries', async engineId => {
+    const capabilities = modelCapabilitiesService.resolve('unknown-future-model')
+    for (const build of [buildUserSessionSdkOptions, buildInternalTaskSdkOptions]) {
+      const options = await build({ ...params(), engineId, credentials: { ...credentials, capabilities } })
+      if (engineId === 'halo') {
+        expect(options.contextWindow).toBe(200_000)
+        expect(options.maxOutputTokens).toBe(64_000)
+      } else {
+        expect(options.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('200000')
+        expect(options.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('64000')
+      }
+    }
+  })
+})
+
 describe('the halo engine', () => {
   it('passes serializable host identity to the worker through both entries', async () => {
     state.engine = 'halo'
@@ -219,7 +236,7 @@ describe('the halo engine', () => {
   // model at its 200K default, so a 1M model is compacted early.
   it('is given the model\'s context window and output cap through both entries', async () => {
     state.engine = 'halo'
-    const capabilities = { contextWindow: 1_000_000, maxOutputTokens: 64_000, maxOutputTokensConfigured: true }
+    const capabilities = { contextWindow: 1_000_000, maxOutputTokens: 64_000 }
     for (const build of [buildUserSessionSdkOptions, buildInternalTaskSdkOptions]) {
       const options = await build({ ...params(), credentials: { ...credentials, capabilities } })
       expect(options.contextWindow).toBe(1_000_000)

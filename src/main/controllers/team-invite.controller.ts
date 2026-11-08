@@ -221,7 +221,6 @@ export async function leaveTeamOffice(
         console.log(`${LOG_TAG} withdrew from office=${officeId} apps=${leaving.length} dutiesKept=${kept}`)
         return { success: true }
       }
-      if (outcome === 'elected-authority') return { success: false, error: 'ELECTED_AUTHORITY' }
       if (outcome !== 'last-members') return { success: false, error: 'OFFICE_UNREACHABLE' }
       // The others are already on their way out: this is leaving the team.
       console.log(`${LOG_TAG} withdraw of apps=${leaving.length} takes the last members out; leaving office=${officeId}`)

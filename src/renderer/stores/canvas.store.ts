@@ -41,6 +41,9 @@ interface CanvasState {
 
   // Maximized mode state (Canvas takes full screen, hide Header/Chat/Rail)
   isMaximized: boolean
+  // Entering fullscreen maximized the window, so leaving it restores the window.
+  // Kept here: the tab bar remounts when fullscreen crosses a layout breakpoint.
+  maximizedWindowForFullscreen: boolean
 
   // Tab Actions (delegate to canvasLifecycle)
   openFile: (path: string, title?: string) => Promise<void>
@@ -73,6 +76,7 @@ interface CanvasState {
   // Maximized Mode Actions
   setMaximized: (maximized: boolean) => void
   toggleMaximized: () => void
+  setMaximizedWindowForFullscreen: (maximized: boolean) => void
 
   // Internal
   setTransitioning: (transitioning: boolean) => void
@@ -116,6 +120,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     // Maximized mode - local state (not in canvasLifecycle)
     isMaximized: false,
+    maximizedWindowForFullscreen: false,
 
     // ============================================
     // Tab Actions (delegate to canvasLifecycle)
@@ -223,7 +228,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         canvasLifecycle.setOpen(true)
       }
       // When exiting maximized, keep canvas open
-      set({ isMaximized: maximized })
+      set(maximized ? { isMaximized: true } : { isMaximized: false, maximizedWindowForFullscreen: false })
     },
 
     toggleMaximized: () => {
@@ -231,7 +236,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       if (!isMaximized && !isOpen) {
         canvasLifecycle.setOpen(true)
       }
-      set({ isMaximized: !isMaximized })
+      set(isMaximized ? { isMaximized: false, maximizedWindowForFullscreen: false } : { isMaximized: true })
+    },
+
+    setMaximizedWindowForFullscreen: (maximized: boolean) => {
+      set({ maximizedWindowForFullscreen: maximized })
     },
 
     setTransitioning: (transitioning: boolean) => {

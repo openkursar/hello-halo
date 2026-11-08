@@ -10,9 +10,11 @@
  *   observation surface; chat lives on the main conversation board).
  * - Hover reveals a "Chat" pill → starts a new conversation with this digital
  *   human on the main board, mirroring what the input's own selector does.
+ *   A team lead is listed with its mark but has no pill: its work arrives
+ *   through the team, and the selector does not offer it either.
  */
 
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Bot } from 'lucide-react'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
@@ -20,11 +22,13 @@ import { useAppStore } from '../../stores/app.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
-import { automationStatusLabel, deriveAutomationStatus } from '../../utils/automation-status'
+import { automationStatusLabel, deriveAutomationStatus, personRuntimeStatus } from '../../utils/automation-status'
 import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { SpaceResourceRow } from './SpaceResourceRow'
 import { navigateToAppChat, startDigitalHumanConversation } from '../../utils/conversation-navigation'
 import { useSpaceDigitalHumans } from '../../hooks/useSpaceDigitalHumans'
+import { useTeamStore } from '../../stores/team.store'
+import { coordinatorIds } from '../../utils/people-model'
 import { api } from '../../api'
 import { markEntry, trackHome, trackNavigate } from '../../services/home-telemetry'
 
@@ -36,7 +40,9 @@ export function DigitalHumansTab({ onItemsChange }: DigitalHumansTabProps) {
   const { t } = useTranslation()
   const spaceId = useSpaceStore(state => state.currentSpace?.id ?? '')
   const appStates = useAppsStore(s => s.appStates)
-  const digitalHumans = useSpaceDigitalHumans(spaceId)
+  const digitalHumans = useSpaceDigitalHumans(spaceId, { includeCoordinators: true })
+  const teams = useTeamStore(s => s.teams)
+  const coordinators = useMemo(() => coordinatorIds(teams), [teams])
 
   useEffect(() => {
     onItemsChange?.(digitalHumans.length)
@@ -73,16 +79,18 @@ export function DigitalHumansTab({ onItemsChange }: DigitalHumansTabProps) {
     <div className="py-2 px-1.5 space-y-1.5 overflow-y-auto h-full">
       {digitalHumans.map(app => {
         const { name, description } = resolveSpecI18n(app.spec, getCurrentLanguage())
-        const effectiveStatus = deriveAutomationStatus(app.status, appStates[app.id]?.status)
+        const effectiveStatus = deriveAutomationStatus(app.status, personRuntimeStatus(appStates[app.id]))
+        const status = automationStatusLabel(effectiveStatus, t)
+        const coordinator = coordinators.has(app.id)
         return (
           <SpaceResourceRow
             key={app.id}
             icon={<AutomationAvatar name={name || app.id} size={26} />}
             bareIcon
             name={name || app.id}
-            description={automationStatusLabel(effectiveStatus, t)}
+            description={coordinator ? `${t('Team lead')} · ${status}` : status}
             onClick={() => handleOpenOverview(app.id)}
-            onUse={() => { if (app.spaceId) void handleOpenChat(app.id, app.spaceId) }}
+            onUse={coordinator ? undefined : () => { if (app.spaceId) void handleOpenChat(app.id, app.spaceId) }}
             useLabel={t('Chat')}
           />
         )

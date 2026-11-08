@@ -9,6 +9,7 @@ story:
   zh: 我能复制已有技能或工具连接，不意外丢失任一边配置。
 basis: observed
 references:
+  - tests/acceptance/skills-requirements.md
   - src/renderer/components/settings/CLIConfigSection.tsx
   - src/renderer/hooks/useMigration.ts
   - src/main/ipc/cli-config.ts
@@ -51,8 +52,8 @@ scenarios:
       - en: Scan, choose skip/overwrite/rename on separate fixtures and execute migration.
         zh: 扫描，在不同测试资料中选择跳过、覆盖或重命名并迁移。
     expected:
-      - en: Each result follows its selected action and unrelated skills remain unchanged.
-        zh: 结果符合所选操作，无关技能不变。
+      - en: Each result follows its selected action as an independent complete user-file copy into the selected global or workspace user skill directory; source and unrelated skills remain unchanged. Skill ownership never follows the selected CLI configuration directory or writes migrated content back there on restart.
+        zh: 结果按所选操作完整独立复制到指定全局或空间用户技能目录，来源及无关技能不变；技能归属不跟随 CLI 配置目录选择，重启不把迁移内容写回旧配置目录。
     notes:
       en: Each action runs in a fresh profile. The real application resolves HOME and every CLI directory inside that profile before scanning. UI scans and migration copy real text, nested resources and binary bytes; an occupied rename suffix and unselected resources remain intact, including after restart. No skill invocation or model request is made.
       zh: 每种操作使用独立资料目录；扫描前核对真实应用解析的 HOME 和所有 CLI 目录均在该目录内。界面扫描和迁移实际文本、嵌套资源及二进制文件；已有重命名后缀与未选资源保留，并验证重启。此项不调用技能或模型。

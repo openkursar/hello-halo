@@ -2251,6 +2251,43 @@ describe('AppRuntimeService', () => {
       expect(state.status).toBe('idle')
     })
 
+    it('marks a person serving a team turn without calling it its own run', () => {
+      const appId = randomUUID()
+      mockAppManager.getApp.mockReturnValue({
+        id: appId,
+        status: 'active',
+        userConfig: {},
+        userOverrides: {},
+        permissions: { granted: [], denied: [] },
+      })
+      let working = true
+      // The team view's status walks the store; a person-level read must not.
+      const getMemberStatus = vi.fn(() => { throw new Error('per-app store walk') })
+      getActiveTeamRuntimeMock.mockReturnValue({ isMemberWorking: () => working, getMemberStatus })
+      const pushed = () => vi.mocked(sendToRenderer).mock.calls
+        .filter(([channel]) => channel === 'app:status_changed')
+        .map(([, payload]) => (payload as { state: { status: string; teamWorking?: boolean } }).state)
+      vi.mocked(sendToRenderer).mockClear()
+      try {
+        const service = createService()
+        const state = service.getAppState(appId)
+        expect(state.status).toBe('idle')
+        expect(state.teamWorking).toBe(true)
+
+        service.refreshAppState(appId)
+        working = false
+        service.refreshAppState(appId)
+        expect(pushed()).toEqual([
+          expect.objectContaining({ status: 'idle', teamWorking: true }),
+          expect.objectContaining({ status: 'idle' }),
+        ])
+        expect(pushed()[1].teamWorking).toBeUndefined()
+        expect(getMemberStatus).not.toHaveBeenCalled()
+      } finally {
+        getActiveTeamRuntimeMock.mockReset()
+      }
+    })
+
     it('should return paused state', () => {
       const appId = randomUUID()
       mockAppManager.getApp.mockReturnValue({

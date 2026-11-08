@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { PlugZap, Globe, MoreHorizontal, FolderInput, Trash2, Check, Loader2, Power, PowerOff, RotateCcw } from 'lucide-react'
+import { PlugZap, Globe, MoreHorizontal, FolderInput, Trash2, Check, Loader2, Power, PowerOff, RotateCcw, Tag } from 'lucide-react'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import type { McpSpec } from '../../../shared/apps/spec-types'
 import type { McpServerStatus } from '../../types'
@@ -22,6 +22,10 @@ import { deriveMcpHealth, mcpHealthText, mcpHealthDotClass, type McpHealth } fro
 import { formatTimeAgo } from '../../utils/format-time'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { api } from '../../api'
+import type { TagCount } from '../../../shared/apps/app-tags'
+import { TagChips } from '../tags/TagChips'
+import { TagEditor } from '../tags/TagEditor'
+import { notifyTagError } from '../tags/useTagActions'
 
 interface McpCardProps {
   app: InstalledApp
@@ -30,6 +34,9 @@ interface McpCardProps {
   /** Digital humans declaring this server, from the capability inventory. */
   declaredBy?: number
   onOpen: () => void
+  /** Tags used across the MCP list, offered when tagging this one. */
+  tags?: readonly TagCount[]
+  onPickTag?: (tag: string) => void
 }
 
 function healthTextClass(health: McpHealth): string {
@@ -43,16 +50,16 @@ function healthTextClass(health: McpHealth): string {
   }
 }
 
-export function McpCard({ app, sdkEntry, spaceMap, declaredBy, onOpen }: McpCardProps) {
+export function McpCard({ app, sdkEntry, spaceMap, declaredBy, onOpen, tags = [], onPickTag }: McpCardProps) {
   const { t } = useTranslation()
-  const { pauseApp, resumeApp, uninstallApp, moveAppToSpace, reinstallApp } = useAppsStore()
+  const { pauseApp, resumeApp, uninstallApp, moveAppToSpace, reinstallApp, updateAppOverrides } = useAppsStore()
   const dependents = useMcpDependents()
   const haloSpace = useSpaceStore(s => s.haloSpace)
   const spaces = useSpaceStore(s => s.spaces)
   const { showConfirm, DialogComponent } = useConfirmDialog()
 
   const [menuOpen, setMenuOpen] = useState(false)
-  const [menuView, setMenuView] = useState<'main' | 'move'>('main')
+  const [menuView, setMenuView] = useState<'main' | 'move' | 'tags'>('main')
   const [testing, setTesting] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -127,7 +134,7 @@ export function McpCard({ app, sdkEntry, spaceMap, declaredBy, onOpen }: McpCard
       role="button"
       tabIndex={0}
       onClick={onOpen}
-      onKeyDown={e => { if (e.key === 'Enter') onOpen() }}
+      onKeyDown={e => { if (e.key === 'Enter' && e.target === e.currentTarget) onOpen() }}
       className={`group relative text-left bg-card border rounded-lg p-4 transition-all cursor-pointer
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary
         ${isUninstalled
@@ -214,6 +221,11 @@ export function McpCard({ app, sdkEntry, spaceMap, declaredBy, onOpen }: McpCard
                     <button onClick={() => { setMenuOpen(false); onOpen() }} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors">
                       {t('Edit configuration')}
                     </button>
+                    {!isUninstalled && (
+                      <button onClick={() => setMenuView('tags')} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors">
+                        <Tag className="w-3.5 h-3.5 text-muted-foreground" /> {t('Tags…')}
+                      </button>
+                    )}
                     <button onClick={() => setMenuView('move')} className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors">
                       <FolderInput className="w-3.5 h-3.5 text-muted-foreground" /> {t('Move to workspace')}
                     </button>
@@ -222,6 +234,14 @@ export function McpCard({ app, sdkEntry, spaceMap, declaredBy, onOpen }: McpCard
                       <Trash2 className="w-3.5 h-3.5" /> {t('Uninstall')}
                     </button>
                   </>
+                ) : menuView === 'tags' ? (
+                  <TagEditor
+                    value={app.userOverrides.tags ?? []}
+                    suggestions={tags}
+                    onChange={async next => {
+                      if (!await updateAppOverrides(app.id, { tags: next.length ? next : undefined })) notifyTagError(t('Could not save the tags'))
+                    }}
+                  />
                 ) : (
                   <>
                     <button onClick={() => handleMoveTo(null)} className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-left hover:bg-muted/60 transition-colors">
@@ -246,6 +266,8 @@ export function McpCard({ app, sdkEntry, spaceMap, declaredBy, onOpen }: McpCard
       </div>
 
       {description && <p className="mt-2.5 text-xs text-muted-foreground line-clamp-2">{description}</p>}
+
+      {!!app.userOverrides.tags?.length && <div className="mt-2.5"><TagChips tags={app.userOverrides.tags} onPick={onPickTag} /></div>}
 
       {shownTools.length > 0 && (
         <div className="mt-2.5 flex flex-wrap items-center gap-1">

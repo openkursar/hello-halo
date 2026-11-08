@@ -356,6 +356,36 @@ describe('OAuth multi-account _accounts upsert', () => {
   })
 })
 
+describe('OAuth login catalog reported in the overrides shape', () => {
+  it('stores the server values on the models, not as the user\'s settings', async () => {
+    seed({ currentId: null, sources: [] })
+    const mgr = new AISourceManager()
+    ;(mgr as unknown as { providers: Map<string, unknown> }).providers.set('acct-prov', {
+      type: 'acct-prov',
+      startLogin: vi.fn(async () => ({ success: true, data: { loginUrl: 'https://example.com/login', state: 'state' } })),
+      completeLogin: vi.fn(async () => ({
+        success: true,
+        data: {
+          _accounts: [{ key: 'k', label: 'Org', id: 'acc' }],
+          _availableModels: ['m1'],
+          _defaultModel: 'm1',
+          _modelOverrides: { m1: { displayName: 'Model One', contextWindow: 128000, vision: true } },
+          _tokenData: { expiresAt: 999 }
+        }
+      })),
+      getBackendConfig: vi.fn()
+    })
+    const start = await mgr.startOAuthLogin('acct-prov')
+    await mgr.completeOAuthLogin('acct-prov', 'state', start.data!.loginId)
+
+    const saved = (store.value.aiSources as AISourcesConfig).sources[0]
+    expect(saved.availableModels).toEqual([
+      { id: 'm1', name: 'Model One', capabilities: { contextWindow: 128000 }, supportsVision: true }
+    ])
+    expect(saved.modelOverrides).toBeUndefined()
+  })
+})
+
 describe('single-source create / update / delete', () => {
   async function login(mgr: AISourceManager, uid: string) {
     ;(mgr as unknown as { providers: Map<string, unknown> }).providers.set('single-prov', {
@@ -1426,8 +1456,67 @@ describe('refreshSourceConfig — token freshness and degraded catalogs', () => 
     await mgr.refreshSourceConfig('o1')
 
     const saved = store.value.aiSources as AISourcesConfig
-    expect(saved.sources[0].availableModels.map(m => m.id)).toEqual(['fetched'])
-    expect(saved.sources[0].modelOverrides).toEqual({ fetched: { contextWindow: 128000 } })
+    expect(saved.sources[0].availableModels).toEqual([
+      { id: 'fetched', name: 'Fetched', capabilities: { contextWindow: 128000 } }
+    ])
+    expect(saved.sources[0].modelOverrides).toEqual({ stored: { contextWindow: 200000 } })
+  })
+
+  it('keeps the user\'s model settings when the server reports its own values', async () => {
+    seedCatalogSource({
+      availableModels: [{ id: 'fetched', name: 'Fetched' }],
+      modelOverrides: { fetched: { contextWindow: 64000, maxOutputTokens: 4096 } }
+    })
+    const mgr = new AISourceManager()
+    registerProvider(mgr, {
+      refreshConfig: vi.fn().mockResolvedValue({
+        success: true,
+        data: {
+          'catalog-prov': {
+            availableModels: ['fetched'],
+            modelNames: { fetched: 'Fetched' },
+            modelOverrides: { fetched: { contextWindow: 128000, maxOutputTokens: 8192, vision: false } }
+          }
+        }
+      })
+    })
+
+    await mgr.refreshSourceConfig('o1')
+
+    const saved = (store.value.aiSources as AISourcesConfig).sources[0]
+    expect(saved.modelOverrides).toEqual({ fetched: { contextWindow: 64000, maxOutputTokens: 4096 } })
+    expect(saved.availableModels[0]).toMatchObject({
+      capabilities: { contextWindow: 128000, maxOutputTokens: 8192 }, supportsVision: false
+    })
+  })
+
+  it('drops server values an earlier refresh copied into the user\'s settings', async () => {
+    seedCatalogSource({
+      availableModels: [{ id: 'fetched', name: 'Fetched' }],
+      modelOverrides: {
+        fetched: { displayName: 'Fetched', contextWindow: 128000, vision: false },
+        edited: { contextWindow: 32000, maxOutputTokens: 2048 }
+      }
+    })
+    const mgr = new AISourceManager()
+    registerProvider(mgr, {
+      refreshConfig: vi.fn().mockResolvedValue({
+        success: true,
+        data: {
+          'catalog-prov': {
+            availableModels: ['fetched', 'edited'],
+            modelNames: { fetched: 'Fetched', edited: 'Edited' },
+            modelCapabilities: { fetched: { contextWindow: 128000 }, edited: { contextWindow: 32000 } },
+            modelVision: { fetched: false }
+          }
+        }
+      })
+    })
+
+    await mgr.refreshSourceConfig('o1')
+
+    const saved = (store.value.aiSources as AISourcesConfig).sources[0]
+    expect(saved.modelOverrides).toEqual({ edited: { maxOutputTokens: 2048 } })
   })
 
   it('announces a changed catalog and stays silent, without writing, when nothing changed', async () => {
@@ -1574,14 +1663,25 @@ describe('syncBuiltinModels (constructor)', () => {
     // Only part of a vendor preset's builtin list saved → sync fills the rest.
     seed({
       currentId: 's1',
-      sources: [apiKeySource({ provider: 'deepseek', availableModels: [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }] })]
+      sources: [apiKeySource({ provider: 'deepseek', availableModels: [{ id: 'deepseek-flash', name: 'DeepSeek Flash' }] })]
     })
     new AISourceManager()
     const saved = store.value.aiSources as AISourcesConfig
     const ids = saved.sources[0].availableModels.map(m => m.id)
-    expect(ids).toContain('deepseek-v4-flash')
+    expect(ids).toContain('deepseek-flash')
     expect(ids).toContain('deepseek-v4-pro')
     expect(saveConfig).toHaveBeenCalled()
+  })
+
+  it('preserves a saved list whose model is no longer in the current preset', () => {
+    seed({
+      currentId: 's1',
+      sources: [apiKeySource({ provider: 'deepseek', availableModels: [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }] })]
+    })
+    new AISourceManager()
+    const saved = store.value.aiSources as AISourcesConfig
+    expect(saved.sources[0].availableModels.map(m => m.id)).toEqual(['deepseek-v4-flash'])
+    expect(saveConfig).not.toHaveBeenCalled()
   })
 
   it('leaves a user-fetched list untouched (contains a non-builtin model id)', () => {

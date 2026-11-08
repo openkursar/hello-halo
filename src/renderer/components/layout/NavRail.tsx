@@ -27,7 +27,7 @@ import { useIsNarrowShell } from '../../hooks/useIsMobile'
 import { useGoToConversation } from '../../hooks/useGoToConversation'
 import { usePlatform } from './Header'
 import { isElectron } from '../../api/transport'
-import { MAC_TRAFFIC_LIGHT_BOTTOM } from '../../../shared/constants/mac-traffic-lights'
+import { macTrafficLightGeometry } from '../../../shared/constants/mac-traffic-lights'
 
 type Destination = 'chat' | 'digital-humans' | 'knowledge' | 'store'
 
@@ -37,7 +37,7 @@ const MAC_LIGHTS_TO_NAV_GAP_PX = 18
 const RAIL_TOP_PADDING_PX = 12
 // Spacer that holds the traffic lights above the destinations, divided by
 // --display-scale so it stays in the real pixels the lights are placed in.
-const MAC_TRAFFIC_LIGHT_CLEARANCE_PX = MAC_TRAFFIC_LIGHT_BOTTOM + MAC_LIGHTS_TO_NAV_GAP_PX - RAIL_TOP_PADDING_PX
+const MAC_TRAFFIC_LIGHT_CLEARANCE_PX = macTrafficLightGeometry(globalThis.window?.platform?.systemVersion).bottom + MAC_LIGHTS_TO_NAV_GAP_PX - RAIL_TOP_PADDING_PX
 
 function useActiveDestination(): Destination | null {
   const view = useAppStore(s => s.view)

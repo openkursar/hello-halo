@@ -1,0 +1,106 @@
+version: 1
+id: models.configuration
+module: models
+title:
+  en: Use the model budget and capabilities shown in settings
+  zh: 实际使用设置中显示的模型预算与能力
+story:
+  en: I can start using a new model with a reasonable budget, and my saved model settings govern conversations instead of being silently replaced by old family limits or engine defaults.
+  zh: 我能以合理预算开始使用新模型，保存的模型设置会用于对话，不会被旧家族限制或引擎默认值悄悄替换。
+basis: documented
+references:
+  - src/shared/types/model-capabilities.ts
+  - src/shared/data/model-capabilities.json
+  - src/main/services/model-capabilities.service.ts
+  - src/renderer/components/settings/ModelConfigPanel.tsx
+  - src/main/services/agent/sdk-config.ts
+promises:
+  defaults:
+    en: Without more specific information, unknown models and broad brand defaults use a working budget of 200000 context tokens and 64000 output tokens, not a claim about the vendor maximum.
+    zh: 没有更具体信息时，未知模型和宽泛品牌默认值采用 200000 上下文、64000 输出令牌的使用预算；这不是对厂商最大容量的声明。
+  limits:
+    en: Known lower limits for specific legacy models and generations remain intact; provider catalog limits take precedence over generic defaults and family guesses.
+    zh: 明确的旧型号与旧代际低额度保持不变；服务商目录限制优先于通用默认值和家族推测。
+  execution:
+    en: Halo SDK and Claude Code receive the effective budget shown in Model Config, subject to existing runtime safety bounds; an unknown model does not silently fall back to a different engine budget.
+    zh: Halo SDK 与 Claude Code 收到模型配置所显示的有效预算，并遵守现有运行安全边界；未知模型不会静默退回另一套引擎预算。
+  overrides:
+    en: Explicit per-model budget, vision and thinking choices survive saving and restarting and take precedence over updated defaults.
+    zh: 用户明确设置的各模型预算、视觉及思考选择在保存、重启后保持，优先于更新后的默认值。
+scenarios:
+  - id: models.configuration.defaults
+    title:
+      en: Use a new model without inheriting obsolete limits
+      zh: 使用新模型而不继承过时额度
+    verifies: [defaults, execution]
+    platforms: &platforms [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    variants:
+      model: [unknown-future-model, deepseek-future, qwen-future, kimi-future, minimax-future, grok-future, mistral-future, llama-future]
+      engine: [halo, anthropic]
+    preconditions:
+      - en: An isolated local provider accepts the chosen model ID but supplies no numeric capability metadata. The requested engine is installed; fallback is not accepted as evidence for it.
+        zh: 隔离本地服务接受所选模型 ID，但不提供数值能力元数据。所测引擎已安装；回退引擎的结果不算该引擎的证据。
+    steps:
+      - en: Add an account through Settings, enter the model ID, open Model Config and save without editing its capabilities.
+        zh: 在设置中新增账户，输入模型 ID，打开模型配置，不修改能力直接保存。
+      - en: Start a conversation on the requested engine and send a message.
+        zh: 使用所测引擎新建对话并发送消息。
+    expected:
+      - en: Model Config shows 200000 context and 64000 output tokens; the actual engine receives both limits and the model request carries the output budget.
+        zh: 模型配置显示 200000 上下文和 64000 输出令牌；实际引擎收到两项限制，模型请求携带该输出预算。
+    notes:
+      en: Observe actual engine configuration for the context budget; an output-token request field alone does not prove the context window or compaction behavior.
+      zh: 上下文预算须检查实际引擎配置；仅检查请求的输出令牌字段不能证明上下文窗口或压缩行为。
+  - id: models.configuration.lower-limits
+    title:
+      en: Preserve known lower limits rather than raising every model
+      zh: 保留已知较低限制，而非抬高所有模型
+    verifies: [limits, execution]
+    platforms: *platforms
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    variants:
+      source: [legacy-model, legacy-generation, provider-catalog]
+      engine: [halo, anthropic]
+    preconditions:
+      - en: Use an isolated provider and the requested installed engine, with no user overrides. Test deepseek-chat (128000/8192), claude-3-opus-20240229 (200000/4096), or deepseek-future whose catalog declares 128000/8192, according to the variant.
+        zh: 使用隔离服务和已安装的所测引擎，不设用户覆盖值。按变体分别测试 deepseek-chat（128000/8192）、claude-3-opus-20240229（200000/4096），或目录声明 128000/8192 的 deepseek-future。
+    steps:
+      - en: Select the model through Settings, inspect its configuration, save and send a conversation message.
+        zh: 在设置中选择模型、检查配置、保存并发送对话消息。
+    expected:
+      - en: Both the displayed budget and actual engine configuration retain the stated lower limits; the outgoing request does not substitute 64000 output tokens.
+        zh: 显示预算与实际引擎配置均保留所述较低限制；发出的请求不替换为 64000 输出令牌。
+  - id: models.configuration.overrides
+    title:
+      en: Retain explicit model settings after restarting
+      zh: 重启后保留明确的模型设置
+    verifies: [overrides, execution]
+    platforms: *platforms
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    variants:
+      budget: [lower, higher]
+      engine: [halo, anthropic]
+    preconditions:
+      - en: An isolated account uses deepseek-v4.1-flash with the current multimodal preset and a local provider. The requested engine is installed.
+        zh: 隔离账户使用当前多模态预设的 deepseek-v4.1-flash 和本地服务，所测引擎已安装。
+    steps:
+      - en: In Model Config set 128000/32000 for the lower variant or 300000/96000 for the higher variant, turn off Vision and Thinking, then save and restart.
+        zh: 在模型配置中按较低变体设置 128000/32000，或按较高变体设置 300000/96000，关闭视觉与思考，保存并重启。
+      - en: Reopen the account and send a message on the requested engine.
+        zh: 重开账户并用所测引擎发送消息。
+    expected:
+      - en: The saved budget and both capability choices remain unchanged; actual engine limits match the chosen budget rather than the preset, and the account identity and selected model remain intact.
+        zh: 保存的预算与两个能力选择均保持不变；实际引擎限制使用所选预算而非预设，账户标识和模型选择不变。
+    notes:
+      en: These budgets stay within existing safety bounds. Image delivery after disabling Vision is verified separately by chat.attachments.vision-disabled.
+      zh: 这些预算处于现有安全边界内；关闭视觉后的图片传递由 chat.attachments.vision-disabled 单独验证。

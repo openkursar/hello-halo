@@ -301,6 +301,14 @@
   },
   {
     "method": "GET",
+    "path": "/api/apps/tags"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/tags/rename"
+  },
+  {
+    "method": "GET",
     "path": "/api/apps"
   },
   {
@@ -774,5 +782,53 @@
   {
     "method": "GET",
     "path": "/api/tlon/:kbId/ingest-status"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/list"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/read"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/save"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/import"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/set-enabled"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/move-preview"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/move"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/copy"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/delete"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/export"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/restore-legacy"
+  },
+  {
+    "method": "POST",
+    "path": "/api/skills/delete-legacy"
   }
 ]

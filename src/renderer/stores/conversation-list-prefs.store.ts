@@ -1,7 +1,8 @@
 /**
  * Conversation list view preferences — which sections and digital-human
- * groups are open (per space) and how tall the resizable panes are. Pure
- * presentation, so client-local (localStorage) like the other view-prefs stores.
+ * groups are open (per space), how tall the resizable panes are, and whether
+ * the whole list is folded to its icon strip. Pure presentation, so
+ * client-local (localStorage) like the other view-prefs stores.
  */
 
 import { create } from 'zustand'
@@ -12,6 +13,9 @@ export type ConversationSection = 'pinned' | 'digital-humans' | 'conversations'
 /** Panes whose height the user can drag; the conversations pane takes what is left. */
 export type ResizablePane = Exclude<ConversationSection, 'conversations'>
 
+/** Whether the content canvas is open beside the chat; the list keeps a fold choice for each. */
+export type ConversationListLayout = 'with-canvas' | 'without-canvas'
+
 /** Digital humans start folded: most people talk to Halo itself far more often. */
 const DEFAULT_SECTION_OPEN: Record<ConversationSection, boolean> = {
   pinned: true,
@@ -19,11 +23,24 @@ const DEFAULT_SECTION_OPEN: Record<ConversationSection, boolean> = {
   conversations: true,
 }
 
+/** The canvas needs the room, so beside it the list starts folded. */
+const DEFAULT_LIST_FOLDED: Record<ConversationListLayout, boolean> = {
+  'with-canvas': true,
+  'without-canvas': false,
+}
+
 export function isSectionOpen(
   choices: Partial<Record<ConversationSection, boolean>> | undefined,
   section: ConversationSection,
 ): boolean {
   return choices?.[section] ?? DEFAULT_SECTION_OPEN[section]
+}
+
+export function isListFolded(
+  choices: Partial<Record<ConversationListLayout, boolean>> | undefined,
+  layout: ConversationListLayout,
+): boolean {
+  return choices?.[layout] ?? DEFAULT_LIST_FOLDED[layout]
 }
 
 interface ConversationListPrefsState {
@@ -36,10 +53,13 @@ interface ConversationListPrefsState {
   appGroupOpen: Record<string, Record<string, boolean>>
   /** Heights the user dragged panes to; absent keeps each pane's default. */
   paneHeights: Partial<Record<ResizablePane, number>>
+  /** layout -> whether the user left the list folded; absent uses the default. */
+  listFolded: Partial<Record<ConversationListLayout, boolean>>
 
   setSectionOpen: (spaceId: string, section: ConversationSection, open: boolean) => void
   setAppGroupOpen: (spaceId: string, appId: string, open: boolean) => void
   setPaneHeight: (pane: ResizablePane, height: number | undefined) => void
+  setListFolded: (layout: ConversationListLayout, folded: boolean) => void
   /** Drop a deleted or forgotten space's choices. */
   forgetSpace: (spaceId: string) => void
 }
@@ -50,6 +70,7 @@ export const useConversationListPrefs = create<ConversationListPrefsState>()(
       sectionOpen: {},
       appGroupOpen: {},
       paneHeights: {},
+      listFolded: {},
 
       setSectionOpen: (spaceId, section, open) =>
         set((state) => {
@@ -71,6 +92,12 @@ export const useConversationListPrefs = create<ConversationListPrefsState>()(
           if (height === undefined) delete next[pane]
           else next[pane] = height
           return { paneHeights: next }
+        }),
+
+      setListFolded: (layout, folded) =>
+        set((state) => {
+          if (state.listFolded[layout] === folded) return state
+          return { listFolded: { ...state.listFolded, [layout]: folded } }
         }),
 
       forgetSpace: (spaceId) =>

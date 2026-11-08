@@ -118,7 +118,8 @@ export type ReplicationOp =
    * responsible for here, whether its owner accepts periodic checks on it, and
    * whether it is currently waiting on its owner to decide something.
    * Only the node that OWNS the member may write them; everyone else reads.
-   * Payload = `{ teamId, appId, duty, acceptsChecks, awaitingDecision }`.
+   * Payload = `{ teamId, appId, duty, acceptsChecks, awaitingDecision }`, plus
+   * `memberName` when the owner renamed the member (older nodes ignore it).
    */
   | 'member_profile'
   /**

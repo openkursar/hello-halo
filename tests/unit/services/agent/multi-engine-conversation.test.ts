@@ -358,14 +358,14 @@ describe('production conversation engine continuation', () => {
     expect(m.pendingHistoryReads).toBe(0)
   })
 
-  it('keeps legacy sessions on their original engine after changing the global default', async () => {
+  it('continues an ordinary legacy CC session through Halo without injecting or replaying history', async () => {
     const conversation = createConversation('space')
     delete conversation.engineRoutingVersion
     addMessage('space', conversation.id, { role: 'user', content: 'Legacy history' })
     saveSessionId('space', conversation.id, 'legacy-native-id')
     m.defaultEngine = 'codex'
     await send(conversation.id, 'CONTINUE_LEGACY'); await settled(conversation.id)
-    expect(m.sessions[0].options.engineId).toBe('anthropic')
+    expect(m.sessions[0].options.engineId).toBe('halo')
     expect(m.sessions[0].options.resume).toBe('legacy-native-id')
     expect(m.sessions[0].sent[0]).toBe('CONTINUE_LEGACY')
   })

@@ -34,10 +34,67 @@ promises:
   current:
     en: Switching the default account preserves each account’s model; removing the current account selects a remaining account when one exists.
     zh: 切换默认账户保留各账户的模型；移除当前账户后，仍有其他账户时切换到剩余账户。
+  presets:
+    en: A newly configured official DeepSeek account offers the current Flash model with its working budget and capabilities; preset updates do not rewrite existing accounts or explicit model settings.
+    zh: 新配置的 DeepSeek 官方账户提供当前 Flash 模型及其使用预算与能力；预设更新不改写已有账户或明确的模型设置。
   availability:
     en: A rejected model choice produces a visible failure and can be corrected in the account editor.
     zh: 模型选择被拒绝时显示失败，并可在账户编辑器中修正。
+  settings:
+    en: A model's settings show only what the user changed; the user's values survive every model-list refresh, the account server's values apply where the user set nothing, and a value equal to the server's counts as the server's.
+    zh: 模型配置只把用户改过的值视为自定义；用户的值在每次刷新模型列表后保留，用户未设置之处采用账户服务端的值，与服务端相同的值视为服务端的值。
 scenarios:
+  - id: models.accounts.deepseek-preset
+    title:
+      en: Configure current DeepSeek Flash without rewriting an existing account
+      zh: 配置当前 DeepSeek Flash 而不改写已有账户
+    verifies: [presets, save]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: An isolated profile contains an existing DeepSeek account selecting deepseek-v4-flash with explicit 208000/8192 limits and Vision disabled. Use only a local scripted endpoint and fixture credentials.
+        zh: 隔离资料中已有 DeepSeek 账户，选择 deepseek-v4-flash，明确设置 208000/8192 并关闭视觉。仅使用本地脚本端点和测试凭据。
+    steps:
+      - en: Open the new-account form, select the official DeepSeek preset and inspect the selected model and Model Config before fetching a remote catalog.
+        zh: 打开新增账户表单，选择 DeepSeek 官方预设，在获取远端目录前检查所选模型与模型配置。
+      - en: Point the new account at the isolated local endpoint, save, restart and send a message with the new account; reopen the existing account as well.
+        zh: 将新账户指向隔离本地端点，保存、重启并用新账户发送消息；同时重新打开已有账户。
+    expected:
+      - en: The new default model is deepseek-flash with 200000 context, 64000 output, Vision and Thinking enabled; the new conversation sends deepseek-flash to the local endpoint.
+        zh: 新账户默认型号为 deepseek-flash，上下文 200000、输出 64000，视觉与思考均启用；新对话向本地端点发送 deepseek-flash。
+      - en: The existing account keeps its identity, selected model, explicit limits and disabled Vision setting after restart.
+        zh: 重启后已有账户保留标识、所选模型、明确设置的额度及关闭视觉的选择。
+    notes:
+      en: This checks the bundled preset and local request flow, not the live vendor service or a real installer upgrade.
+      zh: 本例验证内置预设与本地请求流程，不证明真实厂商服务或安装包升级行为。
+  - id: models.accounts.model-config
+    title:
+      en: Keep model settings across a catalog refresh
+      zh: 刷新模型列表后保留模型配置
+    verifies:
+      - settings
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: A signed-in account whose server reports per-model limits.
+        zh: 已登录、服务端会返回各模型上限的账户。
+    steps:
+      - en: Open a model's settings without editing, then edit and save one value; restart the application and open the model picker.
+        zh: 打开某模型的配置但不修改，再修改并保存一个值；重启应用并打开模型选择器。
+    expected:
+      - en: The untouched model offers no reset; the saved value is still shown; other values match the server's.
+        zh: 未改动的模型不显示重置；保存的值仍在；其余值与服务端一致。
   - id: models.accounts.custom
     title:
       en: Configure a custom API endpoint

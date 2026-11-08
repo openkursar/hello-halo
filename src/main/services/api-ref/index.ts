@@ -89,7 +89,7 @@ does none of that. Use the API when no tool covers the task.
    expand them.
 
 ### Rules
-- IMPORTANT: NEVER write a path from memory. Paths differ between builds.
+- IMPORTANT: Only call paths that this prompt or the manual gives you; never write one from memory. Paths differ between builds.
 - HTTP 200 does not mean success. Check \`"success"\` in the body.
 - 403 means the endpoint exists and is closed to you — never that Halo cannot
   do it. Check your own tools for the same operation first.

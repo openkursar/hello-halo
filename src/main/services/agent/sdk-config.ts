@@ -182,8 +182,7 @@ export function resolveSdkRuntimeLimits(
   // auto-compact later fails — but we no longer silently rewrite their value
   // (the UI shows the same warning so the choice is explicit).
   if (
-    capabilities.maxOutputTokensConfigured
-    && Number.isFinite(capabilities.maxOutputTokens)
+    Number.isFinite(capabilities.maxOutputTokens)
     && capabilities.maxOutputTokens > 0
   ) {
     const value = clampInt(
@@ -1098,10 +1097,11 @@ async function assembleSdkOptions(
     sdkOptions.mcpServers = mcpServers
   }
 
+  sdkOptions.workerGroup = spaceId
+
   // Request identity — host-injected headers, system prefix and metadata
   // (halo engine only).
   if (engineId === 'halo') {
-    sdkOptions.workerGroup = spaceId
     try {
       sdkOptions.haloRequestIdentity = {
         deviceId: getDeviceIdentity().deviceId,

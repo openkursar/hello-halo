@@ -9,6 +9,7 @@ import { parseTodoInput } from '../../utils/thought-activity'
 import { ArrivalCard } from './ArrivalCard'
 import { mergeArrivalThoughts, toArrivalThought } from './transcript'
 import { ThoughtPanel, ThoughtPanelHeader } from './ThoughtPanel'
+import { SkillNotice } from './SkillNotice'
 import { nextThoughtPanelModel } from './thought-utils'
 import type { Message, Thought, ThoughtsSummary } from '../../types'
 import { useTranslation } from '../../i18n'
@@ -95,6 +96,7 @@ export function LazyCollapsedThoughtProcess({ thoughtsSummary, onLoadThoughts, a
 
   return (
     <div className="mb-2">
+      {thoughtsSummary.skillNotices?.map((code, index) => <SkillNotice key={`${index}:${code}`} code={code} />)}
       <ThoughtPanelHeader
         label={unavailable ? t('Thought process was not saved for this message') : t('Already thought')}
         seconds={!unavailable && duration != null ? duration.toFixed(1) : undefined}

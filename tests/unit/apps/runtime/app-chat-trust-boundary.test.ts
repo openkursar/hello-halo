@@ -190,6 +190,8 @@ import {
   getAppChatConversationId,
   loadChatEngineMetadata,
 } from '../../../../src/main/apps/runtime/app-chat'
+import { getConfig } from '../../../../src/main/foundation/config.service'
+import { getAppManager } from '../../../../src/main/apps/manager'
 import { loadChatEngineState } from '../../../../src/main/apps/runtime/session-store'
 import { getSessionEngineId } from '../../../../src/main/services/agent/session-manager'
 import { filterMcpServersByPolicy } from '../../../../src/main/apps/runtime/capability-policy'
@@ -206,8 +208,34 @@ const APP = 'target-app'
 const OTHER = 'other-app'
 
 describe('cold digital-human engine metadata', () => {
-  it('uses the saved native owner rather than the application default', () => {
+  it.each([
+    ['halo', 'anthropic'],
+    ['anthropic', 'halo'],
+  ] as const)('keeps current %s separate from desired %s before the next turn', (current, desired) => {
+    const binding = { version: 1 as const, engineId: current, sessionId: 'native-session' }
+    const app = { id: APP, userOverrides: { engineId: desired } }
+    vi.mocked(getAppManager).mockReturnValueOnce({ getApp: () => app } as unknown as ReturnType<typeof getAppManager>)
+    vi.mocked(loadChatEngineState).mockReturnValueOnce({ sessionId: binding.sessionId, binding })
+    expect(loadChatEngineMetadata('/space', APP, `app-chat:${APP}`)).toEqual({ engineId: current, engineBinding: binding })
+    expect(app.userOverrides.engineId).toBe(desired)
+  })
+
+  it.each(['halo', 'anthropic'] as const)('uses override %s when no binding exists', (engineId) => {
+    vi.mocked(getAppManager).mockReturnValueOnce({ getApp: () => ({ userOverrides: { engineId } }) } as unknown as ReturnType<typeof getAppManager>)
+    vi.mocked(loadChatEngineState).mockReturnValueOnce({})
+    expect(loadChatEngineMetadata('/space', APP, `app-chat:${APP}`)).toEqual({ engineId })
+  })
+
+  it('resolves an automatic CC binding to Halo while preserving its native ownership', () => {
     const binding = { version: 1 as const, engineId: 'anthropic' as const, sessionId: 'cc-native' }
+    vi.mocked(getConfig).mockReturnValueOnce({ agent: { sdkEngine: 'anthropic', ccRuntime: { selectedPath: '/automatic/claude' } } } as ReturnType<typeof getConfig>)
+    vi.mocked(loadChatEngineState).mockReturnValueOnce({ sessionId: binding.sessionId, binding })
+    expect(loadChatEngineMetadata('/space', APP, `app-chat:${APP}`)).toEqual({ engineId: 'halo', engineBinding: binding })
+  })
+
+  it('retains a CC binding when the user explicitly selected the runtime', () => {
+    const binding = { version: 1 as const, engineId: 'anthropic' as const, sessionId: 'cc-native' }
+    vi.mocked(getConfig).mockReturnValueOnce({ agent: { sdkEngine: 'halo', ccRuntime: { selectedPath: '/chosen/claude', selectionOrigin: 'user' } } } as ReturnType<typeof getConfig>)
     vi.mocked(loadChatEngineState).mockReturnValueOnce({ sessionId: binding.sessionId, binding })
     expect(loadChatEngineMetadata('/space', APP, `app-chat:${APP}`)).toEqual({ engineId: 'anthropic', engineBinding: binding })
   })

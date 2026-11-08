@@ -111,7 +111,7 @@ export const teamApi = {
    * because a member owned by another machine runs its turn there: aborting here
    * would find no session and quietly succeed while the member kept working.
    */
-  teamStopMember: async (input: { teamId: string; appId: string; epochId?: string }): Promise<ApiResponse> => {
+  teamStopMember: async (input: { teamId: string; appId: string; epochId: string }): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamStopMember(input)
     return httpRequest('POST', `/api/teams/${input.teamId}/members/${input.appId}/stop`, {
       epochId: input.epochId,

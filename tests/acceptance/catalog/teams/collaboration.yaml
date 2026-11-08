@@ -14,6 +14,7 @@ references:
   - tests/e2e/specs/team-collab.spec.ts
   - tests/e2e/specs/team-render.spec.ts
   - tests/e2e/specs/acceptance-kept-collaboration.spec.ts
+  - tests/e2e/specs/acceptance-digital-human-collaboration.spec.ts
 promises:
   room:
     en: A temporary collaboration has one source task and keeps its members reachable.
@@ -24,7 +25,46 @@ promises:
   history:
     en: Keeping copies no task history. The original task and each member's own conversation stay readable and continue in the collaboration, and the saved team starts with no tasks.
     zh: 保留不复制任务历史。原任务及各成员各自的对话仍可在原协作中阅读并继续，保存的团队没有任何任务。
+  digital-human:
+    en: In my own chat with a digital human I can ask it to organize a temporary team; members' reports return to that chat, other chats of it stay unaffected, and deleting the chat ends the collaboration.
+    zh: 在我与数字人的原生聊天里可以让它组织临时团队；成员的回报回到这个聊天，它的其他聊天不受影响，删除聊天会结束协作。
 scenarios:
+  - id: teams.collaboration.digital-human-chat
+    title:
+      en: Organize a temporary team from a digital human's own chat
+      zh: 在数字人原生聊天中组织临时团队
+    verifies:
+      - digital-human
+      - room
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: Use a fresh isolated profile, an installed digital human with conversation collaboration left off, and a local scripted model endpoint with the real application engine.
+        zh: 使用全新隔离资料、一个未开启对话协作的已安装数字人，以及本地脚本模型端点，应用仍运行真实引擎。
+    steps:
+      - en: In a new chat with the digital human, ask it to organize a team; it creates one member with the real collaboration tool and dispatches work in the same turn.
+        zh: 在与数字人的新聊天中让它组队；它通过真实协作工具创建一名成员，并在同一轮派工。
+      - en: The member reports back to the coordinator.
+        zh: 成员向协调者回报。
+      - en: Delete the chat.
+        zh: 删除这个聊天。
+    expected:
+      - en: The report is recorded in the originating chat as a teammate message and the digital human answers it there; its default chat has no collaboration.
+        zh: 回报以队友消息记录在发起的聊天中，数字人在该聊天中回应；其默认聊天没有协作。
+      - en: Deleting the chat dissolves the temporary collaboration.
+        zh: 删除聊天后临时协作被解散。
+    notes:
+      en: Messages are sent through the application's chat API rather than typed. Live delivery into a reply still in progress, and refusal of other conversations while the collaboration switch is off, are pinned by unit tests, not this scenario.
+      zh: 消息经应用聊天接口发送而非界面输入。回复进行中的实时投递、以及协作开关关闭时其他会话仍被拒绝，由单元测试覆盖，不由本场景证明。
   - id: teams.collaboration.single-room
     title:
       en: Keep temporary collaboration in its source room

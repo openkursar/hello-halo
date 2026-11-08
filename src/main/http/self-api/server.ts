@@ -14,6 +14,7 @@ import { issueSelfApiToken } from './token-store'
 import { redactResponses } from './redact'
 import { rejectNonApi, selfApiAuthMiddleware, selfApiErrorHandler } from './middleware'
 import { rejectWithheldFields } from './withheld-fields'
+import { isSkillRequest, parseSkillBody } from '../skills-body'
 
 /** Distinct from the public listener's 3847 so the two never contend for a port. */
 const DEFAULT_PORT = 4791
@@ -49,10 +50,12 @@ function buildApp(): Express {
   // an easy mistake to make with curl, and one that would otherwise answer
   // with a stack trace.
   app.set('env', 'production')
-  app.use(express.json())
+  const parseJson = express.json()
+  app.use((req, res, next) => isSkillRequest(req.path) ? next() : parseJson(req, res, next))
   app.use(rejectNonApi)
   app.use(redactResponses)
   app.use('/api', selfApiAuthMiddleware)
+  app.use('/api/skills', parseSkillBody)
   app.use('/api', rejectWithheldFields)
   registerApiRoutes(app)
   app.use(selfApiErrorHandler)
@@ -68,7 +71,11 @@ function buildApp(): Express {
  */
 function listenWithRetry(app: Express, port: number, attempt = 0): Promise<number> {
   return new Promise((resolveListen, rejectListen) => {
-    const server = app.listen(port, '127.0.0.1', () => resolveListen(port))
+    // Express 5 also calls this with the bind error; only a clean bind may
+    // settle the port, or a taken one is handed to every session.
+    const server = app.listen(port, '127.0.0.1', (error?: Error) => {
+      if (!error) resolveListen(port)
+    })
     server.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE' && attempt < MAX_PORT_ATTEMPTS) {
         listenWithRetry(app, port + 1, attempt + 1).then(resolveListen, rejectListen)

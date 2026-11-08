@@ -27,7 +27,7 @@ export function InterruptedBubble({ error, onContinue, className = '' }: Interru
           </div>
 
           {/* Description */}
-          <p className="mt-2 text-sm text-amber-600/80 dark:text-amber-400/80">
+          <p className="mt-2 text-sm text-amber-600/80 dark:text-amber-400/80 whitespace-pre-wrap [overflow-wrap:anywhere]">
             {error || t('The response was interrupted unexpectedly. You can continue the conversation.')}
           </p>
 

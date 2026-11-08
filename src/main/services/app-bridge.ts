@@ -20,7 +20,9 @@
  */
 
 import type { AppManagerService } from '../apps/manager'
+import type { SkillCatalogEntry } from '../../shared/types/skills'
 import type { ImChannelInstanceStatus } from '../../shared/types/im-channel'
+import { Emitter } from '../platform/event'
 
 /**
  * Details of a single MCP app lifecycle change. Lets subscribers react
@@ -43,8 +45,7 @@ export type McpAppsChangeHandler = (spaceId: string | null, change?: McpAppChang
 
 /** How a session wants the halo-apps server shaped. */
 export interface HaloAppsServerOptions {
-  /** The session mounts its own person-context tool; leave this server's out. */
-  omitPersonContext?: boolean
+  omitSkillManagement?: boolean
 }
 
 interface AppBridgeImpl {
@@ -53,9 +54,11 @@ interface AppBridgeImpl {
   onMcpAppsChange: (handler: McpAppsChangeHandler) => () => void
   /** Status of every configured IM channel instance; absent where no channels run. */
   getImChannelStatuses?: () => ImChannelInstanceStatus[]
+  getEffectiveSkillCatalog?: (spaceId: string, workDir?: string) => SkillCatalogEntry[]
 }
 
 let impl: AppBridgeImpl | null = null
+const skillCatalogReady = new Emitter<void>()
 
 /**
  * Wire the Apps layer into the services tier. Called once by
@@ -64,6 +67,7 @@ let impl: AppBridgeImpl | null = null
  */
 export function registerAppBridge(bridge: AppBridgeImpl): void {
   impl = bridge
+  if (bridge.getEffectiveSkillCatalog) skillCatalogReady.fire()
 }
 
 /**
@@ -106,4 +110,28 @@ export function onMcpAppsChange(handler: McpAppsChangeHandler): () => void {
  */
 export function getImChannelStatuses(): ImChannelInstanceStatus[] {
   return impl?.getImChannelStatuses?.() ?? []
+}
+
+/** Undefined means the Apps catalog provider has not been registered yet. */
+export function getEffectiveSkillCatalogForSession(spaceId: string, workDir?: string): SkillCatalogEntry[] | undefined {
+  return impl?.getEffectiveSkillCatalog?.(spaceId, workDir)
+}
+
+/** Wait only for registration, never scan; every waiter releases its timer and listener. */
+export function waitForSkillCatalogProvider(signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new Error('Session creation was cancelled'))
+  if (impl?.getEffectiveSkillCatalog) return Promise.resolve(true)
+  return new Promise((resolve, reject) => {
+    const finish = (ready: boolean, cancelled = false) => {
+      clearTimeout(timer)
+      subscription.dispose()
+      signal?.removeEventListener('abort', abort)
+      if (cancelled) reject(signal?.reason ?? new Error('Session creation was cancelled'))
+      else resolve(ready)
+    }
+    const abort = () => finish(false, true)
+    const subscription = skillCatalogReady.event(() => finish(true))
+    const timer = setTimeout(() => finish(false), 10_000)
+    signal?.addEventListener('abort', abort, { once: true })
+  })
 }

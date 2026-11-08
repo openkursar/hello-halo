@@ -1,6 +1,7 @@
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { signingEnvironment } = require('./lib/mac-local-signing.cjs');
+const { buildHaloSdk } = require('./lib/halo-sdk-build.cjs');
 
 try {
   if (process.platform !== 'darwin') throw new Error('Local macOS builds require macOS.');
@@ -20,6 +21,7 @@ try {
     'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID', 'APPLE_API_KEY', 'APPLE_API_KEY_ID', 'APPLE_API_ISSUER']) delete env[key];
   const run = (file, argv) => execFileSync(file, argv, { cwd: root, env, stdio: 'inherit' });
   console.log(`[build:mac] Local ${architectures.join(', ')} build; ad-hoc signing, no notarization or publishing.`);
+  buildHaloSdk(root, { env });
   run('npm', ['run', 'bump-rc']);
   for (const arch of architectures) run(process.execPath, ['scripts/prepare-binaries.mjs', '--platform', `mac-${arch}`]);
   run('npm', ['run', 'build']);

@@ -63,13 +63,14 @@ const VIEWER_PATHS = [
 const GATE_PATHS = [/^scripts\/perf-gate\//, /^tests\/perf\//]
 
 /**
- * The local macOS build path. Its tests are node:test rather than vitest, so
+ * The local macOS build paths. Their tests are node:test rather than vitest, so
  * the unit-test scoping below cannot reach them.
  */
 const MAC_BUILD_PATHS = [
   /^scripts\/(build|install)-mac-local\.cjs$/,
-  /^scripts\/lib\/mac-local-signing\.cjs$/,
-  /^tests\/check\/mac-local-signing\.test\.cjs$/
+  /^scripts\/build-(experimental\.cjs|mac-signed\.sh)$/,
+  /^scripts\/lib\/(mac-local-signing|halo-sdk-build)\.cjs$/,
+  /^tests\/check\/(mac-local-signing|halo-sdk-build)\.test\.cjs$/
 ]
 
 /**
@@ -168,8 +169,8 @@ const checks = [
     when: touched(VIEWER_PATHS)
   },
   {
-    name: 'local macOS signing',
-    argv: ['node', '--test', 'tests/check/mac-local-signing.test.cjs'],
+    name: 'local macOS build',
+    argv: ['node', '--test', 'tests/check/mac-local-signing.test.cjs', 'tests/check/halo-sdk-build.test.cjs'],
     when: touched(MAC_BUILD_PATHS)
   }
 ]

@@ -21,6 +21,17 @@ export function deriveAutomationStatus(
 }
 
 /**
+ * A person's live status across everything it does: its own runs, plus a team
+ * turn it is serving while otherwise standing by (or with automatic tasks off).
+ */
+export function personRuntimeStatus(
+  state: Pick<AutomationAppState, 'status' | 'teamWorking'> | undefined
+): AutomationAppState['status'] | undefined {
+  if (state?.teamWorking && (state.status === 'idle' || state.status === 'paused')) return 'running'
+  return state?.status
+}
+
+/**
  * User-facing status label. `idle` ("值班中") and `paused` ("已暂停") are
  * deliberately distinct — the prior single "Standing by" wording collapsed
  * "scheduled and waiting for its next trigger" into "user turned this off",
@@ -54,14 +65,14 @@ export function automationStatusLabel(status: EffectiveAutomationStatus, t: (s: 
  */
 export function describePersonStatus(
   appStatus: AppStatus,
-  state: Pick<AutomationAppState, 'status' | 'blocked' | 'pendingDecisionCount' | 'automaticEnabled'> | undefined,
+  state: Pick<AutomationAppState, 'status' | 'blocked' | 'pendingDecisionCount' | 'automaticEnabled' | 'teamWorking'> | undefined,
   t: (s: string, options?: Record<string, unknown>) => string
 ): { effective: EffectiveAutomationStatus; label: string; flag?: 'alert' | 'attention' } {
   if (state?.blocked) {
     const effective: EffectiveAutomationStatus = state.blocked === 'needs_login' ? 'needs_login' : 'error'
     return { effective, label: automationStatusLabel(effective, t), flag: state.blocked === 'auto_disabled' ? 'alert' : 'attention' }
   }
-  const effective = deriveAutomationStatus(appStatus, state?.status)
+  const effective = deriveAutomationStatus(appStatus, personRuntimeStatus(state))
   const pending = state?.pendingDecisionCount ?? 0
   if (pending > 0) return { effective, label: t('{{count}} waiting', { count: pending }), flag: 'attention' }
   if (state?.automaticEnabled === false && effective !== 'running') {

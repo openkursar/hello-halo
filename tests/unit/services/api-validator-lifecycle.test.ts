@@ -57,6 +57,15 @@ describe('connection validation terminal outcomes', () => {
     expect(session.close).toHaveBeenCalledTimes(1)
   })
 
+  it.each([
+    ['Anthropic API error (403): OAuth authentication is currently not allowed for this organization.', 'Access denied - check API key permissions'],
+    ['Anthropic API error (401): invalid x-api-key', 'Invalid API key'],
+  ])('tells a refused key from a rejected one when the engine reports either as authentication_failed: %s', async (reason, message) => {
+    const notice = { type: 'assistant', error: 'authentication_failed', message: { model: '<synthetic>', content: [{ type: 'text', text: reason }] } }
+    sessionWith([notice, { type: 'result', subtype: 'error_during_execution', is_error: true, errors: [reason], result: reason }])
+    expect(await validateApiConnection(params)).toMatchObject({ valid: false, message })
+  })
+
   it('reports an unavailable model without exposing the provider payload', async () => {
     sessionWith([assistant, { type: 'result', subtype: 'error_during_execution', is_error: true, errors: [`400 Requested model is not available; ${params.apiKey}`] }])
     expect(await validateApiConnection(params)).toMatchObject({ valid: false, message: 'Requested model is not available' })

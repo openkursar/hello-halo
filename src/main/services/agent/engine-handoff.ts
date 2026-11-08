@@ -22,8 +22,13 @@ export function planEngineHandoff(input: {
   sourceEngine?: EngineId
   latestMessageId?: string
   hasHistory: boolean
+  compatibleNativeResume?: boolean
 }): EngineHandoffPlan {
   const common = { targetEngine: input.targetEngine, sourceEngine: input.binding?.engineId ?? input.sourceEngine }
+  if (input.compatibleNativeResume && input.targetEngine === 'halo' && (!common.sourceEngine || ['halo', 'anthropic'].includes(common.sourceEngine))) {
+    const resumeSessionId = input.binding?.sessionId ?? input.legacySessionId
+    if (resumeSessionId) return { ...common, kind: 'resume', resumeSessionId }
+  }
   if (!input.enabled) return { ...common, kind: 'legacy', resumeSessionId: input.legacySessionId ?? input.binding?.sessionId }
   if (input.binding?.engineId === input.targetEngine) return { ...common, kind: 'resume', resumeSessionId: input.binding.sessionId }
   if (!input.hasHistory && !input.legacySessionId && !input.binding) return { ...common, kind: 'fresh' }

@@ -265,10 +265,12 @@ Today's date: {{TODAY}}
 Halo uses custom directories separate from Claude Code's defaults (NOT ~/.claude/):
 - Halo config: {{HALO_DIR}} (stores spaces, settings, app data)
 - Claude SDK config: {{CLAUDE_CONFIG_DIR}} (Halo's isolated Claude config)
-- Global skills: {{CLAUDE_CONFIG_DIR}}/skills/<skill-name>/SKILL.md
-- Space-scoped skills: <space-path>/.claude/skills/<skill-name>/SKILL.md
+- Personal global skills: ~/.agents/skills/<skill-name>/SKILL.md
+- Personal project skills: <space-path>/.agents/skills/<skill-name>/SKILL.md
+- Existing ~/.claude/skills and <space-path>/.claude/skills remain readable for compatibility; create new personal skills in .agents/skills.
+- Store-installed and built-in skills live in the same folders. Manage them with the capability library or skill_manage; files you change directly are kept when Halo updates the skill.
 
-When looking for configuration or skills, use these Halo-specific paths, not Claude Code's default ~/.claude/ directory.
+For Halo configuration, use the config paths above rather than ~/.claude/. For skills, follow the ownership and compatibility guidance above.
 `.trim()
 
 /**
@@ -443,10 +445,12 @@ Today's date: {{TODAY}}
 Halo uses custom directories separate from Claude Code's defaults (NOT ~/.claude/):
 - Halo config: {{HALO_DIR}} (stores spaces, settings, app data)
 - Claude SDK config: {{CLAUDE_CONFIG_DIR}} (Halo's isolated Claude config)
-- Global skills: {{CLAUDE_CONFIG_DIR}}/skills/<skill-name>/SKILL.md
-- Space-scoped skills: <space-path>/.claude/skills/<skill-name>/SKILL.md
+- Personal global skills: ~/.agents/skills/<skill-name>/SKILL.md
+- Personal project skills: <space-path>/.agents/skills/<skill-name>/SKILL.md
+- Existing ~/.claude/skills and <space-path>/.claude/skills remain readable for compatibility; create new personal skills in .agents/skills.
+- Store-installed and built-in skills live in the same folders. Manage them with the capability library or skill_manage; files you change directly are kept when Halo updates the skill.
 
-When looking for configuration or skills, use these Halo-specific paths, not Claude Code's default ~/.claude/ directory.
+For Halo configuration, use the config paths above rather than ~/.claude/. For skills, follow the ownership and compatibility guidance above.
 `.trim()
 
 /**
@@ -473,8 +477,10 @@ If the user asks for help, inform them of Halo's capabilities:
 # Halo directories
 - Halo config: {{HALO_DIR}} (stores spaces, settings, app data)
 - Agent config: {{CLAUDE_CONFIG_DIR}}
-- Global skills: {{CLAUDE_CONFIG_DIR}}/skills/<skill-name>/SKILL.md
-- Space-scoped skills: <space-path>/.agents/skills/<skill-name>/SKILL.md or <space-path>/.claude/skills/<skill-name>/SKILL.md
+- Personal global skills: ~/.agents/skills/<skill-name>/SKILL.md
+- Personal project skills: <space-path>/.agents/skills/<skill-name>/SKILL.md
+- Existing ~/.claude/skills and <space-path>/.claude/skills remain readable for compatibility; create new personal skills in .agents/skills.
+- Store-installed and built-in skills live in the same folders. Manage them with the capability library or skill_manage; files you change directly are kept when Halo updates the skill.
 
 When looking for Halo configuration or skills, use these paths.
 `.trim()
@@ -584,10 +590,12 @@ Today's date: {{TODAY}}
 Halo keeps its own directories, separate from any agent runtime's defaults (NOT ~/.claude/):
 - Halo config: {{HALO_DIR}} (stores spaces, settings, app data)
 - Agent runtime config: {{CLAUDE_CONFIG_DIR}} (Halo's isolated agent config)
-- Global skills: {{CLAUDE_CONFIG_DIR}}/skills/<skill-name>/SKILL.md
-- Space-scoped skills: <space-path>/.claude/skills/<skill-name>/SKILL.md
+- Personal global skills: ~/.agents/skills/<skill-name>/SKILL.md
+- Personal project skills: <space-path>/.agents/skills/<skill-name>/SKILL.md
+- Existing ~/.claude/skills and <space-path>/.claude/skills remain readable for compatibility; create new personal skills in .agents/skills.
+- Store-installed and built-in skills live in the same folders. Manage them with the capability library or skill_manage; files you change directly are kept when Halo updates the skill.
 
-When looking for configuration or skills, use these Halo-specific paths, not the ~/.claude/ default.
+For Halo configuration, use the config paths above rather than ~/.claude/. For skills, follow the ownership and compatibility guidance above.
 `.trim()
 
 function buildEngineNeutralTemplate(promptProfile: PromptProfile | undefined): string {

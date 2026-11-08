@@ -1,14 +1,20 @@
-import type { ActivityEntry, InstalledApp } from '../../shared/apps/app-types'
-import type { TeamListItem } from '../../shared/apps/team-types'
+import type { ActivityEntry, AppStatus, InstalledApp } from '../../shared/apps/app-types'
+import { leadAppIdSet, type TeamListItem } from '../../shared/apps/team-types'
+
+type TeamMembership = Pick<TeamListItem, 'ephemeral' | 'localMembers'>
+type ListedApp = Pick<InstalledApp, 'id'> & { spec: { type: string } }
 
 /**
- * Members of an ephemeral space collaboration. They exist for one piece of work
- * and are gone with it, so no person-facing surface lists them.
+ * Members that exist only for an ephemeral space collaboration. They are built
+ * for one piece of work, so no person-facing surface lists them. A member kept
+ * by saving the collaboration as a team belongs to that team too and stays
+ * listed, as in the people directory.
  */
-export function ephemeralMemberIds(teams: TeamListItem[]): Set<string> {
-  return new Set(
-    teams.filter(team => team.ephemeral).flatMap(team => team.localMembers.map(member => member.appId))
-  )
+export function ephemeralMemberIds(teams: readonly TeamMembership[]): Set<string> {
+  const memberIds = (ephemeral: boolean) =>
+    teams.filter(team => (team.ephemeral === true) === ephemeral).flatMap(team => team.localMembers.map(member => member.appId))
+  const kept = new Set(memberIds(false))
+  return new Set(memberIds(true).filter(id => !kept.has(id)))
 }
 
 /**
@@ -23,9 +29,23 @@ export function coordinatorIds(teams: TeamListItem[]): Set<string> {
   )
 }
 
-export function visibleDigitalHumans(apps: InstalledApp[], teams: TeamListItem[]): InstalledApp[] {
+export function visibleDigitalHumans<T extends ListedApp>(apps: readonly T[], teams: readonly TeamMembership[]): T[] {
   const hidden = ephemeralMemberIds(teams)
   return apps.filter(app => app.spec.type === 'automation' && !hidden.has(app.id))
+}
+
+/** Digital humans a person can choose for new work: listed and not uninstalled. */
+export function pickableDigitalHumans<T extends ListedApp & { status: AppStatus }>(
+  apps: readonly T[],
+  teams: readonly TeamMembership[],
+): T[] {
+  return visibleDigitalHumans(apps, teams).filter(app => app.status !== 'uninstalled')
+}
+
+/** Leads coordinate their own team, so they never join another as a member. */
+export function teamMemberCandidates(apps: readonly InstalledApp[], teams: readonly TeamListItem[]): InstalledApp[] {
+  const leads = leadAppIdSet(teams)
+  return pickableDigitalHumans(apps, teams).filter(app => !leads.has(app.id))
 }
 
 export function activitySourceKind(entry: ActivityEntry): 'team' | 'automation' | 'chat' | 'upgrade' | 'unknown' {

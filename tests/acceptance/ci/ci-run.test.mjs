@@ -257,3 +257,41 @@ test('a module or case selection reports findings but never advances the baselin
   assert.equal(qualityOf(selected).newFailures.length, 1)
   assert.match(JSON.parse(fs.readFileSync(path.join(selected.directory, 'selection.json'), 'utf8')).reason, /explicit module or scenario selection/)
 })
+
+test('a private development run is compared with the reference lineage and publishes no baseline, even when it passes completely', context => {
+  const failing = fixture(context, { plan: selection([]), runOutcome: 'failed', previousStatus: 'passed', full: true, privateSource: true, comparisonRepository: 'example/application' })
+  assert.equal(failing.run().status, 0)
+  const quality = qualityOf(failing)
+  assert.deepEqual(quality.newFailures.map(item => item.caseId), ['example.journey'])
+  assert.equal(quality.comparedWith.ref, 'main')
+  assert.equal(quality.baselineUnavailable, undefined)
+  assert.match(summaryOf(failing), /\*\*1 new failure\*\*/)
+  assert.match(summaryOf(failing), /no baseline is published from it/)
+  assert.equal(evidence(failing).baseline, false)
+
+  const fixed = fixture(context, { plan: selection([]), previousStatus: 'failed', full: true, privateSource: true, comparisonRepository: 'example/application' })
+  assert.equal(fixed.run().status, 0)
+  assert.deepEqual(qualityOf(fixed).fixed.map(item => item.caseId), ['example.journey'])
+  assert.equal(evidence(fixed).baseline, false)
+
+  const unscoped = fixture(context, { plan: selection([]), previousStatus: 'passed', full: false, privateSource: true, comparisonRepository: 'example/application' })
+  assert.equal(unscoped.run().status, 0)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(unscoped.directory, 'selection.json'), 'utf8')).full, true)
+  assert.equal(evidence(unscoped).baseline, false)
+})
+
+test('a private development run without a reference result lists what fails without calling anything new, and still publishes nothing', context => {
+  const selected = fixture(context, { plan: selection([]), runOutcome: 'failed', privateSource: true, comparisonRepository: 'example/application' })
+  assert.equal(selected.run().status, 0)
+  assert.equal(qualityOf(selected).comparedWith, null)
+  assert.equal(qualityOf(selected).newFailures.length, 0)
+  assert.equal(evidence(selected).baseline, false)
+})
+
+test('a run of the reference repository itself is unchanged by the comparison setting: it compares with its own lineage and advances it', context => {
+  const selected = fixture(context, { plan: selection([]), runOutcome: 'failed', previousStatus: 'passed', full: true, comparisonRepository: 'example/application' })
+  assert.equal(selected.run().status, 0)
+  assert.deepEqual(qualityOf(selected).newFailures.map(item => item.caseId), ['example.journey'])
+  assert.doesNotMatch(summaryOf(selected), /no baseline is published from it/)
+  assert.equal(evidence(selected).baseline, true)
+})

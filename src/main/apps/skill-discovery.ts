@@ -1,31 +1,16 @@
 /**
  * apps/skill-discovery
  *
- * Enumerates the skills a digital human can actually load at runtime by
- * scanning the exact directories the Claude Code SDK reads (see
- * services/agent/sdk-config.ts: settingSources ['user','project']):
- *
- *   - Global (user):   $CLAUDE_CONFIG_DIR/skills/<name>/SKILL.md
- *   - Space (project): <workDir>/.claude/skills/<name>/SKILL.md
- *
- * where workDir is the digital human's space working directory (the agent cwd).
- *
- * This is deliberately disk-based, not DB-based: global skills and manually
- * placed skills frequently have no installed-apps record, and space skills are
- * bound to a space's working dir — so filtering the app table would show an
- * empty or wrong list. The disk is the runtime source of truth.
- *
- * It also resolves a `requires.skills` entry to the folder it names, so
- * declaring, installing and packaging a dependency all agree on which skill
- * that is; reads a hand-placed folder for packaging; and finds the skills a
- * system prompt names without declaring them.
+ * The skills a digital human can load, as the skill library resolves them, and
+ * the helpers that tie a `requires.skills` entry to those skills: finding the
+ * skill it names, reading a hand-placed folder for packaging, and finding the
+ * skills a system prompt names without declaring them.
  */
 
-import { existsSync, lstatSync, readdirSync, readFileSync, type Dirent } from 'fs'
-import { join } from 'path'
-import { resolveGlobalSkillsDir } from './manager/skill-sync'
-import { getWorkingDir } from '../services/agent/helpers'
-import { extractFrontmatterField } from '../../shared/skill-frontmatter'
+import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
+import { getSkillLibrary } from './skills'
+import { skillDirectoryName } from '../services/skills'
 import { toSkillDirName } from '../../shared/skill-naming'
 import { isHaloShippedSkill } from '../../shared/apps/app-types'
 import type { AvailableSkill } from '../../shared/apps/app-types'
@@ -33,145 +18,70 @@ import type { SkillDependency } from '../../shared/apps/spec-types'
 import { findReferencedSkillNames } from '../../shared/apps/skill-references'
 import { CPP_LEVEL_IGNORE_DIRS } from '../../shared/constants/ignore-patterns'
 import type { AppSpec } from './spec'
-import type { AppManagerService } from './manager'
+import type { AppManagerService, InstalledApp } from './manager'
 
-/** Cap per-skill content to keep the response light for large skill sets. */
-const MAX_CONTENT_CHARS = 20000
-
-function scanSkillsDir(dir: string, scope: 'global' | 'space'): AvailableSkill[] {
-  if (!existsSync(dir)) return []
-
-  const results: AvailableSkill[] = []
-  let entries: Dirent[]
+function readInstructions(path: string): string {
+  const fd = openSync(path, 'r')
   try {
-    entries = readdirSync(dir, { withFileTypes: true })
-  } catch (err) {
-    console.warn(`[SkillDiscovery] Failed to read ${dir}:`, (err as Error).message)
-    return []
-  }
+    const info = fstatSync(fd)
+    if (!info.isFile() || info.size > 1024 * 1024) throw new Error('The skill instructions cannot be read safely.')
+    const buffer = Buffer.alloc(Math.min(info.size, 20000))
+    const count = readSync(fd, buffer, 0, buffer.length, 0)
+    return buffer.toString('utf8', 0, count)
+  } finally { closeSync(fd) }
+}
 
-  for (const entry of entries) {
-    // Symlinked skill dirs load fine in the SDK; the SKILL.md check below
-    // filters out symlinks that don't point at a skill directory.
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
-    const skillDir = join(dir, entry.name)
-    const mdPath = join(skillDir, 'SKILL.md')
-    if (!existsSync(mdPath)) continue
-
-    let content = ''
+function availableCopies(spaceId: string, effectiveOnly: boolean, workDir?: string): AvailableSkill[] {
+  const library = getSkillLibrary()
+  const results: AvailableSkill[] = []
+  for (const copy of library.runtimeCopies(spaceId, workDir)) {
+    if (!copy.enabled || copy.availability === 'missing' || copy.availability === 'invalid' || (effectiveOnly && copy.availability !== 'available')) continue
     try {
-      content = readFileSync(mdPath, 'utf-8')
-    } catch {
-      continue
+      results.push({ name: copy.name, description: copy.description, scope: copy.scope,
+        dirName: copy.name, path: dirname(copy.path), content: readInstructions(copy.path) })
+    } catch (error) {
+      console.warn('[Skills] Available skill could not be inspected', { id: copy.id, reason: (error as Error).message })
     }
-
-    const name = extractFrontmatterField(content, 'name') || entry.name
-    const description = extractFrontmatterField(content, 'description') || ''
-    results.push({
-      name,
-      description,
-      scope,
-      dirName: entry.name,
-      path: skillDir,
-      content: content.length > MAX_CONTENT_CHARS ? content.slice(0, MAX_CONTENT_CHARS) : content,
-    })
   }
-
   return results
 }
 
-function skillDirsOf(spaceId: string): { globalDir: string; spaceDir: string } {
-  return { globalDir: resolveGlobalSkillsDir(), spaceDir: join(getWorkingDir(spaceId), '.claude', 'skills') }
-}
-
-/**
- * List the skills a digital human in the given space can load at runtime.
- * Space skills take precedence over global skills with the same name,
- * matching Halo SDK's project-first, case-insensitive lookup.
- */
 export function listAvailableSkills(spaceId: string): AvailableSkill[] {
-  const { globalDir, spaceDir } = skillDirsOf(spaceId)
-
-  const globalSkills = scanSkillsDir(globalDir, 'global')
-  const spaceSkills = scanSkillsDir(spaceDir, 'space')
-
-  const seen = new Set<string>()
-  const merged = [...spaceSkills, ...globalSkills].filter(skill => {
-    const key = skill.dirName.toLowerCase()
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-  merged.sort((a, b) => a.name.localeCompare(b.name))
-
-  console.log(
-    `[SkillDiscovery] space=${spaceId}: ${spaceSkills.length} space + ` +
-    `${globalSkills.length} global → ${merged.length} available`
-  )
-  return merged
+  return availableCopies(spaceId, true)
 }
 
-/**
- * Every copy of every skill the space's engine may load, a global and a space
- * skill of the same name both kept. Which copy the engine loads for a name is
- * its own order, so a check of what may load has to hold for each.
- */
-export function listLoadableSkillCopies(spaceId: string): AvailableSkill[] {
-  const { globalDir, spaceDir } = skillDirsOf(spaceId)
-  return [...scanSkillsDir(spaceDir, 'space'), ...scanSkillsDir(globalDir, 'global')]
+/** Permission checks conservatively consider every enabled copy an external engine could discover. */
+export function listLoadableSkillCopies(spaceId: string, workDir?: string): AvailableSkill[] {
+  return availableCopies(spaceId, false, workDir)
 }
 
-type SkillAppSource = Pick<AppManagerService, 'listApps'>
-type InstalledSkillApp = ReturnType<AppManagerService['listApps']>[number]
+type SkillRecordSource = Pick<AppManagerService, 'listSkillRecords'>
 
-/** A skill folder the engine may load, with the installed skill app behind it when there is one. */
+/** A skill folder the engine loads, with the installed skill record behind it when there is one. */
 export interface LoadableSkill {
   folder: string
   path: string
-  app: InstalledSkillApp | null
-}
-
-function skillFolders(dir: string): string[] {
-  if (!existsSync(dir)) return []
-  try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter(entry => (entry.isDirectory() || entry.isSymbolicLink()) && existsSync(join(dir, entry.name, 'SKILL.md')))
-      .map(entry => entry.name)
-  } catch (err) {
-    console.warn(`[SkillDiscovery] Failed to read ${dir}:`, (err as Error).message)
-    return []
-  }
+  app: InstalledApp | null
 }
 
 /**
- * The skills that may load in a space (global only when `spaceId` is null),
- * the space folder winning a name both scopes hold (see listAvailableSkills).
- * Folders placed by hand have no installed app and are
- * included all the same; a folder is only matched to an app installed in its
- * own scope.
+ * The skill folders that load in a space (global only when `spaceId` is null),
+ * as the skill library resolves a name both scopes hold. A folder placed by
+ * hand has no installed record and is included all the same. Single-file
+ * command skills have no folder to name or package and are left out.
  */
-export function listLoadableSkills(spaceId: string | null, manager: SkillAppSource): LoadableSkill[] {
-  // Match the winning folder to its own scope, including hand-placed skills.
-  const apps = [
-    ...manager.listApps({ spaceId: null, type: 'skill' }),
-    ...(spaceId ? manager.listApps({ spaceId, type: 'skill' }) : []),
-  ].filter(app => app.status !== 'uninstalled')
-  const scopes = [
-    ...(spaceId ? [{ dir: skillDirsOf(spaceId).spaceDir, spaceId }] : []),
-    { dir: resolveGlobalSkillsDir(), spaceId: null },
-  ]
-  const skills: LoadableSkill[] = []
-  const seen = new Set<string>()
-  for (const scope of scopes) {
-    for (const folder of skillFolders(scope.dir)) {
-      const key = folder.toLowerCase()
-      if (seen.has(key)) continue
-      seen.add(key)
-      const app = apps.find(candidate => candidate.spaceId === scope.spaceId && toSkillDirName(candidate.specId) === folder) ?? null
-      skills.push({ folder, path: join(scope.dir, folder), app })
-    }
+export function listLoadableSkills(spaceId: string | null, manager: SkillRecordSource): LoadableSkill[] {
+  const records = new Map<string, InstalledApp>()
+  for (const scope of spaceId ? [null, spaceId] : [null]) {
+    for (const record of manager.listSkillRecords(scope)) records.set(record.id, record)
   }
-  return skills
+  return getSkillLibrary().runtimeCopies(spaceId)
+    .filter(copy => copy.availability === 'available' && basename(copy.path) === 'SKILL.md')
+    .map(copy => ({
+      folder: skillDirectoryName(copy.path),
+      path: dirname(copy.path),
+      app: copy.appId ? records.get(copy.appId) ?? null : null,
+    }))
 }
 
 /**
@@ -282,7 +192,7 @@ export function readLoadableSkillFiles(skill: LoadableSkill): Record<string, str
 }
 
 export interface UndeclaredSkill {
-  /** The id to declare: the Store slug for a Store install, else the specId or folder name. */
+  /** The id to declare: the Store slug for a Store install, else the folder name. */
   id: string
   folder: string
 }
@@ -302,9 +212,8 @@ export function findUndeclaredSkills(spec: AppSpec, skills: LoadableSkill[]): Un
     .filter(skill => named.has(skill.folder))
     .map(skill => {
       const store = skill.app?.spec.store
-      const id = store?.install_source === 'store' && store.slug ? store.slug : skill.app?.specId ?? skill.folder
+      const id = store?.install_source === 'store' && store.slug ? store.slug : skill.folder
       return { id, folder: skill.folder }
     })
     .sort((a, b) => a.folder.localeCompare(b.folder))
 }
-

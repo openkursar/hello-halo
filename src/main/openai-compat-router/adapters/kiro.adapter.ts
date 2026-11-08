@@ -23,6 +23,7 @@ import type {
 } from '../types/anthropic'
 import type { BackendConfig } from '../types'
 import { estimateTokensByChars, countTokens } from '../utils/token-counter'
+import { AwsEventStreamParser, type KiroStreamEvent } from './kiro-event-stream'
 
 // ============================================================================
 // Constants
@@ -271,8 +272,8 @@ function extractTextContent(content: string | AnthropicContentBlock[]): string {
   if (typeof content === 'string') return content
   const parts: string[] = []
   for (const block of content) {
+    // Earlier-turn thinking is not replayed; Kiro would take it as answer text
     if (block.type === 'text') parts.push(block.text)
-    else if (block.type === 'thinking') parts.push(block.thinking)
   }
   return parts.join('')
 }
@@ -867,316 +868,6 @@ export function buildKiroPayload(
 }
 
 // ============================================================================
-// AWS Event Stream Parser
-// ============================================================================
-
-/** Internal tool call accumulation state (OpenAI-style, matches Python parser). */
-interface ParsedToolCall {
-  id: string
-  type: 'function'
-  function: {
-    name: string
-    arguments: string // JSON string
-  }
-}
-
-/** Parsed event emitted by AwsEventStreamParser.feed(). */
-interface KiroStreamEvent {
-  type: 'content' | 'tool_start' | 'tool_input' | 'tool_stop' | 'usage' | 'context_usage' | 'followup'
-  data?: unknown
-}
-
-/**
- * Find the position of the matching closing brace in text,
- * correctly handling nested braces and string literals.
- */
-function findMatchingBrace(text: string, startPos: number): number {
-  if (startPos >= text.length || text[startPos] !== '{') return -1
-
-  let braceCount = 0
-  let inString = false
-  let escapeNext = false
-
-  for (let i = startPos; i < text.length; i++) {
-    const ch = text[i]
-
-    if (escapeNext) { escapeNext = false; continue }
-    if (ch === '\\' && inString) { escapeNext = true; continue }
-    if (ch === '"') { inString = !inString; continue }
-
-    if (!inString) {
-      if (ch === '{') braceCount++
-      else if (ch === '}') {
-        braceCount--
-        if (braceCount === 0) return i
-      }
-    }
-  }
-
-  return -1
-}
-
-/**
- * Remove duplicate tool calls.
- *   1. By id  — if duplicated, keep the one with more arguments (not "{}")
- *   2. By name+arguments — remove exact duplicates
- */
-function deduplicateToolCalls(toolCalls: ParsedToolCall[]): ParsedToolCall[] {
-  const byId = new Map<string, ParsedToolCall>()
-  const withoutId: ParsedToolCall[] = []
-
-  for (const tc of toolCalls) {
-    if (!tc.id) { withoutId.push(tc); continue }
-
-    const existing = byId.get(tc.id)
-    if (!existing) {
-      byId.set(tc.id, tc)
-    } else {
-      const existingArgs = existing.function.arguments
-      const currentArgs = tc.function.arguments
-      if (currentArgs !== '{}' && (existingArgs === '{}' || currentArgs.length > existingArgs.length)) {
-        byId.set(tc.id, tc)
-      }
-    }
-  }
-
-  const seen = new Set<string>()
-  const unique: ParsedToolCall[] = []
-
-  for (const tc of Array.from(byId.values()).concat(withoutId)) {
-    const key = `${tc.function.name}-${tc.function.arguments}`
-    if (!seen.has(key)) {
-      seen.add(key)
-      unique.push(tc)
-    }
-  }
-
-  return unique
-}
-
-/**
- * AWS Event Stream Parser.
- *
- * Kiro returns responses as a proprietary AWS binary event stream.
- * This class extracts JSON events from the raw byte stream by scanning
- * for recognisable JSON patterns and balancing braces.
- *
- * Usage:
- *   const parser = new AwsEventStreamParser()
- *   for await (const chunk of responseBody) {
- *     const events = parser.feed(Buffer.from(chunk))
- *     for (const event of events) { ... }
- *   }
- *   const toolCalls = parser.getToolCalls()
-
- */
-class AwsEventStreamParser {
-  private buffer = ''
-  private lastContent: string | null = null
-  private currentToolCall: ParsedToolCall | null = null
-  private toolCalls: ParsedToolCall[] = []
-
-  /** Patterns used only to locate the start of JSON objects in the binary stream. */
-  private static readonly JSON_START_PATTERNS: ReadonlyArray<string> = [
-    '{"content":',
-    '{"name":',
-    '{"input":',
-    '{"stop":',
-    '{"followupPrompt":',
-    '{"usage":',
-    '{"contextUsagePercentage":'
-  ]
-
-  /**
-   * Classify a parsed JSON object by its fields.
-   * Uses field-combination checks (like AIClient-2-API) instead of relying
-   * on which string pattern was matched — this prevents false positives
-   * where model text output contains e.g. '{"name":' patterns.
-   */
-  private static classifyEvent(data: Record<string, unknown>, currentToolCall: ParsedToolCall | null): KiroStreamEvent['type'] | null {
-    // Content event: has "content" and is NOT a followupPrompt
-    if (data.content !== undefined && !data.followupPrompt) return 'content'
-    // Tool start: has "name" + "toolUseId", AND this is NOT a continuation of the current tool call
-    if (data.name && data.toolUseId && (!currentToolCall || currentToolCall.id !== data.toolUseId)) return 'tool_start'
-    // Tool input continuation: same toolUseId as current, has "name" + "input"
-    if (data.name && data.input !== undefined && currentToolCall && currentToolCall.id === data.toolUseId) return 'tool_input'
-    // Tool input continuation: has "input" but no "name" (alternative format)
-    if (data.input !== undefined && !data.name) return 'tool_input'
-    // Tool stop: has "stop" but NOT "contextUsagePercentage"
-    if (data.stop !== undefined && data.contextUsagePercentage === undefined) return 'tool_stop'
-    // Followup prompt
-    if (data.followupPrompt) return 'followup'
-    // Usage
-    if (data.usage !== undefined) return 'usage'
-    // Context usage percentage (last event in stream)
-    if (data.contextUsagePercentage !== undefined) return 'context_usage'
-    return null
-  }
-
-
-  /**
-   * Feed a raw chunk of bytes from the HTTP response.
-   * Returns zero or more parsed events.
-   */
-  feed(chunk: Buffer): KiroStreamEvent[] {
-    try {
-      this.buffer += chunk.toString('utf8')
-    } catch {
-      return []
-    }
-
-    const events: KiroStreamEvent[] = []
-
-    while (true) {
-      // Find the earliest JSON object start in the buffer
-      let earliestPos = -1
-
-      for (const pattern of AwsEventStreamParser.JSON_START_PATTERNS) {
-        const pos = this.buffer.indexOf(pattern)
-        if (pos !== -1 && (earliestPos === -1 || pos < earliestPos)) {
-          earliestPos = pos
-        }
-      }
-
-      if (earliestPos === -1) break
-
-      // Find the end of the JSON object at that position
-      const jsonEnd = findMatchingBrace(this.buffer, earliestPos)
-      if (jsonEnd === -1) break // Incomplete — wait for more data
-
-      const jsonStr = this.buffer.slice(earliestPos, jsonEnd + 1)
-      this.buffer = this.buffer.slice(jsonEnd + 1)
-
-      try {
-        const data = JSON.parse(jsonStr) as Record<string, unknown>
-        // Classify by actual fields, not by which pattern matched
-        const eventType = AwsEventStreamParser.classifyEvent(data, this.currentToolCall)
-
-        if (eventType) {
-          const event = this.processEvent(data, eventType)
-          if (event) events.push(event)
-        }
-      } catch {
-        // Malformed JSON — discard and continue
-      }
-    }
-
-    return events
-  }
-
-  private processEvent(data: Record<string, unknown>, eventType: KiroStreamEvent['type']): KiroStreamEvent | null {
-    switch (eventType) {
-      case 'content':     return this.processContentEvent(data)
-      case 'tool_start':  this.processToolStartEvent(data);  return null
-      case 'tool_input':  this.processToolInputEvent(data);  return null
-      case 'tool_stop':   this.processToolStopEvent(data);   return null
-      case 'usage':       return { type: 'usage', data: data.usage ?? 0 }
-      case 'context_usage': return { type: 'context_usage', data: data.contextUsagePercentage ?? 0 }
-      default:            return null
-    }
-  }
-
-  private processContentEvent(data: Record<string, unknown>): KiroStreamEvent | null {
-    // Skip followupPrompt embedded in content events
-    if (data.followupPrompt) return null
-
-    const content = (data.content as string) ?? ''
-
-    // Deduplicate repeating content (Kiro sometimes sends the same chunk twice)
-    if (content === this.lastContent) return null
-    this.lastContent = content
-
-    return { type: 'content', data: content }
-  }
-
-  private processToolStartEvent(data: Record<string, unknown>): void {
-    // Finalize any in-progress tool call before starting a new one
-    if (this.currentToolCall) this.finalizeToolCall()
-
-    const inputData = data.input
-    let inputStr: string
-    if (typeof inputData === 'object' && inputData !== null) {
-      inputStr = JSON.stringify(inputData)
-    } else if (inputData && String(inputData).trim()) {
-      // Only use non-empty input from tool_start; empty input means wait for tool_input events
-      inputStr = String(inputData)
-    } else {
-      inputStr = ''
-    }
-
-    this.currentToolCall = {
-      id: (data.toolUseId as string) || `toolu_${crypto.randomBytes(12).toString('hex')}`,
-      type: 'function',
-      function: {
-        name: (data.name as string) || '',
-        arguments: inputStr
-      }
-    }
-
-    if (data.stop) this.finalizeToolCall()
-  }
-
-
-  private processToolInputEvent(data: Record<string, unknown>): void {
-    if (!this.currentToolCall) return
-
-    const inputData = data.input
-    if (typeof inputData === 'object' && inputData !== null) {
-      this.currentToolCall.function.arguments += JSON.stringify(inputData)
-    } else {
-      this.currentToolCall.function.arguments += inputData != null ? String(inputData) : ''
-    }
-  }
-
-  private processToolStopEvent(data: Record<string, unknown>): void {
-    if (this.currentToolCall && data.stop) this.finalizeToolCall()
-  }
-
-  private finalizeToolCall(): void {
-    if (!this.currentToolCall) return
-
-    let args = this.currentToolCall.function.arguments
-
-    if (typeof args === 'string') {
-      if (args.trim()) {
-        try {
-          const parsed = JSON.parse(args)
-          this.currentToolCall.function.arguments = JSON.stringify(parsed)
-        } catch {
-          // Truncated or malformed — use empty object to avoid Kiro rejecting follow-up
-          this.currentToolCall.function.arguments = '{}'
-        }
-      } else {
-        // Empty arguments string (normal for duplicated tool calls from Kiro)
-        this.currentToolCall.function.arguments = '{}'
-      }
-    } else if (typeof args === 'object' && args !== null) {
-      this.currentToolCall.function.arguments = JSON.stringify(args)
-    } else {
-      this.currentToolCall.function.arguments = '{}'
-    }
-
-    this.toolCalls.push(this.currentToolCall)
-    this.currentToolCall = null
-  }
-
-  /**
-   * Return all collected tool calls, finalizing any in-progress call.
-   */
-  getToolCalls(): ParsedToolCall[] {
-    if (this.currentToolCall) this.finalizeToolCall()
-    return deduplicateToolCalls(this.toolCalls)
-  }
-
-  reset(): void {
-    this.buffer = ''
-    this.lastContent = null
-    this.currentToolCall = null
-    this.toolCalls = []
-  }
-}
-
-// ============================================================================
 // Thinking Tag Parser
 // Detects and separates <thinking>...</thinking> tags from streaming content
 // ============================================================================
@@ -1396,21 +1087,84 @@ function estimateInputTokens(request: AnthropicRequest): number {
 // Kiro Stream → Anthropic SSE
 // ============================================================================
 
+/** A Kiro outcome that must reach the client as an error instead of an empty message. */
+class KiroResponseError extends Error {
+  constructor(readonly errorType: string, message: string) {
+    super(message)
+  }
+}
+
+function errorTypeForException(name: string): string {
+  switch (name) {
+    case 'ThrottlingException':
+    case 'ServiceQuotaExceededException':
+      return 'rate_limit_error'
+    case 'ValidationException':
+    case 'ContentLengthExceededException':
+      return 'invalid_request_error'
+    case 'AccessDeniedException':
+      return 'permission_error'
+    default:
+      return 'api_error'
+  }
+}
+
+function exceptionError(model: string, event: Extract<KiroStreamEvent, { type: 'error' }>): KiroResponseError {
+  const detail = event.message ? `: ${event.message}` : ''
+  return new KiroResponseError(errorTypeForException(event.name), `Kiro ${event.name} for ${model}${detail}`)
+}
+
+/** Null when the stop is an ordinary end of turn. */
+function refusalError(model: string, event: Extract<KiroStreamEvent, { type: 'stop' }>): KiroResponseError | null {
+  if (!event.refusal && !/FILTER|REFUS/i.test(event.stopReason ?? '')) return null
+  const label = [event.stopReason, event.refusal?.category].filter(Boolean).join(', ')
+  const explanation = event.refusal?.explanation?.trim()
+  return new KiroResponseError(
+    'invalid_request_error',
+    `Kiro refused the request for ${model}${label ? ` (${label})` : ''}${explanation ? `: ${explanation}` : ''}`
+  )
+}
+
+function emptyResponseError(model: string, sawReasoning: boolean, parser: AwsEventStreamParser | null): KiroResponseError {
+  const dropped = parser?.getDropped()
+  // Only a stream with no events at all may be transient; the others repeat on retry
+  const detail = sawReasoning
+    ? 'reasoning only, no answer'
+    : dropped?.count
+      ? `only unrecognized events: ${dropped.types.join(', ')}`
+      : null
+  if (!detail) return new KiroResponseError('api_error', `Kiro returned no content for ${model} (no events)`)
+  return new KiroResponseError('invalid_request_error', `Kiro returned no content for ${model} (${detail})`)
+}
+
+function logDroppedEvents(model: string, parser: AwsEventStreamParser): void {
+  const { count, types } = parser.getDropped()
+  if (count > 0) {
+    console.warn(`[KiroAdapter] Dropped ${count} unrecognized stream events model=${model} types=${types.join(',')}`)
+  }
+}
+
+function readOutputTokens(data: unknown, current: number): number {
+  if (typeof data === 'object' && data !== null) {
+    const usage = data as Record<string, number>
+    return usage.outputTokens ?? usage.output_tokens ?? current
+  }
+  return typeof data === 'number' && data > 0 ? data : current
+}
+
 /**
  * Stream the raw Kiro response body as Anthropic SSE events.
- *
- * Kiro emits:
- *   - Text chunks  → content_block_start + content_block_delta (text_delta) events
- *   - Tool events  → accumulate in parser; emitted after stream ends as tool_use blocks
- *   - stop         → message_delta + message_stop
  *
  * Output order (matches Anthropic SDK expectations):
  *   message_start
  *   ping
- *   [content_block_start / content_block_delta / content_block_stop]  (text)
- *   [content_block_start / content_block_delta / content_block_stop]  (tool_use, per call)
+ *   [thinking / text blocks, in arrival order]
+ *   [tool_use blocks, emitted after the upstream stream ends]
  *   message_delta  (with stop_reason)
  *   message_stop
+ *
+ * An upstream exception, a refusal, or a stream with neither answer text nor
+ * tool calls ends with an `error` event instead of message_delta.
  */
 async function streamKiroResponseAsAnthropicSSE(
   responseBody: ReadableStream<Uint8Array> | null,
@@ -1420,7 +1174,6 @@ async function streamKiroResponseAsAnthropicSSE(
 ): Promise<void> {
   const msgId = generateMessageId()
 
-  // message_start
   sseEvent(res, 'message_start', {
     type: 'message_start',
     message: {
@@ -1437,122 +1190,105 @@ async function streamKiroResponseAsAnthropicSSE(
 
   sseEvent(res, 'ping', { type: 'ping' })
 
-  if (!responseBody) {
-    sseEvent(res, 'message_delta', {
-      type: 'message_delta',
-      delta: { stop_reason: 'end_turn', stop_sequence: null },
-      usage: { output_tokens: 0 }
+  let blockIndex = 0
+  let openBlock: 'text' | 'thinking' | null = null
+  let emittedText = false
+  let sawReasoning = false
+
+  const closeBlock = (): void => {
+    if (!openBlock) return
+    sseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: blockIndex })
+    blockIndex++
+    openBlock = null
+  }
+  const emitDelta = (kind: 'text' | 'thinking', value: string): void => {
+    if (!value) return
+    if (openBlock !== kind) {
+      closeBlock()
+      sseEvent(res, 'content_block_start', {
+        type: 'content_block_start',
+        index: blockIndex,
+        content_block: kind === 'text' ? { type: 'text', text: '' } : { type: 'thinking', thinking: '' }
+      })
+      openBlock = kind
+    }
+    sseEvent(res, 'content_block_delta', {
+      type: 'content_block_delta',
+      index: blockIndex,
+      delta: kind === 'text' ? { type: 'text_delta', text: value } : { type: 'thinking_delta', thinking: value }
     })
-    sseEvent(res, 'message_stop', { type: 'message_stop' })
+    if (kind === 'text') emittedText = true
+  }
+  const fail = (err: KiroResponseError): void => {
+    closeBlock()
+    console.warn(`[KiroAdapter] Response failed model=${model} type=${err.errorType}: ${err.message.slice(0, 300)}`)
+    sseEvent(res, 'error', { type: 'error', error: { type: err.errorType, message: err.message } })
+  }
+
+  if (!responseBody) {
+    fail(emptyResponseError(model, false, null))
     return
   }
 
   const parser = new AwsEventStreamParser()
   const thinkingParser = new ThinkingTagParser()
-  let thinkingBlockOpen = false
-  let textBlockOpen = false
-  let blockIndex = 0
   let outputTokens = 0
   let collectedText = ''
+  let failure: KiroResponseError | null = null
+  let contentLengthExceeded = false
 
   const reader = responseBody.getReader()
   try {
-    while (true) {
+    while (!failure) {
       const { done, value } = await reader.read()
       if (done) break
 
-      const events = parser.feed(Buffer.from(value))
-      for (const event of events) {
+      for (const event of parser.feed(Buffer.from(value))) {
         if (event.type === 'usage') {
-          const u = event.data
-          if (typeof u === 'object' && u !== null) {
-            const usage = u as Record<string, number>
-            outputTokens = usage.outputTokens ?? usage.output_tokens ?? outputTokens
-          } else if (typeof u === 'number' && u > 0) {
-            outputTokens = u
-          }
+          outputTokens = readOutputTokens(event.data, outputTokens)
+        } else if (event.type === 'reasoning') {
+          sawReasoning = true
+          collectedText += event.data
+          emitDelta('thinking', event.data)
         } else if (event.type === 'content') {
-          const text = event.data as string
-          if (!text) continue
-          collectedText += text
-
-          // Parse thinking tags
-          const { thinking, text: regularText, thinkingStarted, thinkingEnded } = thinkingParser.feed(text)
-
-          // If thinking starts in this chunk and there's text before <thinking>, emit text first
-          if (thinkingStarted && regularText) {
-            if (!textBlockOpen) {
-              sseEvent(res, 'content_block_start', {
-                type: 'content_block_start',
-                index: blockIndex,
-                content_block: { type: 'text', text: '' }
-              })
-              textBlockOpen = true
-            }
-            sseEvent(res, 'content_block_delta', {
-              type: 'content_block_delta',
-              index: blockIndex,
-              delta: { type: 'text_delta', text: regularText }
-            })
-            sseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: blockIndex })
-            blockIndex++
-            textBlockOpen = false
+          collectedText += event.data
+          const { thinking, text } = thinkingParser.feed(event.data)
+          emitDelta('thinking', thinking)
+          emitDelta('text', text)
+        } else if (event.type === 'stop') {
+          failure = refusalError(model, event)
+        } else if (event.type === 'error') {
+          if (event.name === 'ContentLengthExceededException' && emittedText) {
+            contentLengthExceeded = true
+            break
           }
-
-          // Emit thinking content
-          if (thinkingStarted) {
-            // Close any open text block before starting thinking
-            if (textBlockOpen) {
-              sseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: blockIndex })
-              blockIndex++
-              textBlockOpen = false
-            }
-            // Start thinking block
-            sseEvent(res, 'content_block_start', {
-              type: 'content_block_start',
-              index: blockIndex,
-              content_block: { type: 'thinking', thinking: '' }
-            })
-            thinkingBlockOpen = true
-          }
-
-          if (thinking && thinkingBlockOpen) {
-            sseEvent(res, 'content_block_delta', {
-              type: 'content_block_delta',
-              index: blockIndex,
-              delta: { type: 'thinking_delta', thinking }
-            })
-          }
-
-          if (thinkingEnded && thinkingBlockOpen) {
-            sseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: blockIndex })
-            blockIndex++
-            thinkingBlockOpen = false
-          }
-
-          // Emit regular text content (skip if already emitted above before thinking started)
-          if (regularText && !thinkingStarted) {
-            if (!textBlockOpen) {
-              sseEvent(res, 'content_block_start', {
-                type: 'content_block_start',
-                index: blockIndex,
-                content_block: { type: 'text', text: '' }
-              })
-              textBlockOpen = true
-            }
-
-            sseEvent(res, 'content_block_delta', {
-              type: 'content_block_delta',
-              index: blockIndex,
-              delta: { type: 'text_delta', text: regularText }
-            })
-          }
+          failure = exceptionError(model, event)
         }
-        // Tool events accumulate in the parser; retrieved after stream ends
+        if (failure) break
       }
+      if (contentLengthExceeded) break
     }
   } finally {
+    if (failure || contentLengthExceeded) reader.cancel().catch(() => {})
     reader.releaseLock()
+  }
+
+  logDroppedEvents(model, parser)
+
+  if (failure) {
+    fail(failure)
+    return
+  }
+
+  const { thinking: finalThinking, text: finalText } = thinkingParser.flush()
+  emitDelta('thinking', finalThinking)
+  emitDelta('text', finalText)
+  closeBlock()
+
+  const toolCalls = parser.getToolCalls()
+  if (!emittedText && toolCalls.length === 0) {
+    fail(emptyResponseError(model, sawReasoning || thinkingParser.hasThinking(), parser))
+    return
   }
 
   // Fall back to rough estimate if Kiro didn't emit a usage event
@@ -1560,60 +1296,11 @@ async function streamKiroResponseAsAnthropicSSE(
     outputTokens = estimateTokensByChars(collectedText)
   }
 
-  // Flush any remaining buffered content from thinking parser
-  const { thinking: finalThinking, text: finalText } = thinkingParser.flush()
-
-  if (finalThinking && thinkingBlockOpen) {
-    sseEvent(res, 'content_block_delta', {
-      type: 'content_block_delta',
-      index: blockIndex,
-      delta: { type: 'thinking_delta', thinking: finalThinking }
-    })
-  }
-
-  if (finalText) {
-    if (!textBlockOpen) {
-      sseEvent(res, 'content_block_start', {
-        type: 'content_block_start',
-        index: blockIndex,
-        content_block: { type: 'text', text: '' }
-      })
-      textBlockOpen = true
-    }
-    sseEvent(res, 'content_block_delta', {
-      type: 'content_block_delta',
-      index: blockIndex,
-      delta: { type: 'text_delta', text: finalText }
-    })
-  }
-
-  // Close any open thinking block
-  if (thinkingBlockOpen) {
-    sseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: blockIndex })
-    blockIndex++
-    thinkingBlockOpen = false
-  }
-
-  // Close text block
-  if (textBlockOpen) {
-    sseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: blockIndex })
-    blockIndex++
-  }
-
-  // Emit tool use blocks
-  const toolCalls = parser.getToolCalls()
-  const stopReason = toolCalls.length > 0 ? 'tool_use' : 'end_turn'
-
   for (const tc of toolCalls) {
     sseEvent(res, 'content_block_start', {
       type: 'content_block_start',
       index: blockIndex,
-      content_block: {
-        type: 'tool_use',
-        id: tc.id,
-        name: tc.function.name,
-        input: {}
-      }
+      content_block: { type: 'tool_use', id: tc.id, name: tc.function.name, input: {} }
     })
     sseEvent(res, 'content_block_delta', {
       type: 'content_block_delta',
@@ -1624,6 +1311,7 @@ async function streamKiroResponseAsAnthropicSSE(
     blockIndex++
   }
 
+  const stopReason = contentLengthExceeded ? 'max_tokens' : toolCalls.length > 0 ? 'tool_use' : 'end_turn'
   sseEvent(res, 'message_delta', {
     type: 'message_delta',
     delta: { stop_reason: stopReason, stop_sequence: null },
@@ -1636,68 +1324,72 @@ async function streamKiroResponseAsAnthropicSSE(
 // Non-streaming: collect complete Kiro response
 // ============================================================================
 
+/** Throws KiroResponseError for the same outcomes the streaming path reports as `error`. */
 async function collectKiroResponse(
   responseBody: ReadableStream<Uint8Array> | null,
   model: string,
   estimatedInputTokens: number
 ): Promise<Record<string, unknown>> {
-  const parser = new AwsEventStreamParser()
-  const thinkingParser = new ThinkingTagParser()
-  let fullText = ''
-  let outputTokens = 0
+  if (!responseBody) throw emptyResponseError(model, false, null)
 
-  if (responseBody) {
-    const reader = responseBody.getReader()
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        const events = parser.feed(Buffer.from(value))
-        for (const event of events) {
-          if (event.type === 'content') {
-            const text = event.data as string
-            fullText += text
-            // Feed to thinking parser to track state
-            thinkingParser.feed(text)
-          } else if (event.type === 'usage') {
-            const u = event.data
-            if (typeof u === 'object' && u !== null) {
-              const usage = u as Record<string, number>
-              outputTokens = usage.outputTokens ?? usage.output_tokens ?? outputTokens
-            } else if (typeof u === 'number' && u > 0) {
-              outputTokens = u
-            }
+  const parser = new AwsEventStreamParser()
+  let fullText = ''
+  let reasoningText = ''
+  let outputTokens = 0
+  let contentLengthExceeded = false
+
+  const reader = responseBody.getReader()
+  try {
+    reading: while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      for (const event of parser.feed(Buffer.from(value))) {
+        if (event.type === 'content') {
+          fullText += event.data
+        } else if (event.type === 'reasoning') {
+          reasoningText += event.data
+        } else if (event.type === 'usage') {
+          outputTokens = readOutputTokens(event.data, outputTokens)
+        } else if (event.type === 'stop') {
+          const refusal = refusalError(model, event)
+          if (refusal) throw refusal
+        } else if (event.type === 'error') {
+          if (event.name === 'ContentLengthExceededException' && fullText.replace(/<thinking>[\s\S]*?(<\/thinking>|$)/, '').trim()) {
+            contentLengthExceeded = true
+            break reading
           }
+          throw exceptionError(model, event)
         }
       }
-    } finally {
-      reader.releaseLock()
     }
+  } catch (err) {
+    reader.cancel().catch(() => {})
+    throw err
+  } finally {
+    logDroppedEvents(model, parser)
+    reader.releaseLock()
   }
-
-  // Flush thinking parser
-  thinkingParser.flush()
 
   const toolCalls = parser.getToolCalls()
   const content: Array<Record<string, unknown>> = []
 
-  // Parse thinking tags from full text
   const thinkingMatch = fullText.match(/<thinking>([\s\S]*?)<\/thinking>/)
-  let thinkingContent = ''
+  let thinkingContent = reasoningText
   let textContent = fullText
 
   if (thinkingMatch) {
-    thinkingContent = thinkingMatch[1]
-    // Remove thinking tags from text content
+    thinkingContent += thinkingMatch[1]
     textContent = fullText.replace(/<thinking>[\s\S]*?<\/thinking>/, '').trim()
   }
 
-  // Add thinking block first if present
+  if (!textContent.trim() && toolCalls.length === 0) {
+    throw emptyResponseError(model, Boolean(thinkingContent), parser)
+  }
+
   if (thinkingContent) {
     content.push({ type: 'thinking', thinking: thinkingContent })
   }
 
-  // Add text block if present
   if (textContent) {
     content.push({ type: 'text', text: textContent })
   }
@@ -1708,10 +1400,10 @@ async function collectKiroResponse(
     content.push({ type: 'tool_use', id: tc.id, name: tc.function.name, input })
   }
 
-  const stopReason = toolCalls.length > 0 ? 'tool_use' : 'end_turn'
+  const stopReason = contentLengthExceeded ? 'max_tokens' : toolCalls.length > 0 ? 'tool_use' : 'end_turn'
   // Fall back to rough estimate if Kiro didn't emit a usage event
-  if (outputTokens === 0 && fullText.length > 0) {
-    outputTokens = estimateTokensByChars(fullText)
+  if (outputTokens === 0 && (fullText.length > 0 || reasoningText.length > 0)) {
+    outputTokens = estimateTokensByChars(fullText + reasoningText)
   }
 
   return {
@@ -1886,7 +1578,7 @@ export async function handleKiroRequest(
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Failed to collect response'
         console.error('[KiroAdapter] Collect error:', msg)
-        return sendKiroError(res, 'api_error', msg)
+        return sendKiroError(res, err instanceof KiroResponseError ? err.errorType : 'api_error', msg)
       }
     }
   } catch (err: unknown) {

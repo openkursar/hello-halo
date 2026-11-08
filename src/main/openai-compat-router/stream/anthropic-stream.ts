@@ -99,7 +99,8 @@ export class AnthropicStreamHandler extends BaseStreamHandler {
         break
 
       case 'message_stop':
-        // Handled by finishMessage in the finally block
+        // The upstream ends the message even when it skipped message_delta.
+        this.markStreamCompleted()
         break
 
       case 'ping':

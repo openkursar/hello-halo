@@ -735,6 +735,26 @@ describe('retry headers on error replies', () => {
     expect(res.headers['retry-after']).toBeUndefined()
   })
 
+  it.each([
+    { status: 429, error: { type: 'rate_limit_error', message: 'Credits limit exceeded' } },
+    { status: 400, error: { type: 'budget_exceeded', message: 'Budget has been exceeded! Current cost: 12.5, Max budget: 10.0' } },
+    { status: 400, error: { type: 'auth_error', message: 'Authentication Error - ExceededBudget: User=u1 over budget. Spend=10.2, Budget=10.0' } },
+  ])('tells the client not to retry a gateway budget that is used up: $error.message', async ({ status, error }) => {
+    const res = await relay({ status, body: { error } })
+
+    expect(res.statusCode).toBe(status)
+    expect(res.headers['x-should-retry']).toBe('false')
+  })
+
+  it.each([
+    { status: 429, error: { type: 'rate_limit_error', message: 'Rate limit exceeded: 60 requests per minute' } },
+    { status: 400, error: { type: 'invalid_request_error', message: '`max_tokens` must be greater than `thinking.budget_tokens`' } },
+  ])('does not take a passing limit or a token budget for a used-up budget: $error.message', async ({ status, error }) => {
+    const res = await relay({ status, body: { error } })
+
+    expect(res.headers['x-should-retry']).toBeUndefined()
+  })
+
   it.each(['chat_completions', 'anthropic_passthrough'])(
     '%s: passes on none of the upstream\'s retry hints, even a wait of hours',
     async (apiType) => {

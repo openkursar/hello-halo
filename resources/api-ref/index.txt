@@ -79,6 +79,8 @@ GET    /api/im-sessions/linked                                     [ai]       ch
 POST   /api/im-sessions/set-push-link                              [ai]       channels,digital-human  Let a digital human push to an IM chat another digital human's bot knows, or stop it
 GET    /api/auth/providers                                         [ai]       settings                List the sign-in and model providers this build offers
 GET    /api/system/version                                         [ai]       settings                Read the running Halo version
+GET    /api/apps/tags                                              [ai]       digital-human           List the user's tags on one list (digital humans, skills or MCP servers), with how many items carry each
+POST   /api/apps/tags/rename                                       [ai]       digital-human           Rename or remove one of the user's tags across a list (digital humans, skills or MCP servers)
 GET    /api/apps                                                   [ai]       digital-human           List digital humans (and other installed apps) in a space
 POST   /api/apps/install                                           [wrapped]  digital-human           Install a digital human (or other app type) from its full definition (spec) object
 GET    /api/apps/<appId>                                           [ai]       digital-human           Get one installed digital human (or other app) by id
@@ -131,11 +133,11 @@ GET    /api/teams/collab-for-conversation/<conversationId>         [ai]       te
 POST   /api/teams/<teamId>/save-collab                             [ai]       team                    Keep a temporary collaboration as a persistent team
 GET    /api/teams/<teamId>                                         [ai]       team                    Get one team's own record
 GET    /api/teams/<teamId>/detail                                  [ai]       team                    Get a team with members, edges, roster status, board and decisions
-GET    /api/teams/<teamId>/chat-messages                           [ai]       team                    Read one member's transcript within a team
-POST   /api/teams/<teamId>/members/<appId>/send                    [ai]       team                    Send a message to one team member and wait for its reply
-POST   /api/teams/<teamId>/members/<appId>/stop                    [ai]       team                    Stop the turn one team member is running
+GET    /api/teams/<teamId>/chat-messages                           [ai]       team                    Read one member's transcript in one team conversation
+POST   /api/teams/<teamId>/members/<appId>/send                    [ai]       team                    Send a message to one team member in one conversation and wait for its reply
+POST   /api/teams/<teamId>/members/<appId>/stop                    [ai]       team                    Stop the turn one team member is running in one conversation
 GET    /api/teams/<teamId>/artifacts                               [ai]       team                    List files each member produced in the current or latest run
-GET    /api/teams/<teamId>/conversations                           [ai]       team                    List a team's open conversations, newest first
+GET    /api/teams/<teamId>/conversations                           [ai]       team                    List a team's conversations (its tasks and chats), newest first
 POST   /api/teams/<teamId>/conversations                           [ai]       team                    Open a new team conversation
 PATCH  /api/teams/<teamId>/conversations/<epochId>                 [ai]       team                    Rename a team conversation
 DELETE /api/teams/<teamId>/conversations/<epochId>                 [ai]       team                    Archive (close) a team conversation
@@ -203,3 +205,15 @@ POST   /api/tlon/<kbId>/resolve-sources                            [ai]       kn
 POST   /api/tlon/<kbId>/ingest                                     [ai]       knowledge-base          Start indexing a collection's documents (fire-and-forget)
 POST   /api/tlon/<kbId>/clear-relearn                              [ai]       knowledge-base          Wipe extracted text and re-index a collection from scratch
 GET    /api/tlon/<kbId>/ingest-status                              [ai]       knowledge-base          Get the current indexing progress for a collection
+POST   /api/skills/list                                            [ai]       store                   List skill copies available in one workspace and global scope
+POST   /api/skills/read                                            [ai]       store                   Read one discovered skill copy and its current file revision
+POST   /api/skills/save                                            [ai]       store                   Save one skill instruction file against the revision just read
+POST   /api/skills/import                                          [ai]       store                   Import a complete personal skill package into an explicit scope
+POST   /api/skills/set-enabled                                     [ai]       store                   Enable or disable one skill copy without deleting its files
+POST   /api/skills/move-preview                                    [ai]       store                   Preview a skill scope move without changing any files
+POST   /api/skills/move                                            [ai]       store                   Move one complete skill package to the selected scope
+POST   /api/skills/copy                                            [ai]       store                   Create an independent personal skill copy under a new name
+POST   /api/skills/delete                                          [ai]       store                   Trash one skill package on the host computer
+POST   /api/skills/export                                          [ai]       store                   Export one discovered skill package as base64 ZIP bytes
+POST   /api/skills/restore-legacy                                  [ai]       store                   Recover an explicitly selected legacy removed skill
+POST   /api/skills/delete-legacy                                   [ai]       store                   Permanently discard one recoverable legacy skill package

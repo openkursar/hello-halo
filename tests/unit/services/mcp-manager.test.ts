@@ -283,7 +283,7 @@ describe('testMcpConnections telemetry', () => {
       provider: 'anthropic', sourceId: 'account-a', credentialsGeneration: 'captured-a',
       baseUrl: 'https://example.invalid/v1/messages', apiKey: 'test-account-a', model: 'test-model-a',
       customHeaders: { 'x-account-id': 'account-a' }, supportsVision: false,
-      capabilities: { contextWindow: 100_000, maxOutputTokens: 64_000, maxOutputTokensConfigured: true },
+      capabilities: { contextWindow: 100_000, maxOutputTokens: 64_000 },
     }
     credentialsMock.mockResolvedValue(credentials)
     vi.mocked(getDbMcpServers).mockReturnValue({ srv: { type: 'stdio', command: 'test-mcp' } })
@@ -341,7 +341,7 @@ describe('testMcpConnections environment', () => {
   const credentials: ApiCredentials = {
     provider: 'oauth', sourceId: 'account-a', credentialsGeneration: 'captured-a',
     baseUrl: 'https://example.invalid/v1/messages', apiKey: 'token-a', model: 'model-a',
-    capabilities: { contextWindow: 200_000, maxOutputTokens: 32_000, maxOutputTokensConfigured: false },
+    capabilities: { contextWindow: 200_000, maxOutputTokens: 32_000 },
   }
   const builtEnv = { CLAUDE_CONFIG_DIR: '/halo/claude-config', NO_PROXY: 'localhost,127.0.0.1,[::1],.weixin.qq.com' }
 

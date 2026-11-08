@@ -1912,6 +1912,49 @@ describe('TeamOrchestration', () => {
         vi.useRealTimers()
       }
     })
+
+    it('keeps the person-level working set in memory, settled after each edge', () => {
+      seedTeam(store)
+      const { deps, active } = makeSession()
+      const worked: string[] = []
+      bus = createMessageBus({
+        store,
+        hooks: { wakeTarget: (p) => orch.wakeTarget(p), isBusy: (k) => orch.isBusy(k) },
+      })
+      const orch = createOrchestration({
+        store,
+        bus,
+        session: deps,
+        onMemberWorkChanged: (appId) => worked.push(appId),
+      })
+      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:working-set')
+      const sessionKey = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id)
+
+      vi.useFakeTimers()
+      try {
+        active.add(sessionKey)
+        orch.noteMemberStatusChanged(TEAM_ID, RESEARCHER_APP)
+        orch.noteMemberStatusChanged(TEAM_ID, RESEARCHER_APP)
+        expect(orch.isMemberWorking(RESEARCHER_APP)).toBe(false)
+        vi.advanceTimersByTime(1000)
+        expect(orch.isMemberWorking(RESEARCHER_APP)).toBe(true)
+        expect(worked).toEqual([RESEARCHER_APP])
+
+        // The end edge fires while the slot is still held; the read waits for it to free.
+        orch.noteMemberStatusChanged(TEAM_ID, RESEARCHER_APP)
+        active.delete(sessionKey)
+        vi.advanceTimersByTime(1000)
+        expect(orch.isMemberWorking(RESEARCHER_APP)).toBe(false)
+        expect(worked).toEqual([RESEARCHER_APP, RESEARCHER_APP])
+
+        // An edge that changes nothing pushes nothing.
+        orch.noteMemberStatusChanged(TEAM_ID, RESEARCHER_APP)
+        vi.advanceTimersByTime(1000)
+        expect(worked).toHaveLength(2)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 
   // ===========================================================================

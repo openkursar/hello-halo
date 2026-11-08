@@ -186,7 +186,6 @@ vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({ clearSupp
 vi.mock('../../../../src/main/apps/runtime/conversation-collab', () => ({ resolveConversationCollab: () => null, createConversationCollabMcpServer: vi.fn() }))
 vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({ createNotifyToolServer: () => ({}) }))
 vi.mock('../../../../src/main/apps/runtime/reminders/tool', () => ({ createRemindersMcpServer: () => ({}) }))
-vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({ createPersonContextMcpServer: () => ({}), personContextPrompt: () => '' }))
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({ createReportToolServer: vi.fn() }))
 vi.mock('../../../../src/main/services/notify-channels', () => ({ getEnabledChannels: () => [] }))
 vi.mock('../../../../src/main/services/memory-consolidation', () => ({ requestConsolidation: vi.fn() }))
@@ -406,7 +405,7 @@ beforeEach(async () => {
   m.writeEvent.mockReset()
   m.buildMemorySnapshot.mockReset().mockImplementation(async (layout: MemoryLayout) => memorySnapshot(layout))
   m.ensureMemoryFile.mockReset().mockResolvedValue(false)
-  saveConfig({ aiSources: { version: 2, currentId: 'account-b', sources: [account('account-a'), account('account-b')] } })
+  saveConfig({ agent: { maxTurns: 200, ccRuntime: { selectionOrigin: 'user' } }, aiSources: { version: 2, currentId: 'account-b', sources: [account('account-a'), account('account-b')] } })
   await new Promise<void>(resolve => setTimeout(resolve, 0))
 })
 

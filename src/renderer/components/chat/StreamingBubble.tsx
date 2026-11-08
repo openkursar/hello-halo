@@ -72,7 +72,7 @@ export function StreamingBubble({
       prevTextBlockVersionRef.current = textBlockVersion
       // Skip if already clean: state setters are in the dep array, so an
       // unconditional reset here would loop.
-      if (activeSnapshotLen === 0 && segments.length === 0 && scrollOffset === 0) return
+      if (activeSnapshotLen === 0 && segments.length === 0 && scrollOffset === 0 && pendingSnapshotRef.current === null) return
       // Reset all state for new text block
       setActiveSnapshotLen(0)
       setSegments([])
@@ -146,6 +146,7 @@ export function StreamingBubble({
       setActiveSnapshotLen(0)
       setIsSegmentAnimating(false)
       clearTimeout(segmentAnimTimerRef.current)
+      pendingSnapshotRef.current = null
       prevThoughtsLenRef.current = 0
       prevTextBlockVersionRef.current = 0
     }

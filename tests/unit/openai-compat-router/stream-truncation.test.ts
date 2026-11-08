@@ -148,6 +148,51 @@ describe.each(wires.slice(0, 2))('$name explicit stream completion', wire => {
   })
 })
 
+describe('Anthropic compatible message_stop without a stop reason', () => {
+  const wire = wires[2]
+  const stop = { type: 'message_stop' }
+
+  it('accepts complete tool arguments', async () => {
+    const result = await convertEvents(wire, [...wire.events([{ name: 'Bash', args: '{"command":"echo complete"' }], 'missing'), stop])
+    expect((await result.final).stop_reason).toBe('tool_use')
+    expect(toolCallsAtStop(result.events)).toEqual([{ name: 'Bash', input: { command: 'echo complete' } }])
+    expect(blockLifecycleViolations(result.events)).toEqual([])
+  })
+
+  it('rejects a partial value', async () => {
+    const result = await convertEvents(wire, [...wire.events([{ name: 'Bash', args: '{"command":"echo partial' }], 'missing'), stop])
+    await expect(result.final).rejects.toThrow(/incomplete tool arguments/)
+    expect(result.acceptedTools).toEqual([])
+  })
+})
+
+describe.each(wires)('$name clean close without any stop signal', wire => {
+  it('delivers tool calls whose input is complete JSON', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const result = await convert(wire, [{ name: 'Read', args: '{"file_path":"a.ts"}' }, { name: 'Bash', args: '{"command":"echo ok"}' }], 'missing')
+    expect((await result.final).stop_reason).toBe('tool_use')
+    expect(result.acceptedTools).toEqual(['Read', 'Bash'])
+    expect(result.events.some(event => event.event === 'message_stop')).toBe(true)
+    expect(blockLifecycleViolations(result.events)).toEqual([])
+    expect(log.mock.calls.flat().join(' ')).toContain('stop=tool_use (upstream sent no stop reason)')
+  })
+
+  it.each(['{"command":"echo ok"', ''])('does not close brackets or invent input without a stop signal: %s', async args => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = await convert(wire, [{ name: 'Read', args: '{"file_path":"a.ts"}' }, { name: 'Bash', args }], 'missing')
+    await expect(result.final).rejects.toThrow(/before completion/)
+    expect(result.acceptedTools).not.toContain('Bash')
+    expect(result.events.some(event => event.event === 'message_stop')).toBe(false)
+  })
+
+  it('still fails a connection error after complete tool input', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = await convert(wire, [{ name: 'Read', args: '{"file_path":"a.ts"}' }], 'missing', true)
+    await expect(result.final).rejects.toThrow(/before completion/)
+    expect(result.events.some(event => event.event === 'message_stop')).toBe(false)
+  })
+})
+
 describe.each(wires)('$name truncated tool calls', wire => {
   it('delivers a complete tool and following text before the response ends', async () => {
     let controller!: ReadableStreamDefaultController<Uint8Array>
