@@ -216,8 +216,10 @@ for runtime to record execution results. This is cleaner than overloading `updat
 **Decision**: `install()` reuses a skill only when its provenance, command name
 and complete current package bytes match. Different content from that same source
 at the same name/scope is an `AppAlreadyInstalledError`, never an implicit upgrade.
-Different sources may coexist at the same command name without overwriting or
-reenabling each other. Reuse preserves status, configuration and version. Derived
+Every origin shares one skill folder per scope, so a different source (or the
+user's own skill) at the same command name in the same scope is likewise refused
+and never overwritten; an identical package already standing there that no live
+installation owns is adopted. Reuse preserves status, configuration and version. Derived
 localized command-name collisions between different authored names retain their
 numeric suffix behavior. Automation/MCP duplicate installations remain conflicts.
 
@@ -239,9 +241,9 @@ unchanged.
 Explicit skill replacement is a separate product operation in `apps/skills`:
 validate a selected file and revision, replace the complete package, then commit
 its metadata with `updateSkillRecord`. Legacy `updateSpec` still supports explicit
-edits/replacement. Private skill directories use installation UUIDs, never `specId`;
-personal directories use command names. Effective command priority belongs to
-`apps/skills`, not to the persistence key.
+edits/replacement. Skill folders are named by command name, never by `specId` or
+installation ID. Effective command priority belongs to `apps/skills`, not to the
+persistence key.
 
 An explicit reinstall may recreate a deleted managed package from its stored
 content, or install an incoming package into an absent destination. A personal
@@ -340,14 +342,17 @@ previous package. Editing instructions alone uses the content-only writer and
 leaves supporting files untouched. Scope changes move current files with revision
 checks and restore their old location if the record write fails.
 
-Personal skills (`manual`, or no slug/source) live in user/project `.agents/skills`.
-Their records retain metadata only: no `skill_content`, `skill_files` or
-`skill_assets`. `getApp` reads current personal files for legacy detail/publishing;
+Every skill lives in the user's `.agents/skills` of its scope (home for global, the
+workspace folder for a workspace); Halo keeps no private skill folder. Personal skills
+(`manual`, or no slug/source) record metadata only: no `skill_content`, `skill_files`
+or `skill_assets`. `getApp` reads current personal files for legacy detail/publishing;
 missing/unreadable files return metadata with a warning, never stale instructions.
-Store, digital-human dependency and built-in packages retain their contents in the
-record and materialize under Halo's private global skills or space-data `.halo/skills`,
-keyed by installation ID. Changing a workspace working directory does not relocate
-these managed packages.
+Store, digital-human dependency and built-in packages also retain their contents in
+the record, so an explicit reinstall can recreate a deleted package. The installation
+state carries a `digest` of the files Halo last wrote; an author upgrade treats files
+that no longer match it as the user's own edit and keeps them. A skill recorded under
+the retired private roots (`<Halo data>/skills`, `<space>/.halo/skills`) is relocated
+lazily by `apps/skills` migration when its scope is read.
 
 `userOverrides.skill` is versioned internal installation metadata. Public
 `updateOverrides` rejects the field, including null; external clients cannot inject
@@ -362,7 +367,7 @@ uninstall/delete sends only its recorded file/package/link to OS trash, once per
 in-flight deletion, then retains a deleted tombstone; trash failure never falls
 back to permanent deletion. Legacy records without file ownership must use recovery
 before deletion, and no skill record is automatically pruned. Deleting a space
-keeps external personal files and removes only explicitly owned private packages.
+keeps every skill file, since they sit in the user's folders; only the records go.
 Removing a digital human never cascades into its skill dependencies; recorded
 owner labels may remain as provenance.
 
@@ -376,9 +381,9 @@ and the retained package together while clearing customization. User edits still
 use `updateSpec`; skill baselines remain their retained packages, not the
 automation-only field-merge original.
 Built-in skill seeding honors deletion/customization/unmigrated records and retains
-packages no longer shipped rather than erasing their tombstones. The startup
-`reconcileGlobalSkillsLocation` rewrite is disabled; manager startup never touches
-live skill files. Migration belongs to `apps/skills` and is requested-scope only.
+packages no longer shipped rather than erasing their tombstones. A shipped skill
+whose name a user skill already holds is left to the user. Manager startup never
+touches live skill files; migration belongs to `apps/skills` and is requested-scope only.
 
 ### 2.12 Knowledge Base Seeding: Once Per App, Ever
 

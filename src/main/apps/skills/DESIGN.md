@@ -7,12 +7,16 @@ It does not create engine sessions or own digital-human execution.
 
 ## Sources and authority
 
-Personal skills are files in user/project `.agents/skills`, with existing
-`.claude/skills` and command-file compatibility. Only preferences and references
-are retained for discovered files, not their instruction bodies. Store, bundled
-and built-in skill records retain their package in App Manager and materialize
-in Halo's private global/workspace skill directories. Their `spec.name` is a
-command identity, not an installation identity or ownership proof.
+Every skill is a file in the user's `.agents/skills` of its scope, with existing
+`.claude/skills` and command-file compatibility; there is no Halo-private skill
+folder. Only preferences and references are retained for discovered files, not
+their instruction bodies. Store, bundled and built-in skill records keep their
+package in App Manager and are written to the same folders, named by command
+name, and never over a skill that already stands there. Their `spec.name` is a
+command identity, not an ownership proof. Records found under the retired
+private roots (`<Halo data>/skills`, `<space>/.halo/skills`) move into the shared
+folder when their scope is read; an occupied destination leaves the skill working
+where it is.
 
 Installation metadata is an internal versioned `skill` entry in user overrides,
 not a package field. It records the installed file path, customization state,
@@ -40,8 +44,11 @@ services using renderer-safe shared entry types. Apps registers its implementati
 at runtime bootstrap. SDK preparation requests the catalog once when creating an
 engine session, not once per model/tool step. Halo SDK receives the explicit list
 (including an explicit empty list); independent SDK callers retain discovery.
-Other engines disclose unsupported resolution/disablement rather than silently
-changing project settings or using a synthetic copied working directory.
+Other engines read the same shared folders: Codex and dsh find them directly, and
+Claude Code, which only reads `.claude`, gets a Halo-owned directory of links
+(`services/agent/engine-skill-links.ts`) passed as an extra directory, so no project
+setting or user file is changed and no working directory is copied. An engine that
+reads the folders itself ignores the library's enable switch.
 
 ## Lifecycle
 
