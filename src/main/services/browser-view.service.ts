@@ -1,9 +1,10 @@
 /** Browser page state and policy, independent of the guest's DOM host. */
 
-import { BrowserWindow, session, webContents as electronWebContents, type Session, type WebContents } from 'electron'
+import { BrowserWindow, screen, session, webContents as electronWebContents, type Session, type WebContents } from 'electron'
 import { browserHostManager, captureBrowserPage } from './browser-host'
 import { isUrlAllowedByPolicy } from './browser-policy.service'
 import { resolveUserAgent } from './user-agent-resolver'
+import { TouchPointerController } from './browser-touch-pointer'
 import { getConfig, onBrowserConfigChange } from '../foundation/config.service'
 
 // ============================================
@@ -167,6 +168,33 @@ class BrowserPageManager {
   // every open page to reload.
   private lastAppliedUserAgent: string | undefined
 
+  /** Owns the window-wide mouse-as-touch switch for H5 pages (see browser-touch-pointer.ts). */
+  private touchPointer = new TouchPointerController({
+    getPageBounds: () => {
+      const viewId = this.displayedViewId
+      const state = viewId ? this.states.get(viewId) : undefined
+      const bounds = viewId ? this.lastBounds.get(viewId) : undefined
+      if (!viewId || !state || !bounds || state.deviceMode !== 'h5' || state.blockedByPolicy) return null
+      return this.resolveBounds(viewId, bounds)
+    },
+    getHost: () => {
+      const win = this.mainWindow
+      if (!win || win.isDestroyed() || win.webContents.isDestroyed() || win.isMinimized()) return null
+      const content = win.getContentBounds()
+      return { x: content.x, y: content.y, zoom: win.webContents.getZoomFactor(), focused: win.isFocused() }
+    },
+    getCursor: () => screen.getCursorScreenPoint(),
+    setEmit: async enabled => {
+      const wc = this.mainWindow && !this.mainWindow.isDestroyed() ? this.mainWindow.webContents : null
+      if (!wc || wc.isDestroyed()) return
+      if (!wc.debugger.isAttached()) wc.debugger.attach('1.3')
+      await wc.debugger.sendCommand('Emulation.setEmitTouchEventsForMouse', {
+        enabled,
+        configuration: enabled ? 'mobile' : 'desktop',
+      })
+    },
+  })
+
   /**
    * Initialize the manager with the main window
    */
@@ -178,8 +206,14 @@ class BrowserPageManager {
 
     // Clean up views when window is closed
     mainWindow.on('closed', () => {
+      this.touchPointer.stop()
       this.destroyAll()
     })
+    const syncTouchPointer = () => this.touchPointer.sync()
+    mainWindow.on('focus', syncTouchPointer)
+    mainWindow.on('blur', syncTouchPointer)
+    mainWindow.on('minimize', syncTouchPointer)
+    mainWindow.on('restore', syncTouchPointer)
 
     // Issue #124: apply a newly-saved custom User-Agent to all active views
     // immediately, without requiring a page reload or app restart. Only fires
@@ -297,6 +331,7 @@ class BrowserPageManager {
     if (result) {
       this.activeViewId = viewId
       this.displayedViewId = viewId
+      this.touchPointer.sync()
     }
     return result
   }
@@ -306,6 +341,7 @@ class BrowserPageManager {
     const result = this.applyBounds(viewId, this.lastBounds.get(viewId) ?? { x: 0, y: 0, width: 1280, height: 720 }, false)
     if (this.activeViewId === viewId) this.activeViewId = null
     if (this.displayedViewId === viewId) this.displayedViewId = null
+    this.touchPointer.sync()
     return result
   }
 
@@ -571,6 +607,7 @@ class BrowserPageManager {
       this.activeViewId = null
     }
     if (this.displayedViewId === viewId) this.displayedViewId = null
+    this.touchPointer.sync()
 
     this.emitViewDestroyed(viewId, view?.webContents.id)
   }
@@ -784,7 +821,9 @@ class BrowserPageManager {
     const contents = this.views.get(viewId)?.webContents
     // Standard webviews inherit host zoom; page zoom must remain independent of UI scale.
     if (contents && !contents.isDestroyed() && state && contents.getZoomFactor() !== state.zoomLevel) contents.setZoomFactor(state.zoomLevel)
-    return browserHostManager.present(viewId, this.resolveBounds(viewId, bounds), visible && !state?.blockedByPolicy, state?.deviceMode === 'h5' ? H5_VIEWPORT_WIDTH : undefined)
+    const presented = browserHostManager.present(viewId, this.resolveBounds(viewId, bounds), visible && !state?.blockedByPolicy, state?.deviceMode === 'h5' ? H5_VIEWPORT_WIDTH : undefined)
+    this.touchPointer.sync()
+    return presented
   }
 
   /**
@@ -895,6 +934,7 @@ class BrowserPageManager {
       this.activeViewId = null
     }
     if (this.displayedViewId === viewId) this.displayedViewId = null
+    this.touchPointer.sync()
     this.emitViewDestroyed(viewId, contentsId, 'lost')
   }
 
@@ -965,7 +1005,7 @@ class BrowserPageManager {
    *   - Emulation.setDeviceMetricsOverride (viewport + mobile flag)
    *   - WebContents.setUserAgent          (UA string)
    *   - Emulation.setTouchEmulationEnabled
-   *   - Emulation.setEmitTouchEventsForMouse
+   *   - (mouse-as-touch is scoped to the cursor by TouchPointerController)
    *   - Emulation.setEmulatedMedia        (hover:none / pointer:coarse for h5)
    *
    * Then reloads the page so the server sees the new UA on the next request
@@ -990,6 +1030,7 @@ class BrowserPageManager {
       state.deviceMode = mode
       const bounds = this.lastBounds.get(viewId)
       if (bounds) this.applyBounds(viewId, bounds)
+      this.touchPointer.sync()
       this.emitStateChangeImmediate(viewId)
 
       // 4. Reload so the server receives the new UA and the page re-renders
@@ -1030,10 +1071,9 @@ class BrowserPageManager {
         enabled: isH5,
         maxTouchPoints: isH5 ? 5 : 0,
       })
-      await wc.debugger.sendCommand('Emulation.setEmitTouchEventsForMouse', {
-        enabled: isH5,
-        configuration: isH5 ? 'mobile' : 'desktop',
-      })
+      // Mouse-as-touch is NOT set here: Chromium applies it to the whole Halo
+      // window, so TouchPointerController turns it on only while the cursor is
+      // over this page.
 
       // CSS media features — hover and pointer must be set explicitly;
       // they are NOT automatically updated by setDeviceMetricsOverride.

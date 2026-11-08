@@ -77,7 +77,7 @@ import type {
   ImageAttachment
 } from '../shared/types'
 import type { NotifyChannelsProductConfig } from '../shared/types/notification-channels'
-import type { StoreInstallProgress, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, StoreSignInStatus } from '../shared/store/store-types'
+import type { StoreInstallProgress, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, StoreSignInStatus, SkillDepInspection } from '../shared/store/store-types'
 import type { AppType, AppSpec } from '../shared/apps/spec-types'
 
 type GitRpcClient = RpcClient<typeof gitRpc>
@@ -773,8 +773,8 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   storePreviewUpgrade: (input: { appId: string }) => Promise<IpcResponse<import('../shared/apps/app-types').SpecUpgradeOutcome>>
   storePublish: (input: { appId: string; author?: string; version?: string; changelog?: string; category?: string; name?: string; description?: string; tags?: string[] }) => Promise<IpcResponse>
   storePublishPreview: (input: { appId: string; author?: string; name?: string }) => Promise<IpcResponse<{ slug: string; localVersion: string; storeVersion: string | null }>>
-  storeInspectSkillDeps: (input: { appId: string }) => Promise<IpcResponse<Array<{ id: string; declaredBundled: boolean; resolvable: boolean; installed: boolean; appId: string | null; storeName: string | null }>>>
-  storeInspectSkillDepsForSpec: (input: { spec: AppSpec }) => Promise<IpcResponse<Array<{ id: string; declaredBundled: boolean; resolvable: boolean; installed: boolean; appId: string | null; storeName: string | null }>>>
+  storeInspectSkillDeps: (input: { appId: string }) => Promise<IpcResponse<SkillDepInspection[]>>
+  storeInspectSkillDepsForSpec: (input: { spec: AppSpec }) => Promise<IpcResponse<SkillDepInspection[]>>
   storeFindAppByPublishSlug: (input: { slug: string; type?: AppType; author?: string }) => Promise<IpcResponse<{ appId: string | null }>>
   storeExportDhpkg: (input: { appId: string }) => Promise<IpcResponse<{ path: string }>>
   storeExportSkill: (input: { appId: string }) => Promise<IpcResponse<{ path: string }>>

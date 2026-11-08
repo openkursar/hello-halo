@@ -21,9 +21,7 @@ import { readSkillPackage } from '../../services/skills'
 import { extractFrontmatterField } from '../../../shared/skill-frontmatter'
 import { bundleKey, isBundleSeeded, markBundleSeeded } from './bundle-seed-stamp'
 import { AppAlreadyInstalledError } from './errors'
-
-/** Slug namespace identifying this seeder's package provenance. */
-const BUILTIN_SKILL_SLUG_PREFIX = 'halo-builtin-skills/'
+import { BUILTIN_SKILL_SLUG_PREFIX } from '../../../shared/apps/app-types'
 
 /** Resolve resources/builtin-skills/ for dev and packaged (asar reads work through fs). */
 function getBuiltinSkillsDir(): string | null {

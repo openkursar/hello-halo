@@ -2,12 +2,14 @@
  * EditSpaceDialog
  *
  * Modal for editing a dedicated space: its name, icon color, working
- * directory, and — folded under Advanced — its shared memory. Sibling to CreateSpaceDialog (same
- * overlay shell, same z-[60] so it sits above any z-50 panel it was opened
- * from, e.g. SpaceSelector's dropdown).
+ * directory, and — folded under Advanced — its shared memory. Opened from a
+ * sortable SpaceCard, so it is portaled to the body on the global modal
+ * layer: a card mid-drag carries a transform and opacity that would otherwise
+ * re-anchor the fixed overlay and dim it.
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from '../../i18n'
 import { useSpaceStore } from '../../stores/space.store'
 import { api } from '../../api'
@@ -100,8 +102,8 @@ export function EditSpaceDialog({ space, onClose, onSaved }: EditSpaceDialogProp
     }
   }
 
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
+  return createPortal(
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[var(--layer-global-modal)]">
       <div
         className="bg-card border border-border rounded-xl p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto animate-fade-in"
         onMouseDown={(e) => e.stopPropagation()}
@@ -195,6 +197,7 @@ export function EditSpaceDialog({ space, onClose, onSaved }: EditSpaceDialogProp
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

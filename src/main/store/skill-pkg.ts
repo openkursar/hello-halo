@@ -1,5 +1,6 @@
 import { zipSync, strToU8 } from 'fflate'
 import type { SkillSpec } from '../apps/spec'
+import { skillFilesOf } from '../../shared/skill-frontmatter'
 
 /** Maximum total uncompressed size, mirroring the dhpkg cap. */
 const MAX_PACK_BYTES = 50 * 1024 * 1024
@@ -13,10 +14,8 @@ const MAX_PACK_BYTES = 50 * 1024 * 1024
  * `skill_files`) falls back to a lone `SKILL.md` entry from `skill_content`.
  */
 export function packSkill(spec: SkillSpec): Buffer {
-  const files =
-    spec.skill_files && Object.keys(spec.skill_files).length > 0
-      ? spec.skill_files
-      : { 'SKILL.md': spec.skill_content ?? '' }
+  const found = skillFilesOf(spec)
+  const files = Object.keys(found).length > 0 ? found : { 'SKILL.md': '' }
 
   const entries: Record<string, Uint8Array> = {}
   let totalBytes = 0

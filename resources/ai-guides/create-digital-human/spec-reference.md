@@ -185,8 +185,29 @@ documentation.** Its effect depends entirely on what `id` refers to:
     the entry off) in the digital human's **Tools & Resources** (工具与资源). In chat, a missing
     server is simply left out.
 
-`requires.skills` matters unconditionally: those skills are installed right after the app is
-created, and **a failed skill install rolls the entire app creation back**.
+`requires.skills` is **what publishing packages.** At runtime every skill in the digital human's
+space or global scope loads whether declared or not, so a missing entry never shows on the
+author's machine — but sharing to the Store or exporting a `.dhpkg` ships only declared skills,
+and everyone who installs the digital human gets it without the undeclared ones. **Declare every
+skill the `system_prompt` relies on** when you write it; Halo does not add them for you. Leave out
+the skills Halo ships with (`docx`, `pdf`, `pptx`, `xlsx`, ...).
+
+- Use the skill's folder name as `id`. When `create_automation_app` or `update_automation_app`
+  saves the spec, Halo rewrites the id of a skill installed from the Store to its Store id, so
+  installers fetch it from the Store; a skill placed by hand keeps its folder name and is packaged
+  with the digital human.
+- The tool result names local skills the prompt names that `requires.skills` lacks — on create,
+  and on update when the update changes `system_prompt` (only skills the new prompt starts
+  naming). Add one only when the digital human really uses it — a skill name can also be an
+  ordinary word.
+- On create, a declared skill this space can already load is not installed again; any other entry
+  is installed from the Store right after the app is created, and **a failed skill install
+  (including an id the Store does not list) rolls the entire app creation back**.
+- On update, nothing is installed. When the update sets `requires.skills`, the tool result names
+  declared skills this space cannot load: ones the Store lists (the digital human runs without
+  them here until they are installed) and ones it does not (fix the id).
+- The publish and export dialogs flag local skills the prompt names but `requires.skills` lacks,
+  with an **Add as dependencies** (添加为依赖项) button.
 
 ## `browser_login`
 
@@ -221,7 +242,7 @@ Generated from the schema of Halo 3.0.4.
 | `requires.mcps[].reason` | `string` |  | — | Why it needs the server, shown next to the dependency. |
 | `requires.mcps[].bundled` | `boolean` |  | — | SCHEMA-ONLY, no effect. Meant to mark an MCP server shipped inside the package. |
 | `requires.mcps[].enabled` | `boolean` |  | — | `false` keeps the declaration but stops this Digital Human from using the server, in runs and in chat. The server itself stays on for everyone else. |
-| `requires.skills` | `(string \| object)[]` |  | — | Skills to install together with it, as ids or objects. Every skill in its workspace or global scope is available to it anyway; this list only decides what gets installed. |
+| `requires.skills` | `(string \| object)[]` |  | — | Skills it depends on, as ids or objects. Declare every skill the system prompt relies on: sharing and export package only these, so an undeclared skill is missing for everyone who installs it. At runtime every skill in its workspace or global scope loads anyway. |
 | `requires.skills[].id` | `string` non-empty | yes | — | Skill id. |
 | `requires.skills[].reason` | `string` |  | — | Why it needs the skill. |
 | `requires.skills[].bundled` | `boolean` |  | — | `true` when the skill ships inside the package under `skills/<id>/` rather than coming from the Store. |

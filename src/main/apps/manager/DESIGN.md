@@ -617,7 +617,8 @@ skills and MCP connection instances. It exposes installation IDs, scope and
 human consumers, never credentials or transcripts. MCP consumers include disabled
 declarations so removing a connection does not erase its dependency record.
 Workspace MCP installations override global installations with the same spec ID;
-active workspace skills override global skill directories. Skill counts describe
+active workspace skills override global ones, matching Halo SDK's project-first
+lookup (see `apps/skill-discovery`). Skill counts describe
 installed-resource scope, not proof that an agent used a skill. Disk-authored
 skills remain owned by skill discovery and are labelled separately in the UI.
 

@@ -50,6 +50,14 @@ Claude Code, which only reads `.claude`, gets a Halo-owned directory of links
 setting or user file is changed and no working directory is copied. An engine that
 reads the folders itself ignores the library's enable switch.
 
+## Digital-human dependencies
+
+`apps/skill-discovery` reads this inventory for digital humans: the availability
+list, and the skill folders a `requires.skills` entry can name, be packaged from
+or be found undeclared in a prompt. It keeps no disk scanner of its own, so a
+skill that does not load here is not a dependency there. Single-file command
+skills have no folder to name or package and are not offered.
+
 ## Lifecycle
 
 All old App Manager skill entry points use the same file authority: pause does not

@@ -30,7 +30,7 @@ export function ExistingSkillDialog({ spaceId, onClose, onAdded }: { spaceId: st
         const copied = added.includes(copy.id)
         return <div key={copy.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3">
           <div className="min-w-0 flex-1"><p className="break-words text-sm font-medium">{copy.displayName}</p><p className="line-clamp-2 text-xs text-muted-foreground">{copy.description}</p></div>
-          {inScope ? <span className="text-xs text-muted-foreground">{copy.enabled ? t('Already in this scope') : t('Disabled in shared settings')}</span> : <button disabled={!!busy || copied || copy.availability === 'missing' || copy.availability === 'invalid'} onClick={async () => {
+          {inScope ? <span className="text-xs text-muted-foreground">{copy.availability === 'overridden' ? t('Overridden in this workspace') : copy.enabled ? t('Already in this scope') : t('Disabled in shared settings')}</span> : <button disabled={!!busy || copied || copy.availability === 'missing' || copy.availability === 'invalid'} onClick={async () => {
             if (submitting.current) return
             submitting.current = true; setBusy(copy.id); setError(null)
             try {

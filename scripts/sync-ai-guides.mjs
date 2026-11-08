@@ -111,7 +111,7 @@ function main() {
 
   writeFileSync(
     join(staging, 'SNAPSHOT.json'),
-    JSON.stringify({ syncedAt: new Date().toISOString().slice(0, 10), source, files }, null, 2) + '\n'
+    JSON.stringify({ syncedAt: new Date().toISOString().slice(0, 10), source: relative(PROJECT_ROOT, source), files }, null, 2) + '\n'
   )
 
   rmSync(TARGET_DIR, { recursive: true, force: true })

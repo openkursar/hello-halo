@@ -279,7 +279,7 @@ export function createSkillLibrary(deps: SkillLibraryDependencies) {
     list(query: SkillListQuery) { return listSkillInventory(deps.context(query.spaceId), query) },
     read, save, import: importSkill, setEnabled, movePreview, move, copy, delete: remove, restoreLegacy, deleteLegacy,
     effectiveCatalog(spaceId: string, workDir?: string) { return effectiveSkillCatalog(deps.context(spaceId, workDir)) },
-    runtimeCopies(spaceId: string, workDir?: string) { return buildSkillCatalog(deps.context(spaceId, workDir)).candidates.map(item => item.copy) },
+    runtimeCopies(spaceId: string | null, workDir?: string) { return buildSkillCatalog(deps.context(spaceId, workDir)).candidates.map(item => item.copy) },
     openFolder(ref: SkillRef) { const { item } = find(ref); deps.openFolder(dirname(item.filePath)) },
     export(ref: SkillRef) {
       const detail = read(ref)

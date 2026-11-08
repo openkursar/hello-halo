@@ -356,6 +356,21 @@ export function findStoreEntry(slug: string): { entry: RegistryEntry; registryId
 }
 
 /**
+ * The Store skill listing installers would fetch for `slug`: a skill, from a
+ * source that is turned on, preferring `registryId` (where a local copy was
+ * installed from) and otherwise the configured source order. Unlike
+ * `findStoreEntry`, a digital-human listing or a turned-off source never
+ * answers.
+ */
+export function findSkillListing(slug: string, registryId?: string): { entry: RegistryEntry; registryId: string } | null {
+  ensureInitialized()
+  if (!queryService) return null
+  const enabled = config.registries.filter(registry => registry.enabled).map(registry => registry.id)
+  const ordered = registryId && enabled.includes(registryId) ? [registryId, ...enabled.filter(id => id !== registryId)] : enabled
+  return queryService.findSkillEntry(slug, ordered)
+}
+
+/**
  * Get detailed information about a store app by slug.
  *
  * Looks up the entry in SQLite (Mirror) first, then falls back to

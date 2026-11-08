@@ -621,6 +621,14 @@ export function isBuiltinApp(app: Pick<InstalledApp, 'spec'>): boolean {
   return app.spec.store?.install_source === 'builtin'
 }
 
+/** Store slug namespace of the skills seeded from `resources/builtin-skills/`. */
+export const BUILTIN_SKILL_SLUG_PREFIX = 'halo-builtin-skills/'
+
+/** A skill every Halo install already has, so a digital human never declares or packages it. */
+export function isHaloShippedSkill(app: Pick<InstalledApp, 'spec'>): boolean {
+  return app.spec.type === 'skill' && (app.spec.store?.slug ?? '').startsWith(BUILTIN_SKILL_SLUG_PREFIX)
+}
+
 /**
  * The decisions an escalation asks for, in display order.
  *
