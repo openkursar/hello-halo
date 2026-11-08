@@ -167,16 +167,18 @@ describe('buildDshLaunchSpec', () => {
     expect(build().DSH_HOME).toBe(path.join(dataDir, 'home'))
   })
 
-  it('names both skill roots so the runtime reads what Halo installed', () => {
+  it('names every skill folder Halo reads so the runtime sees the same skills', () => {
     setPlatform('darwin')
     detectGitBash.mockReturnValue({ found: true, path: '/bin/bash', source: 'system' })
 
     const roots = JSON.parse(build().DSH_SKILL_DIRS)
 
-    // The space-scoped root is where a skill installed into this workspace
-    // lands; without it the runtime only ever sees global skills.
+    // Global folders come before the workspace ones, which can then override them.
+    expect(roots).toContain(path.join('/work', '.agents', 'skills'))
     expect(roots).toContain(path.join('/work', '.claude', 'skills'))
+    expect(roots.some((root: string) => root.endsWith(path.join('.agents', 'skills')) && !root.startsWith('/work'))).toBe(true)
     expect(roots.some((root: string) => root.endsWith(path.join('claude-config', 'skills')))).toBe(true)
+    expect(roots.indexOf(path.join('/work', '.agents', 'skills'))).toBeGreaterThan(roots.findIndex((root: string) => root.endsWith(path.join('claude-config', 'skills'))))
   })
 
   it('carries MCP configuration in the environment, never on the command line', () => {

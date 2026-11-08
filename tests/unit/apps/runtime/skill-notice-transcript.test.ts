@@ -10,7 +10,7 @@ const root = process.env.HALO_TEST_TMPDIR ?? tmpdir()
 
 // These records contain only generic fixtures; no profile or credentials are borrowed.
 describe('digital-human skill notice persistence', () => {
-  it.each<SkillNotice>(['catalog-unavailable', 'engine-unsupported', 'skill-unsupported'])('keeps %s visible in paged history after a completed turn is reopened', code => {
+  it.each<SkillNotice>(['catalog-unavailable'])('keeps %s visible in paged history after a completed turn is reopened', code => {
     mkdirSync(root, { recursive: true })
     const dir = mkdtempSync(join(root, 'notice-'))
     try {

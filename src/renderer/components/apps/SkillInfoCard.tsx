@@ -16,7 +16,6 @@ import { CodeMirrorEditor } from '../canvas/viewers/CodeMirrorEditor'
 import { SkillCopyDialog } from './SkillCopyDialog'
 import { ShareCurrentAppDialog } from '../store/ShareCurrentAppDialog'
 import type { SkillDetail, SkillGroup, SkillRef } from '../../../shared/types/skills'
-import type { EngineAvailabilityReport } from '../../types'
 
 interface SkillInfoCardProps {
   appId?: string
@@ -126,24 +125,6 @@ export function SkillInfoCard({ appId, skillRef, group, showUse = true, stickyHe
     if (latest?.effectiveId !== copy.id) {
       setError(t('This workspace uses a different version of this skill. Open its workspace version to continue.'))
       return
-    }
-    if (copy.source !== 'personal') {
-      const chat = useChatStore.getState()
-      const state = chat.spaceStates?.get(spaceId)
-      const conversationId = !newConversation ? state?.selectedAppChat?.conversationId ?? state?.currentConversationId : undefined
-      const conversation = conversationId ? chat.conversationCache?.get(conversationId) ?? state?.conversations.find(item => item.id === conversationId) : undefined
-      let engine = conversationId ? chat.sessionInitInfo?.get(conversationId)?.engineId ?? conversation?.resolvedEngineId ?? conversation?.engineBinding?.engineId ?? conversation?.engineOverride : undefined
-      if (!engine) {
-        const response = await api.getEngineAvailability()
-        if (!stillSelected()) return
-        if (!response.success || !response.data) throw new Error(response.error)
-        const availability = response.data as EngineAvailabilityReport
-        engine = availability.defaultEngine ?? availability.activeEngine ?? undefined
-      }
-      if (engine !== 'halo') {
-        setError(t('This skill needs Halo SDK. Choose Halo SDK in the conversation’s advanced settings, then use it again.'))
-        return
-      }
     }
     if (newConversation) {
       const created = await api.createConversation(spaceId)

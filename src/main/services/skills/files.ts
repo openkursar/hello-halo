@@ -297,6 +297,28 @@ export function skillRevision(filePath: string): string {
   return scanTree(locationOf(filePath)).revision
 }
 
+/** Files an operating system or file manager adds to a folder on its own; they are not part of a skill. */
+function incidental(path: string): boolean {
+  const name = (path.split(/[\\/]/).pop() ?? '').toLowerCase()
+  return name === '.ds_store' || name === 'thumbs.db' || name === 'desktop.ini' || name.startsWith('._')
+}
+
+/** A package as read from disk, without the files a file manager leaves behind. */
+export function withoutIncidentalFiles<T extends Pick<SkillPackage, 'files' | 'assets'>>(pkg: T): T {
+  const keep = <V>(entries: Record<string, V>): Record<string, V> => Object.fromEntries(Object.entries(entries).filter(([path]) => !incidental(path)))
+  return { ...pkg, files: keep(pkg.files), assets: keep(pkg.assets) }
+}
+
+/** Content fingerprint of a package as read from disk; unlike a revision it ignores timestamps, permissions and incidental files. */
+export function skillPackageDigest(pkg: Pick<SkillPackage, 'files' | 'assets'>): string {
+  const { files, assets } = withoutIncidentalFiles(pkg)
+  const entries = [
+    ...Object.entries(files).map(([path, text]) => [path, 'text', text]),
+    ...Object.entries(assets).map(([path, asset]) => [path, 'base64', asset.content]),
+  ].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+  return createHash('sha256').update(JSON.stringify(entries)).digest('hex')
+}
+
 export function assertSkillRevision(filePath: string, revision: string): void {
   checkRevision(locationOf(filePath), revision)
 }

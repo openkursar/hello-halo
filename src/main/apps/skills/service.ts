@@ -8,7 +8,7 @@ import type {
   SkillMovePreview, SkillCopyInput, SkillListQuery,
 } from '../../../shared/types/skills'
 import {
-  canonicalSkillPath, classifySkillSource, managedSkillPath, personalSkillPath, readSkillPackage,
+  canonicalSkillPath, skillFilePath, readSkillPackage,
   writeSkillPackage, writeSkillContent, moveSkillFiles, skillRevision, prepareSkillRemoval,
   parseSkillMetadata, validateSkillName, skillRemovalPath,
 } from '../../services/skills'
@@ -130,7 +130,7 @@ export function createSkillLibrary(deps: SkillLibraryDependencies) {
       const spec = personalSpec(parsed)
       validateSkillName(spec.name)
       const context = deps.context(input.spaceId)
-      const target = personalSkillPath(context.workDir, spec.name)
+      const target = skillFilePath(context.workDir, spec.name)
       const preference = readSkillPreference(context.haloDir, canonicalSkillPath(target))
       if (existsSync(target) && preference.requestId === input.requestId) return findPath(input.spaceId, target)
       if (input.replace) {
@@ -193,9 +193,7 @@ export function createSkillLibrary(deps: SkillLibraryDependencies) {
 
   function previewMoveFor(item: SkillCandidate, spaceId: string | null): SkillMovePreview {
     const target = deps.context(spaceId)
-    const toPath = item.copy.source === 'personal'
-      ? personalSkillPath(target.workDir, item.copy.name)
-      : managedSkillPath(target.haloDir, target.spaceDataPath, item.app!.id)
+    const toPath = skillFilePath(target.workDir, item.copy.name)
     const existing = buildSkillCatalog(target).candidates.find(candidate => candidate.copy.spaceId === spaceId && candidate.copy.name.toLowerCase() === item.copy.name.toLowerCase() && candidate.copy.id !== item.copy.id)
     return {
       fromPath: item.filePath, toPath, fromSpaceId: item.copy.spaceId, toSpaceId: spaceId,

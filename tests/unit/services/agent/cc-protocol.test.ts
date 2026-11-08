@@ -26,7 +26,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     const request = frame.request;
     if (request.subtype === 'initialize') {
       hooks = request.hooks;
-      write({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: { commands: [{ name: 'cost' }], models: [], prompt: request.systemPrompt, append: request.appendSystemPrompt, argv: process.argv.slice(2), autoUpdate: process.env.DISABLE_AUTOUPDATER } } });
+      write({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: { commands: [{ name: 'cost' }], models: [], prompt: request.systemPrompt, append: request.appendSystemPrompt, argv: process.argv.slice(2), autoUpdate: process.env.DISABLE_AUTOUPDATER, todoTools: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS, tasks: process.env.CLAUDE_CODE_ENABLE_TASKS } } });
     } else write({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: { mcpServers: [{ name: 'bridge', status: 'connected' }] } } });
     return;
   }
@@ -85,6 +85,15 @@ describe('external Claude Code protocol', () => {
     await session.setPermissionMode('plan')
     await session.interrupt()
     expect(await session.mcpServerStatus()).toEqual([{ name: 'bridge', status: 'connected' }])
+  })
+
+  it('keeps TodoWrite available without overriding explicit tool restrictions or mutating the caller environment', async () => {
+    const env = { ...process.env, CLAUDE_CODE_ENABLE_TODO_TOOLS: 'false', CLAUDE_CODE_ENABLE_TASKS: 'true' }
+    const session = createSession({ env, disallowedTools: ['TodoWrite'] })
+    const initialized = await session.query.initializationResult()
+    expect(initialized).toMatchObject({ todoTools: 'true', tasks: 'false' })
+    expect(initialized.argv).toEqual(expect.arrayContaining(['--disallowedTools', 'TodoWrite']))
+    expect(env).toMatchObject({ CLAUDE_CODE_ENABLE_TODO_TOOLS: 'false', CLAUDE_CODE_ENABLE_TASKS: 'true' })
   })
 
   it('maps a preset append onto the native append field without replacing its default prompt', async () => {

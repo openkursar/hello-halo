@@ -172,8 +172,8 @@ describe('skill management in the assembled Halo Apps server', () => {
 
   it.each(['halo', 'anthropic', 'codex', 'dsh'] satisfies EngineId[])('matches the existing %s prompt guidance with a callable management schema', engineId => {
     const prompt = buildSystemPrompt({ engineId, workDir: '/workspace', promptProfile: 'halo', digitalHumansEnabled: true })
-    expect(prompt).toContain('use the capability library or skill_manage')
-    expect(prompt).toContain('never write directly into Halo\'s private runtime skill directories')
+    expect(prompt).toContain('Manage them with the capability library or skill_manage')
+    expect(prompt).not.toContain('private runtime skill directories')
     expect((skillTool().schema.action as z.ZodEnum<[string, ...string[]]>).options).toEqual(actions)
   })
 })

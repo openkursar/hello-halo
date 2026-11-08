@@ -155,8 +155,8 @@ test('install a maintained store skill and keep or replace its saved package thr
     const copy: SkillCopy = copies[0]
     const ref = { id: copy.id, spaceId: null }
     expect(copy).toMatchObject({ appId, source: 'store', scope: 'global', enabled: true, spaceId: null })
-    expect(ownedSkillFile(server.profile, copy)).toBe(join(server.profile, '.halo/skills', appId, 'SKILL.md'))
-    expect(existsSync(join(server.profile, '.agents/skills', slug))).toBe(false)
+    expect(ownedSkillFile(server.profile, copy)).toBe(join(server.profile, '.agents/skills', slug, 'SKILL.md'))
+    expect(existsSync(join(server.profile, '.halo/skills'))).toBe(false)
     expect(installed[0]).toMatchObject({ status: 'active', spaceId: null, spec: { version: '1.0.0', store: { slug, registry_id: source.id, install_source: 'store' } } })
     expect(mutations.filter(item => item.path === installPath)).toEqual([{ path: installPath, body: { spaceId: null } }])
     assertPackage(server, await server.read(ref), registry.first.files)

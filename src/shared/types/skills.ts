@@ -109,7 +109,7 @@ export interface SkillCopyInput {
   content?: string
 }
 
-export type SkillNotice = 'catalog-unavailable' | 'engine-unsupported' | 'skill-unsupported'
+export type SkillNotice = 'catalog-unavailable'
 
 export interface SkillCatalogEntry {
   name: string
@@ -123,6 +123,8 @@ export interface SkillCatalogEntry {
 export interface SkillInstallationState {
   version: 1
   filePath: string
+  /** Fingerprint of the files Halo last wrote, to tell later edits made outside Halo. */
+  digest?: string
   deleted?: boolean
   customized?: boolean
   migrationWarning?: string

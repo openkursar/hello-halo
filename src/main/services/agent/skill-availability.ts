@@ -1,7 +1,9 @@
 import { homedir } from 'node:os'
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { SkillCatalogEntry, SkillNotice } from '../../../shared/types/skills'
+import { getHaloDir } from '../../foundation/config.service'
 import { getEffectiveSkillCatalogForSession, waitForSkillCatalogProvider } from '../app-bridge'
+import { linkSkillsForClaudeCode } from './engine-skill-links'
 
 interface SessionSkills {
   catalog: SkillCatalogEntry[]
@@ -39,7 +41,7 @@ export function readReadySessionSkills(options: Record<string, any>): SkillCatal
     return getEffectiveSkillCatalogForSession(spaceId, options.cwd)
   } catch (error) {
     if (signal?.aborted) throw error
-    console.warn('[Agent] Skill compatibility notice omitted: ready catalog could not be read', { spaceId, error })
+    console.warn('[Agent] Skills not offered to the engine: ready catalog could not be read', { spaceId, error })
     return undefined
   }
 }
@@ -49,65 +51,45 @@ function inside(file: string, root: string): boolean {
   return part !== '' && part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part)
 }
 
-/** Native discovery is not the Halo catalog; only the session's default roots are compared. */
-export function unsupportedSkillNames(catalog: SkillCatalogEntry[], options: Record<string, any>, engineId: 'anthropic' | 'codex'): Set<string> {
+/** The skills Claude Code would not find on its own with this session's setting sources. */
+export function skillsOutsideClaudeRoots(catalog: readonly SkillCatalogEntry[], options: Record<string, any>): SkillCatalogEntry[] {
   const roots: string[] = []
-  if (engineId === 'anthropic') {
-    const sources: string[] = options.settingSources ?? ['user', 'project']
-    if (sources.includes('user')) {
-      const configDir = options.env?.CLAUDE_CONFIG_DIR ?? join(options.env?.HOME ?? options.env?.USERPROFILE ?? homedir(), '.claude')
-      roots.push(join(configDir, 'skills'), join(configDir, 'commands'))
-    }
-    if (sources.includes('project') && typeof options.cwd === 'string') {
-      roots.push(join(options.cwd, '.claude', 'skills'), join(options.cwd, '.claude', 'commands'))
-    }
-  } else {
-    roots.push(join(options.env?.HOME ?? options.env?.USERPROFILE ?? homedir(), '.agents', 'skills'))
-    if (typeof options.cwd === 'string') roots.push(join(options.cwd, '.agents', 'skills'))
+  const sources: string[] = options.settingSources ?? ['user', 'project']
+  if (sources.includes('user')) {
+    const configDir = options.env?.CLAUDE_CONFIG_DIR ?? join(options.env?.HOME ?? options.env?.USERPROFILE ?? homedir(), '.claude')
+    roots.push(join(configDir, 'skills'), join(configDir, 'commands'))
   }
-  return new Set(catalog.filter(entry => !(roots.some(root => inside(entry.source.path, root))
-    && (engineId === 'anthropic' || basename(entry.source.path) === 'SKILL.md')))
-    .map(entry => entry.name.toLocaleLowerCase('en-US')))
+  if (sources.includes('project') && typeof options.cwd === 'string') {
+    roots.push(join(options.cwd, '.claude', 'skills'), join(options.cwd, '.claude', 'commands'))
+  }
+  return catalog.filter(entry => !roots.some(root => inside(entry.source.path, root)))
 }
 
-/** Session advice is once; an explicitly repeated unsupported command gets its own feedback. */
-export function withSkillNotice<T extends object>(session: T, notice?: SkillNotice, names?: Set<string>, initialInput?: unknown): T {
+/**
+ * Claude Code finds skills by itself, but only in its own folders. The skills Halo lists from
+ * anywhere else are added as one extra directory of links, so every skill works on every engine.
+ */
+export function withClaudeCodeSkills(options: Record<string, any>): Record<string, any> {
+  const catalog = readReadySessionSkills(options)
+  if (!catalog?.length) return options
+  const outside = skillsOutsideClaudeRoots(catalog, options)
+  const directory = outside.length ? linkSkillsForClaudeCode(outside, join(getHaloDir(), 'skill-links')) : undefined
+  return directory ? { ...options, additionalDirectories: [...(options.additionalDirectories ?? []), directory] } : options
+}
+
+/** The notice is shown once per session, right after the engine reports it is ready. */
+export function withSkillNotice<T extends object>(session: T, notice?: SkillNotice): T {
   if (!notice) return session
   let announced = false
-  let pendingCommands = 0
   let closed = false
-  const capturedNames = names ? new Set(names) : undefined
   const methods = new Map<PropertyKey, unknown>()
-  const noteInput = (message: any) => {
-    if (closed || !capturedNames?.size) return
-    const content = typeof message === 'string' ? message : message?.message?.content
-    const text = typeof content === 'string' ? content : Array.isArray(content)
-      ? content.filter(block => block.type === 'text').map(block => block.text).join('\n') : ''
-    const command = text.trimStart().toLocaleLowerCase('en-US')
-    if (command.startsWith('/') && [...capturedNames].some(name => command === `/${name}`
-      || (command.startsWith(`/${name}`) && /\s/u.test(command[name.length + 1] ?? '')))) pendingCommands++
-  }
-  noteInput(initialInput)
-  function* pending(includeSessionNotice: boolean) {
-    if (closed) return
-    if (pendingCommands > 0) {
-      const count = pendingCommands
-      pendingCommands = 0
-      announced = true
-      for (let index = 0; index < count; index++) {
-        yield { type: 'system', subtype: 'skill_notice', skillNotice: 'skill-unsupported' }
-      }
-    } else if (includeSessionNotice && !announced) {
-      announced = true
-      yield { type: 'system', subtype: 'skill_notice', skillNotice: notice }
-    }
-  }
   const stream = async function* (...args: unknown[]) {
     for await (const frame of (session as any).stream(...args)) {
-      const init = frame.type === 'system' && frame.subtype === 'init'
-      if (!init) yield* pending(false)
       yield frame
-      if (init) yield* pending(true)
+      if (!announced && !closed && frame.type === 'system' && frame.subtype === 'init') {
+        announced = true
+        yield { type: 'system', subtype: 'skill_notice', skillNotice: notice }
+      }
     }
   }
   return new Proxy(session, {
@@ -116,20 +98,9 @@ export function withSkillNotice<T extends object>(session: T, notice?: SkillNoti
       const value = Reflect.get(target, property, target)
       if (typeof value !== 'function') return value
       if (!methods.has(property)) {
-        if (property === 'send' || property === 'sendIntoLiveTurn') {
-          methods.set(property, (...args: unknown[]) => {
-            const result = value.apply(target, args)
-            if (result && typeof result.then === 'function') {
-              return result.then((accepted: unknown) => { if (accepted !== false) noteInput(args[0]); return accepted })
-            }
-            if (result !== false) noteInput(args[0])
-            return result
-          })
-        } else if (property === 'close' || property === Symbol.dispose || property === Symbol.asyncDispose) {
+        if (property === 'close' || property === Symbol.dispose || property === Symbol.asyncDispose) {
           methods.set(property, (...args: unknown[]) => {
             closed = true
-            pendingCommands = 0
-            capturedNames?.clear()
             return value.apply(target, args)
           })
         } else methods.set(property, value.bind(target))

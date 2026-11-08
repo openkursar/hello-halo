@@ -5,7 +5,7 @@ import { ownedSkillFile, readSkillPackage, requireSkillData, skillImport, skillM
 
 test.setTimeout(90000)
 
-test('production skill discovery reads selected project roots without adopting unknown private files', managementAcceptance('capabilities.skill-api.discovery'), async ({ managementApp, window }) => {
+test('production skill discovery reads selected project roots without adopting unsupported folders', managementAcceptance('capabilities.skill-api.discovery'), async ({ managementApp, window }) => {
   const project = join(managementApp.profile, 'skill-discovery-project')
   const unrelated = join(managementApp.profile, 'unrelated-skill-project')
   mkdirSync(project)
@@ -17,7 +17,7 @@ test('production skill discovery reads selected project roots without adopting u
     { root: join(project, '.claude/skills'), name: 'compatible-project-skill', expected: true },
     { root: join(managementApp.profile, '.agents/skills'), name: 'direct-global-skill', expected: true },
     { root: join(unrelated, '.agents/skills'), name: 'unrelated-project-skill', expected: false },
-    { root: join(managementApp.profile, '.halo/skills'), name: 'unknown-private-skill', expected: false },
+    { root: join(managementApp.profile, '.halo/skills'), name: 'unsupported-folder-skill', expected: false },
   ]
   const originals = new Map<string, string>()
   for (const item of cases) {
@@ -43,7 +43,7 @@ test('production skill discovery reads selected project roots without adopting u
   expect(search.groups.map(group => group.name)).toEqual(['compatible-project-skill'])
   const reopened = await managementApp.restart()
   const after = requireSkillData(await skillRequest(reopened, 'skillsList', { spaceId: selected.id }))
-  expect(after.groups.some(group => group.name === 'unknown-private-skill')).toBe(false)
+  expect(after.groups.some(group => group.name === 'unsupported-folder-skill')).toBe(false)
   for (const [file, content] of originals) expect(readFileSync(file, 'utf8')).toBe(content)
 })
 

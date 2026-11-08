@@ -114,6 +114,75 @@ test('a recorded external CC choice keeps the selected installation', acceptance
   await info.attach('selected-external-runtime', { body: JSON.stringify({ selectedPath, engine: 'anthropic' }), contentType: 'application/json' })
 })
 
+for (const modelId of ['deepseek-v4.1-flash', 'gpt-6-astra']) {
+  for (const permission of ['allowed', 'disabled'] as const) {
+    test(`CC task checklist on ${modelId} with ${permission} tool`, acceptance('models.engines.cc-task-tracking', { model: modelId, permission }), async ({ acceptanceApp, window, model }, info) => {
+      const selectedPath = process.env.HALO_ACCEPTANCE_CLAUDE_CLI
+      if (!selectedPath || !existsSync(selectedPath)) throw new Error('Blocked prerequisite: configure HALO_ACCEPTANCE_CLAUDE_CLI through the acceptance runner')
+      const space = await seedManagedSpace(window, 'Task checklist compatibility')
+      const target = await seedManagedConversation(window, space.id, 'External CC task checklist', [])
+      const file = join(space.path, '.halo', 'conversations', `${target.id}.json`)
+      let page = await acceptanceApp.restart(profile => {
+        const configFile = join(profile, '.halo', 'config.json')
+        const config = JSON.parse(readFileSync(configFile, 'utf8'))
+        config.agent = { ...config.agent, sdkEngine: 'anthropic', ccRuntime: { selectedPath, selectionOrigin: 'user' } }
+        config.agent.disabledTools = [...(config.agent.disabledTools ?? []).filter((name: string) => name !== 'TodoWrite'), ...(permission === 'disabled' ? ['TodoWrite'] : [])]
+        config.aiSources.sources[0].model = modelId
+        config.aiSources.sources[0].availableModels = [{ id: modelId, name: modelId }]
+        writeFileSync(configFile, JSON.stringify(config))
+        const stored = JSON.parse(readFileSync(file, 'utf8'))
+        stored.engineOverride = 'anthropic'
+        stored.modelSourceId = config.aiSources.sources[0].id
+        stored.modelId = modelId
+        writeFileSync(file, JSON.stringify(stored))
+      })
+      const todo = { content: 'Verify the external engine checklist', status: 'completed', activeForm: 'Verifying the external engine checklist' }
+      const observed: Array<{ tools: string[]; schema: unknown; toolSucceeded: boolean }> = []
+      let searched = false
+      let wrote = false
+      model.respond(request => {
+        if (!request.tools.length) return { text: 'Auxiliary response.' }
+        const schema = (request.body.tools ?? []).map((tool: any) => tool.function ?? tool).find((tool: any) => tool.name === 'TodoWrite')?.parameters
+        observed.push({ tools: request.tools, schema, toolSucceeded: request.toolResults.some(result => !result.error && result.text.includes('Todos have been modified successfully')) })
+        if (permission === 'disabled') return { text: 'Checklist intentionally unavailable.' }
+        if (!request.tools.includes('TodoWrite')) {
+          if (searched || !request.tools.includes('ToolSearch')) return { text: 'Checklist missing.' }
+          searched = true
+          return { tools: [{ id: 'checklist-search', name: 'ToolSearch', input: { query: 'select:TodoWrite', max_results: 1 } }] }
+        }
+        if (!wrote) {
+          wrote = true
+          return { tools: [{ id: 'checklist-write', name: 'TodoWrite', input: { todos: [todo] } }] }
+        }
+        return { text: 'Checklist recorded.' }
+      })
+      await openManagedConversation(page, target.title, space.id, { empty: true })
+      await sendAcceptanceMessage(page, 'Track this work in the task checklist.')
+      await waitForAcceptanceIdle(page, target.id)
+      expect(observed.length).toBeGreaterThan(0)
+      expect(JSON.parse(readFileSync(file, 'utf8')).engineBinding.engineId).toBe('anthropic')
+      expect(observed.every(request => !request.tools.some(name => ['TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate'].includes(name)))).toBe(true)
+      if (permission === 'allowed') {
+        expect(observed.some(request => request.schema && (request.schema as any).properties?.todos)).toBe(true)
+        expect(observed.some(request => request.toolSucceeded)).toBe(true)
+        page = await acceptanceApp.restart()
+        await openManagedConversation(page, target.title, space.id)
+        await expect(page.locator('.message-assistant').last()).toContainText('Checklist recorded.')
+        const details = page.getByRole('button', { name: /Already thought/ }).last()
+        if (await details.getAttribute('aria-expanded') !== 'true') await details.click()
+        await expect(page.getByText('Task plan', { exact: true })).toBeVisible()
+        await expect(page.getByText(todo.content, { exact: true })).toBeVisible()
+      } else {
+        expect(observed.every(request => !request.tools.includes('TodoWrite'))).toBe(true)
+        const calls = await page.evaluate(() => (window as unknown as { acceptanceProbe: { tools: string[] } }).acceptanceProbe.tools)
+        expect(calls).not.toContain('TodoWrite')
+        await expect(page.getByText('Task plan', { exact: true })).toHaveCount(0)
+      }
+      await info.attach('task-checklist-compatibility', { body: JSON.stringify({ modelId, permission, observed }), contentType: 'application/json' })
+    })
+  }
+}
+
 for (const runtime of ['installed', 'missing'] as const) {
   test(`a selected historical delegated account retains CC with ${runtime} runtime`, acceptance('models.engines.upgrade-delegated', { runtime }), async ({ acceptanceApp }, info) => {
     const selectedPath = runtime === 'installed' ? process.env.HALO_ACCEPTANCE_CLAUDE_CLI : join(acceptanceApp.profile, 'missing-delegated-cc')

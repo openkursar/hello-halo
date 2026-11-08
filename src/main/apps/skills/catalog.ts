@@ -107,7 +107,9 @@ export function buildSkillCatalog(context: SkillLibraryContext): SkillCatalog {
   }
   const managedPaths = new Set<string>()
   for (const app of records) {
-    if (app.spec.type !== 'skill' || classifySkillSource(app.spec) === 'personal' || !app.userOverrides.skill?.filePath) continue
+    // A deleted skill's path is free again: whatever the user puts there next is their own file.
+    if (app.spec.type !== 'skill' || classifySkillSource(app.spec) === 'personal' || !app.userOverrides.skill?.filePath
+      || app.status === 'uninstalled' || app.userOverrides.skill.deleted) continue
     try { managedPaths.add(canonicalSkillPath(app.userOverrides.skill.filePath)) }
     catch (error) {
       console.warn('[Skills] Recorded managed skill cannot be resolved', { appId: app.id, reason: (error as Error).message })

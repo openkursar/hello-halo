@@ -10,9 +10,9 @@ import type { AppManagerDeps } from './service'
 import type { SkillInstallationState } from '../../../shared/types/skills'
 import { setSkillMdName } from '../../../shared/skill-frontmatter'
 import {
-  classifySkillSource, personalSkillPath, managedSkillPath, parseSkillMetadata, skillSourceIdentity, sameSkillSource,
+  classifySkillSource, skillFilePath, parseSkillMetadata, skillSourceIdentity, sameSkillSource,
   canonicalSkillPath, readSkillPreference, writeSkillPreference,
-  readSkillPackage, writeSkillPackage, writeSkillContent, moveSkillFiles, skillRevision, skillRemovalPath, prepareSkillRemoval,
+  readSkillPackage, writeSkillPackage, writeSkillContent, moveSkillFiles, skillRevision, skillPackageDigest, withoutIncidentalFiles, skillRemovalPath, prepareSkillRemoval,
 } from '../../services/skills'
 import { AppAlreadyInstalledError, SpaceNotFoundError } from './errors'
 
@@ -53,6 +53,11 @@ function equalPackages(left: ReturnType<typeof skillPackage>, right: ReturnType<
   })
 }
 
+function sameAsPackage(filePath: string, pkg: ReturnType<typeof skillPackage>): boolean {
+  try { return equalPackages(withoutIncidentalFiles(readSkillPackage(filePath)), pkg) }
+  catch { return false }
+}
+
 function namespacedSpecId(spec: SkillSpec): string {
   return `skill:${createHash('sha256').update(skillSourceIdentity(spec)).digest('hex')}:${spec.name}`
 }
@@ -90,18 +95,13 @@ export function readPersonalSkill(app: InstalledApp): InstalledApp {
 }
 
 export function createSkillLifecycle(deps: AppManagerDeps) {
-  const { store, getSpacePath, getAppDataPath, getGlobalAppDir } = deps
+  const { store, getSpacePath, getGlobalAppDir } = deps
   const removals = new Map<string, Promise<void>>()
 
   function pathFor(app: Pick<InstalledApp, 'id' | 'spaceId'>, spec: SkillSpec): string {
-    if (classifySkillSource(spec) === 'personal') {
-      const workDir = app.spaceId === null ? null : getSpacePath(app.spaceId)
-      if (app.spaceId !== null && !workDir) throw new SpaceNotFoundError(app.spaceId)
-      return personalSkillPath(workDir, spec.name)
-    }
-    const dataPath = app.spaceId === null ? null : getAppDataPath(app.spaceId)
-    if (app.spaceId !== null && !dataPath) throw new SpaceNotFoundError(app.spaceId)
-    return managedSkillPath(getGlobalAppDir(), dataPath, app.id)
+    const workDir = app.spaceId === null ? null : getSpacePath(app.spaceId)
+    if (app.spaceId !== null && !workDir) throw new SpaceNotFoundError(app.spaceId)
+    return skillFilePath(workDir, spec.name)
   }
 
   function stateFor(app: InstalledApp): SkillInstallationState {
@@ -137,6 +137,22 @@ export function createSkillLifecycle(deps: AppManagerDeps) {
       })
       throw new AppAlreadyInstalledError(spec.name, spaceId)
     }
+  }
+
+  /** Whether another live installation already owns this skill folder. */
+  function claimedByAnother(filePath: string, spaceId: string | null, ownId?: string): boolean {
+    return store.listSkillRecords(spaceId).some(other => {
+      const state = other.userOverrides.skill
+      return other.id !== ownId && !!state?.filePath && !state.deleted && other.status !== 'uninstalled'
+        && resolve(state.filePath) === resolve(filePath)
+    })
+  }
+
+  /** A skill moves only into a free place: whatever already stands there is someone else's. */
+  function refuseOccupied(target: string, name: string, spaceId: string | null): void {
+    if (!fileExists(skillRemovalPath(target))) return
+    console.warn('[SkillLifecycle] Skill stays where it is; its new place already holds a skill', { spaceId })
+    throw new AppAlreadyInstalledError(name, spaceId)
   }
 
   function commit(app: InstalledApp): void {
@@ -185,17 +201,24 @@ export function createSkillLifecycle(deps: AppManagerDeps) {
         installedAt: Date.now(), upgradeStrategy: 'auto', knowledgeSeeded: false,
       }
       const filePath = pathFor(app, spec)
-      writeSkillPackage(filePath, pkg.files, pkg.assets, undefined, spec.skill_modes)
-      const revision = skillRevision(filePath)
+      // One folder serves every origin, so an occupant that is not this package belongs to the user and is never replaced.
+      const occupied = fileExists(skillRemovalPath(filePath)) && classifySkillSource(spec) !== 'personal'
+      if (occupied && (claimedByAnother(filePath, spaceId, existing?.id) || !sameAsPackage(filePath, pkg))) {
+        console.warn('[SkillLifecycle] Install left an existing skill of the same name untouched', { appId: app.id, spaceId })
+        throw new AppAlreadyInstalledError(spec.name, spaceId)
+      }
+      if (!occupied) writeSkillPackage(filePath, pkg.files, pkg.assets, undefined, spec.skill_modes)
+      const written = readSkillPackage(filePath)
+      const revision = written.revision
       app.spec = storedSkillSpec({ ...spec, skill_content: undefined, skill_files: pkg.files, skill_assets: pkg.assets })
       app.userOverrides = { ...app.userOverrides, skill: {
-        version: 1, filePath, owners: existing?.userOverrides.skill?.owners,
+        version: 1, filePath, digest: skillPackageDigest(written), owners: existing?.userOverrides.skill?.owners,
       } }
       try {
         if (existing) commit(app)
         else store.insert(app)
       } catch (error) {
-        discardCreated(filePath, revision, app.id)
+        if (!occupied) discardCreated(filePath, revision, app.id)
         console.error('[SkillLifecycle] Install record failed after writing package', { appId: app.id, error })
         throw error
       }
@@ -234,19 +257,22 @@ export function createSkillLifecycle(deps: AppManagerDeps) {
           : typeof patch.skill_content === 'string' ? patch.skill_content : original.files['SKILL.md'] },
         assets: original.assets,
       } : skillPackage(next)
-      const target = next.name !== app.spec.name && classifySkillSource(next) === 'personal'
-        ? pathFor(app, next) : state.filePath
+      const target = next.name !== app.spec.name ? pathFor(app, next) : state.filePath
       const moved = resolve(target) !== resolve(state.filePath)
-      if (moved) moveSkillFiles(state.filePath, target, original.revision)
+      if (moved) {
+        refuseOccupied(target, next.name, app.spaceId)
+        moveSkillFiles(state.filePath, target, original.revision)
+      }
       let writtenRevision: string | undefined
       try {
         const revision = moved ? skillRevision(target) : original.revision
         if (instructionsOnly) writeSkillContent(target, pkg.files['SKILL.md'], revision)
         else writeSkillPackage(target, pkg.files, pkg.assets, revision, next.skill_modes)
-        writtenRevision = skillRevision(target)
+        const written = readSkillPackage(target)
+        writtenRevision = written.revision
         commit({ ...app, specId: specIdFor(next, app.spaceId, app), spec: { ...next, skill_content: undefined, skill_files: pkg.files, skill_assets: pkg.assets },
           userOverrides: { ...app.userOverrides, skill: {
-            ...state, filePath: target,
+            ...state, filePath: target, digest: skillPackageDigest(written),
             customized: classifySkillSource(next) === 'personal' ? undefined : !authorUpdate,
           } },
         })
@@ -271,7 +297,10 @@ export function createSkillLifecycle(deps: AppManagerDeps) {
       assertNameAvailable(app, app.spec, spaceId)
       const target = pathFor({ ...app, spaceId }, app.spec)
       const moved = resolve(target) !== resolve(state.filePath)
-      if (moved) moveSkillFiles(state.filePath, target, skillRevision(state.filePath))
+      if (moved) {
+        refuseOccupied(target, app.spec.name, spaceId)
+        moveSkillFiles(state.filePath, target, skillRevision(state.filePath))
+      }
       try {
         commit({ ...app, specId: specIdFor(app.spec, spaceId, app), spaceId,
           userOverrides: { ...app.userOverrides, skill: { ...state, filePath: target } },
@@ -290,6 +319,14 @@ export function createSkillLifecycle(deps: AppManagerDeps) {
       const state = stateFor(app)
       const identity = canonicalSkillPath(state.filePath)
       writeSkillPreference(getGlobalAppDir(), identity, { ...readSkillPreference(getGlobalAppDir(), identity), enabled })
+    },
+
+    /** True when the user changed a managed skill's files outside Halo since Halo last wrote them. */
+    editedOutside(app: InstalledApp): boolean {
+      const state = app.userOverrides.skill
+      if (app.spec.type !== 'skill' || !state?.digest || state.deleted) return false
+      try { return skillPackageDigest(readSkillPackage(state.filePath)) !== state.digest }
+      catch { return false }
     },
 
     assertAvailable(app: InstalledApp): void {
@@ -333,21 +370,6 @@ export function createSkillLifecycle(deps: AppManagerDeps) {
       }).finally(() => removals.delete(app.id))
       removals.set(app.id, operation)
       return operation
-    },
-
-    async deleteForSpace(app: InstalledApp): Promise<void> {
-      if (app.spec.type !== 'skill') return
-      if (classifySkillSource(app.spec) === 'personal') return
-      const state = app.userOverrides.skill
-      if (!state || state.deleted) {
-        console.warn('[SkillLifecycle] Space cleanup skipped unowned or deleted skill files', { appId: app.id })
-        return
-      }
-      if (resolve(state.filePath) !== resolve(pathFor(app, app.spec))) {
-        console.warn('[SkillLifecycle] Space cleanup kept files outside the installation directory', { appId: app.id })
-        return
-      }
-      await this.trash(app)
     },
 
     updateRecord(app: InstalledApp, change: { spec?: SkillSpec; skill?: SkillInstallationState; spaceId?: string | null; status?: AppStatus }): void {

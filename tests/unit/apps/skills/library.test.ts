@@ -6,7 +6,7 @@ import type { AppManagerService, InstalledApp } from '../../../../src/main/apps/
 import type { SkillSpec } from '../../../../src/main/apps/spec'
 import type { SkillImportInput, SkillRef } from '../../../../src/shared/types/skills'
 import { createSkillLibrary, type SkillLibraryDependencies } from '../../../../src/main/apps/skills/service'
-import { classifySkillSource, managedSkillPath, personalSkillPath, readSkillPackage, skillFileId, skillRevision, writeSkillPackage } from '../../../../src/main/services/skills'
+import { classifySkillSource, skillFilePath, readSkillPackage, skillFileId, skillRevision, writeSkillPackage } from '../../../../src/main/services/skills'
 
 vi.mock('node:fs', async importOriginal => ({ ...await importOriginal<typeof import('node:fs')>() }))
 vi.mock('node:os', async importOriginal => ({
@@ -79,7 +79,7 @@ describe('skill library file operations with a narrow manager', () => {
           throw new Error('An installation with this name already exists')
         }
         const id = existing?.id ?? `installation-${++sequence}`
-        const path = personalSkillPath(spaceId === null ? null : work.get(spaceId)!, definition.name)
+        const path = skillFilePath(spaceId === null ? null : work.get(spaceId)!, definition.name)
         const files = definition.skill_files ?? { 'SKILL.md': definition.skill_content! }
         writeSkillPackage(path, files, definition.skill_assets)
         records.set(id, record(id, spaceId, metadata(definition), path))
@@ -120,7 +120,7 @@ describe('skill library file operations with a narrow manager', () => {
 
   function registered(source: 'manual' | 'store' = 'manual', status: InstalledApp['status'] = 'active'): { app: InstalledApp; path: string; ref: SkillRef } {
     const definition = spec({ store: source === 'manual' ? { install_source: 'manual', tags: [] } : { install_source: 'store', slug: 'author/report', tags: [] } })
-    const path = source === 'manual' ? personalSkillPath(work.get('space')!, 'report') : managedSkillPath(halo, join(halo, 'spaces', 'space'), 'managed')
+    const path = skillFilePath(work.get('space')!, 'report')
     writeSkillPackage(path, definition.skill_files!, definition.skill_assets)
     const app = record(source === 'manual' ? 'personal-installation' : 'managed', 'space', source === 'manual' ? metadata(definition) : definition, path, status)
     records.set(app.id, app)
@@ -178,7 +178,7 @@ describe('skill library file operations with a narrow manager', () => {
     library.setEnabled({ ref: ref(path, null), enabled: false })
     const before = library.read(ref(path, null))
     const preview = library.movePreview({ ref: ref(path, null), spaceId: 'space' })
-    expect(preview).toMatchObject({ fromPath: path, toPath: personalSkillPath(work.get('space')!, 'report'), fromSpaceId: null, toSpaceId: 'space' })
+    expect(preview).toMatchObject({ fromPath: path, toPath: skillFilePath(work.get('space')!, 'report'), fromSpaceId: null, toSpaceId: 'space' })
     const moved = library.move({ ref: ref(path, null), spaceId: 'space', revision: before.revision })
     expect(moved).toMatchObject({ enabled: false, availability: 'disabled', spaceId: 'space' })
     expect(existsSync(path)).toBe(false)
@@ -285,7 +285,7 @@ describe('skill library file operations with a narrow manager', () => {
     expect(records.get(removed.id)).toEqual(removed)
     expect(library.list({ spaceId: 'space' }).legacyRemoved).toHaveLength(1)
     expect(library.effectiveCatalog('space')).toEqual([])
-    expect(existsSync(personalSkillPath(work.get('space')!, 'report'))).toBe(false)
+    expect(existsSync(skillFilePath(work.get('space')!, 'report'))).toBe(false)
   })
 
   it('restores a removed manual skill through its existing installation without discarding its sole contents', async () => {

@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import type { SkillCatalogEntry } from '../../../../src/shared/types/skills'
 
 let bridge: typeof import('../../../../src/main/services/app-bridge')
@@ -131,112 +134,76 @@ describe('creation-time skill availability', () => {
   })
 })
 
-describe('session-owned skill notices', () => {
+describe('Claude Code skill visibility', () => {
   const ccOptions = { cwd: '/work', env: { CLAUDE_CONFIG_DIR: '/cc-user' }, settingSources: ['user', 'project'] }
   const entry = (name: string, path: string): SkillCatalogEntry => ({ name, description: name, source: { kind: 'file', path } })
 
-  it('keeps native CC project and configured user skills out of the unsupported names', () => {
+  it('keeps skills Claude Code reads on its own out of the outside set', () => {
     const copies = [entry('project', '/work/.claude/skills/project/SKILL.md'), entry('command', '/work/.claude/commands/command.md'),
       entry('user', '/cc-user/skills/user/SKILL.md'), entry('different-user', '/other/.claude/skills/other/SKILL.md'),
       entry('personal', '/work/.agents/skills/personal/SKILL.md'), ...catalog]
-    expect([...skills.unsupportedSkillNames(copies, ccOptions, 'anthropic')]).toEqual(['different-user', 'personal', 'private-report'])
-    expect([...skills.unsupportedSkillNames(copies, { ...ccOptions, settingSources: [] }, 'anthropic')]).toHaveLength(copies.length)
+    expect(skills.skillsOutsideClaudeRoots(copies, ccOptions).map(item => item.name)).toEqual(['different-user', 'personal', 'private-report'])
+    expect(skills.skillsOutsideClaudeRoots(copies, { ...ccOptions, settingSources: [] })).toHaveLength(copies.length)
   })
 
-  it('recognizes Codex default same-scope SKILL.md roots without claiming support for private files or loose commands', () => {
-    const copies = [entry('repo', '/work/.agents/skills/repo/SKILL.md'), entry('user', '/user/.agents/skills/user/SKILL.md'),
-      entry('command', '/work/.agents/commands/command.md'), entry('loose', '/work/.agents/skills/loose.md'), ...catalog]
-    expect([...skills.unsupportedSkillNames(copies, { cwd: '/work', env: { HOME: '/user' } }, 'codex')]).toEqual(['command', 'loose', 'private-report'])
-  })
+  describe('with a linked view', () => {
+    let root: string
+    beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'halo-skill-view-')) })
+    afterEach(() => rmSync(root, { recursive: true, force: true }))
 
-  it('announces the session once and gives feedback on every explicit unsupported command', async () => {
-    const provider = vi.fn(() => catalog)
-    register(provider)
-    const prepared = await skills.prepareSessionSkills({ workerGroup: 'space' })
+    function ready(entries: SkillCatalogEntry[]) {
+      const provider = vi.fn(() => entries)
+      register(provider)
+      return provider
+    }
+    function skill(name: string): SkillCatalogEntry {
+      const dir = join(root, 'agents', 'skills', name)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: ${name}\n---\n`)
+      return entry(name, join(dir, 'SKILL.md'))
+    }
+
+    it('adds one extra directory holding links to the skills Claude Code cannot find itself', () => {
+      const outside = skill('report')
+      ready([outside, entry('native', '/work/.claude/skills/native/SKILL.md')])
+      const result = skills.withClaudeCodeSkills({ ...ccOptions, workerGroup: 'space', additionalDirectories: ['/extra'] })
+      expect(result.additionalDirectories).toHaveLength(2)
+      expect(result.additionalDirectories[0]).toBe('/extra')
+      const linked = join(result.additionalDirectories[1], '.claude', 'skills')
+      expect(readdirSync(linked)).toEqual(['report'])
+      expect(realpathSync(join(linked, 'report'))).toBe(realpathSync(dirname(outside.source.path)))
+    })
+
+    it('leaves the options untouched when every skill is native, none exist, or nothing is ready', () => {
+      const options = { ...ccOptions, workerGroup: 'space' }
+      expect(skills.withClaudeCodeSkills(options)).toBe(options)
+      ready([])
+      expect(skills.withClaudeCodeSkills(options)).toBe(options)
+      ready([entry('native', '/work/.claude/skills/native/SKILL.md')])
+      expect(skills.withClaudeCodeSkills(options)).toBe(options)
+      expect(skills.withClaudeCodeSkills(ccOptions)).toBe(ccOptions)
+    })
+  })
+})
+
+describe('session-owned skill notice', () => {
+  it('announces the session once, right after the engine is ready', async () => {
     const native = sessionFixture()
-    const session = skills.withSkillNotice(native, 'engine-unsupported', skills.unsupportedSkillNames(prepared.catalog, ccOptions, 'anthropic'))
+    const session = skills.withSkillNotice(native, 'catalog-unavailable')
     session.send('hello')
     const first = await collect(session.stream())
     expect(first.map(frame => frame.subtype)).toEqual(['init', 'skill_notice', undefined, undefined])
-    expect(first[1]).toEqual({ type: 'system', subtype: 'skill_notice', skillNotice: 'engine-unsupported' })
-    session.send('/private-report follow up')
-    expect((await collect(session.stream())).filter(frame => frame.subtype === 'skill_notice')).toEqual([{ type: 'system', subtype: 'skill_notice', skillNotice: 'skill-unsupported' }])
-    session.send('ordinary follow up')
+    expect(first[1]).toEqual({ type: 'system', subtype: 'skill_notice', skillNotice: 'catalog-unavailable' })
     expect((await collect(session.stream())).some(frame => frame.subtype === 'skill_notice')).toBe(false)
-    session.send('/private-report again')
-    expect((await collect(session.stream())).filter(frame => frame.subtype === 'skill_notice')).toEqual([{ type: 'system', subtype: 'skill_notice', skillNotice: 'skill-unsupported' }])
-    expect(provider).toHaveBeenCalledOnce()
-    expect(native.send.mock.calls).toEqual([['hello'], ['/private-report follow up'], ['ordinary follow up'], ['/private-report again']])
-    expect(JSON.stringify(first)).not.toMatch(/private-report|\/private\/|Private/)
+    expect(native.send).toHaveBeenCalledWith('hello')
   })
 
-  it.each(['/PRIVATE-REPORT draft', { message: { content: [{ type: 'text', text: '/private-report draft' }] } }])('recognizes a direct slash from captured names without changing input', async message => {
-    const native = sessionFixture()
-    const session = skills.withSkillNotice(native, 'engine-unsupported', new Set(['private-report']))
-    session.send(message)
-    expect((await collect(session.stream()))[1].skillNotice).toBe('skill-unsupported')
-    expect(native.send).toHaveBeenCalledWith(message)
-  })
-
-  it('does not label a supported CC slash unavailable when another library skill is missing', async () => {
-    const native = sessionFixture()
-    const session = skills.withSkillNotice(native, 'engine-unsupported', new Set(['private-report']))
-    session.send('/native-cc-command')
-    expect((await collect(session.stream()))[1].skillNotice).toBe('engine-unsupported')
-  })
-
-  it('emits repeated command feedback when the native session initializes only once', async () => {
-    let turn = 0
-    const native = { ...sessionFixture(), async *stream() {
-      if (turn++ === 0) yield { type: 'system', subtype: 'init' }
-      yield { type: 'assistant', message: { content: 'reply' } }
-      yield { type: 'result' }
-    } }
-    const session = skills.withSkillNotice(native, 'engine-unsupported', new Set(['private-report']))
-    session.send('hello')
-    expect((await collect(session.stream()))[1].skillNotice).toBe('engine-unsupported')
-    session.send('/private-report')
-    const output = await collect(session.stream())
-    expect(output[0]).toEqual({ type: 'system', subtype: 'skill_notice', skillNotice: 'skill-unsupported' })
-    expect(output[1].message.content).toBe('reply')
-  })
-
-  it('reports each accepted live command and does not report refused or failed sends', async () => {
-    const native = sessionFixture()
-    const session = skills.withSkillNotice(native, 'engine-unsupported', new Set(['private-report']))
-    session.send('hello')
-    await collect(session.stream())
-    native.sendIntoLiveTurn.mockReturnValueOnce(false)
-    expect(session.sendIntoLiveTurn('/private-report')).toBe(false)
-    expect((await collect(session.stream())).some(frame => frame.subtype === 'skill_notice')).toBe(false)
-    session.sendIntoLiveTurn('/private-report one')
-    session.sendIntoLiveTurn('/private-report two')
-    expect((await collect(session.stream())).filter(frame => frame.subtype === 'skill_notice')).toHaveLength(2)
-    native.send.mockRejectedValueOnce(new Error('closed'))
-    await expect(session.send('/private-report')).rejects.toThrow('closed')
-    expect((await collect(session.stream())).some(frame => frame.subtype === 'skill_notice')).toBe(false)
-    native.send.mockResolvedValueOnce(undefined)
-    await session.send('/private-report')
-    expect((await collect(session.stream())).filter(frame => frame.subtype === 'skill_notice')).toHaveLength(1)
-  })
-
-  it('does not treat a path or a longer command as the captured unsupported skill', async () => {
-    const native = sessionFixture()
-    const session = skills.withSkillNotice(native, 'engine-unsupported', new Set(['private-report']))
-    session.send('hello')
-    await collect(session.stream())
-    for (const text of ['/private-report/file.md', '/private-reports', 'Please /private-report now']) {
-      session.send(text)
-      expect((await collect(session.stream())).some(frame => frame.subtype === 'skill_notice')).toBe(false)
-    }
-  })
-
-  it('keeps the native session unchanged when all skills are supported', () => {
+  it('keeps the native session unchanged when there is nothing to announce', () => {
     const native = sessionFixture()
     expect(skills.withSkillNotice(native)).toBe(native)
   })
 
-  it('close releases pending notice state and a new session owns its own notice', async () => {
+  it('close releases a pending notice and a new session owns its own notice', async () => {
     const native = sessionFixture()
     const session = skills.withSkillNotice(native, 'catalog-unavailable')
     session.close()

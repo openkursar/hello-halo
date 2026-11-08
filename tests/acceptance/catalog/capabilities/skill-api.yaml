@@ -8,7 +8,7 @@ references:
   - tests/acceptance/skills-requirements.md
   - tests/e2e/specs/acceptance-skill-files.spec.ts
 promises:
-  discovery: Selected workspace and global files are discoverable without rewriting or automatically adopting unknown private-root files.
+  discovery: Selected workspace and global files are discoverable without rewriting or automatically adopting files outside the supported folders.
   import: An import request creates one complete package including binary assets in its selected user-file root, persisting through restart.
   edits: Stale revision writes fail without overwriting external edits; successful save preserves metadata and supporting resources.
   replace: Explicit replacement removes obsolete package files and preserves disabled choice; an unapproved collision cannot change the old package.
@@ -16,7 +16,7 @@ promises:
   sdk: New Halo SDK conversation requests omit disabled personal copies while retained effective commands expand actual file instructions without changing package bytes.
 scenarios:
   - id: capabilities.skill-api.discovery
-    title: Query real selected-scope discovery without adopting private unknowns
+    title: Query real selected-scope discovery without adopting unsupported folders
     verifies: [discovery]
     platforms: [darwin, win32, linux]
     profiles: [regression]
@@ -24,7 +24,7 @@ scenarios:
     mode: none
     automation: automated
     steps:
-      - Create isolated project/global/compatibility files and private/unrelated controls; query list and search through production preload, restart and compare bytes.
+      - Create isolated project/global/compatibility files and unrelated controls in unsupported folders; query list and search through production preload, restart and compare bytes.
     expected:
       - Only selected/global supported files appear as personal effective copies; compatibility search works and all source bytes stay unchanged.
     notes: This exercises real preload and application storage, not UI scope controls, SDK invocation, scan-count budgets or remote HTTP.

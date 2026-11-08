@@ -27,5 +27,5 @@ paths:
 dependsOn:
   - people
 scope:
-  en: Skills have global or single-workspace scope inherited by people, not per-person allocation. User files and Halo-maintained packages retain distinct ownership, with complete copying, safe moves, file-preserving disable, explicit trash and recoverable migration. Halo SDK is the full skill-support target; other engines disclose actual limits. MCP retains its existing person/workspace/global settings and stdio/HTTP/SSE recovery behavior.
-  zh: 技能只有全局或单空间范围，数字人继承而非逐人分配；用户文件与 Halo 安装包区分归属，支持完整复制、安全移动、保留文件的停用、明确回收及可恢复迁移。Halo SDK 为完整技能支持目标，其他引擎如实说明限制；MCP 保留原有个人/空间/全局配置及 stdio/HTTP/SSE 恢复行为。
+  en: Skills have global or single-workspace scope inherited by people, not per-person allocation. Every skill, whatever its origin, is a file in the shared skill folders, with complete copying, safe moves, file-preserving disable, explicit trash and recoverable migration; every engine uses the same skills. MCP retains its existing person/workspace/global settings and stdio/HTTP/SSE recovery behavior.
+  zh: 技能只有全局或单空间范围，数字人继承而非逐人分配；任何来源的技能都是共享技能目录中的文件，支持完整复制、安全移动、保留文件的停用、明确回收及可恢复迁移，所有引擎使用同一批技能；MCP 保留原有个人/空间/全局配置及 stdio/HTTP/SSE 恢复行为。

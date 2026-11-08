@@ -267,7 +267,8 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     const next = validateAppSpec(authorSpec)
     const fromVersion = app.spec.version
     if (app.spec.type === 'skill' && next.type === 'skill' &&
-      (classifySkillSource(app.spec) === 'personal' || app.userOverrides.skill?.customized || app.userOverrides.skill?.deleted || app.status === 'uninstalled')) {
+      (classifySkillSource(app.spec) === 'personal' || app.userOverrides.skill?.customized || app.userOverrides.skill?.deleted || app.status === 'uninstalled'
+        || skills.editedOutside(app))) {
       return { next, merged: null, outcome: { fromVersion, toVersion: fromVersion, kept: ['skill_files', 'skill_assets', 'skill_content'], editsKnown: true } }
     }
     if (next.type !== 'automation' || app.spec.type !== 'automation') {
@@ -1357,9 +1358,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
           // outcome of destroying a space.
           if (isBuiltinApp(app)) builtinCount++
 
-          if (app.spec.type === 'skill') {
-            await skills.deleteForSpace(app)
-          }
+          // A skill's files sit in the user's own skill folder, so only its record goes with the space.
 
           // Purge the work directory
           try {

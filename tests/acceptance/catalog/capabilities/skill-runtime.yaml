@@ -10,7 +10,7 @@ promises:
   use: Use preserves conversation drafts and waits for sending; the SDK loads the selected effective copy and its relative resources rather than another namesake.
   disable: Disabling preserves files and removes that copy consistently from new SDK catalogs, skill calls, commands and subagents without interrupting existing work.
   content: Current saved files govern new work; old context may remain, explicit reload may read new content and missing old paths cannot silently resolve to a different namesake.
-  engines: Support is disclosed against the actual session engine without forced engine switches, configuration changes or concealed basic-path regressions.
+  engines: Every skill in the shared skill folders works on the actual session engine without a notice, a forced engine switch, a configuration change or a concealed basic-path regression.
   management: AI and UI management share file truth, scope, precedence and authorization, and diagnose real availability without invented certainty or background scans.
 scenarios:
   - id: capabilities.skill-runtime.use
@@ -71,7 +71,7 @@ scenarios:
       - Details show saved current content; new sessions use current effective files. Old loaded content need not disappear and explicit reload can see new bytes without a frozen mirror.
       - Missing/unreadable original path produces an honest error, not another namesake. Copy explains disable timing separately from content-edit timing.
   - id: capabilities.skill-runtime.engines
-    title: Disclose limits for the actual conversation engine
+    title: Use the same skills on every engine
     verifies: [engines, disable]
     platforms: [darwin, win32, linux]
     profiles: [regression]
@@ -81,12 +81,13 @@ scenarios:
     variants:
       engine: [halo, claude-code, codex, dsh]
     steps:
-      - Retain a conversation on its engine while changing the global default; inspect skill loading/disable support, invoke a previously supported skill and compare engine/project configuration.
+      - Keep a personal skill and install a store skill and a built-in skill, start a conversation on the selected engine and invoke each by name; compare what the engine receives with the skill library and with the user's project and engine configuration.
     expected:
-      - The actual conversation engine determines displayed support; unavailable loading or disable is explicit rather than a false effective toggle.
-      - Claude Code and Codex do not wait for Halo's skill catalog during session creation or one-shot queries. If it is not already available, their native skills and normal first message proceed without a catalog-unavailable notice. Halo SDK retains its bounded readiness wait.
-      - A generic compatibility notice appears at most once per session; every accepted explicit invocation of an unsupported library skill receives the specific guidance, including later turns without a new init frame. Ordinary later messages do not repeat it.
-      - No forced switch, project instruction/settings removal, engine configuration rewrite or mass skill replication occurs. A basic invocation regression is reported rather than waived as another engine.
+      - Every skill in the shared `.agents/skills` folders, whatever its origin, is usable on the actual conversation engine with no notice, no forced switch and no instruction to change engine.
+      - Claude Code receives the skills it cannot find in its own folders through one Halo-owned directory of links; no file in the user's project or in Claude configuration is written, removed or replaced.
+      - Claude Code and Codex do not wait for Halo's skill catalog during session creation or one-shot queries. If it is not already available, their normal first message proceeds. Halo SDK keeps its bounded readiness wait and shows a catalog-unavailable notice only when that wait fails.
+      - Turning a skill off in the library takes effect in new Halo SDK and Claude Code conversations; an engine that reads the shared folder itself may still see a turned-off file.
+      - A basic invocation regression on any engine is reported rather than waived as another engine.
     notes: Each engine requires an installed isolated supported runtime and engine-specific model evidence. Missing engines remain blocked, never passing skips or fallback evidence.
   - id: capabilities.skill-runtime.ai-management
     title: Manage and explain skills through the same rules as the UI

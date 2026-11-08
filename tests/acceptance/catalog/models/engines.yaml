@@ -19,10 +19,36 @@ promises:
   fallback:
     en: A missing explicitly selected Claude Code installation fails without selecting another installation or engine; other engine fallback retains the saved choice.
     zh: 明确选择的 Claude Code 安装不可用时失败，不选择其他安装或引擎；其他引擎的回退保留保存的选择。
+  task-tracking:
+    en: Claude Code conversations retain the task checklist on non-Claude models when the tool is allowed; an explicitly disabled checklist tool remains unavailable.
+    zh: Claude Code 对话在非 Claude 模型上仍保留待办清单能力；用户明确禁用清单工具时，它保持不可用。
   upgrade:
     en: An ordinary upgrade never discovers Claude Code or rewrites all history. Ambiguous historical defaults and paths use Halo, while recorded user choices and a currently selected Claude Code delegated account remain selected. Compatible history resumes silently; unsafe recovery preserves history and fails.
     zh: 普通升级不发现 Claude Code、不批量改写历史。来源不明的旧默认值和路径使用 Halo，有记录的主动选择及当前选中的 Claude Code 委托账户保留。兼容历史正常恢复不提示；无法安全恢复时保留历史并失败。
 scenarios:
+  - id: models.engines.cc-task-tracking
+    title:
+      en: Keep the task checklist when using a non-Claude model on Claude Code
+      zh: Claude Code 使用非 Claude 模型时仍可使用待办清单
+    verifies: [task-tracking]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk, local-claude-code]
+    variants:
+      model: [deepseek-v4.1-flash, gpt-6-astra]
+      permission: [allowed, disabled]
+    preconditions:
+      - An isolated application selects an external Claude Code installation and a local scripted OpenAI-compatible model account.
+    steps:
+      - Start a conversation with the checklist tool allowed or explicitly disabled.
+      - If allowed, discover the checklist tool when deferred, write a completed task and reopen the conversation.
+    expected:
+      - When allowed, the model receives TodoWrite's parameter schema, the actual tool succeeds, and the saved conversation displays the task checklist after reopening.
+      - When explicitly disabled, neither TodoWrite nor the replacement Task tools are advertised; no checklist is executed.
+    notes: The real external runtime and the application's model router execute against a local scripted endpoint. This does not establish live provider compatibility or coverage of every external Claude Code version.
   - id: models.engines.global-selection
     title:
       en: Apply a default engine choice to new conversations

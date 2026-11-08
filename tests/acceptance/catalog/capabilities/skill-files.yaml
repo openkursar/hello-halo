@@ -80,7 +80,7 @@ scenarios:
       - Open a workspace containing existing files and a canonical alias; search, open a new conversation and invoke the skill, then compare original file bytes.
     expected:
       - Existing readable formats work without import/registration; aliases count once, no metadata is inserted and files are not reformatted.
-      - Unknown files in Halo private installation roots do not become active skills; no arbitrary folder-link or watcher feature is added.
+      - Files outside the supported skill folders do not become active skills; no arbitrary folder-link or watcher feature is added.
   - id: capabilities.skill-files.edit-external
     title: Reconcile file edits with an unsaved editor draft
     verifies: [truth, failure]
@@ -142,7 +142,7 @@ scenarios:
       - Inspect the one confirmation naming selected directory/resources/shared scope, cancel, then delete and restart; restore a user file from trash or explicitly reinstall maintained content.
     expected:
       - Cancellation changes nothing; available trash receives only the selected copy/link, never the import source, link target or unrelated files. Unavailable trash fails without permanent fallback.
-      - User restore is rediscovered; maintained private files require real installation. Deleted built-ins do not reappear on restart/update without explicit reinstall.
+      - A restored file is rediscovered. Deleted built-ins do not reappear on restart/update without explicit reinstall.
       - Existing context may retain instructions; later missing-resource reads fail honestly rather than promising uninterrupted execution.
   - id: capabilities.skill-files.failure
     title: Preserve data under interrupted, concurrent and stale operations

@@ -10,7 +10,10 @@ import type { AppManagerService } from '../../../../src/main/apps/manager/types'
 import type { AppSpec, SkillSpec } from '../../../../src/main/apps/spec'
 
 const managerRef = vi.hoisted(() => ({ get: vi.fn() }))
-vi.mock('../../../../src/main/apps/manager', () => ({ getAppManager: managerRef.get }))
+vi.mock('../../../../src/main/apps/manager', async () => ({
+  getAppManager: managerRef.get,
+  AppAlreadyInstalledError: (await import('../../../../src/main/apps/manager/errors')).AppAlreadyInstalledError,
+}))
 vi.mock('../../../../src/main/apps/runtime', () => ({ getAppRuntime: () => null }))
 vi.mock('node:os', async importOriginal => ({
   ...await importOriginal<typeof import('node:os')>(), homedir: () => globalThis.__HALO_TEST_DIR__,
@@ -84,35 +87,26 @@ describe('skill dependencies preserve user choices', () => {
     expect(manager.getApp(dependency.id)!.userOverrides.skill!.owners).toHaveLength(1)
   })
 
-  it('keeps same-name dependencies from different sources as independent installations', async () => {
+  it('lets a dependency of another source yield to the installed skill of the same name, without claiming it', async () => {
     const first = await install('first')
     const dependency = manager.listSkillRecords('space')[0]
     const incoming: SkillSpec = { ...skill, store: { slug: 'helper', registry_id: 'another-source', tags: [] },
       skill_files: { 'SKILL.md': 'Other source instructions' },
     }
-    const second = await install('second', incoming)
-    const records = manager.listSkillRecords('space')
-    expect(records).toHaveLength(2)
+    await install('second', incoming)
+    expect(manager.listSkillRecords('space')).toHaveLength(1)
     expect(manager.getApp(dependency.id)!.userOverrides.skill!.owners).toEqual([{ id: first, name: 'first' }])
-    const other = records.find(record => record.id !== dependency.id)!
-    expect(other.specId).not.toBe(dependency.specId)
-    expect(other.userOverrides.skill!.owners).toEqual([{ id: second, name: 'second' }])
     expect(readFileSync(dependency.userOverrides.skill!.filePath, 'utf8')).toContain('Instructions')
-    expect(readFileSync(other.userOverrides.skill!.filePath, 'utf8')).toContain('Other source instructions')
   })
 
-  it('installs beside a personal same-name skill without replacing it or claiming its ownership', async () => {
+  it('leaves a personal same-name skill untouched and does not claim its ownership', async () => {
     const id = await manager.install('space', skill)
     const before = manager.getApp(id)!
     const file = before.userOverrides.skill!.filePath
-    const person = await install('first')
+    await install('first')
     expect(readFileSync(file, 'utf8')).toContain('Instructions')
     expect(manager.getApp(id)).toEqual(before)
-    const records = manager.listSkillRecords('space')
-    expect(records).toHaveLength(2)
-    const dependency = records.find(record => record.id !== id)!
-    expect(dependency.userOverrides.skill!.owners).toEqual([{ id: person, name: 'first' }])
-    expect(dependency.userOverrides.skill!.filePath).not.toBe(file)
+    expect(manager.listSkillRecords('space')).toHaveLength(1)
   })
 
   it('keeps legacy callers safe without inventing an owner from a display name', async () => {

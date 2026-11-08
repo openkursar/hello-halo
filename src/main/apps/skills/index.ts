@@ -15,9 +15,10 @@ const library = createSkillLibrary({
     if (!manager) throw new Error('Skill management is not ready. Try again shortly.')
     const space = spaceId === null ? null : getSpace(spaceId)
     if (spaceId !== null && !space) throw new Error('The selected workspace no longer exists.')
+    const spaceWorkDir = space ? space.isTemp ? join(space.path, 'artifacts') : space.workingDir || space.path : null
     return {
       manager, spaceId, haloDir: getHaloDir(),
-      workDir: workDir ?? (space ? space.isTemp ? join(space.path, 'artifacts') : space.workingDir || space.path : null),
+      workDir: workDir ?? spaceWorkDir, spaceWorkDir,
       spaceDataPath: space?.path ?? null,
       legacyGlobalRoots: [join(resolveClaudeConfigDir(), 'skills'), join(app.getPath('userData'), 'claude-config', 'skills')],
       ownedLegacyGlobalRoot: join(app.getPath('userData'), 'claude-config', 'skills'),

@@ -29,12 +29,9 @@ export function validateSkillName(name: string): string {
   return value
 }
 
-export function personalSkillPath(workDir: string | null, name: string): string {
+/** Where a skill of any origin lives: the user's folder for the scope, never a Halo-private one. */
+export function skillFilePath(workDir: string | null, name: string): string {
   return join(workDir ?? homedir(), '.agents', 'skills', validateSkillName(name), 'SKILL.md')
-}
-
-export function managedSkillPath(haloDir: string, spaceDataPath: string | null, appId: string): string {
-  return join(spaceDataPath ? join(spaceDataPath, '.halo') : haloDir, 'skills', validateSkillName(appId), 'SKILL.md')
 }
 
 export function skillSearchRoots(workDir: string | null): Array<{ path: string; scope: 'global' | 'space' }> {

@@ -5,7 +5,7 @@ import type { AppManagerService, InstalledApp } from '../../../../src/main/apps/
 import type { SkillSpec } from '../../../../src/main/apps/spec'
 import { migrateSkillRecord, migrateUnregisteredGlobalSkills } from '../../../../src/main/apps/skills/migration'
 import { buildSkillCatalog, effectiveSkillCatalog, type SkillLibraryContext } from '../../../../src/main/apps/skills/catalog'
-import { managedSkillPath, personalSkillPath, readSkillPackage, readSkillPreference } from '../../../../src/main/services/skills'
+import { skillFilePath, readSkillPackage, readSkillPreference } from '../../../../src/main/services/skills'
 
 vi.mock('node:os', async importOriginal => ({
   ...await importOriginal<typeof import('node:os')>(),
@@ -135,7 +135,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
     context.ownedLegacyGlobalRoot = owned
     const source = join(owned, 'report', 'SKILL.md')
     packageAt(source)
-    packageAt(personalSkillPath(null, 'report'), 'Existing personal package')
+    packageAt(skillFilePath(null, 'report'), 'Existing personal package')
     const { opendirSync: actualOpen } = await vi.importActual<typeof import('node:fs')>('node:fs')
     vi.mocked(opendirSync).mockImplementationOnce(((...args: Parameters<typeof opendirSync>) => {
       const directory = actualOpen(...args)
@@ -165,7 +165,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
     expect(readSkillPreference(context.haloDir, `migration:personal-root:${owned}`).enabled).toBeUndefined()
     expect(migrateUnregisteredGlobalSkills([], context)).toEqual([])
     expect(existsSync(source)).toBe(false)
-    expect(readFileSync(personalSkillPath(null, 'report'), 'utf8')).toBe(original)
+    expect(readFileSync(skillFilePath(null, 'report'), 'utf8')).toBe(original)
   })
 
   it('does not treat a legacy file permission failure as safe preservation', async () => {
@@ -180,10 +180,10 @@ describe('legacy skill migration with isolated files and record commits', () => 
     expect(migrate(app)).toMatch(/Read permission denied/)
     expect(manager.updateSkillRecord).not.toHaveBeenCalled()
     expect(records.get(app.id)).toEqual(app)
-    expect(existsSync(personalSkillPath(work, 'report'))).toBe(false)
+    expect(existsSync(skillFilePath(work, 'report'))).toBe(false)
     vi.mocked(lstatSync).mockImplementation(actualStat)
     expect(migrate(app)).toBeUndefined()
-    expect(readFileSync(personalSkillPath(work, 'report'), 'utf8')).toBe(original)
+    expect(readFileSync(skillFilePath(work, 'report'), 'utf8')).toBe(original)
   })
 
   it('does not let a workspace record suppress an unrelated owned global migration', () => {
@@ -194,7 +194,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
     packageAt(source)
     expect(migrateUnregisteredGlobalSkills([app], context)).toEqual([])
     expect(existsSync(source)).toBe(false)
-    expect(readFileSync(personalSkillPath(null, 'report'), 'utf8')).toBe(original)
+    expect(readFileSync(skillFilePath(null, 'report'), 'utf8')).toBe(original)
     expect(records.get(app.id)).toEqual(app)
   })
 
@@ -203,7 +203,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
     const source = oldPath(app)
     packageAt(source)
     expect(migrate(app)).toBeUndefined()
-    const target = personalSkillPath(work, 'report')
+    const target = skillFilePath(work, 'report')
     expect(existsSync(source)).toBe(false)
     expect(readSkillPackage(target)).toMatchObject({ files: { 'SKILL.md': original, 'scripts/run.js': 'original script' }, assets: { 'assets/sample.bin': { encoding: 'base64', content: binary.toString('base64') } } })
     expect(records.get(app.id)!.spec).toMatchObject({ skill_files: undefined, skill_content: undefined, skill_assets: undefined })
@@ -227,7 +227,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
     expect(readFileSync(join(dirname(source), 'scripts', 'run.js'), 'utf8')).toBe('user script')
     expect(readFileSync(join(dirname(source), 'assets', 'sample.bin'))).toEqual(binary)
     expect(records.get(app.id)!.userOverrides.skill!.filePath).toBe(source)
-    expect(existsSync(personalSkillPath(work, 'report'))).toBe(false)
+    expect(existsSync(skillFilePath(work, 'report'))).toBe(false)
     expect(effectiveSkillCatalog(context)[0].source.path).toBe(source)
   })
 
@@ -246,22 +246,23 @@ describe('legacy skill migration with isolated files and record commits', () => 
     expect(manager.getSkillRecord).not.toHaveBeenCalled()
   })
 
-  it('moves an unchanged managed package into the private installation path, not the user tree', () => {
+  it('moves an unchanged managed package into the shared skill folder', () => {
     const app = add(legacy('store'))
     const source = oldPath(app)
     packageAt(source)
     expect(migrate(app)).toBeUndefined()
-    const target = managedSkillPath(context.haloDir, context.spaceDataPath, app.id)
+    const target = skillFilePath(app.spaceId === null ? null : work, 'report')
     expect(existsSync(source)).toBe(false)
-    expect(existsSync(personalSkillPath(work, 'report'))).toBe(false)
+    expect(target).toBe(join(work, '.agents', 'skills', 'report', 'SKILL.md'))
     expect(readFileSync(target, 'utf8')).toBe(original)
+    expect(records.get(app.id)!.userOverrides.skill).toMatchObject({ filePath: target, digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
     expect(records.get(app.id)!.spec).toMatchObject({ skill_files: { 'SKILL.md': original } })
   })
 
   it.each(['manual', 'store'] as const)('recovers a %s paused package missing from old disk without enabling it', source => {
     const app = add(legacy(source, 'paused'))
     expect(migrate(app)).toBeUndefined()
-    const target = source === 'manual' ? personalSkillPath(work, 'report') : managedSkillPath(context.haloDir, context.spaceDataPath, app.id)
+    const target = source === 'manual' ? skillFilePath(work, 'report') : skillFilePath(app.spaceId === null ? null : work, 'report')
     expect(readFileSync(target, 'utf8')).toBe(original)
     expect(readFileSync(join(dirname(target), 'assets', 'sample.bin'))).toEqual(binary)
     expect(records.get(app.id)!.status).toBe('paused')
@@ -276,7 +277,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
     expect(migrate(app)).toBeUndefined()
     expect(manager.getSkillRecord).toHaveBeenCalledWith(app.id)
     expect(existsSync(oldPath(app))).toBe(false)
-    const target = source === 'manual' ? personalSkillPath(work, 'report') : managedSkillPath(context.haloDir, context.spaceDataPath, app.id)
+    const target = source === 'manual' ? skillFilePath(work, 'report') : skillFilePath(app.spaceId === null ? null : work, 'report')
     expect(readFileSync(target, 'utf8')).toBe(original)
     expect(readFileSync(join(dirname(target), 'scripts', 'run.js'), 'utf8')).toBe('original script')
     expect(readFileSync(join(dirname(target), 'assets', 'sample.bin'))).toEqual(binary)
@@ -300,7 +301,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
     packageAt(source, changed)
     expect(migrate(app)).toBeUndefined()
     expectPreservationRecordedOnce(app)
-    const target = managedSkillPath(context.haloDir, context.spaceDataPath, app.id)
+    const target = skillFilePath(app.spaceId === null ? null : work, 'report')
     expect(readFileSync(source, 'utf8')).toBe(changed)
     expect(readFileSync(target, 'utf8')).toBe(original)
     const catalog = buildSkillCatalog(context)
@@ -321,13 +322,13 @@ describe('legacy skill migration with isolated files and record commits', () => 
     expect(catalog.groups[0].copies.every(copy => !copy.enabled && copy.availability === 'disabled')).toBe(true)
     expect(effectiveSkillCatalog(context)).toEqual([])
     expect(readFileSync(source, 'utf8')).toBe(changed)
-    expect(readFileSync(managedSkillPath(context.haloDir, context.spaceDataPath, app.id), 'utf8')).toBe(original)
+    expect(readFileSync(skillFilePath(app.spaceId === null ? null : work, 'report'), 'utf8')).toBe(original)
   })
 
   it('records safely preserved conflicting locations once without losing either package', () => {
     const app = add()
     const source = oldPath(app)
-    const target = personalSkillPath(work, 'report')
+    const target = skillFilePath(work, 'report')
     packageAt(source)
     packageAt(target, 'Destination user content')
     expect(migrate(app)).toBeUndefined()
@@ -340,7 +341,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
   it('preserves a paused original and an already independent matching destination without name-wide disablement', () => {
     const app = add(legacy('manual', 'paused'))
     const source = oldPath(app)
-    const target = personalSkillPath(work, 'report')
+    const target = skillFilePath(work, 'report')
     packageAt(source)
     packageAt(target)
     expect(migrate(app)).toBeUndefined()
@@ -356,7 +357,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
 
   it('does not consume the sole paused legacy instructions by adopting unrelated existing destination files', () => {
     const app = add(legacy('manual', 'paused'))
-    const target = personalSkillPath(work, 'report')
+    const target = skillFilePath(work, 'report')
     packageAt(target, 'Unrelated personal instructions already at destination')
     const warning = migrate(app)
     expect.soft(warning).toEqual(expect.stringMatching(/destination|different|conflict/i))
@@ -389,7 +390,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
     expect.soft(catalog.groups.every(group => group.effectiveId === undefined), 'Migration failure must not expose restored paused instructions').toBe(true)
     expect.soft(effectiveSkillCatalog(context)).toEqual([])
     expect(records.get(app.id)).toEqual(app)
-    const remaining = [oldPath(app), personalSkillPath(work, 'report')].filter(path => existsSync(path))
+    const remaining = [oldPath(app), skillFilePath(work, 'report')].filter(path => existsSync(path))
     for (const path of remaining) expect(readFileSync(path, 'utf8')).toBe(original)
   })
 
@@ -409,7 +410,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
 
   it('records canonical .claude/.agents aliases once without warning or duplicate copies', () => {
     const app = add()
-    const target = personalSkillPath(work, 'report')
+    const target = skillFilePath(work, 'report')
     packageAt(target)
     mkdirSync(join(work, '.claude'), { recursive: true })
     symlinkSync(join(work, '.agents', 'skills'), join(work, '.claude', 'skills'), 'dir')
@@ -425,7 +426,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
 
   it.each(['manual', 'store'] as const)('retains a failed %s missing-marker repair for retry without losing the stored package', source => {
     const app = legacy(source)
-    const target = source === 'manual' ? personalSkillPath(work, 'report') : managedSkillPath(context.haloDir, context.spaceDataPath, app.id)
+    const target = source === 'manual' ? skillFilePath(work, 'report') : skillFilePath(app.spaceId === null ? null : work, 'report')
     app.userOverrides.skill = { version: 1, filePath: target, migrationWarning: missingLegacyFiles }
     add(app)
     vi.mocked(manager.updateSkillRecord).mockImplementationOnce(() => { throw new Error('record storage unavailable') })
@@ -443,7 +444,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
 
   it.each([undefined, 'The skill file is missing.', `${missingLegacyFiles} `])('does not repair completed migration with a non-matching warning: %s', migrationWarning => {
     const app = legacy('store')
-    const target = managedSkillPath(context.haloDir, context.spaceDataPath, app.id)
+    const target = skillFilePath(app.spaceId === null ? null : work, 'report')
     app.userOverrides.skill = { version: 1, filePath: target, migrationWarning }
     add(app)
     expect(migrate(app)).toBeUndefined()
@@ -459,7 +460,7 @@ describe('legacy skill migration with isolated files and record commits', () => 
     const app = add(legacy('manual', 'paused', null))
     expect(migrate(app)).toBeUndefined()
     expect(records.get(app.id)!.userOverrides.skill!.filePath).toBe(join(root, '.agents', 'skills', 'report', 'SKILL.md'))
-    expect(readFileSync(personalSkillPath(null, 'report'), 'utf8')).toBe(original)
+    expect(readFileSync(skillFilePath(null, 'report'), 'utf8')).toBe(original)
     expect(effectiveSkillCatalog(context)).toEqual([])
   })
 
@@ -472,12 +473,12 @@ describe('legacy skill migration with isolated files and record commits', () => 
     expect(catalog.groups).toEqual([])
     expect(records.get(app.id)).toEqual(app)
     expect(manager.updateSkillRecord).not.toHaveBeenCalled()
-    expect(existsSync(personalSkillPath(work, 'report'))).toBe(false)
+    expect(existsSync(skillFilePath(work, 'report'))).toBe(false)
   })
 
   it.each(['active', 'paused', 'uninstalled'] as const)('never repairs a deleted record carrying the old missing marker even when its status is %s', status => {
     const app = legacy('store', status)
-    const target = managedSkillPath(context.haloDir, context.spaceDataPath, app.id)
+    const target = skillFilePath(app.spaceId === null ? null : work, 'report')
     app.userOverrides.skill = { version: 1, filePath: target, deleted: true, migrationWarning: missingLegacyFiles }
     add(app)
     expect(migrate(app)).toBeUndefined()
@@ -495,5 +496,163 @@ describe('legacy skill migration with isolated files and record commits', () => 
     expect(buildSkillCatalog(context).groups[0].copies[0].availability).toBe('missing')
     expect(existsSync(target)).toBe(false)
     expect(effectiveSkillCatalog(context)).toEqual([])
+  })
+
+  it('defers a legacy store skill instead of binding it to a different skill that already holds the shared folder', () => {
+    const app = add(legacy('store'))
+    const source = oldPath(app)
+    packageAt(source, `${original}Edited by the user\n`)
+    const taken = skillFilePath(work, 'report')
+    mkdirSync(dirname(taken), { recursive: true })
+    writeFileSync(taken, 'the user\'s own skill')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(migrate(app)).toContain('Could not migrate')
+    expect(records.get(app.id)).toEqual(app)
+    expect(readFileSync(taken, 'utf8')).toBe('the user\'s own skill')
+    expect(readFileSync(source, 'utf8')).toContain('Edited by the user')
+  })
+
+  it('does not let two legacy records of one name bind to the same shared folder', () => {
+    const first = add(legacy('store'))
+    const second = legacy('store')
+    second.id = 'second-installation'
+    second.specId = 'report-second'
+    second.spec = { ...second.spec, store: { install_source: 'store', tags: [], slug: 'author/another-report' } } as SkillSpec
+    add(second)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(migrate(first)).toBeUndefined()
+    expect(migrate(second)).toContain('Could not migrate')
+    expect(records.get(second.id)!.userOverrides.skill).toBeUndefined()
+    expect(records.get(first.id)!.userOverrides.skill!.filePath).toBe(skillFilePath(work, 'report'))
+  })
+
+  describe('skills recorded under the retired private roots', () => {
+    function recorded(id: string, spaceId: string | null, path: string): InstalledApp {
+      const app = legacy('store', 'active', spaceId)
+      app.id = id
+      app.userOverrides = { skill: { version: 1, filePath: path } }
+      return add(app)
+    }
+
+    it.each([
+      ['global', null],
+      ['workspace', 'space'],
+    ] as const)('moves a %s skill into the shared skill folder and records what it wrote', (_scope, spaceId) => {
+      const from = spaceId === null
+        ? join(context.haloDir, 'skills', 'private-id', 'SKILL.md')
+        : join(context.spaceDataPath!, '.halo', 'skills', 'private-id', 'SKILL.md')
+      const to = join(spaceId === null ? root : work, '.agents', 'skills', 'report', 'SKILL.md')
+      packageAt(from)
+      const app = recorded(`move-${spaceId}`, spaceId, from)
+      expect(migrate(app)).toBeUndefined()
+      expect(records.get(app.id)!.userOverrides.skill).toMatchObject({ filePath: to, digest: expect.stringMatching(/^[a-f0-9]{64}$/) })
+      expect(existsSync(from)).toBe(false)
+      expect(readFileSync(to, 'utf8')).toBe(original)
+      expect(readFileSync(join(dirname(to), 'scripts', 'run.js'), 'utf8')).toBe('original script')
+      expect(migrate(records.get(app.id)!)).toBeUndefined()
+      expect(manager.updateSkillRecord).toHaveBeenCalledTimes(1)
+    })
+
+    it('records no fingerprint for a package the user had already changed', () => {
+      const from = join(context.haloDir, 'skills', 'edited-id', 'SKILL.md')
+      packageAt(from, `${original}Edited by the user\n`)
+      const app = recorded('edited', null, from)
+      migrate(app)
+      expect(records.get(app.id)!.userOverrides.skill!.filePath).toBe(join(root, '.agents', 'skills', 'report', 'SKILL.md'))
+      expect(records.get(app.id)!.userOverrides.skill!.digest).toBeUndefined()
+      expect(readFileSync(records.get(app.id)!.userOverrides.skill!.filePath, 'utf8')).toContain('Edited by the user')
+    })
+
+    it('leaves the skill where it works when the shared folder already holds another one', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const from = join(context.haloDir, 'skills', 'occupied-id', 'SKILL.md')
+      packageAt(from)
+      const taken = join(root, '.agents', 'skills', 'report', 'SKILL.md')
+      mkdirSync(dirname(taken), { recursive: true })
+      writeFileSync(taken, 'the user\'s own skill')
+      const app = recorded('occupied', null, from)
+      expect(migrate(app)).toBeUndefined()
+      expect(records.get(app.id)).toEqual(app)
+      expect(existsSync(from)).toBe(true)
+      expect(readFileSync(taken, 'utf8')).toBe('the user\'s own skill')
+      expect(warn).not.toHaveBeenCalled()
+      expect(effectiveSkillCatalog(context).map(entry => entry.source.path)).toEqual([taken])
+      expect(buildSkillCatalog(context).groups[0].copies.map(copy => copy.path).sort()).toEqual([from, taken].sort())
+    })
+
+    it('puts the files back when the record cannot be saved, warns once, and retries later', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const from = join(context.haloDir, 'skills', 'retry-id', 'SKILL.md')
+      const to = join(root, '.agents', 'skills', 'report', 'SKILL.md')
+      packageAt(from)
+      const app = recorded('retry', null, from)
+      vi.mocked(manager.updateSkillRecord).mockImplementation(() => { throw new Error('db write failed') })
+      migrate(app)
+      migrate(app)
+      expect(existsSync(from)).toBe(true)
+      expect(existsSync(to)).toBe(false)
+      expect(records.get(app.id)).toEqual(app)
+      expect(warn).toHaveBeenCalledTimes(1)
+      vi.mocked(manager.updateSkillRecord).mockRestore()
+      migrate(app)
+      expect(existsSync(from)).toBe(false)
+      expect(readFileSync(to, 'utf8')).toBe(original)
+    })
+
+    it('relocates while the catalog is built, so the next session reads the shared folder', () => {
+      const from = join(context.haloDir, 'skills', 'catalog-id', 'SKILL.md')
+      const to = join(root, '.agents', 'skills', 'report', 'SKILL.md')
+      packageAt(from)
+      recorded('catalog', null, from)
+      expect(effectiveSkillCatalog(context).map(entry => entry.source.path)).toEqual([to])
+    })
+
+    it('puts a workspace skill in the workspace folder even when a session works elsewhere', () => {
+      const from = join(context.spaceDataPath!, '.halo', 'skills', 'cwd-id', 'SKILL.md')
+      packageAt(from)
+      const app = recorded('cwd', 'space', from)
+      context.workDir = join(root, 'a-digital-human-working-directory')
+      context.spaceWorkDir = work
+      migrate(app)
+      expect(records.get(app.id)!.userOverrides.skill!.filePath).toBe(join(work, '.agents', 'skills', 'report', 'SKILL.md'))
+      expect(existsSync(join(context.workDir, '.agents'))).toBe(false)
+    })
+
+    it('records a fingerprint for a package whose SKILL.md has no user-invocable line, and keeps one the record already had', () => {
+      const plain = '---\nname: report\ndescription: Stored report\n---\nOriginal instructions\n'
+      const fixture = (id: string, digest?: string) => {
+        const from = join(context.haloDir, 'skills', `${id}-id`, 'SKILL.md')
+        packageAt(from, plain)
+        const app = legacy('store', 'active', null)
+        app.id = id
+        app.spec = { ...app.spec, skill_files: { ...(app.spec as SkillSpec).skill_files, 'SKILL.md': plain } } as SkillSpec
+        app.userOverrides = { skill: { version: 1, filePath: from, ...(digest ? { digest } : {}) } }
+        return add(app)
+      }
+      const fresh = fixture('plain-fresh')
+      migrate(fresh)
+      expect(records.get(fresh.id)!.userOverrides.skill!.digest).toMatch(/^[a-f0-9]{64}$/)
+      rmSync(join(root, '.agents'), { recursive: true })
+      const known = fixture('plain-known', 'a'.repeat(64))
+      migrate(known)
+      expect(records.get(known.id)!.userOverrides.skill!.digest).toBe('a'.repeat(64))
+    })
+
+    it('ignores files a file manager leaves behind when deciding whether the package changed', () => {
+      const from = join(context.haloDir, 'skills', 'junk-id', 'SKILL.md')
+      packageAt(from)
+      writeFileSync(join(dirname(from), '.DS_Store'), 'finder')
+      const app = recorded('junk', null, from)
+      migrate(app)
+      expect(records.get(app.id)!.userOverrides.skill!.digest).toMatch(/^[a-f0-9]{64}$/)
+    })
+
+    it('leaves a missing private package alone for the library to report', () => {
+      const from = join(context.haloDir, 'skills', 'gone-id', 'SKILL.md')
+      const app = recorded('gone', null, from)
+      expect(migrate(app)).toBeUndefined()
+      expect(records.get(app.id)).toEqual(app)
+      expect(manager.updateSkillRecord).not.toHaveBeenCalled()
+    })
   })
 })

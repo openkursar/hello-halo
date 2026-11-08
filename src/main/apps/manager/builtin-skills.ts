@@ -20,6 +20,7 @@ import type { SkillSpec } from '../spec'
 import { readSkillPackage } from '../../services/skills'
 import { extractFrontmatterField } from '../../../shared/skill-frontmatter'
 import { bundleKey, isBundleSeeded, markBundleSeeded } from './bundle-seed-stamp'
+import { AppAlreadyInstalledError } from './errors'
 
 /** Slug namespace identifying this seeder's package provenance. */
 const BUILTIN_SKILL_SLUG_PREFIX = 'halo-builtin-skills/'
@@ -84,8 +85,16 @@ async function seedSdkSkills(manager: AppManagerService): Promise<void> {
         skill_content: `---\nname: ${definition.name}\ndescription: ${JSON.stringify(definition.description)}\n${definition.argumentHint ? `argument-hint: ${JSON.stringify(definition.argumentHint)}\n` : ''}---\n\n${definition.instructions}`,
         store: { slug, install_source: 'bundled', tags: [] },
       }
-      if (!existing) await manager.install(null, spec)
-      else if (existing.spec.version !== version) manager.upgradeSpec(existing.id, spec)
+      try {
+        if (!existing) await manager.install(null, spec)
+        else if (existing.spec.version !== version) manager.upgradeSpec(existing.id, spec)
+      } catch (error) {
+        if (error instanceof AppAlreadyInstalledError) {
+          console.log('[BuiltinSkills] Kept the user\'s own skill of the same name', { name: definition.name })
+        } else {
+          console.warn('[BuiltinSkills] SDK workflow was not installed; other skills remain available', { name: definition.name, reason: (error as Error).message })
+        }
+      }
     }
   } catch (error) {
     console.warn('[BuiltinSkills] SDK workflows were not installed; other skills remain available', { reason: (error as Error).message })
@@ -165,6 +174,10 @@ export async function seedBuiltinSkills(appManager: AppManagerService): Promise<
         if (outcome.toVersion === spec.version) refreshed++
       }
     } catch (err) {
+      if (err instanceof AppAlreadyInstalledError) {
+        console.log('[BuiltinSkills] Kept the user\'s own skill of the same name', { name: spec.name })
+        continue
+      }
       failures++
       console.warn(`[BuiltinSkills] Failed to seed "${spec.name}":`, err)
     }

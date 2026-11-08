@@ -10,7 +10,7 @@ import type { AppManagerService, InstalledApp } from '../../../../src/main/apps/
 import type { SkillSpec } from '../../../../src/main/apps/spec'
 import { AppAlreadyInstalledError } from '../../../../src/main/apps/manager/errors'
 import { createSkillLibrary } from '../../../../src/main/apps/skills'
-import { managedSkillPath, personalSkillPath, readSkillPackage } from '../../../../src/main/services/skills'
+import { skillFilePath, readSkillPackage } from '../../../../src/main/services/skills'
 
 vi.mock('node:os', async importOriginal => ({
   ...await importOriginal<typeof import('node:os')>(),
@@ -92,9 +92,8 @@ describe('skill installation lifecycle', () => {
     }
   }
 
-  function migratedPath(app: InstalledApp, source: 'manual' | 'store'): string {
-    return source === 'manual' ? personalSkillPath(app.spaceId === null ? null : work, 'report')
-      : managedSkillPath(join(root, 'halo'), app.spaceId === null ? null : data, app.id)
+  function migratedPath(app: InstalledApp, _source: 'manual' | 'store'): string {
+    return skillFilePath(app.spaceId === null ? null : work, 'report')
   }
 
   it.each(legacyCases)('migrates legacy SQLite $source/$status scope=$spaceId with missing marker=$markedMissing without losing contents or later edits', ({ source, status, spaceId, markedMissing }) => {
@@ -261,13 +260,41 @@ describe('skill installation lifecycle', () => {
     }
   })
 
-  it('uses private installation IDs and data roots for maintained packages', async () => {
+  it('installs maintained packages into the same user folders as personal ones, with no Halo-private location', async () => {
     const local = await manager.install('space', maintained())
     const global = await manager.install(null, maintained())
-    expect(path(local)).toBe(join(data, '.halo', 'skills', local, 'SKILL.md'))
-    expect(path(global)).toBe(join(root, 'halo', 'skills', global, 'SKILL.md'))
-    expect(existsSync(join(work, '.agents'))).toBe(false)
+    expect(path(local)).toBe(join(work, '.agents', 'skills', 'report', 'SKILL.md'))
+    expect(path(global)).toBe(join(root, '.agents', 'skills', 'report', 'SKILL.md'))
+    expect(existsSync(join(data, '.halo', 'skills'))).toBe(false)
+    expect(existsSync(join(root, 'halo', 'skills'))).toBe(false)
     expect(readFileSync(path(local), 'utf8')).toContain('name: report')
+  })
+
+  it('adopts an identical skill already standing in the folder, and never removes it when the record cannot be saved', async () => {
+    const first = await manager.install('space', maintained())
+    const file = path(first)
+    store.delete(first)
+    const insert = vi.spyOn(store, 'insert').mockImplementationOnce(() => { throw new Error('disk database full') })
+    await expect(manager.install('space', maintained())).rejects.toThrow('disk database full')
+    insert.mockRestore()
+    expect(existsSync(file)).toBe(true)
+    const again = await manager.install('space', maintained())
+    expect(path(again)).toBe(file)
+  })
+
+  it('records a fingerprint of what it wrote and keeps files the user edited elsewhere out of an author upgrade', async () => {
+    const id = await manager.install('space', maintained())
+    expect(store.getById(id)!.userOverrides.skill!.digest).toMatch(/^[a-f0-9]{64}$/)
+    const update = { ...maintained(), version: '2', skill_files: { 'SKILL.md': 'Author version two' } }
+    expect(manager.previewUpgradeSpec(id, update)).toMatchObject({ toVersion: '2', kept: [] })
+    writeFileSync(path(id), readFileSync(path(id), 'utf8').replace('Original', 'Edited in another tool'))
+    expect(manager.previewUpgradeSpec(id, update)).toMatchObject({ fromVersion: '1', toVersion: '1', kept: ['skill_files', 'skill_assets', 'skill_content'] })
+    expect(manager.upgradeSpec(id, update)).toMatchObject({ toVersion: '1' })
+    expect(readFileSync(path(id), 'utf8')).toContain('Edited in another tool')
+    expect(store.getById(id)!.spec.version).toBe('1')
+    manager.replaceSkillFromAuthor(id, update)
+    expect(readFileSync(path(id), 'utf8')).toContain('Author version two')
+    expect(manager.previewUpgradeSpec(id, { ...update, version: '3' })).toMatchObject({ toVersion: '3', kept: [] })
   })
 
   it('reuses equal packages without re-enabling or replacing configuration; conflicts do not overwrite', async () => {
@@ -283,38 +310,46 @@ describe('skill installation lifecycle', () => {
     return { ...maintained(), skill_files: { 'SKILL.md': content } }
   }
 
-  it.each(['space', null])('keeps managed-first and personal same-name packages in scope %s with personal effective priority', async spaceId => {
+  it('does not count the files a file manager leaves in a skill folder as the user\'s edit', async () => {
+    const id = await manager.install('space', maintained())
+    writeFileSync(join(dirname(path(id)), '.DS_Store'), 'finder')
+    writeFileSync(join(dirname(path(id)), 'Thumbs.db'), 'explorer')
+    const update = { ...maintained(), version: '2', skill_files: { 'SKILL.md': 'Author version two' } }
+    expect(manager.previewUpgradeSpec(id, update)).toMatchObject({ toVersion: '2', kept: [] })
+    manager.upgradeSpec(id, update)
+    expect(store.getById(id)!.spec.version).toBe('2')
+    expect(readFileSync(path(id), 'utf8')).toContain('Author version two')
+    const file = path(id)
+    store.delete(id)
+    writeFileSync(join(dirname(file), '.DS_Store'), 'finder again')
+    const again = await manager.install('space', { ...maintained(), version: '2', skill_files: { 'SKILL.md': 'Author version two' } })
+    expect(path(again)).toBe(file)
+  })
+
+  it.each(['space', null])('refuses a same-name package of another origin in scope %s and leaves the installed files untouched', async spaceId => {
     const managed = await manager.install(spaceId, maintained())
     const managedBefore = readSkillPackage(path(managed))
-    const personal = await manager.install(spaceId, spec({ skill_files: { ...spec().skill_files, 'SKILL.md': 'Personal instructions' } }))
-    expect(personal).not.toBe(managed)
-    expect(store.getById(managed)!.specId).toMatch(/^skill:[a-f0-9]{64}:report$/)
-    expect(store.getById(personal)!.specId).toBe('report')
-    expect(manager.listSkillRecords(spaceId)).toHaveLength(2)
+    await expect(manager.install(spaceId, spec({ skill_files: { ...spec().skill_files, 'SKILL.md': 'Personal instructions' } }))).rejects.toThrow('already exists')
+    expect(manager.listSkillRecords(spaceId)).toHaveLength(1)
     expect(readSkillPackage(path(managed))).toEqual(managedBefore)
-    expect(path(personal)).toBe(join(spaceId === null ? root : work, '.agents', 'skills', 'report', 'SKILL.md'))
-    expect(readFileSync(join(dirname(path(personal)), 'images/icon.png'))).toEqual(Buffer.from([0, 255, 1]))
     const skills = library()
-    const group = skills.list({ spaceId }).groups.find(item => item.name === 'report')!
-    expect(group.copies.map(copy => copy.appId).sort()).toEqual([managed, personal].sort())
-    expect(skills.effectiveCatalog(spaceId ?? 'space')[0].source.path).toBe(path(personal))
-    manager.pause(personal)
     expect(skills.effectiveCatalog(spaceId ?? 'space')[0].source.path).toBe(path(managed))
-    expect(readSkillPackage(path(managed))).toEqual(managedBefore)
+    const personalAlone = await manager.install(spaceId === null ? 'space' : null, spec())
+    expect(path(personalAlone)).toBe(join(spaceId === null ? work : root, '.agents', 'skills', 'report', 'SKILL.md'))
+    expect(skills.effectiveCatalog('space')[0].source.path).toBe(spaceId === null ? path(personalAlone) : path(managed))
   })
 
   it('keeps a personal package unchanged when a namesake managed package is installed later', async () => {
     const personal = await manager.install('space', spec())
     const before = readSkillPackage(path(personal))
     manager.pause(personal)
-    const managed = await manager.install('space', maintainedSpec('Managed instructions'))
+    await expect(manager.install('space', maintainedSpec('Managed instructions'))).rejects.toThrow(AppAlreadyInstalledError)
     expect(store.getById(personal)!.status).toBe('paused')
     expect(readSkillPackage(path(personal))).toEqual(before)
-    expect(readFileSync(path(managed), 'utf8')).toContain('Managed instructions')
-    expect(manager.listSkillRecords('space')).toHaveLength(2)
+    expect(manager.listSkillRecords('space')).toHaveLength(1)
   })
 
-  it.each(['registry_id', 'slug', 'repository'] as const)('keeps managed sources separated by %s through update, replacement and restart', async field => {
+  it.each(['registry_id', 'slug', 'repository'] as const)('refuses another source by %s that shares the skill name, and keeps updating the first through replacement and restart', async field => {
     database.closeAll()
     const databasePath = join(root, 'identity.sqlite')
     openManager(databasePath)
@@ -323,14 +358,11 @@ describe('skill installation lifecycle', () => {
       skill_files: { 'SKILL.md': 'Other source instructions', 'other.txt': 'other resource' },
     })
     const first = await manager.install('space', firstSpec, { owner: 'first' })
-    const second = await manager.install('space', secondSpec, { owner: 'second' })
     const firstKey = store.getById(first)!.specId
-    const secondRecord = store.getById(second)!
-    const secondBefore = readSkillPackage(path(second))
-    expect(first).not.toBe(second)
-    expect(firstKey).not.toBe(secondRecord.specId)
-    expect(path(first)).not.toBe(path(second))
-    expect(library().effectiveCatalog('space')).toEqual([])
+    const firstBefore = store.getById(first)!
+    await expect(manager.install('space', secondSpec, { owner: 'second' })).rejects.toThrow(AppAlreadyInstalledError)
+    expect(manager.listSkillRecords('space')).toHaveLength(1)
+    expect(store.getById(first)).toEqual(firstBefore)
     manager.pause(first)
     manager.upgradeSpec(first, { ...firstSpec, version: '2', skill_files: { 'SKILL.md': 'Author version two' } })
     manager.updateSpec(first, { skill_content: 'Customized first instructions' })
@@ -340,16 +372,11 @@ describe('skill installation lifecycle', () => {
     const replacement = { ...firstSpec, version: '3', skill_files: { 'SKILL.md': 'Explicit replacement', 'new.txt': 'new resource' } }
     manager.updateSpec(first, replacement)
     expect(store.getById(first)).toMatchObject({ specId: firstKey, status: 'paused', userConfig: { owner: 'first' } })
-    expect(store.getById(second)).toEqual(secondRecord)
-    expect(readSkillPackage(path(second))).toEqual(secondBefore)
     database.closeAll()
     openManager(databasePath)
     expect(await manager.install('space', replacement)).toBe(first)
-    expect(await manager.install('space', secondSpec)).toBe(second)
     expect(store.getById(first)).toMatchObject({ specId: firstKey, status: 'paused' })
-    expect(store.getById(second)).toEqual(secondRecord)
-    expect(readSkillPackage(path(second))).toEqual(secondBefore)
-    expect(manager.listSkillRecords('space')).toHaveLength(2)
+    expect(manager.listSkillRecords('space')).toHaveLength(1)
     const otherScope = await manager.install('other', replacement)
     expect(store.getById(otherScope)!.specId).toBe(firstKey)
   })
@@ -360,33 +387,35 @@ describe('skill installation lifecycle', () => {
     expect(await manager.install('space', bundled)).toBe(id)
     await expect(manager.install('space', { ...bundled, skill_files: { 'SKILL.md': 'Other bundled content' } })).rejects.toThrow(AppAlreadyInstalledError)
     const builtinSpec = spec({ store: { slug: 'halo-builtin-skills/report', install_source: 'bundled', tags: [] } })
-    const builtin = await manager.install('space', builtinSpec)
+    await expect(manager.install('space', builtinSpec)).rejects.toThrow(AppAlreadyInstalledError)
+    const builtin = await manager.install(null, builtinSpec)
     expect(builtin).not.toBe(id)
-    expect(await manager.install('space', builtinSpec)).toBe(builtin)
+    expect(await manager.install(null, builtinSpec)).toBe(builtin)
     expect(store.getById(builtin)!.specId).not.toBe(store.getById(id)!.specId)
     expect(readFileSync(path(id), 'utf8')).toContain('Original')
   })
 
-  it.each(['active', 'paused', 'uninstalled'] as const)('preserves legacy name-keyed %s managed records when a personal namesake is installed', async status => {
+  it.each(['active', 'paused', 'uninstalled'] as const)('keeps a legacy name-keyed %s managed record intact when a personal namesake is installed', async status => {
     const managed = await manager.install('space', maintained())
     const legacy = { ...store.getById(managed)!, specId: 'report' }
     store.updateSkillRecord(legacy)
     if (status === 'paused') manager.pause(managed)
     if (status === 'uninstalled') await manager.uninstall(managed)
     const before = store.getById(managed)!
-    const personal = await manager.install('space', spec())
-    expect(store.getById(managed)).toEqual(before)
-    expect(store.getById(personal)!.specId).toMatch(/^skill:[a-f0-9]{64}:report$/)
-    expect(path(personal)).toBe(join(work, '.agents', 'skills', 'report', 'SKILL.md'))
-    expect(existsSync(path(managed))).toBe(status !== 'uninstalled')
-    manager.updateSkillRecord(personal, { status: 'paused' })
-    expect(store.getById(personal)!.specId).not.toBe('report')
-    if (status !== 'uninstalled') {
-      expect(await manager.install('space', maintained())).toBe(managed)
-      manager.updateSpec(managed, { description: 'Updated legacy metadata' })
-      manager.updateSkillRecord(managed, { skill: { ...before.userOverrides.skill!, owners: [{ id: 'person', name: 'Person' }] } })
-      expect(store.getById(managed)).toMatchObject({ specId: 'report', status })
+    if (status === 'uninstalled') {
+      const personal = await manager.install('space', spec())
+      expect(store.getById(managed)).toEqual(before)
+      expect(store.getById(personal)!.specId).toMatch(/^skill:[a-f0-9]{64}:report$/)
+      expect(path(personal)).toBe(join(work, '.agents', 'skills', 'report', 'SKILL.md'))
+      return
     }
+    await expect(manager.install('space', spec())).rejects.toThrow('already exists')
+    expect(store.getById(managed)).toEqual(before)
+    expect(existsSync(path(managed))).toBe(true)
+    expect(await manager.install('space', maintained())).toBe(managed)
+    manager.updateSpec(managed, { description: 'Updated legacy metadata' })
+    manager.updateSkillRecord(managed, { skill: { ...before.userOverrides.skill!, owners: [{ id: 'person', name: 'Person' }] } })
+    expect(store.getById(managed)).toMatchObject({ specId: 'report', status })
   })
 
   it('does not let another source revive or replace a deleted namesake', async () => {
@@ -396,32 +425,42 @@ describe('skill installation lifecycle', () => {
     const secondSpec = spec({ store: { ...maintained().store!, registry_id: 'other-source' } })
     const second = await manager.install('space', secondSpec)
     expect(store.getById(first)).toEqual(before)
-    expect(existsSync(path(first))).toBe(false)
     expect(existsSync(path(second))).toBe(true)
     await expect(manager.install('space', maintainedSpec('Replacement must be explicit'))).rejects.toThrow(AppAlreadyInstalledError)
     expect(store.getById(first)).toEqual(before)
-    expect(existsSync(path(first))).toBe(false)
+    expect(readFileSync(path(second), 'utf8')).toContain('Original')
   })
 
   it('retains managed namespaces during command renames and refuses same-source command collisions', async () => {
     const first = await manager.install('space', maintained())
     const firstPath = path(first)
     const prefix = store.getById(first)!.specId.slice(0, -'report'.length)
-    const other = await manager.install('space', { ...maintained(), name: 'renamed', store: { ...maintained().store!, registry_id: 'other-source' } })
+    const other = await manager.install('space', { ...maintained(), name: 'unrelated', store: { ...maintained().store!, registry_id: 'other-source' } })
     const before = readSkillPackage(path(other))
     manager.updateSpec(first, { name: 'renamed' })
     expect(store.getById(first)!.specId).toBe(`${prefix}renamed`)
-    expect(path(first)).toBe(firstPath)
-    expect(readFileSync(firstPath, 'utf8')).toContain('name: renamed')
+    expect(path(first)).toBe(join(work, '.agents', 'skills', 'renamed', 'SKILL.md'))
+    expect(existsSync(firstPath)).toBe(false)
+    expect(readFileSync(path(first), 'utf8')).toContain('name: renamed')
     expect(readSkillPackage(path(other))).toEqual(before)
     const target = await manager.install('space', { ...maintained(), name: 'taken' })
-    const renamed = readSkillPackage(firstPath)
+    const renamed = readSkillPackage(path(first))
     expect(() => manager.updateSpec(first, { name: 'taken' })).toThrow(AppAlreadyInstalledError)
     expect(() => manager.updateSkillRecord(first, { spec: { ...store.getById(first)!.spec as SkillSpec, name: 'taken' } })).toThrow(AppAlreadyInstalledError)
-    expect(readSkillPackage(firstPath)).toEqual(renamed)
+    expect(readSkillPackage(path(first))).toEqual(renamed)
     expect(existsSync(path(target))).toBe(true)
     manager.updateSkillRecord(first, { spec: { ...store.getById(first)!.spec as SkillSpec, name: 'record-renamed' } })
     expect(store.getById(first)!.specId).toBe(`${prefix}record-renamed`)
+  })
+
+  it('refuses to rename a managed skill into a folder another origin already holds', async () => {
+    const first = await manager.install('space', maintained())
+    const other = await manager.install('space', spec({ name: 'taken', store: { install_source: 'manual', tags: [] } }))
+    const before = readSkillPackage(path(first))
+    const otherBefore = readSkillPackage(path(other))
+    expect(() => manager.updateSpec(first, { name: 'taken' })).toThrow(AppAlreadyInstalledError)
+    expect(readSkillPackage(path(first))).toEqual(before)
+    expect(readSkillPackage(path(other))).toEqual(otherBefore)
   })
 
   it('rejects source changes through record-only metadata updates', async () => {
@@ -447,36 +486,33 @@ describe('skill installation lifecycle', () => {
     expect(existsSync(path(target))).toBe(kind !== 'deleted')
   })
 
-  it('allows a manager scope move beside a different source without weakening the library conflict check', async () => {
+  it('refuses a scope move into a folder that holds a namesake of another origin, in the manager and the library alike', async () => {
     const first = await manager.install('space', maintained())
     const other = await manager.install('other', spec())
     const otherBefore = readSkillPackage(path(other))
-    const key = store.getById(first)!.specId
     const before = path(first)
     const skills = library()
     const ref = { id: `app:${first}`, spaceId: 'space' }
     expect(skills.movePreview({ ref, spaceId: 'other' }).conflict).toBeTruthy()
     expect(() => skills.move({ ref, spaceId: 'other', revision: skills.read(ref).revision })).toThrow()
-    expect(path(first)).toBe(before)
     manager.pause(first)
+    await expect(manager.moveToSpace(first, 'other')).rejects.toThrow(AppAlreadyInstalledError)
+    expect(path(first)).toBe(before)
+    expect(existsSync(before)).toBe(true)
+    expect(store.getById(first)).toMatchObject({ spaceId: 'space', status: 'paused' })
+    expect(readSkillPackage(path(other))).toEqual(otherBefore)
+    expect(manager.listSkillRecords('other')).toHaveLength(1)
+  })
+
+  it('moves a managed skill into a free scope with its command folder', async () => {
+    const first = await manager.install('space', maintained())
+    manager.pause(first)
+    const key = store.getById(first)!.specId
+    const before = path(first)
     await manager.moveToSpace(first, 'other')
     expect(existsSync(before)).toBe(false)
     expect(store.getById(first)).toMatchObject({ specId: key, spaceId: 'other', status: 'paused' })
-    expect(path(first)).toBe(join(root, 'halo', 'other', '.halo', 'skills', first, 'SKILL.md'))
-    expect(readSkillPackage(path(other))).toEqual(otherBefore)
-    expect(manager.listSkillRecords('other')).toHaveLength(2)
-  })
-
-  it('namespaces a legacy managed key only when moving beside a name-keyed personal record', async () => {
-    const first = await manager.install('space', maintained())
-    store.updateSkillRecord({ ...store.getById(first)!, specId: 'report' })
-    const personal = await manager.install('other', spec())
-    const before = readSkillPackage(path(personal))
-    await manager.moveToSpace(first, 'other')
-    expect(store.getById(first)!.specId).toMatch(/^skill:[a-f0-9]{64}:report$/)
-    expect(store.getById(personal)!.specId).toBe('report')
-    expect(readSkillPackage(path(personal))).toEqual(before)
-    expect(await manager.install('other', maintained())).toBe(first)
+    expect(path(first)).toBe(join(root, 'other', '.agents', 'skills', 'report', 'SKILL.md'))
   })
 
   it('never adopts a pre-existing unregistered destination by name', async () => {
@@ -735,7 +771,7 @@ describe('skill installation lifecycle', () => {
     expect(store.getById(id)!.status).toBe('paused')
   })
 
-  it('keeps bundled resources when deleting a digital human and external personal files when deleting its space', async () => {
+  it('keeps bundled resources when deleting a digital human and every skill file when deleting its space', async () => {
     const personal = await manager.install('space', spec())
     const managed = await manager.install('space', { ...maintained(), name: 'dependency' })
     const parent = await manager.install('space', { spec_version: '1', type: 'automation', name: 'parent', version: '1', author: 'Test', description: 'Parent', system_prompt: 'Work', requires: { skills: [{ id: 'dependency', bundled: true }] } })
@@ -746,7 +782,7 @@ describe('skill installation lifecycle', () => {
     expect(existsSync(managedPath)).toBe(true)
     await manager.deleteAppsInSpace('space')
     expect(existsSync(personalPath)).toBe(true)
-    expect(existsSync(managedPath)).toBe(false)
+    expect(existsSync(managedPath)).toBe(true)
     expect(manager.listSkillRecords('space')).toEqual([])
   })
 })

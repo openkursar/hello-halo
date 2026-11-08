@@ -79,7 +79,7 @@ describe('scoped skill catalog with real files', () => {
     put(join(other, '.agents', 'skills', 'unselected', 'SKILL.md'), content('unselected'))
     put(join(halo, 'skills', 'unregistered', 'SKILL.md'), content('unregistered'))
     put(join(context.spaceDataPath!, '.halo', 'skills', 'unknown-local', 'SKILL.md'), content('unknown-local'))
-    const installed = put(join(context.spaceDataPath!, '.halo', 'skills', 'known', 'SKILL.md'), content('installed'))
+    const installed = put(join(work, '.agents', 'skills', 'known', 'SKILL.md'), content('installed'))
     records.push(record('known', 'space', installed, 'store', 'installed'))
     records.push(record('other-record', 'other', join(other, 'private', 'SKILL.md'), 'store', 'other-record'))
 
@@ -112,14 +112,14 @@ describe('scoped skill catalog with real files', () => {
   it('ranks workspace above global and personal above managed within the same scope', () => {
     const global = put(join(root, '.agents', 'skills', 'report', 'SKILL.md'), content('report', 'Global personal'))
     const local = put(join(work, '.agents', 'skills', 'report', 'SKILL.md'), content('report', 'Local personal'))
-    const privatePath = put(join(context.spaceDataPath!, '.halo', 'skills', 'managed', 'SKILL.md'), content('report', 'Local installed'))
-    records.push(record('managed', 'space', privatePath))
+    const installedPath = put(join(work, '.claude', 'skills', 'managed', 'SKILL.md'), content('report', 'Local installed'))
+    records.push(record('managed', 'space', installedPath))
     const library = createSkillLibrary({ context: () => context, trash: vi.fn(), openFolder: vi.fn() })
     expect(library.effectiveCatalog('space')[0].source.path).toBe(local)
     const original = readFileSync(local)
     library.setEnabled({ ref: { spaceId: 'space', id: skillFileId(local) }, enabled: false })
     expect(readFileSync(local)).toEqual(original)
-    expect(library.effectiveCatalog('space')[0].source.path).toBe(privatePath)
+    expect(library.effectiveCatalog('space')[0].source.path).toBe(installedPath)
     records[0].status = 'paused'
     expect(library.effectiveCatalog('space')[0].source.path).toBe(global)
     library.setEnabled({ ref: { spaceId: 'space', id: skillFileId(local) }, enabled: true })
@@ -142,8 +142,8 @@ describe('scoped skill catalog with real files', () => {
 
   it('merges by command identity, keeps provenance, and searches copies across folded groups', () => {
     put(join(work, '.agents', 'skills', 'report', 'SKILL.md'), content('report', 'Personal'))
-    const bundled = put(join(context.spaceDataPath!, '.halo', 'skills', 'bundle', 'SKILL.md'), content('report', 'Hidden dependency needle'))
-    const builtin = put(join(halo, 'skills', 'built', 'SKILL.md'), content('builtin-command', 'Built in needle'))
+    const bundled = put(join(work, '.claude', 'skills', 'bundle', 'SKILL.md'), content('report', 'Hidden dependency needle'))
+    const builtin = put(join(root, '.agents', 'skills', 'built', 'SKILL.md'), content('builtin-command', 'Built in needle'))
     const app = record('bundle', 'space', bundled, 'bundled')
     app.userOverrides.skill!.owners = [{ id: 'author-one', name: 'First person' }, { id: 'author-two', name: 'Second person' }]
     app.spec.display_name = 'Same display label'
@@ -177,16 +177,28 @@ describe('scoped skill catalog with real files', () => {
     expect(readFileSync(path, 'utf8')).toBe(revised)
   })
 
-  it('does not carry recorded personal files into a new work directory but retains private installations', () => {
+  it('does not carry recorded personal files into a new work directory but retains installed skills recorded elsewhere', () => {
     const oldPath = put(join(work, '.agents', 'skills', 'old-project', 'SKILL.md'), content('old-project'))
     const nextPath = put(join(other, '.agents', 'skills', 'next-project', 'SKILL.md'), content('next-project'))
-    const managed = put(join(context.spaceDataPath!, '.halo', 'skills', 'managed', 'SKILL.md'), content('managed'))
+    const managed = put(join(root, 'elsewhere', 'managed', 'SKILL.md'), content('managed'))
     records.push(record('personal', 'space', oldPath, 'manual', 'old-project'), record('managed', 'space', managed, 'store', 'managed'))
     expect(effectiveSkillCatalog(context).map(entry => entry.name).sort()).toEqual(['managed', 'old-project'])
     context.workDir = other
     expect(effectiveSkillCatalog(context).map(entry => entry.source.path).sort()).toEqual([managed, nextPath].sort())
     expect(readFileSync(oldPath, 'utf8')).toBe(content('old-project'))
     expect(records.find(app => app.id === 'personal')!.userOverrides.skill!.filePath).toBe(oldPath)
+  })
+
+  it('treats a file that appears where a deleted installed skill used to be as the user\'s own', () => {
+    const path = put(join(work, '.agents', 'skills', 'report', 'SKILL.md'), content('report', 'Written by the user later'))
+    const deleted = record('removed', 'space', path, 'store')
+    deleted.status = 'uninstalled'
+    deleted.userOverrides.skill!.deleted = true
+    records.push(deleted)
+    const group = buildSkillCatalog(context).groups.find(item => item.name === 'report')!
+    expect(group.copies).toHaveLength(1)
+    expect(group.copies[0]).toMatchObject({ path, source: 'personal', enabled: true })
+    expect(effectiveSkillCatalog(context).map(entry => entry.source.path)).toEqual([path])
   })
 
   it('keeps malformed entries visible without excluding healthy or permissive legacy skills', () => {

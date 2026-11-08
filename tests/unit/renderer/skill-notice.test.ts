@@ -10,6 +10,7 @@ vi.mock('../../../src/renderer/components/chat/SubAgentTimeline', () => ({ SubAg
 vi.mock('../../../src/renderer/components/tool/TodoCard', () => ({ TodoCard: () => null }))
 
 import { ThoughtPanel } from '../../../src/renderer/components/chat/ThoughtPanel'
+import { SkillNotice as SkillNoticeView } from '../../../src/renderer/components/chat/SkillNotice'
 import { LazyCollapsedThoughtProcess } from '../../../src/renderer/components/chat/CollapsedThoughtProcess'
 import { nextThoughtPanelModel } from '../../../src/renderer/components/chat/thought-utils'
 import { parseSDKMessage } from '../../../src/main/services/agent/message-utils'
@@ -17,7 +18,7 @@ import { summarizeThoughts } from '../../../src/shared/transcript'
 import { SKILL_NOTICE_TEXT } from '../../../src/shared/skill-notice'
 import type { SkillNotice } from '../../../src/shared/types/skills'
 
-const codes: SkillNotice[] = ['catalog-unavailable', 'engine-unsupported', 'skill-unsupported']
+const codes: SkillNotice[] = ['catalog-unavailable']
 
 describe('skill notice presentation', () => {
   it.each(codes)('renders %s in the collapsed panel, without exposing a skill name or path', code => {
@@ -44,20 +45,20 @@ describe('skill notice presentation', () => {
   })
 
   it('preserves the notice list identity as unrelated reasoning streams', () => {
-    const thought = parseSDKMessage({ type: 'system', subtype: 'skill_notice', skillNotice: 'engine-unsupported' })!
+    const thought = parseSDKMessage({ type: 'system', subtype: 'skill_notice', skillNotice: 'catalog-unavailable' })!
     const reasoning = { ...thought, id: 'thinking', type: 'thinking' as const, skillNotice: undefined, content: 'start' }
     const first = nextThoughtPanelModel(null, [thought, reasoning])
     const next = nextThoughtPanelModel(first, [thought, { ...reasoning, content: 'continued' }])
     expect(next.notices).toBe(first.notices)
-    const added = { ...thought, id: 'next', skillNotice: 'catalog-unavailable' as const }
+    const added = { ...thought, id: 'next' }
     const appended = nextThoughtPanelModel(next, [...next.thoughts, added])
     expect(appended.notices).toEqual([thought, added])
     expect(nextThoughtPanelModel(appended, [added]).notices).toEqual([added])
   })
 
   it('renders several notices from one turn without a duplicate React key', () => {
-    const first = parseSDKMessage({ type: 'system', subtype: 'skill_notice', skillNotice: 'skill-unsupported' })!
-    // Two commands in one turn produce the same code; a stored transcript can also repeat an id.
+    const first = parseSDKMessage({ type: 'system', subtype: 'skill_notice', skillNotice: 'catalog-unavailable' })!
+    // A stored transcript can repeat a notice together with its id.
     const repeated = { ...first, id: first.id }
     const thoughts = [first, repeated]
     const errors: string[] = []
@@ -74,8 +75,13 @@ describe('skill notice presentation', () => {
     expect(errors.filter(line => /same key|duplicate key|unique "key"/i.test(line))).toEqual([])
   })
 
+  it.each(['engine-unsupported', 'skill-unsupported', 'invented'])('shows nothing for the %s notice an earlier build stored in a transcript', code => {
+    expect(renderToStaticMarkup(createElement(SkillNoticeView, { code }))).toBe('')
+  })
+
   it('ignores unknown notice codes and does not promote arbitrary system content', () => {
     expect(parseSDKMessage({ type: 'system', subtype: 'skill_notice', skillNotice: 'invented', content: 'secret' })).toBeNull()
-    expect(parseSDKMessage({ type: 'assistant', subtype: 'skill_notice', skillNotice: 'engine-unsupported' })).toBeNull()
+    expect(parseSDKMessage({ type: 'assistant', subtype: 'skill_notice', skillNotice: 'catalog-unavailable' })).toBeNull()
+    expect(parseSDKMessage({ type: 'system', subtype: 'skill_notice', skillNotice: 'engine-unsupported' })).toBeNull()
   })
 })

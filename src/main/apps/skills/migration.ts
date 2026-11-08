@@ -1,10 +1,10 @@
 import { lstatSync, opendirSync } from 'node:fs'
-import { join, resolve, basename, dirname } from 'node:path'
+import { join, resolve, basename, dirname, sep } from 'node:path'
 import type { AppManagerService, InstalledApp } from '../manager'
 import type { SkillSpec } from '../spec'
 import {
-  classifySkillSource, managedSkillPath, personalSkillPath, readSkillPackage,
-  writeSkillPackage, moveSkillFiles, skillRevision,
+  classifySkillSource, skillFilePath, readSkillPackage,
+  writeSkillPackage, moveSkillFiles, skillRevision, skillPackageDigest, withoutIncidentalFiles,
 } from '../../services/skills'
 import { alignSkillMdName, normalizeSkillMd } from '../../../shared/skill-frontmatter'
 import { canonicalSkillPath } from '../../services/skills'
@@ -15,15 +15,43 @@ export interface SkillMigrationContext {
   manager: AppManagerService
   haloDir: string
   workDir: string | null
+  /** The space's own folder, unaffected by a session's working directory; falls back to `workDir`. */
+  spaceWorkDir?: string | null
   spaceDataPath: string | null
   legacyGlobalRoots: string[]
   ownedLegacyGlobalRoot?: string
+}
+
+function spaceFolder(app: InstalledApp, context: SkillMigrationContext): string | null {
+  return app.spaceId === null ? null : context.spaceWorkDir ?? context.workDir
 }
 
 function packageOf(spec: SkillSpec) {
   const files = { ...(spec.skill_files ?? (spec.skill_content ? { 'SKILL.md': spec.skill_content } : {})) }
   if (files['SKILL.md']) files['SKILL.md'] = alignSkillMdName(normalizeSkillMd(files['SKILL.md']), spec)
   return { files, assets: spec.skill_assets ?? {} }
+}
+
+/** What the files on disk say, read the way `packageOf` reads a stored package. */
+function diskPackageOf(spec: SkillSpec, pkg: ReturnType<typeof readSkillPackage>) {
+  const { files, assets } = withoutIncidentalFiles(pkg)
+  if (files['SKILL.md']) files['SKILL.md'] = alignSkillMdName(normalizeSkillMd(files['SKILL.md']), spec)
+  return { files, assets }
+}
+
+/** Whether a live installation other than `app` already owns the folder at `filePath`. */
+function claimedElsewhere(app: InstalledApp, filePath: string, context: SkillMigrationContext): boolean {
+  return context.manager.listSkillRecords(app.spaceId).some(other => {
+    const state = other.userOverrides.skill
+    return other.id !== app.id && !!state?.filePath && !state.deleted && other.status !== 'uninstalled'
+      && resolve(state.filePath) === resolve(filePath)
+  })
+}
+
+/** The destination already holds exactly this package, and no other installation owns it. */
+function destinationHolds(destination: string, stored: ReturnType<typeof packageOf>, app: InstalledApp, context: SkillMigrationContext): boolean {
+  const target = readSkillPackage(destination)
+  return equalPackage(stored, withoutIncidentalFiles(target)) && !claimedElsewhere(app, destination, context)
 }
 
 function equalPackage(a: ReturnType<typeof packageOf>, b: ReturnType<typeof packageOf>): boolean {
@@ -75,8 +103,8 @@ export function migrateUnregisteredGlobalSkills(records: InstalledApp[], context
         const preserved = `migration:preserved:${resolve(source)}`
         if (readSkillPreference(context.haloDir, preserved).enabled === true || !fileExists(source)) continue
         const target = flat
-          ? join(dirname(dirname(personalSkillPath(null, entry.name.slice(0, -3)))), entry.name)
-          : personalSkillPath(null, entry.name)
+          ? join(dirname(dirname(skillFilePath(null, entry.name.slice(0, -3)))), entry.name)
+          : skillFilePath(null, entry.name)
         if (fileExists(target)) {
           readSkillPackage(source)
           readSkillPackage(target)
@@ -109,20 +137,66 @@ export function migrateUnregisteredGlobalSkills(records: InstalledApp[], context
 
 const missingLegacyFiles = 'The previous skill files are missing. Restore them before using this skill.'
 
+/** Where earlier builds kept store, built-in and digital-human skills before every skill shared one folder. */
+function retiredPrivateRoot(app: InstalledApp, context: SkillMigrationContext): string | undefined {
+  if (app.spaceId === null) return join(context.haloDir, 'skills')
+  return context.spaceDataPath ? join(context.spaceDataPath, '.halo', 'skills') : undefined
+}
+
+const relocationFailures = new Set<string>()
+
+/**
+ * Moves a skill recorded under a retired private root into the shared skill folder.
+ * An occupied destination is left alone: the skill keeps working where it is.
+ */
+function relocateRetiredSkill(summary: InstalledApp, context: SkillMigrationContext, onMigrated?: () => void): void {
+  const state = summary.userOverrides.skill
+  const root = retiredPrivateRoot(summary, context)
+  if (!state?.filePath || !root || !resolve(state.filePath).startsWith(resolve(root) + sep)) return
+  const app = context.manager.getSkillRecord(summary.id)
+  if (!app || app.spec.type !== 'skill' || classifySkillSource(app.spec) === 'personal') return
+  const spec = app.spec
+  let moved: { from: string; to: string; revision: string } | undefined
+  try {
+    const destination = skillFilePath(spaceFolder(app, context), spec.name)
+    if (!fileExists(state.filePath) || fileExists(dirname(destination))) return
+    moveSkillFiles(state.filePath, destination, skillRevision(state.filePath))
+    moved = { from: state.filePath, to: destination, revision: skillRevision(destination) }
+    const disk = readSkillPackage(destination)
+    const unchanged = equalPackage(packageOf(spec), diskPackageOf(spec, disk))
+    context.manager.updateSkillRecord(app.id, {
+      skill: { ...state, filePath: destination, digest: state.digest ?? (unchanged ? skillPackageDigest(disk) : undefined) },
+    })
+    relocationFailures.delete(app.id)
+    onMigrated?.()
+  } catch (error) {
+    if (moved) {
+      try { moveSkillFiles(moved.to, moved.from, moved.revision) }
+      catch (rollbackError) { console.error('[Skills] Relocation rollback failed; files retained at the destination', { appId: app.id, rollbackError }) }
+    }
+    if (!relocationFailures.has(app.id)) {
+      relocationFailures.add(app.id)
+      console.warn('[Skills] Skill stays in its previous folder; relocation will be retried', { appId: app.id, reason: (error as Error).message })
+    }
+  }
+}
+
 export function migrateSkillRecord(summary: InstalledApp, context: SkillMigrationContext, onMigrated?: () => void): string | undefined {
   const previous = summary.userOverrides.skill
   if (summary.status === 'uninstalled' || previous?.deleted) return
-  if (previous?.version === 1 && previous.migrationWarning !== missingLegacyFiles) return
+  if (previous?.version === 1 && previous.migrationWarning !== missingLegacyFiles) {
+    relocateRetiredSkill(summary, context, onMigrated)
+    return
+  }
   const app = context.manager.getSkillRecord(summary.id)
   if (!app || app.spec.type !== 'skill') return
   const spec = app.spec
   const source = classifySkillSource(spec)
   let moved: { from: string; to: string; revision: string } | undefined
   try {
-  const destination = source === 'personal'
-    ? personalSkillPath(app.spaceId === null ? null : context.workDir, toSkillDirName(spec.name))
-    : managedSkillPath(context.haloDir, app.spaceId === null ? null : context.spaceDataPath, app.id)
-  const roots = app.spaceId === null ? context.legacyGlobalRoots : context.workDir ? [join(context.workDir, '.claude', 'skills')] : []
+  const folder = spaceFolder(app, context)
+  const destination = skillFilePath(folder, spec.name)
+  const roots = app.spaceId === null ? context.legacyGlobalRoots : folder ? [join(folder, '.claude', 'skills')] : []
   const candidates = roots.map(root => join(root, toSkillDirName(app.specId), 'SKILL.md'))
   const oldPath = candidates.find(path => fileExists(path))
   const stored = packageOf(spec)
@@ -143,11 +217,15 @@ export function migrateSkillRecord(summary: InstalledApp, context: SkillMigratio
         filePath = oldPath
         warning = 'Existing skill files were kept at their original location.'
       } else if (!same || linked) {
+        const occupied = fileExists(dirname(destination))
+        if (occupied && !destinationHolds(destination, stored, app, context)) {
+          throw new Error('The destination already contains different skill files. The legacy content was kept for recovery.')
+        }
         warning = 'Your existing skill files were preserved separately from the installed version.'
         const identity = canonicalSkillPath(oldPath)
         const preference = readSkillPreference(context.haloDir, identity)
         writeSkillPreference(context.haloDir, identity, { ...preference, enabled: app.status === 'active' && preference.enabled !== false })
-        if (!fileExists(destination)) writeSkillPackage(destination, stored.files, stored.assets)
+        if (!occupied) writeSkillPackage(destination, stored.files, stored.assets)
       } else if (resolve(oldPath) !== resolve(destination)) {
         if (fileExists(destination)) {
           const target = readSkillPackage(destination)
@@ -161,8 +239,7 @@ export function migrateSkillRecord(summary: InstalledApp, context: SkillMigratio
         }
       }
     } else if (fileExists(destination)) {
-      const target = readSkillPackage(destination)
-      if (!equalPackage(stored, { files: target.files, assets: target.assets })) {
+      if (!destinationHolds(destination, stored, app, context)) {
         throw new Error('The destination already contains different skill files. The legacy content was kept for recovery.')
       }
     } else {
@@ -174,9 +251,14 @@ export function migrateSkillRecord(summary: InstalledApp, context: SkillMigratio
     const nextSpec: SkillSpec = source === 'personal'
       ? { ...spec, skill_content: undefined, skill_files: undefined, skill_assets: undefined }
       : spec
+    let digest: string | undefined
+    if (source !== 'personal') {
+      const disk = readSkillPackage(filePath)
+      if (equalPackage(stored, withoutIncidentalFiles(disk))) digest = skillPackageDigest(disk)
+    }
     context.manager.updateSkillRecord(app.id, {
       spec: nextSpec,
-      skill: { ...previous, version: 1, filePath, migrationWarning: undefined },
+      skill: { ...previous, version: 1, filePath, digest, migrationWarning: undefined },
     })
     onMigrated?.()
     if (warning) console.info('[Skills] Preserved legacy skill files during migration', { appId: app.id, reason: warning })

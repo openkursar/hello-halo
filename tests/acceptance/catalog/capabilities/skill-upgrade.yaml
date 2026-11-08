@@ -81,7 +81,7 @@ scenarios:
     steps:
       - Start an isolated legacy profile containing the origin and unrelated controls; inspect migration, resolve only explicit choices, retry, edit the result and restart again.
     expected:
-      - Created/imported resources become user files even when registered; maintained origins use Halo private installation roots independent of Claude Code configuration.
+      - Every origin, including store, built-in and bundled skills, ends as a file in the shared skill folder of its scope, independent of Claude Code configuration; a skill of that name already standing there is left alone and keeps working from where it is.
       - Existing project files are not moved or reformatted. Ambiguous shared/custom paths remain untouched with an actionable location; confirmed owned handwritten files migrate safely.
       - On-disk customization beats stale database body and is preserved with conflict explanation where needed. Sources remain recoverable until destination success is verified.
       - Retry creates no duplicate or stale overwrite and old startup sync never writes new content back into the obsolete engine directory; controls stay unchanged.

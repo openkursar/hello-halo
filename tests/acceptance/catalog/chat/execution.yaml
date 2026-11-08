@@ -13,6 +13,7 @@ references:
   - src/renderer/components/chat/ChatView.tsx
   - tests/e2e/specs/chat.spec.ts
   - tests/e2e/specs/acceptance-chat-recovery.spec.ts
+  - tests/e2e/specs/acceptance-context-compaction.spec.ts
 promises:
   stop:
     en: Stopping settles the active reply and permits a later turn.
@@ -23,6 +24,15 @@ promises:
   budget:
     en: Context and output limits are presented without inventing a successful result.
     zh: 遇到上下文或输出限制时，不会虚构已成功完成。
+  context-continuity:
+    en: Ordinary work appends to model history without automatically clearing old tool results or silently trimming conversation records. Near the input limit, summarization makes room before the next work request. If a proactive summary remains unusable after bounded repair, work may continue with the intact history while the estimated request remains below input capacity; a server overflow starts bounded recovery rather than silent trimming.
+    zh: 日常工作只追加模型历史，不自动清空旧工具结果或悄悄裁剪对话记录。接近输入上限时先总结腾出空间；主动总结经有界修复仍不可用，但请求估算仍低于输入容量时，可保留完整历史继续工作。服务端超窗触发有界恢复，不悄悄裁剪历史。
+  compact-safety:
+    en: A summary cannot run tools or replace live context before its checkpoint is saved. Invalid summaries are repaired within a bounded attempt budget without executing tools. Storage failure or exhausted recovery preserves the previous context and reports failure rather than claiming the work finished.
+    zh: 总结不能执行工具，也不能在检查点保存之前替换活动上下文。无效总结会在有界次数内修复，期间不执行工具。存储失败或恢复耗尽时保留之前的上下文，并报告失败，而非声称工作完成。
+  compact-recovery:
+    en: Reducing active context retains the original disk transcript, and a reopened session continues from the saved summary and recent work.
+    zh: 缩减活动上下文时保留磁盘上的原始记录，重新打开的会话从已保存的总结及近期工作继续。
 scenarios:
   - id: chat.execution.stop-resume
     title:
@@ -123,3 +133,126 @@ scenarios:
     expected:
       - en: The UI explains the limit and retains previous work for the supported continuation.
         zh: 界面说明限制，并为支持的继续方式保留之前工作。
+  - id: chat.execution.append-only-context
+    title: Keep prior observations intact during ordinary work
+    verifies:
+      - context-continuity
+    platforms: *a1
+    profiles: [fast, regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      usage: [reported, absent]
+    preconditions:
+      - A controlled conversation contains several completed tool exchanges whose combined output exceeds the old automatic clearing budget, but its complete request remains below the summary threshold.
+    steps:
+      - Continue work through another tool call and inspect successive requests at the SDK's public provider boundary.
+    expected:
+      - Prior messages and tool results remain unchanged and in order; only new work is appended. No summary request or compact boundary is produced.
+      - System instructions and tool definitions remain unchanged between these requests.
+    notes: Standalone integration with the built SDK and an in-process scripted provider; no application, model service, credentials or network. This verifies request continuity, not measured provider cache hits or latency.
+  - id: chat.execution.pre-request-summary
+    title: Make room before the next work request without losing the request envelope
+    verifies:
+      - context-continuity
+      - compact-safety
+    platforms: *a1
+    profiles: [fast, regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      usage: [reported, absent]
+    preconditions:
+      - A complete request is below the summary threshold; its next tool result raises the pending request to at least 90 percent of available input, defined as context window minus reserved output.
+      - The scripted provider either reports input and cache usage or omits usage; missing usage is budgeted from the complete local request including system instructions and tools.
+    steps:
+      - Complete the tool exchange, pause checkpoint persistence, then release it and inspect the next work request.
+    expected:
+      - Summarization precedes the next work request, using the original system instructions, tools and full conversation with an appended summary instruction.
+      - While checkpoint persistence is pending, reduced history is not installed, no compact boundary is emitted, and no next work request starts.
+      - After persistence succeeds, the continuation uses the saved candidate with a net reduction in complete-request size and retains recent tool calls and results together. A useful summary is not rejected merely for missing the preferred 55 percent target.
+    notes: Integration through public queryLoop, provider and persistence callbacks from the built SDK. The controlled owner writes a checkpoint to an isolated file; actual SDK session persistence and reopening are verified separately. No Electron UI, real tokenizer, cache-hit measurement or live summary quality is established.
+  - id: chat.execution.compact-not-installed
+    title: Refuse an unsafe or unsaved summary without continuing from it
+    verifies:
+      - compact-safety
+    platforms: *a1
+    profiles: [fast, regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      failure: [checkpoint-write, summary-tool-call]
+    preconditions:
+      - Work has reached estimated input capacity after a completed tool exchange, so continuing without successful recovery is not permitted.
+    steps:
+      - Refuse the asynchronous checkpoint write, or keep returning a tool call through the bounded summary repair.
+    expected:
+      - The turn reports failure, does not install reduced history or emit a compact boundary, and sends no further work request.
+      - Original history is retained and the tool requested by the summary is never executed.
+    notes: Standalone built-SDK integration. The checkpoint failure is supplied through the public owner callback, not a real disk-full fault. UI error presentation and storage-device durability are not covered.
+  - id: chat.execution.compact-auto-recovery
+    title: Recover internal context problems without handing retries to the user
+    verifies: [context-continuity, compact-safety, budget]
+    platforms: *a1
+    profiles: [fast, regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      recovery: [transient-summary, invalid-summary, provider-overflow, soft-failure]
+    preconditions:
+      - An isolated built-SDK conversation reaches proactive context pressure or receives a provider context-overflow response.
+      - A scripted provider fails one summary request transiently, returns an invalid summary once, rejects the first post-summary work request as oversized, or repeatedly returns empty summaries while the original request remains below estimated capacity.
+    steps:
+      - Let the SDK recover and continue the original work without another user message; inspect requests, checkpoint callbacks and final usage.
+    expected:
+      - The original task completes automatically without executing tools returned by a summary, silently trimming old records, or changing the stable system and tool definitions.
+      - Transient retries preserve the summary prefix; invalid output uses a changed handover request; a server overflow can recover immediately after a proactive summary.
+      - Repeatedly unusable proactive output below capacity leaves the original history intact and allows ordinary work; no invalid summary is installed.
+      - Every reported summary response contributes once to usage, including rejected output; local context estimates never become billed usage.
+    notes: Scripted public-SDK integration only; it does not establish live-model summary fidelity, actual provider cache hits, Electron presentation or recovery from a real service outage.
+  - id: chat.execution.compact-budget-recovery
+    title: Continue through provider budget normalization and oversized summary merges
+    verifies: [context-continuity, compact-safety, budget]
+    platforms: *a1
+    profiles: [fast, regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      recovery: [thinking-reservation, merge-reservation, merge-input]
+    preconditions:
+      - A configured thinking budget can exceed the work output reservation, or ordered summary segments can fit separately while their merge exceeds the provider capacity.
+    steps:
+      - Run the public SDK with a scripted provider enforcing the relevant request capacity, allowing valid summary responses and final continuation.
+    expected:
+      - A thinking configuration accepted by ordinary work is not rejected locally before the summary provider can normalize it.
+      - An oversized merge recovers within the existing request bound by reducing output reservation or shortening the ordered handovers; no source segment is silently discarded.
+      - The original task and latest user constraints remain present, every successful summary response is accounted once and recovery terminates within its bound.
+    notes: Built public-SDK integration with scripted responses. Provider wire normalization is additionally covered by SDK serialization tests, not claimed as a live-provider observation here.
+  - id: chat.execution.compact-resume
+    title: Reopen summarized work while retaining the original transcript
+    verifies:
+      - compact-recovery
+    platforms: *a1
+    profiles: [fast, regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - An isolated persistent SDK session uses a scripted provider and receives enough ordinary turns to trigger automatic summarization.
+    steps:
+      - Capture the original transcript bytes, continue until summarization, close and flush the session, then resume it through the public SDK session API.
+    expected:
+      - Compaction appends to the disk transcript rather than overwriting its original prefix, and the original request and answer remain present.
+      - The reopened session supplies the saved summary and new user input to its next work request and completes successfully without summarizing again immediately.
+    notes: Real SDK persistence and resume under isolated HOME, USERPROFILE and configuration directories. This is integration evidence, not application reopen, renderer history, crash recovery, subagent ownership or external Claude Code coverage.

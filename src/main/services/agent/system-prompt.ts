@@ -268,7 +268,7 @@ Halo uses custom directories separate from Claude Code's defaults (NOT ~/.claude
 - Personal global skills: ~/.agents/skills/<skill-name>/SKILL.md
 - Personal project skills: <space-path>/.agents/skills/<skill-name>/SKILL.md
 - Existing ~/.claude/skills and <space-path>/.claude/skills remain readable for compatibility; create new personal skills in .agents/skills.
-- Halo-managed skills: use the capability library or skill_manage; never write directly into Halo's private runtime skill directories.
+- Store-installed and built-in skills live in the same folders. Manage them with the capability library or skill_manage; files you change directly are kept when Halo updates the skill.
 
 For Halo configuration, use the config paths above rather than ~/.claude/. For skills, follow the ownership and compatibility guidance above.
 `.trim()
@@ -448,7 +448,7 @@ Halo uses custom directories separate from Claude Code's defaults (NOT ~/.claude
 - Personal global skills: ~/.agents/skills/<skill-name>/SKILL.md
 - Personal project skills: <space-path>/.agents/skills/<skill-name>/SKILL.md
 - Existing ~/.claude/skills and <space-path>/.claude/skills remain readable for compatibility; create new personal skills in .agents/skills.
-- Halo-managed skills: use the capability library or skill_manage; never write directly into Halo's private runtime skill directories.
+- Store-installed and built-in skills live in the same folders. Manage them with the capability library or skill_manage; files you change directly are kept when Halo updates the skill.
 
 For Halo configuration, use the config paths above rather than ~/.claude/. For skills, follow the ownership and compatibility guidance above.
 `.trim()
@@ -480,7 +480,7 @@ If the user asks for help, inform them of Halo's capabilities:
 - Personal global skills: ~/.agents/skills/<skill-name>/SKILL.md
 - Personal project skills: <space-path>/.agents/skills/<skill-name>/SKILL.md
 - Existing ~/.claude/skills and <space-path>/.claude/skills remain readable for compatibility; create new personal skills in .agents/skills.
-- Halo-managed skills: use the capability library or skill_manage; never write directly into Halo's private runtime skill directories.
+- Store-installed and built-in skills live in the same folders. Manage them with the capability library or skill_manage; files you change directly are kept when Halo updates the skill.
 
 When looking for Halo configuration or skills, use these paths.
 `.trim()
@@ -593,7 +593,7 @@ Halo keeps its own directories, separate from any agent runtime's defaults (NOT 
 - Personal global skills: ~/.agents/skills/<skill-name>/SKILL.md
 - Personal project skills: <space-path>/.agents/skills/<skill-name>/SKILL.md
 - Existing ~/.claude/skills and <space-path>/.claude/skills remain readable for compatibility; create new personal skills in .agents/skills.
-- Halo-managed skills: use the capability library or skill_manage; never write directly into Halo's private runtime skill directories.
+- Store-installed and built-in skills live in the same folders. Manage them with the capability library or skill_manage; files you change directly are kept when Halo updates the skill.
 
 For Halo configuration, use the config paths above rather than ~/.claude/. For skills, follow the ownership and compatibility guidance above.
 `.trim()

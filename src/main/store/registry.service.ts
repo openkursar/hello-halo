@@ -17,7 +17,7 @@
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
 import { getConfig, saveConfig as saveHaloConfig } from '../foundation/config.service'
-import { getAppManager } from '../apps/manager'
+import { getAppManager, AppAlreadyInstalledError } from '../apps/manager'
 import { sameSkillSource } from '../services/skills'
 import { getAppRuntime } from '../apps/runtime'
 import type { AppSpec, SkillSpec } from '../apps/spec'
@@ -653,7 +653,7 @@ export async function installRequiredSkills(
   const manager = getAppManager()
   const failures: string[] = []
 
-  async function installDependency(rawSpec: SkillSpec): Promise<string> {
+  async function installDependency(rawSpec: SkillSpec): Promise<void> {
     if (!manager) throw new Error('App Manager is not available')
     const dependency = validateAppSpec(rawSpec)
     if (dependency.type !== 'skill') throw new Error('The declared dependency is not a skill')
@@ -662,7 +662,17 @@ export async function installRequiredSkills(
     if (existing && (existing.status !== 'active' || existing.userOverrides.skill?.deleted)) {
       throw new Error(`Skill "${dependency.name}" was disabled or deleted; enable or reinstall it explicitly`)
     }
-    const id = await manager.install(spaceId, dependency, {})
+    let id: string
+    try {
+      id = await manager.install(spaceId, dependency, {})
+    } catch (error) {
+      // A skill of the same name that is not this package's own already stands in the shared folder; it keeps the name.
+      if (error instanceof AppAlreadyInstalledError && !existing) {
+        console.log('[RegistryService] Skill dependency is provided by an existing skill of the same name', { name: dependency.name })
+        return
+      }
+      throw error
+    }
     const installed = manager.getApp(id)
     if (!installed || installed.status !== 'active' || !installed.userOverrides.skill || installed.userOverrides.skill.deleted) {
       throw new Error(`Skill "${dependency.name}" is not available`)
@@ -677,7 +687,6 @@ export async function installRequiredSkills(
         owners: [...owners.filter(owner => owner.id !== parent.id), { id: parent.id, name: parent.spec.display_name ?? parent.spec.name }],
       } })
     }
-    return id
   }
 
   for (const dep of skills) {
@@ -912,10 +921,11 @@ export async function applyUpgrade(
 
   // The runtime reschedules the app and notes what was kept on its own: it
   // reacts to every upgradeSpec, whichever path made it.
-  const replaceCustomizedSkill = mode === 'force' && app.spec.type === 'skill'
-    && app.status !== 'uninstalled' && app.userOverrides.skill?.customized && !app.userOverrides.skill?.deleted
+  const replaceKeptSkill = mode === 'force' && app.spec.type === 'skill'
+    && app.status !== 'uninstalled' && !app.userOverrides.skill?.deleted
+    && (app.userOverrides.skill?.customized || manager.previewUpgradeSpec(appId, newSpecWithStore).kept.length > 0)
   let outcome: SpecUpgradeOutcome
-  if (replaceCustomizedSkill) {
+  if (replaceKeptSkill) {
     if (newSpecWithStore.type !== 'skill') {
       console.warn('[RegistryService] Skill replacement refused a different package type', { appId, type: newSpecWithStore.type })
       throw new Error('A skill upgrade must contain a skill package')
