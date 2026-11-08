@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AISource, BackendRequestConfig } from '../../../../../src/shared/types/ai-sources'
 
 const state = vi.hoisted(() => ({ source: null as AISource | null, apiType: 'responses' as BackendRequestConfig['apiType'], refresh: vi.fn(), current: vi.fn() }))
-vi.mock('../../../../../src/main/services/ai-sources', () => ({ getAISourceManager: () => ({
+vi.mock('../../../../../src/main/services/ai-sources', () => ({ getGroup: () => null, getAISourceManager: () => ({
   ensureInitialized: async () => {},
   getSourceConfig: (id: string) => state.source?.id === id ? state.source : null,
   getCurrentSourceConfig: state.current,

@@ -1,0 +1,365 @@
+version: 1
+id: models.groups
+module: models
+title:
+  en: Load-balancing groups
+  zh: 负载均衡组
+story:
+  en: I can combine several of my accounts and models into one choice that keeps working when one of them runs out or fails.
+  zh: 我可以把自己的多个账户和模型合成一个选项；其中一个额度用完或出故障时，它仍能继续工作。
+basis: proposed
+references:
+  - src/main/openai-compat-router/balancing/DESIGN.md
+  - src/main/openai-compat-router/server/group-dispatch.ts
+  - src/shared/ai-groups.ts
+  - src/renderer/components/ai-groups/GroupEditor.tsx
+  - src/renderer/components/ai-config/ModelSelector.tsx
+  - tests/e2e/specs/acceptance-load-balancing-groups.spec.ts
+  - tests/unit/openai-compat-router/group-wire.test.ts
+promises:
+  create:
+    en: A group is made from my own accounts and models, reached from a small control beside "Add AI Provider", and making one changes nothing that is already in use.
+    zh: 组由我自己的账户和模型组成，入口是“添加 AI 供应商”旁的小控件；创建组不会改变任何正在使用的设置。
+  choose:
+    en: A group is chosen like a provider. The header keeps its name steady while the open card names the account and model in use, and says so plainly when none has served the chat yet.
+    zh: 组像供应商一样被选用。顶部始终显示组名；展开的卡片给出正在使用的账户与模型，尚未回答过时如实说明。
+  failover:
+    en: When the model in use is rate limited or fails before it answers, the next model answers the same request and the conversation shows no error. An answer that has begun is never repeated on another model.
+    zh: 正在使用的模型被限流或在回答前失败时，由下一个模型回答同一请求，对话中不出现错误；已经开始的回答不会在另一个模型上重复。
+  limits:
+    en: A group promises only what every one of its models offers, and says what a model costs the group (context size, image input) before the group is saved. An unknown output limit never removes another model's known output limit.
+    zh: 组只承诺其全部模型共同具备的能力，并在保存前说明某个模型使组失去了什么（上下文长度、图片输入）。某个模型未声明输出上限不会解除其他模型已知的输出限制。
+  recovery:
+    en: Repairing an account or choosing Try again now clears earlier failure evidence; requests already in flight cannot put the repaired account back to rest.
+    zh: 修复账户或点击“立即重试”会清除之前的失败证据；已经在途的旧请求不能让恢复后的账户重新休息。
+  route-recovery:
+    en: The model card and switch notice identify the model serving a digital-human chat on every supported engine, and recover the current route after a remote connection returns.
+    zh: 模型卡和切换提示在所有受支持引擎上都能显示数字人对话实际使用的模型；远程连接恢复后会重新取得当前路由。
+  selection-failure:
+    en: A refused group selection leaves the new-chat default unchanged, keeps the picker open and explains that the choice was not saved.
+    zh: 组选择被拒绝时，新对话默认保持不变，选择列表保留，并明确提示没有保存成功。
+  delete:
+    en: Deleting a group leaves every account as it was; chats that used it run on the default model, as they do when an account is removed.
+    zh: 删除组不影响任何账户；使用过它的对话改用默认模型，与账户被移除时一致。
+  engine:
+    en: Where a group cannot work (the Codex engine), it is refused at the point of choosing, not after a message fails.
+    zh: 组无法工作的场合（Codex 引擎）在选择时就被拒绝，而不是发送失败之后。
+  quiet:
+    en: Someone who never makes a group sees no group in any list, menu or card.
+    zh: 从未创建组的人，不会在任何列表、菜单或卡片中看到组。
+scenarios:
+  - id: models.groups.create-and-choose
+    title:
+      en: Make a group from my accounts, choose it, and chat through it
+      zh: 用现有账户创建组、选用并通过它对话
+    verifies:
+      - create
+      - choose
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: Two accounts with different selected models pass a real connection check against isolated local providers; the second is the account in use.
+        zh: 两个账户分别选择不同模型，并通过隔离本地服务的真实连接测试；第二个账户为当前使用账户。
+    steps:
+      - en: In settings, open the small menu beside Add AI Provider, create a load-balancing group, fill it with each account's current model and create it.
+        zh: 在设置中打开“添加 AI 供应商”旁的小菜单，创建负载均衡组，用各账户当前模型填充并创建。
+      - en: Start a conversation, open the model list, choose the group, and look at the model card before sending anything.
+        zh: 新建对话，打开模型列表选择该组，发送前先查看模型卡片。
+      - en: Send a message, look at the card again, restart the application and reopen the conversation.
+        zh: 发送一条消息，再看卡片，然后重启应用并重新打开该对话。
+    expected:
+      - en: The group appears in the provider list like any provider, with the account in use first in its order; the account in use and the chosen group are unchanged until the group is chosen.
+        zh: 组与其他供应商一样出现在列表中，当前使用的账户排在首位；在选用该组之前，当前账户和已选择内容保持不变。
+      - en: The conversation stores the group as its choice and the header names it; the card first says the model is picked when a message is sent, then names the account and model that served the reply, and every observed request went to that account with that model.
+        zh: 对话保存该组为所选项，顶部显示组名；卡片先说明发送时才选择模型，回答后给出实际使用的账户与模型，且每个实际请求都发给该账户及其模型。
+      - en: After the restart the group, the conversation's choice and its history are intact.
+        zh: 重启后组、对话所选项及历史保持完整。
+    notes:
+      en: The local provider scripts the answers. This verifies the account and model choice, the card and persistence, not answer quality.
+      zh: 本地服务脚本化返回内容；此场景验证账户与模型选择、卡片与持久化，不代表回答质量。
+  - id: models.groups.failover
+    title:
+      en: Pass over a rate-limited model without an error in the chat
+      zh: 越过被限流的模型，对话中不出现错误
+    verifies:
+      - failover
+      - choose
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A group of two models in two accounts is chosen for a conversation, and the first model's provider answers every request with a rate-limit rejection.
+        zh: 一个对话选用了由两个账户各一个模型组成的组，其中第一个模型的服务对每个请求都返回限流拒绝。
+    steps:
+      - en: Send a message, then another in the same conversation.
+        zh: 发送一条消息，再在同一对话中发送另一条。
+    expected:
+      - en: The first message is answered; the provider saw the rejected request to the first model and then the same request to the second, and the conversation shows no error and no failed message.
+        zh: 第一条消息得到回答；服务端先看到发往第一个模型的被拒请求，随后看到发往第二个模型的同一请求；对话中没有错误或失败消息。
+      - en: The card names the second model's account as the one in use.
+        zh: 卡片显示第二个模型所在账户为当前使用。
+      - en: The second message goes straight to the second model, and the conversation's stored choice is still the group.
+        zh: 第二条消息直接发往第二个模型，对话所存选择仍是该组。
+    notes:
+      en: Verifies the rate-limit case through the local provider boundary. Other failures (overload, quota wording, empty or broken replies, unreachable providers) and the rule that an answer already begun is never repeated are verified below the application boundary by the router's integration tests; they have no acceptance binding yet.
+      zh: 通过本地服务边界验证限流场景。其他失败（过载、额度措辞、空回复或中断回复、服务不可达）以及“已开始的回答绝不重复”由路由器集成测试在应用边界之下验证，尚无验收绑定。
+  - id: models.groups.delete
+    title:
+      en: Delete a group and keep the accounts
+      zh: 删除组并保留账户
+    verifies:
+      - delete
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A conversation has completed a turn through a group of two accounts' models.
+        zh: 某对话已通过由两个账户的模型组成的组完成一轮交流。
+    steps:
+      - en: In settings, open the group's card, choose Delete and confirm.
+        zh: 在设置中展开该组的卡片，选择删除并确认。
+      - en: Reopen the conversation and send another message.
+        zh: 重新打开该对话并再发送一条消息。
+    expected:
+      - en: The group is gone, both accounts and the account in use are unchanged, and no group is chosen for new chats.
+        zh: 组已消失，两个账户及当前使用账户不变，新对话不再选用任何组。
+      - en: The conversation keeps its stored choice, shows the default model it now runs on, and the next request goes to that model's account.
+        zh: 对话保留原存选择，显示其现在使用的默认模型，下一次请求发往该模型的账户。
+  - id: models.groups.limits
+    title:
+      en: Say what a mixed group gives up before it is saved
+      zh: 在保存前说明混合组放弃了什么
+    verifies:
+      - limits
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: planned
+    preconditions:
+      - en: One account offers a large context window and image input; another offers a smaller window and no image input.
+        zh: 一个账户支持大上下文与图片输入；另一个上下文较小且不支持图片输入。
+    steps:
+      - en: Add a model of each account to a new group.
+        zh: 把两个账户的模型各一个加入新组。
+    expected:
+      - en: The editor names the smaller context size and the model that sets it, and says image input is off because of that model; limits the catalogs do not state are called unconfirmed, never supported.
+        zh: 编辑页给出较小的上下文长度及造成该限制的模型，并说明因该模型而无法使用图片输入；目录未给出的能力写作“未确认”，不会写成支持。
+    notes:
+      en: The wording and the rules are covered by unit tests of the editor model and screens; there is no acceptance binding yet.
+      zh: 文案与规则由编辑器模型和界面的单元测试覆盖；尚无验收绑定。
+  - id: models.groups.codex
+    title:
+      en: Refuse a group where it cannot work
+      zh: 在无法使用的场合拒绝组
+    verifies:
+      - engine
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements:
+      - codex
+    preconditions:
+      - en: A group exists and the Codex engine is available.
+        zh: 已有一个组，且 Codex 引擎可用。
+    steps:
+      - en: Open a conversation that runs on the group and look at its engine choices.
+        zh: 打开使用该组的对话，查看其引擎选项。
+    expected:
+      - en: Codex is shown as incompatible with a load-balancing group, with the reason, before anything is sent.
+        zh: Codex 被标为与负载均衡组不兼容并说明原因，且发生在发送任何消息之前。
+    notes:
+      en: The rule is covered by unit tests of the compatibility check and the engine notices.
+      zh: 该规则由兼容性检查与引擎提示的单元测试覆盖。
+  - id: models.groups.quiet
+    title:
+      en: Show nothing about groups to someone who has none
+      zh: 对没有组的人不显示任何组相关内容
+    verifies:
+      - quiet
+    platforms:
+      - darwin
+      - win32
+      - linux
+    profiles:
+      - regression
+    evidence: ui
+    mode: none
+    automation: planned
+    preconditions:
+      - en: Accounts are configured and no group has ever been created.
+        zh: 已配置账户，且从未创建过组。
+    steps:
+      - en: Look at the provider list, the model list and the model card.
+        zh: 查看供应商列表、模型列表和模型卡片。
+    expected:
+      - en: No group, mark or section appears; the only addition is a small menu beside Add AI Provider.
+        zh: 不出现任何组、标记或分区；唯一新增的是“添加 AI 供应商”旁的小菜单。
+    notes:
+      en: Covered by unit tests of the settings section and the model list; there is no acceptance binding yet.
+      zh: 由设置区块与模型列表的单元测试覆盖；尚无验收绑定。
+  - id: models.groups.output-limit
+    title:
+      en: Keep a known output limit when another model declares none
+      zh: 另一个模型未声明上限时仍遵守已知输出限制
+    verifies: [limits]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    steps:
+      - en: Combine a model with an 8192-token output limit and a model with no declared output limit, then send a message through the group.
+        zh: 把输出上限8192的模型与未声明输出上限的模型组成组，再通过该组发送消息。
+    expected:
+      - en: The request carries an output limit no greater than 8192, whichever model is ordered first.
+        zh: 无论哪个模型排在前面，请求的输出上限都不超过8192。
+    notes:
+      en: Group credentials and the real runtime-limit resolver are covered together by unit tests; no application acceptance binding yet.
+      zh: 单元测试联合验证组凭据与真实运行时上限解析器；尚无应用验收绑定。
+  - id: models.groups.long-kiro-answer
+    title:
+      en: Let a Kiro answer already started continue past 90 seconds
+      zh: 让已开始的Kiro回答在90秒后继续完成
+    verifies: [failover]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: integration
+    mode: scripted
+    automation: planned
+    expected:
+      - en: With a backup available, Kiro that sends headers and content promptly may keep answering beyond 90 seconds and complete normally; its existing 10-minute full-response deadline remains.
+        zh: 有备用模型时，及时开始响应的Kiro可在90秒后继续回答并正常结束；原有10分钟完整响应期限保留。
+      - en: Kiro that sends no headers is still passed over after the group header deadline, without replaying any answer that already began.
+        zh: Kiro始终未返回响应头时仍按组等待期限切换；已开始的回答不会重放。
+    notes:
+      en: Real router handlers with virtual timers and a scripted upstream cover this in unit tests; no acceptance binding yet.
+      zh: 单元测试使用真实路由处理器、虚拟时钟及脚本化上游验证；尚无验收绑定。
+  - id: models.groups.large-whole-answer
+    title:
+      en: Finish a large whole answer without leaving the caller waiting
+      zh: 完成大体积整包回答而不让调用方继续等待
+    verifies: [failover]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: integration
+    mode: scripted
+    automation: planned
+    expected:
+      - en: A non-streaming reply larger than 8 MiB is delivered once and its connection ends, whether the handler sends the body at once or in chunks.
+        zh: 大于8MiB的非流式回答只交付一次并结束连接，无论处理器一次发送还是分块发送。
+    notes:
+      en: Response lifecycle regressions are covered below the application boundary; no acceptance binding yet.
+      zh: 响应生命周期回归由应用边界之下的测试覆盖；尚无验收绑定。
+  - id: models.groups.repair-in-flight
+    title:
+      en: Ignore old failure results after repairing an account or retrying now
+      zh: 修复账户或立即重试后忽略旧请求的失败结果
+    verifies: [recovery]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: integration
+    mode: scripted
+    automation: planned
+    variants:
+      action: [edit-account, retry-model, retry-group]
+    expected:
+      - en: A request started before the action cannot restore an authentication or quota rest afterward; new requests and unrelated accounts still update their state normally.
+        zh: 操作前发出的请求不能在操作后恢复认证或额度冷却；新请求及无关账户仍正常更新状态。
+    notes:
+      en: Deterministic balancer tests cover late failures, success and provisional request-shape evidence; no acceptance binding yet.
+      zh: 确定性均衡器测试覆盖迟到失败、成功及待确认的请求格式错误证据；尚无验收绑定。
+  - id: models.groups.digital-human-route
+    title:
+      en: Show the model serving a digital human on Claude Code
+      zh: 显示Claude Code数字人实际使用的组内模型
+    verifies: [choose, route-recovery]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [local-claude-code]
+    expected:
+      - en: The card and switch notice use the existing native session identity as well as the conversation identity, so a successful or switching route does not appear unchosen.
+        zh: 模型卡和切换提示同时关联已有引擎会话与对话身份，已开始服务或切换的路由不会显示为尚未选择。
+    notes:
+      en: Renderer identity lookup is unit-tested; a real external Claude Code application journey remains unverified.
+      zh: 渲染器身份查找有单元测试；真实外部Claude Code应用流程仍未验证。
+  - id: models.groups.remote-route-recovery
+    title:
+      en: Refresh the route missed during a remote disconnection
+      zh: 远程重连后恢复断线期间错过的路由状态
+    verifies: [route-recovery]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    expected:
+      - en: If A changes to B while disconnected, the visible conversation shows B after reconnect without reopening the card or waiting for another switch; conversations not using groups do no extra work.
+        zh: 断线时从A切到B，重连后当前对话显示B，无需重开卡片或等待下一次切换；不用组的对话不增加相关工作。
+    notes:
+      en: Group-only reconnect and snapshot reads are unit-tested; no remote application acceptance binding yet.
+      zh: 组专用重连和快照读取有单元测试；尚无远程应用验收绑定。
+  - id: models.groups.refused-selection
+    title:
+      en: Keep both selections unchanged when the conversation refuses a group
+      zh: 对话拒绝组时保持对话与新对话默认选择不变
+    verifies: [selection-failure, engine]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: planned
+    expected:
+      - en: A conversation scheduled to switch to Codex cannot choose a group. If saving is refused anyway, no global selection is changed and the open picker gives a failure message.
+        zh: 已指定切换到Codex的对话不能选组；即使保存仍被拒绝，也不改变全局选择，并在保留的列表中提示失败。
+    notes:
+      en: Pending-engine eligibility and refused-save side effects are unit-tested; no acceptance binding yet.
+      zh: 待切换引擎的选择资格与保存拒绝后的副作用有单元测试；尚无验收绑定。
+questions:
+  - en: Should the Codex engine be able to use a group? Today a group is refused for it, and the Claude Code CLI account cannot be a member.
+    zh: Codex 引擎是否应支持使用组？目前组会被它拒绝，Claude Code CLI 账户也不能成为组内模型。
+  - en: Which model answered each reply is not recorded, and the dollar figures in a group chat's token usage are left out because the engine prices every reply by one model. Should replies record their model, and should cost be shown?
+    zh: 目前不记录每条回复由哪个模型回答，且因引擎按单一模型计价，组对话的用量中不显示金额。是否应记录回复所用模型并显示费用？
+  - en: A model that was rate limited or out of quota is tried again after the application restarts, because rest times are not kept. Is that acceptable?
+    zh: 因为不保存暂停时间，被限流或额度用尽的模型在应用重启后会被重新尝试。这是否可以接受？
+  - en: A deleted group is followed like a removed account (the chat runs on the default model) instead of asking the person to choose again. Is that the wanted behavior?
+    zh: 已删除的组与被移除的账户一致（对话改用默认模型），而不是要求重新选择。这是否符合预期？

@@ -9,6 +9,10 @@
 export { getAISourceManager, AISourceManager } from './manager'
 export { watchCatalogSignals, type CatalogSignal } from './catalog-signals'
 
+// Load-balancing groups
+export { GroupError, listGroups, getGroup, createGroup, updateGroup, deleteGroup, selectGroup } from './groups'
+export { startGroupRouting, getGroupRoutes, getHealthOfGroup, releaseGroupRest } from './group-routing'
+
 // Auth Loader (for dynamic provider loading)
 export {
   loadAuthProviders,

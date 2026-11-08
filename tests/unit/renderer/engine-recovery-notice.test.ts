@@ -24,6 +24,12 @@ describe('why a conversation cannot run as configured', () => {
   it('keeps the Codex account explanation', () => {
     expect(resolveEngineIssue({ engine: 'codex', delegated: false, accountCompatible: false })).toBe('codex-account')
   })
+
+  it('tells a load-balancing group apart from an account Codex cannot use', () => {
+    expect(resolveEngineIssue({ engine: 'codex', delegated: false, accountCompatible: false, group: true })).toBe('codex-group')
+    expect(resolveEngineIssue({ engine: 'codex', delegated: false, accountCompatible: false, group: false })).toBe('codex-account')
+    expect(resolveEngineIssue({ engine: 'halo', delegated: false, accountCompatible: true, group: true })).toBeNull()
+  })
 })
 
 describe('which note an engine failure gets', () => {

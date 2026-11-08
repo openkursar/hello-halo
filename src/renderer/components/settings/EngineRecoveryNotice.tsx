@@ -12,7 +12,7 @@ import { openPersonModelSettings } from '../../utils/people-navigation'
 import { ModelSelectSheet } from '../ai-config/ModelSelector'
 import { resolveModelSelection } from '../../types'
 import type { EngineId } from '../../../shared/types/engine'
-import { getEngineSourceCompatibility } from '../../../shared/engine-source'
+import { engineSourceOf, getEngineSourceCompatibility } from '../../../shared/engine-source'
 import { resolveEngineIssue, resolveEngineNotice } from './engine-issue'
 
 /**
@@ -40,9 +40,10 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
   const [picking, setPicking] = useState(false)
   const [saving, setSaving] = useState(false)
   const [failed, setFailed] = useState(false)
-  const selected = sources?.version === 2
-    ? resolveModelSelection(sources, target.kind === 'conversation' ? target.conversation : target).source
+  const selection = sources?.version === 2
+    ? resolveModelSelection(sources, target.kind === 'conversation' ? target.conversation : target)
     : undefined
+  const selected = selection && engineSourceOf(selection)
   const delegated = !getEngineSourceCompatibility('halo', selected).compatible
   const availability = useEngineAvailability(engine === 'anthropic' || delegated || Boolean(failure), failure)
   const ccAvailable = availability ? Boolean(availability.engines.find(item => item.engineId === 'anthropic')?.available) : undefined
@@ -50,7 +51,7 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
   const fellBack = !engineId && requested === 'anthropic' && engine === 'halo'
   const canMove = target.kind === 'digital-human' || Boolean(spaceId && target.conversation)
 
-  const issue = engine ? resolveEngineIssue({ engine, delegated, accountCompatible: accountCompatibility.compatible, ccAvailable }) : null
+  const issue = engine ? resolveEngineIssue({ engine, delegated, accountCompatible: accountCompatibility.compatible, group: Boolean(selection?.group), ccAvailable }) : null
   const notice = resolveEngineNotice({ issue, failed: Boolean(failure), fellBack, dismissed })
   if (!notice) return null
 
@@ -75,11 +76,13 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
       ? t('This account signs in through Claude Code. Run this conversation on Claude Code, or use another account.')
       : issue === 'codex-account'
         ? t('Codex supports OpenAI-compatible Chat Completions and Responses accounts. Choose another account or another engine.')
-        : issue === 'cc-missing'
-          ? t('This conversation runs on Claude Code, which is not available on this computer. Install or connect Claude Code, or continue with Halo SDK.')
-          : notice.kind === 'failure'
-            ? t('This conversation’s engine or account cannot run on this computer. Check the engine and account in Settings.')
-            : t('Halo SDK is currently running. To use Claude Code, connect it in Settings > Advanced. Your chat history is kept; no restart is needed.')
+        : issue === 'codex-group'
+          ? t('Codex cannot use a load-balancing group. Choose a single model account or another engine.')
+          : issue === 'cc-missing'
+            ? t('This conversation runs on Claude Code, which is not available on this computer. Install or connect Claude Code, or continue with Halo SDK.')
+            : notice.kind === 'failure'
+              ? t('This conversation’s engine or account cannot run on this computer. Check the engine and account in Settings.')
+              : t('Halo SDK is currently running. To use Claude Code, connect it in Settings > Advanced. Your chat history is kept; no restart is needed.')
   const action = 'min-h-11 rounded-md px-2.5 py-1.5 font-medium text-primary hover:bg-primary/10 disabled:opacity-50 sm:min-h-0 sm:px-0 sm:py-0 sm:hover:bg-transparent sm:hover:underline'
 
   return (
@@ -102,6 +105,9 @@ export function EngineRecoveryNotice({ engineId, spaceId, failure, target: expli
           )}
           {(issue === 'account-needs-cc' || issue === 'account-cc-ready' || issue === 'codex-account') && (
             <button type="button" className={action} onClick={pickAccount}>{t('Use another account')}</button>
+          )}
+          {issue === 'codex-group' && (
+            <button type="button" className={action} onClick={pickAccount}>{t('Choose another model')}</button>
           )}
           {!issue && <button type="button" className={action} onClick={() => navigate('settings')}>{t('Open Settings')}</button>}
         </div>

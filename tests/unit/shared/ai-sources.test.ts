@@ -9,7 +9,8 @@ import { describe, it, expect } from 'vitest'
 import {
   resolveLocalizedText, getModelDisplayName, resolveModelSelection, getSourceAccountName,
   findWithdrawnModel, activeModelReplacement, MODEL_REPLACEMENT_NOTICE_MS,
-  type AISource, type AISourcesConfig,
+  getGroupById, removeSourceFromGroups, deleteSource, GROUP_MODEL_ID,
+  type AIGroup, type AISource, type AISourcesConfig,
 } from '../../../src/shared/types/ai-sources'
 
 describe('stored model selection display', () => {
@@ -126,5 +127,58 @@ describe('models the vendor withdrew', () => {
     expect(activeModelReplacement(account, start + MODEL_REPLACEMENT_NOTICE_MS)).toBeUndefined()
     expect(activeModelReplacement({ ...account, model: 'back' }, start + 1000)).toBeUndefined()
     expect(activeModelReplacement({ ...account, modelReplacement: { ...account.modelReplacement!, at: 'bad' } }, start)).toBeUndefined()
+  })
+})
+
+describe('model groups in stored selections', () => {
+  const source = (id: string): AISource => ({
+    id, name: id, provider: 'custom', authType: 'api-key', apiUrl: '', model: `${id}-model`,
+    availableModels: [{ id: `${id}-model`, name: `${id} model` }], createdAt: '', updatedAt: '',
+  })
+  const group: AIGroup = {
+    id: 'g', name: 'Daily work', strategy: 'priority', createdAt: '', updatedAt: '',
+    members: [{ sourceId: 'a', modelId: 'a-model' }, { sourceId: 'b', modelId: 'b-model' }],
+  }
+  const config: AISourcesConfig = { version: 2, currentId: 'b', sources: [source('a'), source('b')], groups: [group] }
+
+  it('finds a group by id', () => {
+    expect(getGroupById(config, 'g')).toBe(group)
+    expect(getGroupById(config, 'a')).toBeNull()
+    expect(getGroupById({ ...config, groups: undefined }, 'g')).toBeNull()
+  })
+
+  it('resolves a pinned group to the group with its one model, whatever model id was stored', () => {
+    expect(resolveModelSelection(config, { modelSourceId: 'g', modelId: 'anything' }))
+      .toEqual({ source: null, modelId: GROUP_MODEL_ID, own: true, group })
+    expect(getModelDisplayName(config, 'g', GROUP_MODEL_ID)).toBe('Daily work')
+  })
+
+  it('keeps resolving accounts exactly as before when groups exist', () => {
+    expect(resolveModelSelection(config, { modelSourceId: 'a', modelId: 'a-model' }))
+      .toEqual({ source: config.sources[0], modelId: 'a-model', own: true })
+    expect(getModelDisplayName(config, 'a')).toBe('a model')
+  })
+
+  it('treats a deleted group like a removed account and follows the global selection', () => {
+    const without = { ...config, groups: [] }
+    expect(resolveModelSelection(without, { modelSourceId: 'g' })).toEqual({ source: without.sources[1], modelId: 'b-model', own: false })
+    expect(getModelDisplayName(without, 'g')).toBe('b model')
+  })
+
+  it('removes a deleted account\'s models from every group and leaves the others alone', () => {
+    const other: AIGroup = { ...group, id: 'h', name: 'Other', members: [{ sourceId: 'b', modelId: 'b-model' }] }
+    const next = removeSourceFromGroups([group, other], 'a', 'now')!
+    expect(next[0]).toEqual({ ...group, members: [{ sourceId: 'b', modelId: 'b-model' }], updatedAt: 'now' })
+    expect(next[1]).toBe(other)
+    const groups = [other]
+    expect(removeSourceFromGroups(groups, 'a')).toBe(groups)
+    expect(removeSourceFromGroups(undefined, 'a')).toBeUndefined()
+  })
+
+  it('keeps a group, now empty, when its last account is deleted', () => {
+    const only: AIGroup = { ...group, members: [{ sourceId: 'a', modelId: 'a-model' }] }
+    const next = deleteSource({ ...config, groups: [only] }, 'a')
+    expect(next.sources.map(s => s.id)).toEqual(['b'])
+    expect(next.groups).toEqual([{ ...only, members: [], updatedAt: expect.any(String) }])
   })
 })

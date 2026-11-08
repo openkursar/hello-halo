@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Cpu, Loader2 } from 'lucide-react'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import { ENGINE_IDS, isEngineId, type EngineId } from '../../../shared/types/engine'
-import { getEngineSourceCompatibility } from '../../../shared/engine-source'
+import { engineSourceOf, getEngineSourceCompatibility } from '../../../shared/engine-source'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { useAppStore } from '../../stores/app.store'
@@ -57,13 +57,17 @@ export function AppEngineSelector({ app, onChange }: Props) {
     return () => { mounted.current = false }
   }, [])
 
-  const source = aiSources?.version === 2 ? resolveModelSelection(aiSources, app.userOverrides).source : undefined
+  const source = aiSources?.version === 2 ? engineSourceOf(resolveModelSelection(aiSources, app.userOverrides)) : undefined
   const defaultEngine = availability?.defaultEngine ?? availability?.activeEngine ?? 'halo'
   const chosen = app.userOverrides.engineId ?? defaultEngine
   const descriptor = capabilities[chosen]
   const unavailable = availability && !availability.engines.find(item => item.engineId === chosen)?.available
   const compatibility = getEngineSourceCompatibility(chosen, source)
   const restrictedTeamSupport = descriptor && (!descriptor.features.hooks || !descriptor.features.permissionRules)
+  const incompatibleLabel = (engine: EngineId): string | null => {
+    const result = getEngineSourceCompatibility(engine, source)
+    return result.compatible ? null : result.code === 'codex-unsupported-group' ? t('Incompatible with a group') : t('Incompatible account')
+  }
 
   const change = async (value: string) => {
     if (pending.current || loading) return
@@ -107,15 +111,15 @@ export function AppEngineSelector({ app, onChange }: Props) {
       onChange={event => void change(event.target.value)}
       className="w-full min-w-0 rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
     >
-      <option value="" disabled={!getEngineSourceCompatibility(defaultEngine, source).compatible}>{t('Default for new sessions')} · {labels[defaultEngine]}{!getEngineSourceCompatibility(defaultEngine, source).compatible ? ` · ${t('Incompatible account')}` : ''}</option>
-      {ENGINE_IDS.map(engineId => <option key={engineId} value={engineId} disabled={!availability?.engines.find(item => item.engineId === engineId)?.available || !getEngineSourceCompatibility(engineId, source).compatible}>
-        {labels[engineId]}{availability && !availability.engines.find(item => item.engineId === engineId)?.available ? ` · ${t('Unavailable')}` : !getEngineSourceCompatibility(engineId, source).compatible ? ` · ${t('Incompatible account')}` : ''}
+      <option value="" disabled={incompatibleLabel(defaultEngine) !== null}>{t('Default for new sessions')} · {labels[defaultEngine]}{incompatibleLabel(defaultEngine) ? ` · ${incompatibleLabel(defaultEngine)}` : ''}</option>
+      {ENGINE_IDS.map(engineId => <option key={engineId} value={engineId} disabled={!availability?.engines.find(item => item.engineId === engineId)?.available || incompatibleLabel(engineId) !== null}>
+        {labels[engineId]}{availability && !availability.engines.find(item => item.engineId === engineId)?.available ? ` · ${t('Unavailable')}` : incompatibleLabel(engineId) ? ` · ${incompatibleLabel(engineId)}` : ''}
       </option>)}
     </select>
     {loading && <p role="status" className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />{t('Checking…')}</p>}
     {saving && <p role="status" className="text-xs text-muted-foreground">{t('Saving…')}</p>}
     {unavailable && <p role="alert" className="text-xs text-destructive">{t('This engine is unavailable. Set it up in Settings or choose another engine. Your selection is kept; Halo will not silently use another engine.')}</p>}
-    {!compatibility.compatible && <p role="alert" className="text-xs text-destructive">{t(compatibility.message)}</p>}
+    {!compatibility.compatible && <p role="alert" className="text-xs text-destructive">{compatibility.code === 'codex-unsupported-group' ? t('Codex cannot use a load-balancing group. Choose a single model account or another engine.') : t(compatibility.message)}</p>}
     {restrictedTeamSupport && <p className="flex items-start gap-1.5 text-xs text-halo-warning"><AlertTriangle aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>{t('This engine cannot enforce all team and guest permissions. Requests requiring those protections will be refused; permissions will not be relaxed.')}</span></p>}
     {!app.userOverrides.engineId && <p className="text-xs text-muted-foreground">{t('Existing conversations keep their engine. The default applies when a new conversation or task starts.')}</p>}
     {error && <div role="alert" className="space-y-1 text-xs text-destructive"><p>{error}</p>{!availability && <button type="button" className="rounded underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" disabled={loading} onClick={() => void load()}>{t('Try again')}</button>}</div>}

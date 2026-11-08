@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { TokenUsage } from '../../types'
 import { useTranslation } from '../../i18n'
+import { useTokenCostShown } from './token-cost-context'
 
 interface TokenUsageIndicatorProps {
   tokenUsage: TokenUsage
@@ -44,8 +45,96 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * 5
 /** Below this, a sliver of arc still shows that some context is in use. */
 const RING_MIN_FRACTION = 0.04
 
-export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = '' }: TokenUsageIndicatorProps) {
+/** The figures the ring and the tooltip both read. */
+function measureUsage(tokenUsage: TokenUsage, previousCost: number) {
+  // Current context size, matching CC's /context formula:
+  //   input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+  // output_tokens is excluded — it is the generated reply, not part of the prompt the model saw.
+  const contextUsed = tokenUsage.inputTokens + tokenUsage.cacheReadTokens + tokenUsage.cacheCreationTokens
+  // Defensive: avoid NaN when contextWindow is 0
+  const contextWindow = tokenUsage.contextWindow > 0 ? tokenUsage.contextWindow : 200000
+  return {
+    contextUsed,
+    contextWindow,
+    usagePercent: Math.round((contextUsed / contextWindow) * 100),
+    currentCost: tokenUsage.totalCostUsd - previousCost,
+  }
+}
+
+/** The tooltip: where the context stands and what the turn used; the dollar figures only where they can be trusted. */
+export function UsageDetails({ tokenUsage, previousCost = 0, costShown }: { tokenUsage: TokenUsage; previousCost?: number; costShown: boolean }) {
   const { t } = useTranslation()
+  const { contextUsed, contextWindow, usagePercent, currentCost } = measureUsage(tokenUsage, previousCost)
+  return (
+    <div className="bg-popover border border-border rounded-lg shadow-lg p-3 min-w-[180px]">
+      {/* Header */}
+      <div className="text-xs font-medium text-foreground mb-2">
+        {t('Token usage')}
+      </div>
+
+      {/* Progress bar */}
+      <div className="h-1.5 bg-secondary rounded-full mb-2 overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${
+            usagePercent >= 95
+              ? 'bg-red-500'
+              : usagePercent >= 80
+                ? 'bg-amber-500'
+                : 'bg-primary/60'
+          }`}
+          style={{ width: `${Math.min(usagePercent, 100)}%` }}
+        />
+      </div>
+
+      {/* Usage stats */}
+      <div className="space-y-1 text-xs">
+        <div className="flex justify-between text-muted-foreground">
+          <span>{t('Used / limit')}</span>
+          <span className="text-foreground">
+            {formatTokens(contextUsed)} / {formatTokens(contextWindow)}
+          </span>
+        </div>
+        <div className="flex justify-between text-muted-foreground">
+          <span>{t('Input')}</span>
+          <span>{formatTokens(tokenUsage.inputTokens)}</span>
+        </div>
+        <div className="flex justify-between text-muted-foreground">
+          <span>{t('Output')}</span>
+          <span>{formatTokens(tokenUsage.outputTokens)}</span>
+        </div>
+        {tokenUsage.cacheReadTokens > 0 && (
+          <div className="flex justify-between text-muted-foreground">
+            <span>{t('Cache read')}</span>
+            <span>{formatTokens(tokenUsage.cacheReadTokens)}</span>
+          </div>
+        )}
+        {costShown && tokenUsage.totalCostUsd > 0 && (
+          <div className="flex justify-between text-muted-foreground pt-1 border-t border-border-faint">
+            <span>{t('Current / total')}</span>
+            <span className="text-foreground">
+              {formatCost(currentCost)}/{formatCost(tokenUsage.totalCostUsd)}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Warning if near limit */}
+      {usagePercent >= 80 && (
+        <div className={`mt-2 pt-2 border-t border-border-faint text-xs ${
+          usagePercent >= 95 ? 'text-red-500' : 'text-amber-500'
+        }`}>
+          {usagePercent >= 95
+            ? t('Context will be automatically compressed soon')
+            : t('Approaching context limit')
+          }
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = '' }: TokenUsageIndicatorProps) {
+  const costShown = useTokenCostShown()
   const anchorRef = useRef<HTMLDivElement>(null)
   // Viewport position of the tooltip; null while hidden. Portaled and fixed
   // because transcript rows clip their own paint.
@@ -76,18 +165,7 @@ export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = 
     }
   }, [showTooltip])
 
-  // Current context size, matching CC's /context formula:
-  //   input_tokens + cache_read_input_tokens + cache_creation_input_tokens
-  // output_tokens is excluded — it is the generated reply, not part of the prompt the model saw.
-  const contextUsed = tokenUsage.inputTokens + tokenUsage.cacheReadTokens +
-                      tokenUsage.cacheCreationTokens
-
-  // Defensive: avoid NaN when contextWindow is 0
-  const contextWindow = tokenUsage.contextWindow > 0 ? tokenUsage.contextWindow : 200000
-  const usagePercent = Math.round((contextUsed / contextWindow) * 100)
-
-  // Calculate current message cost
-  const currentCost = tokenUsage.totalCostUsd - previousCost
+  const { contextUsed, contextWindow, usagePercent } = measureUsage(tokenUsage, previousCost)
 
   // The ring shows how full the context is without reading the number; it turns
   // amber, then red, at the same points as the tooltip's warning.
@@ -123,70 +201,7 @@ export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = 
           className="fixed z-50 pointer-events-none animate-fade-in"
           style={{ bottom: tooltipAt.bottom, left: tooltipAt.left }}
         >
-          <div className="bg-popover border border-border rounded-lg shadow-lg p-3 min-w-[180px]">
-            {/* Header */}
-            <div className="text-xs font-medium text-foreground mb-2">
-              {t('Token usage')}
-            </div>
-
-            {/* Progress bar */}
-            <div className="h-1.5 bg-secondary rounded-full mb-2 overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all ${
-                  usagePercent >= 95
-                    ? 'bg-red-500'
-                    : usagePercent >= 80
-                      ? 'bg-amber-500'
-                      : 'bg-primary/60'
-                }`}
-                style={{ width: `${Math.min(usagePercent, 100)}%` }}
-              />
-            </div>
-
-            {/* Usage stats */}
-            <div className="space-y-1 text-xs">
-              <div className="flex justify-between text-muted-foreground">
-                <span>{t('Used / limit')}</span>
-                <span className="text-foreground">
-                  {formatTokens(contextUsed)} / {formatTokens(contextWindow)}
-                </span>
-              </div>
-              <div className="flex justify-between text-muted-foreground">
-                <span>{t('Input')}</span>
-                <span>{formatTokens(tokenUsage.inputTokens)}</span>
-              </div>
-              <div className="flex justify-between text-muted-foreground">
-                <span>{t('Output')}</span>
-                <span>{formatTokens(tokenUsage.outputTokens)}</span>
-              </div>
-              {tokenUsage.cacheReadTokens > 0 && (
-                <div className="flex justify-between text-muted-foreground">
-                  <span>{t('Cache read')}</span>
-                  <span>{formatTokens(tokenUsage.cacheReadTokens)}</span>
-                </div>
-              )}
-              {tokenUsage.totalCostUsd > 0 && (
-                <div className="flex justify-between text-muted-foreground pt-1 border-t border-border-faint">
-                  <span>{t('Current / total')}</span>
-                  <span className="text-foreground">
-                    {formatCost(currentCost)}/{formatCost(tokenUsage.totalCostUsd)}
-                  </span>
-                </div>
-              )}
-            </div>
-
-            {/* Warning if near limit */}
-            {usagePercent >= 80 && (
-              <div className={`mt-2 pt-2 border-t border-border-faint text-xs ${
-                usagePercent >= 95 ? 'text-red-500' : 'text-amber-500'
-              }`}>
-                {usagePercent >= 95
-                  ? t('Context will be automatically compressed soon')
-                  : t('Approaching context limit')
-                }
-              </div>
-            )}
-          </div>
+          <UsageDetails tokenUsage={tokenUsage} previousCost={previousCost} costShown={costShown} />
         </div>,
         document.body
       )}

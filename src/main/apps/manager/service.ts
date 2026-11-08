@@ -919,8 +919,9 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       }
       if (isEngineId(merged.engineId) && ['engineId', 'modelSourceId', 'modelId'].some(key => Object.hasOwn(partial, key))) {
         const sources = getConfig().aiSources
-        const source = sources?.version === 2 ? resolveModelSelection(sources, merged as InstalledApp['userOverrides']).source : null
-        if (source) assertEngineSourceCompatible(merged.engineId, source)
+        const selected = sources?.version === 2 ? resolveModelSelection(sources, merged as InstalledApp['userOverrides']) : null
+        if (selected?.source) assertEngineSourceCompatible(merged.engineId, selected.source)
+        else if (selected?.group) assertEngineSourceCompatible(merged.engineId, { isGroup: true })
       }
       store.updateOverrides(appId, merged as InstalledApp['userOverrides'])
 

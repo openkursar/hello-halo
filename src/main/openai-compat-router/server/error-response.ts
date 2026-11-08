@@ -89,6 +89,11 @@ function resolveStatus(errorType: string, upstreamStatus: number | undefined): n
   return 500
 }
 
+/** The HTTP status an Anthropic error type stands for, when it names one. */
+export function statusForErrorType(errorType: string | undefined): number | undefined {
+  return errorType ? ERROR_STATUS_MAP[errorType] : undefined
+}
+
 /** True when the failure is a spent quota or billing problem, not a passing condition. */
 export function isQuotaExhausted(status: number, errorType: string, message: string): boolean {
   if (status === 402) return true
@@ -98,19 +103,21 @@ export function isQuotaExhausted(status: number, errorType: string, message: str
 
 /**
  * Give an error reply the router's retry headers: none of the backend's
- * hints, and `x-should-retry: false` for a spent quota. Anything else is
- * retried on the client's own rhythm.
+ * hints, and `x-should-retry: false` for a spent quota or when the caller
+ * already used up its alternatives. Anything else is retried on the client's
+ * own rhythm.
  */
 export function applyRetryPolicy(
   res: ExpressResponse,
   status: number,
   errorType: string,
-  message: string
+  message: string,
+  refuseRetry = false
 ): void {
   const relayedHints = BACKEND_RETRY_HINTS.filter((header) => res.hasHeader(header))
   for (const header of relayedHints) res.removeHeader(header)
 
-  const refused = isQuotaExhausted(status, errorType, message)
+  const refused = refuseRetry || isQuotaExhausted(status, errorType, message)
   if (refused) res.setHeader('x-should-retry', 'false')
 
   if (relayedHints.length > 0 || refused) {
@@ -119,23 +126,37 @@ export function applyRetryPolicy(
 }
 
 /**
+ * A response that wants to know what the upstream said beyond the status
+ * (the retry hints the router never relays to its own caller).
+ */
+export interface UpstreamEvidenceSink {
+  noteUpstreamHeaders(headers: Headers): void
+}
+
+function isEvidenceSink(res: unknown): res is UpstreamEvidenceSink {
+  return typeof (res as Partial<UpstreamEvidenceSink>).noteUpstreamHeaders === 'function'
+}
+
+/**
  * Send an error in Anthropic JSON format (HTTP error status + JSON body, not
  * SSE). Pass the upstream status when relaying an upstream failure, so a 429
- * stays a 429.
+ * stays a 429; its headers reach a response that collects them.
  */
 export function sendError(
   res: ExpressResponse,
   errorType: string,
   message: string,
-  upstream?: { status: number }
+  upstream?: { status: number; headers?: Headers },
+  options?: { refuseRetry?: boolean; status?: number }
 ): void {
-  const status = resolveStatus(errorType, upstream?.status)
+  if (upstream?.headers && isEvidenceSink(res)) res.noteUpstreamHeaders(upstream.headers)
+  const status = options?.status ?? resolveStatus(errorType, upstream?.status)
   console.log(`[RequestHandler] Sending error: HTTP ${status} ${errorType} - ${message.slice(0, 100)}`)
 
   res.status(status)
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('request-id', `req_${Date.now()}`)
-  applyRetryPolicy(res, status, errorType, message)
+  applyRetryPolicy(res, status, errorType, message, options?.refuseRetry)
   res.json({
     type: 'error',
     error: { type: errorType, message }

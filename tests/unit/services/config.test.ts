@@ -28,6 +28,7 @@ import {
   initializeApp,
   getCredentialsGeneration,
   onApiConfigChange,
+  onAiSourcesConfigChange,
   migrateCredentialEncryption,
   getCredentialDecodeFailures,
   getFederationGatewayUrl
@@ -122,6 +123,47 @@ describe('Config Service', () => {
   describe('saveConfig', () => {
     beforeEach(async () => {
       await initializeApp()
+    })
+
+    it('publishes saved AI source snapshots synchronously without rereading for subscribers', () => {
+      const savedSnapshots = vi.fn()
+      const stop = onAiSourcesConfigChange(savedSnapshots)
+      try {
+        const aiSources: AISourcesConfig = { version: 2, currentId: null, sources: [], groups: [] }
+        saveConfig({ aiSources })
+        expect(savedSnapshots).toHaveBeenLastCalledWith(aiSources)
+        saveConfig({ appearance: { theme: 'light' } })
+        expect(savedSnapshots).toHaveBeenCalledTimes(1)
+        stop()
+        saveConfig({ aiSources })
+        expect(savedSnapshots).toHaveBeenCalledTimes(1)
+      } finally {
+        stop()
+      }
+    })
+
+    it('does not publish AI sources when the settings cannot be saved', () => {
+      fs.writeFileSync(getConfigPath(), '{broken')
+      const savedSnapshots = vi.fn()
+      const stop = onAiSourcesConfigChange(savedSnapshots)
+      try {
+        saveConfig({ aiSources: { version: 2, currentId: null, sources: [] } })
+        expect(savedSnapshots).not.toHaveBeenCalled()
+      } finally {
+        stop()
+      }
+    })
+
+    it('does not publish AI sources if the atomic replacement cannot be written', () => {
+      const savedSnapshots = vi.fn()
+      const stop = onAiSourcesConfigChange(savedSnapshots)
+      fs.mkdirSync(`${getConfigPath()}.tmp`)
+      try {
+        expect(() => saveConfig({ aiSources: { version: 2, currentId: null, sources: [] } })).toThrow()
+        expect(savedSnapshots).not.toHaveBeenCalled()
+      } finally {
+        stop()
+      }
     })
 
     it('should save config to file', () => {
@@ -530,6 +572,111 @@ describe('Config Service', () => {
       saveConfig({ aiSources: makeApiKeySource(updates) } as any)
       expect(getCredentialsGeneration(sourceId)).not.toBe(before)
       expect(getCredentialsGeneration()).toBe(global)
+    })
+  })
+
+  // A session on a group bakes in only what every member can do, so only changes
+  // to that reach it; the router reads members, order and keys on each request.
+  describe('load-balancing groups', () => {
+    const accountA = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+    const accountB = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+    const groupId = 'gggggggg-gggg-gggg-gggg-gggggggggggg'
+
+    const account = (id: string, extra: Record<string, unknown> = {}) => ({
+      id, name: id, provider: 'custom' as const, authType: 'api-key' as const, apiUrl: 'https://example.com',
+      apiKey: `sk-${id}`, model: 'm1', availableModels: [{ id: 'm1', name: 'M1' }, { id: 'm2', name: 'M2' }],
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', ...extra
+    })
+    const group = (extra: Record<string, unknown> = {}) => ({
+      id: groupId, name: 'Daily', strategy: 'priority' as const,
+      members: [{ sourceId: accountA, modelId: 'm1' }, { sourceId: accountB, modelId: 'm1' }],
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', ...extra
+    })
+    const config = (groups: unknown[], sources = [account(accountA), account(accountB)], extra: Record<string, unknown> = {}) =>
+      ({ version: 2 as const, currentId: accountA, sources, groups, ...extra }) as AISourcesConfig
+
+    const changeAfter = (next: AISourcesConfig) => {
+      const handler = vi.fn()
+      const unsubscribe = onApiConfigChange(handler)
+      try {
+        saveConfig({ aiSources: next })
+        vi.runOnlyPendingTimers()
+      } finally {
+        unsubscribe()
+      }
+      return handler
+    }
+
+    beforeEach(async () => {
+      vi.useFakeTimers()
+      await initializeApp()
+      saveConfig({ aiSources: config([group()]) })
+      vi.runOnlyPendingTimers()
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('tells sessions on a group when a model joins or leaves it', () => {
+      const joined = changeAfter(config([group({ members: [...group().members, { sourceId: accountA, modelId: 'm2' }] })]))
+      expect(joined).toHaveBeenCalledWith({ sourceIds: [groupId], selectionChanged: false })
+      const left = changeAfter(config([group({ members: [{ sourceId: accountB, modelId: 'm1' }] })]))
+      expect(left).toHaveBeenCalledWith({ sourceIds: [groupId], selectionChanged: false })
+    })
+
+    it('tells sessions on a group when a member\'s limits or vision change', () => {
+      const changed = changeAfter(config(
+        [group()],
+        [account(accountA, { modelOverrides: { m1: { contextWindow: 64_000 } } }), account(accountB)]
+      ))
+      expect(changed).toHaveBeenCalledTimes(1)
+      const [change] = changed.mock.calls[0]
+      expect(change.sourceIds).toContain(groupId)
+      expect(change.sourceIds).toContain(accountA)
+    })
+
+    it('tells sessions on a group when it is created or deleted', () => {
+      const other = group({ id: 'other-group', name: 'Other' })
+      expect(changeAfter(config([group(), other]))).toHaveBeenCalledWith({ sourceIds: ['other-group'], selectionChanged: false })
+      expect(changeAfter(config([group()]))).toHaveBeenCalledWith({ sourceIds: ['other-group'], selectionChanged: false })
+    })
+
+    it('does not disturb sessions when only the order, strategy or name changes', () => {
+      expect(changeAfter(config([group({ members: [...group().members].reverse() })]))).not.toHaveBeenCalled()
+      expect(changeAfter(config([group({ strategy: 'spread' })]))).not.toHaveBeenCalled()
+      expect(changeAfter(config([group({ name: 'Renamed', updatedAt: '2026-02-01T00:00:00.000Z' })]))).not.toHaveBeenCalled()
+    })
+
+    it('does not disturb sessions when a member\'s key is edited, because the router reads it per request', () => {
+      const handler = changeAfter(config([group()], [account(accountA, { apiKey: 'sk-rotated' }), account(accountB)]))
+      expect(handler).toHaveBeenCalledWith({ sourceIds: [accountA], selectionChanged: false })
+    })
+
+    it('does not count the chosen group as a change of the selected account', () => {
+      const handler = changeAfter(config([group()], undefined, { currentGroupId: groupId }))
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('moves a group\'s credential epoch when what a session took from it changed, and only then', () => {
+      const before = getCredentialsGeneration(groupId)
+      expect(before).not.toBe(JSON.stringify([getCredentialsGeneration(), groupId, 0]))
+      changeAfter(config([group({ strategy: 'spread', name: 'Renamed' })]))
+      expect(getCredentialsGeneration(groupId)).toBe(before)
+      changeAfter(config([group({ members: [{ sourceId: accountB, modelId: 'm1' }] })]))
+      expect(getCredentialsGeneration(groupId)).not.toBe(before)
+    })
+
+    it('has no epoch for a group that was deleted', () => {
+      changeAfter(config([]))
+      expect(getCredentialsGeneration(groupId)).toBe(JSON.stringify([getCredentialsGeneration(), groupId, 0]))
+    })
+
+    it('repairs damaged stored groups when the configuration is read', () => {
+      const raw = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'))
+      raw.aiSources.groups = [null, { id: '', name: 'x', members: [] }, { ...group(), strategy: 'weird' }]
+      fs.writeFileSync(getConfigPath(), JSON.stringify(raw))
+      expect(getConfig().aiSources?.groups).toEqual([{ ...group(), strategy: 'priority' }])
     })
   })
 })

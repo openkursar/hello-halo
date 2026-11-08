@@ -5,6 +5,15 @@ import {
   getDefaultModel
 } from '../../../src/shared/constants/providers'
 
+describe('protocol entries', () => {
+  it('carry no vendor model defaults', () => {
+    for (const id of ['openai', 'anthropic'] as const) {
+      expect(getBuiltinProvider(id)?.models ?? []).toEqual([])
+      expect(getDefaultModel(id)).toBeUndefined()
+    }
+  })
+})
+
 describe('Atlas Cloud built-in provider', () => {
   it('registers an OpenAI-compatible provider with dynamic model discovery', () => {
     const provider = getBuiltinProvider('atlascloud')
@@ -22,7 +31,7 @@ describe('Atlas Cloud built-in provider', () => {
 
   it('defaults to the cheaper V4 Flash tier, matching the DeepSeek preset ordering', () => {
     expect(getDefaultModel('atlascloud')).toBe('deepseek-ai/deepseek-v4-flash')
-    expect(getBuiltinProvider('atlascloud')?.models.map(model => model.id)).toEqual([
+    expect(getBuiltinProvider('atlascloud')?.models?.map(model => model.id)).toEqual([
       'deepseek-ai/deepseek-v4-flash',
       'deepseek-ai/deepseek-v4-pro',
       'qwen/qwen3.5-27b'
@@ -47,7 +56,7 @@ describe('OrcaRouter built-in provider', () => {
 
   it('defaults to a concrete flagship model, with the virtual auto router last', () => {
     expect(getDefaultModel('orcarouter')).toBe('openai/gpt-5.5')
-    expect(getBuiltinProvider('orcarouter')?.models.map(model => model.id)).toEqual([
+    expect(getBuiltinProvider('orcarouter')?.models?.map(model => model.id)).toEqual([
       'openai/gpt-5.5',
       'google/gemini-3.5-flash',
       'anthropic/claude-opus-4.8',
@@ -77,7 +86,7 @@ describe('Cheaper Inference built-in provider', () => {
 
   it('defaults to the mini tier, with bare model ids', () => {
     expect(getDefaultModel('cheaperinference')).toBe('gpt-5.4-mini')
-    expect(getBuiltinProvider('cheaperinference')?.models.map(model => model.id)).toEqual([
+    expect(getBuiltinProvider('cheaperinference')?.models?.map(model => model.id)).toEqual([
       'gpt-5.4-mini',
       'gpt-5.4',
       'claude-sonnet-5',

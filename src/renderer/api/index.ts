@@ -8,6 +8,7 @@
  */
 import { authApi } from './auth.api'
 import { configApi } from './config.api'
+import { aiGroupsApi } from './ai-groups.api'
 import { spaceApi } from './space.api'
 import { conversationApi } from './conversation.api'
 import { agentApi } from './agent.api'
@@ -38,6 +39,7 @@ import { ccRuntimeApi } from './cc-runtime.api'
 export const api = {
   ...authApi,
   ...configApi,
+  ...aiGroupsApi,
   ...spaceApi,
   ...conversationApi,
   ...agentApi,

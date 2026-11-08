@@ -46,6 +46,8 @@ import { gitRpc } from '../shared/rpc/contracts/git.contract'
 import { browserRpc } from '../shared/rpc/contracts/browser.contract'
 import { codeReviewRpc } from '../shared/rpc/contracts/code-review.contract'
 import { configRpc } from '../shared/rpc/contracts/config.contract'
+import { aiGroupsRpc } from '../shared/rpc/contracts/ai-groups.contract'
+import { GROUP_ROUTE_EVENT, type GroupRouteInfo } from '../shared/types/ai-groups-runtime'
 import { agentRpc } from '../shared/rpc/contracts/agent.contract'
 import { terminalRpc } from '../shared/rpc/contracts/terminal.contract'
 import { artifactRpc } from '../shared/rpc/contracts/artifact.contract'
@@ -153,6 +155,15 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   aiSourcesAddSource: (source: unknown) => Promise<IpcResponse>
   aiSourcesUpdateSource: (sourceId: string, updates: unknown) => Promise<IpcResponse>
   aiSourcesDeleteSource: (sourceId: string) => Promise<IpcResponse>
+
+  // Load-balancing groups
+  aiGroupsCreate: RpcClient<typeof aiGroupsRpc>['aiGroupsCreate']
+  aiGroupsUpdate: RpcClient<typeof aiGroupsRpc>['aiGroupsUpdate']
+  aiGroupsDelete: RpcClient<typeof aiGroupsRpc>['aiGroupsDelete']
+  aiGroupsHealth: RpcClient<typeof aiGroupsRpc>['aiGroupsHealth']
+  aiGroupsReleaseRest: RpcClient<typeof aiGroupsRpc>['aiGroupsReleaseRest']
+  aiGroupsRoutes: RpcClient<typeof aiGroupsRpc>['aiGroupsRoutes']
+  onAIGroupRoute: (callback: (data: GroupRouteInfo) => void) => () => void
 
   // Space
   getHaloSpace: () => Promise<IpcResponse>
@@ -889,6 +900,8 @@ const api: HaloAPI = {
 
   // Config + AI Sources CRUD (derived from configRpc contract)
   ...bindRpc(configRpc),
+  ...bindRpc(aiGroupsRpc),
+  onAIGroupRoute: (callback) => createEventListener(GROUP_ROUTE_EVENT, callback),
   onCredentialDecryptFailed: (callback) => createEventListener('credential:decrypt-failed', callback),
   onModelCatalogChanged: (callback) => createEventListener('ai-sources:catalog-changed', callback),
 

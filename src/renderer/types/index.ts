@@ -38,6 +38,9 @@ export { DEFAULT_MODEL, getCurrentModelName, hasAnyAISource };
 export type {
   AISource,
   AISourcesConfig,
+  AIGroup,
+  AIGroupMember,
+  AIGroupStrategy,
   AISourceUser,
   AISourceType,
   AuthType,
@@ -75,6 +78,8 @@ export {
   findWithdrawnModel,
   activeModelReplacement,
   getSourceById,
+  getGroupById,
+  GROUP_MODEL_ID,
   getSourceAccountName,
   isSourceConfigured,
   createSource,

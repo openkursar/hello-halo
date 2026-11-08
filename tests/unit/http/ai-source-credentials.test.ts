@@ -41,6 +41,27 @@ describe('AI source HTTP credential boundary', () => {
     expect(config.sources[0].accessToken).toBe('private-access')
   })
 
+  describe('choosing a load-balancing group', () => {
+    const answer = async (selected: Record<string, unknown>, sourceId: string) => {
+      manager.switchCurrentSource.mockReturnValue({ ...config, groups: [{ id: 'g1' }], ...selected })
+      const routes = new Map<string, any>()
+      const app = Object.fromEntries(['get', 'post', 'put', 'delete'].map(verb => [verb, (url: string, handler: any) => routes.set(`${verb} ${url}`, handler)]))
+      registerAiSourcesRoutes(app as any)
+      const res = { json: vi.fn() }
+      await routes.get('post /api/ai-sources/switch-source')({ body: { sourceId } }, res)
+      return res.json.mock.calls[0][0]
+    }
+
+    it('takes a group as the choice while the account in use stays', async () => {
+      expect(await answer({ currentGroupId: 'g1' }, 'g1')).toMatchObject({ success: true, data: { currentId: 'a', currentGroupId: 'g1' } })
+    })
+
+    it('refuses an id that is neither, and the account kept for a chosen group', async () => {
+      expect(await answer({}, 'nope')).toEqual({ success: false, error: 'Source not found: nope' })
+      expect(await answer({ currentGroupId: 'g1' }, 'a')).toMatchObject({ success: false })
+    })
+  })
+
   it.each([
     ['post', '/api/ai-sources/switch-source'],
     ['post', '/api/ai-sources/set-model'],

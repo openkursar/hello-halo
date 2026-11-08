@@ -24,6 +24,8 @@
 
 import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
+import { registerAiGroupsHandlers } from '../ipc/ai-groups'
+import { GROUP_ROUTE_EVENT } from '../../shared/types/ai-groups-runtime'
 import { powerMonitor } from 'electron'
 import { registerSecurityHandlers } from '../ipc/security'
 import { enableRemoteAccess, enableTunnel } from '../services/remote'
@@ -51,7 +53,7 @@ import {
   isNativeConversationBusy,
 } from '../services/conversation-interop'
 import { setConversationInteropFactory } from '../services/agent/toolsets/broker'
-import { getAISourceManager, watchCatalogSignals } from '../services/ai-sources'
+import { getAISourceManager, startGroupRouting, watchCatalogSignals } from '../services/ai-sources'
 import { setRequestCredentialResolver } from '../openai-compat-router'
 import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '../services/memory-consolidation'
 import { markExtendedServicesReady } from './state'
@@ -144,6 +146,7 @@ let onSystemResume: (() => void) | null = null
 let stopReleasingTeamMail: (() => void) | null = null
 let taskStateService: Awaited<ReturnType<typeof initTaskState>> | null = null
 let stopModelCatalogFreshness: (() => void) | null = null
+let stopGroupRouting: (() => void) | null = null
 
 /**
  * Tell every window and remote client how an office stands (see
@@ -1482,6 +1485,14 @@ export function initializeExtendedServices(): void {
   // this line use the credential they were created with, which is still current.
   setRequestCredentialResolver((sourceId, model) => getAISourceManager().resolveRequestCredentials(sourceId, model))
 
+  // Load-balancing groups: the router learns what a group is, and what it reports
+  // about a conversation's model reaches every window (IPC) and remote client (WS).
+  registerAiGroupsHandlers()
+  stopGroupRouting = startGroupRouting(info => {
+    sendToRenderer(GROUP_ROUTE_EVENT, info)
+    broadcastToAll(GROUP_ROUTE_EVENT, { ...info })
+  })
+
   // Model lists follow the provider without anyone pressing refresh: startup,
   // focus and wake ask for out-of-date catalogs, and a changed list reaches
   // every window (IPC) and remote client (WS).
@@ -1706,6 +1717,8 @@ export async function cleanupExtendedServices(): Promise<void> {
 
     stopModelCatalogFreshness?.()
     stopModelCatalogFreshness = null
+    stopGroupRouting?.()
+    stopGroupRouting = null
 
     // Store: Shutdown registry service (before app manager)
     shutdownRegistryService()

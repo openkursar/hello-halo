@@ -34,6 +34,17 @@ const defaultInterceptors: RequestInterceptor[] = [
   imageBudgetInterceptor,
 ]
 
+/** Interceptors that answer a request themselves, so no model is ever asked. */
+const localAnswerInterceptors: RequestInterceptor[] = [warmupInterceptor, preflightInterceptor]
+
+/**
+ * Whether the request is one the router answers on its own (warmup, preflight).
+ * Such a request needs no model, so no member of a group should be chosen for it.
+ */
+export function answersLocally(request: AnthropicRequest, context: InterceptorContext): boolean {
+  return localAnswerInterceptors.some(interceptor => interceptor.shouldIntercept(request, context))
+}
+
 /**
  * Run request through interceptor chain
  *

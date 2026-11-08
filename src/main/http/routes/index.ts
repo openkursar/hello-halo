@@ -9,6 +9,7 @@
 import type { Express } from 'express'
 import { registerConfigRoutes } from './config.routes'
 import { registerAiSourcesRoutes } from './ai-sources.routes'
+import { registerAiGroupsRoutes } from './ai-groups.routes'
 import { registerSpaceRoutes } from './space.routes'
 import { registerAgentRoutes } from './agent.routes'
 import { registerTerminalRoutes } from './terminal.routes'
@@ -30,6 +31,7 @@ import { registerCodeReviewRoutes } from './code-review.routes'
 export function registerApiRoutes(app: Express): void {
   registerConfigRoutes(app)
   registerAiSourcesRoutes(app)
+  registerAiGroupsRoutes(app)
   registerSpaceRoutes(app)
   registerAgentRoutes(app)
   registerTerminalRoutes(app)

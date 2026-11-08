@@ -12,13 +12,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AISource, BackendRequestConfig } from '../../../../src/shared/types/ai-sources'
+import type { AIGroup, AISource, BackendRequestConfig } from '../../../../src/shared/types/ai-sources'
 
 const { sourceState, manager } = vi.hoisted(() => {
   const sourceState = {
     currentId: '',
     sources: new Map<string, AISource>(),
     backends: new Map<string, BackendRequestConfig>(),
+    groups: new Map<string, AIGroup>(),
   }
   const manager = {
     ensureInitialized: vi.fn(async () => {}),
@@ -33,7 +34,7 @@ const { sourceState, manager } = vi.hoisted(() => {
   return { sourceState, manager }
 })
 
-vi.mock('../../../../src/main/services/ai-sources', () => ({ getAISourceManager: () => manager }))
+vi.mock('../../../../src/main/services/ai-sources', () => ({ getGroup: (id: string) => sourceState.groups.get(id) ?? null, getAISourceManager: () => manager }))
 
 // Newly reachable via ai-sources/manager.ts or mcp-manager.ts pulling in
 // analytics.service.ts (which statically imports providers/baidu.ts's
@@ -149,6 +150,7 @@ describe('account-specific credential resolution', () => {
   beforeEach(() => {
     sourceState.sources.clear()
     sourceState.backends.clear()
+    sourceState.groups.clear()
     sourceState.currentId = 'account-a'
     addAccount('account-a', 100_000)
     addAccount('account-b', 150_000)
@@ -214,6 +216,30 @@ describe('account-specific credential resolution', () => {
     expect(manager.getBackendConfigForSource).toHaveBeenCalledWith('account-a', 'alternate-model')
     expect(credentials).toMatchObject({ sourceId: 'account-a', model: 'alternate-model', capabilities: { contextWindow: 200_000 } })
     expect(source.model).toBe('gpt-test')
+  })
+
+  it('resolves a selection that names a group to the group alone, without asking any account for a credential', async () => {
+    sourceState.groups.set('group-1', {
+      id: 'group-1', name: 'Daily', strategy: 'priority', createdAt: '', updatedAt: '',
+      members: [{ sourceId: 'account-a', modelId: 'gpt-test' }, { sourceId: 'account-b', modelId: 'gpt-test' }],
+    })
+    const credentials = await getApiCredentialsForSelection({ modelSourceId: 'group-1', modelId: 'halo-auto' })
+    expect(credentials).toMatchObject({
+      sourceId: 'group-1', isGroup: true, model: 'halo-auto', displayModel: 'Daily',
+      capabilities: { contextWindow: 100_000 },
+    })
+    expect(manager.ensureValidToken).not.toHaveBeenCalled()
+    expect(manager.getBackendConfigForSource).not.toHaveBeenCalled()
+    expect(credentialsToBackendConfig(credentials)).toMatchObject({ sourceId: 'group-1', model: 'halo-auto' })
+  })
+
+  it('fails a group none of whose accounts can serve rather than using the selected account', async () => {
+    sourceState.groups.set('group-1', {
+      id: 'group-1', name: 'Daily', strategy: 'priority', createdAt: '', updatedAt: '',
+      members: [{ sourceId: 'removed-account', modelId: 'old-model' }],
+    })
+    await expect(getApiCredentialsForSelection({ modelSourceId: 'group-1' })).rejects.toThrow('None of the models in "Daily"')
+    expect(manager.getCurrentSourceConfig).not.toHaveBeenCalled()
   })
 
   it('resolves a selection without a source to the selected account', async () => {

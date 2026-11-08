@@ -1,9 +1,9 @@
 {
-  "totalRoutes": 308,
+  "totalRoutes": 314,
   "expose": {
     "ai": 194,
     "wrapped": 11,
-    "internal": 103,
+    "internal": 109,
     "unlabeled": 0
   },
   "groups": {
@@ -20,6 +20,7 @@
   "files": [
     "config",
     "ai-sources",
+    "ai-groups",
     "space",
     "agent",
     "terminal",

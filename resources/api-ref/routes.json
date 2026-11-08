@@ -79,6 +79,30 @@
     "group": "settings"
   },
   {
+    "method": "POST",
+    "path": "/api/ai-groups"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/ai-groups/:groupId"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/ai-groups/:groupId"
+  },
+  {
+    "method": "GET",
+    "path": "/api/ai-groups/:groupId/health"
+  },
+  {
+    "method": "POST",
+    "path": "/api/ai-groups/:groupId/release-rest"
+  },
+  {
+    "method": "POST",
+    "path": "/api/ai-groups/routes"
+  },
+  {
     "method": "GET",
     "path": "/api/spaces/halo",
     "group": "workspace"

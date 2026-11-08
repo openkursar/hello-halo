@@ -36,9 +36,11 @@ Services Layer (src/main/services)
   - openai-compat-router (src/main/openai-compat-router) sits in this tier:
     services/agent starts it and encodes backend configs through its index;
     it depends on services only through the standalone proxy-fetch utility,
-    never through a domain service. Its one runtime seam is the request
-    credential resolver ai-sources registers at bootstrap, which gives each
-    proxied request its account's current token. It owns the Claude Code identity sent
+    never through a domain service. Its runtime seams are the request
+    credential resolver, which gives each proxied request its account's
+    current token, and the group plan resolver (`setGroupPlanResolver`), which
+    names the members of a load-balancing group; ai-sources registers both at
+    bootstrap. It owns the Claude Code identity sent
     upstream (utils/claude-code-identity), which services/agent reads
     through the router's index.
 
@@ -372,7 +374,7 @@ All channels follow `module:action` format. Modules are organized by functional 
 
 | Area | IPC modules |
 |------|-------------|
-| Auth & config | `auth`, `config`, `cli-config`, `model-capabilities` |
+| Auth & config | `auth`, `config`, `cli-config`, `model-capabilities`, `ai-groups` (+ `ai-sources:group-route` event) |
 | Conversation & agent | `conversation`, `agent` (incl. `agent:toolsets-*` + `toolsets:changed` event) |
 | Terminal | `terminal` (`terminal:list/create/input/resize/kill/replay` + `terminal:data`/`terminal:lifecycle` events) |
 | Space & artifact | `space`, `artifact`, `search`, `git` (the changes view: `git:*` typed-RPC channels, failures carry a `GitErrorCode`; remote twin `POST /api/git/*`), `code-review` (the changes view's review buttons: `code-review:start/get-latest/availability`; remote twin `/api/code-review/*`) |
@@ -409,6 +411,37 @@ vendor (never a fallback list) also records `withdrawnModels` and
 `modelReplacement` on the source; nothing else writes them, and setting the
 account's model clears the replacement. Every picker renders these through
 `renderer/components/ai-config/model-list-parts.tsx`.
+
+**Load-balancing groups** (`aiSources.groups` + `currentGroupId`) are an
+ordered list of account × model pairs offered as one choice. The group's id is
+the `modelSourceId` of a conversation pin or digital-human override and its one
+model id is `GROUP_MODEL_ID` (`halo-auto`); `resolveModelSelection` answers a
+third shape, `{ source: null, group }`. A group holds no credential and is not
+an `AISource`: the engine is started against a placeholder backend
+(`services/agent/group-credentials.ts`, the one agent touch, behind
+`getApiCredentialsForSelection`) whose capabilities are the smallest every
+member offers, and the router picks the member per request — plan from
+`ai-sources/group-plan.ts`, failover and rests from
+`openai-compat-router/balancing` (policy: its DESIGN.md) behind
+`server/group-dispatch.ts`. Group plans read a memory snapshot seeded at startup;
+`foundation/config.service` publishes successful AI-source saves synchronously through
+`onAiSourcesConfigChange`, so account/group edits invalidate that snapshot without
+request-time disk reads or engine-session invalidation. A session bakes only that capability envelope, so
+`getAiSourcesChange` names the group only when the envelope changes: editing
+order, strategy, name or a key never rebuilds a session. Groups are written only
+through `controllers/ai-groups.controller.ts` (`ai-groups:*` IPC and
+`/api/ai-groups*`; whole-config saves can never overwrite them,
+`preserveManagedSources`); deleting an account prunes it from every group. The
+Codex engine and the CLI-delegated account cannot take part
+(`shared/engine-source.ts` `isGroup`). The router reports which member serves
+each conversation as `ai-sources:group-route` (IPC + WS, once per change, to
+every client); the renderer follows it only while a conversation on a group is
+on screen (`stores/ai-group-route.store.ts`). UI lives in
+`renderer/components/ai-groups/`: the editor and cards in settings, the model
+card in the picker, one quiet line above the composer while a switch is waited
+for — nothing is ever added to the chat. Not recorded yet: which model answered
+each reply, the dollar figures of a group chat (the engine prices by one fixed
+model, so they are left out), and rests across restarts.
 
 Two types:
 - **Request/Response** (renderer → main): registered via `ipcMain.handle()`
@@ -777,6 +810,11 @@ SDK (Anthropic format)
 ```
 
 Location: `src/main/openai-compat-router/`
+
+A request whose backend config names a load-balancing group is served by
+`server/group-dispatch.ts`: members are tried in the order `balancing/` gives,
+each behind a stand-in response, and the engine only sees the reply that carried
+content (contract: `balancing/DESIGN.md`).
 
 ## 15) Local Storage Layout
 

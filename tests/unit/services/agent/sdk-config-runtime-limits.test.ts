@@ -24,6 +24,8 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 }))
 
 import { resolveSdkRuntimeLimits } from '../../../../src/main/services/agent/sdk-config'
+import { resolveGroupCredentials } from '../../../../src/main/services/agent/group-credentials'
+import type { AIGroup, AISource } from '../../../../src/shared/types/ai-sources'
 
 describe('resolveSdkRuntimeLimits', () => {
   let warnSpy: MockInstance<Parameters<typeof console.warn>, void>
@@ -132,6 +134,30 @@ describe('resolveSdkRuntimeLimits', () => {
       })
     ).toEqual({ autoCompactWindow: 200_000 })
     expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it.each([true, false])('keeps the known output cap of a mixed group (known first: %s)', knownFirst => {
+    const sources = ['known', 'unknown'].map(id => ({
+      id, name: id, provider: 'custom', authType: 'api-key', apiKey: 'fixture',
+      apiUrl: 'https://example.invalid', model: 'model', availableModels: [], createdAt: '', updatedAt: '',
+    } satisfies AISource))
+    const members = sources.map(source => ({ sourceId: source.id, modelId: source.model }))
+    const group: AIGroup = {
+      id: 'group', name: 'Mixed', strategy: 'priority', createdAt: '', updatedAt: '',
+      members: knownFirst ? members : members.reverse(),
+    }
+    const credentials = resolveGroupCredentials(group, {
+      readSource: id => sources.find(source => source.id === id) ?? null,
+      capabilitiesOf: source => ({
+        contextWindow: 200_000,
+        maxOutputTokens: source.id === 'known' ? 8_192 : 64_000,
+        maxOutputTokensConfigured: source.id === 'known',
+      }),
+      credentialsGeneration: () => 1,
+    })
+    expect(resolveSdkRuntimeLimits(credentials.capabilities)).toEqual({
+      maxOutputTokens: 8_192, autoCompactWindow: 200_000,
+    })
   })
 
   it('does not warn about a low fallback the user never chose', () => {

@@ -11,6 +11,7 @@ import {
 import { isCatalogModelCapability } from '../../../shared/model-catalog'
 import { validateModelCapabilityOverrides } from '../../../shared/model-capability-overrides'
 import { maskConfigFields } from '../../foundation/config-encryption'
+import { isSelected } from '../../../shared/types'
 
 export function registerAiSourcesRoutes(app: Express): void {
   // ===== AI Sources CRUD Routes (atomic operations) =====
@@ -26,7 +27,7 @@ export function registerAiSourcesRoutes(app: Express): void {
         res.json(notSaved)
         return
       }
-      if (result.currentId !== sourceId) {
+      if (!isSelected(result, sourceId)) {
         res.json({ success: false, error: `Source not found: ${sourceId}` })
         return
       }

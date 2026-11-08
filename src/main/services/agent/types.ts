@@ -103,6 +103,11 @@ export interface ApiCredentials {
    * with HTTP 400. undefined = router falls back to supportsVisionById. (#139)
    */
   supportsVision?: boolean
+  /**
+   * The credentials stand for a load-balancing group, not one account: the
+   * router picks the account and model per request. `sourceId` is the group's id.
+   */
+  isGroup?: boolean
 }
 
 // ============================================

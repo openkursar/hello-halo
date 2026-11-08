@@ -44,7 +44,7 @@ vi.mock('../../../../src/main/openai-compat-router', async () => ({
 vi.mock('../../../../src/main/services/ai-sources', async () => {
   const { getConfig } = await import('../../../../src/main/foundation/config.service')
   const getSource = (id: string) => getConfig().aiSources?.sources.find(source => source.id === id) ?? null
-  return { getAISourceManager: () => ({
+  return { getGroup: () => null, getAISourceManager: () => ({
     ensureInitialized: async () => {},
     getCurrentSourceConfig: () => getSource(getConfig().aiSources!.currentId!),
     getSourceConfig: getSource,

@@ -133,6 +133,36 @@ describe('config IPC model fetching', () => {
     expect(saveConfig).toHaveBeenLastCalledWith({ aiSources: { version: 2, currentId: 'a', sources: [live] } })
   })
 
+  describe('choosing what new conversations start on', () => {
+    const accounts = [{ id: 'a', name: 'Account A' }, { id: 'b', name: 'Account B' }]
+    const groups = [{ id: 'g1', name: 'Daily', strategy: 'priority', members: [], createdAt: '', updatedAt: '' }]
+
+    async function choose(selected: Record<string, unknown>, id: string) {
+      vi.mocked(getAISourceManager).mockReturnValue({
+        switchCurrentSource: vi.fn(() => ({ version: 2, sources: accounts, groups, ...selected })),
+      } as any)
+      registerConfigHandlers()
+      return registerRawRpcHandlersMock.mock.calls.at(-1)![1].aiSourcesSwitchSource(id)
+    }
+
+    it('accepts a group: the account in use stays, and the group is what is chosen', async () => {
+      const answer = await choose({ currentId: 'a', currentGroupId: 'g1' }, 'g1')
+      expect(answer).toMatchObject({ success: true, data: { currentId: 'a', currentGroupId: 'g1' } })
+    })
+
+    it('accepts an account, which leaves any chosen group', async () => {
+      expect(await choose({ currentId: 'b' }, 'b')).toMatchObject({ success: true, data: { currentId: 'b' } })
+    })
+
+    it('refuses what is neither an account nor a group', async () => {
+      expect(await choose({ currentId: 'a' }, 'nope')).toEqual({ success: false, error: 'Source not found: nope' })
+    })
+
+    it('does not take the account that was kept for a choice of the group', async () => {
+      expect(await choose({ currentId: 'a', currentGroupId: 'g1' }, 'a')).toMatchObject({ success: false })
+    })
+  })
+
   it('answers "not saved" while the config file cannot be read, for settings and model sources alike', async () => {
     vi.mocked(getConfig).mockReturnValue({} as any)
     vi.mocked(getAISourceManager).mockReturnValue({

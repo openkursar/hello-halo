@@ -25,6 +25,8 @@ import type {
 } from '../../../shared/interfaces'
 import {
   getCurrentSource,
+  getGroupById,
+  removeSourceFromGroups,
   createEmptyAISourcesConfig,
   resolveLocalizedText,
   toPublicOAuthStartResult,
@@ -63,12 +65,13 @@ import { loadAuthProvidersAsync } from './auth-loader'
 import { loadProductConfig } from '../../foundation/product-config'
 import { decryptString } from '../../foundation/secure-storage.service'
 import { MASK_SENTINEL } from '../../foundation/config-encryption'
-import { normalizeApiUrl, type RequestCredentials } from '../../openai-compat-router'
+import { normalizeApiUrl, resetGroupSource, type RequestCredentials } from '../../openai-compat-router'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 import { Emitter, type Event } from '../../platform/event'
 import { CatalogSchedule } from './catalog-schedule'
 import { catalogModel, presentationMap, recordCatalogChange } from './catalog-models'
+import { selectGroup } from './groups'
 
 /**
  * Extended OAuth provider interface for token management
@@ -132,6 +135,9 @@ const OAUTH_LOGIN_TIMEOUT_MS = 10 * 60 * 1000
 /** Providers renew a token minutes before it expires, so a minute-old answer is still current. */
 const REQUEST_CREDENTIAL_RECHECK_MS = 60_000
 const ACCOUNT_REMOVED_ERROR = 'This account was removed. The next message runs on the current account.'
+const MEMBER_REMOVED_ERROR = 'This account was removed.'
+/** Models of groups, at most `MAX_GROUP_MEMBERS` per group; the oldest answers go first. */
+const MAX_MEMBER_BACKENDS = 128
 /** Upper bound on waiting for a superseded login whose provider work cannot be interrupted. */
 const OAUTH_SUPERSEDE_DRAIN_MS = 15_000
 
@@ -184,6 +190,8 @@ class AISourceManager {
   readonly onModelCatalogChanged: Event<ModelCatalogChangedEvent> = this.catalogChanged.event
   /** Keyed by source and model; see resolveRequestCredentials. */
   private requestCredentials = new Map<string, { sourceId: string; credentials: RequestCredentials | null; checkedAt: number }>()
+  /** What a group's member was last asked with, kept for the same minute as `requestCredentials`. */
+  private memberBackends = new Map<string, { sourceId: string; backend: BackendRequestConfig; checkedAt: number }>()
 
   constructor() {
     // Register built-in providers immediately
@@ -591,7 +599,7 @@ class AISourceManager {
 
     const newSources = [...aiSources.sources, source]
     const newConfig: AISourcesConfig = {
-      version: 2,
+      ...aiSources,
       currentId: aiSources.currentId || source.id,
       sources: newSources
     }
@@ -676,7 +684,11 @@ class AISourceManager {
       delete metadata.profileArn
       delete metadata.modelCatalogCache
     }
-    return this.writeSource(sourceId, metadata)
+    // A rest learned about the old key or endpoint says nothing about the new one.
+    const changesAccess = (['apiKey', 'apiUrl', 'apiType'] as const).some(field => metadata[field] !== undefined && metadata[field] !== source[field])
+    const result = this.writeSource(sourceId, metadata)
+    if (changesAccess) resetGroupSource(sourceId)
+    return result
   }
 
   private writeSource(sourceId: string, updates: Partial<AISource>): AISourcesConfig {
@@ -705,6 +717,7 @@ class AISourceManager {
     this.tokenRefreshes.delete(sourceId)
     this.catalogRefreshes.delete(sourceId)
     this.dropRequestCredentials([sourceId])
+    resetGroupSource(sourceId)
     for (const [providerType, login] of this.logins) {
       if (login.sourceId === sourceId) void this.abandonLogin(providerType, login)
     }
@@ -716,10 +729,13 @@ class AISourceManager {
       newCurrentId = newSources.length > 0 ? newSources[0].id : null
     }
 
+    // A group keeps working with the models that remain; one left empty stays for its owner to repair.
+    const groups = removeSourceFromGroups(aiSources.groups, sourceId)
     const newConfig: AISourcesConfig = {
-      version: 2,
+      ...aiSources,
       currentId: newCurrentId,
-      sources: newSources
+      sources: newSources,
+      ...(groups ? { groups } : {})
     }
 
     saveConfig({ aiSources: newConfig } as any)
@@ -731,7 +747,7 @@ class AISourceManager {
   /**
    * Set current source
    */
-  setCurrentSource(sourceId: string): AISourcesConfig {
+  setCurrentSource(sourceId: string, options?: { clearGroup?: boolean }): AISourcesConfig {
     const aiSources = this.getAiSourcesConfig()
 
     if (!aiSources.sources.some(s => s.id === sourceId)) {
@@ -739,9 +755,11 @@ class AISourceManager {
       return aiSources
     }
 
+    const { currentGroupId, ...rest } = aiSources
     const newConfig: AISourcesConfig = {
-      ...aiSources,
-      currentId: sourceId
+      ...rest,
+      currentId: sourceId,
+      ...(currentGroupId && !options?.clearGroup ? { currentGroupId } : {})
     }
 
     saveConfig({ aiSources: newConfig } as any)
@@ -769,7 +787,9 @@ class AISourceManager {
    * covered from one call site.
    */
   switchCurrentSource(sourceId: string): AISourcesConfig {
-    const result = this.setCurrentSource(sourceId)
+    // Choosing a group leaves the selected account alone: features that cannot use a group keep running on it.
+    if (getGroupById(this.getAiSourcesConfig(), sourceId)) return selectGroup(sourceId)
+    const result = this.setCurrentSource(sourceId, { clearGroup: true })
     if (result.currentId === sourceId) {
       const switched = getCurrentSource(result)
       void analytics.track(AnalyticsEvents.SETTINGS_SOURCE_SWITCH, {
@@ -1135,6 +1155,7 @@ class AISourceManager {
       this.tokenRefreshes.delete(id)
       this.catalogRefreshes.delete(id)
       this.dropRequestCredentials([id])
+      if (existing) resetGroupSource(id)
       ids.push(id)
       if (!existing) addedIds.push(id)
     }
@@ -1276,14 +1297,47 @@ class AISourceManager {
     return credentials
   }
 
+  /**
+   * A group member's backend config with its account's current credential.
+   * Rejects, with a reason a person can act on, when the account cannot serve.
+   */
+  async resolveMemberBackend(sourceId: string, modelId: string): Promise<BackendRequestConfig> {
+    const key = `${sourceId}\u0000${modelId}`
+    const cached = this.memberBackends.get(key)
+    if (cached && Date.now() - cached.checkedAt < REQUEST_CREDENTIAL_RECHECK_MS) return cached.backend
+
+    const source = this.getSourceConfig(sourceId)
+    if (!source) throw new Error(MEMBER_REMOVED_ERROR)
+    if (source.authType === 'delegated') throw new Error('This account cannot be used in a group.')
+    if (source.authType === 'oauth') {
+      if (!source.accessToken) throw new Error('This account is signed out. Sign in again to continue.')
+      const token = await this.ensureValidToken(sourceId, modelId)
+      if (!token.success) {
+        if (!this.getSourceConfig(sourceId)) throw new Error(MEMBER_REMOVED_ERROR)
+        // The renewal may have failed transiently; the stored token can still be valid, and if it is not the provider's answer rests the account.
+        console.warn(`[AISourceManager] Member credential not renewed: source=${sourceId} ${token.error ?? 'unknown error'}; using the stored token`)
+      }
+    } else if (!source.apiKey) {
+      throw new Error('This account has no API key.')
+    }
+    const backend = this.getBackendConfigForSource(sourceId, modelId)
+    if (!backend) throw new Error('This account is not configured.')
+    if (this.memberBackends.size >= MAX_MEMBER_BACKENDS) this.memberBackends.delete(this.memberBackends.keys().next().value as string)
+    this.memberBackends.set(key, { sourceId, backend, checkedAt: Date.now() })
+    return backend
+  }
+
   /** Undefined drops every cached answer. */
   private dropRequestCredentials(sourceIds?: string[]): void {
     if (!sourceIds) {
       this.requestCredentials.clear()
+      this.memberBackends.clear()
       return
     }
-    for (const [key, entry] of this.requestCredentials) {
-      if (sourceIds.includes(entry.sourceId)) this.requestCredentials.delete(key)
+    for (const cache of [this.requestCredentials, this.memberBackends]) {
+      for (const [key, entry] of cache) {
+        if (sourceIds.includes(entry.sourceId)) cache.delete(key)
+      }
     }
   }
 
@@ -1314,8 +1368,8 @@ class AISourceManager {
         return source
       }
 
-      const builtin = getBuiltinProvider(source.provider)
-      if (!builtin || builtin.models.length === 0) return source
+      const builtinModels = getBuiltinProvider(source.provider)?.models ?? []
+      if (builtinModels.length === 0) return source
 
       const existing = source.availableModels || []
       if (existing.length === 0) return source
@@ -1324,13 +1378,13 @@ class AISourceManager {
       // If the user fetched custom models via "Fetch Models", there will be model IDs
       // not present in BUILTIN_PROVIDERS — in that case, skip sync to avoid injecting
       // irrelevant defaults into a custom model list.
-      const builtinIds = new Set(builtin.models.map(m => m.id))
+      const builtinIds = new Set(builtinModels.map(m => m.id))
       const hasUserModels = existing.some(m => !builtinIds.has(m.id))
       if (hasUserModels) return source
 
       // All existing models are from builtin — safe to replace with latest builtin list
       const existingIds = new Set(existing.map(m => m.id))
-      const newModels = builtin.models.filter(m => !existingIds.has(m.id))
+      const newModels = builtinModels.filter(m => !existingIds.has(m.id))
       if (newModels.length === 0) return source
 
       dirty = true
@@ -1338,7 +1392,7 @@ class AISourceManager {
 
       return {
         ...source,
-        availableModels: [...builtin.models]
+        availableModels: [...builtinModels]
       }
     })
 
