@@ -25,7 +25,8 @@ Check whether the target repository is public or private before writing.
 
 Internal material — handoff checklists, release status, who reported what, user
 follow-ups, infrastructure notes — belongs in the maintainers' private tracker
-or local notes. If you do not know where that is, ask the owner. Never name or
+or in `local_docs/` (git-ignored). If you do not know where else it goes, ask the
+owner. Never name or
 link the private location from public content.
 
 ## Never in public
@@ -77,7 +78,8 @@ Every action on a public repository reaches other people.
   watcher; do it only on the owner's instruction. Workflow logs of a public
   repository are public, so never pass internal data as a workflow input there.
 - **Pushing.** Push only what the owner authorized, to the branch they named,
-  and read the commit messages being pushed against the list above.
+  and read the commit messages being pushed against the list above. Also open
+  each new file the commits add; a pushed file is public like a post.
 
 ## Before you post
 

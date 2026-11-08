@@ -55,6 +55,7 @@ Check whether any files that should not be committed are included in the changes
 - IDE configs: non-shared files under `.idea/`, `.vscode/`, etc.
 - Build artifacts: `node_modules/`, `dist/`, `build/`, etc.
 - Sensitive files: `.env`, `credentials.json`, private keys, etc.
+- Internal working documents (briefs, handoffs, plans, notes on closed code, or anything else not meant for the public): open every new file, including untracked ones that `git diff` hides. If it is internal, do not stage it.
 
 #### 2.4 Internationalization & Open-source Readiness
 
@@ -101,7 +102,7 @@ git add <relevant files>
 git commit -m "<generated commit message>"
 ```
 
-- Only stage files that pass the checks. Do not blindly `git add .`.
+- Only stage files that pass the checks. Stage by explicit file path; never `git add .`, `-A`, or a directory, which sweeps in stray files.
 - Run `git status` after committing to verify.
 
 ## Notes

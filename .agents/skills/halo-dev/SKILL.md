@@ -59,6 +59,10 @@ When docs and code differ:
 2. Module design docs (`src/main/apps/*/DESIGN.md`, `src/main/platform/*/DESIGN.md`)
 3. `quick.md`, `ARCHITECTURE.md`, `CONTEXT.md`
 
+## Where Documents Go
+
+The repository is public. Internal working documents (briefs, handoffs, plans, specs for unreleased work, anything about closed code, review notes; judged by the `gh-publish` "Never in public" list) never go in a tracked folder. Keep them in `local_docs/features/<feature>/`, or outside the repo if throwaway. Unsure: keep it outside and ask.
+
 ## Keeping These Documents Updated
 
 After completing a development task, evaluate whether these documents need updating. Apply the following rules:

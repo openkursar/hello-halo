@@ -23,6 +23,7 @@ Always design with high maintainability and modularity, aligned with long-term a
 - Code must stand alone — no planning labels (`E1`, `F2`, `Phase X`, etc.), no chat-session IDs, no ceremonial prefixes (`Full-chain X:`, `Helper:`, `Section:`) in code or comments. If a comment only makes sense to someone who saw the design conversation, it's wrong.
 - **IMPORTANT** — Comments convey context that readers cannot obtain from the code itself. Default is not needed; only add when the code itself cannot convey information. Each comment should be as brief as possible, avoid being too long, and must not carry sensitive information such as internal documents, corporate information, personal information, etc.
 - Variable naming follows existing-code observation. Underscore prefix (`_name`) is reserved for intentionally-unused identifiers (e.g. `_event` in IPC handlers). Scan 2–3 sibling files for established style before naming a new local.
+- This repository is public. Internal working documents (briefs, handoffs, plans, specs for unreleased work, anything about closed code) never go in a tracked folder such as `docs/`; see "Where Documents Go" in the halo-dev skill.
 - do not use ask tool
 - Discuss and reply in the user's language (code, comments and commit messages stay in English).
 - Never run raw `git commit`. All commits go through the `code-commit` skill, and only when the human explicitly triggers or authorizes it — never on your own initiative.
