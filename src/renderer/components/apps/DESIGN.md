@@ -131,6 +131,14 @@ without hover. Errors are explicit and retain the last useful records and drafts
 No view claims that a connection failure, missing event or absent team implies a
 closed request or a stalled execution.
 
+An MCP connection's detail card exposes Halo SDK tool loading and a capability
+description through `McpContextSettings`, independently of connection health or
+an active conversation. It uses the existing shared-resource impact dialog and
+override API; unchanged fields are omitted from the patch. Failed saves retain
+the draft. Loading choices do not grant tools, and the card explains that older
+conversations retain their original context and other engines keep their own
+loading behavior.
+
 `PeopleInbox` reads a bounded aggregate pending query, including team coordinators
 that are intentionally absent from the people directory. Stopped people ride the
 same response, unpaginated — one row each, held until the owner acts — and are

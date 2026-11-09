@@ -84,7 +84,7 @@ test('in its own chat a digital human reads its team live, is refused an unnamed
   const firstPrompt = promptOf(first)
   expect(firstPrompt).toContain('Your standing teams')
   expect(firstPrompt).toContain(`Release crew ${token} (teamId ${team.id}) — your role: Release coordinator (lead)`)
-  expect(firstPrompt).toContain('This chat is your own, outside all of them.')
+  expect(firstPrompt).toContain('This conversation has its own work context. These memberships do not change it.')
   expect(firstPrompt).toContain(`$HALO_API_URL/api/teams/<teamId>/conversations`)
 
   const result = (id: string) => askerRequests.flatMap(request => request.toolResults).find(item => item.id === id)

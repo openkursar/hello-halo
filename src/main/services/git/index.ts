@@ -11,7 +11,7 @@
 
 export { GitError, isGitError } from './errors'
 export { getGitAvailability } from './locate'
-export { listRepositories, resolveRepository, discoverRepository, openRepository, forgetRepository } from './repositories'
+export { listRepositories, resolveRepository, discoverRepository, openRepository } from './repositories'
 export { getWorkingTreeStatus } from './status'
 /** `assertCompareScope` validates a scope from a client (throws GIT_INVALID_ARGUMENT), revision syntax included. */
 export { getChangeList, assertCompareScope } from './changes'

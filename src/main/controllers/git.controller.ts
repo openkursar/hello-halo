@@ -13,7 +13,6 @@ import {
   createSnapshot,
   discardPaths,
   discoverRepository,
-  forgetRepository,
   getChangeList,
   getCommitGraph,
   getWorkingTreeStatus,
@@ -69,10 +68,6 @@ export function discoverGitRepository(spaceId: unknown, filePath: unknown): Prom
 
 export function openGitRepository(spaceId: unknown, repoRoot: unknown): Promise<GitRpcResponse<GitRepository>> {
   return respond('open repository', () => openRepository(spaceId as string, repoRoot as string))
-}
-
-export function forgetGitRepository(spaceId: unknown, repoRoot: unknown): Promise<GitRpcResponse<void>> {
-  return respond('forget repository', () => forgetRepository(spaceId as string, repoRoot as string))
 }
 
 export function getGitStatus(spaceId: unknown, repoRoot: unknown, remember?: unknown): Promise<GitRpcResponse<GitWorkingTreeStatus>> {

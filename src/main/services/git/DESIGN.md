@@ -31,7 +31,7 @@ is a user action (open, refresh, click).
 | `locate.ts` | Which git binary, decided on first use and cached (§4). |
 | `context.ts` | `RepoContext` (a validated repository) and `run/read/exec` helpers. |
 | `repositories.ts` | Shallow and opened-file discovery, the request gate (`requireRepository`), branch summaries. |
-| `repository-store.ts` | Bounded, versioned remembered/dismissed paths in space data; serialized atomic writes. |
+| `repository-store.ts` | Bounded, versioned known paths in space data; serialized atomic writes. |
 | `paths.ts` | Repository-relative path validation, symlink-safe worktree resolution, argv batching. |
 | `parse.ts` | Pure parsers for git's `-z` formats. |
 | `files.ts` | What git does not print: untracked line counts, binary sniffing, `linguist-generated`. |
@@ -144,9 +144,10 @@ new git is picked up at once). A failure is otherwise re-checked after 60 s rath
   view unmount, bounded to 64 roots per space; space state is LRU-evicted at 32 spaces and invalidated
   when its working directory changes. No timers keep this state alive.
 - Verified file discoveries and explicitly opened roots share `<space data>/.halo/git/repositories.json`
-  (temporary spaces omit `.halo`): `{ version: 2, workingDir, roots, dismissedRoots }`. There are at most
-  64 remembered roots, 256 explicitly dismissed roots and 1 MiB of input. Version 1 manual records are
-  read into the same model; the next actual mutation writes version 2. Reads never rewrite records.
+  (temporary spaces omit `.halo`): `{ version: 3, workingDir, roots }`. There are at most 320 known
+  roots and 1 MiB of input. Version 1 paths remain known; version 2 remembered and previously hidden
+  paths are combined, preserving its full 64 + 256 capacity without probing those directories. Reads
+  and repeated saves never rewrite records; adding a path writes version 3 with no hiding state.
   Writes serialize per file and rename an exclusive temporary file atomically. Only pending writes
   are resident (32 files / 128 writes); damaged/unreadable stores are reported and never overwritten.
   A different working-directory identity ignores old records. Repeated discovery does not write again.
@@ -154,14 +155,13 @@ new git is picked up at once). A failure is otherwise re-checked after 60 s rath
   request reads remembered/session roots and checks only the space root's `.git`; an explicit shallow
   request also examines direct children. The view loads the selected repository independently while
   shallow discovery supplements the list. Unselected remembered paths are not touched; they remain
-  selectable/removable when missing, and a failed selected load marks them unavailable until retried.
+  selectable when missing, and a failed selected load marks them unavailable until retried.
   Selecting an unremembered shallow path requests remembering only after its status loads successfully;
   routine status refreshes do not read or write repository records.
-- Removal persists a dismissal and invalidates probes, so neither shallow discovery nor late file
-  discoveries can restore it. Explicit opening clears that dismissal only after validation and saving.
-  Record failures leave file viewing and session discovery usable, but surface a user-visible warning.
-  Recorded paths never replace the request gate, and no operation changes repository files or metadata
-  merely to remember, restore or remove an entry.
+- The picker offers selection and explicit opening, never removal or persistent hiding. The space's
+  own repository remains discoverable independently of remembered paths. Record failures leave file
+  viewing and session discovery usable, but surface a user-visible warning. Recorded paths never
+  replace the request gate, and remembering or restoring known paths changes no repository files or metadata.
 - Explicit opening and resolving read summaries (`readRepositorySummary`) from refs only —
   `symbolic-ref`, `for-each-ref` with `%(upstream:track)`. Selected status carries its own branch
   summary; listing reads none. Ahead/behind are as last fetched; nothing here touches the network.

@@ -164,8 +164,14 @@ vi.mock('../../../../src/main/foundation/product-config', () => ({
 // is the single-digital-human path every other test takes.
 let teamStore: Record<string, unknown> | undefined
 let teamRuntime: Record<string, unknown> | undefined
+let collaborationSource = false
+const cancelledHumanRequests = new Set<string>()
 vi.mock('../../../../src/main/apps/team', () => ({
   getTeamStore: () => teamStore,
+  getTeamService: () => ({
+    getCollabForConversation: () => collaborationSource ? { teamId: 'collaboration' } : null,
+    participants: { requestAllowed: (id: string) => /^[a-f0-9-]{36}$/i.test(id) && !cancelledHumanRequests.has(id) },
+  }),
 }))
 vi.mock('../../../../src/main/apps/runtime/team', () => ({
   getActiveTeamRuntime: () => teamRuntime,
@@ -192,6 +198,7 @@ import {
   dispatchInboundMessage,
   releaseSupplementsWhenIdle,
   withdrawProcessingNotice,
+  holdSupplementsAfterStop,
 } from '../../../../src/main/apps/runtime/dispatch-inbound'
 import {
   PendingRelayStore,
@@ -270,6 +277,8 @@ beforeEach(() => {
   conversationGenerating = false
   teamStore = undefined
   teamRuntime = undefined
+  collaborationSource = false
+  cancelledHumanRequests.clear()
   getAppMock.mockReturnValue(APP)
   getInstanceMock.mockReturnValue(undefined)
   hasOpenQuestion.mockReturnValue(false)
@@ -681,13 +690,21 @@ const MEMBER_APP = { id: 'member-1', spaceId: 'space-1', specId: 'spec-1', spec:
 
 /** Stand up a team whose roster is exactly `members`, plus its runtime. */
 function withTeam(members: Array<Record<string, unknown>>, teamOverrides: Record<string, unknown> = {}) {
+  const fences = new Map<string, string>()
+  const targetKey = (target: { teamId: string; epochId: string; appId: string }) => {
+    if (target.teamId !== 'team-1' || !members.some(member => member.appId === target.appId)) throw new Error('Unknown fixture recipient')
+    return `${target.teamId}:${target.epochId}:${target.appId}`
+  }
+  const read = (target: { teamId: string; epochId: string; appId: string }) => fences.get(targetKey(target)) ?? 'initial'
   teamStore = {
     getTeamById: (id: string) => ({ id, name: 'Weekly Brief', leadAppId: 'lead-1', ...teamOverrides }),
     getMember: (_teamId: string, appId: string) => members.find(m => m.appId === appId) ?? null,
+    recipientFences: { read, accepts: (target: Parameters<typeof read>[0], value?: string) => read(target) === (value ?? 'initial') },
   }
   teamRuntime = {
     ensureConversationEpoch: () => ({ id: 'epoch-1' }),
   }
+  return { rotate: (target: Parameters<typeof read>[0]) => { fences.set(targetKey(target), 'after-stop') } }
 }
 
 const LOCAL_MEMBER = { appId: 'member-1', memberName: 'researcher', isLead: false, origin: 'local', ownerNodeId: 'SELF' }
@@ -848,6 +865,24 @@ describe('dispatchInboundMessage — owner/guest rules of a team-fronted chat', 
 // ============================================
 
 describe('dispatchInboundMessage — group @mentions and commands', () => {
+  it('lets the owner stop delegated work while its source conversation is idle', async () => {
+    collaborationSource = true
+    instanceCfg = { ...BASE_CONFIG, permissionEnabled: true, owners: ['u1'] }
+    const reply = makeReply(false)
+    await dispatchInboundMessage(makeMsg({ chatType: 'group', body: '@Halo /stop' }), reply, 'app-1', 'inst-1')
+    expect(abortAppChatTurnMock).toHaveBeenCalledWith('app-chat:app-1:wecom-bot:group:chat-1', 'user')
+    expect(reply.send).toHaveBeenCalledWith('Generation stopped.')
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('does not let an unrelated guest stop the owner’s idle collaboration', async () => {
+    collaborationSource = true
+    instanceCfg = { ...BASE_CONFIG, permissionEnabled: true, owners: ['u1'] }
+    const reply = makeReply(false)
+    await dispatchInboundMessage(makeMsg({ from: 'guest', chatType: 'group', body: '@Halo /stop' }), reply, 'app-1', 'inst-1')
+    expect(abortAppChatTurnMock).not.toHaveBeenCalled()
+    expect(reply.send).toHaveBeenCalledWith('No active generation to stop.')
+  })
   function sentMessage(): string {
     return (sendAppChatMessageMock.mock.calls[0][0] as { message: string }).message
   }
@@ -1713,6 +1748,43 @@ describe('dispatchInboundMessage — buffered messages', () => {
 
   afterEach(() => {
     stopReleasing()
+  })
+
+  it('marks real IM input as human despite its relay provenance and keeps its nonce on hold', async () => {
+    instanceCfg = { ...BASE_CONFIG, permissionEnabled: true, owners: ['owner'] }
+    await dispatchInboundMessage(makeMsg({ body: 'guest input before stop' }), makeReply(false), 'app-1', 'inst-1')
+    const first = sendAppChatMessageMock.mock.calls[0][0]
+    expect(first).toMatchObject({ humanInput: true, collaborationRequestId: expect.any(String), relayOrigin: { subject: { id: 'u1' } } })
+    conversationGenerating = true
+    holdSupplementsAfterStop(CONV)
+    cancelledHumanRequests.add(first.collaborationRequestId!)
+    first.onHeldBack?.([])
+    await dispatchInboundMessage(makeMsg({ body: 'fresh guest input' }), makeReply(false), 'app-1', 'inst-1')
+    conversationGenerating = false
+    conversationChanged?.(CONV)
+    await flushSetImmediate()
+    expect(sendAppChatMessageMock).toHaveBeenCalledTimes(2)
+    const fresh = sendAppChatMessageMock.mock.calls[1][0]
+    expect(fresh.message).toBe('fresh guest input')
+    expect(fresh.collaborationRequestId).not.toBe(first.collaborationRequestId)
+  })
+
+  it('does not relabel an old queued team input with a newer recipient fence', async () => {
+    instanceCfg = { ...BASE_CONFIG, appId: 'member-1', teamId: 'team-1' }
+    getAppMock.mockReturnValue(MEMBER_APP)
+    const fixture = withTeam([LOCAL_MEMBER])
+    conversationGenerating = true
+    await dispatchInboundMessage(makeMsg({ body: 'old queued team input' }), makeReply(false), 'member-1', 'inst-1')
+    fixture.rotate({ teamId: 'team-1', epochId: 'epoch-1', appId: 'member-1' })
+    await dispatchInboundMessage(makeMsg({ body: 'fresh team input' }), makeReply(false), 'member-1', 'inst-1')
+    conversationGenerating = false
+    conversationChanged?.('app-chat:member-1:team:team-1:epoch-1')
+    await flushSetImmediate()
+    expect(sendAppChatMessageMock).toHaveBeenCalledOnce()
+    const input = sendAppChatMessageMock.mock.calls[0][0]
+    expect(input.message).toBe('fresh team input')
+    expect(input.humanInput).toBe(true)
+    expect(input.teamContext).toMatchObject({ requestId: input.collaborationRequestId, recipientFence: 'after-stop' })
   })
 
   it('are released once the chat reads idle, and not while it is still busy', async () => {

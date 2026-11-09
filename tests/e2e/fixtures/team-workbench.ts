@@ -2,6 +2,8 @@ import type { ElectronApplication, Page } from '@playwright/test'
 import { waitForHomePage, navigateToApps } from './helpers'
 
 interface WorkbenchFixtureOptions {
+  goalFreeCreation?: boolean
+  temporaryParticipants?: boolean
   ownCount?: number
   withDecision?: boolean
   historyFailure?: boolean
@@ -19,7 +21,7 @@ interface WorkbenchFixtureOptions {
 /** Deterministic IPC boundary fixture; all rendering and interaction use the built app. */
 export async function openTeamWorkbench(app: ElectronApplication, page: Page, options: WorkbenchFixtureOptions = {}) {
   await waitForHomePage(page)
-  await app.evaluate(({ ipcMain }, { ownCount: count = 2, withDecision: decision, historyFailure, readonlyKind, allowCreate, sendFailure, sendFailureDelay = 500, timestampAnomalies, provenanceMessages, collaborationJourney, remoteDecision, legacyRecovery }) => {
+  await app.evaluate(({ ipcMain }, { ownCount: count = 2, withDecision: decision, historyFailure, readonlyKind, allowCreate, sendFailure, sendFailureDelay = 500, timestampAnomalies, provenanceMessages, collaborationJourney, remoteDecision, legacyRecovery, temporaryParticipants, goalFreeCreation }) => {
     const now = Date.now() - 60_000
     const roster = [
       { appId: 'lead', memberName: 'Lead', sameMachine: count > 0, isLead: true },
@@ -32,6 +34,12 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
     }))
     const members = roster.map(member => ({ ...member, id: member.appId, teamId: 'render-team', origin: member.sameMachine ? 'local' : 'remote', ownerNodeId: member.sameMachine ? 'self' : 'remote-node' }))
     const team = { id: 'render-team', name: 'Workbench review', goal: 'A focused task workspace', status: 'idle', leadAppId: 'lead', owningSpaceId: 'halo-temp', hostNodeId: null, currentEpochId: null, collabMode: 'mesh' }
+    if (temporaryParticipants) team.goal = ''
+    const taskRoster = temporaryParticipants ? [
+      { appId: 'temporary', memberName: 'Investigator', sameMachine: true, isLead: false, spaceId: 'halo-temp', role: 'Research', status: 'waiting_user', presence: 'online', busy: [] },
+      { appId: 'temporary-remote', memberName: 'Remote Collaborator', sameMachine: false, isLead: false, spaceId: null, role: 'Review', status: 'idle', presence: 'online', busy: [], owner: 'Taylor' },
+    ] : []
+    const taskMembers = taskRoster.map(member => ({ ...member, teamId: team.id, epochId: 'epoch-0', parentAppId: 'lead', isTemporary: true, aiProvisioned: false, addedAt: now, origin: member.sameMachine ? 'local' : 'remote', ownerNodeId: member.sameMachine ? 'self' : 'peer' }))
     const tasks = ['Product research', 'Release notes'].map((label, index) => ({ epochId: `epoch-${index}`, workItemId: `work-${index}`, teamId: team.id, kind: 'native', label, readonly: false, startedAt: now, lastActivityAt: now + index, createdByMe: true, involvedMe: true, completed: false }))
     if (remoteDecision) Object.assign(tasks[0], { waitingUser: true, waitingForMe: false, waitingMemberAppIds: ['remote'] })
     if (readonlyKind) Object.assign(tasks[0], { kind: readonlyKind, readonly: true, memberAppId: 'lead' })
@@ -62,6 +70,8 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
     ]
     const findings = [{ id: 'finding-1', teamId: team.id, epochId: 'epoch-0', appId: 'research', ref: 'research-notes.md', content: 'Evidence and source links', createdAt: now }]
     const detail = { team, members, roster, edges: [], tasks: work, findings, activities, pendingEscalations: decision ? [{ entryId: 'decision-1', epochId: 'epoch-0', appId: 'lead', memberName: 'Lead', question: 'Approve the research scope?', entry: { id: 'decision-1', appId: 'lead', type: 'escalation', ts: now, content: { question: 'Approve the research scope?', choices: ['Approve scope', 'Revise scope'] } } }] : [], checks: [] }
+    const temporaryDecision = { id: 'temporary-decision', appId: 'temporary', type: 'escalation', ts: now, userResponse: undefined as any, content: { question: 'Approve this investigation?', choices: ['Approve investigation', 'Revise investigation'], teamContext: { teamId: team.id, epochId: 'epoch-0' } } }
+    if (temporaryParticipants) Object.assign(detail, { pendingEscalations: [{ entryId: temporaryDecision.id, appId: 'temporary', epochId: 'epoch-0', memberName: 'Investigator', question: temporaryDecision.content.question, entry: temporaryDecision }] })
     if (legacyRecovery) Object.assign(detail, { legacyCoordinator: legacyRecovery })
     if (legacyRecovery?.repairDeferred) Object.assign(team, { coordinatorConversationId: 'source-conversation' })
     const apps = roster.filter(member => member.sameMachine).map(member => ({ id: member.appId, spaceId: 'halo-temp', status: 'active', permissions: { granted: [], denied: [] }, installedAt: now, userConfig: {}, spec: { name: member.memberName, type: 'automation', version: '1.0.0', description: 'Renderer fixture', system_prompt: 'Fixture', subscription: [], config_schema: [] } }))
@@ -70,14 +80,34 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
       ipcMain.handle(channel, (_event, ...args) => handler(...args))
     }
     bind('app:list', () => ({ success: true, data: apps }))
+    if (goalFreeCreation) {
+      const captures: unknown[] = []
+      ;(globalThis as any).goalFreeTeamCreationInputs = captures
+      bind('team:create', ({ input }) => {
+        captures.push(input)
+        Object.assign(team, { name: input.name, goal: input.goal })
+        return { success: true, data: team }
+      })
+    }
     bind('team:list', () => ({ success: true, data: [{ ...team, memberCount: roster.length, hasWaitingUser: false, updatedAt: now, localMembers: roster.filter(member => member.sameMachine) }] }))
     bind('team:get-detail', () => ({ success: true, data: detail }))
     bind('team:list-conversations', () => ({ success: true, data: tasks }))
     bind('team:list-epochs', () => ({ success: true, data: [] }))
-    bind('team:epoch-board', ({ epochId }) => ({ success: true, data: { epoch: { id: epochId, teamId: team.id }, members, tasks: work.filter(row => row.epochId === epochId), findings: findings.filter(row => row.epochId === epochId), activities: activities.filter(row => row.epochId === epochId) } }))
+    const reads = { board: 0, roster: 0 }
+    ;(globalThis as any).workbenchReads = reads
+    const rosterFor = (epochId: string) => ({ members: epochId === 'epoch-0' ? [...members, ...taskMembers] : members, roster: epochId === 'epoch-0' ? [...roster, ...taskRoster] : roster })
+    bind('team:epoch-board', ({ epochId }) => {
+      reads.board++
+      return { success: true, data: { epoch: { id: epochId, teamId: team.id }, ...rosterFor(epochId), tasks: work.filter(row => row.epochId === epochId), findings: findings.filter(row => row.epochId === epochId), activities: activities.filter(row => row.epochId === epochId) } }
+    })
+    bind('team:epoch-roster', ({ epochId }) => { reads.roster++; return { success: true, data: rosterFor(epochId) } })
     bind('team:epoch-artifacts', ({ epochId }) => ({ success: true, data: epochId === 'epoch-0' ? [{ memberName: 'Research', artifacts: [{ name: 'research-notes.md', path: '/tmp/halo-render-fixture/research-notes.md' }] }] : [] }))
     let researchEngaged = false
     bind('team:chat-messages', ({ appId, epochId }) => {
+      if (temporaryParticipants && epochId === 'epoch-0' && (appId === 'temporary' || appId === 'temporary-remote')) return { success: true, data: [
+        { id: `${appId}-request`, role: 'user', content: 'Inspect this task only.', timestamp: new Date(now).toISOString(), metadata: { teamTriggerKind: 'human_message' } },
+        { id: `${appId}-answer`, role: 'assistant', content: `${appId} evidence for Product research.`, timestamp: new Date(now + 100).toISOString(), metadata: { teamTriggerKind: 'human_message' } },
+      ] }
       if (historyFailure && epochId === 'epoch-0' && appId === 'lead') { historyFailure = false; return { success: false, error: 'Fixture history unavailable' } }
       if (collaborationJourney && appId === 'research' && epochId === 'epoch-0') return { success: true, data: [
         { id: 'research-request', role: 'user', content: '[Team message from Lead] Investigate the product.', timestamp: new Date(now).toISOString(), metadata: { teamTriggerKind: 'message', correlationId: 'journey-request' } },
@@ -106,7 +136,8 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
     ] : [] }
     })
     bind('app:chat-session-state', () => ({ success: true, data: null }))
-    bind('app:respond-escalation', () => { detail.pendingEscalations = []; return { success: true } })
+    bind('app:respond-escalation', ({ response }) => { temporaryDecision.userResponse = response; detail.pendingEscalations = []; return { success: true } })
+    if (temporaryParticipants) bind('app:get-activity', ({ appId, options }) => ({ success: true, data: appId === 'temporary' && options?.epochId === 'epoch-0' ? [temporaryDecision] : [] }))
     bind('app:chat-status', () => ({ success: true, data: { isGenerating: false } }))
     bind('team:open-conversation', ({ title, memberAppId }) => {
       if (!allowCreate || memberAppId) throw new Error('Changing members must not create a conversation')

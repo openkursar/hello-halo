@@ -4,9 +4,9 @@ import { join } from 'path'
 import * as fsPromises from 'fs/promises'
 
 vi.mock('fs/promises', async (importOriginal) => ({ ...await importOriginal<typeof import('fs/promises')>() }))
-import { discoverRepository, forgetRepository, getWorkingTreeStatus, listRepositories, openRepository, resolveRepository } from '../../../../src/main/services/git'
+import { discoverRepository, getWorkingTreeStatus, listRepositories, openRepository, resolveRepository } from '../../../../src/main/services/git'
 import * as cli from '../../../../src/main/services/git/cli'
-import { readRepositoryRecords, updateRepositoryRecord } from '../../../../src/main/services/git/repository-store'
+import { readRepositoryRecords, rememberRepositoryRoot } from '../../../../src/main/services/git/repository-store'
 import { initRepo, isolateGit, makeTempDir } from './_repo'
 
 const { spaces } = vi.hoisted(() => ({ spaces: new Map<string, { path: string; workingDir: string; isTemp: boolean }>() }))
@@ -94,9 +94,9 @@ describe('opened-file repository discovery', () => {
   })
 
   it('reports capacity without evicting remembered deep roots', async () => {
-    const roots = Array.from({ length: 64 }, (_, index) => join(root, 'deep', `repo-${index}`))
+    const roots = Array.from({ length: 320 }, (_, index) => join(root, 'deep', `repo-${index}`))
     mkdirSync(join(data, '.halo/git'), { recursive: true })
-    writeFileSync(store, JSON.stringify({ version: 2, workingDir: root, roots, dismissedRoots: [] }))
+    writeFileSync(store, JSON.stringify({ version: 3, workingDir: root, roots }))
     const repo = deepRepo()
     expect(await discoverRepository('s', join(repo.root, 'src/a.ts'))).toMatchObject({
       repository: { root: repo.root }, remembered: false, recordError: { code: 'GIT_FAILED' },
@@ -105,8 +105,9 @@ describe('opened-file repository discovery', () => {
     expect((await listRepositories('s')).repositories.map((entry) => entry.root)).toEqual([...roots, repo.root])
   })
 
-  it('does not resurrect a forgotten root when its probe completes', async () => {
+  it('preserves a known root while an opened-file probe completes', async () => {
     const repo = deepRepo()
+    await openRepository('s', repo.root)
     const original = cli.runGit
     let release!: () => void
     let started!: () => void
@@ -121,10 +122,10 @@ describe('opened-file repository discovery', () => {
     })
     const pending = discoverRepository('s', join(repo.root, 'src/a.ts'))
     await entered
-    await forgetRepository('s', repo.root)
+    expect((await listRepositories('s')).repositories.map((item) => item.root)).toEqual([repo.root])
     release()
-    await pending
-    expect((await listRepositories('s')).repositories).toEqual([])
+    expect(await pending).toMatchObject({ repository: { root: repo.root }, remembered: true })
+    expect((await listRepositories('s')).repositories.map((item) => item.root)).toEqual([repo.root])
   })
 
   it('never probes remembered repository paths or runs Git summaries while listing', async () => {
@@ -254,15 +255,14 @@ describe('shared repository records', () => {
     const read = vi.spyOn(fsPromises, 'open')
     await getWorkingTreeStatus('s', repo.root)
     expect(read.mock.calls.some(([path]) => String(path) === store || String(path).startsWith(`${store}.`))).toBe(false)
-    await forgetRepository('s', repo.root)
-    expect(await getWorkingTreeStatus('s', repo.root, true)).toMatchObject({ remembered: false })
-    expect((await listRepositories('s', { shallow: true })).repositories).toEqual([])
+    expect(await getWorkingTreeStatus('s', repo.root, true)).toMatchObject({ remembered: true })
+    expect((await listRepositories('s', { shallow: true })).repositories).toContainEqual({ root: repo.root, name: 'child', relativePath: 'child', remembered: true })
   })
 
   it('persists unique roots without probing unavailable paths during listing', async () => {
     const repo = deepRepo()
     await Promise.all(Array.from({ length: 5 }, () => openRepository('s', repo.root)))
-    expect(JSON.parse(readFileSync(store, 'utf8'))).toEqual({ version: 2, workingDir: root, roots: [repo.root], dismissedRoots: [] })
+    expect(JSON.parse(readFileSync(store, 'utf8'))).toEqual({ version: 3, workingDir: root, roots: [repo.root] })
     expect((await readRepositoryRecords('s', root)).roots).toEqual([repo.root])
     expect((await listRepositories('s')).repositories).toEqual([{ root: repo.root, name: 'app', relativePath: 'projects/nested/app', remembered: true }])
     const before = readFileSync(store, 'utf8')
@@ -274,23 +274,29 @@ describe('shared repository records', () => {
     expect(run).not.toHaveBeenCalled()
     expect(readFileSync(store, 'utf8')).toBe(before)
     await expect(resolveRepository('s', repo.root)).rejects.toMatchObject({ code: 'GIT_NOT_A_REPOSITORY' })
-    await forgetRepository('s', repo.root)
-    expect(await readRepositoryRecords('s', root)).toEqual({ roots: [], dismissedRoots: [repo.root] })
+    expect(await readRepositoryRecords('s', root)).toEqual({ roots: [repo.root] })
     expect(existsSync(`${repo.root}-moved/.git`)).toBe(true)
   })
 
-  it('persists removal against future automatic discovery and restores only on explicit open', async () => {
+  it('restores previously hidden default and deep repositories without probing or changing files', async () => {
+    initRepo(root)
     const repo = deepRepo()
-    await discoverRepository('s', join(repo.root, 'src/a.ts'))
-    await forgetRepository('s', repo.root)
-    expect((await listRepositories('s')).repositories).toEqual([])
+    mkdirSync(join(data, '.halo/git'), { recursive: true })
+    const before = JSON.stringify({ version: 2, workingDir: root, roots: [], dismissedRoots: [root, repo.root] })
+    writeFileSync(store, before)
+    const run = vi.spyOn(cli, 'runGit')
+    const open = vi.spyOn(fsPromises, 'open')
+    expect((await listRepositories('s')).repositories).toEqual([
+      { root, name: 'workspace', relativePath: '', remembered: true },
+      { root: repo.root, name: 'app', relativePath: 'projects/nested/app', remembered: true },
+    ])
+    expect(run).not.toHaveBeenCalled()
+    expect(open.mock.calls.every(([path]) => path === store)).toBe(true)
+    expect(readFileSync(store, 'utf8')).toBe(before)
+    expect(await discoverRepository('s', join(repo.root, 'src/a.ts'))).toMatchObject({ repository: { root: repo.root }, remembered: true })
+    expect((await listRepositories('s', { shallow: true })).repositories.map((item) => item.root)).toEqual([root, repo.root])
     expect(readFileSync(join(repo.root, 'src/a.ts'), 'utf8')).toBe('hello\n')
     expect(existsSync(join(repo.root, '.git'))).toBe(true)
-    expect(await discoverRepository('s', join(repo.root, 'src/a.ts'))).toBeNull()
-    expect((await listRepositories('s', { shallow: true })).repositories).toEqual([])
-    await openRepository('s', repo.root)
-    expect(await discoverRepository('s', join(repo.root, 'src/a.ts'))).toMatchObject({ repository: { root: repo.root }, remembered: true })
-    expect((await readRepositoryRecords('s', root)).dismissedRoots).toEqual([])
   })
 
   it('does not reuse manual or transient records after the space working directory changes', async () => {
@@ -301,10 +307,10 @@ describe('shared repository records', () => {
     mkdirSync(other)
     spaces.get('s')!.workingDir = other
     expect((await listRepositories('s')).repositories).toEqual([])
-    expect(await readRepositoryRecords('s', other)).toEqual({ roots: [], dismissedRoots: [] })
+    expect(await readRepositoryRecords('s', other)).toEqual({ roots: [] })
     const next = initRepo(join(other, 'deep', 'new'))
     await openRepository('s', next.root)
-    expect(JSON.parse(readFileSync(store, 'utf8'))).toEqual({ version: 2, workingDir: other, roots: [next.root], dismissedRoots: [] })
+    expect(JSON.parse(readFileSync(store, 'utf8'))).toEqual({ version: 3, workingDir: other, roots: [next.root] })
   })
 
   it('serializes writes for different roots and stores temporary-space records beside conversations', async () => {
@@ -324,19 +330,17 @@ describe('shared repository records', () => {
     expect((await listRepositories('s')).recordError).toMatchObject({ code: 'GIT_FAILED' })
     expect(await discoverRepository('s', join(repo.root, 'src/a.ts'))).toMatchObject({ repository: { root: repo.root }, remembered: false, recordError: { code: 'GIT_FAILED' } })
     await expect(openRepository('s', repo.root)).rejects.toMatchObject({ code: 'GIT_FAILED' })
-    await expect(forgetRepository('s', repo.root)).rejects.toMatchObject({ code: 'GIT_FAILED' })
     expect(readFileSync(store, 'utf8')).toBe(content)
   })
 
-  it('enforces the manual-record cap without evicting saved entries', async () => {
-    const roots = Array.from({ length: 64 }, (_, i) => join(root, `repo-${i}`))
+  it('enforces the known-path cap without evicting saved entries', async () => {
+    const roots = Array.from({ length: 320 }, (_, i) => join(root, `repo-${i}`))
     mkdirSync(join(data, '.halo/git'), { recursive: true })
-    writeFileSync(store, JSON.stringify({ version: 1, workingDir: root, roots }))
-    await expect(updateRepositoryRecord('s', root, join(root, 'one-more'), 'open')).rejects.toMatchObject({ code: 'GIT_FAILED' })
+    writeFileSync(store, JSON.stringify({ version: 3, workingDir: root, roots }))
+    await expect(rememberRepositoryRoot('s', root, join(root, 'one-more'))).rejects.toMatchObject({ code: 'GIT_FAILED' })
     expect((await readRepositoryRecords('s', root)).roots).toEqual(roots)
-    await updateRepositoryRecord('s', root, roots[0], 'dismiss')
-    await updateRepositoryRecord('s', root, join(root, 'one-more'), 'open')
-    expect((await readRepositoryRecords('s', root)).roots).toHaveLength(64)
+    expect(await rememberRepositoryRoot('s', root, roots[0])).toBe(true)
+    expect((await readRepositoryRecords('s', root)).roots).toHaveLength(320)
   })
 
   it('rejects a directory change while the temporary record is being written', async () => {
@@ -368,7 +372,7 @@ describe('shared repository records', () => {
     const other = join(base, 'other')
     mkdirSync(other)
     spaces.get('s')!.workingDir = other
-    await expect(updateRepositoryRecord('s', root, repo.root, 'open')).rejects.toMatchObject({ code: 'GIT_INVALID_ARGUMENT' })
+    await expect(rememberRepositoryRoot('s', root, repo.root)).rejects.toMatchObject({ code: 'GIT_INVALID_ARGUMENT' })
     expect(existsSync(store)).toBe(false)
   })
 

@@ -637,7 +637,6 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
     disabled: repositoryBusy || operation !== null || busyPaths.size > 0,
     onSelectRepository: (root: string) => { void controller.selectRepository(root) },
     onOpenRepository: controller.openRepository,
-    onForgetRepository: controller.forgetRepository,
   }
   const snapshotMissing = listError?.code === 'GIT_SNAPSHOT_MISSING'
   let page: ReactNode

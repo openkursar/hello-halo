@@ -19,6 +19,7 @@
  * (sendWake/registerTurnComplete/resolveOfficeId) are INJECTED by bootstrap.
  */
 
+import type { TeamStore } from '../../team'
 import {
   SELF_NODE_ID,
   legacyExternalOrigin,
@@ -42,11 +43,10 @@ export interface LocationAwareSessionDepsConfig {
    * Owner node of a member's appId; SELF_NODE_ID for a locally-owned member.
    * One app may be a member of SEVERAL teams with a DIFFERENT owner in each
    * (a template digital human brought into multiple offices), so the lookup
-   * must be scoped to the team whose turn is running. `teamId` is absent only
-   * on team-agnostic calls (getMemberSpaceId) where any membership works as a
-   * fallback.
+   * must be scoped to the team. Private sub-agents are resolved locally and
+   * never acquire a remote identity from retained participant records.
    */
-  resolveOwnerNode: (appId: string, teamId?: string) => string
+  resolveOwnerNode: (appId: string, teamId?: string, epochId?: string) => string
   /** This node's own stable node id (kept for parity/diagnostics). */
   selfNodeId: string
   /** Authority → owner wake send; false when the owner is unreachable. */
@@ -81,14 +81,25 @@ const LOG_TAG = '[FedSessionDeps]'
 export const WAKE_COMPLETION_BACKSTOP_MS = 2 * 60 * 60 * 1000
 const MAX_REMOTE_MESSAGE_RECEIPTS = 1024
 
+export function resolveMemberOwnerNode(
+  store: Pick<TeamStore, 'getMember' | 'listMembersByAppId'>,
+  appId: string,
+  teamId?: string,
+  _epochId?: string,
+): string {
+  if (!teamId) return store.listMembersByAppId(appId)[0]?.ownerNodeId ?? SELF_NODE_ID
+  return store.getMember(teamId, appId)?.ownerNodeId ?? SELF_NODE_ID
+}
+
 function serialize(request: SendAppChatRequest): SerializedWakeRequest {
+  const { requestId: _requestId, recipientFence: _recipientFence, controller: _controller, ...teamContext } = request.teamContext
   return {
     appId: request.appId,
     spaceId: request.spaceId,
     message: request.message,
     recordedMessages: request.recordedMessages,
     conversationId: request.conversationId,
-    teamContext: request.teamContext,
+    teamContext,
   }
 }
 
@@ -243,13 +254,13 @@ export function makeLocationAwareSessionDeps(
     finish: (outcome: TurnCompletion) => void
   }>()
 
-  function isLocal(appId: string, teamId?: string): boolean {
-    return resolveOwnerNode(appId, teamId) === SELF_NODE_ID
+  function isLocal(appId: string, teamId?: string, epochId?: string): boolean {
+    return resolveOwnerNode(appId, teamId, epochId) === SELF_NODE_ID
   }
 
   return {
     sendAppChatMessage(request) {
-      const owner = resolveOwnerNode(request.appId, request.teamContext.teamId)
+      const owner = resolveOwnerNode(request.appId, request.teamContext.teamId, request.teamContext.epochId)
       if (owner === SELF_NODE_ID) return local.sendAppChatMessage(request)
 
       const correlationId = request.teamContext.correlationId
@@ -334,7 +345,7 @@ export function makeLocationAwareSessionDeps(
     },
 
     deliverRemoteMessage(request) {
-      const owner = resolveOwnerNode(request.appId, request.teamContext.teamId)
+      const owner = resolveOwnerNode(request.appId, request.teamContext.teamId, request.teamContext.epochId)
       if (owner === SELF_NODE_ID) return undefined
       const correlationId = request.teamContext.correlationId
       if (remoteMessages.has(correlationId)) return true
@@ -385,7 +396,7 @@ export function makeLocationAwareSessionDeps(
       // Only a session this machine runs can be raced here; a remote member's
       // owner holds its own when the wake lands.
       const parsed = parseTeamSessionKey(sessionKey)
-      return parsed && isLocal(parsed.appId, parsed.teamId) ? local.holdTurn?.(sessionKey) : undefined
+      return parsed && isLocal(parsed.appId, parsed.teamId, parsed.epochId) ? local.holdTurn?.(sessionKey) : undefined
     },
 
     isSessionActive(sessionKey) {
@@ -411,14 +422,18 @@ export function makeLocationAwareSessionDeps(
           pending.finish({ kind: 'undelivered', reason: 'task-closed-before-completion' })
         }
       }
-      if (isLocal(appId, teamId)) return local.closeTeamSession(appId, teamId, epochId)
+      if (isLocal(appId, teamId, epochId)) return local.closeTeamSession(appId, teamId, epochId)
       // The owner tears down its own session; nothing to close here.
       return Promise.resolve()
     },
 
-    stopTeamSession(appId, teamId, epochId) {
-      const owner = resolveOwnerNode(appId, teamId)
-      if (owner === SELF_NODE_ID) return local.stopTeamSession(appId, teamId, epochId)
+    stopTeamSession(appId, teamId, epochId, controller, expectedRequestId) {
+      const owner = resolveOwnerNode(appId, teamId, epochId)
+      if (owner === SELF_NODE_ID) return local.stopTeamSession(appId, teamId, epochId, controller, expectedRequestId)
+      if (controller !== undefined || expectedRequestId !== undefined) {
+        console.warn(`${LOG_TAG} remote stop refused app=${appId} owner=${owner} office=${teamId} reason=conditional-stop-unsupported`)
+        return Promise.reject(new Error('This remote member cannot be stopped with assignment-specific conditions. Use the ordinary user stop instead.'))
+      }
       // Unlike closeTeamSession, doing nothing here would be a lie: the turn is
       // running on the owner and somebody just asked for it to stop. The request
       // travels, and its answer is the owner's.
@@ -426,8 +441,8 @@ export function makeLocationAwareSessionDeps(
       return sendStop({ officeId: teamId, ownerNodeId: owner, appId, epochId })
     },
 
-    getMemberSpaceId(appId) {
-      if (isLocal(appId)) return local.getMemberSpaceId(appId)
+    getMemberSpaceId(appId, teamId, epochId) {
+      if (isLocal(appId, teamId, epochId)) return local.getMemberSpaceId(appId, teamId, epochId)
       // Synchronous, non-null sentinel: the owner resolves the real space
       // locally and ignores this value. Must not become async — orchestration
       // calls it inline before waking.

@@ -35,6 +35,7 @@ vi.mock('../../../../src/main/services/conversation.service', () => ({ createCon
 vi.mock('../../../../src/main/services/agent', async () => ({
   ...(await vi.importActual<object>('../../../../src/main/services/agent/prompt-text')),
   getToolset: m.getToolset,
+  isCollaborationEnabled: () => !(m.config.agent.disabledTools ?? []).some(tool => ['Agent', 'Task', 'spawn_agent', 'mcp__halo-team__spawn_agent'].includes(tool)),
   openToolset: m.openToolset,
   closeToolset: m.closeToolset,
   getWorkingDir: () => '/space',
@@ -78,8 +79,12 @@ describe('getReviewAvailability', () => {
     expect(getReviewAvailability()).toEqual({ team: { available: true } })
     m.getToolset.mockReturnValueOnce(undefined)
     expect(getReviewAvailability()).toEqual({ team: { available: false, reason: 'team-unavailable' } })
-    m.config.agent = { disabledTools: ['mcp__halo-team__collab_start'] }
-    expect(getReviewAvailability().team.available).toBe(false)
+    for (const tool of ['Agent', 'Task', 'spawn_agent', 'mcp__halo-team__spawn_agent', 'mcp__halo-team__*']) {
+      m.config.agent = { disabledTools: [tool] }
+      expect(getReviewAvailability().team.available).toBe(false)
+    }
+    m.config.agent = { disabledTools: ['mcp__halo-team__team_post_task'] }
+    expect(getReviewAvailability().team.available).toBe(true)
   })
 })
 

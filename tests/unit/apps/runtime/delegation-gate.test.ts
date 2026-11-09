@@ -29,6 +29,14 @@ describe('a conversation nobody is borrowing', () => {
 })
 
 describe('what a borrowed turn may do', () => {
+  it('permits only Halo client metadata search, not the generic call gateway', () => {
+    beginDelegatedTurn(CONV, { policy: { allowedTools: [] }, mode: 'strict', clientToolDiscovery: true })
+    expect(decideDelegatedTool(CONV, 'ToolSearch', { query: 'customer' })).toEqual({ allow: true })
+    expect(decideDelegatedTool(CONV, 'CallTool', { tool: 'Bash', arguments: '{}' }).allow).toBe(false)
+    beginDelegatedTurn(CONV, { policy: { allowedTools: [] }, mode: 'strict' })
+    expect(decideDelegatedTool(CONV, 'ToolSearch', { query: 'customer' }).allow).toBe(false)
+  })
+
   it('refuses a command when commands were not granted', () => {
     beginDelegatedTurn(CONV, { policy: { allowedTools: ['Read'] }, mode: 'strict' })
 

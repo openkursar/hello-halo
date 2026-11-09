@@ -8,12 +8,13 @@
  * conversation afterwards does not replace its report.
  */
 
-import type { CollabSummary, EpochEndReason } from '../../shared/apps/team-types'
+import { hasReviewReport } from '../../shared/code-review-report'
+import type { CollabSummary } from '../../shared/apps/team-types'
 import type { GitReviewRecord } from '../../shared/types/git'
 import type { Message } from '../types'
 import type { ThoughtActivity, TodoItem } from './thought-activity'
 
-export type ReviewProgressStatus = 'loading' | 'running' | 'done' | 'error' | 'stopped' | 'missing'
+export type ReviewProgressStatus = 'loading' | 'running' | 'done' | 'error' | 'stopped' | 'incomplete' | 'missing'
 
 export interface ReviewMember {
   name: string
@@ -93,25 +94,14 @@ export interface ReviewProgressInput {
   earlierTodos: TodoItem[] | null
   /** Team reviews: the collaboration; null when there is none, undefined until read. */
   collab: CollabSummary | null | undefined
-  /**
-   * Team reviews: how the collaboration's work ended, once it has and that was
-   * read; null when its record is gone.
-   */
-  collabEnd: CollabEnd | null | undefined
 }
 
-export interface CollabEnd {
-  reason: EpochEndReason | null
-  /** What team_complete left; work closed without it was not finished by the team. */
-  summary: string | null
-}
-
-function memberState(status: CollabSummary['members'][number]['status'], active: boolean): ReviewMember['state'] {
+function memberState(status: CollabSummary['members'][number]['status']): ReviewMember['state'] {
   switch (status) {
     case 'working': return 'working'
     case 'waiting_user': return 'waiting'
     case 'error': return 'failed'
-    case 'idle': return active ? 'idle' : 'done'
+    case 'idle': return 'idle'
   }
 }
 
@@ -142,7 +132,7 @@ export function deriveReviewProgress(input: ReviewProgressInput): ReviewProgress
   const team = record.variant === 'team'
   const collab = team ? input.collab : null
   const members = collab
-    ? collab.members.map((m): ReviewMember => ({ name: m.memberName, role: m.role || undefined, state: memberState(m.status, collab.active) }))
+    ? collab.members.map((m): ReviewMember => ({ name: m.memberName, role: m.role || undefined, state: memberState(m.status) }))
     : null
 
   const base: ReviewProgress = {
@@ -158,23 +148,28 @@ export function deriveReviewProgress(input: ReviewProgressInput): ReviewProgress
     return { ...base, status, endedAt: Number.isFinite(at) ? at : null, ...extra }
   }
 
-  // A team review keeps running while its members work, between the
-  // coordinator's turns, and its first reply only says the work was handed out.
-  if (input.isGenerating || collab?.active) {
-    return { ...base, status: 'running', activity: input.isGenerating ? input.liveActivity : null }
+  const historical = span.end < conversation.messages.length
+  if (!historical && input.isGenerating) {
+    return { ...base, status: 'running', activity: input.liveActivity }
+  }
+  if (!historical && input.sessionErrorType === 'interrupted') return ended('stopped')
+  if (!historical && input.sessionError) return ended('error', { error: input.sessionError })
+  if (!historical && collab?.stopped) return ended('stopped')
+  if (lastReply?.error) {
+    return lastReply.error === 'Stopped by user.' ? ended('stopped') : ended('error', { error: lastReply.error })
   }
   if (team && collab === undefined) return { ...base, status: 'loading' }
-  if (input.sessionErrorType === 'interrupted') return ended('stopped')
-  if (input.sessionError) return ended('error', { error: input.sessionError })
-  if (collab && input.collabEnd !== null) {
-    if (input.collabEnd === undefined) return { ...base, status: 'running' }
-    const { reason, summary } = input.collabEnd
-    if (reason === 'stopped' || reason === 'cleared' || (reason === 'completed' && !summary)) return ended('stopped')
-    if (reason === 'timeout' || reason === 'error') return ended('error')
-  }
-  // The task is recorded before its turn starts.
-  if (!lastReply) return { ...base, status: 'running' }
-  if (lastReply.error) return ended('error', { error: lastReply.error })
+  const membersWorking = members?.some(member => member.state === 'working' || member.state === 'waiting')
+  if (!historical && membersWorking) return { ...base, status: 'running' }
+  // The task is recorded before its first turn starts.
+  if (!lastReply) return { ...base, status: historical ? 'incomplete' : 'running' }
   if (!lastReply.content.trim()) return ended('stopped')
-  return ended('done', { report: { messageId: lastReply.id, content: lastReply.content } })
+  const task = own[0]?.metadata?.task
+  const language = task?.type === 'code-review' ? task.language : 'en'
+  if (!historical && members?.some(member => member.state === 'failed')) return ended('incomplete')
+  if (!hasReviewReport(lastReply.content, language)) return ended('incomplete')
+  return ended('done', {
+    report: { messageId: lastReply.id, content: lastReply.content },
+    members: members?.map(member => member.state === 'idle' ? { ...member, state: 'done' } : member) ?? null,
+  })
 }

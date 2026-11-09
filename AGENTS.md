@@ -1,13 +1,15 @@
-**No hardcoded text.** Use `t('English text')`.
+**No hardcoded renderer text.** Use `t('English text')`.
 
 ```tsx
 ✓ <Button>{t('Save')}</Button>
 ✗ <Button>Save</Button>
 ```
 No need to write translation files because the translation is automated.
-Run `npm run i18n` before commit by user.
+Run `npm run i18n` before commit when renderer text changed.
 Run `npm run sync:ai-guides` before cutting a release when the AI guides changed (see halo-dev `quick.md` §3F).
-Before making any changes, you must read the halo-dev skill. Its `LAWS.md` (load-bearing architecture laws) is read first and overrides all other rules.
+Before planning or changing code, read the halo-dev skill and its `LAWS.md` first; then follow its scope-specific route.
+
+**SDK work:** `src/sdk/halo-sdk/` is a host-independent general-purpose Agent runtime and npm package, not Halo application code. Before SDK design, edits, tests, review or commit, read `src/sdk/halo-sdk/AGENTS.md`; SDK-only work does not require the desktop guides. Cross-boundary work follows both routes. Package structure does not authorize npm publication.
 
 **Long-term principle**
 
@@ -31,7 +33,7 @@ Always design with high maintainability and modularity, aligned with long-term a
 This project is 100% AI-generated, so humans may not necessarily know more than you do. You need to proactively review documentation, manage documents, and examine code to confirm details and direction (for matters involving architecture and direction, actively discuss with users).
 
 **User-outcome acceptance**
-- Before changing user-visible behavior or planning regression coverage, read `.agents/skills/acceptance-testing/SKILL.md` and the affected stories under `tests/acceptance/catalog/`.
+- SDK-only verification follows `src/sdk/halo-sdk/AGENTS.md`. For Halo user-visible behavior or application regression coverage, read `.agents/skills/acceptance-testing/SKILL.md` and the affected stories under `tests/acceptance/catalog/`.
 - Preserve the distinction between product expectations, executable coverage and actual evidence. Missing environments, skipped tests and partial UI checks never establish a complete user journey.
 - Keep product changes, scenario bindings and verification records aligned. Existing documented behavior can be tested directly; new product choices require explicit human direction.
-- After changing user-visible behavior, run the affected modules through the acceptance system and read its findings before reporting the work done; the skill describes how, and what to say when a run is not possible.
+- After changing Halo user-visible behavior, run the affected modules through the acceptance system and read its findings before reporting the work done; the skill describes how, and what to say when a run is not possible.

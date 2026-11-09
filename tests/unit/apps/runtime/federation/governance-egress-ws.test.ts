@@ -68,6 +68,7 @@ import {
   sendFederationFrameToClient,
   listOfficeClientIds,
 } from '../../../../../src/main/http/websocket'
+import { disposeJoinedOfficeWork } from '../../../../../src/main/apps/runtime/team/office-disposal'
 import { createFederationManager } from '../../../../../src/main/apps/runtime/federation/manager'
 import { localAuthProof } from './_ws-auth'
 import type { FederationManager } from '../../../../../src/main/apps/runtime/federation/manager'
@@ -85,6 +86,7 @@ async function waitFor(predicate: () => boolean, budgetMs = 4000): Promise<void>
 }
 
 describe('governance egress + run-epoch + restart recovery (real ws)', () => {
+  let dissolveReplica: ((officeId: string) => void) | undefined
   let dbManager: DatabaseManager
   let joinerDbManager: DatabaseManager
   let teamStore: TeamStore
@@ -136,6 +138,7 @@ describe('governance egress + run-epoch + restart recovery (real ws)', () => {
 
     memberRemoved = []
     officeDissolved = []
+    dissolveReplica = undefined
     joinerManager = createFederationManager({
       hostSend: () => false,
       hostListOfficeClients: () => [],
@@ -149,7 +152,7 @@ describe('governance egress + run-epoch + restart recovery (real ws)', () => {
       makeAuthProof: (nonce) => localAuthProof(nonce),
       onMemberRemovedRemote: (officeId, appId, ownMember) =>
         memberRemoved.push({ officeId, appId, ownMember }),
-      onOfficeDissolvedRemote: (officeId) => officeDissolved.push(officeId),
+      onOfficeDissolvedRemote: (officeId) => { officeDissolved.push(officeId); dissolveReplica?.(officeId) },
     })
   })
 
@@ -226,6 +229,27 @@ describe('governance egress + run-epoch + restart recovery (real ws)', () => {
     await waitFor(() => !joinerManager.listJoinedOffices().includes(OFFICE))
     expect(joinerManager.listJoinedOffices()).not.toContain(OFFICE)
     expect(joinerManager.getOffice(OFFICE)).toBeNull()
+  })
+
+  it('keeps a dissolved shadow office until the local execution cleanup succeeds', async () => {
+    await joinAsB()
+    joinerTeamStore.insertEpoch({ id: EPOCH, teamId: OFFICE, lifecycle: 'conversation', startedAt: 1, endedAt: null, endReason: null, summary: null })
+    joinerTeamStore.participants.insert({ teamId: OFFICE, epochId: EPOCH, appId: 'temporary', parentAppId: 'app-ws-1',
+      memberName: 'temporary', role: '', isLead: false, aiProvisioned: false, isTemporary: true, addedAt: 1 })
+    const failures: unknown[] = []
+    const close = vi.fn(async (): Promise<void> => { throw new Error('Close failed') })
+    const runtime = { bus: { cancelSession: vi.fn() }, closeEpochResources: close } as never
+    dissolveReplica = officeId => { void disposeJoinedOfficeWork(joinerTeamStore, runtime, officeId).catch(error => failures.push(error)) }
+    hostManager.projectOfficeDissolved(OFFICE)
+    await waitFor(() => failures.length > 0)
+    expect(failures).toHaveLength(1)
+    expect(joinerTeamStore.getTeamById(OFFICE)).not.toBeNull()
+    expect(joinerTeamStore.participants.getById('temporary')).not.toBeNull()
+    expect(joinerTeamStore.getEpochById(EPOCH)).toMatchObject({ endedAt: null, endReason: null, summary: null })
+    close.mockImplementation(async () => {})
+    await disposeJoinedOfficeWork(joinerTeamStore, runtime, OFFICE)
+    expect(joinerTeamStore.getTeamById(OFFICE)).toBeNull()
+    expect(joinerTeamStore.participants.getById('temporary')).toBeNull()
   })
 
   it('H-1: a successful join persists a re-join record for restart recovery', async () => {

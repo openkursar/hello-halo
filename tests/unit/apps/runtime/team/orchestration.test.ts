@@ -221,6 +221,61 @@ describe('TeamOrchestration', () => {
   // Epoch lifecycle
   // ===========================================================================
 
+  it('projects direct temporary activity without scanning historical rosters and ignores an older ending', async () => {
+    seedTeam(store)
+    const { deps } = makeSession()
+    const orch = build(deps)
+    const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:temporary-direct')
+    const target = { appId: 'temporary', teamId: TEAM_ID, epochId: epoch.id }
+    const roster = vi.spyOn(store, 'listMembersByTeam')
+    const history = vi.spyOn(store, 'listEpochsByTeam')
+    orch.noteMemberTurnStarted({ ...target, correlationId: 'first' })
+    orch.noteMemberTurnStarted({ ...target, correlationId: 'second' })
+    roster.mockClear(); history.mockClear()
+    expect([...orch.getActiveEpochIds(TEAM_ID)]).toEqual([epoch.id])
+    expect(roster).not.toHaveBeenCalled()
+    expect(history).not.toHaveBeenCalled()
+    orch.noteMemberTurnEnded({ ...target, correlationId: 'first' })
+    expect(orch.getActiveEpochIds(TEAM_ID).has(epoch.id)).toBe(true)
+    orch.noteMemberTurnEnded({ ...target, correlationId: 'second' })
+    expect(orch.getActiveEpochIds(TEAM_ID).size).toBe(0)
+    await new Promise<void>(resolve => setImmediate(resolve))
+  })
+
+  it('includes a temporary member waiting for its concurrency slot in active work', async () => {
+    seedTeam(store, { collabMode: 'free' })
+    const { deps, pendings } = makeSession()
+    deps.getMemberSpaceId = () => SPACE
+    const orch = build(deps, undefined, 1)
+    const first = orch.ensureConversationEpoch(TEAM_ID, 'native:first-active')
+    const second = orch.ensureConversationEpoch(TEAM_ID, 'native:temporary-queued')
+    store.participants.insert({ teamId: TEAM_ID, epochId: second.id, appId: 'temporary', parentAppId: LEAD_APP,
+      memberName: 'temporary', role: '', isLead: false, aiProvisioned: false, isTemporary: true, addedAt: 1 })
+    await bus.send({ teamId: TEAM_ID, epochId: first.id, fromAppId: LEAD_APP, to: 'researcher', message: 'First.' })
+    await bus.send({ teamId: TEAM_ID, epochId: second.id, fromAppId: LEAD_APP, to: 'temporary', message: 'Second.' })
+    expect(pendings).toHaveLength(1)
+    expect([...orch.getActiveEpochIds(TEAM_ID)].sort()).toEqual([first.id, second.id].sort())
+    pendings[0].resolve()
+    await vi.waitFor(() => expect(pendings).toHaveLength(2))
+    pendings[1].resolve()
+    await vi.waitFor(() => expect(orch.getActiveEpochIds(TEAM_ID).size).toBe(0))
+  })
+
+  it('reports closure failures after attempting every member and retries a cleared scope', async () => {
+    seedTeam(store)
+    const { deps } = makeSession()
+    const close = vi.fn(async (appId: string) => { if (appId === RESEARCHER_APP) throw new Error('Could not close') })
+    deps.closeTeamSession = close
+    const orch = build(deps)
+    const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:closure-failure')
+    await expect(orch.sealConversationEpoch(TEAM_ID, epoch.id, 'cleared')).rejects.toThrow(/retained/)
+    expect(close).toHaveBeenCalledTimes(3)
+    expect(store.getEpochById(epoch.id)?.endReason).toBe('cleared')
+    close.mockImplementation(async () => {})
+    await orch.sealConversationEpoch(TEAM_ID, epoch.id, 'cleared')
+    expect(close).toHaveBeenCalledTimes(6)
+  })
+
   it('reuses a sealed conversation task when the same reception or direct channel returns', () => {
     seedTeam(store)
     const { deps } = makeSession()
@@ -288,12 +343,68 @@ describe('TeamOrchestration', () => {
       expect(pendings[0].teamContext.fromAppId).toBeNull()
     })
 
-    it('rejects a second run while this process is executing one', async () => {
+    it('runs independent manual work concurrently and releases each automatic guard only after its activity ends', async () => {
       seedTeam(store)
-      const { deps } = makeSession()
+      const { deps, pendings } = makeSession()
       const orch = build(deps)
-      await orch.startEpoch(TEAM_ID)
-      await expect(orch.startEpoch(TEAM_ID)).rejects.toThrow(/already has a running epoch/)
+      const first = await orch.startEpoch(TEAM_ID, { type: 'manual' }, 'First work')
+      const second = await orch.startEpoch(TEAM_ID, { type: 'manual' }, 'Second work')
+      expect(first.id).not.toBe(second.id)
+      expect(pendings).toHaveLength(2)
+      await expect(orch.startEpoch(TEAM_ID, { type: 'schedule' })).rejects.toThrow(/automatic runs do not overlap/)
+      pendings[0].resolve('First finished')
+      await flush()
+      expect(orch.activeRunEpochId(TEAM_ID)).toBe(second.id)
+      expect(store.getTeamById(TEAM_ID)?.status).toBe('running')
+      pendings[1].resolve('Second finished')
+      await flush()
+      expect(orch.activeRunEpochId(TEAM_ID)).toBeNull()
+      expect(store.getTeamById(TEAM_ID)?.status).toBe('idle')
+      for (const epoch of [first, second]) expect(store.getEpochById(epoch.id)).toMatchObject({ endedAt: null, workItem: { status: 'open' } })
+      await expect(orch.startEpoch(TEAM_ID, { type: 'schedule' })).resolves.toBeTruthy()
+    })
+
+    it('does not treat a decision-blocked run as idle for automatic triggers', async () => {
+      seedTeam(store)
+      const { deps, pendings } = makeSession()
+      const orch = build(deps)
+      const epoch = await orch.startEpoch(TEAM_ID)
+      orch.captureReport(pendings[0].teamContext.correlationId, { kind: 'escalation', content: 'Need the owner' })
+      pendings[0].resolve('Waiting')
+      await flush()
+      expect(orch.activeRunEpochId(TEAM_ID)).toBe(epoch.id)
+      expect(store.getTeamById(TEAM_ID)?.status).toBe('waiting_user')
+      await expect(orch.startEpoch(TEAM_ID, { type: 'schedule' })).rejects.toThrow(/automatic runs do not overlap/)
+      await expect(orch.startEpoch(TEAM_ID, { type: 'manual' }, 'Independent work')).resolves.toBeTruthy()
+    })
+
+    it('keeps the automatic guard until pending reports have actually left their queue', async () => {
+      seedTeam(store)
+      const { deps, pendings } = makeSession()
+      let pendingReports = true
+      let orch: ReturnType<typeof createOrchestration>
+      const channel = createMessageBus({ store, hooks: { isBusy: key => deps.isSessionActive(key), wakeTarget: request => orch.wakeTarget(request) } })
+      orch = createOrchestration({ store, bus: channel, session: deps, hasPendingTurnReports: () => pendingReports })
+      const epoch = await orch.startEpoch(TEAM_ID)
+      pendings[0].resolve('Result produced')
+      await flush()
+      expect(orch.activeRunEpochId(TEAM_ID)).toBe(epoch.id)
+      await expect(orch.startEpoch(TEAM_ID, { type: 'schedule' })).rejects.toThrow(/automatic runs do not overlap/)
+      pendingReports = false
+      orch.notePendingWorkChanged(TEAM_ID, epoch.id)
+      expect(orch.activeRunEpochId(TEAM_ID)).toBeNull()
+      expect(store.getEpochById(epoch.id)).toMatchObject({ endedAt: null, workItem: { status: 'open' } })
+    })
+
+    it('requires a current instruction or standing goal before any execution', async () => {
+      seedTeam(store)
+      store.updateTeamFields(TEAM_ID, { goal: '' })
+      const { deps, pendings } = makeSession()
+      const orch = build(deps)
+      await expect(orch.startEpoch(TEAM_ID)).rejects.toThrow(/Provide an instruction/)
+      expect(pendings).toHaveLength(0)
+      await orch.startEpoch(TEAM_ID, { type: 'manual' }, 'Inspect this issue only.')
+      expect((deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].message).toContain('Inspect this issue only.')
     })
 
     it('runs for a team whose stored pointer belongs to a process that is gone', async () => {
@@ -350,6 +461,41 @@ describe('TeamOrchestration', () => {
 
       const epoch = await after.startEpoch(TEAM_ID)
       expect(epoch.id).not.toBe(stranded.id)
+    })
+
+    it('does not recover a run that this process is currently executing', async () => {
+      seedTeam(store)
+      const { deps } = makeSession()
+      const orch = build(deps)
+      const epoch = await orch.startEpoch(TEAM_ID)
+      expect(await orch.recoverInterruptedRuns()).toBe(0)
+      expect(store.getEpochById(epoch.id)?.endedAt).toBeNull()
+      expect(orch.activeRunEpochId(TEAM_ID)).toBe(epoch.id)
+    })
+
+    it('does not classify quiet open work as interrupted at restart', async () => {
+      seedTeam(store)
+      const { deps, pendings } = makeSession()
+      const before = build(deps)
+      const epoch = await before.startEpoch(TEAM_ID)
+      pendings[0].resolve('Waiting for the next instruction')
+      await flush()
+      const after = build(makeSession().deps)
+      expect(await after.recoverInterruptedRuns()).toBe(0)
+      expect(store.getEpochById(epoch.id)).toMatchObject({ endedAt: null, outcome: null, workItem: { status: 'open' } })
+    })
+
+    it('restores a recorded decision-blocked run without spending on a duplicate automatic run', async () => {
+      seedTeam(store)
+      const epoch = makeEpoch(store)
+      store.updateTeamStatus(TEAM_ID, 'waiting_user')
+      const { deps } = makeSession()
+      const channel = createMessageBus({ store, hooks: { isBusy: () => false } as never })
+      const orch = createOrchestration({ store, bus: channel, session: deps, hasPendingEscalation: () => true })
+      expect(await orch.recoverInterruptedRuns()).toBe(0)
+      expect(orch.activeRunEpochId(TEAM_ID)).toBe(epoch.id)
+      expect(deps.sendAppChatMessage).not.toHaveBeenCalled()
+      await expect(orch.startEpoch(TEAM_ID, { type: 'schedule' })).rejects.toThrow(/automatic runs do not overlap/)
     })
 
     it('keeps the record of a run that had already produced one', async () => {
@@ -465,7 +611,7 @@ describe('TeamOrchestration', () => {
   })
 
   // ===========================================================================
-  // team_complete deferred seal
+  // Explicit archival and idle resource retirement
   // ===========================================================================
 
   describe('where a turn\u2019s request came from', () => {
@@ -499,145 +645,69 @@ describe('TeamOrchestration', () => {
     })
   })
 
-  describe('requestSeal (team_complete)', () => {
-    it('completes a direct lead conversation without touching another task', async () => {
+  describe('explicit task archival and idle retirement', () => {
+    it('does not complete a task merely because a member ends its turn', async () => {
       seedTeam(store)
       const { deps, cleared } = makeSession()
+      const orch = build(deps)
+      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:direct')
+      orch.noteMemberTurnEnded({ teamId: TEAM_ID, epochId: epoch.id, appId: LEAD_APP })
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(store.getEpochById(epoch.id)).toMatchObject({ endedAt: null, workItem: { status: 'open' } })
+      expect(cleared).toHaveLength(0)
+    })
+
+    it('archives only the work explicitly chosen by the human and discards its pending wakes', async () => {
+      seedTeam(store)
+      const { deps, active, pendings, cleared } = makeSession()
       const orch = build(deps)
       const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:direct')
       const other = orch.ensureConversationEpoch(TEAM_ID, 'native:other')
-      orch.requestSeal(TEAM_ID, epoch.id, 'direct work complete')
-      orch.noteMemberTurnEnded({ teamId: TEAM_ID, epochId: epoch.id, appId: LEAD_APP })
-      expect(cleared).toHaveLength(0)
-      await new Promise<void>(resolve => setImmediate(resolve))
-      await flush()
-      expect(store.getEpochById(epoch.id)?.workItem?.status).toBe('completed')
-      expect(store.getEpochById(epoch.id)?.endReason).toBe('completed')
-      expect(store.getEpochById(other.id)?.endedAt).toBeNull()
-      expect(store.getEpochById(other.id)?.workItem?.status).toBe('open')
-      expect(cleared).toHaveLength(3)
-    })
-
-    it('does not consume the lead completion when a different member ends', async () => {
-      seedTeam(store)
-      const { deps, cleared } = makeSession()
-      const orch = build(deps)
-      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:direct')
-      orch.requestSeal(TEAM_ID, epoch.id, 'all done')
-      orch.noteMemberTurnEnded({ teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP })
-      await new Promise<void>(resolve => setImmediate(resolve))
-      expect(store.getEpochById(epoch.id)?.workItem?.status).toBe('open')
-      expect(cleared).toHaveLength(0)
-    })
-
-    it('lets the bus completion consume its seal before the direct fallback', async () => {
-      seedTeam(store)
-      const { deps, pendings, cleared } = makeSession()
-      const orch = build(deps)
-      const epoch = await orch.startEpoch(TEAM_ID)
-      const leadPending = pendings.find(p => p.conversationId === buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id))!
-      const completeTurn = vi.spyOn(bus, 'completeTurn')
-      orch.requestSeal(TEAM_ID, epoch.id, 'bus work complete')
-      orch.noteMemberTurnEnded({ teamId: TEAM_ID, epochId: epoch.id, appId: LEAD_APP })
-      leadPending.resolve('done')
-      await new Promise<void>(resolve => setImmediate(resolve))
-      await flush()
-      expect(completeTurn).toHaveBeenCalledWith(expect.objectContaining({ sealPending: true }))
-      expect(cleared).toHaveLength(3)
-      expect(store.getEpochById(epoch.id)?.workItem?.status).toBe('completed')
-    })
-
-    it('waits for a deferred bus session result before sealing and discarding multiple queued messages', async () => {
-      seedTeam(store, { collabMode: 'free' })
-      const { deps, pendings, cleared } = makeSession()
-      const orch = build(deps)
-      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:deferred')
-      const receipt = bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: RESEARCHER_APP, to: 'lead', message: 'start', wait: true })
-      await flush()
-      const sessionKey = buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id)
-      for (const message of ['queued one', 'queued two']) {
-        await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: TESTER_APP, to: 'lead', message, wait: false })
-      }
-      orch.requestSeal(TEAM_ID, epoch.id, 'done')
-      orch.noteMemberTurnEnded({ teamId: TEAM_ID, epochId: epoch.id, appId: LEAD_APP })
-      // A session may notify its observer before asynchronous finalization resolves its caller.
-      await new Promise<void>(resolve => setImmediate(resolve))
-      await flush()
-      expect(store.getEpochById(epoch.id)?.endedAt).toBeNull()
-      expect(cleared).toHaveLength(0)
-      expect(bus.isSessionOccupied(sessionKey)).toBe(true)
-      pendings[0].resolve('final result')
-      await expect(receipt).resolves.toMatchObject({ message: 'final result', status: 'ok' })
-      await flush()
-      expect(pendings).toHaveLength(1)
-      expect(bus.hasBufferedMessages(epoch.id)).toBe(false)
-      expect(store.getEpochById(epoch.id)?.endReason).toBe('completed')
-    })
-
-    it('discards every queued wake for an explicitly completed task', async () => {
-      seedTeam(store, { collabMode: 'free' })
-      const { deps, active, pendings } = makeSession()
-      const orch = build(deps)
-      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:closed')
       const sessionKey = buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id)
       active.add(sessionKey)
-      for (const message of ['queued one', 'queued two', 'queued three']) {
-        await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: TESTER_APP, to: 'lead', message, wait: false })
-      }
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: RESEARCHER_APP, to: 'lead', message: 'queued report', wait: false })
       store.updateWorkItem(epoch.id, { status: 'completed' })
+      await orch.sealConversationEpoch(TEAM_ID, epoch.id, 'completed', 'Archived by owner')
       active.delete(sessionKey)
       bus.drainMailbox(sessionKey)
       await flush()
       expect(pendings).toHaveLength(0)
       expect(bus.hasBufferedMessages(epoch.id)).toBe(false)
-      expect(bus.isSessionOccupied(sessionKey)).toBe(false)
       expect(store.getEpochById(epoch.id)?.workItem?.status).toBe('completed')
+      expect(store.getEpochById(other.id)).toMatchObject({ endedAt: null, workItem: { status: 'open' } })
+      expect(cleared).toHaveLength(3)
     })
 
-    it('seals a direct conversation before its queued mailbox can start another turn', async () => {
+    it('releases idle execution objects without closing work, records or periodic checks', async () => {
+      vi.useFakeTimers()
+      try {
+        seedTeam(store)
+        const { deps, pendings } = makeSession()
+        deps.evictIdleSession = vi.fn(() => true)
+        const orch = build(deps)
+        const epoch = await orch.startEpoch(TEAM_ID)
+        pendings[0].resolve('Done for now')
+        await vi.advanceTimersByTimeAsync(121_000)
+        expect(deps.evictIdleSession).toHaveBeenCalledTimes(3)
+        expect(deps.closeTeamSession).not.toHaveBeenCalled()
+        expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
+        expect(store.getEpochById(epoch.id)).toMatchObject({ endedAt: null, workItem: { status: 'open' } })
+        await orch.wakeForCheck({ teamId: TEAM_ID, epochId: epoch.id, appId: LEAD_APP, body: 'Scheduled follow-up', onBusy: 'buffer' })
+        expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(2)
+      } finally { vi.useRealTimers() }
+    })
+
+    it('pauses every open run while preserving independent conversation work', async () => {
       seedTeam(store)
-      const { deps, active, pendings } = makeSession()
+      const { deps } = makeSession()
       const orch = build(deps)
-      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:direct')
-      const sessionKey = buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id)
-      active.add(sessionKey)
-      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: RESEARCHER_APP, to: 'lead', message: 'queued report', wait: false })
-      orch.requestSeal(TEAM_ID, epoch.id, 'done')
-      orch.noteMemberTurnEnded({ teamId: TEAM_ID, epochId: epoch.id, appId: LEAD_APP })
-      active.delete(sessionKey)
-      setImmediate(() => bus.drainMailbox(sessionKey))
-      await new Promise<void>(resolve => setImmediate(resolve))
-      await flush()
-      expect(pendings).toHaveLength(0)
-      expect(store.getEpochById(epoch.id)?.endedAt).not.toBeNull()
-      expect(bus.hasBufferedMessages(epoch.id)).toBe(false)
-    })
-
-    it('defers the seal until the lead turn ends, then seals as completed', async () => {
-      seedTeam(store, { collabMode: 'free' })
-      const { deps, pendings, cleared } = makeSession()
-      const orch = build(deps)
-      const epoch = await orch.startEpoch(TEAM_ID)
-
-      // Lead turn is in flight. Lead calls team_complete → requestSeal. The seal
-      // must NOT happen yet (it would abort the in-flight lead turn).
-      orch.requestSeal(TEAM_ID, epoch.id, 'all done')
-      expect(store.getTeamById(TEAM_ID)!.currentEpochId).toBe(epoch.id)
-      expect(cleared).toHaveLength(0)
-
-      // Lead turn ends → the deferred seal fires.
-      const leadPending = pendings.find(
-        (p) => p.conversationId === buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id)
-      )!
-      leadPending.resolve('winner declared')
-      await flush()
-
-      const team = store.getTeamById(TEAM_ID)!
-      expect(team.status).toBe('idle')
-      expect(team.currentEpochId).toBeNull()
-      expect(store.getEpochById(epoch.id)?.endReason).toBe('completed')
-      expect(store.getEpochById(epoch.id)?.summary).toBe('all done')
-      expect(cleared.length).toBeGreaterThan(0)
+      const first = await orch.startEpoch(TEAM_ID)
+      const second = await orch.startEpoch(TEAM_ID)
+      const conversation = orch.ensureConversationEpoch(TEAM_ID, 'native:unrelated')
+      await orch.sealEpoch(TEAM_ID, 'stopped')
+      expect(store.getEpochById(first.id)?.endReason).toBe('stopped')
+      expect(store.getEpochById(second.id)?.endReason).toBe('stopped')
+      expect(store.getEpochById(conversation.id)?.endedAt).toBeNull()
     })
   })
 
@@ -716,7 +786,7 @@ describe('TeamOrchestration', () => {
         const orch = build(deps)
         const epoch = orch.ensureConversationEpoch(TEAM_ID, CHAT_A)
 
-        // Drive one lead turn to completion → schedules a quiescence check.
+        // Finish one lead turn without completing its work context.
         await orch.wakeTarget({
           sessionKey: buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id),
           appId: LEAD_APP,
@@ -727,7 +797,7 @@ describe('TeamOrchestration', () => {
         })
         pendings[0].resolve('replied; awaiting next message')
 
-        // Past two quiescence windows (nudge + would-be auto-seal).
+        // Quiet work stays open without extra model requests.
         await vi.advanceTimersByTimeAsync(12_000)
 
         // Conversation epochs are never auto-sealed — only the initial wake
@@ -739,7 +809,7 @@ describe('TeamOrchestration', () => {
       }
     })
 
-    it('a run epoch under the same idle conditions DOES nudge (quiescence active)', async () => {
+    it('never nudges or completes a quiet run', async () => {
       vi.useFakeTimers()
       try {
         seedTeam(store)
@@ -759,8 +829,8 @@ describe('TeamOrchestration', () => {
 
         await vi.advanceTimersByTimeAsync(6_000)
 
-        // Run epochs nudge the lead on quiescence → a second wake occurs.
-        expect((deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2)
+        expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
+        expect(store.getEpochById(epoch.id)?.endedAt).toBeNull()
       } finally {
         vi.useRealTimers()
       }
@@ -1804,15 +1874,7 @@ describe('TeamOrchestration', () => {
       expect(body).toContain('use the staging account')
     })
 
-    it('a turn ending with a seal pending starts nothing new from the mailbox', async () => {
-      // The bug this pins: `completeTurn`'s last act is draining the mailbox,
-      // and the caller learns three statements later that this epoch is about
-      // to be sealed. The drained envelope therefore started a turn that the
-      // seal — arriving a millisecond behind it — tore down while it was still
-      // building its session. What that produced was worse than either outcome
-      // on its own: a turn that reached no model (0 tokens), a message neither
-      // delivered nor cleanly dropped, and a sealed epoch woken back to life by
-      // its own doomed turn, so a finished run read as still running forever.
+    it('a human archive during a turn prevents pending mailbox work from starting', async () => {
       seedTeam(store, { collabMode: 'free' })
       const epoch = makeEpoch(store)
       const { deps, pendings } = makeSession()
@@ -1826,9 +1888,9 @@ describe('TeamOrchestration', () => {
       await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: TESTER_APP, to: 'lead', message: 'queued behind it', wait: false })
       expect(bus.hasBufferedMessages(epoch.id)).toBe(true)
 
-      // The lead calls team_complete during that turn, so the seal is deferred
-      // to its end — the exact ordering that produced the defect.
-      orch.requestSeal(TEAM_ID, epoch.id, 'done')
+      // The human archives this work while its lead is still finishing.
+      store.updateWorkItem(epoch.id, { status: 'completed' })
+      await orch.sealConversationEpoch(TEAM_ID, epoch.id, 'completed', 'Archived by owner')
       pendings[pendings.length - 1].resolve('wrapping up')
       await flush()
 
@@ -1840,7 +1902,7 @@ describe('TeamOrchestration', () => {
       expect(store.getEpochById(epoch.id)?.endedAt).not.toBeNull()
     })
 
-    it('a turn ending with NO seal pending still drains the mailbox', async () => {
+    it('an ordinary turn ending still drains the mailbox', async () => {
       // The guard must key on this epoch ending, not on "a turn ended" — or the
       // fix would silently strand every queued message behind every turn.
       seedTeam(store, { collabMode: 'free' })
@@ -1932,6 +1994,7 @@ describe('TeamOrchestration', () => {
 
       vi.useFakeTimers()
       try {
+        orch.noteEpochTurn(TEAM_ID, epoch.id, true)
         active.add(sessionKey)
         orch.noteMemberStatusChanged(TEAM_ID, RESEARCHER_APP)
         orch.noteMemberStatusChanged(TEAM_ID, RESEARCHER_APP)
@@ -1998,16 +2061,33 @@ describe('TeamOrchestration', () => {
   // ===========================================================================
 
   describe('buildPromptContext', () => {
+    it('keeps stable system context when temporary peers join while still resolving a temporary caller', () => {
+      seedTeam(store)
+      makeEpoch(store, EPOCH_ID)
+      const orch = build(makeSession().deps)
+      const before = buildTeamEntry(orch.buildPromptContext(TEAM_ID, LEAD_APP, EPOCH_ID)!)
+      for (const [appId, memberName] of [['temporary-1', 'First helper'], ['temporary-2', 'Second helper']]) {
+        store.participants.insert({ teamId: TEAM_ID, epochId: EPOCH_ID, appId, memberName, parentAppId: LEAD_APP,
+          role: 'Review', isLead: false, aiProvisioned: false, isTemporary: true, addedAt: Date.now() })
+      }
+      expect(buildTeamEntry(orch.buildPromptContext(TEAM_ID, LEAD_APP, EPOCH_ID)!)).toBe(before)
+      const temporary = orch.buildPromptContext(TEAM_ID, 'temporary-1', EPOCH_ID)!
+      expect(temporary.selfMemberName).toBe('First helper')
+      expect(temporary.selfIsDisposable).toBe(true)
+      expect(temporary.roster.some(member => member.memberName === 'Second helper')).toBe(false)
+      expect(store.listMembersByTeam(TEAM_ID, EPOCH_ID)).toHaveLength(5)
+    })
+
     it('projects roster with topology contactability, per member', () => {
       seedTeam(store, { collabMode: 'structured' })
+      makeEpoch(store, EPOCH_ID)
       const { deps } = makeSession()
       const orch = build(deps)
 
       const ctx = orch.buildPromptContext(TEAM_ID, RESEARCHER_APP, EPOCH_ID)!
       expect(ctx.selfMemberName).toBe('researcher')
       expect(ctx.collabMode).toBe('structured')
-      // researcher has no outgoing edges → nobody contactable in structured mode.
-      expect(ctx.roster.every((m) => m.contactable === false)).toBe(true)
+      expect(ctx.roster.filter((m) => m.contactable).map((m) => m.memberName)).toEqual(['lead'])
 
       // The lead, by contrast, may contact researcher + tester.
       const leadCtx = orch.buildPromptContext(TEAM_ID, LEAD_APP, EPOCH_ID)!
@@ -2025,11 +2105,12 @@ describe('TeamOrchestration', () => {
       const native = orch.ensureConversationEpoch(TEAM_ID, 'native:abc')
       expect(orch.buildPromptContext(TEAM_ID, RESEARCHER_APP, chat.id)!.chatKey).toBe('inst-1:direct:user-7')
       expect(orch.buildPromptContext(TEAM_ID, RESEARCHER_APP, native.id)!.chatKey).toBe('native:abc')
-      expect(orch.buildPromptContext(TEAM_ID, RESEARCHER_APP, 'missing')!.chatKey).toBeNull()
+      expect(orch.buildPromptContext(TEAM_ID, RESEARCHER_APP, 'missing')).toBeNull()
     })
 
     it('gives the member its team folder for the epoch its session serves', () => {
       seedTeam(store)
+      makeEpoch(store, 'epoch-9')
       const { deps } = makeSession()
       const asked: Array<[string, string, string]> = []
       const folders = {
@@ -2060,16 +2141,19 @@ describe('TeamOrchestration', () => {
 
       it('is true for a member the temporary collaboration built', () => {
         seedTeam(store, { ephemeral: true, aiProvisioned: true, collabMode: 'free' })
+        makeEpoch(store, EPOCH_ID)
         expect(make().buildPromptContext(TEAM_ID, RESEARCHER_APP, EPOCH_ID)!.selfIsDisposable).toBe(true)
       })
 
       it('is false for a digital human the person installed, even in a temporary collaboration', () => {
         seedTeam(store, { ephemeral: true, aiProvisioned: false, collabMode: 'free' })
+        makeEpoch(store, EPOCH_ID)
         expect(make().buildPromptContext(TEAM_ID, RESEARCHER_APP, EPOCH_ID)!.selfIsDisposable).toBe(false)
       })
 
       it('is false for an AI-built member of a persistent team — the team outlives the work', () => {
         seedTeam(store, { aiProvisioned: true })
+        makeEpoch(store, EPOCH_ID)
         expect(make().buildPromptContext(TEAM_ID, RESEARCHER_APP, EPOCH_ID)!.selfIsDisposable).toBe(false)
       })
     })
@@ -2125,7 +2209,7 @@ describe('TeamOrchestration', () => {
       const epoch = makeEpoch(store)
       const { deps, pendings } = makeSession()
       const orch = build(deps)
-      const researcherEntry = () => buildTeamEntry(orch.buildPromptContext(TEAM_ID, RESEARCHER_APP, EPOCH_ID)!)
+      const researcherEntry = () => buildTeamEntry(orch.buildPromptContext(TEAM_ID, RESEARCHER_APP, epoch.id)!)
 
       // Turn 1: the lead sends.
       await bus.send({
@@ -2310,8 +2394,8 @@ describe('TeamOrchestration', () => {
 // ============================================
 
 /** Insert a running epoch directly (for tests that don't exercise startEpoch). */
-function makeEpoch(store: TeamStore): TeamEpoch {
-  const epoch: TeamEpoch = { id: 'epoch-1', teamId: TEAM_ID, startedAt: Date.now(), endedAt: null, endReason: null, summary: null, lifecycle: 'run' }
+function makeEpoch(store: TeamStore, id = 'epoch-1'): TeamEpoch {
+  const epoch: TeamEpoch = { id, teamId: TEAM_ID, startedAt: Date.now(), endedAt: null, endReason: null, summary: null, lifecycle: 'run' }
   store.insertEpoch(epoch)
   store.updateTeamCurrentEpoch(TEAM_ID, epoch.id)
   store.updateTeamStatus(TEAM_ID, 'running')

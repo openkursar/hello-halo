@@ -36,21 +36,28 @@ vi.mock('../../../../../src/main/services/agent/toolsets/meta-server', () => ({
   CAPABILITIES_SERVER_NAME: 'capabilities'
 }))
 
-const ALL = ['ai-browser', 'ai-terminal', 'halo-api-ref']
+const ALL = ['ai-browser', 'ai-terminal', 'ocr', 'halo-team', 'halo-api-ref']
+const contextManaged = (id: string) => id !== 'optional-fixture'
 vi.mock('../../../../../src/main/services/agent/toolsets/registry', () => ({
-  getAvailableToolsets: vi.fn(() => ALL.map(id => ({ id }))),
+  getAvailableToolsets: vi.fn(() => [...ALL, ...(config.value.optional ? ['optional-fixture'] : [])].map(id => ({ id, contextManaged: contextManaged(id) }))),
   getToolset: vi.fn((id: string) =>
-    ALL.includes(id) ? { id, createServer: vi.fn(() => ({ tag: `toolset-${id}` })) } : undefined
+    [...ALL, 'optional-fixture'].includes(id) ? { id, contextManaged: contextManaged(id), createServer: vi.fn(() => ({ tag: `toolset-${id}` })) } : undefined
   )
 }))
 
 vi.mock('../../../../../src/main/services/agent/toolsets/state', () => ({
   getOpenToolsets: vi.fn((_s: string, c: string) => openSets.get(c) ?? new Set<string>()),
-  markOpen: vi.fn(),
+  markOpen: vi.fn((_space: string, conversation: string, id: string) => {
+    const open = openSets.get(conversation) ?? new Set<string>()
+    const changed = !open.has(id)
+    open.add(id)
+    openSets.set(conversation, open)
+    return changed
+  }),
   markClosed: vi.fn()
 }))
 
-import { buildMcpServerRecord } from '../../../../../src/main/services/agent/toolsets/broker'
+import { buildMcpServerRecord, listToolsetStatuses, requestToolset } from '../../../../../src/main/services/agent/toolsets/broker'
 import { TEAM_MCP_SERVER_NAME } from '../../../../../src/shared/apps/team-types'
 import type { ToolsetScope } from '../../../../../src/main/services/agent/toolsets/types'
 
@@ -69,7 +76,8 @@ beforeEach(() => {
 
 describe('buildMcpServerRecord — capabilities meta server', () => {
   it('includes capabilities when at least one toolset is disabled', () => {
-    setOpen(['ai-browser']) // ai-terminal still disabled
+    config.value = { optional: true }
+    setOpen(['ai-browser'])
     const record = buildMcpServerRecord(scope)
     expect(record.capabilities).toBeDefined()
   })
@@ -81,7 +89,8 @@ describe('buildMcpServerRecord — capabilities meta server', () => {
   })
 
   it('recreates the capabilities server on every build', () => {
-    setOpen([]) // both disabled → capabilities present
+    config.value = { optional: true }
+    setOpen([])
     const first = buildMcpServerRecord(scope).capabilities
     const second = buildMcpServerRecord(scope).capabilities
     expect(first).not.toBe(second)
@@ -109,13 +118,10 @@ describe('buildMcpServerRecord — fresh instances per build', () => {
   })
 })
 
-describe('buildMcpServerRecord — halo-api-ref is on demand', () => {
-  it('is absent from the always-on set', () => {
-    // It was always-on once, while the credential and the prompt paragraph
-    // were decided elsewhere — so sessions were told to use a tool they could
-    // not authenticate. It is a registry toolset now; nothing here may add it.
+describe('buildMcpServerRecord — core Halo API', () => {
+  it('is available without a stored selection', () => {
     setOpen([])
-    expect(buildMcpServerRecord(scope)['halo-api-ref']).toBeUndefined()
+    expect(buildMcpServerRecord(scope)['halo-api-ref']).toBeDefined()
   })
 
   it('is present once the toolset is open', () => {
@@ -147,10 +153,69 @@ describe('buildMcpServerRecord — halo-apps gating', () => {
 })
 
 describe('buildMcpServerRecord — Halo Team capability', () => {
-  it('is a registry toolset, never an always-on server', () => {
-    // Team collaboration is opt-in (the Tools menu switch), exactly like
-    // ai-browser: nothing here may re-add it to the always-on set.
+  it('supplies collaboration without a context-loading switch', () => {
     setOpen([])
-    expect(buildMcpServerRecord(scope)[TEAM_MCP_SERVER_NAME]).toBeUndefined()
+    expect(buildMcpServerRecord(scope)[TEAM_MCP_SERVER_NAME]).toBeDefined()
   })
+})
+
+
+describe('automatic Halo context capabilities', () => {
+  const automatic = { ...scope, toolContextMode: 'automatic' as const }
+
+  it('mounts core capabilities including Halo API independently of old switches', () => {
+    setOpen([])
+    const record = buildMcpServerRecord(automatic)
+    expect(record['ai-browser']).toBeDefined()
+    expect(record['ai-terminal']).toBeDefined()
+    expect(record.ocr).toBeDefined()
+    expect(record['halo-team']).toBeDefined()
+    expect(record['halo-api-ref']).toBeDefined()
+    const statuses = listToolsetStatuses(scope.spaceId, scope.conversationId, 'automatic')
+    expect(statuses.filter(item => item.configurable !== false).map(item => item.id)).toEqual([])
+    expect(statuses.find(item => item.id === 'ai-terminal')).toMatchObject({ open: true, configurable: false })
+    expect(listToolsetStatuses(scope.spaceId, scope.conversationId, 'pending').find(item => item.id === 'ai-terminal'))
+      .toMatchObject({ open: true, configurable: false })
+    expect(listToolsetStatuses(scope.spaceId, scope.conversationId, 'manual').find(item => item.id === 'ai-terminal'))
+      .toMatchObject({ open: true, configurable: false })
+  })
+
+  it('does not advertise a request tool for permanently available capabilities', () => {
+    setOpen(['halo-api-ref'])
+    const record = buildMcpServerRecord(automatic)
+    expect(record['halo-api-ref']).toBeDefined()
+    expect(record.capabilities).toBeUndefined()
+  })
+
+  it('does not ask a person to enable a capability already managed by the SDK', () => {
+    setOpen([])
+    expect(requestToolset(automatic, 'ai-terminal')).toMatchObject({ ok: true, alreadyOpen: true })
+  })
+
+  it('uses stable registry order independently of saved selections', () => {
+    setOpen(['halo-api-ref', 'ai-terminal', 'ai-browser'])
+    expect(Object.keys(buildMcpServerRecord(scope)).filter(id => ALL.includes(id)))
+      .toEqual(ALL)
+  })
+})
+
+
+it('prepares an image-required legacy capability in the same creation without scheduling another rebuild', () => {
+  setOpen([])
+  const record = buildMcpServerRecord({ ...scope, toolContextMode: 'manual', requiredToolsets: ['ocr'] })
+  expect(record.ocr).toBeDefined()
+  expect(openSets.get('conv-1')?.has('ocr')).toBe(true)
+})
+
+it('does not persist an automatic capability as an old manual selection', () => {
+  setOpen([])
+  buildMcpServerRecord({ ...scope, toolContextMode: 'automatic', requiredToolsets: ['ocr'] })
+  expect(openSets.get('conv-1')?.size).toBe(0)
+})
+
+it('lets the AI activate an optional capability without asking a person', () => {
+  config.value = { optional: true }
+  setOpen([])
+  expect(requestToolset(scope, 'optional-fixture').ok).toBe(true)
+  expect(openSets.get('conv-1')?.has('optional-fixture')).toBe(true)
 })

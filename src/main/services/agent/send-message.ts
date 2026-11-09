@@ -17,12 +17,13 @@ import { prepareConversationContinuation, resolveConversationEngine } from './en
  *     5. Return immediately (no await on stream processing)
  */
 
+import { randomUUID } from 'crypto'
 import { getConfig } from '../../foundation/config.service'
 import { addMessage, getConversation, updateMessageById } from '../conversation.service'
 import { buildCreationTimeServers, openToolset } from './toolsets/broker'
 import { buildToolsetSection } from './toolsets/capability-index'
-import { getOpenToolsets } from './toolsets/state'
-import { HALO_API_TOOLSET_ID } from '../api-ref'
+import type { ToolsetContextMode } from './toolsets/types'
+import { getToolsetContextMode } from './toolsets/state'
 // The toolset broker (above) supplies AI Browser / web-search / apps as
 // on-demand toolsets; only the knowledge-base helpers are still called directly.
 import { getKBChatContext } from '../tlon'
@@ -36,7 +37,7 @@ import {
   getApiCredentialsForSelection,
   getDbMcpServers
 } from './helpers'
-import { emitAgentEvent } from './events'
+import { emitAgentEvent, emitHumanRequest } from './events'
 import {
   acquireV2Session,
   getSessionEngineId,
@@ -51,7 +52,7 @@ import {
 import { formatTurnAttachments } from './references'
 import { opensWithSlashCommand } from './opening-context'
 import { prepareNonVisionImageFallback, OCR_TOOLSET_ID } from './image-attachments'
-import { resolveCredentialsForSdk, buildUserSessionSdkOptions } from './sdk-config'
+import { captureToolsetExecutionOptions, resolveCredentialsForSdk, buildUserSessionSdkOptions } from './sdk-config'
 import { resolveSpaceMemorySession, buildSpaceMemoryPreamble } from './space-memory'
 import { applyReasoningEffort, pickReasoningEffort } from './reasoning-effort'
 import { createConversationSink } from './conversation-sink'
@@ -63,6 +64,7 @@ import { onAgentError, runPpidScanAndCleanup } from '../health'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 import { COMMAND_ENVIRONMENT_NOT_INSTALLED_ERROR } from '../../../shared/constants/agent-errors'
+import type { TranscriptMessageMetadata } from '../../../shared/types/transcript'
 
 // ============================================
 // Send Message
@@ -98,13 +100,27 @@ export async function sendMessage(
     message,
     resumeSessionId,
     images,
-    thinkingEnabled,
     canvasContext,
     references,
     task
   } = request
+  if (!internal) emitHumanRequest(conversationId, randomUUID())
   // Validated before the message is recorded, so a refused goal leaves no trace.
   const originalConversation = getConversation(spaceId, conversationId)
+  let inheritedReasoning: TranscriptMessageMetadata['reasoning']
+  if (internal) {
+    const messages = originalConversation?.messages ?? []
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const previous = messages[index]
+      if (previous.role === 'user' && !previous.source && previous.metadata?.inputOutcome !== 'stopped'
+        && typeof previous.metadata?.reasoning?.thinkingEnabled === 'boolean') {
+        inheritedReasoning = previous.metadata.reasoning
+        break
+      }
+    }
+  }
+  const thinkingEnabled = request.thinkingEnabled ?? (internal ? inheritedReasoning?.thinkingEnabled ?? true : false)
+  const requestedEffort = pickReasoningEffort(request.reasoningEffort, inheritedReasoning?.effort)
   const engineId = await resolveConversationEngine(originalConversation, getSessionEngineId(conversationId), isSessionBusy(conversationId))
   const turnGoal = request.goal ? prepareGoalInput(request.goal, engineId) : null
 
@@ -142,6 +158,7 @@ export async function sendMessage(
   // Assistant placeholder is NOT created here — it is created by the session
   // consumer when CC emits system:init (unified for user + autonomous turns).
   const messageMetadata = {
+    reasoning: { thinkingEnabled, ...(requestedEffort ? { effort: requestedEffort } : {}) },
     ...(turnGoal ? { goal: turnGoal } : {}),
     ...(references && references.length > 0 ? { references } : {}),
     ...(task ? { task } : {}),
@@ -243,7 +260,7 @@ export async function sendMessage(
     console.log(`[Agent] turn_start conv=${conversationId} model=${credentials.model} ts=${Date.now()}`)
 
     // The conversation's own level wins over one the send carries (API callers).
-    const pickedEffort = pickReasoningEffort(conversation?.reasoningEffort, request.reasoningEffort)
+    const pickedEffort = pickReasoningEffort(conversation?.reasoningEffort, requestedEffort)
     const resolvedCredentials = await resolveCredentialsForSdk(credentials, pickedEffort, engineId)
     const electronPath = getHeadlessElectronPath()
 
@@ -257,7 +274,7 @@ export async function sendMessage(
       credentials,
       images
     })
-    if (imageFallback) {
+    if (imageFallback && (engineId !== 'halo' || getToolsetContextMode(conversationId) === 'manual')) {
       const opened = openToolset(toolsetScope, OCR_TOOLSET_ID, 'system')
       if (!opened.ok) {
         // Non-fatal: the paths are still injected; the model can request_toolset.
@@ -271,11 +288,13 @@ export async function sendMessage(
     // getOrCreateV2Session only when a session is actually created — in-process
     // instances bind to one session, so instantiating them before the
     // reuse/rebuild decision would hand a rebuilt session dead instances.
-    const buildMcpServers = (): Record<string, unknown> | null => {
+    const buildMcpServers = (toolContextMode?: ToolsetContextMode): Record<string, unknown> | null => {
       const dbMcpServers = getDbMcpServers(spaceId)
       const record: Record<string, unknown> = dbMcpServers ? { ...dbMcpServers } : {}
       Object.assign(record, buildCreationTimeServers({
-        spaceId, conversationId, workDir,
+        spaceId, conversationId, workDir, toolContextMode,
+        executionOptions: () => captureToolsetExecutionOptions(sdkOptions, engineId, record),
+        requiredToolsets: imageFallback ? [OCR_TOOLSET_ID] : undefined,
         modelSelection: credentials.sourceId
           ? { modelSourceId: credentials.sourceId, modelId: credentials.model }
           : undefined,
@@ -307,7 +326,7 @@ export async function sendMessage(
       // Same switch that loads the halo_api_ref tool: a session without the
       // manual has no way to discover the API, so the credentials would only
       // widen what an injected instruction can reach.
-      selfApiAccess: getOpenToolsets(spaceId, conversationId).has(HALO_API_TOOLSET_ID),
+      selfApiAccess: true,
       credentials: resolvedCredentials,
       workDir,
       electronPath,
@@ -317,7 +336,7 @@ export async function sendMessage(
         console.error(`[Agent][${conversationId}] CLI stderr:`, data)
         stderrBuffer += data
       },
-      toolsetIndex: buildToolsetSection(spaceId, conversationId),
+      toolsetIndex: engineId === 'halo' ? '' : buildToolsetSection(spaceId, conversationId),
       memoryInstructions: spaceMemory?.instructions,
       memoryGuard: spaceMemory?.guard,
     })
@@ -345,6 +364,7 @@ export async function sendMessage(
       resolveKnowledgeBases,
       {
         creationContext: spaceMemory?.contextKey,
+        toolsetInstructions: (mode: ToolsetContextMode) => engineId === 'halo' ? buildToolsetSection(spaceId, conversationId, mode) : '',
         recoverNativeSession: sessionId ? async () => (await prepareConversationContinuation(
           spaceId, conversationId, conversation, engineId, {
             beforeMessageId: userMessage.id, forceHandoff: true,

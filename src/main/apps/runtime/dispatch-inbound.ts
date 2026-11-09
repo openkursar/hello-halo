@@ -18,10 +18,12 @@
  */
 
 import type { InboundMessage, ReplyHandle, ProgressEvent } from '../../../shared/types/inbound-message'
+import { randomUUID } from 'crypto'
 import type { TranscriptMessage } from '../../../shared/types/transcript'
 import { buildTeamSessionKey } from '../../../shared/apps/team-types'
 import { buildTeamChatKey } from '../../../shared/apps/im-keys'
 import { getAppManager } from '../manager'
+import { getTeamService, getTeamStore } from '../team'
 import { getActiveTeamRuntime } from './team'
 import { resolveTeamBacking, type TeamBacking } from './im-team-session'
 import {
@@ -241,18 +243,34 @@ function relayOwnerValidator(
 //
 // Reply handles stay with their messages until the shared mailbox accepts them.
 
+interface ImHumanInput {
+  requestId: string
+  conversationId: string
+  team?: { teamId: string; epochId: string; appId: string; recipientFence: string }
+}
+
 interface SupplementEntry {
   msg: InboundMessage
   reply: ReplyHandle
   appId: string
   instanceId: string
   identity: string
+  humanInput: ImHumanInput
   /** Taken back after a stop: its record already stands where it first arrived. */
   inputRecorded?: boolean
   recordedInputIds?: readonly string[]
 }
 
 const STOPPED_UNREAD = 'stopped before it was read'
+
+function humanInputRefusal(input: ImHumanInput, conversationId = input.conversationId): string | null {
+  if (input.conversationId !== conversationId) return 'conversation changed'
+  const participants = getTeamService()?.participants
+  if (input.team && !participants) return 'collaboration services unavailable'
+  if (participants?.requestAllowed(input.requestId) === false) return 'request cancelled'
+  if (input.team && getTeamStore()?.recipientFences.accepts(input.team, input.team.recipientFence) !== true) return 'recipient changed'
+  return null
+}
 
 /** The reply path of a supplement taken back after a stop: its stream was already closed. */
 function withoutStream(reply: ReplyHandle): ReplyHandle {
@@ -294,6 +312,22 @@ const supplementGate = createTurnGate<SupplementEntry[]>({
   getJobIdentity: entries => entries[0]?.identity,
   getActiveIdentity: getAppChatTurnIdentity,
   mergeJobs: jobs => jobs.flat(),
+  refreshJob: entries => {
+    const rejected = entries.filter(entry => {
+      const reason = humanInputRefusal(entry.humanInput)
+      if (reason) console.warn(`${LOG_TAG} Stale IM input discarded: conversation=${entry.humanInput.conversationId} request=${entry.humanInput.requestId} reason=${reason}`)
+      return reason !== null
+    })
+    if (!rejected.length) return entries
+    for (const entry of rejected) forgetSupplements(entry.humanInput.conversationId, [entry])
+    const kept = entries.filter(entry => !rejected.includes(entry))
+    if (!kept.length) return undefined
+    for (const entry of rejected) {
+      try { entry.reply.streaming?.dispose?.() }
+      catch (error) { console.warn(`${LOG_TAG} Stale supplement stream cleanup failed: conversation=${entry.humanInput.conversationId}`, error) }
+    }
+    return kept
+  },
   deliverMidTurn: (conversationId, entries) => {
     if (entries[0].identity !== 'owner' && entries.some(entry => entry.msg.attachments?.length)) return false
     if (!injectIntoAppChatBatch(conversationId, entries.map(entry => ({
@@ -548,11 +582,13 @@ async function dispatchSupplementBatch(conversationId: string, entries: Suppleme
   const ownerList = permEnabled ? cfgForPerm?.owners ?? [] : []
   let effectiveFrom = last.msg.from
   let effectiveFromName = last.msg.fromName
+  let primary = last
   if (last.msg.chatType === 'group' && permEnabled && ownerList.length > 0) {
     const guestEntry = entries.find(
       (e) => e.msg.from && !ownerList.includes(e.msg.from)
     )
     if (guestEntry) {
+      primary = guestEntry
       effectiveFrom = guestEntry.msg.from
       effectiveFromName = guestEntry.msg.fromName ?? guestEntry.msg.from
     }
@@ -602,6 +638,7 @@ async function dispatchSupplementBatch(conversationId: string, entries: Suppleme
   // message arriving in between waits behind it instead of starting beside it.
   await dispatchInboundMessage(merged, last.reply, last.appId, last.instanceId, {
     skipBusyCheck: true,
+    humanInput: primary.humanInput,
     preBuiltMessageText: messageText,
     preBuiltSenderIdentity: senderIdentity,
     recordedMessages: entries.filter(entry => !entry.inputRecorded).map(entry => ({ content: supplementText(entry), images: entry.msg.images })),
@@ -620,6 +657,7 @@ async function dispatchSupplementBatch(conversationId: string, entries: Suppleme
 /** Internal options used by flushSupplementBuffer() for pre-merged dispatch. */
 interface DispatchOptions {
   skipBusyCheck?: boolean
+  humanInput?: ImHumanInput
   preBuiltMessageText?: string
   preBuiltSenderIdentity?: { id: string; name: string }
   recordedMessages?: import('./app-chat').AppChatRequest['recordedMessages']
@@ -761,6 +799,9 @@ export async function dispatchInboundMessage(
   const conversationId = teamBacking
     ? buildTeamSessionKey(app.id, teamBacking.teamId, teamBacking.epochId)
     : buildImSessionKey(app.id, msg.channel, msg.chatType, msg.chatId)
+  const stopsOwnedCollaboration = isStopCommand(msg.body, msg.chatType) &&
+    resolveImPermission(instanceCfg, msg.from, msg.fromName ?? msg.from).isOwner &&
+    Boolean(getTeamService()?.getCollabForConversation(conversationId))
 
   // ── Reply scope check ──────────────────────────────────────────
   // Stopping a private turn remains possible after its question was answered.
@@ -769,7 +810,7 @@ export async function dispatchInboundMessage(
   const answersInDirectChat = !scopeCoversChat && msg.chatType === 'direct' &&
     resolveImPermission(instanceCfg, msg.from, msg.fromName ?? msg.from).isOwner &&
     (((isStopCommand(msg.body, msg.chatType) || isClearCommand(msg.body, msg.chatType)) &&
-      isAppChatConversationGenerating(conversationId)) ||
+      (isAppChatConversationGenerating(conversationId) || stopsOwnedCollaboration)) ||
       (!!instanceCfg && (instanceCfg.permissionEnabled ||
         receivesImQuestions(instanceCfg, registry?.findSession(app.id, msg.channel, msg.chatId))) &&
         hasOpenImQuestion(app.id, instanceCfg.teamId)))
@@ -822,7 +863,7 @@ export async function dispatchInboundMessage(
     const waiting = supplementBuffers.get(conversationId)?.length ?? 0
     const isActive = isAppChatConversationGenerating(conversationId)
     if (!isActive) holdSupplementsAfterStop(conversationId)
-    if (isActive) {
+    if (isActive || stopsOwnedCollaboration) {
       console.log(
         `${LOG_TAG} Stop command received: channel=${msg.channel}, chatId=${msg.chatId}, ` +
         `session=${conversationId}, waitingSupplements=${waiting}`
@@ -883,12 +924,33 @@ export async function dispatchInboundMessage(
     return
   }
 
+  let humanInput = options.humanInput
+  if (!humanInput) {
+    const target = teamBacking ? { teamId: teamBacking.teamId, epochId: teamBacking.epochId, appId: app.id } : undefined
+    const store = target ? getTeamStore() : null
+    if (target && !store) {
+      console.warn(`${LOG_TAG} IM input refused: conversation=${conversationId} reason=team store unavailable`)
+      await reply.send('This team is temporarily unavailable. Please try again shortly.').catch(() => {})
+      return
+    }
+    humanInput = { requestId: randomUUID(), conversationId,
+      ...(target ? { team: { ...target, recipientFence: store!.recipientFences.read(target) } } : {}) }
+  }
+  const inputRefusal = humanInputRefusal(humanInput, conversationId)
+  if (inputRefusal) {
+    console.warn(`${LOG_TAG} IM input discarded: conversation=${conversationId} request=${humanInput.requestId} reason=${inputRefusal}`)
+    try { reply.streaming?.dispose?.() }
+    catch (error) { console.warn(`${LOG_TAG} Stale IM stream cleanup failed: conversation=${conversationId}`, error) }
+    return
+  }
+  const acceptedInput = humanInput
+
   // ── Supplement buffering (busy → buffer, flush after generation ends) ──
   // "Busy" covers an autonomous turn too: starting a round while one is running
   // would let that turn claim this message's round and answer the wrong thing.
   if (!options.skipBusyCheck && isAppChatConversationGenerating(conversationId)) {
     const permission = resolveImPermission(instanceCfg, msg.from, msg.fromName ?? msg.from)
-    const entry: SupplementEntry = { msg, reply, appId, instanceId, identity: appChatMessageIdentity(permission) }
+    const entry: SupplementEntry = { msg, reply, appId, instanceId, identity: appChatMessageIdentity(permission), humanInput: acceptedInput }
     const buffer = supplementBuffers.get(conversationId) ?? []
     buffer.push(entry)
     supplementBuffers.set(conversationId, buffer)
@@ -1081,7 +1143,7 @@ export async function dispatchInboundMessage(
   // A person's stop held this message back before the engine got it.
   const handBack = (records: readonly TranscriptMessage[], inputIds?: readonly (string | undefined)[]): void => {
     if (options.onHeldBack) options.onHeldBack(records, inputIds)
-    else handBackSupplements(conversationId, [{ msg, reply, appId, instanceId, identity: appChatMessageIdentity(imPermission) }], records, inputIds)
+    else handBackSupplements(conversationId, [{ msg, reply, appId, instanceId, identity: appChatMessageIdentity(imPermission), humanInput: acceptedInput }], records, inputIds)
   }
 
   // Listener startup may await; the existing hold keeps supplements and stop/clear safe.
@@ -1125,6 +1187,8 @@ export async function dispatchInboundMessage(
       return
     }
     await sendAppChatMessage({
+      humanInput: true,
+      collaborationRequestId: acceptedInput.requestId,
       turnStart,
       onSessionRetired: options.onSessionRetired,
       onHeldBack: handBack,
@@ -1147,7 +1211,8 @@ export async function dispatchInboundMessage(
       // guest's: whatever this turn sets in motion — a teammate it is handed to,
       // a check, a question — stays a guest's request.
       ...(teamBacking
-        ? { teamContext: isOwner ? teamBacking.teamContext : { ...teamBacking.teamContext, origin: 'guest' as const } }
+        ? { teamContext: { ...teamBacking.teamContext, requestId: acceptedInput.requestId, recipientFence: acceptedInput.team?.recipientFence,
+          ...(!isOwner ? { origin: 'guest' as const } : {}) } }
         : {}),
 
       // IM has no Deep Thinking toggle, so replies take the same extended

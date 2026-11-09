@@ -71,7 +71,7 @@ describe('conversation + outcome orchestration', () => {
   const epochMutations: TeamEpoch[] = []
   const profilePublishes: { teamId: string; appId: string }[] = []
 
-  function build(pending?: Set<string>, lifecycle?: { closeSession?: OrchestrationSessionDeps['closeTeamSession']; onTaskClosed?: (teamId: string, epochId: string) => void }): Orchestration {
+  function build(pending?: Set<string>, lifecycle?: { closeSession?: OrchestrationSessionDeps['closeTeamSession']; onTaskClosed?: (teamId: string, epochId: string) => void; closePrivateCollaborations?: (teamId: string, epochId: string) => Promise<void> }): Orchestration {
     active = new Set<string>()
     const session = makeSession(active)
     if (lifecycle?.closeSession) session.closeTeamSession = lifecycle.closeSession
@@ -83,6 +83,7 @@ describe('conversation + outcome orchestration', () => {
     orch = createOrchestration({
       store, bus, session,
       onTaskClosed: lifecycle?.onTaskClosed,
+      closePrivateCollaborations: lifecycle?.closePrivateCollaborations,
       onEpochMutation: (e) => epochMutations.push(e),
       hasPendingEscalation: (appId) => pending?.has(appId) ?? false,
       onMemberProfileChanged: (teamId, appId) => profilePublishes.push({ teamId, appId }),
@@ -103,6 +104,61 @@ describe('conversation + outcome orchestration', () => {
   })
 
   afterEach(() => { dbManager.closeAll() })
+
+  it('awaits private assistant teardown before releasing a completed parent and retries failures', async () => {
+    let release!: () => void
+    const blocked = new Promise<void>(resolve => { release = resolve })
+    const children = vi.fn(async (): Promise<void> => { await blocked; throw new Error('Private session busy') })
+    const closeSession = vi.fn(async () => {})
+    const closed = vi.fn()
+    const orch = build(undefined, { closeSession, onTaskClosed: closed, closePrivateCollaborations: children })
+    const epoch = orch.ensureConversationEpoch(TEAM_ID, nativeConversationChatKey('private-close'))
+    store.updateWorkItem(epoch.id, { status: 'completed' })
+    const first = orch.closeEpochResources(TEAM_ID, epoch.id)
+    await Promise.resolve()
+    expect(children).toHaveBeenCalledWith(TEAM_ID, epoch.id)
+    expect(closeSession).not.toHaveBeenCalled()
+    expect(orch.noteEpochTurn(TEAM_ID, epoch.id, true)).toBe(false)
+    release()
+    await expect(first).rejects.toThrow('Private session busy')
+    expect(closeSession).not.toHaveBeenCalled()
+    expect(closed).not.toHaveBeenCalled()
+    children.mockImplementation(async () => {})
+    await orch.closeEpochResources(TEAM_ID, epoch.id)
+    expect(closeSession).toHaveBeenCalledTimes(2)
+    expect(closed).toHaveBeenCalledOnce()
+  })
+
+  it('disposal closes resources and decisions without rewriting history or re-entering descendant disposal', async () => {
+    const children = vi.fn(async () => {})
+    const closeSession = vi.fn(async () => {})
+    const closed = vi.fn()
+    const orch = build(undefined, { closeSession, onTaskClosed: closed, closePrivateCollaborations: children })
+    const epoch = orch.ensureConversationEpoch(TEAM_ID, nativeConversationChatKey('dispose'))
+    store.updateWorkItem(epoch.id, { status: 'completed' })
+    store.endEpoch(epoch.id, 20, 'completed', 'Published result', 'output')
+    const history = store.getEpochById(epoch.id)
+    epochMutations.length = 0
+    closeSession.mockRejectedValueOnce(new Error('Session busy'))
+    await expect(orch.closeEpochResources(TEAM_ID, epoch.id, { disposing: true })).rejects.toThrow(/retained/)
+    expect(store.getEpochById(epoch.id)).toEqual(history)
+    expect(closed).not.toHaveBeenCalled()
+    await orch.closeEpochResources(TEAM_ID, epoch.id, { disposing: true })
+    expect(children).not.toHaveBeenCalled()
+    expect(closed).toHaveBeenCalledWith(TEAM_ID, epoch.id)
+    expect(epochMutations).toEqual([])
+    expect(store.getEpochById(epoch.id)).toEqual(history)
+  })
+
+  it('disposal closes decisions in open work without requiring a business seal', async () => {
+    const closed = vi.fn()
+    const orch = build(undefined, { onTaskClosed: closed })
+    const epoch = orch.ensureConversationEpoch(TEAM_ID, nativeConversationChatKey('dispose-open'))
+    const history = store.getEpochById(epoch.id)
+    await orch.closeEpochResources(TEAM_ID, epoch.id, { disposing: true })
+    expect(closed).toHaveBeenCalledWith(TEAM_ID, epoch.id)
+    expect(store.getEpochById(epoch.id)).toEqual(history)
+  })
 
   it('replicated closure coalesces local teardown and closes decisions created while sessions stop without publishing', async () => {
     let release!: () => void
@@ -251,6 +307,7 @@ describe('conversation + outcome orchestration', () => {
     // Not serving anything yet.
     expect(orch.getMemberBusy(RESEARCHER_APP, TEAM_ID)).toEqual([])
     // Mark the researcher's session for this conversation active.
+    orch.noteEpochTurn(TEAM_ID, convo.id, true)
     active.add(buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, convo.id))
     const busy = orch.getMemberBusy(RESEARCHER_APP, TEAM_ID)
     expect(busy).toHaveLength(1)
@@ -274,8 +331,8 @@ describe('conversation + outcome orchestration', () => {
     // The run is still the team's live instance.
     expect(store.getEpochById(run.id)?.endedAt).toBeNull()
     const team = store.getTeamById(TEAM_ID)!
-    expect(team.currentEpochId).toBe(run.id)
-    expect(team.status).toBe('running')
+    expect(team.currentEpochId).toBeNull()
+    expect(team.status).toBe('idle')
   })
 
   it('ignores a second seal of an already-sealed conversation', async () => {

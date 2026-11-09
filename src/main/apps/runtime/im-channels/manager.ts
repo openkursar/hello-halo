@@ -15,6 +15,7 @@
  */
 
 import { isDeepStrictEqual } from 'node:util'
+import { Emitter } from '../../../platform/event'
 import type {
   ImChannelProvider,
   ImChannelInstance,
@@ -37,6 +38,8 @@ export class ImChannelManager {
   private currentConfigs: ImChannelInstanceConfig[] = []
   /** Opaque identities retained only for currently configured instances. */
   private authorizationRevisions = new Map<string, object>()
+  private readonly authorizationChanged = new Emitter<string>()
+  readonly onAuthorizationChanged = this.authorizationChanged.event
   /**
    * Last failure reason per instance id (invalid/undecodable config, missing
    * provider, creation error). Provider-agnostic; surfaced in status so a
@@ -105,7 +108,10 @@ export class ImChannelManager {
     }
 
     for (const id of this.authorizationRevisions.keys()) {
-      if (!newConfigMap.has(id)) this.authorizationRevisions.delete(id)
+      if (!newConfigMap.has(id)) {
+        this.authorizationRevisions.delete(id)
+        this.authorizationChanged.fire(id)
+      }
     }
     for (const cfg of configs) {
       this.updateAuthorizationRevision(oldConfigMap.get(cfg.id), cfg)
@@ -439,7 +445,7 @@ export class ImChannelManager {
   }
 
   private snapshotConfig(cfg: ImChannelInstanceConfig): ImChannelInstanceConfig {
-    return { ...cfg, owners: cfg.owners?.slice(), config: structuredClone(cfg.config) }
+    return { ...cfg, owners: cfg.owners?.slice(), ...(cfg.guestPolicy ? { guestPolicy: structuredClone(cfg.guestPolicy) } : {}), config: structuredClone(cfg.config) }
   }
 
   private updateAuthorizationRevision(oldCfg: ImChannelInstanceConfig | undefined, cfg: ImChannelInstanceConfig): void {
@@ -451,9 +457,12 @@ export class ImChannelManager {
       oldCfg.teamId !== cfg.teamId ||
       oldCfg.permissionEnabled !== cfg.permissionEnabled ||
       !isDeepStrictEqual(oldCfg.owners, cfg.owners) ||
+      !isDeepStrictEqual(oldCfg.guestPolicy, cfg.guestPolicy) ||
+      oldCfg.replyScope !== cfg.replyScope ||
       !isDeepStrictEqual(oldCfg.config, cfg.config)
     ) {
       this.authorizationRevisions.set(cfg.id, {})
+      if (oldCfg) this.authorizationChanged.fire(cfg.id)
     }
   }
 

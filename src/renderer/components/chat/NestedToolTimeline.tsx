@@ -1,13 +1,5 @@
 /**
- * SubAgentTimeline - Compact nested timeline for sub-agent tool calls.
- *
- * Rendered inside a Task tool_use ThoughtItem to show what the sub-agent
- * is doing in real-time. Each row shows: status dot, tool name, friendly
- * summary, and merged tool result (collapsed by default).
- *
- * Design: lightweight and purpose-built for nesting. Does NOT reuse
- * ThoughtProcess (which has auto-scroll, lazy loading, expand/collapse
- * header logic that would be inappropriate in a nested context).
+ * Nested tool details avoid the top-level timeline's scrolling and lazy loading.
  */
 
 import { useState, useMemo, memo } from 'react'
@@ -26,15 +18,15 @@ import { useTranslation } from '../../i18n'
 
 // i18n static keys for extraction (DO NOT REMOVE)
 // prettier-ignore
-void function _i18nSubAgentKeys(t: (k: string) => string) {
+void function i18nNestedToolKeys(t: (k: string) => string) {
   t('Running'); t('Running...'); t('tools used');
 }
 
 // ============================================
-// SubAgentToolRow - Single tool call in the timeline
+// NestedToolToolRow - Single tool call in the timeline
 // ============================================
 
-const SubAgentToolRow = memo(function SubAgentToolRow({ thought }: { thought: Thought }) {
+const NestedToolToolRow = memo(function NestedToolToolRow({ thought }: { thought: Thought }) {
   const [showResult, setShowResult] = useState(false)
   const hasResult = !!thought.toolResult
   const isError = thought.toolResult?.isError
@@ -100,25 +92,25 @@ const SubAgentToolRow = memo(function SubAgentToolRow({ thought }: { thought: Th
 })
 
 // ============================================
-// SubAgentTimeline - Container
+// NestedToolTimeline - Container
 // ============================================
 
-interface SubAgentTimelineProps {
+interface NestedToolTimelineProps {
   /** All thoughts in the session (flat array) */
   thoughts: Thought[]
-  /** The parent Task thought's ID (used as tool_use_id in SDK) */
+  /** Stored parent thought ID, already resolved from the engine's tool ID. */
   parentToolUseId: string
   /** Task progress metadata from lifecycle events */
   taskProgress?: TaskProgress
-  /** Whether the parent agent is still thinking */
+  /** Whether the parent tool is still thinking */
   isThinking: boolean
 }
 
-export function SubAgentTimeline({ thoughts, parentToolUseId, taskProgress, isThinking }: SubAgentTimelineProps) {
+export function NestedToolTimeline({ thoughts, parentToolUseId, taskProgress, isThinking }: NestedToolTimelineProps) {
   const { t } = useTranslation()
   const [isExpanded, setIsExpanded] = useState(false)
 
-  // Filter sub-agent thoughts belonging to this parent
+  // Filter nested tool thoughts belonging to this parent
   const childThoughts = useMemo(() => {
     return thoughts.filter(
       th => th.parentToolUseId === parentToolUseId
@@ -182,7 +174,7 @@ export function SubAgentTimeline({ thoughts, parentToolUseId, taskProgress, isTh
       {isExpanded && childThoughts.length > 0 && (
         <div className="px-2.5 py-1.5 border-t border-border/20 space-y-0">
           {childThoughts.map(thought => (
-            <SubAgentToolRow key={thought.id} thought={thought} />
+            <NestedToolToolRow key={thought.id} thought={thought} />
           ))}
         </div>
       )}

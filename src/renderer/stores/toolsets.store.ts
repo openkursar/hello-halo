@@ -16,6 +16,7 @@ export interface ToolsetStatus {
   displayName: string
   summary: string
   open: boolean
+  configurable?: boolean
 }
 
 export interface ToolsetsChangedEvent {
@@ -25,6 +26,7 @@ export interface ToolsetsChangedEvent {
   action?: 'open' | 'close'
   openedBy?: 'user' | 'ai' | 'restore' | 'system'
   open: string[]
+  statuses?: ToolsetStatus[]
 }
 
 export interface ToolsetsRequestedEvent {
@@ -67,10 +69,11 @@ export const useToolsetsStore = create<ToolsetsState>((set, get) => ({
   loading: false,
 
   refresh: async (spaceId, conversationId) => {
+    const previous = get().byConversation.get(conversationId)
     set({ loading: true })
     try {
       const res = await api.listToolsets(spaceId, conversationId)
-      if (res.success && Array.isArray(res.data)) {
+      if (res.success && Array.isArray(res.data) && get().byConversation.get(conversationId) === previous) {
         const next = new Map(get().byConversation)
         next.set(conversationId, res.data as ToolsetStatus[])
         set({ byConversation: next })
@@ -145,10 +148,19 @@ export const useToolsetsStore = create<ToolsetsState>((set, get) => ({
     const { conversationId, toolsetId, action, open } = e
     const statuses = get().byConversation.get(conversationId)
     // Reconcile statuses against the authoritative open[] set.
-    if (statuses) {
+    if (e.statuses) {
+      const next = new Map(get().byConversation)
+      next.set(conversationId, e.statuses)
+      const requested = new Map(get().aiRequested)
+      const visible = new Set(e.statuses.filter(status => status.configurable !== false).map(status => status.id))
+      requested.set(conversationId, new Set([...(requested.get(conversationId) ?? [])].filter(id => visible.has(id))))
+      const signals = new Map(get().requestSignal)
+      if (requested.get(conversationId)?.size === 0) signals.delete(conversationId)
+      set({ byConversation: next, aiRequested: requested, requestSignal: signals })
+    } else if (statuses) {
       const openSet = new Set(open)
       const next = new Map(get().byConversation)
-      next.set(conversationId, statuses.map(s => ({ ...s, open: openSet.has(s.id) })))
+      next.set(conversationId, statuses.map(s => s.configurable === false ? s : { ...s, open: openSet.has(s.id) }))
       set({ byConversation: next })
     }
     // Enabling a requested toolset fulfills the request — clear its highlight.

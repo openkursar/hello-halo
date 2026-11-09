@@ -12,6 +12,11 @@ Pure data/persistence layer for App lifecycle management.
 Consumed by `apps/runtime` (activation, status updates) and renderer (IPC for UI).
 Does NOT execute Apps, trigger scheduling, or call Agents.
 
+`onAppAuthorityChanged` announces effective permissions, tool exclusions, space
+memory access or workspace changes after persistence. Runtime consumers may
+invalidate previously granted work; the manager neither executes cancellation
+nor knows the consumer's request identities. No-op saves emit nothing.
+
 ---
 
 ## 2. Key Design Decisions
@@ -117,9 +122,13 @@ There is no migration for rows written before this rule.
 
 **Signature**: `onMcpAppsChange((spaceId: string | null, change?: McpAppChange) => void)`
 where `McpAppChange = { appId, specId, action }` and `action` is one of
-`installed | uninstalled | reinstalled | paused | resumed | updated | moved | status | tools`.
+`installed | uninstalled | reinstalled | paused | resumed | updated | moved | status | tools | context`.
 `tools` means only the server's tools were turned on or off (`userOverrides.disabledTools`,
 set from its card): sessions are rebuilt, the connection is not probed again.
+`context` means only the MCP service's Halo SDK loading preference or capability
+description changed (`userOverrides.mcpContext`). Only Halo sessions consume it;
+it does not invalidate other engines or trigger a connection probe. A combined
+tool-permission and context change uses the stronger `tools` event once.
 The `McpAppChange` type lives in `services/app-bridge.ts` (type-only import here,
 erased at runtime) because its consumers are on the services tier.
 
@@ -133,6 +142,15 @@ connection probe on `installed`/`reinstalled`/`resumed`/`updated`/`status`
 space-level handlers can ignore it.
 
 ### 2.6b Applying an App's Own Config Changes to Its Chat
+
+MCP context preferences live in the existing `user_overrides_json`, never in
+`userConfig` (which is passed to MCP processes as environment). The shared
+`mcp-context` contract merges only `loading` and `summary`, rejects unknown
+fields, and clears individual overrides with null. An absent loading preference
+means on demand; blank descriptions restore automatic metadata. Descriptions
+are bounded at 512 Unicode code points. No row backfill or schema migration is
+needed for this optional JSON field. Upgrades, moves and reinstalls retain it
+with the other per-installation overrides.
 
 An optional `userOverrides.engineId` is the digital human's explicit engine
 preference. Only automation apps accept a recognized engine id; clearing it

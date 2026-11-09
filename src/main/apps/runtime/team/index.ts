@@ -14,18 +14,19 @@ import { createBoardDigest } from './board-digest'
 import { createBoardArchive } from './board-archive'
 import { createTurnReport } from './turn-report'
 import { createTeamFolders } from './team-folder'
+import { createWorkMembership, createWorkReachability } from './membership'
 import type { TeamFolders } from './team-folder'
 import type { NoteTurnEndedInput } from './turn-report'
 import type { TeamChecks } from './checks'
 import type { BoardDigest } from './board-digest'
 import type { BoardArchive } from './board-archive'
 import type { Orchestration, OrchestrationSessionDeps } from './orchestration'
-import type { MessageBus, TurnCompletion, CircuitLimits } from './message-bus'
+import type { MessageBus, TurnCompletion, CircuitLimits, TeamDeliveryHooks } from './message-bus'
 import type { Blackboard, BlackboardWriteRecord } from './blackboard'
 import type { TeamPromptContext } from './team-prompt'
 import type { ReadTeamArtifact } from './artifact-read'
 import type { ReadTeamMemberRecord } from './member-record'
-import type { TeamStore } from '../../team'
+import { getTeamService, type TeamStore } from '../../team'
 import type {
   TeamEpoch,
   EpochEndReason,
@@ -36,10 +37,11 @@ import type {
   TeamCheck,
   TeamDelegatedPolicy,
   TeamRequestOrigin,
+  TeamStopController,
   TeamToolAudit,
   TeamTriggerContext,
 } from '../../../../shared/apps/team-types'
-import { buildTeamSessionKey, TEAM_DEFAULT_TURN_TIMEOUT_MS } from '../../../../shared/apps/team-types'
+import { buildTeamSessionKey, isRemoteMember, TEAM_DEFAULT_TURN_TIMEOUT_MS } from '../../../../shared/apps/team-types'
 import type { SchedulerService } from '../../../platform/scheduler'
 import { parseTeamSessionKey, parseTeamChatKey } from '../../../../shared/apps/im-keys'
 import type { ImSessionContext } from '../im-channels/im-prompt'
@@ -50,7 +52,7 @@ import { beginAppChatTurnStart, isAppChatConversationGenerating, getAppChatTurnI
 import { withTurnEndingNote, type AppChatTurnEnding } from '../turn-ending'
 import { getAppManager } from '../../manager'
 import { getSpaceDir } from '../../../services/space.service'
-import { onAgentEvent } from '../../../services/agent'
+import { onAgentEvent, evictIdleSession } from '../../../services/agent'
 
 const LOG_TAG = '[TeamRuntime]'
 
@@ -158,12 +160,14 @@ export interface TeamRuntime {
   digest: BoardDigest
   /** The full record behind a bounded board read, exported when one is truncated. */
   archive: BoardArchive
+  discardReports(epochId: string): void
+  isMemberReachable(appId: string, teamId: string): boolean
   /**
    * What a TEAMMATE may make this member do, as its owner set it. Null =
    * unrestricted. Read by the chat entry point when a turn was started by
    * someone other than the owner; never shown to teammates.
    */
-  getDelegatedPolicy(teamId: string, appId: string): TeamDelegatedPolicy | null
+  getDelegatedPolicy(teamId: string, appId: string, epochId?: string): TeamDelegatedPolicy | null
   /**
    * File one tool call a member made while somebody else was driving it. Stays
    * on this machine — it describes this computer, not the office.
@@ -194,6 +198,7 @@ export interface TeamRuntime {
   getObservableStatus(teamId: string): TeamStatus
   /** Live busy assignments (open run/conversations being served) with human labels. */
   getMemberBusy(appId: string, teamId: string): RosterBusyEntry[]
+  getActiveEpochIds(teamId: string): ReadonlySet<string>
   /**
    * Announce that a member's live status may have moved, for a turn the team
    * orchestration did not run itself (a 1:1 chat, an IM-backed turn). Status is
@@ -207,13 +212,13 @@ export interface TeamRuntime {
    * acts are counted in, so the turn-end report can tell "filed nothing" apart
    * from "was not watched" (see `turn-report.ts`).
    */
-  noteMemberTurnStarted(params: { appId: string; teamId: string; epochId: string }): void
+  noteMemberTurnStarted(params: { appId: string; teamId: string; epochId: string; correlationId?: string }): void
   /**
    * Stop the turn a member is running, wherever that member runs. Resolves with
    * whether one was actually running; rejects only when the member's machine
    * could not be reached at all.
    */
-  stopMemberTurn(params: { appId: string; teamId: string; epochId: string }): Promise<boolean>
+  stopMemberTurn(params: { appId: string; teamId: string; epochId: string; controller?: TeamStopController; expectedRequestId?: string }): Promise<boolean>
   /**
    * A person stopped this member session: what teammates sent waits for its next
    * turn instead of starting one. Returns the person's own messages that were
@@ -227,7 +232,7 @@ export interface TeamRuntime {
    * one point every team turn converges on, so it covers the paths the team
    * orchestration never sees (a person's chat, a relayed turn, an IM-backed one).
    */
-  noteMemberTurnEnded(params: NoteTurnEndedInput): void
+  noteMemberTurnEnded(params: NoteTurnEndedInput, options?: { report?: boolean }): void
   /**
    * Re-derive whether a member owned by this machine still owes its own person
    * an answer, and share the result with the office. Only the owner can see the
@@ -259,12 +264,13 @@ export interface TeamRuntime {
   maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): void
   /** A turn is entering this epoch: stamp its activity, and wake it if hibernated. */
   noteEpochTurn(teamId: string, epochId: string, fromHuman?: boolean): boolean
+  /** Release a deleting scope's local resources without changing its business history; caller closes descendants first. */
+  closeEpochResources(teamId: string, epochId: string): Promise<void>
   /** Tear down a replicated closed task locally without publishing another epoch. */
   applyClosedTask(teamId: string, epochId: string): Promise<void>
   sealEpoch(teamId: string, endReason: EpochEndReason, summary?: string | null): Promise<void>
   /** Seal a single conversation epoch (e.g. an IM chat cleared by the user). */
   sealConversationEpoch(teamId: string, epochId: string, endReason?: EpochEndReason, summary?: string | null): Promise<void>
-  requestSeal(teamId: string, epochId: string, summary: string): void
   captureReport(correlationId: string, outcome: TurnCompletion): void
   /** The team layers of a member's system prompt — stable per (team, member, epoch). */
   buildPromptContext(teamId: string, selfAppId: string, epochId: string): TeamPromptContext | null
@@ -339,7 +345,7 @@ export interface CreateTeamRuntimeDeps {
    * raised/resolved). Bootstrap wires it to the federation roster refresh so
    * viewers see pulses start AND stop in step. Absent → no propagation.
    */
-  onMemberStatusChanged?: (teamId: string) => void
+  onMemberStatusChanged?: (teamId: string, appId?: string) => void
   onMemberWorkChanged?: (appId: string) => void
   /** A member's owner-authored profile changed → share it with the office. */
   onMemberProfileChanged?: (teamId: string, appId: string) => void
@@ -433,9 +439,26 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
   archive.sweep()
 
   const bus = createMessageBus({
-    store,
+    store: createWorkMembership(store),
     recordActivity: (input) => board?.postActivity(input),
     hooks: {
+      acquireRecipientFence: target => {
+        const participants = getTeamService()?.participants
+        const accept = (fence?: string) => {
+          if (!fence) throw new Error('The recipient owner is unavailable.')
+          if (target.requestId && participants?.requestAllowed(target.requestId) === false) throw new Error('This collaboration request was stopped.')
+          return fence
+        }
+        if (target.requestId && participants?.requestAllowed(target.requestId) === false) throw new Error('This collaboration request was stopped.')
+        if (!store.getTeamById(target.teamId)?.ephemeral) return 'ordinary-team'
+        const member = store.getMember(target.teamId, target.appId, target.epochId)
+        if (member && isRemoteMember(member)) throw new Error('Internal collaborators must execute on their caller’s computer.')
+        return accept(store.recipientFences.read(target))
+      },
+      acceptRecipientFence: (target, fence) => {
+        const member = store.getMember(target.teamId, target.appId, target.epochId)
+        return !!member && (!store.getTeamById(target.teamId)?.ephemeral || store.recipientFences.accepts(target, fence))
+      },
       wakeTarget: (params) => {
         if (!orchestration) throw new Error('Team orchestration not initialized')
         return orchestration.wakeTarget(params)
@@ -444,7 +467,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
       isBusy: (sessionKey) => (orchestration ? orchestration.isBusy(sessionKey) : false),
       deliverRemote: (params) => orchestration?.deliverRemote(params),
       deliverMidTurn: (params) => (orchestration ? orchestration.deliverMidTurn(params) : false),
-      ...(deps.checkMemberReachable ? { checkReachable: deps.checkMemberReachable } : {}),
+      checkReachable: createWorkReachability(store, deps.checkMemberReachable),
       ...(deps.deliverToSpaceCoordinator
         ? { deliverToCoordinator: createCoordinatorDelivery({ store, deliver: deps.deliverToSpaceCoordinator }) }
         : {}),
@@ -457,7 +480,10 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     reservationTtlMs: (deps.turnTimeoutMs ?? TEAM_DEFAULT_TURN_TIMEOUT_MS) * 2,
   })
 
-  const turnReport = createTurnReport({ store, bus })
+  const turnReport = createTurnReport({ store, bus,
+    requestAllowed: requestId => getTeamService()?.participants.requestAllowed(requestId) ?? true,
+    onPendingSettled: (teamId, epochId) => orchestration?.notePendingWorkChanged(teamId, epochId),
+  })
 
   orchestration = createOrchestration({
     store,
@@ -471,7 +497,9 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     onMemberProfileChanged: deps.onMemberProfileChanged,
     onEpochMutation: deps.onEpochMutation,
     hasPendingEscalation: deps.hasPendingEscalation,
+    hasPendingTurnReports: (_teamId, epochId) => turnReport.hasPendingEpoch(epochId),
     onTaskClosed: deps.onTaskClosed,
+    closePrivateCollaborations: (teamId, epochId) => getTeamService()?.disposePrivateCollaborations(teamId, epochId) ?? Promise.resolve(),
     describeChatKey: deps.describeChatKey,
     getMemberDescription: deps.getMemberDescription,
     teamFolders,
@@ -481,6 +509,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     // on the next message — so its periodic checks must survive the seal.
     // Every other end reason (completed/timeout/error) really is final.
     onEpochArchived: (teamId, epochId, endReason) => {
+      if (endReason === 'completed' || endReason === 'cleared') store.recipientFences.clearEpoch(teamId, epochId)
       if (endReason !== 'stopped') checks?.clearEpoch(teamId, epochId)
       digest.clearEpoch(epochId)
       archive.clearEpoch(epochId)
@@ -540,25 +569,32 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     checks,
     digest,
     archive,
+    discardReports: epochId => turnReport.clearEpoch(epochId),
+    isMemberReachable: (appId, teamId) => deps.checkMemberReachable?.(appId, teamId) !== false,
     teamFolders,
-    getDelegatedPolicy: (teamId, appId) => store.getMember(teamId, appId)?.delegatedPolicy ?? null,
+    getDelegatedPolicy: (teamId, appId, epochId) => {
+      const member = store.getMember(teamId, appId)
+      return member ? member.delegatedPolicy ?? null
+        : (epochId ? store.participants?.getExecution(teamId, epochId, appId)?.delegatedPolicy : undefined) ?? null
+    },
     recordToolAudit: (entry) => store.insertToolAudit(entry),
     ...(deps.readArtifact ? { readArtifact: deps.readArtifact } : {}),
     ...(deps.readMemberRecord ? { readMemberRecord: deps.readMemberRecord } : {}),
     getMemberStatus: memberStatus,
     isMemberWorking: (appId) => orchestration!.isMemberWorking(appId),
+    getActiveEpochIds: teamId => orchestration!.getActiveEpochIds(teamId),
     getObservableStatus: (teamId) => orchestration!.getObservableStatus(teamId),
     getMemberBusy: (appId, teamId) => orchestration!.getMemberBusy(appId, teamId),
     noteMemberStatusChanged: (teamId, appId) => orchestration!.noteMemberStatusChanged(teamId, appId),
-    noteMemberTurnStarted: (params) => turnReport.noteTurnStarted(params),
-    stopMemberTurn: ({ appId, teamId, epochId }) => session.stopTeamSession(appId, teamId, epochId),
+    noteMemberTurnStarted: (params) => { orchestration!.noteMemberTurnStarted(params); turnReport.noteTurnStarted(params) },
+    stopMemberTurn: ({ appId, teamId, epochId, controller, expectedRequestId }) => session.stopTeamSession(appId, teamId, epochId, controller, expectedRequestId),
     holdSessionAfterStop: (sessionKey) => bus.holdSession(sessionKey).map(({ envelope, trigger }) => ({
       text: envelope.body,
       teamOrigin: { kind: trigger.kind, correlationId: trigger.correlationId },
     })),
-    noteMemberTurnEnded: (params) => {
+    noteMemberTurnEnded: (params, options) => {
       orchestration!.noteMemberTurnEnded(params)
-      turnReport.noteTurnEnded(params)
+      if (options?.report !== false) turnReport.noteTurnEnded(params)
     },
     reconcileAwaitingDecision: (appId) => orchestration!.reconcileAwaitingDecision(appId),
     activeRunEpochId: (teamId) => orchestration!.activeRunEpochId(teamId),
@@ -572,9 +608,19 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     maybeAutoNameConversation: (teamId, epochId, fromHuman, message) =>
       orchestration!.maybeAutoNameConversation(teamId, epochId, fromHuman, message),
     noteEpochTurn: (teamId, epochId, fromHuman) => orchestration!.noteEpochTurn(teamId, epochId, fromHuman),
+    closeEpochResources: async (teamId, epochId) => {
+      store.recipientFences.clearEpoch(teamId, epochId)
+      checks?.clearEpoch(teamId, epochId, { replicate: false })
+      await orchestration!.closeEpochResources(teamId, epochId, { disposing: true })
+      digest.clearEpoch(epochId)
+      archive.clearEpoch(epochId)
+      turnReport.clearEpoch(epochId)
+      deps.onEpochSealed?.(teamId, epochId)
+    },
     applyClosedTask: async (teamId, epochId) => {
       const epoch = store.getEpochById(epochId)
       if (epoch?.teamId !== teamId || (epoch.endReason !== 'cleared' && epoch.workItem?.status !== 'completed')) return
+      store.recipientFences.clearEpoch(teamId, epochId)
       checks?.clearEpoch(teamId, epochId, { replicate: false })
       await orchestration!.closeEpochResources(teamId, epochId)
       digest.clearEpoch(epochId)
@@ -587,7 +633,6 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
       if (reason === 'completed' || reason === 'cleared') deps.onTaskClosed?.(teamId, epochId)
       await orchestration!.sealConversationEpoch(teamId, epochId, reason, summary)
     },
-    requestSeal: (teamId, epochId, summary) => orchestration!.requestSeal(teamId, epochId, summary),
     captureReport: (correlationId, outcome) => orchestration!.captureReport(correlationId, outcome),
     buildPromptContext: (teamId, selfAppId, epochId) =>
       orchestration!.buildPromptContext(teamId, selfAppId, epochId),
@@ -604,6 +649,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
 
 export function createDefaultSessionDeps(store: TeamStore): OrchestrationSessionDeps {
   return {
+    evictIdleSession: sessionKey => evictIdleSession(sessionKey, 'team idle'),
     async sendAppChatMessage(request) {
       // Deliberately dynamic, and load-bearing: app-chat imports this module
       // statically, as does anything reaching it for team identity. Making this
@@ -713,8 +759,21 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
       const { closeTeamSession } = await import('../app-chat')
       await closeTeamSession(appId, teamId, epochId)
     },
-    async stopTeamSession(appId, teamId, epochId) {
-      const { stopAppChatConversation } = await import('../app-chat')
+    async stopTeamSession(appId, teamId, epochId, controller, expectedRequestId) {
+      const { stopAppChatConversation, abortAppChatTurn } = await import('../app-chat')
+      if (controller || expectedRequestId) {
+        const participants = getTeamService()?.participants
+        if (!participants) throw new Error('Collaboration services are unavailable.')
+        const target = { appId, teamId, epochId }
+        const prepared = controller ? participants.prepareControlledStop(target, controller)
+          : participants.prepareSourceStop(target, expectedRequestId!)
+        let interrupted = false
+        for (const targetId of prepared.appIds) {
+          interrupted = await abortAppChatTurn(buildTeamSessionKey(targetId, teamId, epochId), 'controller',
+            () => prepared.isCurrent(targetId)) || interrupted
+        }
+        return interrupted
+      }
       const sessionKey = buildTeamSessionKey(appId, teamId, epochId)
       // Read before the abort: afterwards the session no longer says it was
       // running, and "was anything interrupted" is what the caller reports.
@@ -722,9 +781,9 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
       await stopAppChatConversation(sessionKey)
       return wasRunning
     },
-    getMemberSpaceId(appId) {
+    getMemberSpaceId(appId, teamId, epochId) {
       const app = getAppManager()?.getApp(appId)
-      return app?.spaceId ?? null
+      return app?.spaceId ?? (teamId && epochId ? store.participants?.getExecution(teamId, epochId, appId)?.environment.spaceId : null) ?? null
     },
   }
 }
@@ -798,3 +857,10 @@ export type { BoardArchive } from './board-archive'
 export { createTurnReport, readTurnEndReport, renderTurnEndReport } from './turn-report'
 export type { TurnReport, NoteTurnEndedInput } from './turn-report'
 export { renderBoardMarkdown } from './board-render'
+export { createCoordinationMcpServer } from './team-tools'
+export type { TeamMcpContext } from './team-tools'
+
+export { registerCollaborationLifecycle } from './collaboration-lifecycle'
+export { deliverOwnedCollaborationSource, deliverTeamCollaborationSource, observeOwnedCollaborationSources } from './source-delivery'
+
+export { disposeJoinedOfficeWork } from './office-disposal'

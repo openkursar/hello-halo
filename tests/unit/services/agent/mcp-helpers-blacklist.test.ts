@@ -42,6 +42,7 @@ vi.mock('../../../../src/main/services/app-bridge', () => ({
 import { loadProductConfig } from '../../../../src/main/foundation/product-config'
 import { getAppManager } from '../../../../src/main/services/app-bridge'
 import { getDbMcpServers, getMcpServersForRequires } from '../../../../src/main/services/agent/helpers'
+import { buildToolDiscoveryOptions } from '../../../../src/main/services/agent/tool-discovery'
 
 type MockedFn = ReturnType<typeof vi.fn>
 
@@ -68,6 +69,7 @@ interface FakeMcpApp {
     }
   }
   userConfig?: Record<string, unknown>
+  userOverrides?: { mcpContext?: { loading?: 'eager' | 'deferred'; summary?: string } }
 }
 
 function setInstalledMcps(apps: FakeMcpApp[]): void {
@@ -96,6 +98,20 @@ describe('agent/helpers — MCP command blacklist runtime filter', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     setBlacklist(undefined)
+  })
+
+  it('carries installed context through both entry selectors without exporting it to the MCP process', () => {
+    setInstalledMcps([stdioMcp('customer', 'echo', {
+      userConfig: { API_TOKEN: 'fixture-token' },
+      userOverrides: { mcpContext: { loading: 'eager', summary: 'Customer orders' } },
+    }), stdioMcp('paused', 'echo', { status: 'paused' })])
+    const chat = getDbMcpServers(SPACE)!
+    const run = getMcpServersForRequires([{ id: 'customer' }, { id: 'paused' }], SPACE)
+    const expected = { services: { customer: { identity: 'app:id-customer', loading: 'eager', summary: 'Customer orders' } } }
+    expect(buildToolDiscoveryOptions(chat)).toEqual(expected)
+    expect(buildToolDiscoveryOptions(run)).toEqual(expected)
+    expect(chat.customer).toEqual({ command: 'echo', env: { API_TOKEN: 'fixture-token' } })
+    expect(JSON.stringify(chat)).not.toContain('Customer orders')
   })
 
   // ---------------------------------------------------------------------------

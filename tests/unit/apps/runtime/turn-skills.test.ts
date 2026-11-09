@@ -190,7 +190,7 @@ describe('a skill cannot bring more than the request was allowed', () => {
   })
 
   it('loads when the tool it pre-approves is withheld outright: the withholding wins', () => {
-    expect(allowedAs('allowed-tools: Bash, WebFetch, Agent\n', { allowedTools: ['Read'] })).toEqual({ allow: true })
+    expect(allowedAs('allowed-tools: Bash, WebFetch\n', { allowedTools: ['Read'] })).toEqual({ allow: true })
   })
 
   it('does not load with a pre-approval for a tool no switch covers', () => {
@@ -204,9 +204,9 @@ describe('a skill cannot bring more than the request was allowed', () => {
     expect(allowedAs(hooks, { allowedTools: ['Read', 'Bash'] })).toEqual({ allow: true })
   })
 
-  it('does not run as a sub-agent unless sub-agents were allowed', () => {
-    expect(allowedAs('context: fork\n')).toMatchObject({ allow: false, reason: expect.stringContaining('sub-agent') })
-    expect(allowedAs('context: fork\n', { ...LISTED_COMMANDS, allowedTools: ['Read', 'Agent'] })).toEqual({ allow: true })
+  it('does not revive native fork execution through an old delegation grant', () => {
+    expect(allowedAs('context: fork\n')).toMatchObject({ allow: false, reason: expect.stringContaining('native fork') })
+    expect(allowedAs('context: fork\n', { ...LISTED_COMMANDS, allowedTools: ['Read', 'Agent'] })).toMatchObject({ allow: false, reason: expect.stringContaining('native fork') })
   })
 
   it('does not load when its settings cannot be read', () => {

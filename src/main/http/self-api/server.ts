@@ -57,7 +57,7 @@ function buildApp(): Express {
   app.use('/api', selfApiAuthMiddleware)
   app.use('/api/skills', parseSkillBody)
   app.use('/api', rejectWithheldFields)
-  registerApiRoutes(app)
+  registerApiRoutes(app, { assistant: true })
   app.use(selfApiErrorHandler)
   return app
 }

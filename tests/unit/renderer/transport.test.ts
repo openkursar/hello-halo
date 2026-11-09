@@ -10,6 +10,7 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { gitApi } from '../../../src/renderer/api/git.api'
+import { teamApi } from '../../../src/renderer/api/team.api'
 
 vi.mock('../../../src/renderer/i18n', () => ({ default: { t: (text: string) => text } }))
 import {
@@ -41,11 +42,32 @@ afterEach(() => {
   clearServerUrl()
 })
 
+describe('work roster API routing', () => {
+  it('uses the lightweight desktop bridge for the selected work', async () => {
+    const response = { success: true, data: { members: [], roster: [] } }
+    const invoke = vi.fn().mockResolvedValue(response)
+    setGlobal('window', { halo: { teamEpochRoster: invoke } })
+    expect(await teamApi.teamEpochRoster('team', 'work')).toBe(response)
+    expect(invoke).toHaveBeenCalledWith({ teamId: 'team', epochId: 'work' })
+  })
+
+  it('uses the same scoped read remotely without fetching the full board', async () => {
+    setGlobal('window', {})
+    setGlobal('document', { baseURI: 'https://remote.example.com/halo/' })
+    setGlobal('localStorage', { getItem: () => 'test-token' })
+    const response = { success: true, data: { members: [], roster: [] } }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(response)))
+    expect(await teamApi.teamEpochRoster('team/x', 'work y')).toEqual(response)
+    expect(fetchSpy).toHaveBeenCalledWith('https://remote.example.com/halo/api/teams/team%2Fx/epochs/work%20y/roster', {
+      method: 'GET', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-token' },
+    })
+  })
+})
+
 describe('Git repository API routing', () => {
   const operations = [
     { method: 'gitDiscoverRepository', route: 'discover-repository', field: 'filePath' },
     { method: 'gitOpenRepository', route: 'open-repository', field: 'repoRoot' },
-    { method: 'gitForgetRepository', route: 'forget-repository', field: 'repoRoot' },
   ] as const
 
   it.each(operations)('routes $method directly through the desktop bridge', async ({ method }) => {

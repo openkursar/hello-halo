@@ -170,6 +170,7 @@ vi.mock('../../../../src/main/foundation/product-config', () => ({
   getImChannelsPermissionDefaults: vi.fn(() => ({})),
 }))
 vi.mock('../../../../src/main/apps/team', () => ({
+  getTeamService: () => null,
   getTeamStore: vi.fn(() => ({})),
 }))
 vi.mock('../../../../src/main/apps/runtime/team', () => ({

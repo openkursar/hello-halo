@@ -8,9 +8,19 @@
 
 import { getConversation, updateConversation } from '../../conversation.service'
 import { releaseInteractiveBrowserContext } from '../../ai-browser'
+import type { ToolsetContextMode } from './types'
 
 /** conversationId -> open toolset ids */
 const openSets = new Map<string, Set<string>>()
+const contextModes = new Map<string, ToolsetContextMode>()
+
+export function getToolsetContextMode(conversationId: string): ToolsetContextMode | undefined {
+  return contextModes.get(conversationId)
+}
+
+export function setToolsetContextMode(conversationId: string, mode: ToolsetContextMode): void {
+  contextModes.set(conversationId, mode)
+}
 
 /**
  * Get the open set for a conversation, lazily hydrating from the persisted
@@ -58,6 +68,7 @@ function persist(spaceId: string, conversationId: string, set: Set<string>): voi
 /** Drop all in-memory state for a conversation (persisted record remains) */
 export function dropConversationState(conversationId: string): void {
   openSets.delete(conversationId)
+  contextModes.delete(conversationId)
   // The conversation's view of the browser goes with it. Releases rather than
   // destroys — the tabs are the user's and stay open.
   releaseInteractiveBrowserContext(conversationId)

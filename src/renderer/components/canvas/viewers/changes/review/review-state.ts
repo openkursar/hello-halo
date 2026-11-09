@@ -25,6 +25,7 @@ export type ReviewCardState =
       members: ReviewProgress['members']
     }
   | { kind: 'stopped'; variant: ReviewVariant }
+  | { kind: 'incomplete'; variant: ReviewVariant }
   /** Ended without a report. */
   | { kind: 'failed'; variant: ReviewVariant; error: string | null }
   | {
@@ -60,6 +61,8 @@ export function reviewCardState(record: GitReviewRecord | null, progress: Review
       }
     case 'stopped':
       return { kind: 'stopped', variant }
+    case 'incomplete':
+      return { kind: 'incomplete', variant }
     case 'error':
       return { kind: 'failed', variant, error: progress.error }
     case 'done': {

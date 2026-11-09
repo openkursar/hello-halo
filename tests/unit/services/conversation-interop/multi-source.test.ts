@@ -500,8 +500,8 @@ describe('delivery across sources', () => {
       expect(delivered).toEqual(['member report'])
     })
 
-    it('a space conversation coordinator is not given the exemption', () => {
-      expect(collabReportOwnership(store as never, 't1', 'notes:1')).toBeUndefined()
+    it('an unrelated space conversation cannot claim ownership of the report', () => {
+      expect(collabReportOwnership(store as never, 't1', 'notes:1')()).toBe(false)
     })
 
     it('is refused once the collaboration moved to another chat', async () => {

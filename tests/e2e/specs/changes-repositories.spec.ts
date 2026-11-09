@@ -4,7 +4,6 @@ import { createHash } from 'node:crypto'
 import type { ElectronApplication, Page } from '@playwright/test'
 import type { RpcClient } from '../../../src/shared/rpc/define'
 import type { gitRpc } from '../../../src/shared/rpc/contracts/git.contract'
-import type { GitRepositoryListOptions } from '../../../src/shared/types/git'
 import { test as base, expect, WINDOW_SIZE } from '../fixtures/electron-with-git-workspace'
 import { getAppEntryPath, launchElectronApp } from '../fixtures/electron'
 import { CONVERSATION_TITLE, SPACE_NAME, createGitWorkspace, type GitWorkspace } from '../fixtures/git-workspace'
@@ -134,15 +133,15 @@ async function pickFolder(app: ElectronApplication, window: Page, root: string |
   }
 }
 
-async function listRepositories(window: Page, workspace: GitWorkspace, options?: GitRepositoryListOptions) {
-  return window.evaluate(({ spaceId, options }) => {
+async function listRepositories(window: Page, workspace: GitWorkspace) {
+  return window.evaluate((spaceId) => {
     const { halo } = globalThis as unknown as { halo: RpcClient<typeof gitRpc> }
-    return halo.gitListRepositories(spaceId, options)
-  }, { spaceId: workspace.spaceId, options })
+    return halo.gitListRepositories(spaceId)
+  }, workspace.spaceId)
 }
 
-async function repositories(window: Page, workspace: GitWorkspace, options?: GitRepositoryListOptions) {
-  const response = await listRepositories(window, workspace, options)
+async function repositories(window: Page, workspace: GitWorkspace) {
+  const response = await listRepositories(window, workspace)
   expect(response.success, JSON.stringify(response)).toBe(true)
   expect(response.data?.git.available).toBe(true)
   expect(response.data).toBeDefined()
@@ -172,15 +171,20 @@ async function expectRemembered(window: Page, workspace: GitWorkspace, root: str
   })
 }
 
-async function expectDismissed(window: Page, workspace: GitWorkspace, root: string): Promise<void> {
-  const response = await window.evaluate(({ spaceId, filePath }) => {
-    const { halo } = globalThis as unknown as { halo: RpcClient<typeof gitRpc> }
-    return halo.gitDiscoverRepository(spaceId, filePath)
-  }, { spaceId: workspace.spaceId, filePath: path.join(root, 'deep.ts') })
-  expect(response.success, JSON.stringify(response)).toBe(true)
-  expect(response.data).toBeNull()
-  expect((await repositories(window, workspace)).repositories.map(repo => repo.root)).not.toContain(root)
-  expect((await repositories(window, workspace, { shallow: true })).repositories.map(repo => repo.root)).not.toContain(root)
+function repositoryRecordsFile(workspace: GitWorkspace): string {
+  return path.join(workspace.testConfigDir, '.halo', 'spaces', workspace.spaceId, '.halo', 'git', 'repositories.json')
+}
+
+async function expectNoRemoval(window: Page, roots: string[]): Promise<void> {
+  await expect(repositoryMenu(window)).toBeVisible()
+  await expect(repositoryMenu(window).getByRole('menuitem', { name: /^Remove from list/ })).toHaveCount(0)
+  await expect(repositoryMenu(window).getByRole('menuitem')).toHaveCount(1)
+  await expect(repositoryMenu(window).getByRole('menuitem', { name: 'Open repository…', exact: true })).toBeVisible()
+  for (const root of roots) {
+    const group = repositoryGroup(window, root)
+    await expect(group).toHaveCount(1)
+    await expect(group.getByRole('menuitemradio')).toBeEnabled()
+  }
 }
 
 async function openDeepFile(window: Page): Promise<void> {
@@ -239,7 +243,7 @@ test('discovers the nearest ignored repository from an opened file without mixin
   expect(treeSnapshot(workspace.repoRoot)).toEqual(before)
 })
 
-test('remembers an explicitly opened deep repository across restart and removes only its record', acceptance('changes.inspect.deep-repositories'), async ({ window, workspace, repositoryApp }) => {
+test('retains an explicitly opened deep repository across switching and restarts without a removal action', acceptance('changes.inspect.deep-repositories'), async ({ window, workspace, repositoryApp }) => {
   const before = treeSnapshot(workspace.repoRoot)
   const deepRoot = path.join(workspace.repoRoot, DEEP_PATH)
   await openDeepRepository(repositoryApp.app, window, workspace)
@@ -256,21 +260,23 @@ test('remembers an explicitly opened deep repository across restart and removes 
   await expectRepositoryDiff(reopened, deepRoot)
 
   await openPicker(reopened)
-  const group = repositoryGroup(reopened, deepRoot)
-  await expect(group.getByText('No files will be deleted.', { exact: true })).toBeVisible()
-  await group.getByRole('menuitem', { name: /^Remove from list/ }).click()
-  await expect(group).toHaveCount(0)
+  await expectNoRemoval(reopened, [workspace.repoRoot, deepRoot])
+  await repositoryGroup(reopened, workspace.repoRoot).getByRole('menuitemradio').click()
   await expect(picker(reopened)).toHaveAttribute('title', workspace.repoRoot)
   await expect(repositoryMenu(reopened)).toHaveCount(0)
   await expect.poll(() => diffCardPaths(reopened)).toContain('src/app.ts')
-  expect((await repositories(reopened, workspace)).repositories.map(repo => repo.root)).not.toContain(deepRoot)
+  await expectRemembered(reopened, workspace, deepRoot)
   expect(treeSnapshot(workspace.repoRoot)).toEqual(before)
 
-  const afterRemoval = await repositoryApp.restart()
-  await openChangesWithShortcut(afterRemoval)
-  await openPicker(afterRemoval)
-  await expect(repositoryGroup(afterRemoval, deepRoot)).toHaveCount(0)
-  expect((await repositories(afterRemoval, workspace)).repositories.map(repo => repo.root)).not.toContain(deepRoot)
+  const afterSwitch = await repositoryApp.restart()
+  await expect(afterSwitch.locator('[title="deep.ts"]')).toHaveCount(0)
+  await expectRemembered(afterSwitch, workspace, deepRoot)
+  await openChangesWithShortcut(afterSwitch)
+  await openPicker(afterSwitch)
+  await expectNoRemoval(afterSwitch, [workspace.repoRoot, deepRoot])
+  await expect(repositoryGroup(afterSwitch, path.join(workspace.repoRoot, UNOPENED_PATH))).toHaveCount(0)
+  await repositoryGroup(afterSwitch, deepRoot).getByRole('menuitemradio').click()
+  await expectRepositoryDiff(afterSwitch, deepRoot)
   expect(treeSnapshot(workspace.repoRoot)).toEqual(before)
 })
 
@@ -278,7 +284,7 @@ for (const discovery of ['opened-file', 'shallow-child'] as const) {
   test.describe(`automatic repository records: ${discovery}`, () => {
     test.use({ discoveryPath: discovery === 'opened-file' ? DEEP_PATH : SHALLOW_PATH })
 
-    test('remembers automatic discovery across restart, keeps removal dismissed and restores only on explicit open', acceptance('changes.inspect.automatic-repository-records', { discovery }), async ({ window, workspace, repositoryApp, discoveryPath }) => {
+    test('retains automatic discovery across switching and restarts without explicit reopening', acceptance('changes.inspect.automatic-repository-records', { discovery }), async ({ window, workspace, repositoryApp, discoveryPath }) => {
       const before = treeSnapshot(workspace.repoRoot)
       const root = path.join(workspace.repoRoot, discoveryPath)
       expect((await repositories(window, workspace)).repositories.map(repo => repo.root)).not.toContain(root)
@@ -287,6 +293,9 @@ for (const discovery of ['opened-file', 'shallow-child'] as const) {
       if (discovery === 'opened-file') await openDeepFile(window)
       await openChangesWithShortcut(window)
       await openPicker(window)
+      if (discovery === 'shallow-child') {
+        expect((await repositories(window, workspace)).repositories.map(repo => repo.root)).not.toContain(root)
+      }
       await repositoryGroup(window, root).getByRole('menuitemradio').click()
       await expectRepositoryDiff(window, root)
       await expectRemembered(window, workspace, root)
@@ -306,45 +315,101 @@ for (const discovery of ['opened-file', 'shallow-child'] as const) {
       await expectRepositoryDiff(reopened, root)
 
       await openPicker(reopened)
-      const group = repositoryGroup(reopened, root)
-      await expect(group.getByText('No files will be deleted.', { exact: true })).toBeVisible()
-      await group.getByRole('menuitem', { name: /^Remove from list/ }).click()
+      await expectNoRemoval(reopened, [workspace.repoRoot, root])
+      await repositoryGroup(reopened, workspace.repoRoot).getByRole('menuitemradio').click()
       await expect(repositoryMenu(reopened)).toHaveCount(0)
       await expect(picker(reopened)).toHaveAttribute('title', workspace.repoRoot)
       await expect.poll(() => diffCardPaths(reopened)).toContain('src/app.ts')
-      expect((await repositories(reopened, workspace)).repositories.map(repo => repo.root)).not.toContain(root)
+      await expectRemembered(reopened, workspace, root)
 
       await openDeepFile(reopened)
       await openChangesWithShortcut(reopened)
       await reopened.locator('.canvas-tab [title="deep.ts"]').click()
       await expect(reopened.locator('.canvas-tab.active [title="deep.ts"]')).toBeVisible()
       await openChangesWithShortcut(reopened)
-      await expectDismissed(reopened, workspace, root)
+      await expectRemembered(reopened, workspace, root)
       await openPicker(reopened)
-      await expect(repositoryGroup(reopened, root)).toHaveCount(0)
+      await expectNoRemoval(reopened, [workspace.repoRoot, root])
+      await expect(repositoryGroup(reopened, path.join(workspace.repoRoot, UNOPENED_PATH))).toHaveCount(0)
       await reopened.keyboard.press('Escape')
       expect(treeSnapshot(workspace.repoRoot)).toEqual(before)
 
       await reopened.getByRole('button', { name: 'Close canvas (clears all tabs)', exact: true }).click()
       await expect(reopened.locator('.canvas-tab')).toHaveCount(0)
-      const afterRemoval = await repositoryApp.restart()
-      await expect(afterRemoval.locator('[title="deep.ts"]')).toHaveCount(0)
-      expect((await repositories(afterRemoval, workspace)).repositories.map(repo => repo.root)).not.toContain(root)
-      await openChangesWithShortcut(afterRemoval)
-      await expectDismissed(afterRemoval, workspace, root)
-      await openPicker(afterRemoval)
-      await expect(repositoryGroup(afterRemoval, root)).toHaveCount(0)
-      await afterRemoval.keyboard.press('Escape')
-      expect(treeSnapshot(workspace.repoRoot)).toEqual(before)
-
-      await pickFolder(repositoryApp.app, afterRemoval, root)
-      await expect(repositoryMenu(afterRemoval)).toHaveCount(0)
-      await expectRepositoryDiff(afterRemoval, root)
-      await expectRemembered(afterRemoval, workspace, root)
+      const afterSwitch = await repositoryApp.restart()
+      await expect(afterSwitch.locator('[title="deep.ts"]')).toHaveCount(0)
+      await expectRemembered(afterSwitch, workspace, root)
+      await openChangesWithShortcut(afterSwitch)
+      await openPicker(afterSwitch)
+      await expectNoRemoval(afterSwitch, [workspace.repoRoot, root])
+      await expect(repositoryGroup(afterSwitch, path.join(workspace.repoRoot, UNOPENED_PATH))).toHaveCount(0)
+      await repositoryGroup(afterSwitch, root).getByRole('menuitemradio').click()
+      await expectRepositoryDiff(afterSwitch, root)
+      await expectRemembered(afterSwitch, workspace, root)
       expect(treeSnapshot(workspace.repoRoot)).toEqual(before)
     })
   })
 }
+
+test('restores legacy hidden paths as selectable known repositories and preserves them in new records', acceptance('changes.inspect.legacy-repository-records'), async ({ window, workspace, repositoryApp }) => {
+  const deepRoot = path.join(workspace.repoRoot, DEEP_PATH)
+  const rememberedRoot = path.join(workspace.repoRoot, UNOPENED_PATH)
+  fs.writeFileSync(path.join(rememberedRoot, 'deep.ts'), 'export const deepRepositoryMarker = "remembered-only"\n')
+  const before = treeSnapshot(workspace.repoRoot)
+  const recordsFile = repositoryRecordsFile(workspace)
+  const legacyText = `${JSON.stringify({
+    version: 2,
+    workingDir: workspace.repoRoot,
+    roots: [rememberedRoot],
+    dismissedRoots: [deepRoot, workspace.repoRoot],
+  }, null, 2)}\n`
+  await expect(window.locator('.canvas-tab')).toHaveCount(0)
+  const reopened = await repositoryApp.restart(() => {
+    fs.mkdirSync(path.dirname(recordsFile), { recursive: true })
+    fs.writeFileSync(recordsFile, legacyText)
+  })
+
+  await expect(reopened.locator('.canvas-tab')).toHaveCount(0)
+  for (const root of [workspace.repoRoot, rememberedRoot, deepRoot]) await expectRemembered(reopened, workspace, root)
+  expect((await repositories(reopened, workspace)).repositories.map(repo => repo.root).sort()).toEqual([workspace.repoRoot, rememberedRoot, deepRoot].sort())
+  expect(fs.readFileSync(recordsFile, 'utf8')).toBe(legacyText)
+
+  await openChangesWithShortcut(reopened)
+  await expect(picker(reopened)).toHaveAttribute('title', workspace.repoRoot)
+  await expect.poll(() => diffCardPaths(reopened)).toContain('src/app.ts')
+  for (const [root, marker] of [[rememberedRoot, 'remembered-only'], [deepRoot, 'deep-only']]) {
+    await openPicker(reopened)
+    await expectNoRemoval(reopened, [workspace.repoRoot, rememberedRoot, deepRoot])
+    await repositoryGroup(reopened, root).getByRole('menuitemradio').click()
+    await expectRepositoryDiff(reopened, root)
+    await expect(diffCard(reopened, 'deep.ts')).toContainText(marker)
+  }
+
+  await pickFolder(repositoryApp.app, reopened, workspace.nestedRepoRoot)
+  await expect(picker(reopened)).toHaveAttribute('title', workspace.nestedRepoRoot)
+  await expect.poll(() => diffCardPaths(reopened)).toEqual(['README.md'])
+  const expectedRoots = [workspace.repoRoot, rememberedRoot, deepRoot, workspace.nestedRepoRoot]
+  const stored = JSON.parse(fs.readFileSync(recordsFile, 'utf8'))
+  expect(stored).toEqual({ version: 3, workingDir: workspace.repoRoot, roots: expect.any(Array) })
+  expect(stored.roots.slice().sort()).toEqual(expectedRoots.slice().sort())
+  for (const root of expectedRoots) await expectRemembered(reopened, workspace, root)
+  expect(treeSnapshot(workspace.repoRoot)).toEqual(before)
+
+  await reopened.getByRole('button', { name: 'Close canvas (clears all tabs)', exact: true }).click()
+  await expect(reopened.locator('.canvas-tab')).toHaveCount(0)
+  const afterSave = await repositoryApp.restart()
+  await expect(afterSave.locator('.canvas-tab')).toHaveCount(0)
+  for (const root of expectedRoots) await expectRemembered(afterSave, workspace, root)
+  expect((await repositories(afterSave, workspace)).repositories.map(repo => repo.root).sort()).toEqual(expectedRoots.slice().sort())
+  expect(JSON.parse(fs.readFileSync(recordsFile, 'utf8'))).toEqual(stored)
+  await openChangesWithShortcut(afterSave)
+  await openPicker(afterSave)
+  await expectNoRemoval(afterSave, expectedRoots)
+  await repositoryGroup(afterSave, deepRoot).getByRole('menuitemradio').click()
+  await expectRepositoryDiff(afterSave, deepRoot)
+  await expect(diffCard(afterSave, 'deep.ts')).toContainText('deep-only')
+  expect(treeSnapshot(workspace.repoRoot)).toEqual(before)
+})
 
 for (const selection of ['ordinary parent folder', 'outside repository'] as const) {
   test(`rejects an ${selection} without changing the selected repository`, acceptance('changes.inspect.repository-boundary', { selection: selection === 'ordinary parent folder' ? 'parent-folder' : 'outside-repository' }), async ({ window, workspace, electronApp }) => {
@@ -369,7 +434,7 @@ for (const selection of ['ordinary parent folder', 'outside repository'] as cons
   })
 }
 
-test('validates a remembered path only when selected and allows recovery or removal after failure', acceptance('changes.inspect.repository-unavailable'), async ({ window, workspace, repositoryApp }) => {
+test('retains unavailable paths through retry, repository switching and restart', acceptance('changes.inspect.repository-unavailable'), async ({ window, workspace, repositoryApp }) => {
   const before = treeSnapshot(workspace.repoRoot)
   await openDeepRepository(repositoryApp.app, window, workspace)
   const deepRoot = path.join(workspace.repoRoot, DEEP_PATH)
@@ -394,10 +459,11 @@ test('validates a remembered path only when selected and allows recovery or remo
   await expect(group.getByText('Unavailable', { exact: true })).toBeVisible()
   await expect(group.getByRole('menuitemradio')).toHaveAttribute('aria-checked', 'true')
   await expect(group.getByRole('menuitemradio')).toBeEnabled()
-  await expect(group.getByRole('menuitem', { name: /^Remove from list/ })).toBeEnabled()
+  await expectNoRemoval(reopened, [workspace.repoRoot, deepRoot])
   await repositoryGroup(reopened, workspace.repoRoot).getByRole('menuitemradio').click()
   await expect(picker(reopened)).toHaveAttribute('title', workspace.repoRoot)
   await expect.poll(() => diffCardPaths(reopened)).toContain('src/app.ts')
+  await expectRemembered(reopened, workspace, deepRoot)
   expect(treeSnapshot(workspace.repoRoot)).toEqual(whileMissing)
   expect(treeSnapshot(movedRoot)).toEqual(deepBefore)
 
@@ -419,26 +485,47 @@ test('validates a remembered path only when selected and allows recovery or remo
   await group.getByRole('menuitemradio').click()
   await expect(reopened.getByText("Couldn't read this repository", { exact: true })).toBeVisible()
   await expect(picker(reopened)).toHaveAttribute('title', deepRoot)
+  await expect.poll(() => diffCardPaths(reopened)).toEqual([])
   await openPicker(reopened)
   await expect(group.getByText('Unavailable', { exact: true })).toBeVisible()
-  await expect(group.getByText('No files will be deleted.', { exact: true })).toBeVisible()
-  await group.getByRole('menuitem', { name: /^Remove from list/ }).click()
-  await expect(group).toHaveCount(0)
+  await expectNoRemoval(reopened, [workspace.repoRoot, deepRoot])
+  await repositoryGroup(reopened, workspace.repoRoot).getByRole('menuitemradio').click()
   await expect(picker(reopened)).toHaveAttribute('title', workspace.repoRoot)
   await expect(repositoryMenu(reopened)).toHaveCount(0)
   await expect.poll(() => diffCardPaths(reopened)).toContain('src/app.ts')
-  expect((await repositories(reopened, workspace)).repositories.map(repo => repo.root)).not.toContain(deepRoot)
+  await expectRemembered(reopened, workspace, deepRoot)
   expect(treeSnapshot(workspace.repoRoot)).toEqual(whileMissing)
   expect(treeSnapshot(movedRoot)).toEqual(deepBefore)
   expect(fs.existsSync(deepRoot)).toBe(false)
 
-  const afterRemoval = await repositoryApp.restart()
-  await openChangesWithShortcut(afterRemoval)
-  await openPicker(afterRemoval)
-  await expect(repositoryGroup(afterRemoval, deepRoot)).toHaveCount(0)
-  expect((await repositories(afterRemoval, workspace)).repositories.map(repo => repo.root)).not.toContain(deepRoot)
+  await reopened.getByRole('button', { name: 'Close canvas (clears all tabs)', exact: true }).click()
+  await expect(reopened.locator('.canvas-tab')).toHaveCount(0)
+  const afterFailure = await repositoryApp.restart()
+  await expectRemembered(afterFailure, workspace, deepRoot)
+  expect(fs.existsSync(deepRoot)).toBe(false)
+  await openChangesWithShortcut(afterFailure)
+  await expect(picker(afterFailure)).toHaveAttribute('title', workspace.repoRoot)
+  await expect.poll(() => diffCardPaths(afterFailure)).toContain('src/app.ts')
+  await openPicker(afterFailure)
+  const retained = repositoryGroup(afterFailure, deepRoot)
+  await expectNoRemoval(afterFailure, [workspace.repoRoot, deepRoot])
+  await expect(retained.getByText('Unavailable', { exact: true })).toHaveCount(0)
+  await retained.getByRole('menuitemradio').click()
+  await expect(afterFailure.getByText("Couldn't read this repository", { exact: true })).toBeVisible()
+  await expect(picker(afterFailure)).toHaveAttribute('title', deepRoot)
+  await expect.poll(() => diffCardPaths(afterFailure)).toEqual([])
   expect(treeSnapshot(workspace.repoRoot)).toEqual(whileMissing)
   expect(treeSnapshot(movedRoot)).toEqual(deepBefore)
+
+  fs.renameSync(movedRoot, deepRoot)
+  await afterFailure.getByRole('button', { name: 'Try again', exact: true }).click()
+  await expectRepositoryDiff(afterFailure, deepRoot)
+  await expectRemembered(afterFailure, workspace, deepRoot)
+  await openPicker(afterFailure)
+  await expect(retained.getByText('Unavailable', { exact: true })).toHaveCount(0)
+  await expectNoRemoval(afterFailure, [workspace.repoRoot, deepRoot])
+  await afterFailure.keyboard.press('Escape')
+  expect(treeSnapshot(workspace.repoRoot)).toEqual(before)
 })
 
 test('opening and canceling repository pickers preserves selection, records and project files', acceptance('changes.inspect.repository-picker-cancel'), async ({ window, workspace, electronApp }) => {

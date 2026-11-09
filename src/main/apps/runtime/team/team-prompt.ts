@@ -4,10 +4,10 @@
  */
 
 import type { CollabMode, EscalationRouting } from '../../../../shared/apps/team-types'
+import { TEAM_LEAD_ADDRESS, teamMemberAddress } from '../../../../shared/apps/team-types'
 import type { TeamFolderPaths } from './team-folder'
 
 export interface TeamPromptRosterEntry {
-  /** Never rendered; names who a turn's request came from (see `buildRestrictionNotice`). */
   appId: string
   memberName: string
   role: string
@@ -48,6 +48,7 @@ export interface TeamPromptRosterEntry {
 export interface TeamPromptContext {
   teamName: string
   goal: string
+  temporaryCollaboration?: boolean
   collabMode: CollabMode
   escalationRouting: EscalationRouting
   selfMemberName: string
@@ -85,9 +86,9 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
   const lines: string[] = [
     '## Team Session Context',
     '',
-    `You are a member of the team "${ctx.teamName}".`,
+    ctx.temporaryCollaboration ? 'You are collaborating in this conversation.' : `You are a member of the standing team "${ctx.teamName}".`,
     `Your role: ${ctx.selfRole || 'member'}.`,
-    `Your member name (how teammates address you): ${ctx.selfMemberName}.`,
+    `Your member name: ${ctx.selfIsLead ? TEAM_LEAD_ADDRESS : ctx.selfMemberName}.`,
     ctx.selfIsLead ? 'You are the team LEAD.' : '',
     '',
     // The owner's own words about this member's part in this team. It layers on
@@ -95,21 +96,22 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
     ...(ctx.selfDuty && ctx.selfDuty.trim()
       ? ['### What you are responsible for here', '', ctx.selfDuty.trim(), '']
       : []),
-    'This is a team-channel turn. The message below was delivered to you by the',
-    'team runtime, not by a human user. Acting in this turn means coordinating',
-    'with your teammates through the team tools. The message itself says who it',
-    'came from.',
+    'This is the current team conversation. Each message identifies its sender;',
+    'follow the current instruction and its permission boundaries.',
+    'Collaborators can be added with spawn_agent. No team setup or fixed goal is required.',
+    'End your turn when your work is done. No team-completion tool call is required.',
+    'These runtime facts apply even if an older stored role prompt describes a different workflow.',
     '',
-    '### Team Goal',
-    '',
-    ctx.goal,
-    '',
-    '### Roster',
+    ...(!ctx.temporaryCollaboration && ctx.goal.trim() ? ['### Standing Team Goal', ctx.goal.trim(), 'The current instruction specifies the work to do now.', ''] : []),
+    '### Known standing members',
     '',
     ...renderRoster(ctx),
+    'Temporary collaborators for this work are listed by team_read_board; they are not part of the standing roster.',
     '',
     '### Communication',
     '',
+    '- Address the lead with `team_send(to:"lead", message)`. Use the sender address',
+    '  to reply to the actual requester; do not redirect every teammate reply to the lead.',
     '- Human conversations with your owner are private and do not notify the lead.',
     '- To answer a teammate, call `team_send(to, message)` directly. Send your',
     '  result to the requester; do not rely on your closing reply as a message.',
@@ -128,13 +130,13 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
     '  have finished the work and not recorded it. To find out whether something',
     '  happened, ask the person — never conclude it did not because the board is',
     '  silent.',
-    '- Keep the record straight as you go: `team_post_task` / `team_update_task`',
-    '  for work, `team_post_finding(...)` for an observation or artifact. In',
-    '  particular, when you get an answer you were waiting on, update the task it',
-    '  belongs to — otherwise the rest of the team cannot tell the answer arrived.',
-    '  These are shared RECORDS, not how you reply: writing to the board notifies',
-    '  nobody. Recording a result and telling the person who asked are two',
-    '  separate acts, and you usually owe both.',
+    '- Use team_post_task / team_update_task when explicit ownership and progress',
+    '  tracking are useful; small requests need no board task. Posting a task does',
+    '  not dispatch it. Use team_send to give the assignee its instructions.',
+    '- Use team_post_finding only for reusable knowledge or artifacts useful to',
+    '  multiple collaborators. Do not use findings for requests, replies,',
+    '  acknowledgements or routine progress. With one collaborator, direct messages',
+    '  usually suffice. Recording a finding does not notify a particular teammate.',
     '- Only when you need a HUMAN decision, call',
     '  `report(type:"escalation", content, choices?)`.',
     '',
@@ -202,15 +204,14 @@ function renderFileSharing(folder: TeamFolderPaths | null): string[] {
 
 function renderRoster(ctx: TeamPromptContext): string[] {
   if (ctx.roster.length === 0) {
-    return ['(You are the only member listed.)']
+    return ['No other standing members are listed here. Read team_read_board for current collaborators.']
   }
   const rows = ctx.roster.map((m) => {
-    const tags = [m.isLead ? 'lead' : null].filter(Boolean).join(', ')
     // Owner label: a teammate on another machine is "brought by <person>";
     // same-machine teammates need no label (they are yours, on this machine).
     const ownership =
       m.sameMachine === false ? ` — ${m.owner ? `${m.owner}\u2019s digital human` : 'a teammate\u2019s digital human'}` : ''
-    const head = `- ${m.memberName} — ${m.role || 'member'}${tags ? ` (${tags})` : ''}${ownership}`
+    const head = `- ${m.isLead ? TEAM_LEAD_ADDRESS : m.memberName} — ${m.role || 'member'}; to=${JSON.stringify(teamMemberAddress(m))}${ownership}`
     // Both are their owner's own words and both decide who gets a piece of
     // work, so both are carried verbatim: what the digital human is, and what
     // it is responsible for here. Labelled only when both are present — alone,
@@ -231,7 +232,7 @@ function renderRoster(ctx: TeamPromptContext): string[] {
   })
 
   if (ctx.collabMode === 'structured') {
-    const contactable = ctx.roster.filter((m) => m.contactable).map((m) => m.memberName)
+    const contactable = ctx.roster.filter((m) => m.contactable).map(teamMemberAddress)
     rows.push('')
     rows.push(
       contactable.length > 0
@@ -279,10 +280,6 @@ function renderRoster(ctx: TeamPromptContext): string[] {
  * to that person — the one place a final message IS a delivery, because the IM
  * reply handle is attached to this turn.
  *
- * A teammate's answer can only arrive as a LATER turn, so a question that needs
- * someone else becomes two messages to the person — an acknowledgement now, the
- * answer when it lands.
- *
  * The bound member may be the lead or any teammate, and the two are addressed
  * differently: a lead is the team's counter and routes work; a teammate is
  * reachable in its own right and answers its own remit first. Both keep the
@@ -321,10 +318,11 @@ export function buildTeamImBridge(
     '- Only the text you write after your last tool call is sent, once the turn',
     '  ends; text written before a tool call is not. Do finishing work — memory,',
     '  notes, the board — before you write the reply, and end with the reply itself.',
-    '- To involve a teammate, `team_send(to, message)`. Their answer cannot',
-    '  arrive inside this turn — it comes back later as a new turn of yours. So',
-    '  when you hand something over, tell the person now that you are checking, then',
-    '  send them the answer when it lands. Two short messages, not one long silence.',
+    '- To involve a teammate, use team_send(to, message). Replies with matching',
+    '  permissions can arrive between tool calls. A reply with different permissions',
+    '  is processed in a separate turn. Keep working when useful; if the answer',
+    '  is still pending when you end, tell the person you are checking and answer',
+    '  when the result arrives.',
     '- Never promise something you have not got. If you have not heard back yet,',
     '  say you are still waiting — do not compose an answer on a teammate\u2019s',
     '  behalf.',
@@ -343,10 +341,11 @@ function buildTeamRules(ctx: TeamPromptContext): string {
   const lines: string[] = ['## Team Rules', '']
 
   if (ctx.collabMode === 'structured') {
-    const contactable = ctx.roster.filter((m) => m.contactable).map((m) => m.memberName)
+    const contactable = ctx.roster.filter((m) => m.contactable).map(teamMemberAddress)
     lines.push(
-      '- Topology boundary: you may only START a conversation with the teammates',
-      `  listed as contactable${contactable.length > 0 ? ` (${contactable.join(', ')})` : ''}.`,
+      '- Topology boundary: contact only teammates allowed by the current work context.',
+      `  Known standing contacts${contactable.length > 0 ? `: ${contactable.join(', ')}` : ': none listed here'}.`,
+      '  Temporary collaborators inherit their creator’s contact limits; discover them on the board.',
       '  Reaching anyone else first is rejected by the team tools — do not try to',
       '  route around it. Replying is never restricted: anyone who can message you,',
       '  you can message back.',

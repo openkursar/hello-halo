@@ -7,7 +7,7 @@ import Database from 'better-sqlite3'
 
 export const teamTables = ['teams', 'team_members', 'team_edges', 'blackboard_tasks', 'blackboard_findings', 'team_epochs', 'team_triggers', 'team_checks', 'team_activity', 'team_tool_audit'] as const
 export const legacyTeamVersion = 19
-export const currentTeamVersion = 21
+export const currentTeamVersion = 25
 /** Columns appended by migrations after the frozen checkpoint; rows that predate them hold NULL. */
 export const columnsAddedSinceFrozen: Partial<Record<typeof teamTables[number], readonly string[]>> = { teams: ['saved_team_id'] }
 const schema = readFileSync(new URL('./data/app-team-v19.sql', import.meta.url), 'utf8')

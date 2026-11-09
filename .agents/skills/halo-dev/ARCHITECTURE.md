@@ -55,6 +55,8 @@ Platform Layer (src/main/platform)
                   of consolidation; standing conventions shared across owners
   - background  : keep-alive + tray + daemon browser
   - turn-gate   : generic exclusive turn reservation + permission-aware mailbox
+                  (public facade over the engine-independent SDK `/collaboration`
+                  library; importing it starts no engine or background work)
                   (shared by team, conversation interop, app chat, IM and automation;
                   batches matching authority, isolates different/unknown authority,
                   flushes startup arrivals on readiness; see its DESIGN.md)
@@ -1000,9 +1002,13 @@ private session ID into an incompatible engine. See `agent/DESIGN.md` for the
 binding commit, legacy baseline, recovery and resource lifecycle contracts.
 
 
-Halo's SDK adapter uses the independent package's public Worker API. Host
-integration is defined in `src/main/services/agent/DESIGN.md`; execution internals
-and defaults are owned by the SDK.
+Halo SDK (`src/sdk/halo-sdk/`) is a host-independent general-purpose Agent runtime
+and npm package; its development entry is `src/sdk/halo-sdk/AGENTS.md`. It must not
+import Halo application code or Electron. Halo consumes its public package entries;
+host policy and UI stay in the application, connected through explicit SDK contracts.
+The adapter uses the public Worker API; its contract is in
+`src/main/services/agent/DESIGN.md`. Package ownership does not imply public npm
+publication or an independent repository.
 
 ### External Claude Code and experimental distribution
 

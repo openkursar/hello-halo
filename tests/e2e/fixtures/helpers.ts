@@ -10,16 +10,17 @@ import { expect, type Page } from '@playwright/test'
 /**
  * Wait for the app to finish loading and show its shell.
  *
- * The rail is the shell's persistent furniture on every view, so it is what a
- * loaded app can be recognised by.
+ * Narrow layouts replace the rail with a navigation menu.
  */
 export async function waitForHomePage(window: Page) {
   await window.waitForSelector('#root', { timeout: 15000 })
   await window.waitForLoadState('domcontentloaded')
   const skip = window.getByRole('button', { name: 'Skip for now', exact: true })
-  await skip.or(window.locator('nav button').first()).first().waitFor({ state: 'visible', timeout: 15000 })
+  const navigation = window.locator('nav button:visible').first()
+    .or(window.getByRole('button', { name: 'Navigate', exact: true })).first()
+  await skip.or(navigation).first().waitFor({ state: 'visible', timeout: 15000 })
   if (await skip.isVisible()) await skip.click()
-  await window.waitForSelector('nav button', { timeout: 15000 })
+  await navigation.waitFor({ state: 'visible', timeout: 15000 })
 }
 
 /**
@@ -80,11 +81,20 @@ export async function navigateToWorkspaces(window: Page) {
 /** Navigate to the Apps page through the rail's Digital Humans entry. */
 export async function navigateToApps(window: Page) {
   await waitForHomePage(window)
-
-  await window.getByRole('button', { name: 'Digital Humans', exact: true }).first().click()
+  const enter = async () => {
+    const navigation = window.getByRole('button', { name: 'Navigate', exact: true })
+    const narrow = await navigation.isVisible()
+    if (narrow) await navigation.click()
+    await window.getByRole('button', { name: 'Digital Humans', exact: true }).first().click()
+    if (narrow) await expect(window.getByRole('heading', { name: 'Navigate', exact: true })).toHaveCount(0)
+  }
+  await enter()
+  await expect(window.getByRole('banner').getByText('Digital Humans · Extensions', { exact: true })).toBeVisible()
 
   const directory = window.getByText('My Digital Humans', { exact: true })
   const back = window.getByRole('button', { name: 'All digital humans', exact: true })
+  // Returning from another page restores the prior tab; a second navigation opens the directory.
+  if (!await directory.isVisible() && !await back.isVisible()) await enter()
   await expect(directory.or(back).first()).toBeVisible()
   if (await back.isVisible()) await back.click()
 

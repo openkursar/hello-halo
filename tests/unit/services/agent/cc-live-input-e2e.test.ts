@@ -1,5 +1,5 @@
 /**
- * Live input against the real bundled Claude Code CLI and a local scripted
+ * Live input against the real Claude Code CLI and a local scripted
  * Messages API. Opt-in (CC_E2E=1): it spawns the CLI once per case.
  *
  * Covers what only the real CLI can prove: which inputs it acknowledges, which
@@ -9,7 +9,7 @@
  */
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -101,6 +101,10 @@ async function startHarness(overrides: Record<string, unknown> = {}) {
     name: 'h',
     version: '1.0.0',
     tools: [
+      tool('spawn_agent', 'Host-scoped collaboration fixture', { prompt: z.string() }, async () => {
+        toolCalls.push('collaborator')
+        return { content: [{ type: 'text', text: 'host-collaboration-receipt' }] }
+      }),
       tool('slow', 'Waits', { ms: z.number() }, async ({ ms }) => {
         toolCalls.push('slow')
         await sleep(ms)
@@ -186,6 +190,74 @@ async function startHarness(overrides: Record<string, unknown> = {}) {
 const slowFinalAnswer: Step = { chunks: Array.from({ length: 12 }, (_, i) => `part${i} `), chunkDelayMs: 120 }
 
 describe.skipIf(!enabled)('Claude Code live input (real CLI)', () => {
+  it('withholds both native delegation aliases while executing the host collaboration tool', async () => {
+    const h = await startHarness({ disallowedTools: ['NotebookEdit'], settingSources: ['project'] })
+    const legacyDirectory = path.join(h.cwd, '.claude', 'agents')
+    mkdirSync(legacyDirectory, { recursive: true })
+    writeFileSync(path.join(legacyDirectory, 'obsolete-profile.md'), '---\nname: obsolete-profile\ndescription: OBSOLETE_PROFILE_SENTINEL\n---\nThis old profile must not be advertised.\n')
+    const delegate: Step = { toolUse: { name: 'mcp__h__spawn_agent', input: { prompt: 'Inspect the fixture.' } } }
+    h.plan.push(request => {
+      if (request.tools.some((tool: any) => tool.name === 'mcp__h__spawn_agent' && tool.defer_loading !== true)) return delegate
+      h.plan.unshift(delegate)
+      return { toolUse: { name: 'ToolSearch', input: { query: 'select:mcp__h__spawn_agent', max_results: 1 } } }
+    }, { text: 'done' })
+    await h.session.send('Delegate through the host collaboration tool.')
+    await h.waitForResults(1)
+    expect(h.toolCalls).toContain('collaborator')
+    const names = h.modelRequests.flatMap(request => request.tools.map((tool: any) => tool.name))
+    for (const name of ['Agent', 'Task', 'TeamCreate', 'TeamDelete', 'SendMessage']) expect(names).not.toContain(name)
+    expect(names).toContain('Bash')
+    expect(JSON.stringify(h.modelRequests)).toContain('host-collaboration-receipt')
+    expect(JSON.stringify(h.modelRequests)).not.toContain('OBSOLETE_PROFILE_SENTINEL')
+    expect(JSON.stringify(h.modelRequests)).not.toContain('obsolete-profile')
+  })
+
+  it('keeps inspectable inline skills executable with native delegation disabled', async () => {
+    const h = await startHarness({ settingSources: ['project'] })
+    const skillDir = path.join(h.cwd, '.claude', 'skills', 'inline-fixture')
+    mkdirSync(skillDir, { recursive: true })
+    writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: inline-fixture\ndescription: Fixture inline workflow\n---\nINLINE_SKILL_SENTINEL: report the fixture value.\n')
+    h.plan.push({ toolUse: { name: 'Skill', input: { skill: 'inline-fixture' } } }, { text: 'done' })
+    await h.session.send('Use the inline-fixture skill.')
+    await h.waitForResults(1)
+    expect(h.modelRequests).toHaveLength(2)
+    expect(JSON.stringify(h.modelRequests[1].messages)).toContain('INLINE_SKILL_SENTINEL')
+    expect(h.frames.some(frame => frame.parent_tool_use_id)).toBe(false)
+  })
+
+  it('delivers path text and expands a namespaced command with the real CLI', async () => {
+    const h = await startHarness({ settingSources: ['project'] })
+    const commandDir = path.join(h.cwd, '.claude', 'commands', 'frontend')
+    mkdirSync(commandDir, { recursive: true })
+    writeFileSync(path.join(commandDir, 'test.md'), '---\ndescription: Fixture command\n---\nNESTED_COMMAND_SENTINEL: report the fixture value.\n')
+    const messages = ['/Users/example/project inspect', '/Volumes/data/project', '/tmp', '/frontend:test']
+    for (const [index, message] of messages.entries()) {
+      h.plan.push({ text: 'done' })
+      await h.session.send(message)
+      await h.waitForResults(index + 1)
+    }
+    for (const message of messages.slice(0, -1)) expect(h.modelSaw(message)).toBe(true)
+    expect(h.modelSaw('NESTED_COMMAND_SENTINEL')).toBe(true)
+    expect(h.results().every(result => result.subtype === 'success')).toBe(true)
+    expect(h.frames.some(frame => frame.parent_tool_use_id)).toBe(false)
+  }, 60000)
+
+  it('refuses native fork execution through both Skill and direct commands', async () => {
+    const h = await startHarness({ settingSources: ['project'] })
+    const skillDir = path.join(h.cwd, '.claude', 'skills', 'fork-fixture')
+    mkdirSync(skillDir, { recursive: true })
+    writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: fork-fixture\ndescription: Fixture fork workflow\ncontext: fork\nagent: general-purpose\n---\nNATIVE_FORK_SENTINEL: report the fixture value.\n')
+    h.plan.push({ toolUse: { name: 'Skill', input: { skill: 'fork-fixture' } } }, { text: 'done' })
+    await h.session.send('Use the fork-fixture skill.')
+    await h.waitForResults(1)
+    expect(h.frames.filter(frame => frame.subtype === 'task_started')).toHaveLength(0)
+    expect(h.modelRequests).toHaveLength(2)
+    expect(JSON.stringify(h.modelRequests[1].messages)).not.toContain('NATIVE_FORK_SENTINEL')
+    expect(JSON.stringify(h.modelRequests[1].messages)).toContain('context: fork')
+    await expect(h.session.send('/fork-fixture')).rejects.toThrow('native fork')
+    expect(h.frames.some(frame => frame.parent_tool_use_id)).toBe(false)
+  })
+
   it.each(['deepseek-v4.1-flash', 'gpt-6-astra', 'claude-sonnet-4-5'])('discovers and executes TodoWrite for %s', async model => {
     const h = await startHarness({ model })
     const todos = [{ content: 'Verify task tracking', status: 'completed', activeForm: 'Verifying task tracking' }]

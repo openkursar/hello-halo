@@ -100,7 +100,7 @@ export const MODULE: RouteModuleMeta = {
       group: 'settings',
       summary: 'Read what the running agent engine can do',
       returns:
-        '{success:true,data:{engineId,displayName,streaming:{text,reasoning,toolInput,toolOutput},tools:{native,synthetic,shellHeuristics},todo:{states,hasActiveForm},subAgent:{...}}}',
+        '{success:true,data:{engineId,displayName,streaming:{text,reasoning,toolInput,toolOutput},tools:{native,synthetic,shellHeuristics},todo:{states,hasActiveForm}}}',
       notes: 'Describes the conditions you run under — which streaming and tool features are native versus emulated. Always answers; falls back to the active engine defaults.',
     },
     'GET /api/agent/engine-availability': {
@@ -114,21 +114,15 @@ export const MODULE: RouteModuleMeta = {
     'POST /api/agent/toolsets/list': {
       expose: 'ai',
       group: 'conversation',
-      summary: 'List the on-demand toolsets available to a conversation',
+      summary: 'List the capabilities with manual controls in a conversation',
       body: '{"spaceId": "<spaceId — a uuid from GET /api/spaces>", "conversationId": "<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}',
       returns: '{success:true,data:[{id:string,displayName:string,summary:string,open:boolean}]}',
       notes: [
-        'Read-only. Opening and closing are the user\'s to do — ask with the request_toolset tool, which highlights the switch for them.',
+        'Read-only capability inventory. Core capabilities are already available and have no loading switch. The agent may activate other listed capabilities through request_toolset without a human enablement step.',
         'For your own session you need its conversationId; GET /api/agent/sessions lists the ones generating right now, which includes yours.',
       ].join('\n'),
     },
-    // Both call the *ByUser* opener, so the change is recorded as the user's
-    // own and reaches rememberLastToolsets, which
-    // persists it as config.lastToolsets — the seed every future conversation
-    // starts from. An agent flipping its own tools would silently rewrite a
-    // preference the user set by hand, across conversations it will never see.
-    // toolsets/DESIGN.md states the rule this keeps: the AI asks via
-    // request_toolset and the user flips the switch.
+    // Legacy client preference endpoints; AI activation uses request_toolset.
     'POST /api/agent/toolsets/open': {
       expose: 'internal',
     },

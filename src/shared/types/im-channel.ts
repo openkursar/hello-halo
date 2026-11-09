@@ -674,6 +674,8 @@ export interface ImChannelInstanceStatus {
  * detail page (AppNotifyChannelsSection).
  */
 export interface ImSessionRecord {
+  /** Persistent context incarnation; reset or recipient changes invalidate delayed work. */
+  contextId?: string
   /** Archive address; independent of the external delivery channel. */
   teamContext?: { teamId: string; epochId: string }
   /** Associated digital human (App) ID */

@@ -25,7 +25,7 @@ import { createMessageBus } from '../../../../../src/main/apps/runtime/team/mess
 import type { TeamDeliveryHooks } from '../../../../../src/main/apps/runtime/team/message-bus'
 import { createCoordinatorDelivery } from '../../../../../src/main/apps/runtime/team/space-coordinator'
 import type { CoordinatorDeliveryRequest } from '../../../../../src/main/apps/runtime/team/space-coordinator'
-import { spaceCoordinatorAppId, SPACE_COORDINATOR_MEMBER_NAME, spaceCollabChatKey } from '../../../../../src/shared/apps/team-types'
+import { buildTeamSessionKey, spaceCoordinatorAppId, SPACE_COORDINATOR_MEMBER_NAME, spaceCollabChatKey } from '../../../../../src/shared/apps/team-types'
 import type { Team, TeamEpoch, TeamMember } from '../../../../../src/main/apps/team/types'
 
 const TEAM_ID = 'team-1'
@@ -253,6 +253,17 @@ describe('createCoordinatorDelivery', () => {
       trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'gone', fromAppId: 'app-gone', wait: false, kind: 'message' },
     })
     expect(delivered.map(request => request.permissionIdentity)).toEqual(['external', 'external'])
+  })
+
+  it('returns typed parent routing for a member-private coordinator instead of treating its key as a space chat', async () => {
+    const parentKey = buildTeamSessionKey('parent', 'public-team', 'public-work')
+    store.setCoordinatorConversation(TEAM_ID, parentKey)
+    const { delivered, hook } = makeDelivery()
+    await hook({ envelope: { ...envelope('Private result'), requestId: 'root/parent/private/child' },
+      trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'corr-1', fromAppId: RESEARCHER_APP, wait: false, kind: 'message' } })
+    expect(delivered[0]).toMatchObject({ conversationId: parentKey,
+      parentTeam: { appId: 'parent', teamId: 'public-team', epochId: 'public-work', correlationId: 'corr-1' },
+      persist: { metadata: { requestId: 'root/parent/private/child' } } })
   })
 
   it('passes a system turn-end report verbatim', async () => {

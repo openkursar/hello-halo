@@ -5,7 +5,7 @@
     "appearance": "Appearance", "language": "Language", "save": "Save", "reset": "Reset", "cancel": "Cancel", "close": "Close", "pin": "Pin", "unpin": "Unpin",
     "personSearch": "Search digital humans", "allPeople": "All digital humans", "personSettings": "Capabilities and settings", "identity": "Identity & Instructions", "name": "Name", "systemPrompt": "System Prompt",
     "personError": "App name is required", "imageError": "Failed to process image: {name}", "proxyError": "Unsupported protocol. Use http://, https://",
-    "teams": "Teams", "tasks": "Tasks", "members": "Members", "teamSettings": "Team settings", "taskRoom": "Task room", "teamGoal": "Team goal", "viewGoal": "View team goal", "chooseMember": "Choose which of your digital humans to talk to",
+    "teams": "Teams", "tasks": "Tasks", "members": "Members", "teamSettings": "Team settings", "taskRoom": "Task room", "teamGoal": "Team goal", "viewGoal": "View team goal", "chooseMember": "Choose who to talk to",
     "invite": "Invite", "inviteTitle": "Invite to this team", "inviteError": "Turn on Remote Access in Settings so others can join this team.", "tryAgain": "Try again",
     "storeBack": "Back to Store", "storeSearch": "Search Digital Humans / Skills / MCP", "digitalHuman": "Digital Human", "install": "Install", "next": "Next", "defaultWorkspace": "Default workspace", "required": "Required", "storeError": "Please complete the required fields",
     "files": "Files", "learned": "Learned", "watchedFolders": "Watched folders", "unavailable": "Unavailable", "retry": "Retry", "collapseCanvas": "Collapse canvas"

@@ -4,6 +4,7 @@ import type { GitRepository, GitRepositoryEntry, GitRepositoryList } from '../..
 const api = vi.hoisted(() => ({ gitListRepositories: vi.fn(), gitDiscoverRepository: vi.fn(), gitGetStatus: vi.fn(), gitGetChanges: vi.fn(), codeReviewGetLatest: vi.fn() }))
 vi.mock('../../../../../src/renderer/api', () => ({ api }))
 import { gitDiscovery } from '../../../../../src/renderer/services/git-discovery'
+import { i18nReady, setLanguage } from '../../../../../src/renderer/i18n'
 import { useNotificationStore } from '../../../../../src/renderer/stores/notification.store'
 import { createGitChangesController, type GitChangesController } from '../../../../../src/renderer/components/canvas/viewers/changes/state/git-changes-store'
 import { createViewMemory } from '../../../../../src/renderer/components/canvas/viewers/changes/state/view-memory'
@@ -22,7 +23,9 @@ function deferred<T>() {
   return { promise, resolve }
 }
 let controller: GitChangesController
-beforeEach(() => {
+beforeEach(async () => {
+  await i18nReady
+  await setLanguage('en')
   vi.resetAllMocks()
   gitDiscovery.forget()
   useNotificationStore.getState().clear()

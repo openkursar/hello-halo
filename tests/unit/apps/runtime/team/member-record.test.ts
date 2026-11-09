@@ -6,17 +6,15 @@
 
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('../../../../../src/main/services/agent/resolved-sdk', () => ({
-  tool: (name: string, description: string, inputSchema: unknown, handler: unknown) => ({ name, description, inputSchema, handler }),
-  createSdkMcpServer: (options: { tools: Array<{ name: string }> }) => options,
-}))
+vi.mock('../../../../../src/main/services/agent/resolved-sdk', async () =>
+  import('../../../../../src/main/services/agent/mcp/sdk-server'))
 
 import {
   createTeamMemberRecordReader,
   renderMemberRecord,
   type RemoteRecordRow,
 } from '../../../../../src/main/apps/runtime/team/member-record'
-import { buildCoordinationTools, createTeamMcpServer } from '../../../../../src/main/apps/runtime/team/team-tools'
+import { createCoordinationMcpServer, createTeamMcpServer } from '../../../../../src/main/apps/runtime/team/team-tools'
 import type { TeamMcpContext } from '../../../../../src/main/apps/runtime/team/team-tools'
 import type { MessageBus } from '../../../../../src/main/apps/runtime/team/message-bus'
 import type { Blackboard } from '../../../../../src/main/apps/runtime/team/blackboard'
@@ -149,9 +147,8 @@ describe('member record reader', () => {
 })
 
 type ToolReply = { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
-type Tool = { name: string; handler: (input: Record<string, unknown>) => Promise<ToolReply> }
 
-function serverFor(overrides: Partial<TeamMcpContext>) {
+function serverFor(overrides: Partial<TeamMcpContext>, forceRead = false) {
   const readMemberRecord = vi.fn(async () => ({ ok: true as const, memberName: 'writer', remote: false, stale: false, lines: [{ seq: 1, role: 'user' as const, content: 'hi' }], total: 1, hiddenBefore: 0 }))
   const bus = {
     resolveMemberAppId: (_team: string, name: string) => {
@@ -168,11 +165,11 @@ function serverFor(overrides: Partial<TeamMcpContext>) {
     bus,
     blackboard: {} as Blackboard,
     callerWorkDir: '/tmp',
-    requestComplete: () => {},
     readMemberRecord,
     ...overrides,
   }
-  const tools = (createTeamMcpServer(ctx) as unknown as { tools: Tool[] }).tools
+  const server = forceRead ? createCoordinationMcpServer(() => ctx) : createTeamMcpServer(ctx)
+  const tools = server.instance.listTools().map(tool => ({ ...tool, handler: async (input: Record<string, unknown>) => (await server.instance.callTool(tool.name, input)) as ToolReply }))
   return { readMemberRecord, tool: tools.find((t) => t.name === TEAM_TOOL_NAMES.readMember), tools }
 }
 
@@ -183,7 +180,7 @@ describe('team_read_member tool', () => {
   })
 
   it('is part of the space coordinator toolset', () => {
-    const names = buildCoordinationTools(() => null).map((t) => (t as unknown as Tool).name)
+    const names = createCoordinationMcpServer(() => null).instance.listTools().map(tool => tool.name)
     expect(names).toContain(TEAM_TOOL_NAMES.readMember)
   })
 
@@ -196,7 +193,7 @@ describe('team_read_member tool', () => {
   })
 
   it.each(['colleague', 'guest'] as const)('does not read the record while serving a %s request restricted', async (origin) => {
-    const { tool, readMemberRecord } = serverFor({ origin })
+    const { tool, readMemberRecord } = serverFor({ origin }, true)
     const res = await tool!.handler({ member: 'writer' })
     expect(res.isError).toBe(true)
     expect(readMemberRecord).not.toHaveBeenCalled()
@@ -213,11 +210,10 @@ describe('team_read_member tool', () => {
       bus: { resolveMemberAppId: () => 'app-local' },
       blackboard: {},
       callerWorkDir: '/tmp',
-      requestComplete: () => {},
-      readMemberRecord,
+        readMemberRecord,
     } as unknown as TeamMcpContext
-    const tool = (buildCoordinationTools(() => memberCtx) as unknown as Tool[]).find((t) => t.name === TEAM_TOOL_NAMES.readMember)!
-    const res = await tool.handler({ member: 'writer' })
+    const server = createCoordinationMcpServer(() => memberCtx)
+    const res = await server.instance.callTool(TEAM_TOOL_NAMES.readMember, { member: 'writer' }) as ToolReply
     expect(res.isError).toBe(true)
     expect(readMemberRecord).not.toHaveBeenCalled()
   })

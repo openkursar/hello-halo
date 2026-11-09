@@ -11,6 +11,7 @@ import { basename, isAbsolute, join } from 'path'
 import { broadcastToAll } from '../../http/websocket'
 import { sendToRenderer } from '../../foundation/window.service'
 import {
+  buildTeamSessionKey,
   TEAM_EVENTS,
   AI_MEMBER_HARD_LIMIT,
   parseMemberChatKey,
@@ -25,7 +26,10 @@ import {
   isTeamFolderRef,
 } from '../../../shared/apps/team-types'
 import { provisionLeadSpec } from './lead'
-import { conversationKindOf, deriveConversationLabel } from './epoch-label'
+import { conversationKindOf, deriveConversationLabel, deriveConversationTitle } from './epoch-label'
+import { createParticipantService, type ParticipantService } from './participant-service'
+import { releaseParticipantWorkspaces } from './participant-resources'
+import { isWorkEdgeAllowed, listWorkMembers } from './work-members'
 import type { TeamRuntime } from '../runtime/team'
 import type { AppManagerService } from '../manager'
 import type { AppSpec } from '../spec'
@@ -47,10 +51,13 @@ import type {
   TeamListItem,
   TeamUpdatedEvent,
   TeamEpochSummary,
+  TeamEpoch,
   TeamTrigger,
   TeamTriggerInput,
   TeamRunTrigger,
+  TeamRunResult,
   EpochBoard,
+  EpochRoster,
   TeamArtifactGroup,
   TeamArtifactOpenResult,
   TeamArtifact,
@@ -62,10 +69,11 @@ import type {
   TeamStatus,
   TeamToolAudit,
   TeamDelegatedPolicy,
+  TeamParticipant,
 } from '../../../shared/apps/team-types'
 import { isRemoteMember, toLocalMembers } from '../../../shared/apps/team-types'
 import { capabilityPolicyFromPreset } from '../../../shared/apps/capability-policy'
-import { parseSpaceCollabChatKey } from '../../../shared/apps/im-keys'
+import { parseSpaceCollabChatKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
 
 const LOG_TAG = '[TeamService]'
 
@@ -107,6 +115,7 @@ export interface TeamServiceDeps {
 
   /** A membership/edge change occurred → re-project the office roster. */
   onRosterMutated?: (teamId: string) => void
+  onParticipantCreated?: (participant: TeamParticipant) => void | Promise<void>
   /**
    * An owner rewrote one of its own members' duty (or flipped whether it accepts
    * periodic checks). Those are office-shared facts, so on a joined office they
@@ -228,33 +237,20 @@ function projectOwnership(member: TeamMember): Pick<RosterMember, 'owner' | 'sam
   }
 }
 
-/** Input for assembling a temporary space collaboration. */
-export interface CreateCollabInput {
-  owningSpaceId: string
-  /** The space conversation that coordinates this collaboration. */
-  conversationId: string
-  name: string
-  goal: string
-  members: ProposedMember[]
-  modelSelection: AgentModelSelection
-}
-
 export interface TeamService {
+  readonly participants: ParticipantService
+  ensureCollaboration(input: { owningSpaceId: string; conversationId: string; title: string }): Promise<{ team: Team; epochId: string }>
   createTeam(input: CreateTeamInput, confirmedProposal?: ProposedMember[]): Promise<Team>
-  /**
-   * Assemble a temporary collaboration for one space conversation: an ephemeral
-   * team whose coordinator is the space agent itself (no lead app). Members are
-   * AI-provisioned into the owning space and hidden from the people directory.
-   */
-  createCollab(input: CreateCollabInput): Promise<{ team: Team; epochId: string }>
+  /** Host execution scope without the task, roster or live-status projection. */
+  getCollaborationScope(conversationId: string): { team: Team; epochId: string } | null
   /** The collaboration bound to a space conversation, compactly. Null when none. */
   getCollabForConversation(conversationId: string): CollabSummary | null
+  /** Remove member-private scopes when their parent work closes, retaining failed cleanup for retry. */
+  disposePrivateCollaborations(teamId: string, epochId?: string): Promise<void>
   /** Save a separate ordinary team from configuration, leaving the current work here. */
   saveCollab(teamId: string, name?: string): Promise<Team>
   /** Repair a previously saved conversation-led team on explicit use. */
   prepareTeam(teamId: string): Promise<void>
-  /** End a collaboration's work: seal its conversation epoch as completed. */
-  completeCollab(teamId: string, summary: string): Promise<void>
   getTeam(teamId: string): Team | null
   listTeams(spaceId?: string): Team[]
   listTeamItems(spaceId?: string): TeamListItem[]
@@ -287,7 +283,7 @@ export interface TeamService {
    * concrete brief, appended to the lead's start wake — the delegation path the
    * space agent uses. Legacy saved collaborations prepare their lead first.
    */
-  runTeam(teamId: string, trigger?: TeamRunTrigger, instruction?: string): Promise<void>
+  runTeam(teamId: string, trigger?: TeamRunTrigger, instruction?: string): Promise<TeamRunResult>
   pauseTeam(teamId: string): Promise<void>
   dissolveTeam(teamId: string): Promise<void>
   listTriggers(teamId: string): TeamTrigger[]
@@ -309,6 +305,7 @@ export interface TeamService {
   listToolAudit(teamId: string, options?: { appId?: string; limit?: number }): TeamToolAudit[]
   listEpochs(teamId: string): TeamEpochSummary[]
   getEpochBoard(teamId: string, epochId: string): EpochBoard | null
+  getEpochRoster(teamId: string, epochId: string): EpochRoster | null
   /**
    * Drive ONE member turn and return its reply. Position-transparent: a
    * remote-owned target is woken on its owner node over the office link and the
@@ -394,7 +391,11 @@ export interface StopMemberResult {
 export function createTeamService(deps: TeamServiceDeps): TeamService {
   const { store, appManager, getRuntime, spaces } = deps
 
+  const dissolvingTeams = new Set<string>()
+  const dissolutionTasks = new Map<string, Promise<void>>()
+
   function requireTeam(teamId: string): Team {
+    if (dissolvingTeams.has(teamId)) throw new Error('This team is being deleted.')
     const team = store.getTeamById(teamId)
     if (!team) throw new Error(`Team not found: ${teamId}`)
     return team
@@ -488,8 +489,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   async function createAiMember(
     team: Team,
-    proposed: ProposedMember,
-    modelSelection?: AgentModelSelection
+    proposed: ProposedMember
   ): Promise<TeamMember> {
     const memberName = uniqueMemberName(team.id, proposed.memberName)
     const spaceId = spaces.createMemberSpace({
@@ -516,8 +516,6 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       addedAt: Date.now(),
     }
     store.addMember(member)
-    // Register ownership first so failed configuration is covered by team rollback.
-    if (modelSelection) appManager.updateOverrides(appId, { ...modelSelection })
     return member
   }
 
@@ -619,7 +617,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   async function createTeamInternal(
     input: CreateTeamInput,
     confirmedProposal?: ProposedMember[],
-    snapshot?: { ownedApps: Set<string>; model: AgentModelSelection | null; edges: TeamEdge[]; coordinatorAppId: string | null },
+    snapshot?: { ownedApps: Set<string>; model: (AgentModelSelection & { engineId?: import('../../../shared/types/engine').EngineId }) | null; edges: TeamEdge[]; coordinatorAppId: string | null },
   ): Promise<Team> {
     if (!spaces.spaceExists(input.owningSpaceId)) {
       throw new Error(`Owning space not found: ${input.owningSpaceId}`)
@@ -633,7 +631,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       id: randomUUID(),
       name: input.name,
       owningSpaceId: input.owningSpaceId,
-      goal: input.goal,
+      goal: input.goal?.trim() ?? '',
       leadAppId: input.leadAppId ?? null,
       memberSourcing: input.memberSourcing,
       collabMode: input.collabMode,
@@ -695,11 +693,11 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   function uniqueTeamName(spaceId: string, preferred: string, ephemeral = true): string {
     const base = (preferred || 'Collaboration').trim() || 'Collaboration'
-    const taken = new Set(store.listTeamsBySpace(spaceId).filter(team => ephemeral || !team.ephemeral).map(team => team.name))
-    if (!taken.has(base)) return base
+    const taken = (name: string) => !!store.getTeamByName(spaceId, name, ephemeral ? undefined : false)
+    if (!taken(base)) return base
     for (let i = 2; i < 1000; i++) {
       const candidate = `${base} ${i}`
-      if (!taken.has(candidate)) return candidate
+      if (!taken(candidate)) return candidate
     }
     return `${base} ${randomUUID().slice(0, 8)}`
   }
@@ -723,148 +721,92 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     return store.getOpenConversationEpoch(team.id, chatKey) ?? store.getLatestConversationEpoch(team.id, chatKey)
   }
 
-  // createCollab awaits between reading the previous binding and finishing
-  // assembly, so two concurrent calls for one conversation could both pass the
-  // "previous" check and dissolve each other's half-built team. Serialize per
-  // conversation with a promise chain.
+  // Serialize group binding for one source conversation.
   const collabCreationChain = new Map<string, Promise<unknown>>()
 
-  function createCollab(input: CreateCollabInput): Promise<{ team: Team; epochId: string }> {
-    const capturedInput = { ...input, modelSelection: { ...input.modelSelection } }
+  function ensureCollaboration(input: { owningSpaceId: string; conversationId: string; title: string }): Promise<{ team: Team; epochId: string }> {
     const prior = collabCreationChain.get(input.conversationId) ?? Promise.resolve()
-    const run = prior.then(
-      () => createCollabExclusive(capturedInput),
-      () => createCollabExclusive(capturedInput)
-    )
-    const settled = run.catch(() => undefined)
-    collabCreationChain.set(input.conversationId, settled)
-    void settled.finally(() => {
-      if (collabCreationChain.get(input.conversationId) === settled) {
-        collabCreationChain.delete(input.conversationId)
+    const run = prior.then(() => {
+      const parent = parseTeamSessionKey(input.conversationId)
+      if (parent) {
+        const epoch = store.getEpochById(parent.epochId)
+        if (dissolvingTeams.has(parent.teamId) || epoch?.teamId !== parent.teamId || epoch.endedAt !== null || epoch.workItem?.status === 'completed') {
+          console.warn(`${LOG_TAG} Private collaboration refused: team=${parent.teamId} epoch=${parent.epochId} reason=parent-work-closed`)
+          throw new Error('The parent work is closed. No private assistant scope was created.')
+        }
       }
+      if (!spaces.spaceExists(input.owningSpaceId)) throw new Error('The source workspace is unavailable.')
+      let team = store.getCollabTeamByConversation(input.conversationId)
+      if (team && dissolvingTeams.has(team.id)) throw new Error('This collaboration is being deleted.')
+      if (team && team.owningSpaceId !== input.owningSpaceId) throw new Error('The collaboration belongs to another source workspace.')
+      if (team && !team.ephemeral) {
+        store.setCoordinatorConversation(team.id, null)
+        team = null
+      }
+      if (!team) {
+        const now = Date.now()
+        const title = deriveConversationTitle(input.title)
+        if (!title) throw new Error('A collaborator assignment is required.')
+        const coordinator = spaceCoordinatorAppId(input.conversationId)
+        team = {
+          id: randomUUID(), name: uniqueTeamName(input.owningSpaceId, title), owningSpaceId: input.owningSpaceId,
+          goal: '', leadAppId: coordinator, memberSourcing: 'ai', collabMode: 'free', escalationRouting: 'user',
+          status: 'idle', currentEpochId: null, createdAt: now, updatedAt: now,
+          ephemeral: true, coordinatorConversationId: input.conversationId,
+        }
+        store.insertTeam(team)
+        store.addMember({ teamId: team.id, appId: coordinator, memberName: SPACE_COORDINATOR_MEMBER_NAME,
+          role: '', isLead: true, aiProvisioned: false, isSystemCoordinator: true, addedAt: now })
+      }
+      const epoch = requireRuntime().ensureConversationEpoch(team.id, spaceCollabChatKey(input.conversationId), team.name, deps.getViewerIdentity?.())
+      if (epoch.endReason === 'stopped' && !requireRuntime().noteEpochTurn(team.id, epoch.id, true)) {
+        throw new Error('The collaboration could not resume in its source conversation.')
+      }
+      emitUpdated(team.id, { team })
+      return { team, epochId: epoch.id }
     })
+    const settled = run.catch(() => {})
+    collabCreationChain.set(input.conversationId, settled)
+    void settled.finally(() => { if (collabCreationChain.get(input.conversationId) === settled) collabCreationChain.delete(input.conversationId) })
     return run
   }
 
-  async function createCollabExclusive(input: CreateCollabInput): Promise<{ team: Team; epochId: string }> {
-    if (!spaces.spaceExists(input.owningSpaceId)) {
-      throw new Error(`Owning space not found: ${input.owningSpaceId}`)
-    }
-    if (input.members.length === 0) {
-      throw new Error('A collaboration needs at least one member role.')
-    }
-    if (!input.modelSelection.modelSourceId || !input.modelSelection.modelId) {
-      console.warn(`${LOG_TAG} createCollab refused: conversation=${input.conversationId} missing coordinator model`)
-      throw new Error('A collaboration requires the coordinator source and model.')
-    }
+  const participants = createParticipantService({ store, getRuntime, identityExists: id => !!appManager.getApp(id),
+    onCreated: async participant => {
+      emitUpdated(participant.teamId, { team: requireTeam(participant.teamId), changed: ['members', 'conversations'] })
+      await deps.onParticipantCreated?.(participant)
+    },
+  })
 
-    // Replacing a finished collaboration preserves the source history when its
-    // configuration was saved; an unsaved source is dissolved.
-    const previous = store.getCollabTeamByConversation(input.conversationId)
-    if (previous) {
-      const openEpoch = previous.coordinatorConversationId
-        ? store.getOpenConversationEpoch(previous.id, spaceCollabChatKey(previous.coordinatorConversationId))
-        : null
-      if (openEpoch) {
-        throw new Error(
-          `This conversation already has an active collaboration ("${previous.name}"). ` +
-            'Finish it with team_complete before starting a new one.'
-        )
-      }
-      if (previous.ephemeral && !previous.savedTeamId) {
-        await dissolveTeamInternal(previous.id)
-      } else {
-        store.setCoordinatorConversation(previous.id, null)
-        emitUpdated(previous.id, { team: requireTeam(previous.id) })
-      }
-    }
+  function readCollaborationContext(conversationId: string): { team: Team; epoch: TeamEpoch } | null {
+    const team = store.getCollabTeamByConversation(conversationId)
+    const epoch = team ? collabEpoch(team) : null
+    return team && epoch ? { team, epoch } : null
+  }
 
-    const now = Date.now()
-    const coordinatorAppId = spaceCoordinatorAppId(input.conversationId)
-    const team: Team = {
-      id: randomUUID(),
-      name: uniqueTeamName(input.owningSpaceId, input.name),
-      owningSpaceId: input.owningSpaceId,
-      goal: input.goal,
-      // The space conversation IS the coordinator: member replies and turn-end
-      // notices route to it, and turn-report resolves "the lead" through this.
-      leadAppId: coordinatorAppId,
-      memberSourcing: 'ai',
-      collabMode: 'free',
-      escalationRouting: 'user',
-      status: 'idle',
-      currentEpochId: null,
-      createdAt: now,
-      updatedAt: now,
-      ephemeral: true,
-      coordinatorConversationId: input.conversationId,
-    }
-    try {
-      store.insertTeam(team)
-    } catch (err) {
-      // The unique index on coordinator_conversation_id is the last line of
-      // defense against a concurrent binding; surface it as a readable error.
-      const message = err instanceof Error ? err.message : String(err)
-      if (message.includes('UNIQUE constraint failed') && message.includes('coordinator_conversation_id')) {
-        throw new Error(
-          'This conversation already has a collaboration bound to it. ' +
-            'Finish it with team_complete before starting a new one.'
-        )
-      }
-      throw err
-    }
-    console.log(
-      `${LOG_TAG} createCollab: id=${team.id} name="${team.name}" conversation=${input.conversationId} ` +
-        `members=${input.members.length}`
-    )
-
-    try {
-      store.addMember({
-        teamId: team.id,
-        appId: coordinatorAppId,
-        memberName: SPACE_COORDINATOR_MEMBER_NAME,
-        role: 'Coordinator',
-        duty: 'Coordinates this collaboration and reports to the user.',
-        isLead: true,
-        aiProvisioned: false,
-        isSystemCoordinator: true,
-        addedAt: now,
-      })
-      for (const proposed of input.members.slice(0, AI_MEMBER_HARD_LIMIT)) {
-        await createAiMember(team, proposed, input.modelSelection)
-      }
-    } catch (err) {
-      console.error(`${LOG_TAG} createCollab failed, rolling back team=${team.id}:`, err)
-      await dissolveTeamInternal(team.id, { silent: true }).catch((cleanupErr) => {
-        console.warn(`${LOG_TAG} rollback cleanup error for team=${team.id}:`, cleanupErr)
-      })
-      throw err
-    }
-
-    const epoch = requireRuntime().ensureConversationEpoch(
-      team.id,
-      spaceCollabChatKey(input.conversationId),
-      team.name,
-      deps.getViewerIdentity?.()
-    )
-
-    const finalTeam = requireTeam(team.id)
-    emitUpdated(finalTeam.id, { team: finalTeam })
-    return { team: finalTeam, epochId: epoch.id }
+  function getCollaborationScope(conversationId: string): { team: Team; epochId: string } | null {
+    const context = readCollaborationContext(conversationId)
+    return context ? { team: context.team, epochId: context.epoch.id } : null
   }
 
   function getCollabForConversation(conversationId: string): CollabSummary | null {
-    const team = store.getCollabTeamByConversation(conversationId)
-    if (!team) return null
-    const epoch = collabEpoch(team)
-    if (!epoch) return null
+    const parent = parseTeamSessionKey(conversationId)
+    if (parent) {
+      const epoch = store.getEpochById(parent.epochId)
+      const member = epoch?.teamId === parent.teamId
+        ? store.getMember(parent.teamId, parent.appId, parent.epochId) : null
+      if (!member || isRemoteMember(member)) return null
+    }
+    const context = readCollaborationContext(conversationId)
+    if (!context) return null
+    const { team, epoch } = context
     const runtime = getRuntime()
     // What each member is on right now, for the in-chat panel: the newest task
     // of theirs that is still open in this collaboration.
     const openTasks = store
       .listTasksByEpoch(team.id, epoch.id)
       .filter((task) => task.status === 'in_progress' || task.status === 'pending')
-    const members = store.listMembersByTeam(team.id)
+    const members = store.listMembersByTeam(team.id, epoch.id)
       .filter((m) => !parseSpaceCoordinatorAppId(m.appId))
       .map((m) => {
         const task = openTasks.filter((tk) => tk.assigneeAppId === m.appId).at(-1)
@@ -882,6 +824,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       goal: team.goal,
       epochId: epoch.id,
       active: epoch.endedAt === null && epoch.workItem?.status !== 'completed',
+      stopped: participants.sourceState(conversationId).stopped,
       saved: !!team.savedTeamId || team.ephemeral !== true,
       ...(team.savedTeamId ? { savedTeamId: team.savedTeamId } : {}),
       members,
@@ -903,6 +846,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   async function saveConfiguration(teamId: string, name?: string): Promise<Team> {
     const source = requireTeam(teamId)
+    if (source.coordinatorConversationId && parseTeamSessionKey(source.coordinatorConversationId)) {
+      throw new Error('A member’s internal assistants cannot be saved as an explicit team.')
+    }
     if (source.hostNodeId != null) throw new Error('Only the team creator can keep this configuration.')
     if (!source.ephemeral) {
       await prepareTeam(teamId)
@@ -910,29 +856,77 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
     const existing = source.savedTeamId ? store.getTeamById(source.savedTeamId) : null
     if (existing) return existing
-    const members = store.listMembersByTeam(teamId).filter(member => !parseSpaceCoordinatorAppId(member.appId))
+    const epoch = collabEpoch(source)
+    if (!epoch) throw new Error('The original collaboration work is unavailable.')
+    const members = store.listMembersByTeam(teamId, epoch.id).filter(member => !parseSpaceCoordinatorAppId(member.appId))
     if (members.some(isRemoteMember)) {
       console.warn(`${LOG_TAG} configuration save refused: team=${teamId} reason=remote-members-require-new-invitation`)
       throw new Error('Create a new team and invite the teammates again to keep this configuration.')
     }
-    const input: CreateTeamInput = {
-      owningSpaceId: source.owningSpaceId,
-      name: uniqueTeamName(source.owningSpaceId, name?.trim() || source.name, false),
-      goal: source.goal,
-      memberSourcing: 'manual',
-      collabMode: source.collabMode,
-      escalationRouting: source.escalationRouting,
-      members: members.map(member => ({
-        appId: member.appId, memberName: member.memberName, role: member.role,
-        duty: member.duty ?? undefined, delegatedPolicy: member.delegatedPolicy ?? undefined,
-      })),
+    const temporary = members.filter((member): member is TeamParticipant => 'isTemporary' in member && member.isTemporary === true)
+    const profiles = temporary.map(member => {
+      const execution = store.participants.getExecution(teamId, epoch.id, member.appId)
+      if (!execution) {
+        console.warn(`${LOG_TAG} configuration save refused: team=${teamId} member=${member.appId} reason=local-profile-unavailable`)
+        throw new Error(`The local configuration for ${member.memberName} is unavailable.`)
+      }
+      const sourceApp = execution.sourceAppId ? appManager.getApp(execution.sourceAppId) : null
+      if (execution.sourceAppId && (!sourceApp || sourceApp.status === 'uninstalled')) {
+        console.warn(`${LOG_TAG} configuration save refused: team=${teamId} member=${member.appId} reason=source-identity-unavailable`)
+        throw new Error(`The source identity for ${member.memberName} is unavailable.`)
+      }
+      return { member, execution, permissions: sourceApp ? {
+        granted: execution.permissions.granted.filter(value => sourceApp.permissions.granted.includes(value)),
+        denied: [...new Set([...execution.permissions.denied, ...sourceApp.permissions.denied])],
+      } : execution.permissions }
+    })
+    const takenSpecNames = new Set(profiles.length ? appManager.listApps({ spaceId: source.owningSpaceId }).map(app => app.specId) : [])
+    const preferred = name?.trim() || source.name
+    let savedName = uniqueTeamName(source.owningSpaceId, preferred, false)
+    for (let suffix = 2; takenSpecNames.has(`${savedName} Lead`); suffix++) {
+      savedName = uniqueTeamName(source.owningSpaceId, `${preferred} ${suffix}`, false)
     }
+    const freshSpecName = (base: string) => {
+      let candidate = base
+      for (let suffix = 2; takenSpecNames.has(candidate); suffix++) candidate = `${base} ${suffix}`
+      takenSpecNames.add(candidate)
+      return candidate
+    }
+    const newApps = new Set<string>()
+    const identities = new Map(members.map(member => [member.appId, member.appId]))
+    const ownedApps = new Set(members.filter(member => member.aiProvisioned).map(member => member.appId))
+    const model = profiles[0] ? { ...profiles[0].execution.modelSelection, engineId: profiles[0].execution.engineId } : collabModelSelection(teamId)
+    const sourceEdges = source.collabMode === 'structured' && temporary.length
+      ? [source.leadAppId!, ...members.map(member => member.appId)].flatMap(from => members
+        .filter(member => member.appId !== from && isWorkEdgeAllowed(store, teamId, epoch.id, from, member.appId))
+        .map(member => ({ teamId, fromAppId: from, toAppId: member.appId, sync: true })))
+      : store.listEdgesByTeam(teamId)
     let saved: Team | undefined
     try {
+      for (const { member, execution, permissions } of profiles) {
+        const spec = buildMemberSpec({ memberName: member.memberName, role: member.role,
+          responsibility: member.duty?.trim() || member.role }, savedName)
+        spec.name = freshSpecName(spec.name)
+        const appId = await appManager.install(source.owningSpaceId, spec as AppSpec, {})
+        newApps.add(appId)
+        ownedApps.add(appId)
+        identities.set(member.appId, appId)
+        appManager.updateOverrides(appId, { ...execution.modelSelection, engineId: execution.engineId,
+          memory: { enabled: false }, spaceMemoryAccess: false })
+        for (const permission of permissions.granted) if (!permissions.denied.includes(permission)) appManager.grantPermission(appId, permission)
+        for (const permission of permissions.denied) appManager.revokePermission(appId, permission)
+      }
+      const input: CreateTeamInput = {
+        owningSpaceId: source.owningSpaceId, name: savedName, goal: source.goal,
+        memberSourcing: 'manual', collabMode: source.collabMode, escalationRouting: source.escalationRouting,
+        members: members.map(member => ({ appId: identities.get(member.appId)!, memberName: member.memberName,
+          role: member.role, duty: member.duty ?? undefined,
+          delegatedPolicy: member.delegatedPolicy ?? profiles.find(profile => profile.member.appId === member.appId)?.execution.delegatedPolicy ?? undefined })),
+      }
       saved = await createTeamInternal(input, undefined, {
-        ownedApps: new Set(members.filter(member => member.aiProvisioned).map(member => member.appId)),
-        model: collabModelSelection(teamId),
-        edges: store.listEdgesByTeam(teamId),
+        ownedApps, model,
+        edges: sourceEdges.map(edge => ({ ...edge, fromAppId: identities.get(edge.fromAppId) ?? edge.fromAppId,
+          toAppId: identities.get(edge.toAppId) ?? edge.toAppId })),
         coordinatorAppId: source.leadAppId,
       })
       store.attachSavedTeam(teamId, saved.id)
@@ -941,6 +935,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       if (saved) await dissolveTeamInternal(saved.id, { silent: true }).catch(cleanupError => {
         console.error(`${LOG_TAG} configuration rollback failed: team=${saved!.id}`, cleanupError)
       })
+      for (const appId of newApps) if (appManager.getApp(appId)) await cleanupOrphanApp(appId, source.owningSpaceId)
+      const linked = store.getTeamById(teamId)?.savedTeamId
+      const winner = linked ? store.getTeamById(linked) : null
+      if (winner) return winner
       throw error
     }
     emitUpdated(saved.id, { team: saved })
@@ -1043,15 +1041,6 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     return getTeamDetail(teamId)
   }
 
-  async function completeCollab(teamId: string, summary: string): Promise<void> {
-    const team = requireTeam(teamId)
-    const epoch = collabEpoch(team)
-    if (!epoch || epoch.endedAt !== null) return
-    await requireRuntime().sealConversationEpoch(teamId, epoch.id, 'completed', summary)
-    console.log(`${LOG_TAG} completeCollab: team=${teamId} epoch=${epoch.id}`)
-    emitUpdated(teamId, { team: requireTeam(teamId) })
-  }
-
   // ── Reads ──
 
   function getTeam(teamId: string): Team | null {
@@ -1072,7 +1061,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   }
 
   function listTeamItems(spaceId?: string): TeamListItem[] {
-    return listTeams(spaceId).map((team) => {
+    return store.listStandingTeams(spaceId).map((team) => {
       const members = store.listMembersByTeam(team.id).filter(m => !parseSpaceCoordinatorAppId(m.appId))
       // Waiting decisions survive a run seal (P0-5), so a team can be idle yet
       // still have pending escalations — count them independently of run status.
@@ -1092,7 +1081,6 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         leadAppId: team.leadAppId,
         localMembers: toLocalMembers(members),
         hostNodeId: team.hostNodeId,
-        ephemeral: team.ephemeral === true,
         updatedAt: team.updatedAt,
       }
     })
@@ -1418,6 +1406,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     if (!spaces.spaceExists(owningSpaceId)) {
       throw new Error(`Owning space not found: ${owningSpaceId}`)
     }
+    if (!goal.trim()) return []
     const proposed = await deps.proposeMembersFromGoal(goal, owningSpaceId)
     const capped = proposed.slice(0, AI_MEMBER_HARD_LIMIT)
     console.log(`${LOG_TAG} proposeMembers: goal-len=${goal.length} proposed=${capped.length}`)
@@ -1430,13 +1419,17 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     teamId: string,
     trigger: TeamRunTrigger = { type: 'manual' },
     instruction?: string
-  ): Promise<void> {
+  ): Promise<TeamRunResult> {
     const team = requireTeam(teamId)
     if (team.ephemeral) {
       throw new Error(
         'This is a temporary collaboration coordinated from its space conversation. ' +
           'Save it as a team first, then it can run on its own.'
       )
+    }
+    if (!instruction?.trim() && !team.goal.trim()) {
+      console.warn(`${LOG_TAG} run refused: team=${teamId} reason=missing-instruction`)
+      throw new Error('Provide an instruction before starting a team without a standing goal.')
     }
     await prepareTeam(teamId)
     const rt = requireRuntime()
@@ -1446,6 +1439,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     // Push the live run-state (now running + the active epoch) to joiners so a
     // remote status board goes live at run-start, not only on a structural change.
     deps.onRunStateChanged?.(teamId)
+    return { epochId: epoch.id }
   }
 
   async function pauseTeam(teamId: string): Promise<void> {
@@ -1502,28 +1496,73 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
   }
 
-  async function dissolveTeamInternal(
-    teamId: string,
-    opts: { silent?: boolean } = {}
-  ): Promise<void> {
+  function dissolveTeamInternal(teamId: string, opts: { silent?: boolean } = {}): Promise<void> {
+    const existing = dissolutionTasks.get(teamId)
+    if (existing) return existing
+    dissolvingTeams.add(teamId)
+    const release = store.beginDisposal(teamId)
+    const pending = performDissolution(teamId, opts).finally(() => {
+      dissolutionTasks.delete(teamId)
+      dissolvingTeams.delete(teamId)
+      release()
+    })
+    dissolutionTasks.set(teamId, pending)
+    return pending
+  }
+
+  async function disposePrivateCollaborations(teamId: string, epochId?: string): Promise<void> {
+    const failures: unknown[] = []
+    for (const team of store.listPrivateCollaborations(teamId, epochId)) {
+      try { await dissolveTeamInternal(team.id) } catch (error) { failures.push(error) }
+    }
+    if (failures.length) throw new AggregateError(failures, 'Some private assistants could not be closed. Their parent work was retained for cleanup.')
+  }
+
+  async function performDissolution(teamId: string, opts: { silent?: boolean }): Promise<void> {
     const team = store.getTeamById(teamId)
     if (!team) return
-
-    // Project office-dissolved to joiners BEFORE any teardown, while the hosted
-    // office's link is still live (bootstrap projects the frame, then tears
-    // down). Skipped on a silent internal dissolve (no user-facing teardown).
-    if (!opts.silent) {
-      deps.onOfficeDissolved?.(teamId)
-    }
-
-    if (team.status === 'running' || team.currentEpochId) {
-      const rt = getRuntime()
-      if (rt) {
-        await rt.sealEpoch(teamId, 'stopped').catch((err) => {
-          console.warn(`${LOG_TAG} dissolve sealEpoch failed for team=${teamId}:`, err)
-        })
+    const rt = getRuntime()
+    const epochs = store.listEpochsByTeam(teamId)
+    const remoteStops: Array<{ appId: string; teamId: string; epochId: string }> = []
+    for (const epoch of epochs) {
+      participants.invalidateRecipientFences(teamId, epoch.id)
+      for (const member of listWorkMembers(store, teamId, epoch.id)) {
+        if (isRemoteMember(member) && (epoch.endedAt === null || epoch.endReason === 'cleared')) remoteStops.push({ appId: member.appId, teamId, epochId: epoch.id })
+        participants.markStopped({ teamId, epochId: epoch.id, callerAppId: member.appId })
+        rt?.bus.cancelSession(buildTeamSessionKey(member.appId, teamId, epoch.id))
       }
     }
+    if (team.coordinatorConversationId) {
+      store.sourceBindings.revokeSource(team.coordinatorConversationId)
+      await participants.stopSource(team.coordinatorConversationId)
+    }
+    const failures: unknown[] = []
+    if (!rt && epochs.length && team.coordinatorConversationId && parseTeamSessionKey(team.coordinatorConversationId)) {
+      failures.push(new Error('Team execution services are unavailable. The private scope was retained for cleanup.'))
+    }
+    try { await disposePrivateCollaborations(teamId) } catch (error) { failures.push(error) }
+    if (rt) for (const target of remoteStops) {
+      if (!rt.isMemberReachable(target.appId, teamId)) {
+        console.warn(`${LOG_TAG} Skipped remote stop during deletion: team=${teamId} epoch=${target.epochId} app=${target.appId} owner unreachable`)
+        continue
+      }
+      try { await rt.stopMemberTurn(target) } catch (error) {
+        if (!rt.isMemberReachable(target.appId, teamId)) {
+          console.warn(`${LOG_TAG} Skipped failed remote stop during deletion: team=${teamId} epoch=${target.epochId} app=${target.appId} owner became unreachable`, error)
+        } else failures.push(error)
+      }
+    }
+    // Revisit closed scopes too: a prior failed teardown must be retried before its rows or leases disappear.
+    if (rt) for (const epoch of epochs) {
+      try { await rt.closeEpochResources(teamId, epoch.id) } catch (error) { failures.push(error) }
+    }
+    if (failures.length) {
+      const error = new AggregateError(failures, 'Some team sessions could not be closed. The team and its work were retained.')
+      console.error(`${LOG_TAG} Team deletion paused: team=${teamId} failures=${failures.length}`, error)
+      throw error
+    }
+    await releaseParticipantWorkspaces(store, teamId)
+    if (!opts.silent) deps.onOfficeDissolved?.(teamId)
 
     const members = store.listMembersByTeam(teamId)
     // Read before the team row goes: the folders are named after its epochs.
@@ -1537,7 +1576,6 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     store.deleteTriggersByTeam(teamId)
     // Periodic checks die with the team — including their alarms, which the
     // runtime disarms as each row goes.
-    const rt = getRuntime()
     for (const check of store.listChecksByTeam(teamId)) rt?.checks.cancelById(check.id)
     const sources = store.listSavedTeamSources(teamId)
     store.deleteTeam(teamId)
@@ -1668,13 +1706,38 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     requireTeam(teamId)
     const epoch = store.getEpochById(epochId)
     if (!epoch || epoch.teamId !== teamId) return null
+    const projection = getEpochRoster(teamId, epochId)!
     return {
       epoch,
       tasks: store.listTasksByEpoch(teamId, epochId),
       findings: store.listFindingsByEpoch(teamId, epochId),
-      members: store.listMembersByTeam(teamId).filter(member => !parseSpaceCoordinatorAppId(member.appId)),
+      ...projection,
       activities: store.listActivityByEpoch(teamId, epochId),
     }
+  }
+
+  function getEpochRoster(teamId: string, epochId: string): EpochRoster | null {
+    requireTeam(teamId)
+    if (store.getEpochById(epochId)?.teamId !== teamId) return null
+    const members = store.listMembersByTeam(teamId, epochId).filter(member => !parseSpaceCoordinatorAppId(member.appId))
+    const runtime = getRuntime()
+    const projected = store.getJoinedMemberStatuses(teamId)
+    const roster: RosterMember[] = members.map(member => {
+      const remote = isRemoteMember(member)
+      const localStatus = runtime?.getMemberStatus(member.appId)
+      const status = member.awaitingDecision ? 'waiting_user'
+        : localStatus && localStatus !== 'idle' ? localStatus : store.getParticipantStatus(teamId, member.appId) ?? projected.get(member.appId) ?? 'idle'
+      const busy = runtime?.getMemberBusy(member.appId, teamId) ?? store.getJoinedMemberBusy(teamId, member.appId) ?? []
+      return {
+        appId: member.appId, memberName: member.memberName, role: member.role, duty: member.duty,
+        isLead: member.isLead, status, ...projectOwnership(member),
+        spaceId: remote ? null : appManager.getApp(member.appId)?.spaceId
+          ?? store.participants.getExecution(teamId, epochId, member.appId)?.environment.spaceId ?? null,
+        presence: remote && runtime?.isMemberReachable?.(member.appId, teamId) === false ? 'offline' : 'online',
+        ...(busy.length ? { busy } : {}),
+      }
+    })
+    return { members, roster }
   }
 
   // ── Triggers ──
@@ -1732,13 +1795,16 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   async function stopMember(params: StopMemberParams): Promise<StopMemberResult> {
     requireTeam(params.teamId)
-    const target = store.listMembersByTeam(params.teamId).find((m) => m.appId === params.appId)
-    if (!target) return { ok: false, stopped: false, reason: 'MEMBER_NOT_FOUND' }
-
     // Named by the caller, like a message: a stop aimed at a conversation picked
     // for it could end the member's work in another one. A sealed conversation
     // can still hold a running turn, so it stays stoppable when named.
     if (!params.epochId) throw new Error('Name the conversation whose turn to stop.')
+    if (store.getEpochById(params.epochId)?.teamId !== params.teamId) {
+      console.warn(`${LOG_TAG} stop refused: team=${params.teamId} epoch=${params.epochId} reason=conversation-not-in-team`)
+      return { ok: false, stopped: false, reason: 'CONVERSATION_NOT_FOUND' }
+    }
+    const target = store.getMember(params.teamId, params.appId, params.epochId)
+    if (!target) return { ok: false, stopped: false, reason: 'MEMBER_NOT_FOUND' }
     const stopped = await requireRuntime().stopMemberTurn({ appId: params.appId, teamId: params.teamId, epochId: params.epochId })
     return { ok: true, stopped }
   }
@@ -1753,9 +1819,6 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       console.warn(`${LOG_TAG} direct message refused: team=${params.teamId} reason=source-conversation-target`)
       throw new Error('Continue this collaboration in its original conversation.')
     }
-    const target = store.listMembersByTeam(params.teamId).find((m) => m.appId === params.appId)
-    if (!target) return { ok: false, finalMessage: null, reason: 'MEMBER_NOT_FOUND' }
-
     const rt = requireRuntime()
 
     // The caller names the conversation. Choosing one for it — a running run,
@@ -1770,6 +1833,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       console.warn(`${LOG_TAG} direct message refused: team=${params.teamId} epoch=${epochId} reason=conversation-not-in-team`)
       return { ok: false, finalMessage: null, reason: 'CONVERSATION_NOT_FOUND' }
     }
+    const target = store.getMember(params.teamId, params.appId, epochId)
+    if (!target) return { ok: false, finalMessage: null, reason: 'MEMBER_NOT_FOUND' }
     if (isReadonlyCollaboration(team, epoch)) {
       console.warn(`${LOG_TAG} direct message refused: team=${params.teamId} epoch=${epochId} reason=source-task-readonly`)
       throw new Error('This task is read-only.')
@@ -1788,9 +1853,12 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     // leaves no trace on the office record — a person's chat is not the team's
     // work, and borrowing the lead's identity to file it would put words in the
     // mouth of a digital human that never ran, in front of the whole office.
+    const requestId = randomUUID()
+    participants.beginRequest(buildTeamSessionKey(params.appId, params.teamId, epochId), requestId)
     const result = await rt.bus.send({
       teamId: params.teamId,
       epochId,
+      requestId,
       fromAppId: null,
       to: target.memberName,
       message: params.message,
@@ -1829,10 +1897,12 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       // a member here" handed those to every office the member belongs to: one
       // office showed another's decision, and a purely solo question lit an
       // office as "waiting for you" with nothing to open.
-      if (e.teamId !== teamId || !nameByApp.has(e.appId)) continue
+      if (e.teamId !== teamId) continue
+      const memberName = nameByApp.get(e.appId) ?? (e.epochId ? store.getMember(teamId, e.appId, e.epochId)?.memberName : undefined)
+      if (!memberName) continue
       out.push({
         appId: e.appId,
-        memberName: nameByApp.get(e.appId)!,
+        memberName,
         entryId: e.entryId,
         entry: e.entry,
         question: e.question,
@@ -1862,7 +1932,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     // conversation as idle and its "busy now" list is always empty.
     const isJoined = team.hostNodeId != null
     const rt = getRuntime()
-    const activeEpochIds = new Set<string>()
+    const activeEpochIds = new Set(rt?.getActiveEpochIds?.(teamId))
+    const participantWork = store.getParticipantWorkStates(teamId)
+    for (const [epochId, state] of participantWork) if (state.active) activeEpochIds.add(epochId)
     for (const m of members) {
       const busy = isJoined ? store.getJoinedMemberBusy(teamId, m.appId) : rt?.getMemberBusy(m.appId, teamId) ?? []
       for (const b of busy) activeEpochIds.add(b.epochId)
@@ -1896,6 +1968,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       const waitingMembers = [...new Set([
         ...sharedWaiting,
         ...localWaiting,
+        ...(participantWork.get(epoch.id)?.waitingAppIds ?? []),
       ])].sort((left, right) => {
         const byRoster = (memberOrder.get(left) ?? Number.MAX_SAFE_INTEGER) - (memberOrder.get(right) ?? Number.MAX_SAFE_INTEGER)
         return byRoster || left.localeCompare(right)
@@ -1970,12 +2043,14 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   }
 
   return {
+    participants,
+    ensureCollaboration,
     createTeam,
-    createCollab,
+    getCollaborationScope,
     getCollabForConversation,
+    disposePrivateCollaborations,
     saveCollab,
     prepareTeam,
-    completeCollab,
     getTeam,
     listTeams,
     listTeamItems,
@@ -2001,6 +2076,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     listToolAudit,
     listEpochs,
     getEpochBoard,
+    getEpochRoster,
     sendToMember,
     stopMember,
     listConversations,

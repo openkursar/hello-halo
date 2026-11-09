@@ -3,37 +3,37 @@
 > Optional built-in in-process MCP servers ("toolsets", e.g. ai-browser,
 > ai-terminal). Read this before adding a toolset or touching MCP seeding.
 
-## 1) Problem it solves
+## 1) Purpose
 
-Halo's in-process MCP servers keep growing. Injecting every toolset's full tool
-schemas into every session is a linear, always-on context cost and dilutes model
-attention. The fix is **opt-in loading**: a toolset's tools + rich usage guide
-enter context only while it is enabled. Disabled toolsets cost one summary line.
+The broker assembles built-in MCP servers for space conversations. Context loading
+and authorization have separate owners: the Halo SDK manages model context;
+actual access grants, tool restrictions and platform availability remain host policy.
 
-## 2) Model (uniform across all engines)
+## 2) Capability availability and tool context
 
-- **One mechanism, no runtime hot-swap.** The complete in-process MCP set (the base
-  toolset — web-search / halo-docs / halo-apps, the broker meta server, and currently-enabled toolsets)
-  is seeded at **session creation** via creation-time options. Enabling/disabling a
-  toolset schedules a **session rebuild**, so the new set is seeded at the next
-  session creation — the same deferral machinery as a credentials change.
-- **The AI never enables a toolset itself.** Tools are frozen per turn by the CC
-  subprocess, so a mid-turn open would be unusable that turn and the model would
-  waste steps probing for it. Instead the AI calls `request_toolset`, which asks
-  the user to flip the switch (and highlights it in the composer's "+" panel). Once
-  the user enables it, the session rebuilds and its tools are available from the
-  next message.
-- **Resident cost** = the single `request_toolset` meta tool, whose description
-  bakes in the current disabled-toolset summaries (meta-server.ts). ENABLED
-  toolsets get their full `usageGuide` appended to the system prompt
-  (`buildToolsetSection`); disabled ones add nothing to the prompt itself.
-
-Historical note: an earlier design let the AI hot-open toolsets via
-`session.setMcpServers` + an interrupt/auto-continuation dance to make "open and
-use in one message" work. It fought the CC turn model (UI reflow, mid-turn
-interrupt artifacts) and put a niche feature on the hot path. It was removed in
-favour of the uniform creation-time + rebuild model above; the `setMcpServers`
-SDK path is no longer used.
+- Supported browser, terminal, OCR, collaboration and Operate Halo capabilities
+  are supplied automatically in space conversations. Core capability residency
+  does not depend on saved per-conversation switches or engine selection.
+- Operate Halo is core. Its reference tool, usage guide and scoped runtime
+  credentials are available from the first turn without a human enablement step.
+- The engine owns detailed tool context. Halo SDK uses client discovery for
+  configured MCP services in native mode; legacy histories, explicit XML/JSON and
+  other engines retain their own calling/history representation. This does not
+  turn capability loading into a user authorization workflow.
+- The status catalog retains platform-available capabilities. `configurable:
+  false` hides a core loading control while preserving availability for actions
+  such as opening a terminal. Platform restrictions and explicit caller/tool
+  policies still determine what an execution may do.
+- The broker assembles servers and guidance together at session creation. It
+  never parses native history to decide whether a person must enable a capability.
+  Each build receives fresh server instances. Configuration changes apply at safe
+  boundaries; ordinary SDK discovery does not recreate sessions or connections.
+- An optional registered capability may be activated by the AI through
+  `request_toolset`. It emits an ordinary change, not a request for a human click.
+  Current core capabilities need no activation tool at all.
+- Fixed host guidance overrides obsolete documentation about capability switches.
+  It directs the model to the actual exposed tools and preserves explicit tool,
+  connection and caller restrictions.
 
 ## 3) Files
 
@@ -41,11 +41,12 @@ SDK path is no longer used.
 |---|---|
 | `types.ts` | `ToolsetDefinition`, scope, status, event types |
 | `registry.ts` | The catalog. **Adding a toolset = one entry here** |
-| `state.ts` | Per-conversation open-set; write-through persisted on the conversation record |
+| `state.ts` | Legacy/manual open-set persisted on the conversation; resolved context mode retained only for its session |
 | `base.ts` | `buildBaseToolset`: the servers every user-facing session starts from (web-search, halo-docs, halo-apps while digital humans are enabled). Space chat (via the broker), digital-human chat and automation start from it and exclude explicitly. Imported directly, not through the barrel (the barrel loads the registry). See §6 |
 | `broker.ts` | Builds the creation-time MCP record (`buildCreationTimeServers`); `openToolset`/`closeToolset` (user toggle → persist + schedule rebuild); `requestToolset` (AI → user, emits `toolsets:requested`); emits `toolsets:changed`. Rebuild via an injected invalidator (DI seam, avoids a cycle with session-manager) |
 | `meta-server.ts` | The resident `request_toolset` MCP server (disabled-toolset awareness lives in its tool description) |
-| `capability-index.ts` | `buildToolsetSection`: enabled-toolset usage guides for the system prompt |
+| `selection.ts` | Shared mode-aware selection for mounted capabilities and manual controls |
+| `capability-index.ts` | `buildToolsetSection`: guides for the mode's mounted capabilities |
 | `service.ts` | User-initiated open/close/list façade for transport |
 
 ## 4) Seeding & rebuild
@@ -73,37 +74,20 @@ SDK path is no longer used.
   are currently unavailable on this platform; availability is gated at use time
   (registry), so a user's selection survives availability transitions.
 
-## 4b) Last-used seed for new conversations
+## 4b) Persisted optional selections
 
-Per-conversation state is authoritative (`state.ts`, persisted on the conversation
-record), but a **new** conversation should inherit the previous window's enabled
-toolsets — the toolset analog of the global model selection. On a user toggle
-(`openToolset`/`closeToolset`, `opener='user'`) the broker writes the conversation's
-full open-set to `config.lastToolsets` (`rememberLastToolsets`). `createConversation`
-(conversation.service) stamps that seed onto the new conversation's `toolsets`, next
-to the model-pin stamp. Only user toggles update the seed (AI requests never open a
-toolset; a restore must not rewrite it). Seeding happens **only at creation** — never
-in `getOpenToolsets` hydration — so reopening an old (empty) conversation stays empty.
-Unknown ids in the seed are dropped on hydrate, so no filtering is needed at stamp time.
-Before any user toggle has written `config.lastToolsets`, `createConversation` seeds
-`DEFAULT_TOOLSETS` (`shared/constants/toolsets.ts`, currently `ai-browser` + `halo-team`);
-once the user toggles anything, `config.lastToolsets` (including an empty set = all off) is
-authoritative. When a toolset later joins the defaults, `applyNewToolsetDefaultsOnDisk`
-(foundation/config, at startup) adds it to an existing `lastToolsets` exactly once and records
-it in `config.toolsetDefaultsSeen`, so a user who then turns it off keeps it off. The renderer
-reads the same constant: the composer's "+" button surfaces only toolsets enabled beyond it.
+Historical open-sets and last-used defaults remain readable for optional
+capabilities. They do not withhold core capabilities. User changes may update
+that preference; AI activation changes only the current conversation and does
+not rewrite the user's global last-used selection.
 
-## 5) `request_toolset` UX
+## 5) Capability activation
 
-`requestToolset` (broker) emits `toolsets:requested`; the renderer
-(`App.tsx` → `toolsets.store.applyRequestedEvent` → `useComposerToolsets`) opens the
-composer's "+" panel and highlights the requested switch in its Capabilities group.
-It does so at once, also while the turn that asked is still running: the panel then
-holds only the Capabilities group, and a switch flipped there takes effect from the
-user's next message, since the session rebuild waits for the turn to end. Nothing
-is added to the running turn.
-The meta-server tool returns guidance so the AI tells the user which toolset to
-enable, then stops.
+`request_toolset` exists only if an optional capability is not already included.
+The broker activates it directly and schedules the existing safe session update.
+It never asks the user to enable a switch. Core capabilities report already
+available, and older clients cannot close them through the loading endpoint.
+Availability/status events retain desktop and remote parity.
 
 ## 6) Automation (digital humans)
 
@@ -164,7 +148,8 @@ record, so the user's enabled set survives.
 2. Add one `registerToolset({ id, displayName, summary, usageGuide, isAvailable,
    createServer })` entry in `registry.ts`.
 3. Interactive: meta tools, system-prompt section, the composer's Capabilities
-   group, and persistence all derive from the registry. Add the renderer icon,
+   group, and persistence all derive from the registry. State whether the switch
+   is solely for context size (`contextManaged`) or a real access grant. Add the renderer icon,
    label and one-line description in `components/chat/composer-menu/toolset-display.tsx`.
 4. Automation (optional): add a `resolvePermission` gate + MCP injection in
    `apps/runtime/execute.ts` and `app-chat.ts`, a usage-guide append in

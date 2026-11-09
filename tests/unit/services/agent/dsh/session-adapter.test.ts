@@ -8,10 +8,12 @@
  * so no child process is involved.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { DshSession } from '../../../../../src/main/services/agent/dsh/session-adapter'
 import type { DshNotification, DshRuntimeClient } from '../../../../../src/main/services/agent/dsh/types'
 import { inboxReceipt, sessionStatus, textTurn, toolTurn } from './fixtures'
+
+vi.mock('crypto', () => ({ randomUUID: () => 'sess-a' }))
 
 const SESSION = 'sess-a'
 
@@ -83,7 +85,6 @@ class FakeRuntimeClient implements DshRuntimeClient {
 async function createSession(): Promise<{ session: DshSession; runtime: FakeRuntimeClient }> {
   const runtime = new FakeRuntimeClient()
   const session = await DshSession.create({
-    resume: SESSION,
     model: 'deepseek-v4',
     provider: 'deepseek-official',
     cwd: '/tmp',
@@ -260,7 +261,6 @@ describe('DshSession — lifecycle', () => {
     )
 
     const session = await DshSession.create({
-      resume: SESSION,
       model: 'deepseek-v4',
       provider: 'deepseek-official',
       cwd: '/tmp',
@@ -335,7 +335,6 @@ describe('DshSession — child liveness', () => {
 
     await expect(
       DshSession.create({
-        resume: SESSION,
         model: 'deepseek-v4',
         cwd: '/tmp',
         runtimeClientFactory: () => runtime,

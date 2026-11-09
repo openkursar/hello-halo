@@ -116,6 +116,7 @@ export function toAppChatRequest(appId: string, body: unknown): AppChatRequestRe
     ok: true,
     request: {
       appId,
+      humanInput: true,
       spaceId: fields.spaceId,
       message: fields.message,
       conversationId: target.conversationId,

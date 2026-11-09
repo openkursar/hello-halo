@@ -140,6 +140,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
 }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({
+  emitUserStop: vi.fn(),
   stopGeneration: vi.fn(async () => {}),
   getSessionState: () => ({ isActive: false, thoughts: [] }),
 }))
@@ -148,7 +149,7 @@ vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getActiveTeamRuntime: () => null,
 }))
-vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: () => undefined }))
+vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: () => undefined, getTeamService: () => null }))
 
 const { buildUserSessionSdkOptions } = vi.hoisted(() => ({
   buildUserSessionSdkOptions: vi.fn((_input: Record<string, unknown>): Record<string, any> => ({})),
@@ -194,7 +195,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getDbMcpServers: vi.fn(() => null),
 }))
-vi.mock('../../../../src/main/services/agent/events', () => ({ onAgentEvent: (listener: (event: any) => void) => { engine.state.eventListeners.add(listener); return { dispose: () => engine.state.eventListeners.delete(listener) } }, emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ onAgentEvent: (listener: (event: any) => void) => { engine.state.eventListeners.add(listener); return { dispose: () => engine.state.eventListeners.delete(listener) } }, emitAgentEvent: vi.fn(), emitHumanRequest: vi.fn() }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))

@@ -25,7 +25,6 @@ const TOOL_IDS = [
   'tool-terminal',
   'tool-web',
   'tool-skill',
-  'tool-subagent',
 ]
 
 /**

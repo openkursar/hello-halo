@@ -8,13 +8,13 @@ import Database from 'better-sqlite3'
 
 export const legacyRuntimeVersion = 3
 // A newer runtime namespace requires an explicit fixture-layout review.
-export const currentRuntimeVersion = 8
+export const currentRuntimeVersion = 9
 const legacySchema = readFileSync(fileURLToPath(new URL('./data/app-runtime-v3.sql', import.meta.url)), 'utf8')
 export const migrationFault = 'Acceptance runtime version write refused'
 const faultTrigger = 'acceptance_refuse_runtime_migration'
 const runtimeTables = [
   'decision_continuations', 'app_session_environments', 'runtime_closed_runs',
-  'runtime_legacy_deadlines', 'runtime_decision_migration_backup', 'activity_entries', 'automation_runs',
+  'runtime_legacy_deadlines', 'runtime_decision_migration_backup', 'activity_entries', 'automation_runs', 'runtime_execution_actors',
 ]
 
 export function legacySchemaIdentity() {
@@ -87,16 +87,23 @@ export function prepareLegacyRuntime(profile: string, child: Pick<ChildProcess, 
       'finished_at', 'duration_ms', 'tokens_used', 'error_message', 'session_id', 'environment_json',
       'stopped_at', 'transcript_cleared_at',
     ], 'Only the reviewed current runtime layout can be converted to the frozen historical input')
-    assert.deepEqual((db.pragma('foreign_key_list(activity_entries)') as Row[]).map(key => ({ from: key.from, table: key.table })), [{ from: 'app_id', table: 'installed_apps' }])
+    assert.deepEqual((db.pragma('foreign_key_list(activity_entries)') as Row[]).map(key => ({ from: key.from, table: key.table })), [{ from: 'app_id', table: 'runtime_execution_actors' }])
+    assert.deepEqual((db.pragma('foreign_key_list(runtime_execution_actors)') as Row[]).map(key => ({ from: key.from, table: key.table, onDelete: key.on_delete })),
+      [{ from: 'installed_app_id', table: 'installed_apps', onDelete: 'CASCADE' }])
+    assert.deepEqual(db.prepare('SELECT id, installed_app_id, team_id, epoch_id, name FROM runtime_execution_actors ORDER BY id').all(),
+      (db.prepare('SELECT id FROM installed_apps ORDER BY id').all() as Array<{ id: string }>).map(({ id }) => ({ id, installed_app_id: id, team_id: null, epoch_id: null, name: null })),
+      'Only derived installed actors may be removed from a fresh historical fixture')
+    assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name='runtime_installed_actor_insert'").get())
     for (const table of runtimeTables) {
-      // This v7 table is derived from installed specs, which stay intact below.
-      if (table === 'runtime_legacy_deadlines') continue
+      // These rows derive from installed Apps, which stay intact below.
+      if (table === 'runtime_legacy_deadlines' || table === 'runtime_execution_actors') continue
       assert.equal((db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count, 0, `The fresh profile must not discard existing runtime data in ${table}`)
     }
     const appsBefore = db.prepare('SELECT * FROM installed_apps ORDER BY id').all()
     const namespacesBefore = db.prepare("SELECT * FROM _migrations WHERE namespace != 'app_runtime' ORDER BY namespace").all()
     db.pragma('foreign_keys = OFF')
     db.transaction(() => {
+      db.exec('DROP TRIGGER runtime_installed_actor_insert')
       for (const table of runtimeTables) db.exec(`DROP TABLE ${table}`)
       db.exec(legacySchema)
       db.prepare("UPDATE _migrations SET version = ?, applied_at = ? WHERE namespace = 'app_runtime'").run(legacyRuntimeVersion, records.timestamp)

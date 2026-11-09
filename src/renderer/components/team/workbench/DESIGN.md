@@ -50,7 +50,7 @@ names describe the task source plainly; inbound channel work is labelled as IM
 conversations, while unrelated work in the same team is labelled as other tasks.
 Answers occur in the room, scoped by the persisted question's execution id,
 never by a member-wide waiting flag. The sender picker targets only the viewer's
-own installed digital humans. Member-rail selection is task observation for every
+own digital humans and local temporary collaborators in this work. Member-rail selection is task observation for every
 member and preserves the current task and per-member draft; it never opens a
 separate direct channel. Member details remain a separate explicit action in the
 member summary. One owned member renders a static identity instead of a selector.
@@ -132,3 +132,28 @@ per page. These are DOM limits, not server-side history pagination: opening a
 large history still incurs its initial full response and in-memory projection.
 The team detail's 500-record live window is a refresh buffer, not the complete
 selected task history.
+
+## Work-scoped collaborators
+
+The selected board supplies its own members and roster. `detailForTask` combines
+that snapshot with team configuration only when both team and epoch match. The
+projection is local to the task room, member rail, activity, decisions and history;
+standing team settings always receive the original permanent roster. A temporary
+participant's details open its work execution instead of a permanent-person editor.
+A local participant needs an explicit local workspace before its composer is
+editable; a remote participant remains read-only.
+
+Task switches retain a requested or remembered member until the matching board
+arrives, then validate it against that roster. Member and status notifications
+refresh only the selected work's `EpochRoster`, with a short burst coalescing
+window and one request in flight. They never reread activity, tasks or findings.
+Full-board reads occur on entry, explicit retry or a gap in the activity buffer.
+A later membership snapshot survives an older full-board response; requests from
+a prior selection cannot replace the current roster. A missing roster from an
+older server retains the standing projection;
+an explicitly empty roster stays empty.
+
+A standing goal is optional. Manual team creation accepts an empty goal; AI roster
+proposals still require a concrete brief. Empty goals have no header popover, and
+starting work without one opens a new task for the user's instructions. Editable
+settings retain the optional goal field so it can be added later.

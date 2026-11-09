@@ -1,27 +1,7 @@
-/**
- * The board as the AGENT reads it.
- *
- * The snapshot used to go out as `JSON.stringify(...)`, which spends most of its
- * budget on things the reader cannot use: every field name repeated once per row,
- * the team and epoch ids it already asked with, and the opaque app ids behind
- * names the tools actually take. Tables state each column once, so the same board
- * costs a fraction of the tokens and reads as what it is — a status page.
- *
- * Two rules keep the compression honest:
- *
- * - **Nothing is truncated.** Long text is reflowed onto one line (a table cell
- *   cannot hold a newline) and never cut. What the JSON carried, this carries.
- * - **Only unusable identifiers are dropped.** A task id stays, because updating
- *   a task needs it verbatim. Activity/finding row ids and app ids go: no tool
- *   takes them, members are addressed by NAME everywhere, and a reader given an
- *   app id has no way to turn it into one.
- *
- * A section that has nothing in it still prints, with "None." An absent heading
- * reads as "not included in this view", which is a different claim from "there
- * is none" — and this file must never blur the two.
- */
+/** Model-facing board: compact tables preserve content and usable addresses. */
 
 import { describeSchedule } from './checks'
+import { TEAM_LEAD_ADDRESS, teamMemberAddress } from '../../../../shared/apps/team-types'
 import type {
   BlackboardFinding,
   BlackboardSnapshot,
@@ -49,7 +29,7 @@ export interface RenderBoardOptions {
 }
 
 export function renderBoardMarkdown(snapshot: BlackboardSnapshot, options: RenderBoardOptions): string {
-  const names = new Map(snapshot.roster.map((m) => [m.appId, m.memberName]))
+  const names = new Map(snapshot.roster.map((m) => [m.appId, teamMemberAddress(m)]))
   const nameOf = (appId: string | null | undefined): string =>
     !appId ? '—' : names.get(appId) ?? appId
 
@@ -69,12 +49,13 @@ function renderRoster(roster: readonly RosterMember[]): string {
 
   const hasDuty = roster.some((m) => m.duty)
   const hasBusy = roster.some((m) => m.busy && m.busy.length > 0)
-  const header = ['member', 'role', ...(hasDuty ? ['duty'] : []), 'status', 'presence', 'machine']
+  const header = ['member', 'to', 'role', ...(hasDuty ? ['duty'] : []), 'status', 'presence', 'machine']
   if (hasBusy) header.push('serving')
 
   const rows = roster.map((m) => {
     const row = [
-      m.isLead ? `${m.memberName} (lead)` : m.memberName,
+      m.isLead ? TEAM_LEAD_ADDRESS : m.memberName,
+      teamMemberAddress(m),
       m.role,
       ...(hasDuty ? [m.duty ?? ''] : []),
       m.currentTaskTitle ? `${m.status} — ${m.currentTaskTitle}` : m.status,

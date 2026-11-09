@@ -38,7 +38,7 @@ POST   /api/agent/test-mcp                                         [ai]       se
 POST   /api/agent/probe-mcp                                        [ai]       settings                Probe one installed MCP server for connectivity and tools
 GET    /api/agent/engine-capabilities                              [ai]       settings                Read what the running agent engine can do
 GET    /api/agent/engine-availability                              [ai]       settings                List which agent engines are installed and which one is active
-POST   /api/agent/toolsets/list                                    [ai]       conversation            List the on-demand toolsets available to a conversation
+POST   /api/agent/toolsets/list                                    [ai]       conversation            List the capabilities with manual controls in a conversation
 GET    /api/terminal/list                                          [wrapped]  terminal                List open terminal sessions
 POST   /api/terminal/create                                        [wrapped]  terminal                Open a terminal session
 POST   /api/terminal/input                                         [wrapped]  terminal                Send keystrokes to a terminal session
@@ -126,12 +126,10 @@ POST   /api/apps/<appId>/im-chat/stop                              [ai]       di
 POST   /api/apps/<appId>/sessions/create                           [ai]       digital-human           Start a new chat thread with a digital human
 POST   /api/apps/<appId>/sessions/fork                             [ai]       digital-human           Branch an existing chat thread into a new one, copying its history
 POST   /api/apps/<appId>/sessions/delete                           [ai]       digital-human           Delete a chat thread with a digital human
-GET    /api/teams                                                  [ai]       team                    List teams, optionally only those owned by one space
+GET    /api/teams                                                  [ai]       team                    List saved teams, optionally only those owned by one space
 POST   /api/teams                                                  [ai]       team                    Create a persistent team, with a lead provisioned for it
 POST   /api/teams/propose-members                                  [ai]       team                    Draft AI member roles for a team goal (creates nothing)
-GET    /api/teams/collab-for-conversation/<conversationId>         [ai]       team                    Get the temporary collaboration started from one conversation
-POST   /api/teams/<teamId>/save-collab                             [ai]       team                    Keep a temporary collaboration as a persistent team
-GET    /api/teams/<teamId>                                         [ai]       team                    Get one team's own record
+GET    /api/teams/<teamId>                                         [ai]       team                    Get one saved team's own record
 GET    /api/teams/<teamId>/detail                                  [ai]       team                    Get a team with members, edges, roster status, board and decisions
 GET    /api/teams/<teamId>/chat-messages                           [ai]       team                    Read one member's transcript in one team conversation
 POST   /api/teams/<teamId>/members/<appId>/send                    [ai]       team                    Send a message to one team member in one conversation and wait for its reply
@@ -143,6 +141,7 @@ PATCH  /api/teams/<teamId>/conversations/<epochId>                 [ai]       te
 DELETE /api/teams/<teamId>/conversations/<epochId>                 [ai]       team                    Archive (close) a team conversation
 GET    /api/teams/<teamId>/epochs                                  [ai]       team                    List a team's runs and conversations (history), newest first
 GET    /api/teams/<teamId>/epochs/<epochId>/board                  [ai]       team                    Get the tasks, findings and members of one run
+GET    /api/teams/<teamId>/epochs/<epochId>/roster                 [ai]       team                    Read the members and live status of one work item without its history
 GET    /api/teams/<teamId>/epochs/<epochId>/artifacts              [ai]       team                    List files produced during one run
 PATCH  /api/teams/<teamId>                                         [ai]       team                    Edit a team's name, goal, mode, escalation routing or lead
 DELETE /api/teams/<teamId>                                         [ai]       team                    Dissolve a team
@@ -151,8 +150,8 @@ PATCH  /api/teams/<teamId>/members/<appId>                         [ai]       te
 DELETE /api/teams/<teamId>/checks/<checkId>                        [ai]       team                    Stop one periodic check a member set inside a team
 DELETE /api/teams/<teamId>/members/<appId>                         [ai]       team                    Remove a member from a team
 PUT    /api/teams/<teamId>/edges                                   [ai]       team                    Replace who hands work to whom in a structured team
-POST   /api/teams/<teamId>/run                                     [ai]       team                    Start a team run on its goal
-POST   /api/teams/<teamId>/pause                                   [ai]       team                    Stop the team's current run
+POST   /api/teams/<teamId>/run                                     [ai]       team                    Start independent work with a standing team
+POST   /api/teams/<teamId>/pause                                   [ai]       team                    Stop all open runs of this team
 GET    /api/teams/<teamId>/triggers                                [ai]       team                    List a team's schedules and other triggers
 POST   /api/teams/<teamId>/triggers                                [ai]       team                    Add a schedule, file or WeCom trigger to a team, or change one
 POST   /api/teams/<teamId>/leave                                   [ai]       team                    Leave a team hosted on someone else's computer

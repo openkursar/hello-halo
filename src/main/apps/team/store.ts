@@ -18,6 +18,11 @@ import type Database from 'better-sqlite3'
 import { dirname, join } from 'path'
 import { workItemFromRow, applyWorkItem, updateWorkItem } from './work-items'
 import { createRetainedDuties, type RetainedDuties } from './retained-duties'
+import { createRecipientFences, type RecipientFences } from './recipient-fences'
+import { createCollaborationRequests, type CollaborationRequests } from './collaboration-requests'
+import { createCollaborationSourceBindings, type CollaborationSourceBindings } from './source-bindings'
+import { createTeamParticipants, type TeamParticipants } from './participants'
+import { getWorkMember, findWorkMember, listWorkMembers } from './work-members'
 import type { TeamWorkItem } from '../../../shared/apps/team-types'
 import type {
   Team,
@@ -345,7 +350,25 @@ export class TeamStore implements ITeamStore {
   >()
 
   /** Duties of members that left a joined office, kept beside the database file. */
+  private readonly disposalHolds = new Map<string, number>()
+  private readonly participantRuntime = new Map<string, Map<string, { epochId?: string; status: TeamMemberRuntimeStatus; busy?: RosterBusyEntry[] }>>()
   private readonly retainedDuties: RetainedDuties
+  private requestStore?: CollaborationRequests
+  get requests(): CollaborationRequests { return this.requestStore ??= createCollaborationRequests(this.db) }
+  private recipientFenceStore?: RecipientFences
+  get recipientFences(): RecipientFences { return this.recipientFenceStore ??= createRecipientFences(this.db) }
+  private sourceBindingStore?: CollaborationSourceBindings
+  get sourceBindings(): CollaborationSourceBindings { return this.sourceBindingStore ??= createCollaborationSourceBindings(this.db) }
+  private onWorkRemoved?: (teamId: string, epochId?: string) => void
+  /** Runs inside the deletion transaction; failures must roll back the removal. */
+  setWorkRemovedHandler(handler: (teamId: string, epochId?: string) => void): void { this.onWorkRemoved = handler }
+  private participantIdentityLookup?: (id: string) => boolean
+  setParticipantIdentityLookup(lookup: (id: string) => boolean): void { this.participantIdentityLookup = lookup }
+  private participantStore?: TeamParticipants
+
+  get participants(): TeamParticipants {
+    return this.participantStore ??= createTeamParticipants(this.db, id => this.participantIdentityLookup?.(id) ?? false)
+  }
   /** Per team: a renamed member's former names → its appId, so in-flight addressing still lands. */
   private readonly formerNames = new Map<string, Map<string, string>>()
 
@@ -653,6 +676,14 @@ export class TeamStore implements ITeamStore {
     })
   }
 
+  getTeamByName(spaceId: string, name: string, ephemeral?: boolean): Team | null {
+    const row = (ephemeral === undefined
+      ? this.db.prepare('SELECT * FROM teams WHERE owning_space_id = ? AND name = ? LIMIT 1').get(spaceId, name)
+      : this.db.prepare('SELECT * FROM teams WHERE owning_space_id = ? AND name = ? AND ephemeral = ? LIMIT 1').get(spaceId, name, ephemeral ? 1 : 0)) as TeamRow | undefined
+    return row ? rowToTeam(row) : null
+  }
+
+
   getTeamById(teamId: string): Team | null {
     const row = this.stmtGetTeamById.get(teamId) as TeamRow | undefined
     return row ? rowToTeam(row) : null
@@ -664,6 +695,13 @@ export class TeamStore implements ITeamStore {
 
   listTeamsBySpace(spaceId: string): Team[] {
     return (this.stmtListTeamsBySpace.all(spaceId) as TeamRow[]).map(rowToTeam)
+  }
+
+  listStandingTeams(spaceId?: string): Team[] {
+    const query = spaceId
+      ? this.db.prepare('SELECT * FROM teams WHERE ephemeral = 0 AND owning_space_id = ? ORDER BY created_at DESC, id ASC').all(spaceId)
+      : this.db.prepare('SELECT * FROM teams WHERE ephemeral = 0 ORDER BY created_at DESC, id ASC').all()
+    return (query as TeamRow[]).map(rowToTeam)
   }
 
   /**
@@ -766,8 +804,37 @@ export class TeamStore implements ITeamStore {
     return row ? rowToTeam(row) : null
   }
 
+  listPrivateCollaborations(teamId: string, epochId?: string): Team[] {
+    return (this.db.prepare(`SELECT teams.* FROM teams
+      JOIN team_epochs epochs ON substr(teams.coordinator_conversation_id, 1, 9) = 'app-chat:'
+        AND substr(teams.coordinator_conversation_id, -length(':team:' || epochs.team_id || ':' || epochs.id)) = ':team:' || epochs.team_id || ':' || epochs.id
+      WHERE teams.ephemeral = 1 AND epochs.team_id = ? AND (? IS NULL OR epochs.id = ?)`)
+      .all(teamId, epochId ?? null, epochId ?? null) as TeamRow[]).map(rowToTeam)
+  }
+
   deleteTeam(teamId: string): boolean {
-    return this.stmtDeleteTeam.run(teamId).changes > 0
+    return this.db.transaction(() => {
+      const team = this.getTeamById(teamId)
+      if (!team) return false
+      const sources = this.db.prepare(`SELECT heads.source_key FROM collaboration_request_heads heads
+        JOIN team_epochs epochs ON substr(heads.source_key, 1, 9) = 'app-chat:'
+          AND substr(heads.source_key, -length(':team:' || epochs.team_id || ':' || epochs.id)) = ':team:' || epochs.team_id || ':' || epochs.id
+        WHERE epochs.team_id = ?`).all(teamId) as Array<{ source_key: string }>
+      const keys = new Set(sources.map(row => row.source_key))
+      if (team.coordinatorConversationId) keys.add(team.coordinatorConversationId)
+      for (const source of keys) {
+        this.requests.cancelSource(source)
+        const current = this.requests.current(source)
+        if (current) this.requests.cancel(current)
+        this.sourceBindings.revokeSource(source)
+        this.requests.forget(source)
+      }
+      this.db.prepare('DELETE FROM collaboration_recipient_fences WHERE team_id = ?').run(teamId)
+      this.db.prepare('DELETE FROM collaboration_recipient_epochs WHERE team_id = ?').run(teamId)
+      const removed = this.stmtDeleteTeam.run(teamId).changes > 0
+      if (removed) this.onWorkRemoved?.(teamId)
+      return removed
+    })()
   }
 
   /**
@@ -782,7 +849,7 @@ export class TeamStore implements ITeamStore {
       this.deleteTriggersByTeam(officeId)
       this.db.prepare(`DELETE FROM team_checks WHERE team_id = ?`).run(officeId)
       this.db.prepare(`DELETE FROM team_activity WHERE team_id = ?`).run(officeId)
-      return this.stmtDeleteTeam.run(officeId).changes > 0
+      return this.deleteTeam(officeId)
     })
     const removed = purge()
     this.joinedMemberRuntime.delete(officeId)
@@ -874,11 +941,13 @@ export class TeamStore implements ITeamStore {
     this.stmtSetMemberLead.run({ team_id: teamId, app_id: appId, is_lead: isLead ? 1 : 0 })
   }
 
-  listMembersByTeam(teamId: string): TeamMember[] {
+  listMembersByTeam(teamId: string, epochId?: string): TeamMember[] {
+    if (epochId) return listWorkMembers(this, teamId, epochId)
     return (this.stmtListMembersByTeam.all(teamId) as TeamMemberRow[]).map(rowToMember)
   }
 
-  getMemberByName(teamId: string, memberName: string): TeamMember | null {
+  getMemberByName(teamId: string, memberName: string, epochId?: string): TeamMember | null {
+    if (epochId) return findWorkMember(this, teamId, epochId, memberName)
     const row = this.stmtGetMemberByName.get(teamId, memberName) as TeamMemberRow | undefined
     if (row) return rowToMember(row)
     const formerOwner = this.formerNames.get(teamId)?.get(memberName)
@@ -901,7 +970,8 @@ export class TeamStore implements ITeamStore {
     names.set(former, appId)
   }
 
-  getMember(teamId: string, appId: string): TeamMember | null {
+  getMember(teamId: string, appId: string, epochId?: string): TeamMember | null {
+    if (epochId) return getWorkMember(this, teamId, epochId, appId)
     const row = this.stmtGetMember.get(teamId, appId) as TeamMemberRow | undefined
     return row ? rowToMember(row) : null
   }
@@ -1114,10 +1184,32 @@ export class TeamStore implements ITeamStore {
     return { dutiesRestored }
   }
 
+  applyParticipantStatuses(teamId: string, members: Array<{ appId: string; epochId?: string; status: TeamMemberRuntimeStatus; busy?: RosterBusyEntry[] }>): void {
+    if (members.length === 0) { this.participantRuntime.delete(teamId); return }
+    this.participantRuntime.set(teamId, new Map(members.map(member => [member.appId, { epochId: member.epochId, status: member.status, busy: member.busy }])))
+  }
+
+  getParticipantWorkStates(teamId: string): Map<string, { active: boolean; waitingAppIds: string[] }> {
+    const result = new Map<string, { active: boolean; waitingAppIds: string[] }>()
+    for (const [appId, state] of this.participantRuntime.get(teamId) ?? []) {
+      if (!state.epochId) continue
+      const work = result.get(state.epochId) ?? { active: false, waitingAppIds: [] }
+      if (state.status === 'working') work.active = true
+      if (state.status === 'waiting_user') work.waitingAppIds.push(appId)
+      result.set(state.epochId, work)
+    }
+    return result
+  }
+
+  getParticipantStatus(teamId: string, appId: string): TeamMemberRuntimeStatus | null {
+    return this.participantRuntime.get(teamId)?.get(appId)?.status ?? null
+  }
+
   getJoinedMemberStatuses(teamId: string): Map<string, TeamMemberRuntimeStatus> {
     const runtime = this.joinedMemberRuntime.get(teamId)
     const out = new Map<string, TeamMemberRuntimeStatus>()
     if (runtime) for (const [appId, v] of runtime) out.set(appId, v.status)
+    for (const [appId, value] of this.participantRuntime.get(teamId) ?? []) out.set(appId, value.status)
     return out
   }
 
@@ -1127,7 +1219,7 @@ export class TeamStore implements ITeamStore {
 
   /** Live busy assignments from the last snapshot of a joined office. */
   getJoinedMemberBusy(teamId: string, appId: string): RosterBusyEntry[] {
-    return this.joinedMemberRuntime.get(teamId)?.get(appId)?.busy ?? []
+    return this.participantRuntime.get(teamId)?.get(appId)?.busy ?? this.joinedMemberRuntime.get(teamId)?.get(appId)?.busy ?? []
   }
 
   applyJoinedMemberStatus(
@@ -1426,7 +1518,20 @@ export class TeamStore implements ITeamStore {
     updateWorkItem(this.db, epochId, patch)
   }
 
+  beginDisposal(teamId: string): () => void {
+    this.disposalHolds.set(teamId, (this.disposalHolds.get(teamId) ?? 0) + 1)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const remaining = (this.disposalHolds.get(teamId) ?? 1) - 1
+      if (remaining > 0) this.disposalHolds.set(teamId, remaining)
+      else this.disposalHolds.delete(teamId)
+    }
+  }
+
   insertEpoch(epoch: TeamEpoch, triggerType: TeamRunTriggerType = 'manual'): void {
+    if (this.disposalHolds.has(epoch.teamId)) throw new Error('This team is being removed; new work cannot be created.')
     this.db.transaction(() => this.insertEpochRecord(epoch, triggerType))()
   }
 

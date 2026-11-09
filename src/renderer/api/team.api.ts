@@ -11,6 +11,8 @@ import type {
   ProposedMember,
   TeamTriggerInput,
   TeamArtifactOpenResult,
+  TeamRunResult,
+  EpochRoster,
 } from '../../shared/apps/team-types'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
 import type { ContentReference } from '../../shared/types/content-reference'
@@ -155,6 +157,11 @@ export const teamApi = {
     return httpRequest('GET', `/api/teams/${teamId}/epochs/${epochId}/board`)
   },
 
+  teamEpochRoster: async (teamId: string, epochId: string): Promise<ApiResponse<EpochRoster | null>> => {
+    if (isElectron()) return window.halo.teamEpochRoster({ teamId, epochId })
+    return httpRequest('GET', `/api/teams/${encodeURIComponent(teamId)}/epochs/${encodeURIComponent(epochId)}/roster`)
+  },
+
   /** Products produced during one specific run. */
   teamEpochArtifacts: async (teamId: string, epochId: string): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamEpochArtifacts({ teamId, epochId })
@@ -232,9 +239,9 @@ export const teamApi = {
     return httpRequest('POST', '/api/teams/propose-members', { goal, owningSpaceId })
   },
 
-  teamRun: async (teamId: string): Promise<ApiResponse> => {
-    if (isElectron()) return window.halo.teamRun(teamId)
-    return httpRequest('POST', `/api/teams/${teamId}/run`)
+  teamRun: async (teamId: string, instruction?: string): Promise<ApiResponse<TeamRunResult>> => {
+    if (isElectron()) return window.halo.teamRun(teamId, { type: 'manual' }, instruction)
+    return httpRequest('POST', `/api/teams/${teamId}/run`, { trigger: { type: 'manual' }, ...(instruction !== undefined ? { instruction } : {}) })
   },
 
   teamPause: async (teamId: string): Promise<ApiResponse> => {

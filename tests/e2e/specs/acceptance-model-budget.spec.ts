@@ -29,15 +29,19 @@ async function addAccount(page: Page, model: AcceptanceModel, id: string, name =
     await section.getByRole('button').filter({ hasText: 'OpenAI' }).first().click()
     await section.getByPlaceholder('Search providers...').fill('DeepSeek')
     await section.getByRole('button').filter({ hasText: 'DeepSeek' }).last().click()
+    await expect(section.getByRole('button', { name: id, exact: true })).toBeVisible()
+    await openBudget(page)
+    await inspectBudget(page, defaults)
+    await expect(section.getByLabel('Vision', { exact: true })).toBeChecked()
+    await expect(section.getByLabel('Thinking', { exact: true })).toBeChecked()
   }
   await providerField(page, 'Display Name').fill(name)
   await providerField(page, 'API URL').fill(`${model.url}/v1`)
   await providerField(page, 'API Key').fill('local-scripted-endpoint')
-  if (!preset) {
-    await section.getByLabel('Use custom model ID', { exact: true }).check()
-    await section.getByPlaceholder('Enter model ID', { exact: true }).fill(id)
-    await section.getByRole('button', { name: 'Apply', exact: true }).click()
-  }
+  // Choosing the local fixture endpoint clears the prior endpoint's model choice.
+  await section.getByLabel('Use custom model ID', { exact: true }).check()
+  await section.getByPlaceholder('Enter model ID', { exact: true }).fill(id)
+  await section.getByRole('button', { name: 'Apply', exact: true }).click()
   await openBudget(page)
 }
 

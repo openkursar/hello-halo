@@ -33,6 +33,9 @@ promises:
   compact-recovery:
     en: Reducing active context retains the original disk transcript, and a reopened session continues from the saved summary and recent work.
     zh: 缩减活动上下文时保留磁盘上的原始记录，重新打开的会话从已保存的总结及近期工作继续。
+  output-allowance:
+    en: A large output ceiling does not consume the input working budget. Halo SDK adjusts work output to remaining estimated context without reducing effective thinking; a small work ceiling does not starve internal summaries. A clear output-only parameter-range rejection can lower and retry a request once before content starts, without rewriting saved settings, replaying tools or treating unrelated errors as context overflows.
+    zh: 较大的输出上限不会耗尽输入工作预算。Halo SDK 按估算剩余上下文调整工作输出，不降低有效思考；较小工作上限不会饿死内部总结。明确的纯输出参数范围拒绝，可在尚未产生内容时降低额度并重试一次；不改写保存设置、不重放工具，也不将无关错误视为上下文超窗。
 scenarios:
   - id: chat.execution.stop-resume
     title:
@@ -238,6 +241,29 @@ scenarios:
       - An oversized merge recovers within the existing request bound by reducing output reservation or shortening the ordered handovers; no source segment is silently discarded.
       - The original task and latest user constraints remain present, every successful summary response is accounted once and recovery terminates within its bound.
     notes: Built public-SDK integration with scripted responses. Provider wire normalization is additionally covered by SDK serialization tests, not claimed as a live-provider observation here.
+  - id: chat.execution.output-allowance
+    title:
+      en: Continue work with large or small output ceilings and explicit output refusals
+      zh: 大小输出上限及明确输出拒绝不妨碍安全继续工作
+    verifies: [output-allowance, context-continuity, compact-safety, budget]
+    platforms: *a1
+    profiles: [fast, regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      budget: [large-ceiling, small-work-ceiling, explicit-output-range, unrelated-error, partial-content]
+    preconditions:
+      - An isolated built-SDK conversation uses a 150000-token working context and a 320000-token output ceiling, a 300-token work ceiling, or a provider that explicitly refuses the output range before any content. Negative variants refuse an unrelated parameter or fail after starting content.
+    steps:
+      - Run the original task through the public SDK and observe work and summary requests, checkpoints and the unchanged supplied configuration.
+    expected:
+      - A large ceiling does not trigger unnecessary maintenance on ordinary history; near capacity, bounded summarization precedes continuation with input plus output within the declared working window.
+      - A small work ceiling still permits a useful bounded summary, while work requests remain below that ceiling. Effective thinking, system instructions and tool definitions remain unchanged across the summary.
+      - Only an explicit output-only range refusal before content permits one corrected request. Unrelated errors and partial-content failures are not replayed. No tool returned by a summary executes, and rejected attempts do not install history or invent usage.
+      - Original task constraints survive and the supplied output ceiling remains unchanged.
+    notes: Built public-SDK integration with scripted responses; not live-provider limits, summary quality, application settings persistence or measured cache-hit evidence.
   - id: chat.execution.compact-resume
     title: Reopen summarized work while retaining the original transcript
     verifies:
@@ -255,4 +281,4 @@ scenarios:
     expected:
       - Compaction appends to the disk transcript rather than overwriting its original prefix, and the original request and answer remain present.
       - The reopened session supplies the saved summary and new user input to its next work request and completes successfully without summarizing again immediately.
-    notes: Real SDK persistence and resume under isolated HOME, USERPROFILE and configuration directories. This is integration evidence, not application reopen, renderer history, crash recovery, subagent ownership or external Claude Code coverage.
+    notes: Real SDK persistence and resume under isolated HOME, USERPROFILE and configuration directories. This is integration evidence, not application reopen, renderer history, crash recovery, collaborator ownership or external Claude Code coverage.

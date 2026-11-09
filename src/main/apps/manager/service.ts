@@ -33,6 +33,7 @@ import type {
   AppUninstalledHandler,
   SpecUpgradedHandler,
   AppRenamedHandler,
+  AppAuthorityChangedHandler,
   AppUninstallReason,
   Unsubscribe,
   UninstallOptions,
@@ -58,6 +59,7 @@ import { classifySkillSource } from '../../services/skills'
 import { isBuiltinApp } from './types'
 import { sanitizeMemorySettings } from '../../../shared/types/memory'
 import { cleanTag, normalizeTags, requireTag } from '../../../shared/apps/app-tags'
+import { mcpContextPreferencesKey, mergeMcpContextPreferences } from '../../../shared/apps/mcp-context'
 import { compareDotVersions } from '../../../shared/store/version-compare'
 import type { SpecUpgradeOutcome } from '../../../shared/apps/app-types'
 import { authorVersionPatch, mergeAuthorUpgrade } from './spec-upgrade'
@@ -195,6 +197,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
   const appUninstalledHandlers: AppUninstalledHandler[] = []
   const specUpgradedHandlers: SpecUpgradedHandler[] = []
   const appRenamedHandlers: AppRenamedHandler[] = []
+  const appAuthorityChangedHandlers: AppAuthorityChangedHandler[] = []
 
   /**
    * Notify all registered status change handlers.
@@ -240,6 +243,13 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       } catch (error) {
         console.error('[AppManager] Spec upgrade handler error:', error)
       }
+    }
+  }
+
+  function notifyAuthorityChanged(appId: string): void {
+    for (const handler of appAuthorityChangedHandlers) {
+      try { handler(appId) }
+      catch (error) { console.error(`[AppManager] Authority-change handler failed: appId=${appId}`, error) }
     }
   }
 
@@ -860,6 +870,13 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       // HTTP path (null via JSON serialization) correctly clear optional fields.
       const merged: Record<string, unknown> = { ...app.userOverrides }
       for (const [key, value] of Object.entries(partial as Record<string, unknown>)) {
+        if (key === 'mcpContext') {
+          if (app.spec.type !== 'mcp') throw new Error('mcpContext applies to MCP servers only')
+          const context = mergeMcpContextPreferences(app.userOverrides.mcpContext, value)
+          if (context) merged.mcpContext = context
+          else delete merged.mcpContext
+          continue
+        }
         if (key === 'engineId' && value != null && (app.spec.type !== 'automation' || !isEngineId(value))) {
           console.warn('[AppManager] Engine preference was rejected', { appId, reason: app.spec.type !== 'automation' ? 'not-automation' : 'unknown-engine' })
           throw new Error(app.spec.type !== 'automation' ? 'engineId applies to digital humans only' : 'Invalid engineId')
@@ -908,9 +925,13 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       // Sessions were given the server's tools when they were built.
       const before = JSON.stringify([...(app.userOverrides.disabledTools ?? [])].sort())
       const after = JSON.stringify([...((merged.disabledTools as string[] | undefined) ?? [])].sort())
+      if (before !== after || (app.userOverrides.spaceMemoryAccess === true) !== (merged.spaceMemoryAccess === true)) notifyAuthorityChanged(appId)
       if (before !== after) {
         console.log(`[AppManager] App ${appId}: ${(merged.disabledTools as string[] | undefined)?.length ?? 0} MCP tool(s) turned off`)
         emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'tools' })
+      } else if (mcpContextPreferencesKey(app.userOverrides.mcpContext) !==
+        mcpContextPreferencesKey((merged as InstalledApp['userOverrides']).mcpContext)) {
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'context' })
       }
     },
 
@@ -1130,6 +1151,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       // Persist the new spaceId. The DB unique-index guards against races.
       store.updateSpaceId(appId, newSpaceId)
+      notifyAuthorityChanged(appId)
 
       // For MCP apps: notify both old and new scopes so session-manager
       // can invalidate the affected sessions on both sides.
@@ -1217,6 +1239,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       permissions.denied = permissions.denied.filter(p => p !== permission)
 
       store.updatePermissions(appId, permissions)
+      notifyAuthorityChanged(appId)
     },
 
     revokePermission(appId: string, permission: string): void {
@@ -1235,6 +1258,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       }
 
       store.updatePermissions(appId, permissions)
+      notifyAuthorityChanged(appId)
     },
 
     // ── File System ───────────────────────────
@@ -1335,6 +1359,14 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       return () => {
         const index = appRenamedHandlers.indexOf(handler)
         if (index > -1) appRenamedHandlers.splice(index, 1)
+      }
+    },
+
+    onAppAuthorityChanged(handler: AppAuthorityChangedHandler): Unsubscribe {
+      appAuthorityChangedHandlers.push(handler)
+      return () => {
+        const index = appAuthorityChangedHandlers.indexOf(handler)
+        if (index > -1) appAuthorityChangedHandlers.splice(index, 1)
       }
     },
 

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import type { Page } from '@playwright/test'
 import { test, expect, type SkillServer } from '../fixtures/acceptance-skill-server'
 import type { ModelRequest } from '../fixtures/acceptance-model'
+import { replyWithModelTool } from '../fixtures/acceptance-tool-discovery'
 
 interface Conversation {
   id: string
@@ -87,23 +88,24 @@ test('the owner can ask the actual skill management tool to inspect and disable 
   const model = server.model!
   const requests: ModelRequest[] = []
   let reference: { id: string; spaceId: string | null } | undefined
-  let toolName = ''
+  const issues: string[] = []
   let parseFailure: string | undefined
   const answer = 'The selected skill is disabled; its files were kept.'
   model.respond(request => {
     requests.push(request)
-    toolName ||= request.tools.find(name => /(?:__|_)skill_manage$/.test(name)) ?? 'mcp__halo-apps__skill_manage'
-    if (request.sequence === 1) return { tools: [{ id: 'list-library', name: toolName, input: { action: 'list', scope: 'global', q: active.name } }] }
-    if (request.sequence === 2) {
-      const result = request.toolResults.find(item => item.id === 'list-library')
-      try {
-        const inventory = JSON.parse(result?.text ?? '{}') as { groups?: Array<{ copies: Array<{ name: string; ref: { id: string; spaceId: string | null } }> }> }
-        reference = inventory.groups?.flatMap(group => group.copies).find(copy => copy.name === active.name)?.ref
-      } catch (error) { parseFailure = String(error) }
-      if (!reference) return { text: 'The library did not return the requested reference.' }
-      return { tools: [{ id: 'read-library', name: toolName, input: { action: 'read', ref: reference } }] }
+    const listed = request.toolResults.find(item => item.id === 'list-library')
+    if (!listed) return replyWithModelTool(request, 'skill_manage', { action: 'list', scope: 'global', q: active.name }, 'list-library', issues)
+    try {
+      const inventory = JSON.parse(listed.text) as { groups?: Array<{ copies: Array<{ name: string; ref: { id: string; spaceId: string | null } }> }> }
+      reference = inventory.groups?.flatMap(group => group.copies).find(copy => copy.name === active.name)?.ref
+    } catch (error) { parseFailure = String(error) }
+    if (!reference) return { text: 'The library did not return the requested reference.' }
+    if (!request.toolResults.some(item => item.id === 'read-library')) {
+      return replyWithModelTool(request, 'skill_manage', { action: 'read', ref: reference }, 'read-library', issues)
     }
-    if (request.sequence === 3) return { tools: [{ id: 'disable-library', name: toolName, input: { action: 'disable', ref: reference } }] }
+    if (!request.toolResults.some(item => item.id === 'disable-library')) {
+      return replyWithModelTool(request, 'skill_manage', { action: 'disable', ref: reference }, 'disable-library', issues)
+    }
     return { text: answer }
   })
   await openGlobalLibrary(server.page)
@@ -112,11 +114,13 @@ test('the owner can ask the actual skill management tool to inspect and disable 
   await sendThroughComposer(server.page, `Inspect my global skill ${active.name}, then disable it. Keep its files.`)
   await expect(server.page.locator('.message-assistant').last()).toContainText(answer)
   expect(parseFailure).toBeUndefined()
-  expect(requests[0].tools).toContain(toolName)
+  expect(issues).toEqual([])
+  expect(requests[0].tools).toEqual(expect.arrayContaining(['ToolSearch', 'CallTool']))
+  expect(requests[0].tools.some(name => name.endsWith('__skill_manage'))).toBe(false)
+  expect(requests.every(request => JSON.stringify(request.body.tools) === JSON.stringify(requests[0].body.tools))).toBe(true)
   expect(reference).toBeDefined()
-  expect(requests).toHaveLength(4)
-  expect(requests[2].toolResults.find(item => item.id === 'read-library')?.text).toContain(active.body)
-  expect(requests[3].toolResults.find(item => item.id === 'disable-library')?.text).toContain('"enabled":false')
+  expect(requests.at(-1)!.toolResults.find(item => item.id === 'read-library')?.text).toContain(active.body)
+  expect(requests.at(-1)!.toolResults.find(item => item.id === 'disable-library')?.text).toContain('"enabled":false')
   expect((await server.list()).groups.find(group => group.name === active.name)?.effectiveId).toBeUndefined()
   expect(server.rows().find(row => row.id === active.id)?.status).toBe('paused')
   expect(readFileSync(active.destination, 'utf8')).toBe(active.spec.skill_files!['SKILL.md'])

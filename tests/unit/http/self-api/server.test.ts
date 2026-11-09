@@ -40,6 +40,7 @@ describe('self-API public listener contract', () => {
     expect(await first).toEqual({ url: 'http://127.0.0.1:4791' })
     expect(await ensureSelfApiServer()).toEqual(await first)
     expect(mocks.listen).toHaveBeenCalledTimes(1)
+    expect(mocks.register).toHaveBeenCalledWith(expect.anything(), { assistant: true })
     expect(mocks.listen).toHaveBeenCalledWith(4791, '127.0.0.1', expect.any(Function))
     expect(mocks.register).toHaveBeenCalledTimes(1)
     expect(mocks.issue).not.toHaveBeenCalled()

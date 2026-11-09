@@ -133,7 +133,8 @@
 | Change scheduling behavior | `src/main/platform/scheduler/index.ts` | `scheduler/schedule.ts`, `scheduler/store.ts`, `tests/unit/platform/scheduler/*` |
 | Add event source/filter behavior | `src/main/platform/event/*` | `src/main/bootstrap/extended.ts` |
 | Change memory behavior | `src/main/platform/memory/index.ts` | `memory/prompt.ts`, `memory/guard.ts`, `tests/unit/platform/memory/*` |
-| Change agent engine (session / stream / prompt / subagent / permissions / MCP) | **Read `src/main/services/agent/DESIGN.md` first**, then jump to named file | Co-edits depend on the exact concern — see DESIGN.md routing |
+| Change Halo SDK internals (loop / prompt / tools / Worker / collaboration) | **Read `src/sdk/halo-sdk/AGENTS.md` first** | SDK checks and module docs are routed there; host changes also follow the row below |
+| Change Halo engine integration (session / stream / permissions / MCP) | **Read `src/main/services/agent/DESIGN.md` first**, then jump to named file | Co-edits depend on the exact concern — see DESIGN.md routing |
 | Change external Claude Code discovery, compatibility checks or downloads | **Read `src/main/services/cc-runtime/DESIGN.md` first** | Shared types and `cc-runtime` typed RPC; `agent/cc` consumes the service public API and owns protocol execution. |
 | Change digital-team coordination (send/wait/blackboard/orchestration) | **Read `src/main/apps/runtime/federation/DESIGN.md` first**, then `src/main/apps/runtime/team/*` | `apps/team/store.ts`, `tests/unit/apps/runtime/team/*`; kernel stays transport-free |
 | Change cross-node offices (join/presence/wake/replication/feeds/gateway) | **Read `src/main/apps/runtime/federation/DESIGN.md` + `log/DESIGN.md` first** | `manager.ts`/`coordinator.ts`/`ctrl-feed.ts`/`session-feed.ts`, `apps/federation/*`, `tests/unit/apps/runtime/federation/*`; then the cluster tier (§5) |

@@ -23,6 +23,7 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSdkMcpServer: (options: unknown) => options,
 }))
 vi.mock('../../../../src/main/services/agent', () => ({
+  emitHumanRequest: vi.fn(), isCollaborationEnabled: () => false,
   acquireV2Session: acquireSession, getToolset: () => undefined,
   formatTurnAttachments: () => '', workingDirErrorDetail: () => ({}), engineErrorDetail: () => ({}),
   hasPendingSessionInput: () => false, hasLiveTurn: () => false, markMcpServerSettings: (server: unknown) => server,
@@ -40,7 +41,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getApiCredentialsForSelection: async () => ({}), getWorkingDir: () => state.workDir,
   getHeadlessElectronPath: () => '/fixture/electron', getDbMcpServers: () => null,
 }))
-vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn(), emitHumanRequest: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/sdk-config', () => ({ addSdkHooks: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/reasoning-effort', () => ({ applyReasoningEffort: () => 0, pickReasoningEffort: () => undefined }))
 vi.mock('../../../../src/main/services/agent/permission-handler', () => ({ createCanUseTool: vi.fn() }))
@@ -71,7 +72,12 @@ vi.mock('../../../../src/main/apps/skills', () => ({ getSkillLibrary: () => libr
 vi.mock('../../../../src/main/store', () => ({ installFromStore: vi.fn() }))
 vi.mock('../../../../src/main/store/registry.service', () => ({ installRequiredSkills: vi.fn() }))
 vi.mock('../../../../src/main/apps/skill-discovery', () => ({ listLoadableSkillCopies: () => [] }))
-vi.mock('../../../../src/main/apps/team', () => ({ getTeamService: () => null }))
+const authority = vi.hoisted(() => ({ current: null as ReturnType<typeof import('../runtime/fixtures/participant-service').createScopedParticipantService> | null }))
+vi.mock('../../../../src/main/apps/team', async () => {
+  const { createScopedParticipantService } = await import('../runtime/fixtures/participant-service')
+  authority.current = createScopedParticipantService()
+  return { getTeamStore: () => null, getTeamService: () => ({ participants: authority.current!.service, getCollaborationScope: () => null, getCollabForConversation: () => null }) }
+})
 vi.mock('../../../../src/main/apps/runtime/team', () => ({
   getActiveTeamRuntime: () => ({
     buildPromptContext: () => ({ selfIsDisposable: state.disposable, selfIsLead: false, teamName: 'Fixture team', roster: [] }),
@@ -82,7 +88,7 @@ vi.mock('../../../../src/main/apps/runtime/team', () => ({
   }),
 }))
 vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({
-  buildCoordinationTools: () => [], createTeamMcpServer: () => ({ name: 'halo-team' }),
+  createCoordinationMcpServer: () => ({ name: 'halo-team' }), createTeamMcpServer: () => ({ name: 'halo-team' }),
 }))
 vi.mock('../../../../src/main/apps/runtime/team/team-prompt', () => ({
   buildRestrictionNotice: () => '', buildTeamEntry: () => '', buildTeamConstraints: () => [], buildTeamImBridge: () => '',
@@ -137,6 +143,8 @@ import { registerAppBridge } from '../../../../src/main/services/app-bridge'
 import { buildImSessionKey, buildTeamSessionKey } from '../../../../src/shared/apps/im-keys'
 
 beforeEach(() => {
+  authority.current!.reset()
+  authority.current!.allow('fixture-team', 'fixture-task', app.id)
   state.workDir = globalThis.__HALO_TEST_DIR__
   state.sessions = []
   state.policy = { allowedTools: ['Read'] }

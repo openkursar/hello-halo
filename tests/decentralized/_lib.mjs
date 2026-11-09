@@ -129,7 +129,8 @@ export async function api(node, method, apiPath, body) {
     }
     return { status: res.status, json }
   } catch (err) {
-    return { status: 0, json: null, error: err.message }
+    const causeCode = typeof err.cause?.code === 'string' && /^[A-Z0-9_]+$/.test(err.cause.code) ? err.cause.code : undefined
+    return { status: 0, json: null, error: `${err.message}${causeCode ? ` [${causeCode}]` : ''}`, ...(causeCode ? { causeCode } : {}) }
   }
 }
 

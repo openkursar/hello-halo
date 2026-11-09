@@ -1,14 +1,11 @@
 /**
- * handleSubAgentMessage parses complete sub-agent SDK messages (no stream deltas)
+ * handleToolMessage parses complete tool-owned SDK messages (no stream deltas)
  * into nested Thoughts. These pin the three load-bearing behaviors:
  *   - tool_use → a tool_use Thought carrying the resolved parentToolUseId, and its
  *     id registered in toolIdToThoughtId so a later result can merge;
  *   - tool_result → merges into the mapped tool_use Thought, or (orphan path)
  *     becomes a standalone tool_result Thought when no mapping exists;
  *   - block.input parsed from both an object and a JSON string.
- *
- * team-lifecycle.test.ts already covers hasActiveTeamTasks/isTeamLifecycleThought,
- * so those are intentionally not re-tested here.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -16,14 +13,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent }))
 
-import { handleSubAgentMessage, type SubAgentContext } from '../../../../src/main/services/agent/subagent-handler'
+import { handleToolMessage, type ToolMessageContext } from '../../../../src/main/services/agent/tool-message-handler'
 import type { Thought } from '../../../../src/main/services/agent/types'
 
-function makeCtx(): SubAgentContext {
+function makeCtx(): ToolMessageContext {
   return {
     spaceId: 'space-1',
     conversationId: 'conv-1',
-    sessionState: { thoughts: [] as Thought[] } as SubAgentContext['sessionState'],
+    sessionState: { thoughts: [] as Thought[] } as ToolMessageContext['sessionState'],
     toolIdToThoughtId: new Map<string, string>()
   }
 }
@@ -33,13 +30,13 @@ const user = (content: unknown[]) => ({ type: 'user', message: { content } })
 
 beforeEach(() => emitAgentEvent.mockClear())
 
-describe('handleSubAgentMessage — tool_use', () => {
+describe('handleToolMessage — tool_use', () => {
   it('creates a tool_use thought carrying the resolved parentToolUseId and registers the mapping', () => {
     const ctx = makeCtx()
     // Map the SDK parent id to a Halo thought id so the child resolves to it.
     ctx.toolIdToThoughtId.set('parent-tu', 'halo-parent')
 
-    handleSubAgentMessage(
+    handleToolMessage(
       assistant([{ type: 'tool_use', id: 'tu-1', name: 'Bash', input: { command: 'ls' } }]),
       'parent-tu',
       ctx
@@ -58,7 +55,7 @@ describe('handleSubAgentMessage — tool_use', () => {
 
   it('falls back to the raw parent id when it is not in the map', () => {
     const ctx = makeCtx()
-    handleSubAgentMessage(
+    handleToolMessage(
       assistant([{ type: 'tool_use', id: 'tu-1', name: 'Read', input: {} }]),
       'unmapped-parent',
       ctx
@@ -68,7 +65,7 @@ describe('handleSubAgentMessage — tool_use', () => {
 
   it('parses a JSON-string input, and leaves toolInput empty on malformed JSON', () => {
     const ctx = makeCtx()
-    handleSubAgentMessage(
+    handleToolMessage(
       assistant([
         { type: 'tool_use', id: 'a', name: 'X', input: '{"k":1}' },
         { type: 'tool_use', id: 'b', name: 'Y', input: 'not json' }
@@ -82,15 +79,15 @@ describe('handleSubAgentMessage — tool_use', () => {
 
   it('ignores non-array assistant content', () => {
     const ctx = makeCtx()
-    handleSubAgentMessage({ type: 'assistant', message: { content: null } }, 'p', ctx)
+    handleToolMessage({ type: 'assistant', message: { content: null } }, 'p', ctx)
     expect(ctx.sessionState.thoughts).toHaveLength(0)
   })
 })
 
-describe('handleSubAgentMessage — tool_result', () => {
+describe('handleToolMessage — tool_result', () => {
   it('merges a result into the mapped tool_use thought (no new thought)', () => {
     const ctx = makeCtx()
-    handleSubAgentMessage(
+    handleToolMessage(
       assistant([{ type: 'tool_use', id: 'tu-1', name: 'Bash', input: {} }]),
       'p',
       ctx
@@ -98,7 +95,7 @@ describe('handleSubAgentMessage — tool_result', () => {
     const toolUse = ctx.sessionState.thoughts[0]
     emitAgentEvent.mockClear()
 
-    handleSubAgentMessage(
+    handleToolMessage(
       user([{ type: 'tool_result', tool_use_id: 'tu-1', content: 'output text', is_error: false }]),
       'p',
       ctx
@@ -117,8 +114,8 @@ describe('handleSubAgentMessage — tool_result', () => {
 
   it('serializes non-string result content to JSON when merging', () => {
     const ctx = makeCtx()
-    handleSubAgentMessage(assistant([{ type: 'tool_use', id: 'tu-1', name: 'B', input: {} }]), 'p', ctx)
-    handleSubAgentMessage(
+    handleToolMessage(assistant([{ type: 'tool_use', id: 'tu-1', name: 'B', input: {} }]), 'p', ctx)
+    handleToolMessage(
       user([{ type: 'tool_result', tool_use_id: 'tu-1', content: [{ type: 'text', text: 'hi' }] }]),
       'p',
       ctx
@@ -130,7 +127,7 @@ describe('handleSubAgentMessage — tool_result', () => {
     const ctx = makeCtx()
     ctx.toolIdToThoughtId.set('parent-tu', 'halo-parent')
 
-    handleSubAgentMessage(
+    handleToolMessage(
       user([{ type: 'tool_result', tool_use_id: 'orphan-id', content: 'boom', is_error: true }]),
       'parent-tu',
       ctx
@@ -149,7 +146,7 @@ describe('handleSubAgentMessage — tool_result', () => {
 
   it('labels a successful orphan result as succeeded', () => {
     const ctx = makeCtx()
-    handleSubAgentMessage(
+    handleToolMessage(
       user([{ type: 'tool_result', tool_use_id: 'orphan', content: 'ok', is_error: false }]),
       'p',
       ctx

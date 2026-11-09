@@ -258,6 +258,10 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
       // author fields to borrow the open default.
       const payload = frame.payload as { teamId?: string }
       const teamId = typeof payload.teamId === 'string' ? payload.teamId : officeId
+      if (teamId !== officeId) {
+        console.warn(`${LOG_TAG} member write denied: office=${officeId} team=${teamId} op=${frame.op} reason=office-mismatch`)
+        return false
+      }
       const subjectAppId =
         resolveWriteSubjectAppId(teamId, frame) ??
         (NODE_SCOPED_WRITE_OPS.has(frame.op) ? resolveWritingMemberOfNode(teamId, frame.fromNode) : null)

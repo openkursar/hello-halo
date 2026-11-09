@@ -21,7 +21,7 @@ vi.mock('../../../../src/main/store', () => ({ installFromStore: vi.fn() }))
 vi.mock('../../../../src/main/store/registry.service', () => ({ installRequiredSkills: vi.fn() }))
 vi.mock('../../../../src/main/apps/team', () => ({ getTeamService: () => null }))
 vi.mock('../../../../src/main/apps/runtime/team', () => ({ getActiveTeamRuntime: () => null }))
-vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({ buildCoordinationTools: () => [] }))
+vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({ createCoordinationMcpServer: () => ({ name: 'halo-team' }) }))
 vi.mock('../../../../src/main/services/official-docs-mcp', () => ({ CREATE_GUIDE_PATH: 'create-digital-human/SKILL.md' }))
 
 import { createSkillLibrary } from '../../../../src/main/apps/skills'

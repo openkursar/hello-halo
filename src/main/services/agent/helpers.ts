@@ -26,6 +26,7 @@ import { isMcpCommandBlocked } from '../security-policy'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
 import { assertDelegatedAuthReady } from './cli-auth'
 import { resolveGroupCredentials } from './group-credentials'
+import { markInstalledMcpContext } from './tool-discovery'
 
 // ============================================
 // Headless Electron Path Management
@@ -434,7 +435,7 @@ export function appToSdkServerConfig(app: InstalledApp): Record<string, unknown>
     serverConfig.headers = mcpServer.headers
   }
 
-  return serverConfig
+  return markInstalledMcpContext(serverConfig, app)
 }
 
 /**

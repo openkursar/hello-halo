@@ -21,7 +21,7 @@ function team(name: string, overrides: Partial<StandingTeam> = {}): StandingTeam
 }
 
 describe('the standing teams a digital human is given', () => {
-  it('is nothing at all for a digital human in no team and without agent-team tools', () => {
+  it('is nothing at all for a digital human in no team and without collaboration tools', () => {
     expect(buildTeamGuidance({ teams: [] })).toBeNull()
   })
 
@@ -52,25 +52,26 @@ describe('the standing teams a digital human is given', () => {
     expect(prompt).toContain('- …3 more: GET $HALO_API_URL/api/teams lists them all')
   })
 
-  it('defines a standing team itself when this chat holds no agent-team guide', () => {
+  it('defines a standing team itself when this chat holds no collaboration guide', () => {
     const prompt = buildTeamGuidance({ teams: [team('Dev')] })!
     expect(prompt.startsWith('## Your standing teams\nA standing team is a lasting group of digital humans')).toBe(true)
   })
 
-  it('continues the agent-team guide instead of defining a standing team twice', () => {
+  it('keeps stable membership separate from daily collaboration guidance', () => {
     const prompt = buildTeamGuidance({ agentTeamGuide: TEAM_TOOLSET_GUIDE, teams: [team('Dev')] })!
     expect(prompt.startsWith(TEAM_TOOLSET_GUIDE)).toBe(true)
     expect(prompt).toContain('### Your standing teams')
     expect(prompt.split('A standing team is a lasting group of digital humans').length - 1).toBe(1)
-    expect(prompt).toContain('When the person says "the team" without naming one and you have not started an agent team here, they mean one of these.')
+    expect(prompt).toContain('These memberships do not change it.')
+    expect(prompt).not.toContain('pursuing its own goal')
   })
 
-  it('gives a chat with agent-team tools but no standing team only the guide', () => {
+  it('gives a chat with collaboration tools but no standing team only the guide', () => {
     expect(buildTeamGuidance({ agentTeamGuide: TEAM_TOOLSET_GUIDE, teams: [] })).toBe(TEAM_TOOLSET_GUIDE)
   })
 
   it('tells it which conversation this chat is, and that its own team tools act on that one', () => {
-    expect(buildTeamGuidance({ teams: [team('Dev')] })).toContain('This chat is your own, outside all of them.')
+    expect(buildTeamGuidance({ teams: [team('Dev')] })).toContain('This conversation has its own work context.')
     const viaIm = buildTeamGuidance({ teams: [team('Dev')], current: { teamName: 'Dev', epochId: 'epoch-release', viaIm: true } })!
     expect(viaIm).toContain('This chat is an IM conversation of Dev (epochId epoch-release): your team tools act on it')
     expect(viaIm).toContain('the calls below are for the team\'s other conversations.')
@@ -121,35 +122,33 @@ describe('the standing teams a digital human is given', () => {
   })
 })
 
-describe('the agent-team guide', () => {
-  it('names the two kinds apart', () => {
-    expect(TEAM_TOOLSET_GUIDE).toContain('An agent team is an ad hoc team you spin up for the job in front of you.')
-    expect(TEAM_TOOLSET_GUIDE).toContain('A standing team is a lasting group of digital humans in Halo')
+describe('daily collaboration guidance', () => {
+  it('offers independent work and context isolation without an organization choice', () => {
+    expect(TEAM_TOOLSET_GUIDE).toContain('work can progress independently')
+    expect(TEAM_TOOLSET_GUIDE).toContain('separate context')
+    expect(TEAM_TOOLSET_GUIDE).toContain('independent review')
+    expect(TEAM_TOOLSET_GUIDE).toContain('A direct read or search is often enough for a small question')
+    expect(TEAM_TOOLSET_GUIDE).not.toContain('standing team')
   })
 
-  it('leaves the decision to the model, with doing the work itself as the default', () => {
-    expect(TEAM_TOOLSET_GUIDE).toContain('By default, do the work yourself in this chat.')
-    expect(TEAM_TOOLSET_GUIDE).toContain('If you are not sure, do it yourself.')
-    expect(TEAM_TOOLSET_GUIDE).toContain('People rarely ask for an agent team by name, so the decision is yours. If they do ask, do it.')
-    // A keyword list would teach it to obey phrases instead of judging the work.
-    expect(TEAM_TOOLSET_GUIDE).not.toContain('"split the work"')
+  it('requires self-contained assignments and reports sent to the requester', () => {
+    expect(TEAM_TOOLSET_GUIDE).toContain('permitted actions and the evidence you need back')
+    expect(TEAM_TOOLSET_GUIDE).toContain('Use team_send for requests, questions and replies')
+    expect(TEAM_TOOLSET_GUIDE).toContain('turn-end notification is not a delivered reply')
   })
 
-  it('names the three things separating a part can buy: isolation, parallel work, teammates working together', () => {
-    expect(TEAM_TOOLSET_GUIDE).toContain('It keeps bulky details out of this chat, or it can run in parallel with other parts')
-    expect(TEAM_TOOLSET_GUIDE).toContain('or it needs teammates to work with each other')
+  it('makes the host lifecycle explicit without a completion tool', () => {
+    expect(TEAM_TOOLSET_GUIDE).toContain('resume the conversation when you are idle')
+    expect(TEAM_TOOLSET_GUIDE).toContain('No wait or team-completion call is required')
+    expect(TEAM_TOOLSET_GUIDE).toContain('Respect explicit stops')
+    expect(TEAM_TOOLSET_GUIDE).toContain('Findings are not messages')
   })
 
-  it('briefs with team_send, which is the call that reaches a teammate, and leaves the reading tools to their own descriptions', () => {
-    expect(TEAM_TOOLSET_GUIDE).toContain('Brief each teammate with `team_send`.')
-    expect(TEAM_TOOLSET_GUIDE).not.toContain('team_post_task')
-    expect(TEAM_TOOLSET_GUIDE).not.toContain('team_read_')
-    expect(TEAM_TOOLSET_GUIDE).toContain('what to send back')
-  })
-
-  it('no longer tells it to prefer a standing team over starting one', () => {
-    expect(TEAM_TOOLSET_GUIDE).not.toMatch(/Prefer reusing/i)
-    expect(TEAM_TOOLSET_GUIDE).toContain('only when asked for exactly that')
+  it('consults saved teams only for an explicit reference, without guessing the latest work', () => {
+    const prompt = buildTeamGuidance({ agentTeamGuide: TEAM_TOOLSET_GUIDE, teams: [team('Dev')] })!
+    expect(prompt).toContain('only when the person explicitly refers to an existing standing team or its work')
+    expect(prompt).toContain('Otherwise continue in this conversation')
+    expect(prompt).toContain('Never default to the newest or the active one')
   })
 })
 

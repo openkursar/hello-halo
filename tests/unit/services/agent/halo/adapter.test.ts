@@ -13,11 +13,13 @@ import * as fs from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
+import { markInstalledMcpContext } from '../../../../../src/main/services/agent/tool-discovery'
+import type { InstalledApp } from '../../../../../src/shared/apps/app-types'
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => '/application' } }))
 
 function fixture() {
-  const runtime = { initialize: vi.fn(async () => {}), close: vi.fn(async () => {}), diagnostics: vi.fn(() => ({ workers: [] })),
+  const runtime = { readSessionToolContextMode: vi.fn(async () => 'deferred' as const), initialize: vi.fn(async () => {}), close: vi.fn(async () => {}), diagnostics: vi.fn(() => ({ workers: [] })),
     createSession: vi.fn(async (_options: Record<string, unknown>, _placement?: unknown) => ({ sessionId: 'real' })), query: vi.fn(() => (async function* () {})()) }
   const sdk = { createWorkerRuntime: vi.fn(() => runtime), getWorkerEntryUrl: () => new URL('file:///sdk/dist/worker/entry.js'),
     tool: vi.fn(), createSdkMcpServer: vi.fn(), setLogger: vi.fn(),
@@ -26,6 +28,39 @@ function fixture() {
 }
 
 describe('Halo host worker adapter', () => {
+  it('inspects context on the same owned Worker runtime and maps strict history errors', async () => {
+    const { module, runtime } = fixture()
+    const signal = new AbortController().signal
+    const options = { cwd: '/work', env: { CLAUDE_CONFIG_DIR: '/isolated' } }
+    expect(await module.readSessionToolContextMode('stored', options, { signal, group: 'space' })).toBe('deferred')
+    expect(runtime.readSessionToolContextMode).toHaveBeenCalledWith('stored', options, { signal, group: 'space' })
+    runtime.readSessionToolContextMode.mockRejectedValueOnce(Object.assign(new Error('damaged'), { code: 'RESUME_HISTORY_UNAVAILABLE' }))
+    await expect(module.readSessionToolContextMode('stored', options, { signal })).rejects.toMatchObject({ engineId: 'halo', sessionId: 'stored', code: 'NATIVE_SESSION_RESUME_FAILED' })
+  })
+
+  it('prepares the final mounted catalog identically for sessions and one-shot queries', async () => {
+    const { runtime, module } = fixture()
+    const customer = markInstalledMcpContext({ type: 'http', url: 'https://example.test/mcp' }, {
+      id: 'customer', spec: { type: 'mcp', description: 'Customer orders' }, userOverrides: {},
+    } as InstalledApp)
+    const options = { mcpServers: { customer, 'halo-email': { type: 'sdk', instance: {} } } }
+    await module.createSession(options)
+    for await (const _frame of module.query({ prompt: 'task', options })) { /* drain */ }
+    const discovery = runtime.createSession.mock.calls[0][0].toolDiscovery
+    expect(discovery).toEqual({ services: {
+      customer: { identity: 'app:customer', loading: 'deferred', summary: 'Customer orders' },
+      'halo-email': { identity: 'builtin:halo-email', loading: 'deferred', summary: expect.any(String) },
+    } })
+    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { ...options, skillCatalog: [], collaboration: { mode: 'hosted' }, toolDiscovery: discovery } }, expect.anything())
+    expect(options).not.toHaveProperty('toolDiscovery')
+  })
+
+  it.each(['xml', 'json'])('keeps explicit %s calling free of discovery configuration', async toolCallingMode => {
+    const { runtime, module } = fixture()
+    await module.createSession({ toolCallingMode, mcpServers: { 'halo-email': { type: 'sdk' } }, toolDiscovery: { services: {} } })
+    expect(runtime.createSession.mock.calls[0][0]).not.toHaveProperty('toolDiscovery')
+  })
+
   it('finds setup beside a built unpackaged main entry', async () => {
     const root = fs.mkdtempSync(join(tmpdir(), 'halo-adapter-'))
     const main = join(root, 'out/main')
@@ -56,7 +91,7 @@ describe('Halo host worker adapter', () => {
     const mcpServers = { host: { type: 'sdk', instance: {} } }
     await module.createSession({ workerGroup: 'space', haloRequestIdentity: { sessionId: 'conversation' },
       requestIdentity: { systemPrefix: vi.fn() }, canUseTool, hooks, mcpServers, model: 'model' })
-    expect(runtime.createSession).toHaveBeenCalledWith({ canUseTool, hooks, mcpServers, model: 'model', skillCatalog: [] }, {
+    expect(runtime.createSession).toHaveBeenCalledWith({ canUseTool, hooks, mcpServers, model: 'model', skillCatalog: [], collaboration: { mode: 'hosted' }, toolDiscovery: { services: {} } }, {
       group: 'space', setup: { module: 'file:///application/out/main/worker/halo-setup.cjs', data: { sessionId: 'conversation' } },
     })
   })
@@ -64,7 +99,7 @@ describe('Halo host worker adapter', () => {
   it('routes one-shot helper queries through the same independent runtime', async () => {
     const { runtime, module } = fixture()
     for await (const _frame of module.query({ prompt: 'task', options: { model: 'model' } })) { /* drain */ }
-    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { model: 'model', skillCatalog: [] } }, { group: undefined, setup: undefined })
+    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { model: 'model', skillCatalog: [], collaboration: { mode: 'hosted' } } }, { group: undefined, setup: undefined })
   })
 
   it('resolves one effective catalog at session creation and query creation with the actual workspace', async () => {
@@ -77,7 +112,7 @@ describe('Halo host worker adapter', () => {
     expect(runtime.createSession.mock.calls[0][0].skillCatalog).toEqual(catalog)
     for await (const _frame of module.query({ prompt: 'task', options: { workerGroup: 'space', cwd: '/other' } })) { /* drain */ }
     expect(getEffectiveSkillCatalogForSession).toHaveBeenLastCalledWith('space', '/other')
-    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { cwd: '/other', skillCatalog: catalog } }, expect.anything())
+    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { cwd: '/other', skillCatalog: catalog, collaboration: { mode: 'hosted' } } }, expect.anything())
   })
 
   it('takes only the effective catalog, never caller-supplied or disabled copies', async () => {
@@ -95,7 +130,7 @@ describe('Halo host worker adapter', () => {
     await module.createSession({ workerGroup: 'space' })
     for await (const _frame of module.query({ prompt: 'task', options: { workerGroup: 'space' } })) { /* drain */ }
     expect(runtime.createSession.mock.calls[0][0].skillCatalog).toEqual([])
-    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { skillCatalog: [] } }, expect.anything())
+    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { skillCatalog: [], collaboration: { mode: 'hosted' } } }, expect.anything())
     expect(waitForSkillCatalogProvider).toHaveBeenCalledTimes(2)
   })
 
@@ -129,7 +164,7 @@ describe('Halo host worker adapter', () => {
     await module.createSession({ skillCatalog: [{ name: 'commit', source: { kind: 'builtin', name: 'commit' } }] })
     expect(runtime.createSession.mock.calls[0][0].skillCatalog).toEqual([])
     for await (const _frame of module.query({ prompt: 'task' })) { /* drain */ }
-    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { skillCatalog: [] } }, expect.anything())
+    expect(runtime.query).toHaveBeenCalledWith({ prompt: 'task', options: { skillCatalog: [], collaboration: { mode: 'hosted' } } }, expect.anything())
     expect(getEffectiveSkillCatalogForSession).not.toHaveBeenCalled()
   })
 

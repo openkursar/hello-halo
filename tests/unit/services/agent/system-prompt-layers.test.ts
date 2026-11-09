@@ -32,7 +32,7 @@ const IDENTITY_MARKERS = [
 ]
 
 /** Tool names that belong to Claude Code's registrations, not to every engine. */
-const CC_TOOL_MARKERS = ['TodoWrite', 'AskUserQuestion', 'subagent_type=Explore']
+const CC_TOOL_MARKERS = ['TodoWrite', 'AskUserQuestion', 'Give each collaborator the context']
 
 describe('buildSystemPrompt on an engine with its own agent guidance', () => {
   beforeEach(() => {
@@ -80,7 +80,7 @@ describe('buildSystemPrompt on an engine with its own agent guidance', () => {
     expect(buildSystemPrompt(baseCtx)).not.toMatch(/\{\{[A-Z_]+\}\}/)
   })
 
-  it('leaves the Claude Code prompt untouched', () => {
+  it('preserves the Claude Code tool policy while removing native delegation guidance', () => {
     engine.id = 'anthropic'
     const prompt = buildSystemPrompt(baseCtx)
     expect(prompt.startsWith('You are Halo, an AI assistant built with Claude Code.')).toBe(true)

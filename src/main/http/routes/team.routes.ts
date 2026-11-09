@@ -1,6 +1,6 @@
 /** Digital Team REST API routes. Thin delegation to TeamService. */
 import type { Express, Request, Response } from 'express'
-import { getTeamService, getTeamStore } from '../../apps/team'
+import { getTeamService, getTeamStore, workMemberPrincipalId } from '../../apps/team'
 import { readTeamMemberHistory } from '../../apps/runtime/app-chat'
 import { getOfficeCredential } from '../auth/middleware'
 import { resolveOfficeMemberAppIds } from '../identity/office-membership'
@@ -31,7 +31,21 @@ import type {
   TeamArtifactGroup,
 } from '../../../shared/apps/team-types'
 
-export function registerTeamRoutes(app: Express): void {
+export function registerTeamRoutes(app: Express, options: { assistant?: boolean } = {}): void {
+  if (options.assistant) {
+    app.param('teamId', (_req, res, next, teamId: string) => {
+      const service = getServiceOrFail(res)
+      if (!service) return
+      const team = service.getTeam(teamId)
+      if (!team || team.ephemeral) {
+        console.warn('[TeamRoutes] Assistant team access refused: team is not in the standing directory')
+        res.status(404).json({ success: false, error: 'Team not found. Use a team returned by GET /api/teams.' })
+        return
+      }
+      next()
+    })
+  }
+
   // Resolve the service or respond 503 (it initializes asynchronously).
   function getServiceOrFail(res: Response): ReturnType<typeof getTeamService> {
     const service = getTeamService()
@@ -75,6 +89,15 @@ export function registerTeamRoutes(app: Express): void {
       ...(candidates ? { candidates } : {}),
     })
     return false
+  }
+
+  function requestedMember(store: NonNullable<ReturnType<typeof getTeamStore>>, teamId: string, appId: string, epochId?: string) {
+    if (epochId) {
+      if (store.getEpochById(epochId)?.teamId !== teamId) return null
+      return store.getMember(teamId, appId, epochId)
+    }
+    // Standing membership preserves the existing permission/missing-conversation error order; it never authorizes a read or send without a scope.
+    return store.getMember(teamId, appId)
   }
 
   // Per-invite scope projection. A request authenticated by an office
@@ -215,6 +238,11 @@ export function registerTeamRoutes(app: Express): void {
   // the literal segment is not read as a team id).
   app.get('/api/teams/collab-for-conversation/:conversationId', async (req: Request, res: Response) => {
     try {
+      if (getOfficeCredential(req)) {
+        console.warn('[TeamRoutes] Source collaboration lookup refused: office credential cannot inspect private source work')
+        res.status(403).json({ success: false, error: 'Forbidden' })
+        return
+      }
       const service = getServiceOrFail(res)
       if (!service) return
       res.json({ success: true, data: service.getCollabForConversation(req.params.conversationId) })
@@ -272,7 +300,7 @@ export function registerTeamRoutes(app: Express): void {
 
   // GET /api/teams/:teamId/chat-messages — a member's team-channel chat history
   // for ONE run. ?appId is required and MUST be a member of the team (prevents
-  // probing arbitrary apps). ?epochId defaults to the team's current epoch.
+  // probing arbitrary apps). ?epochId names the work; no current/latest fallback.
   app.get('/api/teams/:teamId/chat-messages', async (req: Request, res: Response) => {
     try {
       if (!officeGateOk(req, res, req.params.teamId)) return
@@ -287,7 +315,8 @@ export function registerTeamRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing required query parameter: appId' })
         return
       }
-      const targetMember = store.listMembersByTeam(teamId).find((m) => m.appId === appId)
+      const epochId = typeof req.query.epochId === 'string' ? req.query.epochId : undefined
+      const targetMember = requestedMember(store, teamId, appId, epochId)
       if (!targetMember) {
         res.status(404).json({ success: false, error: 'App is not a member of this team' })
         return
@@ -301,7 +330,8 @@ export function registerTeamRoutes(app: Express): void {
       const cred = getOfficeCredential(req)
       if (cred) {
         const ownAppIds = resolveOfficeMemberAppIds(teamId, cred.identity)
-        if (!ownAppIds.includes(appId)) {
+        const principal = epochId ? workMemberPrincipalId(store, teamId, epochId, appId) : appId
+        if (!ownAppIds.includes(appId) && (!principal || !ownAppIds.includes(principal))) {
           const gate = createScopeGate({ store })
           const members = store.listMembersByTeam(teamId)
           const canSeePeer = ownAppIds.some((own) => {
@@ -316,7 +346,6 @@ export function registerTeamRoutes(app: Express): void {
           }
         }
       }
-      const epochId = req.query.epochId
       if (!conversationNamed(req, res, teamId, epochId)) return
       // A remote-owned member's transcript lives on the node that OWNS it, not
       // here. Pull it over the office link from that owner; the owner
@@ -377,8 +406,9 @@ export function registerTeamRoutes(app: Express): void {
         return
       }
 
-      const isMember = store.listMembersByTeam(teamId).some((m) => m.appId === targetAppId)
-      if (!isMember) {
+      const epochId = typeof req.body?.epochId === 'string' ? req.body.epochId : undefined
+      const targetMember = requestedMember(store, teamId, targetAppId, epochId)
+      if (!targetMember) {
         res.status(404).json({ success: false, error: 'App is not a member of this team' })
         return
       }
@@ -396,7 +426,8 @@ export function registerTeamRoutes(app: Express): void {
         // make coordination writes AND contact the target.
         const allowed = callerAppIds.some(
           (callerAppId) =>
-            gate.canCoordinationWrite(teamId, callerAppId) && gate.canContact(teamId, callerAppId, targetAppId),
+            gate.canCoordinationWrite(teamId, callerAppId) && gate.canContact(teamId, callerAppId,
+              epochId ? workMemberPrincipalId(store, teamId, epochId, targetAppId) ?? targetAppId : targetAppId),
         )
         if (!allowed) {
           res.status(403).json({ success: false, error: 'Forbidden' })
@@ -423,7 +454,6 @@ export function registerTeamRoutes(app: Express): void {
       // A member with no conversation yet is reached by opening one first
       // (POST /api/teams/:teamId/conversations; memberAppId only for a member on
       // this computer, as one elsewhere cannot be given a one-to-one thread).
-      const epochId = req.body?.epochId
       if (!conversationNamed(req, res, teamId, epochId)) return
 
       // An office credential is a teammate reaching in from their own machine;
@@ -461,8 +491,9 @@ export function registerTeamRoutes(app: Express): void {
         return
       }
 
-      const isMember = store.listMembersByTeam(teamId).some((m) => m.appId === targetAppId)
-      if (!isMember) {
+      const epochId = typeof req.body?.epochId === 'string' ? req.body.epochId : undefined
+      const targetMember = requestedMember(store, teamId, targetAppId, epochId)
+      if (!targetMember) {
         res.status(404).json({ success: false, error: 'App is not a member of this team' })
         return
       }
@@ -477,7 +508,8 @@ export function registerTeamRoutes(app: Express): void {
         const gate = createScopeGate({ store })
         const allowed = callerAppIds.some(
           (callerAppId) =>
-            gate.canCoordinationWrite(teamId, callerAppId) && gate.canContact(teamId, callerAppId, targetAppId),
+            gate.canCoordinationWrite(teamId, callerAppId) && gate.canContact(teamId, callerAppId,
+              epochId ? workMemberPrincipalId(store, teamId, epochId, targetAppId) ?? targetAppId : targetAppId),
         )
         if (!allowed) {
           res.status(403).json({ success: false, error: 'Forbidden' })
@@ -485,7 +517,6 @@ export function registerTeamRoutes(app: Express): void {
         }
       }
 
-      const epochId = req.body?.epochId
       if (!conversationNamed(req, res, teamId, epochId)) return
       const result = await service.stopMember({ teamId, appId: targetAppId, epochId })
       res.json({ success: true, data: result })
@@ -589,6 +620,18 @@ export function registerTeamRoutes(app: Express): void {
       const projected = projectBoardForCredential(req, req.params.teamId, board.tasks, board.findings, board.activities ?? [])
       res.json({ success: true, data: { ...board, tasks: projected.tasks, findings: projected.findings, activities: projected.activities } })
     } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  app.get('/api/teams/:teamId/epochs/:epochId/roster', async (req: Request, res: Response) => {
+    try {
+      if (!officeGateOk(req, res, req.params.teamId)) return
+      const service = getServiceOrFail(res)
+      if (!service) return
+      res.json({ success: true, data: service.getEpochRoster(req.params.teamId, req.params.epochId) })
+    } catch (error) {
+      console.warn(`[TeamHTTP] Epoch roster read failed team=${req.params.teamId} epoch=${req.params.epochId}:`, (error as Error).message)
       res.json({ success: false, error: (error as Error).message })
     }
   })
@@ -714,8 +757,15 @@ export function registerTeamRoutes(app: Express): void {
     try {
       const service = getServiceOrFail(res)
       if (!service) return
-      await service.runTeam(req.params.teamId, { type: 'http' })
-      res.json({ success: true })
+      const instruction = req.body?.instruction
+      const triggerType = req.body?.trigger?.type ?? 'http'
+      if ((instruction !== undefined && typeof instruction !== 'string') || !['manual', 'http'].includes(triggerType)) {
+        console.warn(`[TeamRoutes] Run arguments rejected: team=${req.params.teamId}`)
+        res.status(400).json({ success: false, error: 'Provide a text instruction and a manual or http trigger.' })
+        return
+      }
+      const data = await service.runTeam(req.params.teamId, { type: triggerType }, instruction)
+      res.json({ success: true, data })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -853,7 +903,7 @@ export function registerTeamRoutes(app: Express): void {
 }
 
 const POLICY_LIST_KEYS = new Set(['allowedTools', 'allowedSkills', 'bashRules', 'allowedUserMcp'])
-const POLICY_FLAG_KEYS = new Set<string>([...CAPABILITY_MCP_TOGGLES.map((toggle) => toggle.key), 'allowChecks'])
+const POLICY_FLAG_KEYS = new Set<string>([...CAPABILITY_MCP_TOGGLES.map((toggle) => toggle.key), 'allowCollaboration', 'allowChecks'])
 
 /**
  * A delegated policy is persisted as sent and later read as permissions, so a

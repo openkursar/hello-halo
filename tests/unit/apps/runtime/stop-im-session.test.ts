@@ -32,7 +32,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 
 // A conversation is "generating" when its persistent consumer is mid-turn —
 // app chat no longer keeps its own activeSessions entry.
-const { consumers, v2Sessions, closeV2Session, stopGeneration } = vi.hoisted(() => {
+const { consumers, v2Sessions, closeV2Session, stopGeneration, emitUserStop } = vi.hoisted(() => {
   const _consumers = new Map<string, unknown>()
   const _v2Sessions = new Map<string, unknown>()
   return {
@@ -41,7 +41,9 @@ const { consumers, v2Sessions, closeV2Session, stopGeneration } = vi.hoisted(() 
     closeV2Session: vi.fn((id: string) => {
       _v2Sessions.delete(id)
     }),
-    stopGeneration: vi.fn(async (id: string) => {
+    emitUserStop: vi.fn(),
+    stopGeneration: vi.fn(async (id: string, options: { reason: string; isCurrent: () => boolean }) => {
+      if (!options.isCurrent()) throw new Error('Fixture received a stale stop')
       _consumers.delete(id)
     }),
   }
@@ -81,7 +83,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
 }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({
-  stopGeneration,
+  stopGeneration, emitUserStop,
   getSessionState: (id: string) =>
     consumers.has(id)
       ? { isActive: true, thoughts: [], spaceId: 'space-1' }
@@ -186,6 +188,7 @@ describe('stopImSession', () => {
     v2Sessions.clear()
     closeV2Session.mockClear()
     stopGeneration.mockClear()
+    emitUserStop.mockClear()
     holdSupplementsAfterStop.mockClear()
     getImStreamHandle.mockClear()
     clearImStreamHandle.mockClear()
@@ -199,7 +202,7 @@ describe('stopImSession', () => {
 
     expect(result).toEqual({ stopped: true })
     expect(stopGeneration).toHaveBeenCalledTimes(1)
-    expect(stopGeneration).toHaveBeenCalledWith(conversationId, { reason: 'user' })
+    expect(stopGeneration).toHaveBeenCalledWith(conversationId, { reason: 'user', isCurrent: expect.any(Function) })
   })
 
   it('holds the waiting supplements of the conversation', async () => {
@@ -228,6 +231,7 @@ describe('stopImSession', () => {
 
     expect(result).toEqual({ stopped: false })
     expect(stopGeneration).not.toHaveBeenCalled()
+    expect(emitUserStop).toHaveBeenCalledWith(buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1'))
     // Supplements are still held even when not active — a stale buffer
     // from a previously-aborted round should not start a turn of its own.
     expect(holdSupplementsAfterStop).toHaveBeenCalledTimes(1)
@@ -242,7 +246,7 @@ describe('stopImSession', () => {
     await stopImSession('app-1', 'wecom-bot', 'group', 'room-1')
 
     expect(stopGeneration).toHaveBeenCalledTimes(1)
-    expect(stopGeneration).toHaveBeenCalledWith(targetKey, { reason: 'user' })
+    expect(stopGeneration).toHaveBeenCalledWith(targetKey, { reason: 'user', isCurrent: expect.any(Function) })
     expect(consumers.has(siblingKey)).toBe(true)
   })
 
@@ -272,7 +276,7 @@ describe('stopImSession', () => {
     const result = await stopImSession('app-1', 'wecom-bot', 'group', 'room-1')
 
     expect(result).toEqual({ stopped: true })
-    expect(stopGeneration).toHaveBeenCalledWith(conversationId, { reason: 'user' })
+    expect(stopGeneration).toHaveBeenCalledWith(conversationId, { reason: 'user', isCurrent: expect.any(Function) })
     expect(clearImStreamHandle).toHaveBeenCalledWith(conversationId)
   })
 
@@ -306,6 +310,7 @@ describe('stop entry points share the same cleanup', () => {
     consumers.clear()
     v2Sessions.clear()
     stopGeneration.mockClear()
+    emitUserStop.mockClear()
     holdSupplementsAfterStop.mockClear()
     getImStreamHandle.mockClear()
     clearImStreamHandle.mockClear()
@@ -320,7 +325,7 @@ describe('stop entry points share the same cleanup', () => {
 
     await stopAppChatConversation(conversationId)
 
-    expect(stopGeneration).toHaveBeenCalledWith(conversationId, { reason: 'user' })
+    expect(stopGeneration).toHaveBeenCalledWith(conversationId, { reason: 'user', isCurrent: expect.any(Function) })
     expect(holdSupplementsAfterStop).toHaveBeenCalledWith(conversationId)
     expect(dispose).toHaveBeenCalledTimes(1)
     expect(clearImStreamHandle).toHaveBeenCalledWith(conversationId)
@@ -334,8 +339,8 @@ describe('stop entry points share the same cleanup', () => {
 
     await stopAppChat('app-1')
 
-    expect(stopGeneration).toHaveBeenCalledWith(nativeKey, { reason: 'user' })
-    expect(stopGeneration).toHaveBeenCalledWith(imKey, { reason: 'user' })
+    expect(stopGeneration).toHaveBeenCalledWith(nativeKey, { reason: 'user', isCurrent: expect.any(Function) })
+    expect(stopGeneration).toHaveBeenCalledWith(imKey, { reason: 'user', isCurrent: expect.any(Function) })
     expect(holdSupplementsAfterStop).toHaveBeenCalledWith(nativeKey)
     expect(holdSupplementsAfterStop).toHaveBeenCalledWith(imKey)
     expect(clearImStreamHandle).toHaveBeenCalledWith(imKey)
@@ -350,7 +355,7 @@ describe('stop entry points share the same cleanup', () => {
     await stopAppChat('app-1')
 
     expect(stopGeneration).toHaveBeenCalledTimes(1)
-    expect(stopGeneration).toHaveBeenCalledWith(ownKey, { reason: 'user' })
+    expect(stopGeneration).toHaveBeenCalledWith(ownKey, { reason: 'user', isCurrent: expect.any(Function) })
     expect(consumers.has(otherKey)).toBe(true)
   })
 })

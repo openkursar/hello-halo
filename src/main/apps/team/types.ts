@@ -32,6 +32,9 @@ import type {
   TeamActivity,
   TeamToolAudit,
 } from '../../../shared/apps/team-types'
+import type { TeamParticipants } from './participants'
+import type { CollaborationRequests } from './collaboration-requests'
+import type { CollaborationSourceBindings } from './source-bindings'
 
 // Re-export the frozen domain contract for apps/team consumers.
 export type {
@@ -282,11 +285,18 @@ export interface TaskPatch {
  * so no in-process locking is required (see DESIGN.md).
  */
 export interface TeamStore {
+  setParticipantIdentityLookup(lookup: (id: string) => boolean): void
+  readonly participants: TeamParticipants
+  readonly recipientFences: import('./recipient-fences').RecipientFences
+  readonly requests: CollaborationRequests
+  readonly sourceBindings: CollaborationSourceBindings
   // ── teams ─────────────────────────────────────
   insertTeam(team: Team): void
   getTeamById(teamId: string): Team | null
+  getTeamByName(spaceId: string, name: string, ephemeral?: boolean): Team | null
   listTeams(): Team[]
   listTeamsBySpace(spaceId: string): Team[]
+  listStandingTeams(spaceId?: string): Team[]
   updateTeamFields(teamId: string, fields: TeamFieldUpdate): void
   updateTeamStatus(teamId: string, status: TeamStatus): void
   updateTeamLeadAppId(teamId: string, leadAppId: string | null): void
@@ -302,6 +312,10 @@ export interface TeamStore {
   setCoordinatorConversation(teamId: string, conversationId: string | null): void
   /** The ephemeral collaboration coordinated by a space conversation, or null. */
   getCollabTeamByConversation(conversationId: string): Team | null
+  /** Private scopes bound to member sessions of this team or one exact epoch, including removed members. */
+  listPrivateCollaborations(teamId: string, epochId?: string): Team[]
+  /** Cleanup shares the deletion transaction and must propagate failures. */
+  setWorkRemovedHandler(handler: (teamId: string, epochId?: string) => void): void
   deleteTeam(teamId: string): boolean
 
   // ── team_members ──────────────────────────────
@@ -314,12 +328,12 @@ export interface TeamStore {
    * the derived accepts-checks bit). Omitted fields are preserved.
    */
   updateMemberFields(teamId: string, appId: string, fields: MemberFieldUpdate): void
-  listMembersByTeam(teamId: string): TeamMember[]
+  listMembersByTeam(teamId: string, epochId?: string): TeamMember[]
   /** Team-unique addressing; a renamed member still answers to its former names until restart. */
-  getMemberByName(teamId: string, memberName: string): TeamMember | null
+  getMemberByName(teamId: string, memberName: string, epochId?: string): TeamMember | null
   /** Change a member's addressing name, keeping the old one as an alias. False when unchanged. */
   renameMember(teamId: string, appId: string, memberName: string): boolean
-  getMember(teamId: string, appId: string): TeamMember | null
+  getMember(teamId: string, appId: string, epochId?: string): TeamMember | null
   listMembersByAppId(appId: string): TeamMember[]
   listDirectoryMemberships(): import('../../../shared/apps/people-directory').DirectoryMembership[]
 
@@ -347,6 +361,9 @@ export interface TeamStore {
    * it onto the rendered roster. Empty for a locally-hosted office or before any
    * snapshot has arrived.
    */
+  applyParticipantStatuses(teamId: string, members: Array<{ appId: string; epochId?: string; status: TeamMemberRuntimeStatus; busy?: RosterBusyEntry[] }>): void
+  getParticipantWorkStates(teamId: string): Map<string, { active: boolean; waitingAppIds: string[] }>
+  getParticipantStatus(teamId: string, appId: string): TeamMemberRuntimeStatus | null
   getJoinedMemberStatuses(teamId: string): Map<string, TeamMemberRuntimeStatus>
   /** The in-progress task title a working member is on, from the last snapshot. */
   getJoinedMemberTaskTitle(teamId: string, appId: string): string | undefined
@@ -432,6 +449,8 @@ export interface TeamStore {
 
   // ── team_epochs ───────────────────────────────
   updateWorkItem(epochId: string, patch: Partial<Pick<import('../../../shared/apps/team-types').TeamWorkItem, 'title' | 'status' | 'createdBy' | 'entryAppId'>>): void
+  purgeJoinedOffice(officeId: string): boolean
+  beginDisposal(teamId: string): () => void
   insertEpoch(epoch: TeamEpoch, triggerType?: TeamRunTriggerType): void
   getEpochById(epochId: string): TeamEpoch | null
   endEpoch(

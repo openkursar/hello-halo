@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import type * as WorkerSdk from '@hello-halo/agent-sdk/worker'
 import type { Options } from '@hello-halo/agent-sdk'
 import { prepareSessionSkills, withSkillNotice } from '../skill-availability'
+import { buildToolDiscoveryOptions } from '../tool-discovery'
 import { getBundledRipgrepPath } from './ripgrep'
 import { updateEnvPath } from '../../child-env'
 import { NativeSessionResumeError } from '../../../../shared/types/engine-session'
@@ -25,6 +26,14 @@ export function createHaloSdkModule(sdk: typeof WorkerSdk) {
   const setupModule = pathToFileURL(unpack(setupPath)).href
   const prepare = async (options: Record<string, any>) => {
     const { haloRequestIdentity, workerGroup, ...sessionOptions } = options
+    sessionOptions.collaboration = { mode: 'hosted' }
+    if (!sessionOptions.toolCallingMode || sessionOptions.toolCallingMode === 'native') {
+      const toolDiscovery = buildToolDiscoveryOptions(sessionOptions.mcpServers)
+      if (toolDiscovery) sessionOptions.toolDiscovery = toolDiscovery
+      else delete sessionOptions.toolDiscovery
+    } else {
+      delete sessionOptions.toolDiscovery
+    }
     const skills = await prepareSessionSkills(options)
     sessionOptions.skillCatalog = skills.catalog
     if (haloRequestIdentity) delete sessionOptions.requestIdentity
@@ -51,6 +60,15 @@ export function createHaloSdkModule(sdk: typeof WorkerSdk) {
     initialize: () => runtime.initialize(),
     close: () => runtime.close(),
     diagnostics: () => runtime.diagnostics(),
+    async readSessionToolContextMode(sessionId: string, options: WorkerSdk.ReadSessionToolContextModeOptions,
+      controls: { signal: AbortSignal; group?: string }) {
+      try {
+        return await runtime.readSessionToolContextMode(sessionId, options, controls)
+      } catch (error) {
+        if (sdk.isResumeHistoryError(error)) throw new NativeSessionResumeError('halo', sessionId, error)
+        throw error
+      }
+    },
     async createSession(options: Record<string, any>) {
       const prepared = await prepare(options)
       try {

@@ -25,8 +25,7 @@
  *   - two members publishing the same file name from their team folders do not
  *     collide, while the same name in the working directory still does.
  *
- * The SDK's tool() wrapper is mocked to expose the handler directly; the
- * blackboard, store and filesystem underneath are real.
+ * The shared parser, blackboard, store and filesystem are real.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -36,15 +35,8 @@ import { join } from 'path'
 
 vi.mock('../../../../../src/main/http/websocket', () => ({ broadcastToAll: vi.fn() }))
 vi.mock('../../../../../src/main/foundation/window.service', () => ({ sendToRenderer: vi.fn() }))
-vi.mock('../../../../../src/main/services/agent/resolved-sdk', () => ({
-  tool: (name: string, description: string, inputSchema: unknown, handler: unknown) => ({
-    name,
-    description,
-    inputSchema,
-    handler,
-  }),
-  createSdkMcpServer: (options: { tools: Array<{ name: string }> }) => options,
-}))
+vi.mock('../../../../../src/main/services/agent/resolved-sdk', async () =>
+  import('../../../../../src/main/services/agent/mcp/sdk-server'))
 
 import { createDatabaseManager } from '../../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../../src/main/platform/store/types'
@@ -148,15 +140,12 @@ describe('team tools publish gate', () => {
         ofTaskAssignee: (_teamId, _epochId, taskId) =>
           store.getTaskById(taskId)?.assigneeAppId === PEER_APP_ID ? join(teamShared, 'analyst') : null,
       },
-      requestComplete: () => {},
-    }
-    const server = createTeamMcpServer(ctx) as unknown as {
-      tools: Array<{ name: string; handler: (input: Record<string, unknown>) => Promise<ToolReply> }>
-    }
+      }
+    const server = createTeamMcpServer(ctx)
     call = async (toolName, input) => {
-      const found = server.tools.find((t) => t.name === toolName)
-      if (!found) throw new Error(`tool not registered: ${toolName}`)
-      return found.handler(input)
+      const result = await server.instance.callTool(toolName, input)
+      if (!result) throw new Error(`tool not registered: ${toolName}`)
+      return result as ToolReply
     }
   })
 

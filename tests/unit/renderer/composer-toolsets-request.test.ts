@@ -7,7 +7,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
 const env = vi.hoisted(() => ({ state: null as any }))
-vi.mock('react', async original => ({ ...await original<typeof import('react')>(), useEffect: (effect: () => unknown) => { effect() } }))
+vi.mock('react', async original => ({
+  ...await original<typeof import('react')>(),
+  useEffect: (effect: () => unknown) => { effect() },
+  useMemo: (compute: () => unknown) => compute(),
+}))
 vi.mock('../../../src/renderer/stores/space.store', () => ({ useSpaceStore: (select: any) => select({ currentSpace: { id: 'space-1' } }) }))
 vi.mock('../../../src/renderer/stores/chat.store', () => ({ useChatStore: () => 'conv-1', selectActiveConversationId: () => 'conv-1' }))
 vi.mock('../../../src/renderer/stores/toolsets.store', () => ({ useToolsetsStore: (select: any) => select(env.state) }))
@@ -28,6 +32,20 @@ function storeWith(requestSignal: Map<string, number>) {
 }
 
 describe('toolset requests in the composer', () => {
+  it('keeps automatic capabilities out of the controls without removing them from the availability catalog', () => {
+    env.state = storeWith(new Map())
+    const terminal = { id: 'ai-terminal', displayName: 'Terminal', summary: '', open: true, configurable: false }
+    const grant = { id: 'halo-api-ref', displayName: 'Operate Halo', summary: '', open: false }
+    env.state.byConversation.set('conv-1', [terminal, grant])
+    const controls = useComposerToolsets({ enabled: true, panelOpen: false, onRequested: vi.fn() })
+    expect(controls.list).toEqual([grant])
+    expect(env.state.byConversation.get('conv-1')).toContain(terminal)
+    controls.toggle(terminal)
+    expect(env.state.close).not.toHaveBeenCalled()
+    controls.toggle(grant)
+    expect(env.state.open).toHaveBeenCalledWith('space-1', 'conv-1', 'halo-api-ref')
+  })
+
   it('open the panel at once and are consumed', () => {
     env.state = storeWith(new Map([['conv-1', 1]]))
     const onRequested = vi.fn()

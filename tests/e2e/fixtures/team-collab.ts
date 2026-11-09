@@ -9,6 +9,7 @@
  * driving the store, so the spec covers the path a person actually takes.
  */
 
+import { seedSdkAliases } from './seed-sdk-bundle'
 import { test as base, type ElectronApplication, type Page } from '@playwright/test'
 import { mkdirSync } from 'fs'
 import { join, dirname } from 'path'
@@ -49,6 +50,7 @@ function seedCollaboration(directory: string, legacySaved: boolean): SeededColla
     entryPoints: [join(folder, 'team-collab-seed-worker.ts')],
     outfile: output, platform: 'node', format: 'cjs', bundle: true,
     packages: 'external',
+    alias: seedSdkAliases,
     external: ['better-sqlite3', 'electron', '@parcel/watcher'], logLevel: 'silent',
   })
   const payload = JSON.stringify({

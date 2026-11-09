@@ -6,8 +6,6 @@
  *
  *   - tool input arrives as a single payload (no `input_json_delta` stream).
  *   - todos are 2-state (pending/completed), no `activeForm`.
- *   - sub-agents are imperative (Codex orchestrates internally; Halo only
- *     sees a flat tool stream), so the SubAgentTimeline UI collapses.
  *   - `Edit`/`Write` tool calls are synthesized from the engine's
  *     `file_change` item, with patch fidelity. Marked lossy because
  *     line-level oldString/newString reconstruction is not always
@@ -46,7 +44,6 @@ export const CODEX_CAPABILITIES: EngineCapabilities = {
     shellHeuristics: false,
   },
   todo: { states: ['pending', 'completed'], hasActiveForm: false },
-  subAgent: { model: 'imperative', visibleLifecycle: false },
   // The adapter never hands the app-server a system prompt (`codex/options.ts`
   // reads none), so this flag changes nothing Codex sees; it stays false so
   // Codex sessions build the same host prompt as before.

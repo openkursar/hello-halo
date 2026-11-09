@@ -7,16 +7,17 @@ user-invocable: true
 
 # Halo Development Context v3
 
-## Mandatory Entry (Read in Order)
+## Mandatory Entry
 
-0. `LAWS.md` — **Load-bearing architecture laws. Read first; they override every other rule in this skill.**
-1. `CONTEXT.md` — Product vision, development principles (styling, responsive, security, i18n), and current state.
-2. `ARCHITECTURE.md` — Directory structure, data types, IPC channels, theme system, CSS rules, responsive design, layout modes, multi-platform, local storage, tech stack.
-3. `quick.md` — Hard development rules (with code examples), task-to-file routing, and checklists.
+Read `LAWS.md` first; it overrides other rules in this skill. Then choose the task scope (paths below are repository-relative):
 
-**Do not start implementation before reading these files.**
+- **SDK only:** read `src/sdk/halo-sdk/AGENTS.md`, then its affected module docs. Do not load the desktop guides below for SDK-only work.
+- **Halo application:** read `CONTEXT.md`, `ARCHITECTURE.md`, then `quick.md` in this skill directory.
+- **SDK and host integration:** read both routes, including `src/main/services/agent/DESIGN.md` for the adapter contract. Human authorization remains required.
 
-All code changes **must** comply with the patterns, conventions, and structures described in these documents. This includes:
+**Read the applicable route before implementation.** The SDK is a host-independent npm package; Halo is one consumer. Its internal checks do not replace host integration acceptance.
+
+Halo application code must comply with its guides. This includes:
 - Responsive design (mobile-first, `sm:` breakpoint at 640px)
 - Theme system (CSS variables only, no hardcoded colors)
 - Tailwind-first styling (no unnecessary CSS files)
@@ -36,7 +37,7 @@ If a change conflicts with the documented architecture, update the architecture 
 
 ## Fast Navigation Policy
 
-After the mandatory entry docs:
+For Halo application work, after its mandatory entry docs:
 
 - Jump directly to touched module `DESIGN.md`:
   - `src/main/apps/*/DESIGN.md`
@@ -56,7 +57,7 @@ After the mandatory entry docs:
 When docs and code differ:
 
 1. Actual code in `src/**`
-2. Module design docs (`src/main/apps/*/DESIGN.md`, `src/main/platform/*/DESIGN.md`)
+2. Affected module design docs (SDK paths are listed in `src/sdk/halo-sdk/AGENTS.md`)
 3. `quick.md`, `ARCHITECTURE.md`, `CONTEXT.md`
 
 ## Where Documents Go

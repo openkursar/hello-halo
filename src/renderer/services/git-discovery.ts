@@ -87,14 +87,10 @@ export class GitDiscovery {
     })
   }
 
-  invalidateProbes(spaceId?: string): void {
+  forget(spaceId?: string): void {
     for (const [key, probe] of this.probes) {
       if (!spaceId || probe.spaceId === spaceId) this.probes.delete(key)
     }
-  }
-
-  forget(spaceId?: string): void {
-    this.invalidateProbes(spaceId)
     for (const [key, owner] of this.recordFailures) {
       if (!spaceId || owner === spaceId) this.recordFailures.delete(key)
     }

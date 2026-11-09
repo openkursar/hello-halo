@@ -19,11 +19,13 @@ import {
   TEAM_DEFAULT_TURN_TIMEOUT_MS,
   TEAM_DEFAULT_MAX_CONCURRENT_TURNS,
   legacyExternalOrigin,
+  teamMemberAddress,
 } from '../../../../shared/apps/team-types'
 import type {
   MemberTurnFate,
   TeamEpoch,
   TeamRequestOrigin,
+  TeamStopController,
   TeamTriggerContext,
   TeamRunTrigger,
   TeamEnvelope,
@@ -34,8 +36,9 @@ import type {
   RosterBusyEntry,
 } from '../../../../shared/apps/team-types'
 import type { TeamStore } from '../../team'
+import { getWorkMember, listWorkMembers, isWorkEdgeAllowed } from '../../team'
 import { deriveConversationLabel, deriveConversationTitle } from '../../team/epoch-label'
-import { isNativeConversationChatKey } from '../../../../shared/apps/im-keys'
+import { isNativeConversationChatKey, parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 import type {
   MessageBus,
   TeamDelivery,
@@ -141,8 +144,10 @@ export interface OrchestrationSessionDeps {
    * the member at all, which for a member owned by another machine means its
    * machine could not be reached.
    */
-  stopTeamSession(appId: string, teamId: string, epochId: string): Promise<boolean>
-  getMemberSpaceId(appId: string): string | null
+  stopTeamSession(appId: string, teamId: string, epochId: string, controller?: TeamStopController, expectedRequestId?: string): Promise<boolean>
+  getMemberSpaceId(appId: string, teamId?: string, epochId?: string): string | null
+  /** Reclaim only an idle execution object; preserve history, mailbox and task identity. */
+  evictIdleSession?(sessionKey: string): boolean
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -182,23 +187,10 @@ export interface Orchestration {
   /** Can this session take a turn — a streaming turn OR a held reservation. */
   isSessionOccupied(sessionKey: string): boolean
 
-  /**
-   * The run epoch this process is executing for the team, or null — the question
-   * every trigger guard on a team is really asking. Deliberately NOT the persisted
-   * `team.currentEpochId`: that pointer outlives the process that set it, so a
-   * crash or a quit mid-run would have a team refuse every future run (nothing
-   * would ever clear it), while the team sits idle on the board. A joined office is
-   * the one exception, where the replicated pointer is the only live signal this
-   * node can have.
-   */
+  /** Any executing, queued or decision-blocked run; used only to guard automatic triggers. */
   activeRunEpochId(teamId: string): string | null
 
-  /**
-   * Seal the runs a previous session left open (see {@link activeRunEpochId}).
-   * Run once at bootstrap, before triggers are rehydrated, so the run slot, the
-   * History rows and this session's triggers all start from the same truth.
-   * Returns how many were sealed.
-   */
+  /** Recover the persisted execution projection at bootstrap without completing quiet open work. */
   recoverInterruptedRuns(): Promise<number>
 
   /** `instruction` is this run's concrete brief, appended to the lead's start wake. */
@@ -222,21 +214,15 @@ export interface Orchestration {
    * node's session list stops showing "New session".
    */
   maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): void
-  /**
-   * A turn is entering this epoch (user/IM/teammate). Stamps its activity so a
-   * list of work can be ordered by when it last moved, and — reversible seal —
-   * wakes it if hibernated: clears the end stamp and, for run epochs, restores
-   * team.currentEpochId + status=running. The wake is what lets a team keep
-   * coordinating (and the lead keep receiving member replies) after an auto-seal.
-   */
+  /** Record activity and resume an execution scope. Only a human request may reopen archived work. */
   noteEpochTurn(teamId: string, epochId: string, fromHuman?: boolean): boolean
-  closeEpochResources(teamId: string, epochId: string): Promise<void>
+  closeEpochResources(teamId: string, epochId: string, options?: { disposing?: boolean }): Promise<void>
   sealEpoch(teamId: string, endReason: EpochEndReason, summary?: string | null): Promise<void>
   /** Seal a single conversation epoch (e.g. an IM chat cleared by the user). */
   sealConversationEpoch(teamId: string, epochId: string, endReason?: EpochEndReason, summary?: string | null): Promise<void>
-  /** Deferred: seal runs after the lead's current turn ends. */
-  requestSeal(teamId: string, epochId: string, summary: string): void
-  noteMemberTurnEnded(params: { appId: string; teamId: string; epochId: string; fate?: MemberTurnFate }): void
+  notePendingWorkChanged(teamId: string, epochId: string): void
+  noteMemberTurnStarted(params: { appId: string; teamId: string; epochId: string; correlationId?: string }): void
+  noteMemberTurnEnded(params: { appId: string; teamId: string; epochId: string; correlationId?: string; fate?: MemberTurnFate }): void
 
   wakeForCheck(params: {
     teamId: string
@@ -269,6 +255,7 @@ export interface Orchestration {
    * conversations), each with a human label resolved on this side (P0-2).
    */
   getMemberBusy(appId: string, teamId: string): RosterBusyEntry[]
+  getActiveEpochIds(teamId: string): ReadonlySet<string>
   /**
    * Announce that a member's live status may have moved, for a turn this
    * orchestration did not run. Status is DERIVED from the session ledger, so a
@@ -312,6 +299,7 @@ export interface Orchestration {
 }
 
 export interface OrchestrationDeps {
+  hasPendingTurnReports?: (teamId: string, epochId: string) => boolean
   store: TeamStore
   bus: MessageBus
   session: OrchestrationSessionDeps
@@ -326,11 +314,10 @@ export interface OrchestrationDeps {
    */
   maxConcurrentTurns?: number
   /**
-   * Observer fired AFTER a run epoch is sealed (manual pause, quiescence
-   * auto-seal, circuit breach). Additive only — it does not alter seal semantics;
+   * Observer fired AFTER a run epoch is sealed (manual pause or circuit breach). Additive only — it does not alter seal semantics;
    * it lets the federation egress propagate the rested run-state to joiners so a
    * remote roster steps back to idle (and member pulses clear) promptly, even on
-   * an auto-seal that does not go through the service-level pauseTeam. Absent →
+   * a runtime stop that does not go through service-level pauseTeam. Absent →
    * no propagation. Never thrown into the seal path.
    */
   onRunStateChanged?: (teamId: string) => void
@@ -342,7 +329,7 @@ export interface OrchestrationDeps {
    * final turn) until some unrelated write refreshed the roster. Coalescing is
    * the subscriber's job. Never thrown into the turn path.
    */
-  onMemberStatusChanged?: (teamId: string) => void
+  onMemberStatusChanged?: (teamId: string, appId?: string) => void
   /**
    * A member of this machine started or stopped serving a team turn, coalesced
    * and fired after the turn's slot settled, so a person-level status (outside
@@ -405,6 +392,7 @@ export interface OrchestrationDeps {
    * (checks are constructed after orchestration). Never thrown into the seal path.
    */
   onTaskClosed?: (teamId: string, epochId: string) => void
+  closePrivateCollaborations?: (teamId: string, epochId: string) => Promise<void>
   onEpochArchived?: (teamId: string, epochId: string, endReason: EpochEndReason) => void
   /**
    * Report an ending the woken member itself cannot: a wake that never became a
@@ -495,6 +483,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       teamId: params.teamId,
       epochId: params.epochId,
       fate: { kind: 'never_ran', reason: params.reason },
+      requestId: trigger.requestId,
       correlationId: trigger.correlationId,
       triggerKind: trigger.kind ?? 'human_message',
       requestSummary: envelope.body,
@@ -508,8 +497,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
   function holdsTurnSlot(appId: string): boolean {
     for (const m of store.listMembersByAppId(appId)) {
-      for (const epoch of store.listOpenEpochs(m.teamId)) {
-        if (isSessionOccupied(buildTeamSessionKey(appId, m.teamId, epoch.id))) return true
+      for (const epochId of knownEpochs.get(m.teamId) ?? []) {
+        if (isSessionOccupied(buildTeamSessionKey(appId, m.teamId, epochId))) return true
       }
     }
     return false
@@ -542,7 +531,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     // run looked alive (a run additionally flips team.status, which the UI polls).
     scheduleStatusPush(teamId)
     try {
-      deps.onMemberStatusChanged?.(teamId)
+      deps.onMemberStatusChanged?.(teamId, appId)
     } catch (err) {
       console.error(`${LOG_TAG} onMemberStatusChanged observer failed:`, err)
     }
@@ -584,25 +573,90 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
   const capturedEscalations = new Map<string, TurnCompletion>()
 
-  // Deferred seal: applied after the lead's turn ends, never mid-turn.
-  const pendingSeals = new Map<string, { teamId: string; summary: string }>()
   const busTurns = new Set<string>()
+  const observedTurns = new Map<string, string | undefined>()
   const closingEpochs = new Map<string, Promise<void>>()
 
-  // Auto-seal when all tasks are terminal and all members idle but the lead
-  // did not call team_complete. First nudge re-wakes the lead; second auto-seals.
-  const quiescenceNudgeCount = new Map<string, number>()
-  const quiescenceTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  const QUIESCENCE_DELAY_MS = 5_000
+  const idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const IDLE_RELEASE_MS = 120_000
+  const knownEpochs = new Map<string, Set<string>>()
+  const remoteTurns = new Map<string, Set<symbol>>()
 
   // epochId → appIds awaiting a user decision. Cleared on response or seal.
   const escalationWaiters = new Map<string, Set<string>>()
 
-  // teamId → the run epoch THIS process is executing. `team.currentEpochId` is a
-  // cache of the same fact for the UI and for joiners; this map is the fact
-  // itself, and it is the only one a dead process cannot leave lying — see
-  // `activeRunEpochId` and `recoverInterruptedRuns`.
-  const activeRunEpochs = new Map<string, string>()
+  // Only executing, queued or decision-blocked runs occupy the automatic-trigger guard.
+  const activeRunEpochs = new Map<string, Set<string>>()
+
+  function observeEpoch(teamId: string, epochId: string): void {
+    let epochs = knownEpochs.get(teamId)
+    if (!epochs) knownEpochs.set(teamId, epochs = new Set())
+    epochs.add(epochId)
+    clearTimeout(idleTimers.get(epochId))
+    idleTimers.delete(epochId)
+  }
+
+  function claimRun(teamId: string, epochId: string): void {
+    let epochs = activeRunEpochs.get(teamId)
+    if (!epochs) activeRunEpochs.set(teamId, epochs = new Set())
+    epochs.add(epochId)
+  }
+
+  function forgetRun(teamId: string, epochId: string): void {
+    const epochs = activeRunEpochs.get(teamId)
+    epochs?.delete(epochId)
+    if (!epochs?.size) activeRunEpochs.delete(teamId)
+  }
+
+  function waitingInEpoch(teamId: string, epochId: string): boolean {
+    return (escalationWaiters.get(epochId)?.size ?? 0) > 0 ||
+      listWorkMembers(store, teamId, epochId).some(member => deps.hasPendingEscalation?.(member.appId, teamId, epochId))
+  }
+
+  function occupiedEpoch(teamId: string, epochId: string): boolean {
+    return deps.hasPendingTurnReports?.(teamId, epochId) === true || bus.hasBufferedMessages(epochId) || listWorkMembers(store, teamId, epochId)
+      .some(member => isSessionOccupied(buildTeamSessionKey(member.appId, teamId, epochId)))
+  }
+
+  function refreshRunProjection(teamId: string, notify = true): void {
+    const team = store.getTeamById(teamId)
+    if (!team || team.hostNodeId != null) return
+    const runs = [...(activeRunEpochs.get(teamId) ?? [])]
+    const waiting = runs.find(epochId => waitingInEpoch(teamId, epochId))
+    const status: TeamStatus = waiting ? 'waiting_user' : runs.length ? 'running' : 'idle'
+    const current = waiting ?? runs.at(-1) ?? null
+    if (team.status === status && (team.currentEpochId ?? null) === current) return
+    store.updateTeamStatus(teamId, status)
+    store.updateTeamCurrentEpoch(teamId, current)
+    if (notify) { emitTeamUpdated(teamId); notifyRunStateChanged(teamId) }
+  }
+
+  function settleEpochActivity(teamId: string, epochId: string): void {
+    const epoch = store.getEpochById(epochId)
+    if (!epoch || epoch.teamId !== teamId) return
+    const occupied = epoch.endedAt === null && occupiedEpoch(teamId, epochId)
+    if (occupied) {
+      observeEpoch(teamId, epochId)
+      if (epoch.lifecycle === 'run') claimRun(teamId, epochId)
+    } else {
+      knownEpochs.get(teamId)?.delete(epochId)
+      if (!knownEpochs.get(teamId)?.size) knownEpochs.delete(teamId)
+      if (!waitingInEpoch(teamId, epochId)) forgetRun(teamId, epochId)
+    }
+    if (epoch.lifecycle === 'run' || activeRunEpochs.has(teamId)) refreshRunProjection(teamId)
+    if (occupied || epoch.endedAt !== null || !session.evictIdleSession || idleTimers.has(epochId)) return
+    const timer = setTimeout(() => {
+      idleTimers.delete(epochId)
+      try {
+        if (!store.getEpochById(epochId) || occupiedEpoch(teamId, epochId)) return
+        for (const member of listWorkMembers(store, teamId, epochId)) {
+          session.evictIdleSession?.(buildTeamSessionKey(member.appId, teamId, epochId))
+        }
+      } catch (error) { console.warn(`${LOG_TAG} Idle execution release failed: team=${teamId} epoch=${epochId}`, error) }
+    }, IDLE_RELEASE_MS)
+    timer.unref?.()
+    idleTimers.set(epochId, timer)
+  }
 
   /**
    * What a run interrupted by the app going away is recorded as. Only written
@@ -618,7 +672,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     console.warn(`${LOG_TAG} Circuit breach: team=${event.teamId} reason=${event.reason}; sealing`)
     escalateToUserSystem(
       event.teamId,
-      `The team run was stopped automatically: ${describeBreach(event.reason)}.`
+      `The team run was stopped automatically: ${describeBreach(event.reason)}.`,
+      event.epochId
     )
     try {
       await sealEpochById(event.teamId, event.epochId, 'error', `Circuit breaker: ${event.reason}`)
@@ -716,7 +771,9 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       bus.completeTurn({ sessionKey, trigger, outcome: { kind: 'undelivered', reason: 'Task closed before this wake could run' } })
       return
     }
-    const spaceId = session.getMemberSpaceId(appId)
+    observeEpoch(teamId, epochId)
+    if (store.getEpochById(epochId)?.lifecycle === 'run') claimRun(teamId, epochId)
+    const spaceId = session.getMemberSpaceId(appId, teamId, epochId)
     if (!spaceId) {
       console.error(`${LOG_TAG} wakeTarget: no space for app=${appId}; reporting error completion`)
       reportTurnEnded({
@@ -724,6 +781,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         teamId,
         epochId,
         fate: { kind: 'never_ran', reason: 'the member has no workspace on its machine' },
+        requestId: trigger.requestId,
         correlationId: trigger.correlationId,
         triggerKind: trigger.kind ?? 'human_message',
         requestSummary: envelope.body,
@@ -732,6 +790,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       })
       deliveries.forEach((delivery) => settleDecision(delivery.trigger.correlationId, { kind: 'error', message: 'Member has no space' }))
       bus.completeTurn({ sessionKey, trigger, outcome: { kind: 'error', message: 'Member has no space' } })
+      settleEpochActivity(teamId, epochId)
       return
     }
 
@@ -790,6 +849,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
               teamId,
               epochId,
               fate: { kind: 'timeout' },
+              requestId: trigger.requestId,
               correlationId: trigger.correlationId,
               triggerKind: trigger.kind ?? 'human_message',
               requestSummary: envelope.body,
@@ -825,48 +885,25 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         // slot AND swallow the reason, leaving a session that only queues mail
         // while every status surface reads idle. Hence: the steps around the
         // completion are guarded, and the completion itself is unconditional.
-        // Whether THIS ending is the one that seals the epoch. Decided before
-        // the completion because `completeTurn` ends by draining this session's
-        // mailbox, and a drained envelope starts a turn — a turn that the seal,
-        // one statement later, tears down while it is still building its
-        // session. Read here rather than there because a deferred seal is
-        // session-layer state: at this instant the epoch row still says open.
-        //
-        // Inside the guarded block for the same reason as everything else
-        // preceding the completion: a throw must never cost the session's slot.
-        // Left unread it stays false, which is exactly the old behavior.
-        let sealing = false
         try {
           capturedEscalations.delete(trigger.correlationId)
-          // The turn ended → clear the viewer-side pulse (working → idle/alert).
-          notifyMemberStatusChanged(teamId, appId)
           if (outcome.kind === 'escalation') {
             markEscalationToUser(teamId, epochId, appId)
           }
           if (outcome.kind === 'undelivered') {
             reportNeverRan({ sessionKey, appId, teamId, epochId, envelope, trigger, reason: outcome.reason })
           }
-          const pending = pendingSeals.get(epochId)
-          sealing = !!pending && store.getTeamById(pending.teamId)?.leadAppId === appId
         } catch (err) {
           console.error(`${LOG_TAG} turn-end bookkeeping failed (completing anyway):`, err)
         }
 
         busTurns.delete(sessionKey)
         deliveries.forEach((delivery) => settleDecision(delivery.trigger.correlationId, outcome))
-        bus.completeTurn({ sessionKey, trigger, outcome, ...(sealing ? { sealPending: true } : {}) })
+        bus.completeTurn({ sessionKey, trigger, outcome })
+        notifyMemberStatusChanged(teamId, appId)
 
-        try {
-          if (sealing) {
-            finishPendingSeal(epochId)
-          } else if (!pendingSeals.has(epochId)) {
-            // A seal is pending but this is someone else's turn ending: neither
-            // seal nor sweep — the lead's own ending is what fires it.
-            scheduleQuiescenceCheck(teamId, epochId)
-          }
-        } catch (err) {
-          console.error(`${LOG_TAG} post-completion sweep failed:`, err)
-        }
+        try { settleEpochActivity(teamId, epochId) }
+        catch (error) { console.error(`${LOG_TAG} Work activity settlement failed: team=${teamId} epoch=${epochId}`, error) }
       })
       .catch((err) => {
         // A `void`-ed chain that rejected would otherwise vanish, and the slot it
@@ -895,6 +932,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         session.recordStoppedInputs?.(sessionKey, unwritten.map((delivery) => recordDelivery(delivery, renderEnvelope(delivery.envelope, delivery.trigger))))
       }
       notifyMemberStatusChanged(teamId, appId)
+      settleEpochActivity(teamId, epochId)
     }
   }
 
@@ -914,7 +952,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
           teamId: envelope.teamId,
           epochId: envelope.epochId,
           teamName: store.getTeamById(envelope.teamId)?.name ?? envelope.teamId,
-          fromMemberName: trigger.fromAppId ? store.getMember(envelope.teamId, trigger.fromAppId)?.memberName ?? null : null,
+          fromMemberName: trigger.fromAppId ? memberName(envelope.teamId, trigger.fromAppId, envelope.epochId) : null,
           teamTriggerKind: trigger.kind,
           // The content carries the framing the member read; the card shows the sender's own words.
           ...(summary ? { summary: oneLineExcerpt(summary, RECORD_SUMMARY_LIMIT) } : {}),
@@ -966,66 +1004,6 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       }
     }
     return delivered
-  }
-
-  // ── Quiescence detection ────────────────────────────────────────────────────
-
-  function scheduleQuiescenceCheck(teamId: string, epochId: string): void {
-    const existing = quiescenceTimers.get(epochId)
-    if (existing) clearTimeout(existing)
-
-    const timer = setTimeout(() => {
-      quiescenceTimers.delete(epochId)
-      // Fires after the turn that scheduled it — by then the store may be gone
-      // (shutdown, team dissolved). A lost check is not worth an unhandled throw.
-      void checkQuiescence(teamId, epochId).catch((err) => {
-        console.error(`${LOG_TAG} quiescence check failed: team=${teamId} epoch=${epochId}`, err)
-      })
-    }, QUIESCENCE_DELAY_MS)
-    if (typeof timer.unref === 'function') timer.unref()
-    quiescenceTimers.set(epochId, timer)
-  }
-
-  async function checkQuiescence(teamId: string, epochId: string): Promise<void> {
-    const team = store.getTeamById(teamId)
-    if (!team || team.currentEpochId !== epochId || team.status !== 'running') return
-    if (pendingSeals.has(epochId)) return
-
-    // Conversation epochs (e.g. an IM-backed team) never auto-seal: going quiet
-    // after a reply is the normal "waiting for the next message" state, not run
-    // completion. They end only on explicit close (/clear, dissolve, team_complete).
-    const epoch = store.getEpochById(epochId)
-    if (epoch?.lifecycle === 'conversation') return
-
-    const tasks = store.listTasksByEpoch(teamId, epochId)
-    const terminalStatuses = new Set(['done', 'rejected'])
-    if (tasks.length > 0 && !tasks.every((t) => terminalStatuses.has(t.status))) return
-
-    const members = store.listMembersByTeam(teamId)
-    for (const m of members) {
-      const key = buildTeamSessionKey(m.appId, teamId, epochId)
-      if (session.isSessionActive(key)) return
-    }
-
-    if (bus.hasBufferedMessages(epochId)) return
-
-    const nudges = quiescenceNudgeCount.get(epochId) ?? 0
-
-    if (nudges === 0) {
-      quiescenceNudgeCount.set(epochId, 1)
-      console.log(`${LOG_TAG} quiescence detected: team=${teamId} epoch=${epochId}; nudging lead`)
-      await nudgeLead(teamId, epochId)
-    } else {
-      console.log(
-        `${LOG_TAG} quiescence persists after nudge: team=${teamId} epoch=${epochId}; auto-sealing`
-      )
-      quiescenceNudgeCount.delete(epochId)
-      try {
-        await sealEpochById(teamId, epochId, 'completed', 'Auto-sealed: all tasks completed, lead did not finalize.')
-      } catch (err) {
-        console.error(`${LOG_TAG} quiescence auto-seal failed:`, err)
-      }
-    }
   }
 
   /** Repeated checks use a coalescing key; the gate decides when they can be read. */
@@ -1090,28 +1068,6 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     })
   }
 
-  async function nudgeLead(teamId: string, epochId: string): Promise<void> {
-    const team = store.getTeamById(teamId)
-    if (!team?.leadAppId) return
-
-    try {
-      await wakeSelf({
-        teamId,
-        epochId,
-        appId: team.leadAppId,
-        kind: 'run_start',
-        onBusy: 'buffer',
-        body:
-          '[System] All tasks are in a terminal state and all members are idle. ' +
-          'The run appears complete. If the goal is achieved, you MUST call ' +
-          '`team_complete("<summary>")` now to finalize this run. ' +
-          'If you do not, the system will auto-seal the run.',
-      })
-    } catch (err) {
-      console.error(`${LOG_TAG} nudgeLead failed:`, err)
-    }
-  }
-
   /**
    * Append what this member missed while it was not running.
    *
@@ -1151,7 +1107,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     // team, and the appended lines would both derail the reply and read as noise
     // in a transcript that person opens. Local app-chat sends the raw text; match it.
     if (trigger.kind === 'human_message') return envelope.body
-    const fromName = trigger.fromAppId ? memberName(envelope.teamId, trigger.fromAppId) : null
+    const fromName = trigger.fromAppId ? memberName(envelope.teamId, trigger.fromAppId, envelope.epochId) : null
     if (!fromName) return withDigest(`[Team run signal]\n\n${envelope.body}`, envelope)
     return withDigest(`[Team message from ${fromName}${renderAge(envelope)}]\n\n${envelope.body}`, envelope)
   }
@@ -1202,7 +1158,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
    */
   function renderMidTurnEnvelope(envelope: TeamEnvelope, trigger: TeamTriggerContext): string {
     if (trigger.kind === 'human_message') return trigger.origin ? inertCommandText(envelope.body) : envelope.body
-    const fromName = trigger.fromAppId ? memberName(envelope.teamId, trigger.fromAppId) : null
+    const fromName = trigger.fromAppId ? memberName(envelope.teamId, trigger.fromAppId, envelope.epochId) : null
     if (!fromName) return `[Arrived while you were working]\n\n${envelope.body}`
     const role = isLead(envelope.teamId, trigger.fromAppId!) ? 'lead' : 'teammate'
     return `[Arrived while you were working — from ${fromName} (${role})]\n\n${envelope.body}`
@@ -1308,7 +1264,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     const { teamId, epochId, appId, taskId, response, question } = params
     const team = store.getTeamById(teamId)
     const epoch = store.getEpochById(epochId)
-    if (!team || !epoch || epoch.endReason === 'cleared' || epoch.workItem?.status === 'completed' || epoch.teamId !== teamId || !store.getMember(teamId, appId) || !session.getMemberSpaceId(appId)) {
+    if (!team || !epoch || epoch.endReason === 'cleared' || epoch.workItem?.status === 'completed' || epoch.teamId !== teamId || !getWorkMember(store, teamId, epochId, appId) || !session.getMemberSpaceId(appId, teamId, epochId)) {
       console.warn(`${LOG_TAG} Decision resume rejected: team=${teamId} epoch=${epochId} app=${appId}`)
       return false
     }
@@ -1385,9 +1341,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       waiters.delete(appId)
       if (waiters.size === 0) escalationWaiters.delete(epochId)
     }
-    if (epoch.lifecycle === 'run' && team.status === 'waiting_user') {
-      store.updateTeamStatus(teamId, 'running')
-    }
+    if (epoch.lifecycle === 'run') refreshRunProjection(teamId)
     reconcileAwaitingDecision(appId)
     emitTeamUpdated(teamId)
     notifyMemberStatusChanged(teamId, appId)
@@ -1411,12 +1365,12 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       const tasks = store.listTasksByEpoch(teamId, e.id)
       const done = tasks.filter((tk) => tk.status === 'done').length
       const when = new Date(e.startedAt).toISOString().slice(0, 16).replace('T', ' ')
-      const status = e.endedAt ? (e.endReason ?? 'ended') : 'running'
+      const status = e.workItem?.status === 'completed' ? 'archived' : e.endedAt ? (e.endReason ?? 'stopped') : 'open'
       const summary = e.summary ? ` — ${e.summary}` : ''
       return `- ${when} (${status}, ${done}/${tasks.length} tasks)${summary}`
     })
     return [
-      'Recent runs of this team (newest first). This run\u2019s member records are readable with `team_read_member`:',
+      'Recent work history, for reference only. Follow the current instruction; do not resume earlier tasks unless asked:',
       ...lines,
     ].join('\n')
   }
@@ -1430,9 +1384,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     if (!team) throw new Error(`Team not found: ${teamId}`)
     if (!team.leadAppId) throw new Error(`Team has no lead provisioned: ${teamId}`)
     const activeEpochId = activeRunEpochId(teamId)
-    if (activeEpochId) {
-      throw new Error(`Team ${teamId} already has a running epoch (${activeEpochId})`)
+    if (runTrigger.type !== 'manual' && activeEpochId) {
+      throw new Error(`Team ${teamId} already has active work (${activeEpochId}); automatic runs do not overlap.`)
     }
+    const brief = instruction?.trim() || team.goal.trim()
+    if (!brief) throw new Error('Provide an instruction before starting a team without a standing goal.')
 
     const epoch: TeamEpoch = {
       id: randomUUID(),
@@ -1444,9 +1400,9 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       lifecycle: 'run',
     }
     store.insertEpoch(epoch, runTrigger.type)
-    store.updateTeamCurrentEpoch(teamId, epoch.id)
-    store.updateTeamStatus(teamId, 'running')
-    activeRunEpochs.set(teamId, epoch.id)
+    claimRun(teamId, epoch.id)
+    observeEpoch(teamId, epoch.id)
+    refreshRunProjection(teamId, false)
     publishEpoch(epoch.id)
     emitTeamUpdated(teamId)
 
@@ -1461,10 +1417,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       kind: 'run_start',
     }
     const digest = buildRecentRunsDigest(teamId, epoch.id)
-    const brief = instruction?.trim()
-    const startBody =
-      'The team run has started. Read the goal and the board, then decompose and dispatch the work.' +
-      (brief ? `\n\nThis run's brief from the requester:\n${brief}` : '')
+    const startBody = `This work has started. Follow the current instruction and use collaborators when useful.\n\nCurrent instruction:\n${brief}`
     const startEnvelope: TeamEnvelope = {
       id: randomUUID(),
       teamId,
@@ -1523,10 +1476,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     }
     store.insertEpoch(epoch, 'event')
     if (createdBy || entryAppId) store.updateWorkItem(epoch.id, { ...(createdBy ? { createdBy } : {}), ...(entryAppId ? { entryAppId } : {}) })
-    // Conversation epochs intentionally do NOT set team.currentEpochId or
-    // status='running'. currentEpochId is the single-RUN reentrancy/UI pointer;
-    // conversation epochs are per-chat (many open at once) and must not occupy it
-    // — otherwise chats would collide and scheduled runs would be blocked.
+    // Creating a conversation does not start execution or occupy the automatic-run guard.
     publishEpoch(epoch.id)
     emitTeamUpdated(teamId)
     console.log(`${LOG_TAG} ensureConversationEpoch: team=${teamId} chat=${chatKey} epoch=${epoch.id} (new)`)
@@ -1577,7 +1527,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     if (endReason === 'error' || endReason === 'timeout') return 'failed'
     const waiting =
       (escalationWaiters.get(epochId)?.size ?? 0) > 0 ||
-      store.listMembersByTeam(teamId).some((m) => deps.hasPendingEscalation?.(m.appId, teamId, epochId))
+      listWorkMembers(store, teamId, epochId).some((m) => deps.hasPendingEscalation?.(m.appId, teamId, epochId))
     if (waiting) return 'escalation'
     const produced =
       store.listTasksByEpoch(teamId, epochId).some((t) => t.resultRef) ||
@@ -1594,14 +1544,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     return epoch.lifecycle === 'run' ? classifyRunOutcome(teamId, epoch.id, endReason) : null
   }
 
-  /**
-   * Archive one epoch: stamp its end, tear down member team sessions (keeping
-   * JSONL/sessionId for history), reset the bus, and clear quiescence timers.
-   * Does NOT touch team.currentEpochId/status — callers decide that.
-   *
-   * The record written is the caller's: a run classified from its end reason, or
-   * one preserved as it stood (see `recoverInterruptedRuns`).
-   */
+  /** Seal execution and release sessions while retaining task identity and history. */
   async function archiveEpoch(
     teamId: string,
     epochId: string,
@@ -1611,9 +1554,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   ): Promise<void> {
     store.endEpoch(epochId, Date.now(), endReason, summary, outcome)
     publishEpoch(epochId)
-    // The run slot is free the moment the epoch is stamped, whatever the caller
-    // decides to do with the pointer.
-    if (activeRunEpochs.get(teamId) === epochId) activeRunEpochs.delete(teamId)
+    // Release admission before asynchronous resource cleanup can yield.
+    forgetRun(teamId, epochId)
 
     await closeEpochResources(teamId, epochId)
 
@@ -1623,20 +1565,22 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       console.error(`${LOG_TAG} onEpochArchived observer failed:`, err)
     }
 
-    quiescenceNudgeCount.delete(epochId)
     // Escalation waiters deliberately SURVIVE the seal (P0-5): a decision the
     // user has not made yet keeps the member marked waiting_user (and the
     // attention chain alive) until it is answered — resumeFromEscalation clears
     // the marker and reactivates the epoch. The persisted activity entry is the
     // cross-restart truth; this set is only the live-window mirror.
-    const qTimer = quiescenceTimers.get(epochId)
-    if (qTimer) {
-      clearTimeout(qTimer)
-      quiescenceTimers.delete(epochId)
-    }
+    clearTimeout(idleTimers.get(epochId))
+    idleTimers.delete(epochId)
   }
 
-  function closeEpochResources(teamId: string, epochId: string): Promise<void> {
+  function closeEpochResources(teamId: string, epochId: string, options?: { disposing?: boolean }): Promise<void> {
+    clearTimeout(idleTimers.get(epochId))
+    idleTimers.delete(epochId)
+    knownEpochs.get(teamId)?.delete(epochId)
+    for (const key of remoteTurns.keys()) if (key.endsWith(`:${epochId}`)) remoteTurns.delete(key)
+    for (const key of observedTurns.keys()) if (key.endsWith(`:${epochId}`)) observedTurns.delete(key)
+    forgetRun(teamId, epochId)
     const pending = closingEpochs.get(epochId)
     if (pending) return pending
     // Disarm mailbox timers before any asynchronous teardown can yield.
@@ -1650,15 +1594,27 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     }
     bus.resetEpoch(epochId)
     const closing = Promise.resolve().then(async () => {
-      for (const member of store.listMembersByTeam(teamId)) {
+      const epoch = store.getEpochById(epochId)
+      // Disposal callers have already awaited descendants; normal task closure owns them here.
+      if (!options?.disposing && epoch?.teamId === teamId && (epoch.endReason === 'cleared' || epoch.workItem?.status === 'completed')) {
+        try { await deps.closePrivateCollaborations?.(teamId, epochId) }
+        catch (error) {
+          console.error(`${LOG_TAG} Private assistant teardown failed: team=${teamId} epoch=${epochId}`, error)
+          throw error
+        }
+      }
+      const failures: unknown[] = []
+      for (const member of listWorkMembers(store, teamId, epochId)) {
         try {
           await session.closeTeamSession(member.appId, teamId, epochId)
         } catch (error) {
+          failures.push(error)
           console.error(`${LOG_TAG} closeTeamSession failed: team=${teamId} epoch=${epochId} app=${member.appId}`, error)
         }
       }
-      const epoch = store.getEpochById(epochId)
-      if (epoch?.teamId === teamId && (epoch.endReason === 'cleared' || epoch.workItem?.status === 'completed')) {
+      if (failures.length) throw new AggregateError(failures, 'Some team sessions could not be closed. Their work was retained.')
+      const closedEpoch = store.getEpochById(epochId)
+      if (closedEpoch?.teamId === teamId && (options?.disposing || closedEpoch.endReason === 'cleared' || closedEpoch.workItem?.status === 'completed')) {
         escalationWaiters.delete(epochId)
         deps.onTaskClosed?.(teamId, epochId)
       }
@@ -1677,31 +1633,22 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     store.touchEpoch(epochId, Date.now())
     const reopeningTask = epoch.workItem?.status === 'completed'
     if (reopeningTask) store.updateWorkItem(epochId, { status: 'open' })
-    // A turn entering a run epoch makes it the team's live run context — whether
-    // this call just opened it or woke a hibernated one. Claim the slot before
-    // the early return below, so a second run cannot start alongside it.
-    if (epoch.lifecycle === 'run') activeRunEpochs.set(teamId, epochId)
-    if (epoch.endedAt === null && !reopeningTask) return true
-    store.reopenEpoch(epochId)
-    if (epoch.lifecycle === 'run') {
-      store.updateTeamCurrentEpoch(teamId, epochId)
-      store.updateTeamStatus(teamId, 'running')
+    // Resume activity without changing the identity of this work.
+    observeEpoch(teamId, epochId)
+    if (epoch.lifecycle === 'run') claimRun(teamId, epochId)
+    if (epoch.endedAt === null && !reopeningTask) {
+      if (epoch.lifecycle === 'run') refreshRunProjection(teamId)
+      return true
     }
+    store.reopenEpoch(epochId)
+    if (epoch.lifecycle === 'run') refreshRunProjection(teamId, false)
     publishEpoch(epochId)
     emitTeamUpdated(teamId)
     console.log(`${LOG_TAG} noteEpochTurn resumed: team=${teamId} epoch=${epochId}`)
     return true
   }
 
-  /**
-   * Seal an EXACT epoch by id — the single implementation every seal path
-   * funnels through, so a request scoped to one epoch (team_complete inside a
-   * conversation, a deferred seal, a breach on a specific epoch) can never be
-   * satisfied by archiving a different one. Only touches team.currentEpochId/
-   * status when the sealed epoch IS the team's current run pointer; a
-   * conversation epoch (or a run epoch that already stopped being current)
-   * leaves that pointer untouched.
-   */
+  /** Stop exactly the named work context; another run or conversation is never substituted. */
   async function sealEpochById(
     teamId: string,
     epochId: string,
@@ -1714,26 +1661,13 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
     console.log(`${LOG_TAG} sealEpochById: team=${teamId} epoch=${epochId} reason=${endReason}`)
     await archiveEpoch(teamId, epochId, endReason, summary, classifyEpochOutcome(teamId, epoch, endReason))
-    releaseRunSlot(teamId, epochId)
+    releaseRunActivity(teamId, epochId)
   }
 
-  /**
-   * Hand the team's run slot back when `epochId` is the run it points at. A
-   * conversation epoch, or a run epoch that already stopped being current, leaves
-   * the pointer alone.
-   */
-  function releaseRunSlot(teamId: string, epochId: string): void {
-    const team = store.getTeamById(teamId)
-    if (!team || team.currentEpochId !== epochId) return
-    store.updateTeamStatus(teamId, 'idle')
-    store.updateTeamCurrentEpoch(teamId, null)
-    emitTeamUpdated(teamId)
-    // Propagate the rested run-state to joiners. The service-level pauseTeam
-    // fires this too, but quiescence/breach auto-seal funnels only through
-    // here — without this an auto-ended run leaves a joiner's members
-    // spinning until the next throttled roster refresh. Observer-only;
-    // never blocks or breaks the seal.
-    notifyRunStateChanged(teamId)
+  /** Release one run from the activity projection; other concurrent runs remain represented. */
+  function releaseRunActivity(teamId: string, epochId: string): void {
+    forgetRun(teamId, epochId)
+    refreshRunProjection(teamId)
   }
 
   async function sealEpoch(
@@ -1746,16 +1680,9 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       console.warn(`${LOG_TAG} sealEpoch: team not found ${teamId}`)
       return
     }
-    const epoch = store.getCurrentEpochForTeam(teamId)
-    if (!epoch) {
-      console.warn(`${LOG_TAG} sealEpoch: no open run epoch for team ${teamId}`)
-      store.updateTeamStatus(teamId, 'idle')
-      store.updateTeamCurrentEpoch(teamId, null)
-      emitTeamUpdated(teamId)
-      notifyRunStateChanged(teamId)
-      return
-    }
-    await sealEpochById(teamId, epoch.id, endReason, summary ?? null)
+    const epochs = store.listOpenEpochs(teamId).filter(epoch => epoch.lifecycle === 'run')
+    for (const epoch of epochs) await sealEpochById(teamId, epoch.id, endReason, summary ?? null)
+    refreshRunProjection(teamId)
   }
 
   function notifyRunStateChanged(teamId: string): void {
@@ -1787,25 +1714,17 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     // A joined office does not run the office's runs — its members' turns execute
     // on their owners — so for it the replicated pointer is not a cache but the
     // only live signal this node can have.
-    if (team.hostNodeId != null) return team.currentEpochId ?? null
-    return activeRunEpochs.get(teamId) ?? null
+    if (team.hostNodeId != null) return team.status === 'running' || team.status === 'waiting_user' ? team.currentEpochId ?? null : null
+    const tracked = activeRunEpochs.has(teamId)
+    for (const epochId of activeRunEpochs.get(teamId) ?? []) {
+      const epoch = store.getEpochById(epochId)
+      if (!epoch || epoch.endedAt !== null || (!occupiedEpoch(teamId, epochId) && !waitingInEpoch(teamId, epochId))) forgetRun(teamId, epochId)
+    }
+    if (tracked) refreshRunProjection(teamId)
+    return activeRunEpochs.get(teamId)?.values().next().value ?? null
   }
 
-  /**
-   * Seal the runs a previous session left open.
-   *
-   * An open run epoch IS the team's "a run is in flight" fact, and the only thing
-   * that closes one is this process deciding to (the lead finalizing, quiescence,
-   * a person stopping it) — so a process that goes away mid-run strands it. The
-   * epoch then stays open for good: the team refuses every trigger, the History
-   * row reads Running, and nothing will ever clear either. Sealing it is not
-   * killing work — the sessions died with that process — it is recording when the
-   * work stopped.
-   *
-   * The epoch keeps the record it already had: a run that stamped its summary and
-   * outcome had finished and was merely revived (a message re-opens its context),
-   * and re-classifying that as a failure would rewrite history.
-   */
+  /** Only a persisted active pointer identifies interrupted execution. Quiet open history is preserved. */
   async function recoverInterruptedRuns(): Promise<number> {
     let sealed = 0
     for (const team of store.listTeams()) {
@@ -1814,8 +1733,14 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       // office may decide that one of its own runs is over.
       if (team.hostNodeId != null) continue
 
-      const epoch = store.getCurrentEpochForTeam(team.id)
-      if (epoch) {
+      const epoch = team.currentEpochId ? store.getEpochById(team.currentEpochId) : null
+      if (epoch && activeRunEpochs.get(team.id)?.has(epoch.id)) continue
+      if (epoch?.teamId === team.id && epoch.endedAt === null && epoch.lifecycle === 'run' && waitingInEpoch(team.id, epoch.id)) {
+        claimRun(team.id, epoch.id)
+        refreshRunProjection(team.id)
+        continue
+      }
+      if (epoch?.teamId === team.id && epoch.endedAt === null && epoch.lifecycle === 'run') {
         console.log(
           `${LOG_TAG} recoverInterruptedRuns: sealing team=${team.id} epoch=${epoch.id} ` +
           `(open since ${new Date(epoch.startedAt).toISOString()})`
@@ -1831,7 +1756,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       }
       // A pointer with no open epoch behind it is stale in the same way, and just
       // as capable of reading "running" at a team that is doing nothing.
-      if (team.currentEpochId) releaseRunSlot(team.id, team.currentEpochId)
+      if (team.currentEpochId) releaseRunActivity(team.id, team.currentEpochId)
     }
     if (sealed > 0) {
       console.log(`${LOG_TAG} recoverInterruptedRuns: sealed ${sealed} interrupted run(s)`)
@@ -1845,23 +1770,24 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     capturedEscalations.set(correlationId, outcome)
   }
 
-  function requestSeal(teamId: string, epochId: string, summary: string): void {
-    console.log(`${LOG_TAG} requestSeal queued: team=${teamId} epoch=${epochId}`)
-    pendingSeals.set(epochId, { teamId, summary })
+  function noteMemberTurnStarted({ appId, teamId, epochId, correlationId }: { appId: string; teamId: string; epochId: string; correlationId?: string }): void {
+    observeEpoch(teamId, epochId)
+    observedTurns.set(buildTeamSessionKey(appId, teamId, epochId), correlationId)
   }
 
-  function finishPendingSeal(epochId: string): void {
-    const pending = pendingSeals.get(epochId)
-    if (!pending) return
-    pendingSeals.delete(epochId)
-    store.updateWorkItem(epochId, { status: 'completed' })
-    void sealEpochById(pending.teamId, epochId, 'completed', pending.summary).catch((error) =>
-      console.error(`${LOG_TAG} deferred sealEpoch failed: team=${pending.teamId} epoch=${epochId}`, error)
-    )
+  function getActiveEpochIds(teamId: string): ReadonlySet<string> {
+    const result = new Set<string>()
+    for (const key of new Set([...busTurns, ...remoteTurns.keys(), ...observedTurns.keys()])) {
+      const parsed = parseTeamSessionKey(key)
+      if (parsed?.teamId === teamId) result.add(parsed.epochId)
+    }
+    return result
   }
 
-  function noteMemberTurnEnded({ appId, teamId, epochId, fate }: { appId: string; teamId: string; epochId: string; fate?: MemberTurnFate }): void {
+  function noteMemberTurnEnded({ appId, teamId, epochId, correlationId, fate }: { appId: string; teamId: string; epochId: string; correlationId?: string; fate?: MemberTurnFate }): void {
     const sessionKey = buildTeamSessionKey(appId, teamId, epochId)
+    if (observedTurns.has(sessionKey) && observedTurns.get(sessionKey) !== correlationId) return
+    observedTurns.delete(sessionKey)
     const decisions = liveDecisions.get(sessionKey)
     liveDecisions.delete(sessionKey)
     const outcome: TurnCompletion = fate?.kind === 'error' ? { kind: 'error', message: fate.message }
@@ -1870,18 +1796,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       : fate?.kind === 'never_ran' ? { kind: 'undelivered', reason: fate.reason }
       : { kind: 'result', content: '' }
     for (const correlationId of decisions ?? []) settleDecision(correlationId, outcome)
-    const pending = pendingSeals.get(epochId)
-    if (!pending || pending.teamId !== teamId || store.getTeamById(teamId)?.leadAppId !== appId) return
-    // Bus completions consume the seal in their promise chain, with mailbox
-    // draining suppressed. Direct chats need the fallback before their drain.
+    if (busTurns.has(sessionKey)) return
     setImmediate(() => {
-      if (pendingSeals.get(epochId) !== pending || busTurns.has(buildTeamSessionKey(appId, teamId, epochId))) return
-      try {
-        console.log(`${LOG_TAG} direct turn completion: team=${teamId} epoch=${epochId} app=${appId}`)
-        finishPendingSeal(epochId)
-      } catch (error) {
-        console.error(`${LOG_TAG} direct turn completion failed: team=${teamId} epoch=${epochId} app=${appId}`, error)
-      }
+      try { settleEpochActivity(teamId, epochId) }
+      catch (error) { console.warn(`${LOG_TAG} Direct work settlement failed: team=${teamId} epoch=${epochId}`, error) }
     })
   }
 
@@ -1890,12 +1808,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   function buildPromptContext(teamId: string, selfAppId: string, epochId: string): TeamPromptContext | null {
     const team = store.getTeamById(teamId)
     if (!team) return null
-    const members = store.listMembersByTeam(teamId)
-    const self = members.find((m) => m.appId === selfAppId)
+    const self = getWorkMember(store, teamId, epochId, selfAppId)
     if (!self) return null
 
-    const roster = members
-      .filter((m) => m.appId !== selfAppId)
+    const roster = store.listMembersByTeam(teamId)
+      .filter((m) => m.appId !== selfAppId && !('isTemporary' in m) && (!team.ephemeral || !m.aiProvisioned || m.isSystemCoordinator))
       .map((m) => {
         const remote = isRemoteMember(m)
         const description = deps.getMemberDescription?.(m.appId)?.trim()
@@ -1909,7 +1826,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
           duty: m.duty ?? null,
           isLead: m.isLead,
           contactable:
-            team.collabMode === 'free' || store.isEdgeAllowed(teamId, selfAppId, m.appId),
+            team.collabMode === 'free' || isWorkEdgeAllowed(store, teamId, epochId, selfAppId, m.appId)
+              || isWorkEdgeAllowed(store, teamId, epochId, m.appId, selfAppId),
           owner: remote ? m.ownerDisplayName ?? 'a teammate' : null,
           sameMachine: !remote,
         }
@@ -1918,6 +1836,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     return {
       teamName: team.name,
       goal: team.goal,
+      temporaryCollaboration: team.ephemeral === true,
       collabMode: team.collabMode,
       escalationRouting: team.escalationRouting,
       selfMemberName: self.memberName,
@@ -1927,7 +1846,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       // Both halves are needed: a team that is merely temporary does not make a
       // member disposable — one the person installed themselves survives its
       // end (only AI-provisioned apps are cleaned up on dissolve).
-      selfIsDisposable: team.ephemeral === true && self.aiProvisioned,
+      selfIsDisposable: ('isTemporary' in self && self.isTemporary) || (team.ephemeral === true && self.aiProvisioned),
       roster,
       teamFolder: deps.teamFolders?.forMember(teamId, epochId, selfAppId) ?? null,
       chatKey: store.getEpochById(epochId)?.chatKey ?? null,
@@ -1947,11 +1866,13 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
    * ended up running in two places at once.
    */
   function isSessionOccupied(sessionKey: string): boolean {
-    return bus.isSessionOccupied(sessionKey)
+    return busTurns.has(sessionKey) || remoteTurns.has(sessionKey) || bus.isSessionOccupied(sessionKey)
   }
 
   function getMemberStatus(appId: string): TeamMemberRuntimeStatus {
     const memberships = store.listMembersByAppId(appId)
+    const participant = store.participants?.getById(appId)
+    if (participant) memberships.push(participant)
     for (const m of memberships) {
       // Awaiting a user decision takes precedence over working/idle — and it
       // SURVIVES a run seal (P0-5): the persisted activity entry is the truth,
@@ -1968,8 +1889,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       // A member working ANY open epoch — a run OR a conversation — is lit
       // (P0-2). Previously only the run epoch counted, so a member serving an
       // IM chat looked idle on the board.
-      for (const epoch of store.listOpenEpochs(m.teamId)) {
-        if (isSessionOccupied(buildTeamSessionKey(appId, m.teamId, epoch.id))) {
+      for (const epochId of knownEpochs.get(m.teamId) ?? []) {
+        if (isSessionOccupied(buildTeamSessionKey(appId, m.teamId, epochId))) {
           return 'working'
         }
       }
@@ -1990,11 +1911,9 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
    * card and the member avatars can never disagree about who is working.
    */
   function hasWorkingMember(teamId: string): boolean {
-    const epochs = store.listOpenEpochs(teamId)
-    if (epochs.length === 0) return false
-    for (const member of store.listMembersByTeam(teamId)) {
-      for (const epoch of epochs) {
-        if (isSessionOccupied(buildTeamSessionKey(member.appId, teamId, epoch.id))) return true
+    for (const epochId of knownEpochs.get(teamId) ?? []) {
+      for (const member of listWorkMembers(store, teamId, epochId)) {
+        if (isSessionOccupied(buildTeamSessionKey(member.appId, teamId, epochId))) return true
       }
     }
     return false
@@ -2021,8 +1940,9 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   /** Every open epoch this member is actively serving, with a human label (P0-2). */
   function getMemberBusy(appId: string, teamId: string): RosterBusyEntry[] {
     const out: RosterBusyEntry[] = []
-    for (const epoch of store.listOpenEpochs(teamId)) {
-      if (!isSessionOccupied(buildTeamSessionKey(appId, teamId, epoch.id))) continue
+    for (const epochId of knownEpochs.get(teamId) ?? []) {
+      const epoch = store.getEpochById(epochId)
+      if (!epoch || !isSessionOccupied(buildTeamSessionKey(appId, teamId, epoch.id))) continue
       out.push({
         epochId: epoch.id,
         kind: epoch.lifecycle,
@@ -2039,8 +1959,9 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
   // ── Internal helpers ──────────────────────────────────────────────────────────
 
-  function memberName(teamId: string, appId: string): string {
-    return store.getMember(teamId, appId)?.memberName ?? appId
+  function memberName(teamId: string, appId: string, epochId: string): string {
+    const member = getWorkMember(store, teamId, epochId, appId)
+    return member ? teamMemberAddress(member) : appId
   }
 
   function emitTeamUpdated(teamId: string): void {
@@ -2055,16 +1976,16 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     sendToRenderer(TEAM_EVENTS.updated, payload)
   }
 
-  function escalateToUserSystem(teamId: string, message: string): void {
-    const epoch = store.getCurrentEpochForTeam(teamId)
+  function escalateToUserSystem(teamId: string, message: string, epochId?: string): void {
+    const epoch = epochId ? store.getEpochById(epochId) : null
     const payload = {
       teamId,
       epochId: epoch?.id ?? null,
       system: true,
       message,
     }
-    broadcastToAll('app:escalation:new', { teamId, system: true, question: message })
-    sendToRenderer('app:escalation:new', { teamId, system: true, question: message })
+    broadcastToAll('app:escalation:new', { teamId, epochId: epoch?.id ?? null, system: true, question: message })
+    sendToRenderer('app:escalation:new', { teamId, epochId: epoch?.id ?? null, system: true, question: message })
     broadcastToAll(TEAM_EVENTS.updated, { teamId, ...(store.getTeamById(teamId) ? { team: store.getTeamById(teamId)! } : {}) })
     console.warn(`${LOG_TAG} escalateToUser: team=${teamId} ${message}`, payload)
   }
@@ -2074,15 +1995,25 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     deliverMidTurn,
     deliverRemote: ({ sessionKey, envelope, trigger, coalescingKey, onCompletion }) => {
       const message = renderEnvelope(envelope, trigger)
-      return session.deliverRemoteMessage?.({
+      let completed = false
+      const ticket = Symbol()
+      const accepted = session.deliverRemoteMessage?.({
         appId: envelope.toAppId,
-        spaceId: session.getMemberSpaceId(envelope.toAppId) ?? envelope.toAppId,
+        spaceId: session.getMemberSpaceId(envelope.toAppId, envelope.teamId, envelope.epochId) ?? envelope.toAppId,
         message,
         recordedMessages: [recordDelivery({ envelope, trigger }, message)],
         conversationId: sessionKey,
         teamContext: trigger,
         coalescingKey,
         onCompletion: (outcome) => {
+          if (completed) {
+            console.warn(`${LOG_TAG} Duplicate remote completion ignored: session=${sessionKey}`)
+            return
+          }
+          completed = true
+          const pending = remoteTurns.get(sessionKey)
+          pending?.delete(ticket)
+          if (!pending?.size) remoteTurns.delete(sessionKey)
           if (outcome.kind === 'undelivered') {
             reportNeverRan({
               sessionKey, appId: envelope.toAppId, teamId: envelope.teamId, epochId: envelope.epochId,
@@ -2090,8 +2021,18 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
             })
           }
           onCompletion(outcome)
+          settleEpochActivity(envelope.teamId, envelope.epochId)
         },
       })
+      if (accepted && !completed) {
+        let pending = remoteTurns.get(sessionKey)
+        if (!pending) remoteTurns.set(sessionKey, pending = new Set())
+        pending.add(ticket)
+        observeEpoch(envelope.teamId, envelope.epochId)
+        if (store.getEpochById(envelope.epochId)?.lifecycle === 'run') claimRun(envelope.teamId, envelope.epochId)
+        refreshRunProjection(envelope.teamId)
+      }
+      return accepted
     },
     wakeForCheck,
     isBusy,
@@ -2106,14 +2047,16 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     recoverInterruptedRuns,
     sealEpoch,
     sealConversationEpoch,
-    requestSeal,
+    noteMemberTurnStarted,
     noteMemberTurnEnded,
+    notePendingWorkChanged: settleEpochActivity,
     captureReport,
     buildPromptContext,
     getMemberStatus,
     isMemberWorking: (appId: string) => workingMembers.has(appId),
     getObservableStatus: observableStatus,
     getMemberBusy,
+    getActiveEpochIds,
     noteMemberStatusChanged: notifyMemberStatusChanged,
     reconcileAwaitingDecision,
     resumeFromEscalation,

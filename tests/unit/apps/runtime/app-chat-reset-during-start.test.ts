@@ -25,6 +25,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 // Mocks (must be declared before importing app-chat)
 // ============================================
 
+const authority = vi.hoisted(() => ({ current: null as ReturnType<typeof import('./fixtures/participant-service').createScopedParticipantService> | null }))
+vi.mock('../../../../src/main/apps/team', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../src/main/apps/team')>()
+  const { createScopedParticipantService } = await import('./fixtures/participant-service')
+  authority.current = createScopedParticipantService()
+  return { ...actual, getTeamService: () => ({ participants: authority.current!.service, getCollaborationScope: () => null, getCollabForConversation: () => null }) }
+})
+
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   unstable_v2_createSession: vi.fn(),
   tool: vi.fn((opts: any) => ({ ...opts, _isTool: true })),
@@ -131,6 +139,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
 }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({
+  emitUserStop: vi.fn(),
   stopGeneration: vi.fn(async () => {}),
   getSessionState: () => ({ isActive: false, thoughts: [] }),
 }))
@@ -195,7 +204,7 @@ vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
     bus: { drainMailbox: () => {} },
   }),
 }))
-vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({ createTeamMcpServer }))
+vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({ createTeamMcpServer, createCoordinationMcpServer: () => ({ _isMcpServer: true, name: 'halo-team' }) }))
 
 const { buildUserSessionSdkOptions, getEngineCapabilities } = vi.hoisted(() => ({
   buildUserSessionSdkOptions: vi.fn((_input: Record<string, unknown>): Record<string, any> => ({})),
@@ -243,7 +252,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getDbMcpServers: vi.fn(() => null),
 }))
 const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }))
-vi.mock('../../../../src/main/services/agent/events', () => ({ onAgentEvent: () => ({ dispose: () => {} }), emitAgentEvent }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ emitHumanRequest: vi.fn(), onAgentEvent: () => ({ dispose: () => {} }), emitAgentEvent }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
@@ -425,6 +434,8 @@ async function startHeldInAcquire(request: AppChatRequest): Promise<{ turn: Prom
 
 describe('a chat reset while a message is on its way to the engine', () => {
   beforeEach(() => {
+  authority.current!.reset()
+  authority.current!.allow('team-1', 'epoch-1', 'app-desk')
     engine.reset()
     engine.acquireV2Session.mockClear()
     engine.closeV2Session.mockClear()

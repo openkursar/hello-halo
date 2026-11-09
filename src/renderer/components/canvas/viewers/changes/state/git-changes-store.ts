@@ -86,7 +86,6 @@ export interface GitChangesController {
   refreshIfStale(): void
   selectRepository(root: string): Promise<void>
   openRepository(root: string): Promise<GitFailure | null>
-  forgetRepository(root: string): Promise<GitFailure | null>
   setScope(scope: StoredCompareScope): Promise<void>
   resetWorkingDirectory(): Promise<void>
   setReview(review: GitReviewRecord | null): void
@@ -105,7 +104,7 @@ export interface GitChangesController {
   dispose(): void
 }
 
-const MAX_VISIBLE_REPOSITORIES = 1_129
+const MAX_VISIBLE_REPOSITORIES = 1_385
 const NEW_CHANGES_DEBOUNCE_MS = 1_000
 const STALE_AFTER_MS = 2_000
 /** File content reads in flight at once: as many as the main process runs at a time (each costs two git processes). */
@@ -402,44 +401,28 @@ export function createGitChangesController(
     await load()
   }
 
-  async function changeRememberedRepository(root: string, open: boolean): Promise<GitFailure | null> {
+  async function openRepository(root: string): Promise<GitFailure | null> {
     if (disposed || mutationBusy() || get().repositoryBusy) return { code: 'GIT_BUSY' }
     const selectedAtStart = selectionVersion
     const directoryAtStart = directoryGeneration
     set({ repositoryBusy: true })
     try {
-      const repository = open ? await gitClient.openRepository(spaceId, root) : null
-      if (!open) {
-        await gitClient.forgetRepository(spaceId, root)
-        discoveries.delete(root)
-      }
+      const repository = await gitClient.openRepository(spaceId, root)
       if (disposed || directoryAtStart !== directoryGeneration) return null
       generation++
       repositoryGeneration++
       repositoryRequest = null
       repositoriesDirty = true
-      if (repository) {
-        const entry: GitRepositoryEntry = { root: repository.root, name: repository.name, relativePath: repository.relativePath, remembered: true }
-        set((state) => ({ repositories: state.repositories.some((item) => item.root === entry.root)
-          ? state.repositories.map((item) => item.root === entry.root ? entry : item)
-          : [...state.repositories, entry] }))
-        if (selectedAtStart === selectionVersion) prepareRepository(repository.root)
-      } else {
-        set((state) => {
-          const unavailableRoots = new Set(state.unavailableRoots)
-          unavailableRoots.delete(root)
-          return { repositories: state.repositories.filter((item) => item.root !== root), unavailableRoots }
-        })
-        if (get().repoRoot === root) {
-          cache.clear()
-          set({ repoRoot: null, status: null, list: null, review: null, listError: null, loadError: null, newChanges: 0 })
-        }
-      }
+      const entry: GitRepositoryEntry = { root: repository.root, name: repository.name, relativePath: repository.relativePath, remembered: true }
+      set((state) => ({ repositories: state.repositories.some((item) => item.root === entry.root)
+        ? state.repositories.map((item) => item.root === entry.root ? entry : item)
+        : [...state.repositories, entry] }))
+      if (selectedAtStart === selectionVersion) prepareRepository(repository.root)
       await load({ relist: true })
       return disposed ? null : get().loadError
     } catch (error) {
       const failure = failureOf(error)
-      console.warn('[ChangesView] Could not update remembered repositories:', { spaceId, action: open ? 'open' : 'forget', code: failure.code })
+      console.warn('[ChangesView] Could not open remembered repository:', { spaceId, root, code: failure.code })
       return failure
     } finally {
       if (!disposed && directoryAtStart === directoryGeneration) set({ repositoryBusy: false })
@@ -617,8 +600,7 @@ export function createGitChangesController(
     refresh,
     refreshIfStale,
     selectRepository,
-    openRepository: (root) => changeRememberedRepository(root, true),
-    forgetRepository: (root) => changeRememberedRepository(root, false),
+    openRepository,
     setScope,
     resetWorkingDirectory,
     setReview,

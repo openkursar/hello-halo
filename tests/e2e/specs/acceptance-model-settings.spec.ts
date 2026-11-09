@@ -169,9 +169,10 @@ test('credentials are concealed by default and reopening the editor restores con
 
 test('a rejected key shows errors for model fetching and connection testing and can be corrected in place', modelSettingsAcceptance('models.accounts.rejected-key'), async ({ providerGateway, managementApp, window }) => {
   await openAdd(window)
-  await fillProvider(window, { name: 'Recoverable account', url: providerGateway.url('primary'), key: 'invalid-local-fixture-key', model: 'gpt-4o' })
+  await fillProvider(window, { name: 'Recoverable account', url: providerGateway.url('primary'), key: 'invalid-local-fixture-key' })
   await aiSection(window).getByRole('button', { name: 'Fetch Models', exact: true }).click()
   await expect(aiSection(window).getByText('Invalid API Key or no permission', { exact: false })).toBeVisible()
+  await setCustomModel(window, 'gpt-4o')
   await aiSection(window).getByRole('button', { name: 'Test connection', exact: true }).click()
   await expect(aiSection(window).getByText('Invalid API key', { exact: true })).toBeVisible({ timeout: 30000 })
   await expect(aiSection(window).getByText('Connection successful', { exact: true })).toHaveCount(0)

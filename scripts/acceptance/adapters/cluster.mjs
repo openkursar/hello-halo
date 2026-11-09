@@ -35,10 +35,39 @@ export async function clusterEnvironment(root, mode, environment = {}) {
     Object.assign(result, { HALO_ACCEPTANCE_MODE: 'brokered-live', HALO_TEST_API_URL: url.href, HALO_TEST_API_KEY: environment.HALO_TEST_API_KEY,
       HALO_TEST_MODEL: environment.HALO_TEST_MODEL, HALO_TEST_PROVIDER: environment.HALO_TEST_PROVIDER,
       HALO_TEST_API_TYPE: environment.HALO_TEST_PROVIDER === 'anthropic' ? 'anthropic_passthrough' : 'chat_completions' })
-  } else if (mode === 'none') {
+  } else if (mode === 'none' || mode === 'scripted') {
     Object.assign(result, { HALO_ACCEPTANCE_MODE: 'deterministic', HALO_TEST_API_TYPE: 'chat_completions' })
   } else throw new Error(`Unsupported cluster model mode: ${mode}`)
   return result
+}
+
+/** Preserve bounded diagnostic tails before deleting credential-bearing node profiles. */
+export async function preserveClusterDiagnostics(root, profiles, destination, environment) {
+  const folders = await fs.readdir(profiles, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error })
+  if (!folders.length) return
+  const rawManifest = await fs.readFile(path.join(profiles, 'nodes.json'), 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error })
+  const manifest = rawManifest ? JSON.parse(rawManifest) : null
+  const secrets = { ...environment }
+  for (const node of manifest?.nodes ?? []) if (typeof node.token === 'string') secrets[`CLUSTER_NODE_${node.index}_TOKEN`] = node.token
+  const summary = { manifestAvailable: !!manifest, nodes: (manifest?.nodes ?? []).map(node => ({ index: node.index, pid: node.pid, startupReady: node.ready, identityId: node.identityId, port: node.port })), logs: [] }
+  await fs.mkdir(destination, { recursive: true })
+  for (const folder of folders.filter(entry => entry.isDirectory() && /^node-\d+$/.test(entry.name))) {
+    for (const relative of ['node.log', '.halo/logs/main.log']) {
+      const source = path.join(profiles, folder.name, relative)
+      const handle = await fs.open(source, 'r').catch(error => { if (error.code === 'ENOENT') return null; throw error })
+      if (!handle) continue
+      try {
+        const stat = await handle.stat()
+        const bytes = Math.min(stat.size, 1024 * 1024)
+        const buffer = Buffer.alloc(bytes)
+        await handle.read(buffer, 0, bytes, stat.size - bytes)
+        const name = `${folder.name}-${relative === 'node.log' ? 'process' : 'main'}.log`
+        await fs.writeFile(path.join(destination, name), redact(buffer.toString('utf8'), root, secrets))
+        summary.logs.push({ file: name, originalBytes: stat.size, retainedBytes: bytes })
+      } finally { await handle.close() }
+    }
+  }
+  await fs.writeFile(path.join(destination, 'processes.json'), JSON.stringify(summary, null, 2))
 }
 
 export async function executeClusterTests(root, tests, { outputDirectory, eventFile, environment = {}, timeoutMs = 1800000 } = {}) {
@@ -87,8 +116,11 @@ export async function executeClusterTests(root, tests, { outputDirectory, eventF
       if (markdown !== null) await fs.writeFile(results, redact(markdown, root, childEnvironment))
     } finally {
       if (execution && !execution.cleanupFailed) {
-        await fs.rm(profiles, { recursive: true, force: true })
-        await fs.rm(`${profiles}.prev`, { recursive: true, force: true })
+        try { await preserveClusterDiagnostics(root, profiles, path.join(runDirectory, 'node-logs'), childEnvironment) }
+        finally {
+          await fs.rm(profiles, { recursive: true, force: true })
+          await fs.rm(`${profiles}.prev`, { recursive: true, force: true })
+        }
       }
     }
   }

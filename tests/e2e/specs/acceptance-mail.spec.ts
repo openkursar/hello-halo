@@ -102,7 +102,7 @@ test('email_send persists only the requested synthetic MIME delivery and exposes
     expect(mailBackend.smtp.readMessages()).toEqual(stored)
     expect(readFileSync(file)).toEqual(attachment)
     expect(readFileSync(controlFile)).toEqual(untouched)
-    expect(model.exchanges).toHaveLength(8)
+    expect(model.exchanges).toHaveLength(histories.reduce((count, history) => count + history.requestCount, 0))
   } finally {
     mailBackend.smtp.setFailure('none')
     await info.attach('mail-send-outcome', { body: JSON.stringify({ appId: person.appId, outcomes }, null, 2), contentType: 'application/json' })
@@ -158,7 +158,7 @@ test('calendar_create persists the requested event only after authenticated succ
     await assertMailHistory(reopened, person, histories)
     expect(mailBackend.calendar.readEvents('primary')).toEqual(stored)
     expect(mailBackend.calendar.readEvents('control')).toEqual([{ uid: controlUid, bytes: otherControl }])
-    expect(model.exchanges).toHaveLength(8)
+    expect(model.exchanges).toHaveLength(histories.reduce((count, history) => count + history.requestCount, 0))
   } finally {
     mailBackend.calendar.setFailure('none')
     await info.attach('calendar-create-outcome', { body: JSON.stringify({ appId: person.appId, controlUid, outcomes }, null, 2), contentType: 'application/json' })
@@ -202,7 +202,7 @@ test('calendar_delete refuses failed transport without removing records and reco
     await assertMailHistory(reopened, person, histories)
     expect(mailBackend.calendar.readEvents('primary')).toEqual([{ uid: controlUid, bytes: ownControl }])
     expect(mailBackend.calendar.readEvents('control')).toEqual([{ uid: targetUid, bytes: otherControl }])
-    expect(model.exchanges).toHaveLength(6)
+    expect(model.exchanges).toHaveLength(histories.reduce((count, history) => count + history.requestCount, 0))
   } finally {
     mailBackend.calendar.setFailure('none')
     await info.attach('calendar-delete-outcome', { body: JSON.stringify({ appId: person.appId, targetUid, controlUid, outcomes }, null, 2), contentType: 'application/json' })

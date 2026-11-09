@@ -13,6 +13,7 @@ references:
   - tests/decentralized/README.md
   - tests/decentralized/SCENARIOS.md
   - tests/decentralized/run-scenarios.mjs
+  - tests/decentralized/participant-scenarios.mjs
 promises:
   identity:
     en: Each device keeps an independent identity and data directory, and retains its identity after
@@ -38,6 +39,55 @@ promises:
     en: Different offices and their members retain separate identities and access boundaries.
     zh: 不同办公室及其成员保留各自身份和访问边界。
 scenarios:
+  - id: offices.cluster.scoped-participant
+    title:
+      en: A remote member uses a private local assistant and shares only its own summary
+      zh: 远端成员使用本机内部助手，仅自行分享总结
+    verifies: [membership, records, delivery, isolation]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: Three isolated built Halo nodes use the existing controlled model endpoint with real SDK tools and office transport. The remote member owner explicitly grants collaboration plus Read and Write for this work.
+        zh: 三个隔离的已构建 Halo 节点使用现有受控模型端点，SDK 工具和办公室传输均真实运行；远端成员所有者明确授予本次工作协作及读写权限。
+    steps:
+      - en: A standing member receives work across nodes and spawns an independent-context assistant on its own machine. The assistant writes a private file and returns its result to its creator, not the public lead.
+        zh: 常驻成员跨节点接收任务，并在本机创建独立上下文助手；助手写入私有文件并将结果返回创建者，而不是公共负责人。
+      - en: The parent reads the returned private reference and assistant record, continues the assistant by its returned handle, then publishes and sends its own summary to the public team.
+        zh: 父成员读取返回的私有引用及助手记录，通过返回的句柄续工，再自行向公共团队发布并发送总结。
+      - en: All nodes attempt to read and contact the helper through the public team; the public lead attempts to read the private artifact and assistant record, and another task attempts the same history read.
+        zh: 所有节点尝试通过公共团队读取和联系助手；公共负责人尝试读取私有产出与助手记录，另一个任务也尝试读取同一历史。
+    expected:
+      - en: Standing membership and cross-node delivery remain unchanged. The helper never enters the public epoch roster or board; its identity and private scope do not replicate. Only its parent reads the private bytes and record and follows up locally. Public team APIs cannot address the helper or read its history, and the public lead receives the parent summary but no private child record or file content.
+        zh: 常驻成员及跨节点投递保持原样；助手不进入公共任务名册或看板，其身份与私有作用域不跨机同步。只有父成员读取私有文件及记录并在本机续工；公共团队 API 无法联系助手或读取其历史，公共负责人收到父成员总结，但不能取得内部助手记录或文件内容。
+    notes:
+      en: Real app processes, HTTP/WS and SQLite with a scripted model. This does not establish physical-network resilience or live-model task quality.
+      zh: 真实应用进程、HTTP/WS 和 SQLite 配合脚本模型，不证明物理网络韧性或真实模型任务质量。
+  - id: offices.cluster.scoped-participant-cancel
+    title:
+      en: Stop a member's internal assistant or close it when the shared team is deleted
+      zh: 停止成员内部助手，或在删除共享团队时关闭助手
+    verifies: [membership, records, delivery, isolation]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      action: [stop, delete]
+    preconditions:
+      - en: The remote member owner has explicitly granted collaboration and file access. Its local internal assistant is executing a deliberately held model response in a private scope, absent from the shared team roster and board.
+        zh: 远端成员所有者已明确授予协作和文件访问权限；其本机内部助手正在私有作用域执行被刻意暂留的模型响应，不出现在共享团队名册或看板中。
+    steps:
+      - en: The parent stops its helper by the returned handle, or the host deletes the shared team. Then release the delayed response and, after stopping, send the parent a new human request.
+        zh: 父成员通过返回的句柄停止助手，或由主机删除共享团队；随后释放延迟响应，并在停止分支向父成员发送新的人类请求。
+    expected:
+      - en: The actual helper stream is cancelled and its delayed result cannot wake the parent or enter public history. Stopping retains the owner's private assistant history and allows the parent to continue new human work. Deleting the shared team closes its owner's internal helper and removes its private scope and office replicas while preserving the owner's independent digital human.
+        zh: 助手实际流被取消，迟到结果不能唤醒父成员或进入公共历史；停止保留所有者可读的内部助手记录，并允许父成员继续新的人类任务。删除共享团队会关闭所有者的内部助手、移除私有作用域及办公室副本，同时保留所有者独立的数字人。
   - id: offices.cluster.independent-identities
     title:
       en: Independent nodes expose distinct identities and working endpoints

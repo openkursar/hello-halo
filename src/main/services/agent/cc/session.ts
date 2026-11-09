@@ -6,6 +6,7 @@ import type { SessionLiveInputOptions } from '../types'
 import { hostSystemPromptText } from '../system-prompt'
 import type { SdkMcpBridge } from '../mcp/sdk-bridge'
 import { buildCcArguments, prepareMcpServers, type CcOptions } from './options'
+import { createNativeSkillPolicy } from './skill-policy'
 
 interface PendingControl {
   resolve: (value: any) => void
@@ -45,6 +46,7 @@ export class CcSession {
   private forceKillTimer?: ReturnType<typeof setTimeout>
   private frameCount = 0
   private readonly exitListeners = new Set<(error?: Error) => void>()
+  private skillPolicy?: ReturnType<typeof createNativeSkillPolicy>
   private initialization: Promise<any>
   private exitPromise: Promise<void> = Promise.resolve()
   private bridgeClosing?: Promise<void>
@@ -90,6 +92,7 @@ export class CcSession {
     // Halo's progress UI consumes TodoWrite; newer CC gates it by model and defaults to Tasks.
     env.CLAUDE_CODE_ENABLE_TODO_TOOLS = 'true'
     env.CLAUDE_CODE_ENABLE_TASKS = 'false'
+    env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '0'
     delete env.NODE_OPTIONS
     if (this.launch.kind === 'native') delete env.ELECTRON_RUN_AS_NODE
     // The entry point must match Halo's delegated authentication flow, not the SDK package.
@@ -130,8 +133,10 @@ export class CcSession {
     }, 120_000)
     this.heartbeat.unref()
     const hooks: Record<string, unknown[]> = {}
+    this.skillPolicy = createNativeSkillPolicy(this.options)
+    const configuredHooks = { ...this.options.hooks, PreToolUse: [...(this.options.hooks?.PreToolUse ?? []), this.skillPolicy.hook] }
     let callbackId = 0
-    for (const [event, matchers] of Object.entries(this.options.hooks ?? {}) as Array<[string, any[]]>) {
+    for (const [event, matchers] of Object.entries(configuredHooks) as Array<[string, any[]]>) {
       hooks[event] = matchers.map(matcher => ({
         matcher: matcher.matcher,
         timeout: matcher.timeout,
@@ -149,9 +154,11 @@ export class CcSession {
     const result = await this.request({
       subtype: 'initialize', hooks,
       systemPrompt, appendSystemPrompt,
-      agents: this.options.agents,
       jsonSchema: this.options.outputFormat?.schema,
     })
+    delete result.agents
+    this.skillPolicy.setCommands(result.commands)
+    if (Array.isArray(result.commands)) result.commands = this.skillPolicy.filterCommands(result.commands)
     if (this.options.abortController?.signal.aborted) this.close()
     else this.options.abortController?.signal.addEventListener('abort', this.onAbort, { once: true })
     console.log(`[CC] Session ready pid=${child.pid ?? 'none'} runtime=${this.launch.kind} version=${this.launch.version} mcp=${Object.keys(mcp.servers).length}`)
@@ -170,13 +177,15 @@ export class CcSession {
 
   sendIntoLiveTurn(message: any, live?: SessionLiveInputOptions): boolean {
     if (!this.query.transport.isReady()) return false
-    this.enqueue(message, live ?? {})
+    try { this.enqueue(message, live ?? {}) }
+    catch { return false }
     return true
   }
 
   hasPendingInput(): boolean { return this.pending.size > 0 }
 
   private enqueue(message: any, live?: SessionLiveInputOptions): void {
+    this.skillPolicy?.checkInput(message)
     const frame = typeof message === 'string'
       ? { type: 'user', session_id: '', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'text', text: message }] } }
       : { ...message }
@@ -303,6 +312,11 @@ export class CcSession {
         if (uuid) frame = { type: 'user', isReplay: true, uuid }
       }
       frame ??= JSON.parse(line)
+      if (frame.type === 'system' && frame.subtype === 'init') {
+        delete frame.agents
+        if (Array.isArray(frame.slash_commands)) frame.slash_commands = this.skillPolicy!.filterCommands(frame.slash_commands)
+        if (Array.isArray(frame.skills)) frame.skills = this.skillPolicy!.filterCommands(frame.skills)
+      }
       this.frameCount++
       if (frame.type === 'control_response') {
         const response = frame.response

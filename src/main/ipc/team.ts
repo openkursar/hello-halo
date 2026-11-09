@@ -117,8 +117,8 @@ export function registerTeamIpc(): void {
       handle('team:propose-members', (s) => s.proposeMembers(input.goal, input.owningSpaceId))
   )
 
-  ipcMain.handle(TEAM_IPC.run, async (_e, teamId: string, trigger?: TeamRunTrigger) =>
-    handle('team:run', (s) => s.runTeam(teamId, trigger ?? { type: 'manual' }))
+  ipcMain.handle(TEAM_IPC.run, async (_e, teamId: string, trigger?: TeamRunTrigger, instruction?: string) =>
+    handle('team:run', (s) => s.runTeam(teamId, trigger ?? { type: 'manual' }, instruction))
   )
 
   ipcMain.handle(TEAM_IPC.pause, async (_e, teamId: string) =>
@@ -152,8 +152,10 @@ export function registerTeamIpc(): void {
       // read in its place.
       if (!input.epochId) return { success: true, data: [] }
       const teamStore = getTeamStore()
-      const target = teamStore?.listMembersByTeam(input.teamId).find((m) => m.appId === input.appId)
-      if (target?.origin === 'remote' && target.ownerNodeId) {
+      if (teamStore?.getEpochById(input.epochId)?.teamId !== input.teamId) return { success: true, data: [] }
+      const target = teamStore.getMember(input.teamId, input.appId, input.epochId)
+      if (!target) return { success: true, data: [] }
+      if (target.origin === 'remote' && target.ownerNodeId) {
         const manager = getFederationManager()
         if (!manager) {
           return { success: false, error: 'Federation is not yet initialized. Please try again shortly.' }
@@ -242,6 +244,9 @@ export function registerTeamIpc(): void {
   // ── team:epoch-board — tasks/findings/roster snapshot for a past run ──────
   ipcMain.handle('team:epoch-board', async (_e, input: { teamId: string; epochId: string }) =>
     handle('team:epoch-board', (s) => s.getEpochBoard(input.teamId, input.epochId))
+  )
+  ipcMain.handle('team:epoch-roster', async (_e, input: { teamId: string; epochId: string }) =>
+    handle('team:epoch-roster', (s) => s.getEpochRoster(input.teamId, input.epochId))
   )
 
   // ── team:epoch-artifacts — products produced during a specific run ────────

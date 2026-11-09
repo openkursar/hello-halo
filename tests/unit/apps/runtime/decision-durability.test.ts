@@ -22,14 +22,14 @@ describe('decision disk durability and competing connections', () => {
     connections.forEach(connection => connection.closeAll())
     rmSync(directory, { recursive: true, force: true })
   })
-  function open(version = 7): { manager: DatabaseManager; store: ActivityStore } {
+  function open(version = migrations.at(-1)!.version): { manager: DatabaseManager; store: ActivityStore } {
     const manager = createDatabaseManager(databasePath)
     connections.push(manager)
     const db = manager.getAppDatabase()
     manager.runMigrations(db, 'app_manager', managerMigrations)
     manager.runMigrations(db, 'app_runtime', migrations.filter(migration => migration.version <= version))
     db.pragma('busy_timeout = 20')
-    return { manager, store: version === 7 ? new ActivityStore(db) : undefined! }
+    return { manager, store: version >= 7 ? new ActivityStore(db) : undefined! }
   }
   function seed(manager: DatabaseManager, store: ActivityStore): void {
     manager.getAppDatabase().prepare(`INSERT INTO installed_apps(id, spec_id, space_id, spec_json, installed_at) VALUES ('person', 'spec', 'original-space', '{"type":"automation"}', 1)`).run()

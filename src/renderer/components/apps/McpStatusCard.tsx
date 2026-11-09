@@ -20,6 +20,7 @@ import { useAppsStore } from '../../stores/apps.store'
 import { useAppStore } from '../../stores/app.store'
 import { AppStatusDot } from './AppStatusDot'
 import { McpToolSwitches, listedMcpTools } from './McpToolSwitches'
+import { McpContextSettings } from './McpContextSettings'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { isSessionOnlyFailure } from '../../utils/mcpStatus'
@@ -678,6 +679,13 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
           )}
         </div>
       )}
+
+      <McpContextSettings
+        key={appId}
+        appId={appId}
+        value={app.userOverrides.mcpContext}
+        onSave={patch => updateAppOverrides(appId, { mcpContext: patch })}
+      />
 
       {/* ── Tools ── */}
       <div className="space-y-2">

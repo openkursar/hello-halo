@@ -104,3 +104,10 @@ export function emitAgentBroadcast(
 ): void {
   _onAgentBroadcast.fire({ channel, data })
 }
+
+/** Only trusted input entry points emit this; model turns and teammate delivery do not. */
+const humanRequest = new Emitter<{ conversationId: string; requestId: string }>()
+export const onHumanRequest = humanRequest.event
+export function emitHumanRequest(conversationId: string, requestId: string): void {
+  humanRequest.fire({ conversationId, requestId })
+}

@@ -1,3 +1,4 @@
+import { TEAM_TOOLS } from '../../../../shared/constants/disabled-tools'
 import { partitionMcpServers } from '../mcp/partition'
 import { SdkMcpBridge } from '../mcp/sdk-bridge'
 
@@ -51,9 +52,12 @@ export function buildCcArguments(options: CcOptions, servers: Record<string, unk
   if (options.allowDangerouslySkipPermissions) args.push('--allow-dangerously-skip-permissions')
   if (options.strictMcpConfig) args.push('--strict-mcp-config')
   if (options.includeHookEvents) args.push('--include-hook-events')
-  for (const [key, flag] of [['allowedTools', '--allowedTools'], ['disallowedTools', '--disallowedTools'], ['betas', '--betas']] as const) {
+  for (const [key, flag] of [['allowedTools', '--allowedTools'], ['betas', '--betas']] as const) {
     if (options[key]?.length) args.push(flag, options[key].join(','))
   }
+  const extraDenied = ['disallowedTools', 'disallowed-tools'].flatMap(name =>
+    typeof options.extraArgs?.[name] === 'string' ? options.extraArgs[name].split(/[ ,]+/).filter(Boolean) : [])
+  args.push('--disallowedTools', [...new Set([...TEAM_TOOLS, ...(options.disallowedTools ?? []), ...extraDenied])].join(','))
   if (options.tools !== undefined) args.push('--tools', Array.isArray(options.tools) ? options.tools.join(',') : 'default')
   if (options.settingSources !== undefined) args.push(`--setting-sources=${options.settingSources.join(',')}`)
   if (Object.keys(servers).length) args.push('--mcp-config', JSON.stringify({ mcpServers: servers }))
@@ -67,6 +71,11 @@ export function buildCcArguments(options: CcOptions, servers: Record<string, unk
   else if (thinking?.type === 'adaptive' || (thinking?.type === 'enabled' && thinking.budgetTokens == null)) args.push('--thinking', 'adaptive')
   else value('--max-thinking-tokens', thinking?.budgetTokens ?? options.maxThinkingTokens)
   for (const [flag, argument] of Object.entries(options.extraArgs ?? {})) {
+    if (flag === 'disallowedTools' || flag === 'disallowed-tools') continue
+    if (flag === 'agent' || flag === 'agents') {
+      console.warn('[CC] Native execution configuration refused')
+      throw new Error('Native agent configuration is unavailable. Halo owns collaboration for this session.')
+    }
     args.push(`--${flag}`)
     if (argument !== null) args.push(String(argument))
   }

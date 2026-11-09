@@ -34,7 +34,6 @@ beforeAll(async () => {
             unavailableRoots: new Set(options.unavailable ?? []), disabled: !!options.disabled,
             onSelectRepository: path => window.calls.push(['select', path]),
             onOpenRepository: async path => { window.calls.push(['open', path]); return window.failure },
-            onForgetRepository: async path => { window.calls.push(['forget', path]); return window.failure },
           };
           const topBar = { spaceId: 'space', scope: { kind: 'uncommitted' }, review: null, snapshotMissing: false,
             onScope: scope => window.calls.push(['scope', scope]), totals: null, page: 'changes', onPage: () => {},
@@ -116,27 +115,17 @@ describe('repository picker (isolated browser UI, mocked application API)', () =
     expect(await page.getByRole('alert').innerText()).toContain('folder picker')
   })
 
-  it('renders removable unavailable rows without nested buttons or file deletion actions', async () => {
+  it.each([390, 960])('keeps unavailable rows selectable without removal controls at %s px', async (width) => {
+    await page.setViewportSize({ width, height: 844 })
     await mount({ repositories: [{ root: '/space/gone', name: 'gone', relativePath: 'gone', remembered: true }], unavailable: ['/space/gone'], noStatus: true })
     await menu()
     const group = page.getByRole('group', { name: '/space/gone' })
     expect(await group.innerText()).toContain('Unavailable')
     expect(await group.innerText()).toContain('/space/gone')
-    expect(await group.innerText()).toContain('No files will be deleted.')
+    expect(await page.getByRole('menuitem', { name: /Remove|Delete|Hide/ }).count()).toBe(0)
     expect(await page.locator('button button').count()).toBe(0)
-    await group.getByRole('menuitem', { name: /Remove from list/ }).click()
-    expect(await calls()).toEqual([['forget', '/space/gone']])
-  })
-
-  it('keeps removal failures inline and makes available remembered roots removable too', async () => {
-    await mount({ remembered: true })
-    await page.evaluate(() => { (window as any).failure = { code: 'GIT_FAILED', error: 'disk full' } })
-    await menu()
-    await page.getByRole('group', { name: '/space/repo' }).getByRole('menuitem', { name: /Remove from list/ }).click()
-    await page.getByRole('alert').waitFor()
-    expect(await page.getByRole('alert').innerText()).toContain('disk full')
-    expect(await page.getByRole('menu').count()).toBe(1)
-    expect(await calls()).toEqual([['forget', '/space/repo']])
+    await group.getByRole('menuitemradio').click()
+    expect(await calls()).toEqual([['select', '/space/gone']])
   })
 
   it('keeps unavailable paths selectable for a retry and retains the selected path label without a branch', async () => {
@@ -162,11 +151,13 @@ describe('repository picker (isolated browser UI, mocked application API)', () =
     expect(await page.getByRole('button', { name: 'Repository: repo' }).innerText()).toContain('main')
   })
 
-  it('offers removal for session discoveries as well as remembered paths', async () => {
-    await mount({ remembered: false })
+  it.each([false, true])('offers only selection and opening for remembered=%s', async (remembered) => {
+    await mount({ remembered })
     await menu()
-    await page.getByRole('group', { name: '/space/repo' }).getByRole('menuitem', { name: /Remove from list/ }).click()
-    expect(await calls()).toEqual([['forget', '/space/repo']])
+    expect(await page.getByRole('menuitemradio').count()).toBe(1)
+    expect(await page.getByRole('menuitem').allTextContents()).toEqual(['Open repository…'])
+    await page.getByRole('group', { name: '/space/repo' }).getByRole('menuitemradio').click()
+    expect(await calls()).toEqual([['select', '/space/repo']])
   })
 
   it('keeps scope choices disabled until a real selected repository status is available', async () => {

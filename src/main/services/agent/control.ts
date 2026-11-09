@@ -9,10 +9,9 @@
  */
 
 import { activeSessions, v2Sessions, closeV2Session, getConsumerHandle, getRunningConsumerIds } from './session-manager'
-import { hasActiveTeamTasks } from './subagent-handler'
 import { getActivePendingQuestion, type RecoverablePendingQuestion } from './permission-handler'
 import { withdrawUnreadLiveInput } from './live-turn'
-import type { Thought } from './types'
+import type { StopReason, Thought } from './types'
 import type { ApiRetryState } from '../../../shared/types/api-retry'
 import { snapshotApiRetry } from './api-retry'
 import { Emitter, type Event } from '../../platform/event'
@@ -26,11 +25,13 @@ import { Emitter, type Event } from '../../platform/event'
  * read is withdrawn first and never runs (its sender's `onWithdrawn` decides
  * what becomes of it).
  * `internal`: the system stopped the turn; unread input runs right after it.
+ * `controller`: a collaborator stopped only the assignment it still owns.
  */
-export type StopReason = 'user' | 'internal'
+export type { StopReason } from './types'
 
 export interface StopGenerationOptions {
   reason: StopReason
+  isCurrent?: () => boolean
 }
 
 const userStop = new Emitter<string>()
@@ -42,6 +43,7 @@ const userStopSettled = new Emitter<string>()
  * so a delivery gate can hold what it still buffers for that conversation.
  */
 export const onUserStop: Event<string> = userStop.event
+export function emitUserStop(conversationId: string): void { userStop.fire(conversationId) }
 
 /**
  * A person's stop of this conversation has done its part: unread input is
@@ -57,44 +59,43 @@ export const onUserStopSettled: Event<string> = userStopSettled.event
  * @param conversationId - Optional conversation ID. If not provided, stops all.
  */
 export async function stopGeneration(conversationId: string | undefined, options: StopGenerationOptions): Promise<void> {
+  if (options.reason === 'controller' && !conversationId) throw new Error('A controller stop must name its conversation.')
+  if (options.isCurrent?.() === false) {
+    console.warn(`[Agent] Stop ignored for a replaced assignment: conversation=${conversationId} reason=${options.reason}`)
+    return
+  }
   // Log caller stack trace for debugging spurious abort
   console.log(`[Agent] stopGeneration called, conversationId=${conversationId ?? 'ALL'}, reason=${options.reason}`, new Error('stopGeneration caller trace').stack)
 
   const stoppedByUser = options.reason !== 'user' ? []
     : conversationId ? [conversationId] : Array.from(new Set([...v2Sessions.keys(), ...activeSessions.keys()]))
-  for (const id of stoppedByUser) userStop.fire(id)
-  await Promise.all(stoppedByUser.map(withdrawUnreadLiveInput))
+  for (const id of stoppedByUser) emitUserStop(id)
+  const withdrawn = options.reason === 'controller'
+    ? conversationId ? [conversationId] : [] : stoppedByUser
+  if (withdrawn.length) await Promise.all(withdrawn.map(withdrawUnreadLiveInput))
   try {
-    await endGeneration(conversationId)
+    if (options.isCurrent?.() === false) {
+      console.warn(`[Agent] Stop ignored after input withdrawal for a replaced assignment: conversation=${conversationId} reason=${options.reason}`)
+      return
+    }
+    await endGeneration(conversationId, options.reason)
   } finally {
     for (const id of stoppedByUser) userStopSettled.fire(id)
   }
 }
 
-async function endGeneration(conversationId: string | undefined): Promise<void> {
+async function endGeneration(conversationId: string | undefined, reason: StopReason): Promise<void> {
   if (conversationId) {
     // Try consumer-based stop first (new REPL consumer model for chat conversations)
     const consumer = getConsumerHandle(conversationId)
     if (consumer && consumer.isRunning) {
       const sessionState = consumer.getActiveSessionState()
-      const thoughts = sessionState?.thoughts || []
-
       const v2Session = v2Sessions.get(conversationId)
-      // Team detection must include lifecycle thoughts carried across turns:
-      // the team may have been spawned several turns ago, and stopping it via
-      // interrupt() would leave its agents running in the subprocess.
-      if (v2Session && hasActiveTeamTasks([...thoughts, ...consumer.getTeamLifecycleThoughts()])) {
-        // Team mode: close() kills the entire CC subprocess (main agent + all team members).
-        // interrupt() + drain is insufficient because team agents run independently in the
-        // same subprocess — interrupt only stops the current SDK turn, not the agents.
-        console.log(`[Agent] Team active — closing V2 session (kills subprocess + all agents)`)
-        try {
-          v2Session.session.close()
-        } catch (e) {
-          console.error(`[Agent] Failed to close V2 session:`, e)
-        }
-        closeV2Session(conversationId)  // This also stops the consumer
-      } else if (v2Session) {
+      // interrupt() can finish the turn before its acknowledgement arrives.
+      // Its own signal fixes the cause without touching a successor turn.
+      sessionState?.abortController.abort(reason)
+
+      if (v2Session) {
         // Normal mode: interrupt current turn — consumer handles the drain via stream()
         try {
           await (v2Session.session as any).interrupt()
@@ -104,11 +105,6 @@ async function endGeneration(conversationId: string | undefined): Promise<void> 
         }
       }
 
-      // Abort the current turn's AbortController
-      if (sessionState) {
-        sessionState.abortController.abort()
-      }
-
       console.log(`[Agent] Stopped generation for conversation (consumer): ${conversationId}`)
       return
     }
@@ -116,63 +112,44 @@ async function endGeneration(conversationId: string | undefined): Promise<void> 
     // Fallback: legacy activeSessions-based stop (for app-chat.ts / execute.ts)
     const session = activeSessions.get(conversationId)
     if (session) {
-      session.abortController.abort()
+      session.abortController.abort(reason)
       activeSessions.delete(conversationId)
 
       const v2Session = v2Sessions.get(conversationId)
       if (v2Session) {
-        if (hasActiveTeamTasks(session.thoughts)) {
-          console.log(`[Agent] Team active — closing V2 session (kills subprocess + all agents)`)
-          try {
-            v2Session.session.close()
-          } catch (e) {
-            console.error(`[Agent] Failed to close V2 session:`, e)
-          }
-          closeV2Session(conversationId)
-        } else {
-          // Normal mode: interrupt current turn.
-          // Do NOT drain here — processStream() is already consuming the same
-          // v2Session.session.stream() iterator and will drain stale messages
-          // after detecting abortController.signal.aborted. Draining here would
-          // race with processStream, causing one side to hang waiting for a
-          // 'result' message that the other side already consumed.
-          try {
-            await (v2Session.session as any).interrupt()
-            console.log(`[Agent] V2 session interrupted (processStream handles drain)`)
-          } catch (e) {
-            console.error(`[Agent] Failed to interrupt V2 session:`, e)
-          }
+        // Normal mode: interrupt current turn.
+        // Do NOT drain here — processStream() is already consuming the same
+        // v2Session.session.stream() iterator and will drain stale messages
+        // after detecting abortController.signal.aborted. Draining here would
+        // race with processStream, causing one side to hang waiting for a
+        // 'result' message that the other side already consumed.
+        try {
+          await (v2Session.session as any).interrupt()
+          console.log(`[Agent] V2 session interrupted (processStream handles drain)`)
+        } catch (e) {
+          console.error(`[Agent] Failed to interrupt V2 session:`, e)
         }
       }
 
       console.log(`[Agent] Stopped generation for conversation: ${conversationId}`)
     }
   } else {
-    // Stop all sessions: use interrupt for non-team sessions, close for team sessions
+    // Stop all sessions and release their execution resources.
     for (const [convId, session] of Array.from(activeSessions)) {
-      session.abortController.abort()
+      session.abortController.abort(reason)
 
       const v2Session = v2Sessions.get(convId)
       if (v2Session) {
-        if (hasActiveTeamTasks(session.thoughts)) {
-          // Team mode: close() kills the entire subprocess (main agent + all team members)
-          try {
-            v2Session.session.close()
-          } catch (e) {
-            console.error(`[Agent] Failed to close V2 session ${convId}:`, e)
-          }
-        } else {
-          // Non-team: interrupt first for graceful shutdown, then close
-          try {
-            await (v2Session.session as any).interrupt()
-          } catch (e) {
-            // Interrupt may fail if process already exiting — proceed to close
-          }
-          try {
-            v2Session.session.close()
-          } catch (e) {
-            console.error(`[Agent] Failed to close V2 session ${convId}:`, e)
-          }
+        // Interrupt before closing the session resource.
+        try {
+          await (v2Session.session as any).interrupt()
+        } catch (e) {
+          console.warn(`[Agent] Interrupt failed during close: conversation=${convId}`, e)
+        }
+        try {
+          v2Session.session.close()
+        } catch (e) {
+          console.error(`[Agent] Failed to close V2 session ${convId}:`, e)
         }
         closeV2Session(convId)
       }
@@ -183,6 +160,7 @@ async function endGeneration(conversationId: string | undefined): Promise<void> 
 
     // Also close all V2 sessions with consumers (chat conversations not in activeSessions)
     for (const convId of Array.from(v2Sessions.keys())) {
+      getConsumerHandle(convId)?.getActiveSessionState()?.abortController.abort(reason)
       closeV2Session(convId)  // This also stops consumers
     }
 

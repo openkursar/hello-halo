@@ -13,6 +13,16 @@ an exclusivity primitive, not evidence of sender authority. A user-started turn
 may accept messages from another surface only when the caller supplies equal,
 known permission identities. No caller should reimplement that comparison.
 
+## Shared implementation
+
+The implementation lives in the engine-independent
+`@hello-halo/agent-sdk/collaboration/turn-gate` entry. This module retains Halo's public
+facade so callers keep the same admission contract. The library starts no engine
+and imports no application modules. Each existing delivery boundary still owns
+exactly one gate; the shared implementation does not add a second queue.
+The narrow entry avoids loading tool descriptions and board operations on
+ordinary chat admission paths.
+
 ## Public contract
 
 - `dispatch(key, job)` resolves on acceptance, not turn completion. Rejecting means

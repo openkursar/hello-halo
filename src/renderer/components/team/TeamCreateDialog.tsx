@@ -14,7 +14,7 @@
  * humans, or let AI propose a roster from the goal. The AI path confirms the
  * proposal (cost governance) before teamCreate runs with it.
  *
- * Validation: name + goal required; creating directly requires ≥1 member.
+ * Validation: name and workspace required; direct creation needs a member.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -133,7 +133,6 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
   )
 
   const nameError = submitted && !name.trim()
-  const goalError = submitted && !goal.trim()
   const spaceError = submitted && !selectedSpaceId
   const memberError = submitted && selectedAppIds.length === 0
 
@@ -166,9 +165,7 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
     }
   }
 
-  // The common required fields; the AI path derives its roster from the goal,
-  // so it cannot start without one either way.
-  const baseValid = name.trim().length > 0 && goal.trim().length > 0 && selectedSpaceId !== ''
+  const baseValid = name.trim().length > 0 && selectedSpaceId !== ''
 
   const handleCreate = async () => {
     setSubmitted(true)
@@ -178,7 +175,7 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
 
   const handleAiBuild = async () => {
     setSubmitted(true)
-    if (!baseValid) return
+    if (!baseValid || !goal.trim()) return
     const proposed = await proposeMembers(goal.trim(), selectedSpaceId)
     // null = backend error (toast already shown). Empty = AI returned nothing
     // usable; surface inline so the user can refine the goal or add members
@@ -216,6 +213,9 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-4" onMouseDown={onClose}>
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('New team')}
           // Fixed frame height: inline expansions (member picker, space picker)
           // must scroll the body, not grow the dialog — a resizing modal jumps.
           className="flex h-[min(44rem,90vh)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-xl"
@@ -244,10 +244,8 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
 
             {/* Goal */}
             <Field
-              label={t('Goal')}
-              required
-              hint={t('Describe in plain words what this team should do')}
-              error={goalError ? t('Goal is required') : undefined}
+              label={t('Goal (optional)')}
+              hint={t('Add a standing goal, or give the team instructions when starting work.')}
             >
               {/* A controlled form field: the value is read on submit, so there is
                   nothing to save on blur or on Done. */}

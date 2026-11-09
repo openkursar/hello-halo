@@ -45,6 +45,8 @@ export type ToolAuditSink = (entry: TeamToolAudit) => void
 export interface ActiveDelegation {
   policy: CapabilityPolicy | undefined
   mode: CapabilityMode
+  /** The captured Halo runtime searches only the already-filtered MCP catalog. */
+  clientToolDiscovery?: boolean
   /** Where this turn's file tools may reach; see turn-file-access. */
   files?: TurnFileAccess
   /** Which skills this turn may load; see turn-skills. */
@@ -67,7 +69,7 @@ export interface ActiveDelegation {
  *
  * An entry is replaced by each turn and outlives it, rather than being cleared
  * at turn end: a turn can leave work running behind it (a background task, a
- * subagent still reporting), and those tool calls arrive after the turn that
+ * retired engine still reporting), and those tool calls arrive after the turn that
  * asked for them is over. Clearing would hand exactly those calls back the full
  * run of the machine. The entry is dropped when the conversation itself goes.
  */
@@ -145,6 +147,7 @@ export function recordExecutedTool(
  * session creation.
  */
 function judge(delegation: ActiveDelegation, toolName: string, input: Record<string, unknown>): ToolDecision {
+  if (toolName === 'ToolSearch' && delegation.clientToolDiscovery) return { allow: true }
   if (toolName.startsWith('mcp__')) {
     const decision = delegation.files ? decideFileAccess(delegation.files, toolName, input, true) : null
     return decision && !decision.allow ? { allow: false, reason: decision.reason } : { allow: true }

@@ -12,7 +12,6 @@ export const MODULE: RouteModuleMeta = {
     'POST /api/git/repositories': { expose: 'internal' },
     'POST /api/git/discover-repository': { expose: 'internal' },
     'POST /api/git/open-repository': { expose: 'internal' },
-    'POST /api/git/forget-repository': { expose: 'internal' },
     'POST /api/git/status': { expose: 'internal' },
     'POST /api/git/changes': { expose: 'internal' },
     'POST /api/git/file-contents': { expose: 'internal' },

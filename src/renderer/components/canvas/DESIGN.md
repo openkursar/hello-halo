@@ -106,8 +106,10 @@ as diffs. `openChanges(source, { reveal })` keeps one tab per source:
   and validates every path. The changes list loads known repositories immediately;
   mounted consumers receive completed discoveries for their space and append new roots
   without reloading the displayed diff or changing selection. Subscriptions end on disposal.
-  The picker can open an exact repository folder and remove saved records without
-  deleting files; manual roots persist in space data, unavailable roots stay removable.
+  The picker selects known repositories or opens an exact repository folder; it
+  offers no removal or hiding action. Verified discoveries and selected roots persist
+  in space data. Unavailable roots remain selectable for retry, and previously hidden
+  paths are restored to the known list without probing them.
 - **Data per mounted viewer.** Each git tab's viewer creates its own vanilla
   store (`state/git-changes-store.ts`) and disposes it on unmount. It loads on
   mount (opening or returning to the tab), on window focus, after the user's

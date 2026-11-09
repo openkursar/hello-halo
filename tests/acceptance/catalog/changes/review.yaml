@@ -11,6 +11,7 @@ basis: documented
 references:
   - src/main/services/code-review/DESIGN.md
   - src/main/services/code-review/start-review.ts
+  - tests/e2e/specs/acceptance-code-review.spec.ts
 promises:
   snapshot:
     en: The review describes the selected repository and captured comparison scope.
@@ -34,7 +35,7 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
     preconditions:
       - en: A fixture repository has a known change.
         zh: 测试仓库有已知修改。
@@ -44,10 +45,12 @@ scenarios:
     expected:
       - en: The review names the captured change and the conversation retains its result.
         zh: 审阅针对捕获的修改，对话保留结果。
+    requirements:
+      - halo-sdk
   - id: changes.review.team
     title:
-      en: Start a team review and stop it
-      zh: 发起并停止团队审阅
+      en: Distinguish complete, stopped and incomplete team reviews
+      zh: 区分完整、已停止和不完整的团队审阅
     verifies:
       - snapshot
       - conversation
@@ -56,13 +59,25 @@ scenarios:
       - regression
     evidence: app-e2e
     mode: scripted
-    automation: planned
+    automation: automated
     preconditions:
       - en: Team collaboration is available for a fixture review.
         zh: 测试审阅可使用团队协作。
     steps:
-      - en: Start a team review, observe collaboration, then stop through its conversation.
-        zh: 发起团队审阅，查看协作，再通过对话停止。
+      - en: Start a team review through the changes panel. Three independent collaborators read the real source and receive follow-up work through their returned handles.
+        zh: 从修改面板发起团队审阅。三位独立协作者读取真实源码，后续工作通过返回的句柄投递。
+      - en: In the stop variant, stop while the source is idle and reviewers are working, then restart. In other variants, produce a complete or partial report.
+        zh: 停止变体在源对话空闲、评审者工作时停止，然后重启；其他变体生成完整或部分报告。
     expected:
-      - en: The selected snapshot is shared with reviewers and stopped work is not reported complete.
-        zh: 审阅者收到所选快照，停止的工作不报告为已完成。
+      - en: The selected snapshot reaches every reviewer. A complete report is shown while collaboration stays open; partial reports are incomplete. A requested stop survives restart and cancelled results never wake the source.
+        zh: 每位评审者收到所选快照。完整报告显示时协作仍可保留；部分报告显示不完整。停止请求在重启后保留，取消的结果不会唤醒源对话。
+    variants:
+      outcome:
+        - complete
+        - stopped
+        - incomplete
+    requirements:
+      - halo-sdk
+    notes:
+      en: Scripted replies verify execution, routing and state, not review quality. All members are local in this scenario; a stop label does not prove offline peers have finished cancelling.
+      zh: 脚本回复验证执行、路由与状态，不评估审阅质量。本例成员均在本地，停止标签不证明离线节点已完成取消。

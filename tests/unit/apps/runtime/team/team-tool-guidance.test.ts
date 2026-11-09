@@ -1,64 +1,61 @@
-/**
- * What the team tools say about themselves at the moment the model chooses
- * between them: posting a task does not reach the teammate, and a call made
- * with no agent team started points to the right next step.
- */
-
 import { describe, it, expect, vi } from 'vitest'
+import { createCollaborationServer, type CollaborationResult } from '@hello-halo/agent-sdk/collaboration'
 
-vi.mock('../../../../../src/main/services/agent/resolved-sdk', () => ({
-  tool: (name: string, description: string, inputSchema: unknown, handler: unknown) => ({ name, description, inputSchema, handler }),
-  createSdkMcpServer: (options: { tools: Array<{ name: string }> }) => options,
-}))
+vi.mock('../../../../../src/main/services/agent/resolved-sdk', async () =>
+  import('../../../../../src/main/services/agent/mcp/sdk-server'))
 
-import { createSpaceTeamMcpServer } from '../../../../../src/main/apps/conversation-mcp/team-mcp'
-import { buildCoordinationTools } from '../../../../../src/main/apps/runtime/team/team-tools'
-import { TEAM_TOOL_NAMES } from '../../../../../src/shared/apps/team-types'
+import { createCoordinationMcpServer } from '../../../../../src/main/apps/runtime/team/team-tools'
 
-type Tool = { name: string; description: string; handler: (input: Record<string, unknown>) => Promise<{ content: Array<{ text: string }>; isError?: boolean }> }
-
-const tools = buildCoordinationTools(() => null) as unknown as Tool[]
-const spaceTools = (createSpaceTeamMcpServer({ spaceId: 's', conversationId: 'c', workDir: '/tmp' }) as unknown as { tools: Tool[] }).tools
-const find = (name: string) => tools.find((tool) => tool.name === name)!
-
-describe('team tool descriptions', () => {
-  it('says that posting a task does not notify the teammate, and where to send the message instead', () => {
-    expect(find(TEAM_TOOL_NAMES.postTask).description).toContain('it does not notify the teammate, so message them with team_send')
-  })
-
-  it('leaves when to read the board, a member\u2019s record or an artifact to the tools themselves', () => {
-    expect(find(TEAM_TOOL_NAMES.readBoard).description).toContain('reconcile state')
-    expect(find(TEAM_TOOL_NAMES.readMember).description).toContain('check work against what the member claims')
-    expect(find(TEAM_TOOL_NAMES.readArtifact).description).toContain('open a deliverable a teammate shared')
-  })
+const server = createCoordinationMcpServer(() => null, {
+  spawn: async () => ({ content: [{ type: 'text', text: 'created' }] }),
 })
+const tools = server.instance.listTools()
+const find = (name: string) => tools.find(tool => tool.name === name)!
 
-describe('the tools of a chat that can start an agent team', () => {
-  const described = (name: string) => spaceTools.find((tool) => tool.name === name)!.description
-
-  it('collab_start defaults to doing the work yourself and names the three reasons to separate a part', () => {
-    const text = described('collab_start')
-    expect(text).toContain('do the work yourself by default')
-    expect(text).toContain('it keeps bulky details out of this chat, it can run in parallel with other parts, or it needs teammates to work with each other')
-    expect(text).toContain('brief them with team_send')
-    expect(text).not.toContain('team_post_task')
+describe('shared collaboration contract', () => {
+  it('offers the same nine tools and schemas as the standalone SDK', () => {
+    const operations = Object.fromEntries(tools.map(tool => [tool.name, async () => ({ content: [] })]))
+    expect(tools).toEqual(createCollaborationServer(operations).instance.listTools())
+    expect(tools.map(tool => tool.name)).toEqual([
+      'spawn_agent', 'team_send', 'team_read_board', 'team_read_member', 'team_post_finding',
+      'team_read_artifact', 'team_post_task', 'team_update_task', 'team_stop',
+    ])
   })
 
-  it('team_list no longer sends it to check for a standing team before starting an agent team', () => {
-    expect(described('team_list')).toBe('List the standing teams of this space (id, members, status).')
+  it('creates one collaborator with an assignment and permits incremental additions without group selection', () => {
+    expect(find('spawn_agent').inputSchema).toMatchObject({
+      required: ['prompt'], additionalProperties: false,
+      properties: { prompt: { type: 'string' }, name: { type: 'string' } },
+    })
+    expect(Object.keys(find('spawn_agent').inputSchema!.properties as object)).toEqual(['prompt', 'name', 'cwd', 'isolation'])
+    expect(find('spawn_agent').description).toContain('create more collaborators as needed')
+    expect(find('spawn_agent').description).toContain('No team setup or shared goal is required')
   })
 
-  it('team_run is for handing a job to a standing team the person asked for', () => {
-    expect(described('team_run')).toContain('Only when the person asks to give the job to that team')
+  it('distinguishes delivery, board tracking and reusable findings', () => {
+    expect(find('team_send').description).toContain('Returns delivery status, not task completion')
+    expect(find('team_post_task').description).toContain('does not notify or start the assignee')
+    expect(find('team_post_finding').description).toContain('Do not use this for assignments')
+    expect(find('team_post_finding').description).toContain('only one collaborator')
+    expect(find('team_stop').description).toContain('does not mark work complete')
   })
-})
 
-describe('a team tool called with no agent team started in this chat', () => {
-  it('says so, and sends a standing team\u2019s work to Operate Halo instead of to collab_start alone', async () => {
-    const reply = await find(TEAM_TOOL_NAMES.readBoard).handler({})
-    expect(reply.isError).toBe(true)
-    expect(reply.content[0].text).toContain('No agent team has been started in this chat.')
-    expect(reply.content[0].text).toContain('collab_start')
-    expect(reply.content[0].text).toContain('for a standing team\'s work, use the Operate Halo calls in your instructions')
+  it('describes fact checking and the remote artifact boundary at the point of use', () => {
+    expect(find('team_read_board').description).toContain('not for repeated progress polling')
+    expect(find('team_read_member').description).toContain('not private reasoning')
+    expect(find('team_read_artifact').description).toContain('including one produced on another machine')
+  })
+
+  it('points an empty conversation to the incremental creation tool', async () => {
+    const reply = await server.instance.callTool('team_send', { to: 'missing', message: 'Hello' }) as CollaborationResult
+    expect(reply).toMatchObject({ isError: true })
+    expect(reply!.content[0]).toMatchObject({ text: expect.stringContaining('Use spawn_agent') })
+  })
+
+  it('rejects management and scope arguments before any operation', async () => {
+    expect(await server.instance.callTool('collab_start', {})).toBeUndefined()
+    for (const input of [{ prompt: 'Review', team_id: 'foreign' }, { prompt: 'Review', goal: 'new' }, { prompt: 'Review', model: 'unknown' }]) {
+      expect(await server.instance.callTool('spawn_agent', input)).toMatchObject({ isError: true })
+    }
   })
 })

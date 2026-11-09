@@ -46,6 +46,7 @@ import { createFederation } from '../../../../../src/main/apps/runtime/federatio
 import { LanMeshLink } from '../../../../../src/main/apps/runtime/federation/lan-mesh-provider'
 import {
   makeLocationAwareSessionDeps,
+  resolveMemberOwnerNode,
   withOwnerResolvedSpace,
   withExternalOrigin,
   WAKE_COMPLETION_BACKSTOP_MS,
@@ -397,6 +398,54 @@ describe('federation remote wake (position transparency)', () => {
     expect(local.holdTurn).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps private participant records without turning them into remote members', () => {
+    wireNodes(federationStore, teamStore, async () => ({ finalMessage: null }))
+    teamStore.participants.insert({ teamId: OFFICE, epochId: EPOCH_ID, appId: 'private-child', parentAppId: MEMBER_M,
+      memberName: 'helper', role: '', isLead: false, aiProvisioned: false, isTemporary: true, addedAt: 1,
+      ownerNodeId: NODE_B, origin: 'remote' })
+    expect(resolveMemberOwnerNode(teamStore, 'private-child', OFFICE, EPOCH_ID)).toBe(SELF_NODE_ID)
+    expect(resolveMemberOwnerNode(teamStore, MEMBER_M, OFFICE, EPOCH_ID)).toBe(NODE_B)
+    expect(teamStore.participants.getById('private-child')).not.toBeNull()
+  })
+
+  it('keeps exact stops local and refuses only the conditional remote operation', async () => {
+    const local: OrchestrationSessionDeps = {
+      sendAppChatMessage: async () => ({ finalMessage: null }), isSessionActive: () => false,
+      injectIntoSession: () => false, closeTeamSession: async () => {},
+      stopTeamSession: vi.fn(async () => true), getMemberSpaceId: () => 'local-space',
+    }
+    const sendStop = vi.fn(async () => true)
+    const adapter = makeLocationAwareSessionDeps({ local, resolveOwnerNode: appId => appId === MEMBER_M ? NODE_B : SELF_NODE_ID,
+      selfNodeId: NODE_A, sendWake: () => true, sendStop, registerTurnComplete: () => () => {}, getRemoteSpaceId: () => undefined })
+    const controller = { appId: 'local-controller', requestId: 'parent' }
+    await expect(adapter.stopTeamSession('local-child', OFFICE, EPOCH_ID, controller, 'child')).resolves.toBe(true)
+    expect(local.stopTeamSession).toHaveBeenCalledWith('local-child', OFFICE, EPOCH_ID, controller, 'child')
+    await expect(adapter.stopTeamSession(MEMBER_M, OFFICE, EPOCH_ID, controller, 'child')).rejects.toThrow('assignment-specific')
+    await expect(adapter.stopTeamSession(MEMBER_M, OFFICE, EPOCH_ID, undefined, 'child')).rejects.toThrow('assignment-specific')
+    expect(sendStop).not.toHaveBeenCalled()
+    await expect(adapter.stopTeamSession(MEMBER_M, OFFICE, EPOCH_ID)).resolves.toBe(true)
+    expect(sendStop).toHaveBeenCalledWith({ officeId: OFFICE, ownerNodeId: NODE_B, appId: MEMBER_M, epochId: EPOCH_ID })
+  })
+
+  it('sends ordinary remote messages without local cancellation or recipient-ticket fields', () => {
+    const sendWake = vi.fn((_input: { request: SerializedWakeRequest }) => false)
+    const adapter = makeLocationAwareSessionDeps({ local: {
+      sendAppChatMessage: async () => ({ finalMessage: null }), isSessionActive: () => false,
+      injectIntoSession: () => false, closeTeamSession: async () => {}, stopTeamSession: async () => false, getMemberSpaceId: () => null,
+    }, resolveOwnerNode: () => NODE_B, selfNodeId: NODE_A, sendWake, sendStop: async () => false,
+      registerTurnComplete: () => () => {}, getRemoteSpaceId: () => undefined })
+    const request = makeRequest(MEMBER_M)
+    request.teamContext.requestId = 'local-assignment'
+    request.teamContext.recipientFence = 'local-incarnation'
+    request.teamContext.controller = { appId: 'local-controller' }
+    adapter.deliverRemoteMessage?.({ ...request, onCompletion: () => {} })
+    const sent = sendWake.mock.calls[0][0].request.teamContext
+    expect(sent).not.toHaveProperty('requestId')
+    expect(sent).not.toHaveProperty('recipientFence')
+    expect(sent).not.toHaveProperty('controller')
+    expect(request.teamContext.requestId).toBe('local-assignment')
+  })
+
   it('getMemberSpaceId returns a non-null sentinel synchronously for a remote member', () => {
     const { hostManager } = wireNodes(federationStore, teamStore, async () => ({ finalMessage: 'x' }))
     const locationAware = makeLocationAwareSessionDeps({
@@ -544,6 +593,18 @@ describe('federation remote wake (position transparency)', () => {
 // flashing then vanishing with no record on either side).
 
 describe('owner-side message authority', () => {
+  it('does not accept peer-local controller or cancellation state as owner authority', () => {
+    const request = makeRequest(MEMBER_M)
+    request.teamContext.requestId = 'peer-request'
+    request.teamContext.recipientFence = 'peer-ticket'
+    request.teamContext.controller = { appId: MEMBER_M }
+    const incoming = withExternalOrigin(request)
+    expect(incoming.teamContext.origin).toBe('colleague')
+    expect(incoming.teamContext).not.toHaveProperty('requestId')
+    expect(incoming.teamContext).not.toHaveProperty('recipientFence')
+    expect(incoming.teamContext).not.toHaveProperty('controller')
+  })
+
   it('overrides a remote owner claim and records every batch item as team data', () => {
     const request = { ...makeRequest(MEMBER_M), coalescingKey: 'check:one',
       recordedMessages: [{ content: 'first' }, { content: 'second' }] }

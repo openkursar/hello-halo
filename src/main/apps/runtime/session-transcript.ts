@@ -590,16 +590,25 @@ export function convertEventsToTranscript(events: StoredEvent[], lines?: readonl
     // aggregates but no recoverable bubble text. The engine still reports the
     // turn's final text in `result.result`; adopt it when no text block was
     // reconstructed. Engine-agnostic: Claude carries text in assistant events,
-    // so `lastTextThought` is already set and this stays inert. Error results are
-    // skipped: a stopped turn ends with one too, and a failure is told before it
-    // — as an assistant message carrying `error` (read above), or as Codex's
-    // emitTerminalError text. dsh tells it nowhere else, so its record keeps none.
+    // so `lastTextThought` is already set and this stays inert. Some engines
+    // report failures only in the result; preserve those without treating a
+    // step limit or the SDK's cancellation acknowledgement as a provider error.
     if (event.type === 'result') {
       if (event.is_error !== true) {
         const resultText = typeof event.result === 'string' ? event.result : ''
         if (resultText && (pendingThoughts.length > 0 || resultText !== lastFlushedAnswer)) {
           pendingResultText = resultText
           pendingResultTs = ts
+        }
+      } else if (event.subtype !== 'error_max_turns' && event.parent_tool_use_id == null) {
+        const expectedAbort = event.subtype === 'error_during_execution' && event.result === 'Operation was aborted'
+          && Array.isArray(event.errors) && event.errors.length === 1 && event.errors[0] === 'Operation was aborted'
+        const errorText = typeof event.result === 'string' && event.result
+          ? event.result : Array.isArray(event.errors) ? event.errors.filter(error => typeof error === 'string').join('\n') : ''
+        if (!expectedAbort && errorText && !pendingError) {
+          turnFirstLine ??= lineOf(index)
+          pendingError = errorText
+          pendingErrorTs = ts
         }
       }
       noteTurnStart(index)

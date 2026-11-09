@@ -57,6 +57,16 @@ const concrete = (path: string) =>
     .join('/')
 
 describe('the real generated tables', () => {
+  it('keeps conversation discovery and saving outside the assistant management surface', () => {
+    expect(classify('GET', '/api/teams').decision).toBe('allowed')
+    expect(classify('GET', '/api/teams/collab-for-conversation/another-chat').decision).toBe('forbidden')
+    expect(classify('POST', '/api/teams/temporary/save-collab').decision).toBe('forbidden')
+    const manual = readFileSync(join(repoRoot, 'resources/api-ref/team.txt'), 'utf-8')
+    expect(manual).not.toContain('collab-for-conversation')
+    expect(manual).not.toContain('collab_save')
+    expect(manual).not.toContain('ephemeral:true')
+  })
+
   it('are non-trivial, so a silently empty table cannot make the rest pass', () => {
     expect(scope.length).toBeGreaterThan(50)
     expect(routes.length).toBeGreaterThan(scope.length)

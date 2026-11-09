@@ -7,7 +7,7 @@ import { getSpace, getSpaceDir } from '../space.service'
 import { GitError } from './errors'
 import { execGit, runGit } from './cli'
 import { assertRepoPath, requireSpaceDirectory } from './paths'
-import { readRepositoryRecords, updateRepositoryRecord } from './repository-store'
+import { readRepositoryRecords, rememberRepositoryRoot } from './repository-store'
 import { Gate } from './gate'
 import { getGitAvailability, requireGitExecutable } from './locate'
 import { parseRefLines, parseTrack, type BranchHeader } from './parse'
@@ -234,7 +234,7 @@ export async function listRepositories(spaceId: string, options: GitRepositoryLi
   const spaceDir = requireSpaceDir(spaceId)
   const state = spaceRepositories(spaceId, spaceDir)
   const revision = state.revision
-  let records = { roots: [] as string[], dismissedRoots: [] as string[] }
+  let records = { roots: [] as string[] }
   let recordError: GitRepositoryRecordFailure | undefined
   try {
     records = await readRepositoryRecords(spaceId, spaceDir)
@@ -243,14 +243,13 @@ export async function listRepositories(spaceId: string, options: GitRepositoryLi
   }
   const git = await getGitAvailability()
   const shallow = options.shallow ? await discoverRoots(spaceDir) : await hasGitDir(spaceDir) ? [spaceDir] : []
-  const dismissed = new Set(records.dismissedRoots)
   const remembered = new Set(records.roots)
   if (getSpaceDir(spaceId) === '' || resolve(getSpaceDir(spaceId)) !== spaceDir || getSpace(spaceId)?.path !== state.dataPath) {
     throw new GitError('GIT_INVALID_ARGUMENT', 'The space changed while listing repositories')
   }
   if (state.revision !== revision) throw new GitError('GIT_BUSY', 'Repository records changed while listing; retry the request')
   const roots = [...new Set([...shallow, ...records.roots, ...state.roots])]
-  const repositories: GitRepositoryEntry[] = roots.filter((root) => !dismissed.has(root)).map((root) => ({
+  const repositories: GitRepositoryEntry[] = roots.map((root) => ({
     root,
     name: basename(root),
     relativePath: relative(spaceDir, root).split(sep).join('/'),
@@ -303,7 +302,7 @@ export async function discoverRepository(spaceId: string, filePath: string): Pro
       }
       let remembered: boolean
       try {
-        remembered = await updateRepositoryRecord(spaceId, spaceDir, root, 'discover', isCurrent)
+        remembered = await rememberRepositoryRoot(spaceId, spaceDir, root, isCurrent)
       } catch (error) {
         if (!isCurrent()) {
           console.warn(`[Git] Ignoring failed obsolete repository discovery in space ${spaceId}: ${root}`)
@@ -344,7 +343,7 @@ export async function openRepository(spaceId: string, repoRoot: string): Promise
   if (getSpace(spaceId)?.path !== dataPath || requireSpaceDir(spaceId) !== spaceDir) {
     throw new GitError('GIT_INVALID_ARGUMENT', 'The space changed while opening a repository')
   }
-  await updateRepositoryRecord(spaceId, ctx.spaceDir, ctx.root, 'open')
+  await rememberRepositoryRoot(spaceId, ctx.spaceDir, ctx.root)
   const state = spaceRepositories(spaceId, ctx.spaceDir)
   state.revision++
   state.probes.clear()
@@ -352,22 +351,7 @@ export async function openRepository(spaceId: string, repoRoot: string): Promise
   return summary
 }
 
-/** Forget records only, including roots whose directory no longer exists. */
-export async function forgetRepository(spaceId: string, repoRoot: string): Promise<void> {
-  const spaceDir = requireSpaceDir(spaceId)
-  if (typeof repoRoot !== 'string' || !isAbsolute(repoRoot) || repoRoot.length > 4096 || repoRoot.includes('\0')) {
-    throw new GitError('GIT_INVALID_ARGUMENT', 'An absolute repository root is required')
-  }
-  const root = resolve(repoRoot)
-  await updateRepositoryRecord(spaceId, spaceDir, root, 'dismiss')
-  if (requireSpaceDir(spaceId) !== spaceDir) throw new GitError('GIT_INVALID_ARGUMENT', 'The space changed while removing a repository')
-  const state = spaceRepositories(spaceId, spaceDir)
-  state.revision++
-  state.roots.delete(root)
-  state.probes.clear()
-}
-
-/** Selection may remember a verified path, but cannot undo an explicit dismissal. */
+/** Remember a shallow root only after its selected status was verified. */
 export async function rememberRepository(spaceId: string, ctx: RepoContext): Promise<Pick<GitRepositoryDiscovery, 'remembered' | 'recordError'>> {
   const state = spaceRepositories(spaceId, ctx.spaceDir)
   const revision = state.revision
@@ -377,7 +361,7 @@ export async function rememberRepository(spaceId: string, ctx: RepoContext): Pro
       && resolve(currentDir) === ctx.spaceDir && getSpace(spaceId)?.path === state.dataPath
   }
   try {
-    const remembered = await updateRepositoryRecord(spaceId, ctx.spaceDir, ctx.root, 'discover', isCurrent)
+    const remembered = await rememberRepositoryRoot(spaceId, ctx.spaceDir, ctx.root, isCurrent)
     if (remembered && isCurrent()) rememberRoot(state, ctx.root)
     return { remembered }
   } catch (error) {

@@ -55,7 +55,7 @@ async function post(path: string, body: unknown): Promise<any> {
   app.use(express.json())
   registerGitRoutes(app)
   const server = await new Promise<import('http').Server>((resolve) => {
-    const s = app.listen(0, () => resolve(s))
+    const s = app.listen(0, '127.0.0.1', () => resolve(s))
   })
   try {
     const res = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}${path}`, {
@@ -90,7 +90,7 @@ describe('git transport', () => {
     expect(contents.data).toMatchObject({ before: 'a\n', after: 'b\n' })
   })
 
-  it('discovers, opens, lists and forgets a deep repository over both transports', async () => {
+  it('discovers, opens and lists a deep repository over both transports', async () => {
     const repoRoot = join(dir, 'projects', 'nested', 'repo with spaces')
     const repo = initRepo(repoRoot)
     repo.write('src/example.ts', 'export const value = 1\n')
@@ -113,18 +113,12 @@ describe('git transport', () => {
     expect(listed.data.repositories.every((entry: object) => !('branch' in entry))).toBe(true)
     expect(await post('/api/git/repositories', { spaceId: 's' })).toEqual(listed)
 
-    expect(await handlers.get('git:forget-repository')!({}, 's', repoRoot)).toEqual({ success: true, data: undefined })
-    expect(await post('/api/git/open-repository', { spaceId: 's', repoRoot })).toEqual(opened)
-    expect(await post('/api/git/forget-repository', { spaceId: 's', repoRoot })).toEqual({ success: true })
-    const forgotten = await post('/api/git/repositories', { spaceId: 's' })
-    expect(forgotten.data.repositories.map((entry: { root: string }) => entry.root)).not.toContain(repoRoot)
-    expect(await post('/api/git/discover-repository', { spaceId: 's', filePath })).toEqual({ success: true, data: null })
     expect(readFileSync(filePath, 'utf8')).toBe('export const value = 1\n')
     expect(readFileSync(join(repoRoot, '.git', 'index'))).toEqual(index)
     expect(existsSync(join(repoRoot, '.git', 'HEAD'))).toBe(true)
   })
 
-  it('lists unavailable saved roots and lets either transport forget them', async () => {
+  it('lists unavailable saved roots identically over both transports', async () => {
     const repoRoot = join(dir, 'projects', 'unavailable', 'repo')
     initRepo(repoRoot)
     expect(await post('/api/git/open-repository', { spaceId: 's', repoRoot })).toMatchObject({ success: true })
@@ -133,8 +127,6 @@ describe('git transport', () => {
     expect(listed.data.repositories).toContainEqual({ root: repoRoot, name: 'repo', relativePath: 'projects/unavailable/repo', remembered: true })
     expect(await post('/api/git/status', { spaceId: 's', repoRoot })).toMatchObject({ success: false, code: 'GIT_NOT_A_REPOSITORY' })
     expect(await post('/api/git/repositories', { spaceId: 's' })).toEqual(listed)
-    expect(await handlers.get('git:forget-repository')!({}, 's', repoRoot)).toEqual({ success: true, data: undefined })
-    expect(await post('/api/git/forget-repository', { spaceId: 's', repoRoot })).toEqual({ success: true })
   })
 
   it('remembers a selected shallow repository through identical status options on either transport', async () => {
@@ -146,9 +138,6 @@ describe('git transport', () => {
     expect(await post('/api/git/status', { spaceId: 's', repoRoot: root, remember: true })).toEqual(ipc)
     expect((await post('/api/git/repositories', { spaceId: 's' })).data.repositories).toContainEqual({ root, name: 'selected-child', relativePath: 'selected-child', remembered: true })
     expect(await post('/api/git/status', { spaceId: 's', repoRoot: root, remember: 'yes' })).toMatchObject({ success: false, code: 'GIT_INVALID_ARGUMENT' })
-    await post('/api/git/forget-repository', { spaceId: 's', repoRoot: root })
-    expect(await post('/api/git/status', { spaceId: 's', repoRoot: root, remember: true })).toMatchObject({ success: true, data: { remembered: false } })
-    expect((await post('/api/git/repositories', { spaceId: 's', options: { shallow: true } })).data.repositories.some((entry: { root: string }) => entry.root === root)).toBe(false)
   })
 
   it('keeps known and shallow path listing identical across transports', async () => {
@@ -172,7 +161,7 @@ describe('git transport', () => {
     expect(await post('/api/git/discover-repository', { spaceId: 's', filePath })).toEqual({ success: true, data: null })
   })
 
-  it.each(['discover-repository', 'open-repository', 'forget-repository'])('preserves validation failures for %s', async (operation) => {
+  it.each(['discover-repository', 'open-repository'])('preserves validation failures for %s', async (operation) => {
     const overIpc = await handlers.get(`git:${operation}`)!({}, 's', 42)
     const argument = operation === 'discover-repository' ? 'filePath' : 'repoRoot'
     expect(overIpc).toMatchObject({ success: false, code: 'GIT_INVALID_ARGUMENT' })

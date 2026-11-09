@@ -63,11 +63,6 @@ export const gitClient = {
   invalidateDiscovery: (spaceId: string): void => gitDiscovery.forget(spaceId),
   openRepository: (spaceId: string, repoRoot: string): Promise<GitRepository> =>
     unwrap(api.gitOpenRepository(spaceId, repoRoot)),
-  forgetRepository: async (spaceId: string, repoRoot: string): Promise<void> => {
-    gitDiscovery.invalidateProbes(spaceId)
-    await unwrap(api.gitForgetRepository(spaceId, repoRoot))
-    gitDiscovery.invalidateProbes(spaceId)
-  },
   getStatus: async (spaceId: string, repoRoot: string, remember?: boolean): Promise<GitWorkingTreeStatus> => {
     const status = await unwrap(remember === undefined ? api.gitGetStatus(spaceId, repoRoot) : api.gitGetStatus(spaceId, repoRoot, remember))
     if (status.recordError) gitDiscovery.reportRecordFailure(spaceId, repoRoot, status.recordError)

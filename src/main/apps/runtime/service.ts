@@ -54,6 +54,8 @@ import { eventPayloadForModel, renderEventInput } from './event-input'
 import { tryInjectIntoActiveRun, isRunActive, listActiveRuns, onActiveRunReady, getActiveRun, markRunInputsStopped, type RunSupplement } from './active-runs'
 import { automaticEnabled, blockedReason, deriveRuntimeStatus } from './app-state'
 import { getActiveTeamRuntime } from './team'
+import { getTeamStore } from '../team'
+import { resolveParticipantExecution } from './team/participant-execution'
 import { getEscalationQuestions, formatEscalationAnswer, totalRunTokens, type RunTokenUsage } from '../../../shared/apps/app-types'
 import type { ContentReference } from '../../../shared/types/content-reference'
 import { broadcastToAll } from '../../http/websocket'
@@ -718,6 +720,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       })
 
       const runTag = result.runId.slice(0, 8)
+      let fallbackEntryId: string | undefined
 
       // ── Fallback activity entry ──────────────────────
       // If the AI didn't call report_to_user (e.g., non-Anthropic model
@@ -731,8 +734,9 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
               ? result.finalText.slice(0, 500)
               : `${app.spec.name} completed (${result.durationMs}ms)`
 
+            fallbackEntryId = randomUUID()
             const fallbackEntry: ActivityEntry = {
-              id: randomUUID(),
+              id: fallbackEntryId,
               appId: app.id,
               runId: result.runId,
               type: result.outcome === 'noop' ? 'run_skipped' : 'run_complete',
@@ -805,7 +809,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         try {
           // Query entries for THIS run only — avoid showing stale content from previous runs
           const runEntries = store.getEntriesForRun(result.runId)
-          const completionEntry = runEntries.find(e => e.type === 'run_complete' || e.type === 'output')
+          const completionEntry = runEntries.find(e => e.id !== fallbackEntryId && (e.type === 'run_complete' || e.type === 'output'))
           // Only send if AI didn't report (report-tool.ts already sent its own notification)
           if (!completionEntry) {
             const body = result.finalText
@@ -905,11 +909,36 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     }
   }
 
+  function participantDecisionContext(entry: ActivityEntry) {
+    const actor = store.getParticipantActor(entry.appId)
+    const team = entry.content.teamContext
+    const teamStore = getTeamStore()
+    if (!actor || !team || !teamStore || actor.teamId !== team.teamId || actor.epochId !== team.epochId
+      || teamStore.getEpochById(actor.epochId)?.teamId !== actor.teamId
+      || !teamStore.participants.getExecution(actor.teamId, actor.epochId, actor.appId)) return null
+    return { actor, teamStore }
+  }
+
+  function decisionActor(entry: ActivityEntry): InstalledApp | null {
+    const installed = appManager.getApp(entry.appId)
+    if (installed) return installed
+    const context = participantDecisionContext(entry)
+    if (!context) return null
+    const { actor, teamStore } = context
+    return resolveParticipantExecution(teamStore, appManager, actor.teamId, actor.epochId, actor.appId)?.app ?? null
+  }
+
   function dispatchContinuations(): void {
     for (const entry of store.getQueuedContinuations()) {
       if (continuationDispatches.has(entry.id)) continue
       const team = entry.content.teamContext
-      const app = appManager.getApp(entry.appId)
+      if (team && !getActiveTeamRuntime()) continue
+      let app: InstalledApp | null
+      try { app = decisionActor(entry) }
+      catch (error) {
+        finishContinuation(entry, error instanceof Error ? error.message : String(error))
+        continue
+      }
       if (!app || !entry.userResponse || entry.content.resolution || store.isRunClosed(entry.runId)) {
         console.warn('[Runtime] Cancelled unavailable continuation', { entryId: entry.id, appId: entry.appId })
         store.updateContinuation(entry.id, 'cancelled')
@@ -930,7 +959,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         }
         continue
       }
-      if (team && !getActiveTeamRuntime()) continue
       continuationDispatches.add(entry.id)
       const onStarted = (): void => {
         store.updateContinuation(entry.id, 'running')
@@ -1474,9 +1502,9 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     // ── Escalation ──────────────────────────────────
 
     async respondToEscalation(appId: string, entryId: string, response: EscalationResponse): Promise<ActivityEntry> {
-      if (!appManager.getApp(appId)) throw new AppNotFoundError(appId)
       const existing = store.getEntry(entryId)
       if (!existing || existing.appId !== appId) throw new EscalationNotFoundError(appId, entryId)
+      if (!decisionActor(existing)) throw new AppNotFoundError(appId)
       const entry = store.acceptDecision(appId, entryId, response)
       if (!entry.content.teamContext) for (const controller of queuedAutomatic.get(appId) ?? []) controller.abort('An accepted answer takes priority over queued automatic work')
       console.log('[Runtime] Decision accepted durably', { appId, entryId, continuation: entry.continuation?.status })
@@ -1487,9 +1515,9 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     },
 
     async dismissEscalation(appId: string, entryId: string): Promise<void> {
-      if (!appManager.getApp(appId)) throw new AppNotFoundError(appId)
       const existing = store.getEntry(entryId)
       if (!existing || existing.appId !== appId) throw new EscalationNotFoundError(appId, entryId)
+      if (!appManager.getApp(appId) && !participantDecisionContext(existing)) throw new AppNotFoundError(appId)
       const entry = store.dismissDecision(entryId)
       if (!entry) throw new Error('This request was already answered or closed')
       console.log('[Runtime] Decision dismissed by user', { appId, entryId })

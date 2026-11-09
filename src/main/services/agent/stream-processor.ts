@@ -23,7 +23,8 @@ import type {
   ToolCall,
   TokenUsage,
   SingleCallUsage,
-  SessionState
+  SessionState,
+  StopReason
 } from './types'
 import type { Goal, GoalChangeSource } from '../../../shared/types/goal'
 import { emitAgentEvent } from './events'
@@ -40,12 +41,12 @@ import {
 import { broadcastMcpStatus } from './mcp-manager'
 import { probeUnhealthyServers } from './mcp-probe'
 import {
-  handleSubAgentMessage,
+  handleToolMessage,
   handleTaskStarted,
   handleTaskProgress,
   handleTaskNotification,
-  type SubAgentContext
-} from './subagent-handler'
+  type ToolMessageContext
+} from './tool-message-handler'
 import { isTransparentTool } from './constants'
 import { isAppChatKey, parseAppChatKey } from '../../../shared/apps/im-keys'
 import { analytics } from '../analytics/analytics.service'
@@ -251,8 +252,10 @@ export interface StreamResult {
   capturedSessionId?: string
   /** Whether the stream was interrupted (no result message or error_during_execution) */
   isInterrupted: boolean
-  /** Whether the user aborted via AbortController */
+  /** Whether the host aborted this turn via its AbortController. */
   wasAborted: boolean
+  /** Explicit host cause, absent for legacy or unspecified aborts. */
+  stopReason?: StopReason
   /** Whether an error thought was received (e.g., rate limit, auth failure) */
   hasErrorThought: boolean
   /** The error thought itself, if any */
@@ -606,6 +609,9 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
       (isStreamingTextBlock ? currentStreamingText : lastTextContent || currentStreamingText) || ''
     const errorThought = thoughts.find(thought => thought.type === 'error')
     const wasAborted = abortController.signal.aborted
+    const reason = abortController.signal.reason
+    const stopReason: StopReason | undefined = wasAborted && (reason === 'user' || reason === 'internal' || reason === 'controller')
+      ? reason : undefined
     return {
       finalContent,
       hasMeaningfulContent: finalContent.trim().length > 0,
@@ -614,6 +620,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
       capturedSessionId,
       isInterrupted: !receivedResult || hadErrorDuringExecution,
       wasAborted,
+      ...(stopReason ? { stopReason } : {}),
       hasErrorThought: !!errorThought,
       errorThought,
       reachedMaxTurns: hadMaxTurnsReached,
@@ -663,12 +670,46 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
         break
       }
 
+      // Committed tool outcomes still belong to this turn's recoverable record.
+      // Late answer text stays out of both the partial reply and its sink.
+      if (sdkMessage.type === 'user' && Array.isArray(sdkMessage.message?.content)
+        && sdkMessage.message.content.some((block: { type?: string }) => block.type === 'tool_result')) {
+        const blocks = sdkMessage.parent_tool_use_id == null ? sdkMessage.message.content : []
+        for (const block of blocks) {
+          if (block.type !== 'tool_result') continue
+          const outcome = parseSDKMessage({ ...sdkMessage, message: { ...sdkMessage.message, content: [block] } }, displayModel)
+          if (!outcome || outcome.type !== 'tool_result') continue
+          const tool = sessionState.thoughts.find(thought => thought.id === toolIdToThoughtId.get(outcome.id))
+          if (tool) tool.toolResult = { output: outcome.toolOutput || '', isError: outcome.isError || false, timestamp: outcome.timestamp }
+          else sessionState.thoughts.push(outcome)
+        }
+        callbacks.onRawMessage?.(sdkMessage)
+        assertSessionActive()
+      }
+
       // Consume the result and exit cleanly
       if (sdkMessage.type === 'result') {
         receivedResult = true
-        hadErrorDuringExecution = true
+        hadErrorDuringExecution = sdkMessage.subtype === 'error_during_execution'
         // Extract session ID for persistence
         const msg = sdkMessage as Record<string, unknown>
+        // Halo's cancellation result is flagged as an error. Only this exact
+        // acknowledgement is expected; a racing provider failure still matters.
+        const expectedAbort = msg.subtype === 'error_during_execution'
+          && msg.result === 'Operation was aborted'
+          && Array.isArray(msg.errors) && msg.errors.length === 1 && msg.errors[0] === 'Operation was aborted'
+        if (!expectedAbort) {
+          const failure = parseSDKMessage(sdkMessage, displayModel)
+          if (failure?.type === 'error') {
+            failure.content = explainEngineError(failure.content, params.engineId)
+            sessionState.thoughts.push(failure)
+            callbacks.onRawMessage?.(sdkMessage)
+            assertSessionActive()
+            console.warn(`[Agent][${conversationId}] Engine failure received while draining a stopped turn: ${failure.content}`)
+            emitAgentEvent('agent:thought', spaceId, conversationId, { thought: failure })
+            emitAgentEvent('agent:error', spaceId, conversationId, { type: 'error', error: failure.content, errorCode: failure.errorCode })
+          }
+        }
         if (!capturedSessionId) {
           const sessionIdFromMsg = msg.session_id || (msg.message as Record<string, unknown>)?.session_id
           capturedSessionId = sessionIdFromMsg as string
@@ -679,7 +720,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
         break
       }
 
-      // Skip all processing (no UI events, no thought accumulation) — just drain
+      // Other drained frames cannot extend the reply or start further work.
       continue
     }
 
@@ -881,10 +922,6 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
         // Send to renderer for immediate display (shows tool name + preparing state)
         emitAgentEvent('agent:thought', spaceId, conversationId, { thought })
 
-        // Agent Team: detect Agent tool_use with name + team_name (team mode spawn)
-        // Note: full input JSON is not available yet at content_block_start,
-        // so team spawn detection is deferred to content_block_stop when input is parsed.
-        // We track the toolId here so we can check when the block completes.
       }
 
       // Tool use input JSON delta - accumulate partial JSON. Nothing is published:
@@ -1004,15 +1041,13 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
       continue  // stream_event handled, skip normal processing
     }
 
-    // ========== Sub-agent message routing ==========
-    // SDK emits sub-agent assistant/user messages with parent_tool_use_id set.
-    // Route these to the dedicated handler — they must NOT enter the main agent
-    // processing path (which expects stream_event-created tool_use thoughts).
+    // Tool-owned messages have no stream-event-created thoughts and must not
+    // enter the main conversation's processing path.
     const parentToolUseId = (sdkMessage as any).parent_tool_use_id as string | null | undefined
     if (parentToolUseId != null && (sdkMessage.type === 'assistant' || sdkMessage.type === 'user')) {
-      const subCtx: SubAgentContext = { spaceId, conversationId, sessionState, toolIdToThoughtId }
-      handleSubAgentMessage(sdkMessage, parentToolUseId, subCtx)
-      continue  // Sub-agent message handled, skip main processing
+      const subCtx: ToolMessageContext = { spaceId, conversationId, sessionState, toolIdToThoughtId }
+      handleToolMessage(sdkMessage, parentToolUseId, subCtx)
+      continue
     }
 
     // DEBUG: Log all SDK messages with timestamp (ms since send).
@@ -1275,11 +1310,9 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
         )
       }
 
-      // Task lifecycle events — update sub-agent progress + forward to Agent Team
       if (subtype === 'task_started' || subtype === 'task_progress' || subtype === 'task_notification') {
-        const subCtx: SubAgentContext = { spaceId, conversationId, sessionState, toolIdToThoughtId }
+        const subCtx: ToolMessageContext = { spaceId, conversationId, sessionState, toolIdToThoughtId }
 
-        // Update the Task thought's taskProgress for sub-agent timeline display
         if (subtype === 'task_started') {
           handleTaskStarted(msg, subCtx)
         } else if (subtype === 'task_progress') {
@@ -1289,41 +1322,22 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
         }
       }
 
-      // Forward slash_commands / skills / agents to renderer for input autocomplete.
+      // Forward slash_commands and skills to renderer for input autocomplete.
       // These are only present on the init subtype message.
       if (subtype === 'init') {
         const sdkSlashCommands = msg.slash_commands as string[] | undefined
         const sdkSkills = msg.skills as string[] | undefined
-        const sdkAgents = msg.agents as string[] | undefined
-        if (params.engineId || sdkSlashCommands || sdkSkills || sdkAgents) {
+        if (params.engineId || sdkSlashCommands || sdkSkills) {
           emitAgentEvent('agent:session-info', spaceId, conversationId, {
             ...(params.engineId ? { engineId: params.engineId } : {}),
             slashCommands: sdkSlashCommands ?? [],
             skills: sdkSkills ?? [],
-            agents: sdkAgents ?? []
           })
         }
       }
     } else if (sdkMessage.type === 'result') {
       receivedResult = true  // Mark that we received a result message
       resultReceivedAt = Date.now()
-
-      // Which teammates were still mid-task when the turn ended — the shape a
-      // stalled team turn leaves behind.
-      if (isDeveloperMode()) {
-        const teamThoughts = sessionState.thoughts.filter(
-          t => t.type === 'tool_use' && t.toolName === 'Agent' && (t.toolInput as any)?.team_name
-        )
-        const summary = teamThoughts.length > 0
-          ? `team agents: [${teamThoughts.map(t =>
-              `${(t.toolInput as any)?.name ?? '?'}(${t.taskProgress?.status ?? 'no-task-started'})`
-            ).join(', ')}]`
-          : 'no team agents in session'
-        console.log(
-          `[Agent][${conversationId}] result received at iteration #${loopIterationCount}` +
-          ` | ${summary} | subtype=${(sdkMessage as any).subtype ?? 'success'}`
-        )
-      }
 
       if (!capturedSessionId) {
         const sessionIdFromMsg = msg.session_id || (msg.message as Record<string, unknown>)?.session_id
@@ -1383,7 +1397,8 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
   // | 7    | no         | no            | no              | no         | yes             | max turns notice |
 
   const result = readSnapshot()
-  const { finalContent, hasMeaningfulContent, wasAborted, hasErrorThought, isInterrupted, errorThought } = result
+  const { finalContent, hasMeaningfulContent, wasAborted, stopReason, hasErrorThought, isInterrupted, errorThought } = result
+  const internalStop = stopReason === 'internal' && !hasErrorThought && !hadMaxTurnsReached && !result.drainTimedOut
 
   // Log content source for debugging. Gate on meaningful content so the
   // repair placeholder (whitespace-only) is logged as "no content", matching
@@ -1403,11 +1418,11 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
   }
 
   const turnDurationMs = Date.now() - t0
-  if (isInterrupted || hasErrorThought || wasAborted) {
+  if (!internalStop && (isInterrupted || hasErrorThought || wasAborted)) {
     const errorSummary = String((errorThought?.content as unknown) ?? '').slice(0, 300).replace(/"/g, "'")
-    console.log(`[Agent] turn_error conv=${conversationId} duration_ms=${turnDurationMs} aborted=${wasAborted} interrupted=${isInterrupted} hasErrorThought=${hasErrorThought} maxTurns=${hadMaxTurnsReached} content_len=${finalContent.length} error="${errorSummary}"`)
+    console.log(`[Agent] turn_error conv=${conversationId} duration_ms=${turnDurationMs} aborted=${wasAborted} stop_reason=${stopReason ?? 'none'} interrupted=${isInterrupted} hasErrorThought=${hasErrorThought} maxTurns=${hadMaxTurnsReached} content_len=${finalContent.length} error="${errorSummary}"`)
   } else {
-    console.log(`[Agent] turn_end conv=${conversationId} duration_ms=${turnDurationMs} content_len=${finalContent.length} tokens_in=${tokenUsage?.inputTokens ?? 0} tokens_out=${tokenUsage?.outputTokens ?? 0} cache_read=${tokenUsage?.cacheReadTokens ?? 0} cache_creation=${tokenUsage?.cacheCreationTokens ?? 0}`)
+    console.log(`[Agent] turn_end conv=${conversationId} duration_ms=${turnDurationMs} stop_reason=${stopReason ?? 'none'} content_len=${finalContent.length} tokens_in=${tokenUsage?.inputTokens ?? 0} tokens_out=${tokenUsage?.outputTokens ?? 0} cache_read=${tokenUsage?.cacheReadTokens ?? 0} cache_creation=${tokenUsage?.cacheCreationTokens ?? 0}`)
   }
 
   // Notify caller for storage handling (optional — consumer-based callers
@@ -1430,15 +1445,19 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
 
   // Determine if interrupted error should be sent
   const getInterruptedErrorMessage = (): string | null => {
+    if (hasErrorThought) return null
+    if (internalStop) return null
+    if (result.drainTimedOut) return 'Model response interrupted unexpectedly.'
+    if (stopReason === 'internal' && hadMaxTurnsReached) return MAX_TURNS_NOTICE
     if (hasMeaningfulContent) {
       // Has content: user aborted shows friendly message, other interrupts show warning
-      if (wasAborted) return 'Stopped by user.'
+      if (wasAborted) return stopReason === 'controller' ? 'Stopped by the collaborator that assigned this work.' : 'Stopped by user.'
       // What was written so far is not the whole answer — say why it stopped
       if (hadMaxTurnsReached) return MAX_TURNS_NOTICE
       return isInterrupted ? 'Model response interrupted unexpectedly.' : null
     } else {
       // No content: skip if already has error thought or user aborted
-      if (hasErrorThought || wasAborted) return null
+      if (wasAborted) return null
       // Max turns is a graceful SDK limit, not a crash — show a clear actionable message
       if (hadMaxTurnsReached) return MAX_TURNS_NOTICE
       return isInterrupted
@@ -1460,8 +1479,6 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
       errorType: 'interrupted',
       error: errorMessage
     })
-  } else if (wasAborted) {
-    console.log(`[Agent][${conversationId}] User stopped - no error sent`)
   }
 
   // Telemetry: flush the last API call of this stream. Mid-stream calls flush
@@ -1490,7 +1507,7 @@ async function consumeStream(params: ProcessStreamParams, deltas: DeltaCoalescer
   // hits AFTER successful invocations does not retroactively turn those
   // calls into failures, and double-emitting `ok` + `error` for the same
   // turn with no turnId would corrupt dashboard aggregates.
-  if (!invocationOkEmitted && (hasErrorThought || isInterrupted || wasAborted)) {
+  if (!invocationOkEmitted && !internalStop && (hasErrorThought || isInterrupted || wasAborted)) {
     // A failed call is still billed if the provider reported usage for it.
     // Reaching here means no flush happened yet, so this usage was never
     // attributed elsewhere. Streams that died before producing output report

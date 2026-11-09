@@ -252,6 +252,8 @@ describe('ImChannelManager — authorization revisions', () => {
       ['owner removal', { owners: [] }],
       ['owner roster removal', { owners: undefined }],
       ['owner replacement', { owners: ['owner-2'] }],
+      ['guest policy', { guestPolicy: { allowCollaboration: true } }],
+      ['reply scope', { replyScope: 'direct' }],
       ['bot identity', { config: { botId: 'b2', secret: 'fixture-credential' } }],
       ['credentials', { config: { botId: 'b1', secret: 'changed-fixture-credential' } }],
     ])('never revives a revision after %s changes and reverts without an intervening lookup', (_name, change) => {
@@ -266,7 +268,7 @@ describe('ImChannelManager — authorization revisions', () => {
       expect(manager.getInstanceConfig('i1')).toEqual(cfg)
     })
 
-    it('preserves revisions for no-change saves and unrelated dispatch or guest-policy edits', () => {
+    it('preserves revisions for no-change saves and unrelated presentation edits', () => {
       manager.applyConfig([cfg], noopInbound)
       const revision = manager.getAuthorizationRevision('i1')
       const instance = manager.getInstance('i1')
@@ -275,8 +277,7 @@ describe('ImChannelManager — authorization revisions', () => {
         expect(manager.getAuthorizationRevision('i1')).toBe(revision)
       }
       const unrelated: Partial<ImChannelInstanceConfig> = {
-        streaming: true, processingNotice: false, replyScope: 'direct',
-        guestPolicy: { allowedTools: ['Read'] }, savedGuestPolicy: { allowedTools: [] },
+        streaming: true, processingNotice: false, savedGuestPolicy: { allowedTools: [] },
       }
       update({ ...cfg, ...unrelated })
       expect(manager.getAuthorizationRevision('i1')).toBe(revision)
@@ -381,6 +382,19 @@ describe('ImChannelManager — authorization revisions', () => {
     expect(onStop).toHaveBeenCalledOnce()
     expect(onStop.mock.results[0].value).toBeDefined()
     expect(onStop.mock.results[0].value).not.toBe(revision)
+  })
+
+  it('announces every authorization revocation synchronously, including hot policy edits and removal', () => {
+    manager.applyConfig([cfg], noopInbound)
+    const changed = vi.fn()
+    const listener = manager.onAuthorizationChanged(changed)
+    manager.applyConfig([{ ...cfg, guestPolicy: { allowCollaboration: true } }], noopInbound)
+    manager.applyConfig([cfg], noopInbound)
+    manager.applyConfig([], noopInbound)
+    expect(changed.mock.calls).toEqual([['i1'], ['i1'], ['i1']])
+    listener.dispose()
+    manager.applyConfig([cfg], noopInbound)
+    expect(changed).toHaveBeenCalledTimes(3)
   })
 })
 

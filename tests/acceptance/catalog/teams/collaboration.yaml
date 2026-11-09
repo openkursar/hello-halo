@@ -15,7 +15,16 @@ references:
   - tests/e2e/specs/team-render.spec.ts
   - tests/e2e/specs/acceptance-kept-collaboration.spec.ts
   - tests/e2e/specs/acceptance-digital-human-collaboration.spec.ts
+  - tests/e2e/specs/acceptance-im-collaboration.spec.ts
+  - tests/e2e/specs/acceptance-collaboration-engines.spec.ts
+  - tests/e2e/specs/acceptance-live-collaboration.spec.ts
 promises:
+  addressing:
+    en: Collaborators address the lead as lead and reply to the actual requesting teammate without guessing a role name.
+    zh: 协作者使用 lead 联系负责人，并回复实际请求工作的队友，无需猜测角色地址。
+  directory:
+    en: Global team directories expose only saved teams. A temporary collaboration remains available in its source conversation and appears in the directory only as a separate saved team after I keep it.
+    zh: 全局团队目录只展示正式团队；临时协作保留在源对话中，我保存后才以独立正式团队进入目录。
   room:
     en: A temporary collaboration has one source task and keeps its members reachable.
     zh: 临时协作只有一个源任务，其成员始终可访问。
@@ -25,10 +34,133 @@ promises:
   history:
     en: Keeping copies no task history. The original task and each member's own conversation stay readable and continue in the collaboration, and the saved team starts with no tasks.
     zh: 保留不复制任务历史。原任务及各成员各自的对话仍可在原协作中阅读并继续，保存的团队没有任何任务。
+  delegation:
+    en: Collaborators can independently read their assigned workspace files and return evidence for a combined answer in the source conversation.
+    zh: 协作者能分别读取所分配的工作区文件，并把证据回报到源聊天，形成汇总回答。
   digital-human:
     en: In my own chat with a digital human I can ask it to organize a temporary team; members' reports return to that chat, other chats of it stay unaffected, and deleting the chat ends the collaboration.
     zh: 在我与数字人的原生聊天里可以让它组织临时团队；成员的回报回到这个聊天，它的其他聊天不受影响，删除聊天会结束协作。
+  im-source:
+    en: IM collaboration answers in the original chat under the original caller's permissions, after the digital human reviews the result. Stops, clearing and authorization changes invalidate old results.
+    zh: IM 协作按原调用者权限，由数字人审阅结果后回复原聊天。停止、清空和权限变更会使旧结果失效。
 scenarios:
+  - id: teams.collaboration.engine-parity
+    title:
+      en: Use the same collaboration flow with each application engine
+      zh: 在各应用引擎中使用同一协作流程
+    verifies: [delegation, room]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      engine: [halo, anthropic, codex, dsh]
+    preconditions:
+      - en: An isolated application explicitly selects the tested engine and one local chat-completions model endpoint. Claude Code is separately installed and explicitly selected through HALO_ACCEPTANCE_CLAUDE_CLI; the selected engine must be available without fallback.
+        zh: 隔离应用明确选择待测引擎及一个本地聊天补全模型端点。Claude Code 通过 HALO_ACCEPTANCE_CLAUDE_CLI 明确选择独立安装；待测引擎必须实际可用且不允许回退。
+    steps:
+      - en: Create one collaborator through the real tool, wait for its initial reply, address follow-up work to the returned handle and receive the answer in the source conversation. For Dsh, restart the application before the follow-up and continue in the original conversation.
+        zh: 通过真实工具创建一位协作者，等待首条回复，按返回句柄派发后续工作，并在源对话接收结果。Dsh 在后续派工前重启应用，并在原对话继续。
+    expected:
+      - en: The source and collaborator have distinct persisted session bindings for the requested engine. The collaborator retains its assignment context, the source receives its answer, and no native or retired delegation tool is advertised. After the Dsh restart the logical member and collaboration stay unchanged, native session IDs change, and provider requests contain the original source task, accepted member handle and the member’s private assignment.
+        zh: 源与协作者保留不同的原生会话绑定且都属于指定引擎。协作者保留任务上下文，源收到回答，模型目录没有原生或已退役的委派工具。Dsh 重启后成员与协作身份保持不变，原生会话 ID 更新，实际模型请求包含原源任务、已接受的成员句柄及成员私有任务上下文。
+    notes:
+      en: This uses the real application services and engine processes with scripted provider responses. Codex uses the application's Responses-to-chat router. It does not establish live-model answer quality, cross-device delivery or packaged installation behavior.
+      zh: 使用真实应用服务与引擎进程，模型回复由脚本控制。Codex 经应用的 Responses 到聊天接口转换，不证明真实模型回答质量、跨设备投递或安装包行为。
+  - id: teams.collaboration.live-delegation
+    title:
+      en: Delegate two independent file reads with a real model
+      zh: 真实模型委派两次独立文件读取
+    verifies: [delegation, room]
+    platforms: [darwin, win32, linux]
+    profiles: [live]
+    evidence: live-model
+    mode: live
+    automation: automated
+    requirements: [halo-sdk, live-model]
+    preconditions:
+      - en: Use a fresh isolated profile with Halo SDK, collaboration enabled, and the existing bounded live-model broker. Two files contain distinct synthetic random values unknown to the prompt.
+        zh: 使用全新隔离资料、Halo SDK、已开启的协作能力和现有有预算上限的真实模型代理；两个文件包含提示词未透露的不同随机测试值。
+    steps:
+      - en: Ask the source to create two collaborators, assign one file to each, and combine their reports in its reply.
+        zh: 要求源 AI 创建两位协作者，各读取一个文件，并在源聊天回复中汇总回报。
+    expected:
+      - en: At least two real spawn calls occur; two distinct member transcripts contain successful reads of their respective values in the same work scope.
+        zh: 记录至少两次真实创建调用；同一工作范围内，两位不同成员各自的独立记录包含对所分配值的成功读取。
+      - en: One persisted and visible source answer contains both values; the input files remain unchanged and a different work scope cannot read those member histories.
+        zh: 源聊天一条可见且持久保存的回答包含两个值；输入文件未被修改，其他工作范围读不到这些成员记录。
+    notes:
+      en: This tests live delegation and local application routing, not exact wording, remote federation, long tasks or adversarial confidentiality between teammates.
+      zh: 检验真实模型委派和本机应用路由，不要求逐字措辞，也不覆盖跨端协作、长任务或队友之间的对抗保密。
+  - id: teams.collaboration.im-source
+    title:
+      en: Review collaborator results in the original IM source
+      zh: 在原 IM 聊天中审阅协作者结果
+    verifies: [im-source]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      authority: [owner, guest]
+    preconditions:
+      - en: A digital human uses the real channel dispatcher and engine with isolated local WeCom and model endpoints; the guest variant has an explicit collaboration grant.
+        zh: 数字人使用真实渠道分发与引擎，企微及模型端点均为隔离本地服务；访客变体明确获得协作授权。
+    steps:
+      - en: Start one collaborator from the group, hold its result, let a sender with different permissions speak, then release the result.
+        zh: 从群聊创建一位协作者并暂留其结果，让权限不同的发送者发言，再释放结果。
+    expected:
+      - en: The source AI reviews the result with the original caller's permissions and replies only in that group. Raw member output is never pushed, and another chat has no collaboration association.
+        zh: 源 AI 按原调用者权限审阅结果并仅回复该群，不直接推送成员原始输出，另一个聊天没有协作关联。
+    notes:
+      en: The guest variant compares the initial, later-owner and callback tool grants and attempts a workspace write and an outside-workspace read during review; both must be refused without file changes or private-content exposure. This covers local collaborators and real application routing, not live-model review quality or a remote collaborator's network recovery.
+      zh: 访客变体比较初始访客、随后主人及回报复核时的工具授权，并在复核期间尝试工作区写入和工作区外读取；两者必须被拒绝，不改变文件或泄露私有内容。覆盖本地协作者及真实应用路由，不评估真实模型审阅质量或远端协作者的网络恢复。
+  - id: teams.collaboration.im-guest-denied
+    title:
+      en: Keep collaboration unavailable to an ungranted IM guest
+      zh: 不向未获授权的 IM 访客提供协作
+    verifies: [im-source]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: The isolated channel has an owner and a guest without collaboration permission.
+        zh: 隔离渠道配置主人，以及未获得协作权限的访客。
+    steps:
+      - en: The guest asks the digital human to delegate work.
+        zh: 访客要求数字人委派工作。
+    expected:
+      - en: The guest receives a normal reply but no spawn tool, and no collaboration is created.
+        zh: 访客收到正常回复，但模型没有创建协作者工具，也不会创建协作。
+  - id: teams.collaboration.im-source-cancel
+    title:
+      en: Prevent invalidated IM work from waking the source
+      zh: 防止已失效的 IM 工作唤醒源聊天
+    verifies: [im-source]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      invalidation: [stop, clear, authority]
+    preconditions:
+      - en: A collaborator is working while its original IM source is idle.
+        zh: 协作者仍在工作，而原 IM 源聊天已空闲。
+    steps:
+      - en: Stop or clear the source, or replace and restore the owner list. Release the old result, then send a fresh human message.
+        zh: 停止或清空源聊天，或更换主人名单后恢复；释放旧结果，再发送一条新的人类消息。
+    expected:
+      - en: The old result neither wakes the source nor appears in the IM transcript or channel; the fresh human request still receives its reply.
+        zh: 旧结果既不唤醒源 AI，也不进入源 IM 记录或渠道；新的人类请求仍正常收到回复。
   - id: teams.collaboration.digital-human-chat
     title:
       en: Organize a temporary team from a digital human's own chat
@@ -36,6 +168,7 @@ scenarios:
     verifies:
       - digital-human
       - room
+      - addressing
     platforms:
       - darwin
       - win32
@@ -96,6 +229,7 @@ scenarios:
     verifies:
       - keep
       - room
+      - directory
     platforms:
       - darwin
       - win32
@@ -111,26 +245,27 @@ scenarios:
       - en: Use a fresh isolated profile and a local scripted model endpoint with the real application engine.
         zh: 使用全新隔离资料及本地脚本模型端点，应用仍运行真实引擎。
     steps:
-      - en: Enable collaboration in space chat and create two reviewers through the real collaboration tool.
-        zh: 在空间聊天启用协作，通过真实协作工具创建两名评审成员。
+      - en: Enable collaboration in space chat and create two reviewers with separate spawn_agent calls, using their returned handles.
+        zh: 在空间聊天启用协作，分两次通过 spawn_agent 创建评审成员，并使用返回的句柄。
       - en: Keep the team from its source conversation, restart the application and open the saved team from the Teams page.
         zh: 从源对话保留团队，重启应用，然后在团队页打开已保存的团队。
       - en: On a new task in the saved team, send a distinct message to its lead and to every member through the digital-human selector.
         zh: 在已保存团队的新任务中，通过数字人选择入口向其负责人及每位成员发送不同消息。
     expected:
-      - en: A separate persistent team exists with the same members and a lead of its own, without the collaboration's coordinator, and with no tasks until the user starts one.
-        zh: 出现一支独立的持久团队，成员相同并有自己的负责人，不含协作的协调者，在用户发起前没有任何任务。
+      - en: A separate persistent team exists with new digital-human identities carrying the temporary members’ configurations and a lead of its own, without the collaboration's coordinator, and with no tasks until the user starts one.
+        zh: 出现一支独立的持久团队，临时成员配置转为新的数字人身份并有自己的负责人，不含协作的协调者，在用户发起前没有任何任务。
       - en: The temporary collaboration keeps its identity, source conversation association and single task; the saved team's lead and every member reply in their own persisted transcripts of the new task, and nothing from them enters the collaboration.
         zh: 临时协作的身份、源对话关联及唯一任务保持不变；已保存团队的负责人及每位成员在新任务各自持久保存的记录中回复，且不会写入原协作。
     notes:
-      en: Saving snapshots configuration only; epochs, messages, checks, findings and current work are never copied. Scripted responses prove routing and persistence, not the quality of a live model's answer.
-      zh: 保存只复制配置，从不复制任务周期、消息、检查、发现及当前工作。脚本回复验证消息路由与持久化，不评估真实模型回答的质量。
+      en: Saving never converts a temporary actor into an installed digital human. It snapshots configuration only; epochs, messages, checks, findings and current work are never copied. Scripted responses prove routing and persistence, not the quality of a live model's answer.
+      zh: 保存不会把临时身份变成已安装数字人，只复制配置，从不复制任务周期、消息、检查、发现及当前工作。脚本回复验证消息路由与持久化，不评估真实模型回答的质量。
   - id: teams.collaboration.keep-history
     title:
       en: Keep the original task and member context after keeping the team
       zh: 保留团队后原任务及成员上下文不变
     verifies:
       - history
+      - directory
     platforms:
       - darwin
       - win32
@@ -148,8 +283,8 @@ scenarios:
       - en: Give the references only in one-to-one conversations; neither member sends them to a teammate or publishes them to the team's shared records or files.
         zh: 参考信息仅出现在一对一聊天中；两位成员都不将其发送给队友，也不发布到团队共享记录或文件中。
     steps:
-      - en: Create a collaboration in space chat and give each installed member a different reference through the task room.
-        zh: 在空间聊天创建协作，通过任务室向每位已安装成员提供不同参考信息。
+      - en: Create two temporary collaborators in space chat and give each a different reference through the task room.
+        zh: 在空间聊天创建两位临时协作者，通过任务室向每位成员提供不同参考信息。
       - en: Keep the team, restart the application and reopen the collaboration from its source conversation, then every member conversation in its task.
         zh: 保留团队，重启应用，从源对话重新打开协作，再打开其任务中每位成员的对话。
       - en: Continue each member conversation without repeating the reference, then reopen the source space conversation.

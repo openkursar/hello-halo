@@ -4,19 +4,17 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { getSpace, getSpaceDir } from '../space.service'
 import { GitError } from './errors'
 
-const MAX_ROOTS = 64
-const MAX_DISMISSED_ROOTS = 256
+const MAX_ROOTS = 320
 const MAX_FILE_BYTES = 1024 * 1024
 const MAX_PENDING_FILES = 32
 const MAX_PENDING_WRITES = 128
 
 export interface RepositoryRecords {
   roots: string[]
-  dismissedRoots: string[]
 }
 
 interface RepositoryFile extends RepositoryRecords {
-  version: 2
+  version: 3
   workingDir: string
 }
 
@@ -73,41 +71,41 @@ async function readRecords(file: string, workingDir: string): Promise<Repository
       await handle.close()
     }
     const value = JSON.parse(text) as { version?: unknown; workingDir?: unknown; roots?: unknown; dismissedRoots?: unknown } | null
-    if ((value?.version !== 1 && value?.version !== 2) || !isNormalizedPath(value.workingDir) ||
-        !isRootList(value.roots, value.workingDir, MAX_ROOTS)) {
+    if ((value?.version !== 1 && value?.version !== 2 && value?.version !== 3) || !isNormalizedPath(value.workingDir) ||
+        !isRootList(value.roots, value.workingDir, value.version === 3 ? MAX_ROOTS : 64)) {
       throw new Error('Unexpected repository records format')
     }
-    const dismissedRoots = value.version === 1 ? [] : value.dismissedRoots
-    if (!isRootList(dismissedRoots, value.workingDir, MAX_DISMISSED_ROOTS) ||
-        value.roots.some((root) => dismissedRoots.includes(root))) {
-      throw new Error('Unexpected repository records format')
+    let roots = value.roots
+    if (value.version === 2) {
+      const dismissedRoots = value.dismissedRoots
+      if (!isRootList(dismissedRoots, value.workingDir, 256) || roots.some((root) => dismissedRoots.includes(root))) {
+        throw new Error('Unexpected repository records format')
+      }
+      // Previously hidden paths are still known repositories, including unavailable ones.
+      roots = [...roots, ...dismissedRoots]
     }
-    return value.workingDir === workingDir ? { roots: value.roots, dismissedRoots } : { roots: [], dismissedRoots: [] }
+    return { roots: value.workingDir === workingDir ? roots : [] }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { roots: [], dismissedRoots: [] }
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { roots: [] }
     throw new GitError('GIT_FAILED', `Cannot read saved repositories ${file}: ${(error as Error).message}`)
   }
 }
 
-/** Read remembered and dismissed path identities without probing repository directories. */
+/** Read known path identities without probing repository directories or rewriting records. */
 export async function readRepositoryRecords(spaceId: string, workingDir: string): Promise<RepositoryRecords> {
   if (!isNormalizedPath(workingDir)) throw new GitError('GIT_INVALID_ARGUMENT', 'A normalized absolute working directory is required')
   return readRecords(storeFile(spaceId), workingDir)
 }
 
-/** Only explicit opening may restore a dismissed root; obsolete requests never replace records. */
-export async function updateRepositoryRecord(
+/** Remember a verified root; obsolete requests never replace records. */
+export async function rememberRepositoryRoot(
   spaceId: string,
   workingDir: string,
   root: string,
-  action: 'discover' | 'open' | 'dismiss',
   isCurrent?: () => boolean,
 ): Promise<boolean> {
   if (!isNormalizedPath(workingDir) || !isNormalizedPath(root) || !isInside(workingDir, root)) {
     throw new GitError('GIT_INVALID_ARGUMENT', 'A normalized absolute repository root inside the space is required')
-  }
-  if (action !== 'discover' && action !== 'open' && action !== 'dismiss') {
-    throw new GitError('GIT_INVALID_ARGUMENT', 'Unknown repository record action')
   }
   const file = storeFile(spaceId)
   if (pendingWrites >= MAX_PENDING_WRITES || (!writes.has(file) && writes.size >= MAX_PENDING_FILES)) {
@@ -115,7 +113,7 @@ export async function updateRepositoryRecord(
   }
   const obsolete = (): boolean => {
     if (!isCurrent || isCurrent()) return false
-    console.warn(`[Git] Ignoring obsolete repository ${action} in space ${spaceId}: ${root}`)
+    console.warn(`[Git] Ignoring obsolete repository save in space ${spaceId}: ${root}`)
     return true
   }
   pendingWrites++
@@ -126,24 +124,14 @@ export async function updateRepositoryRecord(
     const records = await readRecords(file, workingDir)
     if (obsolete()) return false
     requireSpaceIdentity(spaceId, workingDir, file)
-    const remembered = records.roots.includes(root)
-    const dismissed = records.dismissedRoots.includes(root)
-    if (action === 'discover' && dismissed) {
-      console.warn(`[Git] Ignoring discovery of dismissed repository in space ${spaceId}: ${root}`)
-      return false
-    }
-    if (action === 'dismiss' ? dismissed : remembered) return true
-    if (action === 'dismiss' && records.dismissedRoots.length >= MAX_DISMISSED_ROOTS) {
-      throw new GitError('GIT_FAILED', `At most ${MAX_DISMISSED_ROOTS} repositories can be dismissed in a space`)
-    }
-    if (action !== 'dismiss' && records.roots.length >= MAX_ROOTS) {
+    if (records.roots.includes(root)) return true
+    if (records.roots.length >= MAX_ROOTS) {
       throw new GitError('GIT_FAILED', `At most ${MAX_ROOTS} repositories can be saved in a space`)
     }
     const content: RepositoryFile = {
-      version: 2,
+      version: 3,
       workingDir,
-      roots: action === 'dismiss' ? records.roots.filter((entry) => entry !== root) : [...records.roots, root],
-      dismissedRoots: action === 'dismiss' ? [...records.dismissedRoots, root] : records.dismissedRoots.filter((entry) => entry !== root),
+      roots: [...records.roots, root],
     }
     const text = `${JSON.stringify(content, null, 2)}\n`
     if (Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) throw new GitError('GIT_FAILED', 'Repository records exceed the file size limit')

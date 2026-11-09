@@ -47,7 +47,7 @@ describe.skipIf(!enabled)('Codex native MCP routing', () => {
       'halo-team': {
         type: 'sdk',
         instance: {
-          listTools: () => [{ name: 'collab_start', description: 'Return a local marker.', inputSchema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'], additionalProperties: false } }],
+          listTools: () => [{ name: 'spawn_agent', description: 'Return a local marker.', inputSchema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'], additionalProperties: false } }],
           callTool: async (name: string, args: Record<string, unknown>) => {
             calls.push({ name, args })
             return { content: [{ type: 'text', text: 'native-tool-receipt-42' }] }
@@ -61,7 +61,7 @@ describe.skipIf(!enabled)('Codex native MCP routing', () => {
     upstreamApp.post(endpoint, (req, res) => {
       modelRequests.push(req.body)
       const toolStep = modelRequests.length <= 2
-      const toolName = modelRequests.length === 1 ? 'collab_start' : 'exec_command'
+      const toolName = modelRequests.length === 1 ? 'spawn_agent' : 'exec_command'
       const offered = req.body.tools.find((tool: any) => (tool.name ?? tool.function?.name)?.endsWith(toolName))
       const name = offered?.name ?? offered?.function.name
       const args = modelRequests.length === 1 ? { value: 'marker' } : { cmd: 'printf native-shell-%s $((6 * 7))', max_output_tokens: 100 }
@@ -105,6 +105,7 @@ describe.skipIf(!enabled)('Codex native MCP routing', () => {
       threadParams: {
         model: 'gpt-5.1-codex-max', cwd: directory, approvalPolicy: 'never', sandbox: 'danger-full-access',
         config: {
+          features: { multi_agent: false, multi_agent_v2: false },
           model_provider: 'local-test',
           model_providers: { 'local-test': { name: 'Local deterministic model', base_url: `${baseUrl(router)}/v1`, wire_api: 'responses', requires_openai_auth: false, env_key: 'HALO_NATIVE_TEST_KEY' } },
           mcp_servers: prepared.mcpServers,
@@ -113,12 +114,17 @@ describe.skipIf(!enabled)('Codex native MCP routing', () => {
     }, 'native-session', {})
     try {
       await (session as any).start()
-      session.send('Call collab_start with value marker, then finish.')
+      session.send('Call spawn_agent with value marker, then finish.')
       const frames: any[] = []
       for await (const frame of session.stream()) frames.push(frame)
       expect(frames.at(-1)).toMatchObject({ type: 'result', is_error: false })
-      expect(nativeRequests[0].tools.some((tool: any) => tool.type === 'namespace' && tool.tools.some((inner: any) => inner.name === 'collab_start'))).toBe(true)
-      expect(calls, JSON.stringify(nativeRequests[0].tools.filter((tool: any) => tool.type === 'namespace'))).toEqual([{ name: 'collab_start', args: { value: 'marker' } }])
+      expect(nativeRequests[0].tools.some((tool: any) => tool.type === 'namespace' && tool.tools.some((inner: any) => inner.name === 'spawn_agent'))).toBe(true)
+      const nativeTools = nativeRequests[0].tools.flatMap((tool: any) => tool.type !== 'namespace'
+        ? [tool.name] : tool.name?.startsWith('mcp__') ? [] : tool.tools.map((entry: any) => entry.name))
+      expect(nativeTools).not.toContain('spawn_agent')
+      expect(nativeTools).not.toContain('send_input')
+      expect(nativeTools).not.toContain('wait_agent')
+      expect(calls, JSON.stringify(nativeRequests[0].tools.filter((tool: any) => tool.type === 'namespace'))).toEqual([{ name: 'spawn_agent', args: { value: 'marker' } }])
       expect(JSON.stringify(modelRequests[1])).toContain('native-tool-receipt-42')
       expect(JSON.stringify(modelRequests[1])).not.toContain('unsupported call')
       expect(JSON.stringify(modelRequests[2])).toContain('native-shell-42')

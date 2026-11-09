@@ -141,6 +141,26 @@ so a standby keeps the older record it already holds.
 
 **Who receives what**
 
+A member's internal sub-agents belong to its local caller scope, not the public
+office roster. Federation does not publish their identities, execution profiles,
+status or ancestry through control feeds, replication or snapshots. Existing local
+records are retained without granting them a federation identity; ordinary member
+admission never resolves a private participant as a standing member.
+
+Ordinary messages use protocol 4's existing authenticated wake and durable control
+feed. They require no recipient ticket or owner preflight round trip. Request
+cancellation and recipient incarnations are local execution details, not wire
+requirements that an older owner could silently ignore.
+
+User-initiated remote stops keep the existing owner-served protocol 4 contract.
+An internal tool requiring an exact assignment or controller check may stop a
+local session through the local runtime, but must refuse that operation before
+sending to a remote owner: protocol 4 cannot promise those conditions. This does
+not disable ordinary team messages or the user's remote stop. Persisted entries
+from experimental participant publication are not deleted or republished as
+ordinary members; unsupported control entries retain the feed's existing
+forward-compatible consume behavior.
+
 A node's inbound traffic is meant to grow with what it owns, what it shows, and
 a digest of the rest, never with the size of the office. Every
 subscription-like state is soft state, re-declared after each (re)join,
@@ -238,7 +258,8 @@ reconnect or election.
   renderer merges; `team:updated` (a whole-office reload) is reserved for an
   epoch change, a snapshot, or a catch-up page too large to send row by row.
 - `session-deps.ts` — location-aware session deps so a woken member runs with the
-  right owner-resolved space. Also where "stop this member" becomes
+  right owner-resolved space. Owner resolution uses standing membership scoped to
+  the team; private sub-agents stay local. Also where "stop this member" becomes
   position-transparent: a locally-owned member is aborted in place, a remote one
   over the stop plane. Unlike `closeTeamSession`, doing nothing for a remote
   member is not an option — someone asked for a running turn to end. A wake's

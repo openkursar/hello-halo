@@ -21,6 +21,7 @@ import {
   DELEGABLE_BUILTIN_TOOLS,
   allowsBuiltin,
   allowsCapability,
+  allowsCollaboration,
   allowsSkill,
   allowsUserMcp,
   normalizeBashRules,
@@ -242,10 +243,6 @@ export function CapabilityPolicyFields({
     { tools: ['Grep'], group: 'file', name: t('Search contents'), description: t('Search for text inside files (Grep)') },
     { tools: ['WebFetch'], group: 'network', name: t('Open web pages'), description: t('Read a web page it is given (WebFetch)') },
     { tools: ['WebSearch'], group: 'network', name: t('Web search'), description: t('Look things up with a search engine (WebSearch)') },
-    {
-      tools: ['Agent'], group: 'other', name: t('Subtasks'),
-      description: t('Hand parts of a task to sub-agents working in parallel, under the same limits; uses more model quota (Agent)'),
-    },
     { tools: ['Write'], group: 'advanced', name: t('Write files'), description: t('Create files in this workspace (Write)') },
     {
       tools: ['Edit', 'NotebookEdit'], group: 'advanced', name: t('Edit files'),
@@ -266,17 +263,21 @@ export function CapabilityPolicyFields({
       ? t('Only inside this workspace. The workspace\'s internal data — every conversation\'s record — stays closed; memory stays open.')
       : t('For a request from another computer: only inside this workspace, with its internal data closed and memory open — unless everything here is on.'),
     network: t('Reaches the internet, not files on your computer.'),
-    other: t('Sub-agents are held to exactly the same limits as the task that started them.'),
+    other: t('Collaborators keep the permissions of the work that created them.'),
     advanced: audience === 'guest'
       ? t('Writing is limited to this workspace. Commands are not: they run on your computer with your permissions.')
       : t('For a request from another computer, writing stays inside this workspace unless everything here is on. Commands never do: they run on your computer with your permissions.'),
   }
 
+  const collaborationAllowed = allowsCollaboration(policy, mode)
+  const retainedPolicy = { ...policy, allowCollaboration: collaborationAllowed,
+    ...(policy?.allowedTools ? { allowedTools: policy.allowedTools.filter(name => name !== 'Agent' && name !== 'Task') } : {}) }
+
   // Both writes below settle the policy into an EXPLICIT list first. Otherwise
   // the first click on a permissive screen (where silence means yes) would read
   // as "only this one is allowed" and switch everything else off at once.
   const explicitTools = () => new Set(
-    policy?.allowedTools ?? (mode === 'permissive' ? DELEGABLE_BUILTIN_TOOLS.map(tl => tl.name) : [])
+    retainedPolicy.allowedTools ?? (mode === 'permissive' ? DELEGABLE_BUILTIN_TOOLS.map(tl => tl.name) : [])
   )
 
   const setRow = (row: ToolRow, on: boolean) => {
@@ -285,7 +286,7 @@ export function CapabilityPolicyFields({
       if (on) current.add(name)
       else current.delete(name)
     }
-    onChange({ ...policy, allowedTools: Array.from(current) })
+    onChange({ ...retainedPolicy, allowedTools: Array.from(current) })
   }
 
   const toggleUserMcp = (specId: string) => {
@@ -294,7 +295,7 @@ export function CapabilityPolicyFields({
     )
     if (current.has(specId)) current.delete(specId)
     else current.add(specId)
-    onChange({ ...policy, allowedUserMcp: Array.from(current) })
+    onChange({ ...retainedPolicy, allowedUserMcp: Array.from(current) })
   }
 
   // Written as the list of skills that exist now: one that was removed keeps no
@@ -304,7 +305,7 @@ export function CapabilityPolicyFields({
     const current = new Set(listed.filter(s => allowsSkill(policy, s.dirName, mode)).map(s => s.dirName))
     if (on) current.add(dirName)
     else current.delete(dirName)
-    onChange({ ...policy, allowedSkills: Array.from(current) })
+    onChange({ ...retainedPolicy, allowedSkills: Array.from(current) })
   }
 
   const bash = resolveBashAccess(policy, mode)
@@ -333,7 +334,7 @@ export function CapabilityPolicyFields({
   const abilities: Ability[] = [
     { on: on('file'), label: audience === 'guest' ? t('view files in this workspace') : t('view files') },
     { on: on('network'), label: t('use the internet') },
-    { on: on('other'), label: t('split work into subtasks') },
+    { on: collaborationAllowed, label: t('work with collaborators') },
     { on: on('advanced'), label: audience === 'guest' ? t('change files in this workspace') : t('change files') },
     {
       // An empty list runs nothing.
@@ -365,7 +366,7 @@ export function CapabilityPolicyFields({
 
       {CAPABILITY_TOOL_GROUPS.map(group => {
         const groupRows = rows.filter(r => r.group === group)
-        if (groupRows.length === 0 && group !== 'advanced') return null
+        if (groupRows.length === 0 && group !== 'advanced' && group !== 'other') return null
         return (
           <div key={group} className="space-y-2 border-t border-border/40 pt-3">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -377,6 +378,15 @@ export function CapabilityPolicyFields({
               )}
               <HelpHint label={t('More about this group')} text={groupHelp[group]} />
             </div>
+            {group === 'other' && (
+              <label className={`${TOGGLE_ROW} cursor-pointer`}>
+                <span className="min-w-0">
+                  <span className={`block ${TOGGLE_TITLE}`}>{t('Collaboration')}</span>
+                  <span className="block text-xs text-muted-foreground">{t('Create collaborators for independent work under the same permissions; uses additional model quota.')}</span>
+                </span>
+                <Switch size="sm" checked={collaborationAllowed} onCheckedChange={allowCollaboration => onChange({ ...retainedPolicy, allowCollaboration })} />
+              </label>
+            )}
             {groupRows.map(row => (
               <label key={row.tools.join('+')} className={`${TOGGLE_ROW} cursor-pointer`}>
                 <span className="min-w-0">
@@ -391,7 +401,7 @@ export function CapabilityPolicyFields({
                 access={bash}
                 audience={audience}
                 onScopeChange={setBashAccess}
-                onRulesChange={rules => onChange({ ...policy, bashScope: 'listed', bashRules: rules })}
+                onRulesChange={rules => onChange({ ...retainedPolicy, bashScope: 'listed', bashRules: rules })}
               />
             )}
           </div>
@@ -451,7 +461,7 @@ export function CapabilityPolicyFields({
                 size="sm"
                 disabled={blockedByCommands}
                 checked={allowsCapability(policy, key, mode)}
-                onCheckedChange={() => onChange({ ...policy, [key]: !allowsCapability(policy, key, mode) })}
+                onCheckedChange={() => onChange({ ...retainedPolicy, [key]: !allowsCapability(policy, key, mode) })}
               />
             </label>
           )

@@ -2,48 +2,81 @@ version: 1
 id: chat.capabilities
 module: chat
 title:
-  en: Approve optional AI capabilities
-  zh: 授权可选 AI 能力
+  en: Use capabilities without managing model context
+  zh: 使用能力而无需管理模型上下文
 story:
-  en: I can decide whether a conversation may use an optional capability, and the AI cannot silently enable it for itself.
-  zh: 我能决定对话是否使用可选能力，AI 不会自行悄悄开启。
-basis: observed
+  en: I can ask Halo to use its available capabilities directly, without managing capability switches.
+  zh: 我能直接要求 Halo 使用可用能力，无需管理能力开关。
+basis: documented
 references:
   - src/main/services/agent/toolsets/DESIGN.md
   - src/renderer/components/chat/InputArea.tsx
   - tests/e2e/specs/acceptance-capabilities.spec.ts
 promises:
-  request:
-    en: Requesting a disabled capability shows the user’s enablement action without granting the tool.
-    zh: 请求已禁用能力仅显示用户开启入口，不直接授予工具。
-  enable:
-    en: The user’s explicit enablement makes the capability available on the supported next turn.
-    zh: 用户明确开启后，能力在支持的下一轮可用。
+  automatic:
+    en: A new native Halo conversation can use context-managed capabilities in the requested turn without asking me to enable a loading switch or send another message.
+    zh: 新的原生 Halo 对话能在当前请求中使用由系统管理上下文的能力，无需我打开加载开关或再发一条消息。
+  core-api:
+    en: Operate Halo is a core capability. Its API guide and scoped runtime credentials are available from the first turn without a human enablement step.
+    zh: 操作 Halo 是核心能力；API 指南与限定作用域的运行凭据从第一轮即可使用，无需人工启用。
+  compatibility:
+    en: Core capabilities remain available in legacy and other-engine conversations; explicit tool restrictions and caller policies remain effective.
+    zh: 旧会话及其他引擎会话同样可使用核心能力；明确的工具禁用和调用者策略继续生效。
 scenarios:
-  - id: chat.capabilities.user-enable
+  - id: chat.capabilities.automatic
     title:
-      en: Ask for and explicitly enable team collaboration
-      zh: 请求并明确开启团队协作
-    verifies:
-      - request
-      - enable
-    platforms:
-      - darwin
-      - win32
-      - linux
-    profiles:
-      - regression
+      en: Create a collaborator without a capability enablement request
+      zh: 无需能力开关，直接创建协作者
+    verifies: [automatic]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
     evidence: app-e2e
     mode: scripted
     automation: automated
+    requirements: [halo-sdk]
     preconditions:
-      - en: Team collaboration is disabled in the current space conversation.
-        zh: 当前空间对话已关闭团队协作。
+      - A fresh conversation uses an isolated workspace and a local scripted model.
     steps:
-      - en: Ask the scripted model to request it, inspect the unchanged switch, enable it manually and send another message.
-        zh: 让脚本模型申请，检查开关未变，手动开启后再发消息。
+      - Inspect the composer capability menu, then ask for one bounded collaborator task.
     expected:
-      - en: No team operation occurs before user action; the next turn can execute the real team tool.
-        zh: 用户操作前无团队操作，下一轮可调用真实团队工具。
-    requirements:
-      - halo-sdk
+      - Browser, terminal, OCR, collaboration and Halo API enablement controls are absent.
+      - The real collaboration tool returns an accepted collaborator handle and its execution starts without requesting a capability switch or follow-up message.
+    notes: This journey executes collaborator creation and checks the menu. It does not establish execution of browser, terminal or OCR operations; those retain their own stories.
+  - id: chat.capabilities.halo-api-core
+    title:
+      en: Use the core Halo API from the first turn
+      zh: 从第一轮使用核心 Halo API
+    verifies: [core-api]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - A new conversation has not performed any capability enablement action.
+    steps:
+      - Inspect the menu, read the API guide, and list an isolated workspace through the real authenticated local API.
+    expected:
+      - Halo API has no enablement switch and its guide tool is advertised in the first model request.
+      - The runtime supplies usable scoped credentials without exposing their values in the model response.
+      - The requested workspace is returned without a request-to-enable call.
+  - id: chat.capabilities.manual-compatibility
+    title:
+      en: Keep core capabilities available across conversation engines
+      zh: 各类会话均可使用核心能力
+    verifies: [compatibility]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    variants:
+      engine: [legacy-halo, anthropic, codex, dsh]
+    preconditions:
+      - A legacy Halo transcript or configured external engine has saved manual capability selections.
+    steps:
+      - Reopen the conversation and inspect its capability controls and actual model request, then use a core capability.
+    expected:
+      - Old manual selections do not withhold core capabilities; explicit execution restrictions remain enforced.
+    notes: No application journey is bound yet. Host unit tests for mode selection and external-engine isolation do not establish this complete reopen journey.

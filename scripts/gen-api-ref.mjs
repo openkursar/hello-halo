@@ -88,7 +88,7 @@ function assertRouteFilesMatchRegistrationOrder() {
   }
 
   const body = source.slice(source.indexOf('export function registerApiRoutes'))
-  const registered = [...body.matchAll(/^\s*(\w+)\(app\)/gm)]
+  const registered = [...body.matchAll(/^\s*(\w+)\(app(?:\s*,\s*options)?\)/gm)]
     .map(([, fn]) => moduleOf.get(fn))
     .filter(Boolean)
 

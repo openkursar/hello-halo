@@ -1,0 +1,146 @@
+version: 1
+id: capabilities.tool-discovery
+module: capabilities
+title:
+  en: Discover tools without rebuilding the model context
+  zh: 发现工具而不重建模型上下文
+story:
+  en: Halo SDK can find the tool instructions a task needs, keep them across long work and still enforce the real tool's permissions.
+  zh: Halo SDK 能找到任务所需的工具说明，在长任务中保留这些说明，并始终执行真实工具的权限检查。
+basis: documented
+references:
+  - src/main/services/agent/DESIGN.md
+  - tests/e2e/specs/acceptance-tool-discovery.spec.ts
+  - tests/e2e/specs/acceptance-tool-discovery-app-chat.spec.ts
+  - tests/e2e/specs/acceptance-tool-discovery-hosted.spec.ts
+  - tests/e2e/specs/acceptance-tool-discovery-wire.spec.ts
+promises:
+  request:
+    en: Native tool discovery keeps the declared tool names, order and schemas fixed. A service directory precedes work, and complete discovered definitions are appended without rewriting earlier messages or system instructions.
+    zh: 原生工具发现保持工具名称、顺序和 schema 固定；服务目录先于工作输入，发现后的完整定义追加到历史，不重写此前消息或系统指令。
+  execution:
+    en: Permissions, validation and execution use the real business tool and effective arguments. The model history retains the original CallTool wrapper and exact JSON string; public progress names the business tool.
+    zh: 权限、校验和执行使用真实业务工具及有效参数；模型历史保留原 CallTool 封装和原始 JSON 字符串，对外进度显示业务工具。
+  recovery:
+    en: Committed definitions and required usage guides survive compaction and reopening even when the model's summary omits all tool information. Restoring history never repeats past tool effects.
+    zh: 即使模型摘要遗漏全部工具信息，已提交定义和必要指南仍能跨压缩及重启恢复；恢复历史不会重复执行此前工具。
+  isolation:
+    en: A fork receives only discoveries committed before its chosen history boundary. Later discoveries in the fork do not grant tools to its parent.
+    zh: 分支仅获得所选历史边界前已提交的发现，分支后续发现不会让父会话获得调用资格。
+  capacity:
+    en: A definition that cannot be delivered completely within result and recovery budgets is not loaded. The SDK reports the limit and refuses calls based on an incomplete discovery.
+    zh: 不能在结果及恢复预算内完整交付的定义不会被加载；SDK 说明限制并拒绝依据不完整发现发起的调用。
+  compatibility:
+    en: Provider requests contain ordinary tool interfaces and no private tool-context metadata or vendor-native deferred flags. Explicit XML/JSON modes and external engines retain their existing behavior.
+    zh: 发给供应商的请求使用普通工具接口，不包含私有工具上下文元数据或供应商原生 deferred 标志；显式 XML/JSON 模式和外部引擎保留原有行为。
+  journey:
+    en: A task using an available capability proceeds without asking the person to enable a switch solely to load tool instructions. Real permission restrictions, disabled tools and connection failures remain effective and visible.
+    zh: 任务使用可用能力时，无需让用户仅为加载工具说明而打开开关；真实权限、禁用工具和连接故障仍有效且可见。
+scenarios:
+  - id: capabilities.tool-discovery.fixed-request
+    title: Discover complete instructions and call the real tool through a fixed interface
+    verifies: [request, execution, compatibility]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      entry: [session, query]
+      permission: [allow, deny]
+    preconditions:
+      - The built public SDK uses a scripted provider and two real in-process MCP tools in an isolated profile.
+    steps:
+      - Discover both tools in successive model requests, then call one through CallTool while the real-tool permission callback modifies or denies its arguments.
+      - Inspect each effective provider request, public tool progress and actual handler effects.
+    expected:
+      - Neither complete schema nor long guide appears before discovery; the search result contains the complete definition afterward.
+      - The declared tools and system instructions stay fixed and earlier messages remain unchanged in order.
+      - The original wrapper string survives permission edits; execution and public progress use the real tool name. Denial produces no handler effect even if CallTool is allowed.
+      - Private state and vendor-native deferred flags do not appear at the provider boundary.
+    notes: Built-SDK public API integration with a scripted provider. It establishes neither Electron UI behavior nor actual wire encoding, vendor cache hits, model quality, latency or cost improvement.
+  - id: capabilities.tool-discovery.compact-resume
+    title: Continue with an already discovered tool after compaction and reopening
+    verifies: [request, recovery]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - Discover a tool, complete enough real in-process calls to trigger compaction, and deliberately summarize without tool names, schemas or guides.
+      - Close the persistent SDK session, reopen it through the public API and call the discovered tool without another search.
+    expected:
+      - A compact checkpoint is written; the resumed request still contains the exact definition and uses the same fixed declarations.
+      - Reopening does not repeat earlier effects, the new call succeeds once, and subsequent persistence preserves the previous journal bytes.
+    notes: Real SDK disk persistence under isolated HOME, USERPROFILE and configuration paths. It does not prove application restart, abrupt process-crash durability or live-model summary fidelity.
+  - id: capabilities.tool-discovery.fork
+    title: Restore discovery only up to a fork boundary and keep subsequent changes separate
+    verifies: [isolation, execution]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      boundary: [before-discovery, after-discovery]
+    steps:
+      - Fork a recorded session at a public assistant-message UUID before or after discovery and reopen the branch.
+      - Attempt the earlier tool, discover and call a second tool in the branch, then reopen the parent and try both tools.
+    expected:
+      - The earlier tool is available only when discovery preceded the chosen anchor.
+      - The branch's newly discovered tool executes there but remains undiscovered in the parent; the parent's own earlier discovery still executes.
+    notes: Public SDK fork and resume with separate real transcript files and in-process MCP effects. This does not establish application conversation cloning or SDK spawned-child inheritance.
+  - id: capabilities.tool-discovery.budget
+    title: Reject an oversized definition without truncating it into a false discovery
+    verifies: [capacity]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      budget: [bytes, characters, recovery]
+    steps:
+      - Search for a definition exceeding the UTF-8 result limit, configured character budget or future recovery capacity, then attempt CallTool anyway.
+    expected:
+      - The search returns no partial definition and explains that the complete item does not fit.
+      - CallTool reports an error, the handler never runs and declared tools remain unchanged.
+  - id: capabilities.tool-discovery.native-wire
+    title: Preserve ordinary provider encoding across discovery and stream recovery
+    verifies: [request, execution, compatibility]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: integration
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      protocol: [messages, chat, host-responses]
+    steps:
+      - Run a controlled discovery and business call through the real provider encoder to a local scripted HTTP endpoint, including supported stream recovery.
+    expected:
+      - Ordinary request schemas, call IDs, exact wrapper arguments and paired results survive encoding; private state never crosses the wire and effects are not replayed after admission.
+    notes: The acceptance bindings execute the existing real-HTTP regressions through their owning SDK or host Vitest runner and attach its structured results. Every named assertion must execute and pass; a filtered or skipped assertion cannot satisfy the binding. Messages includes actual stream-to-JSON fallback; Chat includes one-shot query and cross-provider reopening. The host Responses case runs the real router facade and encoder between two local HTTP endpoints. These are integration boundaries, not Electron UI or vendor cache-hit evidence.
+  - id: capabilities.tool-discovery.application
+    title: Use an available capability without a context-loading enablement request
+    verifies: [journey, execution, recovery]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      entry: [space, digital-human, im-owner, im-guest, automation, team-member, collaborator]
+    steps:
+      - Through the selected real application entry, request work requiring an available MCP capability and continue through discovery, execution and a later turn.
+      - Exercise the entry's actual permission restriction or disabled-tool setting and inspect results, approvals and saved history.
+    expected:
+      - Work proceeds without asking the person to turn on a switch merely to load instructions, and real business tools appear in progress and approval UI.
+      - Unauthorized or disabled tools remain unavailable; recovery preserves usable instructions without restoring revoked access.
+    notes: All seven entries use the real application with local model and MCP services. Space, automation and IM cases inspect rendered replies; digital-human and team-member cases exercise the real chat IPC and persisted transcripts. The collaborator case uses the host collaboration runtime, verifies independent discovery, restores the source after application restart, and refuses the disabled dependency in the retained collaborator. Child compaction and journal reopening are separately covered by the SDK integration tests. These scripted cases do not establish natural-model decision quality.

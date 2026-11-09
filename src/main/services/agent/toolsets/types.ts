@@ -1,13 +1,17 @@
-/**
- * Toolset Broker - Types
- *
- * A "toolset" is a built-in in-process MCP server (ai-browser, ai-terminal, ...)
- * that is loaded into a session on demand instead of at session creation.
- * The broker keeps the resident context cost constant (a one-line summary per
- * toolset in the system prompt) regardless of how many toolsets exist.
- */
+/** Contracts for built-in capabilities, context loading and manual grants. */
 
 import type { AgentModelSelection } from '../../../../shared/types/ai-sources'
+import type { EngineId } from '../../../../shared/types/engine'
+
+export interface ToolsetExecutionOptions {
+  engineId: EngineId
+  collaborationEnabled: boolean
+  permissionMode?: string
+  allowDangerouslySkipPermissions?: boolean
+  allowedTools?: string[]
+  disallowedTools?: string[]
+  mcpServerNames: string[]
+}
 
 /**
  * Who triggered a toolset open/close. 'system' marks an automatic open by the
@@ -16,13 +20,21 @@ import type { AgentModelSelection } from '../../../../shared/types/ai-sources'
  */
 export type ToolsetOpener = 'user' | 'ai' | 'restore' | 'system'
 
+export type ToolsetContextMode = 'manual' | 'automatic'
+
 /** Per-session scope passed to toolset server factories */
 export interface ToolsetScope {
   spaceId: string
   conversationId: string
   workDir: string
+  toolContextMode?: ToolsetContextMode
+  /** Capabilities needed by this input, resolved only when creating its session. */
+  requiredToolsets?: readonly string[]
   /** Captured with the session, not the next turn's pending model selection. */
   modelSelection?: AgentModelSelection
+  /** Read the captured execution's effective grants when work is delegated. */
+  executionOptions?: () => ToolsetExecutionOptions
+  collaborationEnabled?: boolean
 }
 
 /**
@@ -42,18 +54,22 @@ export interface ToolsetDefinition {
    * the toolset is enabled (buildToolsetSection); a rich system-prompt fragment.
    */
   usageGuide: string
+  /** The host supplies this capability without manual enablement; the engine manages its tool context. */
+  contextManaged?: boolean
   /** Platform/capability gate. Unavailable toolsets are hidden everywhere. */
   isAvailable: () => boolean
   /** Build the in-process SDK MCP server instance for a session scope */
   createServer: (scope: ToolsetScope) => unknown
 }
 
-/** Toolset state exposed to the composer's "+" menu */
+/** Platform availability and manual controls exposed to the renderer. */
 export interface ToolsetStatus {
   id: string
   displayName: string
   summary: string
   open: boolean
+  /** False when the capability is available without a manual loading control. */
+  configurable?: boolean
 }
 
 /** Payload of the `toolsets:changed` event */
@@ -66,4 +82,6 @@ export interface ToolsetsChangedEvent {
   openedBy?: ToolsetOpener
   /** Full current open set after the change */
   open: string[]
+  /** Replaces the displayed controls when the actual session mode becomes known. */
+  statuses?: ToolsetStatus[]
 }

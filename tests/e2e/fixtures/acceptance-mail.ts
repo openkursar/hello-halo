@@ -9,6 +9,7 @@ import type { InstalledApp } from '../../../src/shared/apps/app-types'
 import type { Thought, TranscriptMessage } from '../../../src/shared/types/transcript'
 import { test as base, expect } from './acceptance-app'
 import type { AcceptanceModel, ModelRequest } from './acceptance-model'
+import { replyWithModelTool } from './acceptance-tool-discovery'
 import { seedManagedSpace } from './acceptance-management'
 import { startAcceptanceSmtp } from './acceptance-mail-smtp'
 import { startAcceptanceCalDav } from './acceptance-mail-caldav'
@@ -99,15 +100,13 @@ export async function performMailTool(page: Page, model: AcceptanceModel, person
   const question = `I authorize this isolated ${name} operation on the synthetic test account only: ${JSON.stringify(input)}. Reference ${id}.`
   const answer = `The local tool response has been recorded: ${id}.`
   const requests: ModelRequest[] = []
-  const missing: number[] = []
+  const missing: string[] = []
   let text: string | undefined
   model.respond(request => {
     requests.push(request)
     const result = request.toolResults.find(result => result.id === id)
     if (result) { text = result.text; return { text: answer } }
-    const names = request.tools.filter(tool => tool === name || tool.endsWith(`__${name}`))
-    if (names.length !== 1) { missing.push(names.length); return { text: 'The requested mail capability was unavailable.' } }
-    return { tools: [{ id, name: names[0], input }] }
+    return replyWithModelTool(request, name, input, id, missing)
   })
   const created = await page.evaluate(appId => (window as unknown as { halo: HaloAPI }).halo.appSessionCreate({ appId }), person.appId)
   expect(created.success).toBe(true)
@@ -121,7 +120,10 @@ export async function performMailTool(page: Page, model: AcceptanceModel, person
     return (response.data as { isActive: boolean }).isActive
   }, { timeout: 30000 }).toBe(false)
   expect(missing).toEqual([])
-  expect(requests).toHaveLength(2)
+  expect(requests).toHaveLength(3)
+  expect(requests[0].tools).toContain('ToolSearch')
+  expect(requests[0].tools.some(tool => tool === name || tool.endsWith(`__${name}`))).toBe(false)
+  for (const request of requests) expect(request.tools).toEqual(requests[0].tools)
   expect(requests[0].lastUserText).toContain(question)
   const messages = await readMailChat(page, person, conversationId)
   expect(messages.filter(message => message.role === 'user').map(message => message.content)).toEqual([question])

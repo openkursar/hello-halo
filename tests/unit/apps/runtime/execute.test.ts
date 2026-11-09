@@ -464,7 +464,7 @@ describe('executeRun — per-person engines', () => {
     const result = await executeRun({ app: makeApp(), trigger: { type: 'continue_followup', description: 'Continue', continue: { sessionId: 'saved-cc-session' } }, existingRunId: 'old-run', existingSessionKey: 'old-thread', store, memory: makeMemory() })
     expect(result.outcome).toBe('useful')
     expect(vi.mocked(acquireV2Session).mock.calls[0].slice(0, 5)).toEqual(['space-1', 'old-thread', expect.objectContaining({ engineId: 'anthropic', strictNativeResume: true }), 'saved-cc-session', '/tmp/space-1'])
-    expect(vi.mocked(acquireV2Session).mock.calls[0][9]).toMatchObject({ recoverNativeSession: expect.any(Function) })
+    expect(vi.mocked(acquireV2Session).mock.calls[0][9]).toMatchObject({ streamOwner: 'caller', recoverNativeSession: expect.any(Function) })
   })
 })
 

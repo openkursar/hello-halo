@@ -191,17 +191,12 @@ export interface Thought {
     isError: boolean
     timestamp: string
   }
-  // Sub-agent support: links this thought to a parent Task tool_use
-  // Matches SDK's parent_tool_use_id — null/undefined for main agent thoughts
+  // Stored parent thought ID for nested tool messages; absent for top-level messages.
   parentToolUseId?: string
-  // Task/Agent tool progress (updated via task_started/task_progress/task_notification)
   taskProgress?: TaskProgress
 }
 
-/**
- * Progress tracking for a Task/Agent tool_use thought.
- * Updated in real-time via SDK task lifecycle events.
- */
+/** Progress reported by an external engine for a tool's background task. */
 export interface TaskProgress {
   taskId: string
   status: 'running' | 'completed' | 'failed' | 'stopped'
@@ -215,6 +210,9 @@ export interface TaskProgress {
 // ============================================
 // Session State
 // ============================================
+
+/** The host's reason for ending one turn, carried by its AbortSignal. */
+export type StopReason = 'user' | 'internal' | 'controller'
 
 /**
  * Active session state for a conversation
@@ -298,6 +296,10 @@ export type V2SDKSession = {
  */
 export interface V2SessionInfo {
   engineId: EngineId
+  /** Whether this session uses the native tool-calling path eligible for client discovery. */
+  nativeToolCalling?: boolean
+  /** Exact installed instances in the final mounted pool, after entry-level policy filtering. */
+  mcpContextAppIds?: ReadonlySet<string>
   session: V2SDKSession
   spaceId: string
   conversationId: string

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const discover = vi.hoisted(() => vi.fn())
 vi.mock('../../../../src/renderer/api', () => ({ api: { gitDiscoverRepository: discover } }))
 import { GitDiscovery } from '../../../../src/renderer/services/git-discovery'
+import { i18nReady, setLanguage } from '../../../../src/renderer/i18n'
 import { useNotificationStore } from '../../../../src/renderer/stores/notification.store'
 
 const repository = { root: '/space/sdk', name: 'sdk', relativePath: 'sdk' }
@@ -10,7 +11,9 @@ const recordError = { code: 'GIT_FAILED' as const, error: 'disk full' }
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
 
 describe('opened-file repository discovery', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await i18nReady
+    await setLanguage('en')
     discover.mockReset().mockResolvedValue({ success: true, data: null })
     useNotificationStore.getState().clear()
   })
@@ -100,7 +103,7 @@ describe('opened-file repository discovery', () => {
     discovery.subscribe('a', listener)
     discovery.noteFile('a', '/space/sdk/file.ts')
     await flush()
-    discovery.invalidateProbes('a')
+    discovery.forget('a')
     finish({ success: true, data: { repository, remembered: false, recordError } })
     await flush()
     expect(listener).not.toHaveBeenCalled()

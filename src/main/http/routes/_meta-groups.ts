@@ -26,7 +26,7 @@ export const GROUPS: Record<GroupId, GroupMeta> = {
     },
     withheld: [
       'Answer a pending question on the user\'s behalf — Halo stopped to ask precisely because it needed a person, so the user answers it in the conversation.',
-      'Open or close a toolset. Reading which are open is fine; flipping one is the user\'s, and the request_toolset tool is how you ask them to.',
+      'Treat context loading as permission to bypass explicit tool restrictions or caller scope. Core capabilities, including Operate Halo, need no human enablement.',
     ],
     noEndpoint: {
       'exporting a conversation to a file':
@@ -58,7 +58,7 @@ export const GROUPS: Record<GroupId, GroupMeta> = {
       'one digital human on its own schedule': 'digital-human',
       'installing a digital human to use as a member': 'digital-human',
       'binding an IM chat to a team member': 'channels',
-      'assembling a temporary team inside this conversation': 'tool:collab_start',
+      'assigning independent work inside this conversation': 'tool:spawn_agent',
     },
     withheld: [
       'Invite people from other computers into a team, revoke an invite, or join a team hosted on someone else\'s computer — each one decides who can reach this machine, so the user does it from the team\'s settings in the Halo app.',

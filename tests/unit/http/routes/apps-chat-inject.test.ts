@@ -22,7 +22,11 @@ vi.mock('../../../../src/main/http/routes/_shared', () => ({
   injectIntoAppChatWhenLive: async (...args: unknown[]) => injectIntoAppChat(...args),
   sendAppChatMessage: (...args: unknown[]) => sendAppChatMessage(...args),
 }))
-vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: () => team.ready ? {
+vi.mock('../../../../src/main/apps/team', () => ({ getTeamService: () => team.ready ? { participants: {} } : null, getTeamStore: () => team.ready ? {
+  recipientFences: { read: (target: { teamId: string; epochId: string; appId: string }) => {
+    if (target.teamId !== 't1' || target.epochId !== 'e1' || target.appId !== 'app-1') throw new Error('Unknown recipient')
+    return 'current-owner-incarnation'
+  } },
   getTeamById: () => ({ leadAppId: 'lead', ephemeral: false }),
   getEpochById: (id: string) => id === 'e1' ? { id, teamId: 't1' } : null,
   getMember: (_teamId: string, appId: string) => appId === 'app-1' ? { origin: team.remote ? 'remote' : 'local', ownerNodeId: team.remote ? 'other-node' : undefined } : null,
@@ -34,7 +38,7 @@ async function withServer(fn: (post: (path: string, body: unknown) => Promise<{ 
   const app = express()
   app.use(express.json())
   registerAppsRoutes(app)
-  const server = await new Promise<import('http').Server>((resolve) => { const s = app.listen(0, () => resolve(s)) })
+  const server = await new Promise<import('http').Server>((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)) })
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   try {
     await fn(async (path, body) => {

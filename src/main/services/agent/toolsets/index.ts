@@ -24,3 +24,4 @@ export type {
   ToolsetOpener,
   ToolsetsChangedEvent
 } from './types'
+export type { ToolsetExecutionOptions } from './types'

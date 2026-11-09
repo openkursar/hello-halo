@@ -473,5 +473,87 @@ export const migrations: Migration[] = [
       db.exec(`DROP INDEX idx_teams_name_space`)
       db.exec(`CREATE UNIQUE INDEX idx_teams_name_space ON teams(owning_space_id, name, ephemeral)`)
     }
+  },
+  {
+    version: 22,
+    description: 'Store temporary work participants separately from standing membership',
+    up(db) {
+      db.exec(`
+        CREATE TABLE team_participants (
+          app_id TEXT PRIMARY KEY,
+          team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+          epoch_id TEXT NOT NULL REFERENCES team_epochs(id) ON DELETE CASCADE,
+          parent_app_id TEXT NOT NULL,
+          member_name TEXT NOT NULL,
+          owner_node_id TEXT NOT NULL,
+          origin TEXT NOT NULL CHECK(origin IN ('local', 'remote')),
+          added_at INTEGER NOT NULL,
+          metadata_json TEXT NOT NULL,
+          execution_json TEXT,
+          UNIQUE(team_id, epoch_id, member_name)
+        );
+        CREATE INDEX idx_team_participants_scope ON team_participants(team_id, epoch_id, added_at, app_id);
+      `)
+    }
+  },
+  {
+    version: 23,
+    description: 'Persist collaboration request budgets and cancellation fences',
+    up(db) {
+      db.exec(`
+        CREATE TABLE collaboration_requests (
+          id TEXT PRIMARY KEY,
+          budget_id TEXT NOT NULL,
+          used INTEGER NOT NULL DEFAULT 0,
+          cancelled INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE collaboration_request_heads (
+          source_key TEXT PRIMARY KEY,
+          request_id TEXT NOT NULL,
+          controller_app_id TEXT,
+          controller_origin TEXT
+        );
+        CREATE TABLE collaboration_request_sources (
+          source_key TEXT NOT NULL,
+          request_id TEXT NOT NULL,
+          PRIMARY KEY(source_key, request_id)
+        );
+      `)
+    }
+  },
+  {
+    version: 24,
+    description: 'Persist private collaboration source routing and revocation',
+    up(db) {
+      db.exec(`
+        CREATE TABLE collaboration_source_bindings (
+          request_id TEXT PRIMARY KEY,
+          source_key TEXT NOT NULL,
+          scope_key TEXT NOT NULL,
+          owner_key TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          revoked INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX idx_collaboration_source_bindings_source ON collaboration_source_bindings(source_key);
+        CREATE INDEX idx_collaboration_source_bindings_scope ON collaboration_source_bindings(scope_key);
+        CREATE INDEX idx_collaboration_source_bindings_owner ON collaboration_source_bindings(owner_key);
+      `)
+    }
+  },
+  {
+    version: 25,
+    description: 'Persist recipient delivery incarnations across stop and clear',
+    up(db) {
+      db.exec(`
+        CREATE TABLE collaboration_recipient_fences (
+          team_id TEXT NOT NULL, epoch_id TEXT NOT NULL, app_id TEXT NOT NULL, incarnation TEXT NOT NULL,
+          PRIMARY KEY(team_id, epoch_id, app_id)
+        );
+        CREATE TABLE collaboration_recipient_epochs (
+          team_id TEXT NOT NULL, epoch_id TEXT NOT NULL, incarnation TEXT NOT NULL,
+          PRIMARY KEY(team_id, epoch_id)
+        );
+      `)
+    }
   }
 ]

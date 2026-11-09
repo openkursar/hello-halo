@@ -35,6 +35,7 @@ import {
 } from '../../../shared/constants/model-runtime-limits'
 import { getEngineCapabilities, resolveDefaultEngine } from './resolved-sdk'
 import type { EngineId } from '../../../shared/types/engine'
+import type { ToolsetExecutionOptions } from './toolsets/types'
 import { assertEngineSourceCompatible } from '../../../shared/engine-source'
 import { assertDelegatedAuthReady } from './cli-auth'
 import { waitForSdkInitialization } from './initialization'
@@ -44,6 +45,7 @@ import { applyProxyEnv } from '../proxy-policy'
 import { WorkingDirectoryUnavailableError } from './working-dir'
 import { createMemoryWriteHooks, type MemoryWriteGuardConfig } from '../../platform/memory'
 import { buildModelPricingTable } from '../../../shared/constants/model-pricing'
+import { toolDiscoveryFingerprint } from './tool-discovery'
 
 // ============================================
 // Configuration
@@ -603,7 +605,10 @@ export function computeSessionInputsFingerprint(sdkOptions: Record<string, any>)
   const skipPermissions = sdkOptions.extraArgs
     ? String(sdkOptions.extraArgs['dangerously-skip-permissions'] ?? '')
     : ''
-  const material = [mcpKeys, prompt, permissionMode, disallowed, allowed, skipPermissions].join('\u0000')
+  const inputs = [mcpKeys, prompt, permissionMode, disallowed, allowed, skipPermissions]
+  const discovery = toolDiscoveryFingerprint(sdkOptions)
+  if (discovery) inputs.push(discovery)
+  const material = inputs.join('\u0000')
   return createHash('sha256').update(material).digest('hex').slice(0, 16)
 }
 
@@ -1133,4 +1138,22 @@ async function assembleSdkOptions(
   }
 
   return sdkOptions
+}
+
+export function captureToolsetExecutionOptions(
+  options: Record<string, unknown>,
+  engineId: EngineId,
+  servers: Record<string, unknown>,
+): ToolsetExecutionOptions {
+  const strings = (value: unknown): string[] | undefined => Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string') : undefined
+  return {
+    engineId,
+    collaborationEnabled: readUserAgentSettings().collaborationEnabled,
+    permissionMode: typeof options.permissionMode === 'string' ? options.permissionMode : undefined,
+    allowDangerouslySkipPermissions: options.allowDangerouslySkipPermissions === true,
+    allowedTools: strings(options.allowedTools),
+    disallowedTools: strings(options.disallowedTools),
+    mcpServerNames: Object.keys(servers),
+  }
 }

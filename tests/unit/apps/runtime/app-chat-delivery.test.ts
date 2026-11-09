@@ -49,7 +49,7 @@ vi.mock('../../../../src/main/apps/runtime/app-chat-sink', () => ({
 }))
 vi.mock('../../../../src/main/apps/runtime/im-permission-registry', () => ({ getImPermissionContext: () => undefined }))
 
-import { createAppChatDelivery } from '../../../../src/main/apps/runtime/app-chat-delivery'
+import { createAppChatDelivery, isPersonRequest } from '../../../../src/main/apps/runtime/app-chat-delivery'
 
 const KEY = 'app-chat:person'
 const request = (message: string, extra: Partial<AppChatRequest> = {}): AppChatRequest => ({
@@ -75,14 +75,47 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-async function idle(): Promise<void> {
+async function idle(conversationId = KEY): Promise<void> {
   env.busy = false
   env.identity = undefined
-  for (const listener of env.changes) listener(KEY)
+  for (const listener of env.changes) listener(conversationId)
   await vi.advanceTimersByTimeAsync(0)
 }
 
 describe('digital-human message admission', () => {
+  it('reports mailbox admission once before waiting for the source reply', async () => {
+    env.busy = true
+    env.identity = 'owner'
+    const run = vi.fn(async (_request: AppChatRequest) => {})
+    const delivery = createAppChatDelivery(run)
+    const admitted = vi.fn()
+    let completed = false
+    const sent = delivery.send(request('collaborator report', { onAdmitted: admitted })).then(() => { completed = true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(admitted).toHaveBeenCalledOnce()
+    expect(admitted).toHaveBeenCalledWith('mid_turn')
+    expect(completed).toBe(false)
+    env.accepted[0]()
+    await sent
+    expect(admitted).toHaveBeenCalledOnce()
+    delivery.dispose()
+  })
+
+  it('reports a different-authority input as buffered without waiting for its future turn', async () => {
+    env.busy = true
+    env.identity = 'owner'
+    const run = vi.fn(async (_request: AppChatRequest) => {})
+    const delivery = createAppChatDelivery(run)
+    const admitted = vi.fn()
+    const sent = delivery.send(request('guest report', { imPermission: guest, onAdmitted: admitted }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(admitted).toHaveBeenCalledWith('buffered')
+    expect(run).not.toHaveBeenCalled()
+    await idle()
+    await sent
+    expect(admitted).toHaveBeenCalledOnce()
+    delivery.dispose()
+  })
   it('starts idle work and releases the mailbox after completion', async () => {
     const run = vi.fn(async (_request: AppChatRequest) => {})
     const delivery = createAppChatDelivery(run)
@@ -378,6 +411,52 @@ describe('chat delivery admission failures', () => {
   })
 })
 
+
+describe('trusted owner input in a team conversation', () => {
+  const teamContext = { teamId: 'team', epochId: 'work', correlationId: 'human-input', fromAppId: null, wait: false }
+  const teamKey = 'app-chat:person:team:team:work'
+
+  it('recognizes only attested owner input when the trigger kind is omitted', () => {
+    expect(isPersonRequest(request('owner', { teamContext, humanInput: true }))).toBe(true)
+    expect(isPersonRequest(request('unknown', { teamContext }))).toBe(false)
+    for (const extra of [
+      { imPermission: guest },
+      { recorded: { content: 'peer report', provenance: { source: 'team-message' as const } } },
+      { recordedMessages: [{ content: 'peer report', provenance: { source: 'team-message' as const } }] },
+      { refreshBeforeDelivery: () => undefined },
+      { teamContext: { ...teamContext, kind: 'message' as const, fromAppId: 'peer' } },
+      { teamContext: { ...teamContext, origin: 'colleague' as const } },
+    ]) expect(isPersonRequest(request('not owner input', { teamContext, humanInput: true, ...extra }))).toBe(false)
+  })
+
+  it.each([false, true])('keeps the stopped team-owner draft and never replays it (already recorded=%s)', async recorded => {
+    let finish!: () => void
+    const run = vi.fn((_request: AppChatRequest) => new Promise<void>(resolve => { finish = resolve }))
+    const delivery = createAppChatDelivery(run)
+    const sent = delivery.send(request('owner draft', { conversationId: teamKey, teamContext, humanInput: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run).toHaveBeenCalledOnce()
+    delivery.holdAfterStop(teamKey)
+    run.mock.calls[0][0].onHeldBack?.(recorded ? [{ id: 'owner-record' }] as never : [])
+    finish(); await sent
+    if (recorded) {
+      expect(env.markInputsStopped).toHaveBeenCalledWith([{ id: 'owner-record' }])
+      expect(env.writeStoppedInput).not.toHaveBeenCalled()
+    } else {
+      expect(env.writeStoppedInput).toHaveBeenCalledWith('owner draft', undefined, undefined, undefined,
+        { kind: 'human_message', correlationId: 'human-input' })
+    }
+    await idle(teamKey)
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(run).toHaveBeenCalledOnce()
+    const next = delivery.send(request('fresh owner input', { conversationId: teamKey, teamContext, humanInput: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(run.mock.calls[1][0].message).toBe('fresh owner input')
+    finish(); await next
+    delivery.dispose()
+  })
+})
 
 describe('a person stopping the chat', () => {
   it('voids their own waiting message, keeping it in the record, and holds the rest without starting a turn', async () => {

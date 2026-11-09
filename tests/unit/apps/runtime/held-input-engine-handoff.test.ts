@@ -41,6 +41,19 @@ beforeEach(() => { state.active = false; state.withdrawn = [] })
 afterEach(() => { disposeAppChatSink(key) })
 
 describe('held input identities across engine changes', () => {
+  it('restores a Dsh member from its own persisted assignment and private reference', () => {
+    const writer = openSessionWriter(root(), 'person', 'chat')
+    writer.writeTrigger('MEMBER_ASSIGNMENT: retain private reference cobalt-729 and report to source-handle.')
+    writer.writeEvent({ type: 'assistant', message: { content: [{ type: 'text', text: 'The private reference is retained.' }] } })
+    openSessionWriter(root(), 'other-person', 'chat').writeTrigger('OTHER_MEMBER_PRIVATE_REFERENCE')
+    const plan = prepareAppEngineSession({ engineId: 'dsh', state: { sessionId: 'retired-dsh-session', binding: { version: 1, engineId: 'dsh', sessionId: 'retired-dsh-session' } }, spacePath: root(), appId: 'person', runId: 'chat' })
+    const input = prependEngineHandoff('Report the private reference from your assignment.', plan.recoverNativeSession!())
+    expect(input).toContain('MEMBER_ASSIGNMENT')
+    expect(input).toContain('cobalt-729')
+    expect(input).toContain('source-handle')
+    expect(input).not.toContain('OTHER_MEMBER_PRIVATE_REFERENCE')
+  })
+
   it('carries a withdrawn reminder through refresh and batching, excluding only its own stored record', async () => {
     const writer = openSessionWriter(root(), 'person', 'chat')
     writer.writeTrigger('KEEP_EARLIER_DECISION')

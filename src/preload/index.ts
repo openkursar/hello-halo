@@ -66,6 +66,8 @@ import type {
   TeamEdge,
   ProposedMember,
   TeamRunTrigger,
+  TeamRunResult,
+  EpochRoster,
   TeamTriggerInput,
 } from '../shared/apps/team-types'
 import { taskRpc } from '../shared/rpc/contracts/task.contract'
@@ -688,7 +690,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   teamRemoveMember: (input: { teamId: string; appId: string }) => Promise<IpcResponse>
   teamSetEdges: (input: { teamId: string; edges: TeamEdge[] }) => Promise<IpcResponse>
   teamProposeMembers: (input: { goal: string; owningSpaceId: string }) => Promise<IpcResponse>
-  teamRun: (teamId: string, trigger?: TeamRunTrigger) => Promise<IpcResponse>
+  teamRun: (teamId: string, trigger?: TeamRunTrigger, instruction?: string) => Promise<IpcResponse<TeamRunResult>>
   teamPause: (teamId: string) => Promise<IpcResponse>
   teamGetDetail: (teamId: string) => Promise<IpcResponse>
   /** Triggers (team as a first-class triggerable entity). */
@@ -707,6 +709,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   teamListEpochs: (teamId: string) => Promise<IpcResponse>
   /** Tasks/findings/members snapshot for one past run. */
   teamEpochBoard: (input: { teamId: string; epochId: string }) => Promise<IpcResponse>
+  teamEpochRoster: (input: { teamId: string; epochId: string }) => Promise<IpcResponse<EpochRoster | null>>
   /** Products produced during one specific run. */
   teamEpochArtifacts: (input: { teamId: string; epochId: string }) => Promise<IpcResponse>
   teamToolAudit: (input: { teamId: string; appId?: string; limit?: number }) => Promise<IpcResponse>
@@ -819,7 +822,6 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   gitListRepositories: GitRpcClient['gitListRepositories']
   gitDiscoverRepository: GitRpcClient['gitDiscoverRepository']
   gitOpenRepository: GitRpcClient['gitOpenRepository']
-  gitForgetRepository: GitRpcClient['gitForgetRepository']
   gitGetStatus: GitRpcClient['gitGetStatus']
   gitGetChanges: GitRpcClient['gitGetChanges']
   gitGetFileContents: GitRpcClient['gitGetFileContents']
@@ -1146,7 +1148,7 @@ const api: HaloAPI = {
   teamRemoveMember: (input) => ipcRenderer.invoke(TEAM_IPC.removeMember, input),
   teamSetEdges: (input) => ipcRenderer.invoke(TEAM_IPC.setEdges, input),
   teamProposeMembers: (input) => ipcRenderer.invoke(TEAM_IPC.proposeMembers, input),
-  teamRun: (teamId, trigger) => ipcRenderer.invoke(TEAM_IPC.run, teamId, trigger),
+  teamRun: (teamId, trigger, instruction) => ipcRenderer.invoke(TEAM_IPC.run, teamId, trigger, instruction),
   teamPause: (teamId) => ipcRenderer.invoke(TEAM_IPC.pause, teamId),
   teamGetDetail: (teamId) => ipcRenderer.invoke(TEAM_IPC.getDetail, teamId),
   teamListArtifacts: (teamId) => ipcRenderer.invoke(TEAM_IPC.listArtifacts, teamId),
@@ -1157,6 +1159,7 @@ const api: HaloAPI = {
   teamChatMessages: (input) => ipcRenderer.invoke('team:chat-messages', input),
   teamListEpochs: (teamId) => ipcRenderer.invoke('team:list-epochs', teamId),
   teamEpochBoard: (input) => ipcRenderer.invoke('team:epoch-board', input),
+  teamEpochRoster: (input) => ipcRenderer.invoke('team:epoch-roster', input),
   teamEpochArtifacts: (input) => ipcRenderer.invoke('team:epoch-artifacts', input),
   teamToolAudit: (input) => ipcRenderer.invoke('team:tool-audit', input),
   teamGenerateInvite: (input) => ipcRenderer.invoke(TEAM_IPC.generateInvite, input),

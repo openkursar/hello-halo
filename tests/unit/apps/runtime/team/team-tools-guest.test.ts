@@ -7,10 +7,8 @@
 
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('../../../../../src/main/services/agent/resolved-sdk', () => ({
-  tool: (name: string, description: string, inputSchema: unknown, handler: unknown) => ({ name, description, inputSchema, handler }),
-  createSdkMcpServer: (options: { tools: Array<{ name: string }> }) => options,
-}))
+vi.mock('../../../../../src/main/services/agent/resolved-sdk', async () =>
+  import('../../../../../src/main/services/agent/mcp/sdk-server'))
 
 import { createTeamMcpServer } from '../../../../../src/main/apps/runtime/team/team-tools'
 import type { TeamMcpContext } from '../../../../../src/main/apps/runtime/team/team-tools'
@@ -27,11 +25,11 @@ function toolNames(overrides: Partial<TeamMcpContext>): string[] {
     selfIsLead: true,
     bus: {} as MessageBus,
     blackboard: {} as Blackboard,
+    checks: {} as TeamMcpContext['checks'],
     callerWorkDir: '/tmp',
-    requestComplete: () => {},
     ...overrides,
   }
-  return (createTeamMcpServer(ctx) as unknown as { tools: Array<{ name: string }> }).tools.map((t) => t.name)
+  return createTeamMcpServer(ctx).instance.listTools().map((tool) => tool.name)
 }
 
 describe('team tools while serving a guest', () => {

@@ -108,6 +108,8 @@ export interface InstalledApp {
      * the card lists. No session is given them, whoever it runs for.
      */
     disabledTools?: string[]
+    /** MCP servers only: Halo SDK context loading, independent of tool permissions. */
+    mcpContext?: import('./mcp-context').McpContextPreferences
     /** Internal skill installation metadata, not a user-editable override. */
     skill?: import('../types/skills').SkillInstallationState
   }

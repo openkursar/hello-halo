@@ -46,7 +46,7 @@ test('the owner asking through IM gets its teams and reads a conversation live',
   const prompt = promptOf(owners[0])
   expect(prompt).toContain('Your standing teams')
   expect(prompt).toContain(`Release crew ${token} (teamId ${team.id}) — your role: Release coordinator (lead)`)
-  expect(prompt).toContain('This chat is your own, outside all of them.')
+  expect(prompt).toContain('This conversation has its own work context. These memberships do not change it.')
   const listed = owners.flatMap(request => request.toolResults).find(result => result.id === 'im-list')
   expect(listed?.error).toBe(false)
   for (const conversation of [intended, unrelated]) {

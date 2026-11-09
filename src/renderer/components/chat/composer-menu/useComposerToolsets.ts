@@ -7,7 +7,7 @@
  * effect from the next message: the session rebuild waits for the turn to end.
  */
 
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useToolsetsStore, type ToolsetStatus } from '../../../stores/toolsets.store'
 import { useChatStore, selectActiveConversationId } from '../../../stores/chat.store'
 import { useSpaceStore } from '../../../stores/space.store'
@@ -62,13 +62,15 @@ export function useComposerToolsets({ enabled, panelOpen, onRequested }: Options
     return () => timers.forEach((timer) => window.clearTimeout(timer))
   }, [active, panelOpen, aiRequested, conversationId, consumeRequestHighlight])
 
-  const list = active ? statuses ?? EMPTY : EMPTY
+  const list = useMemo(() => active && statuses
+    ? statuses.filter(status => status.configurable !== false)
+    : EMPTY, [active, statuses])
 
   return {
     list,
     requested: aiRequested ?? new Set<string>(),
     toggle: (ts) => {
-      if (!active) return
+      if (!active || ts.configurable === false) return
       if (ts.open) void closeToolset(spaceId!, conversationId!, ts.id)
       else void openToolset(spaceId!, conversationId!, ts.id)
     },

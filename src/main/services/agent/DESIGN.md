@@ -17,7 +17,7 @@
 | System prompt composition | `system-prompt.ts` | Space context, conversation context, tool availability injection. `buildKnowledgeSection` is exported separately for creation-time append. On the `halo` engine the Claude Code-derived template is not used: `buildSystemPrompt` yields only Halo's product context, and every site that sets `sdkOptions.systemPrompt` wraps it with `toEngineSystemPrompt` into the engine's `{ preset: 'default', append }`. Code that later extends or reads the prompt goes through `appendToSystemPrompt` / `hostSystemPromptText`, never assumes a string. A digital human with its own instructions passes `ownIdentity`: the one identity line ("You are Halo, …") becomes "You run on Halo, …", so asked who it is it answers as its instructions say; everything else stays Halo's. |
 | Knowledge context resolution | `knowledge-context.ts` | Conversation `knowledgeBaseIds` → injectable `KBReference[]` (agent→tlon dependency collector). Cheap id-only variant feeds the session knowledge fingerprint. |
 | Space memory | `space-memory.ts` | Space chat's shared memory (platform/memory, scope `space`, per-space settings): the shared compact format, recording policy, file paths and conversation author tag appended to the Halo system prompt, plus the write guard at session setup, the bounded memory block on a new conversation's first message. Whether memory was on is passed as `SessionGates.creationContext`, so a session warmed before the setting flipped is rebuilt. Every concern that watches tool calls adds its hooks with `addSdkHooks` (sdk-config) — never by assigning `hooks`. Consolidation is not here — `services/memory-consolidation` listens for turn ends. |
-| Subagent orchestration | `subagent-handler.ts` | Nested agent invocations — Halo supports agents spawning agents. |
+| Tool-owned messages | `tool-message-handler.ts` | Nested tool records and external background-command progress. |
 | Permission gating | `permission-handler.ts` | AskUserQuestion, and the optional `ToolGate` a caller supplies for calls the engine left undecided. Knows nothing about what a policy says — only whom to ask. |
 | MCP server routing | `mcp-manager.ts` | Registration, discovery, per-session MCP bindings. Owns the shared status cache (`agent:mcp-status` broadcast). |
 | MCP connection probe | `mcp-probe.ts` | Native initialize+tools/list handshake via `@modelcontextprotocol/sdk` — no agent session, no token cost. Classifies failures (401→needs-auth, refused/timeout→failed + `errorDetail`). Triggered by app lifecycle events (install/resume/spec-update, wired in `apps/runtime`), by SDK-reported `failed`/`needs-auth` (stream-processor follow-up), and manually via `agent:probe-mcp` IPC. A probe that connects also clears the server's CC auth record, and lets sessions that reported the server failed rebuild (see §2). |
@@ -144,7 +144,7 @@ starting an empty session or changing the previous binding.
 - **API config changes rebuild only affected sources.** `config.service.ts` exposes `onApiConfigChange(callback)` with an optional `{ sourceIds, selectionChanged }` payload. V2 source configuration, account-routing and capability changes advance only those sources' versions; the global epoch advances only for legacy `api` changes (an undefined callback payload invalidates all sessions). Sessions carry the non-secret `sourceId`, resolved from `HALO_AI_SOURCE_ID` or their encoded backend descriptor. Changing one account never invalidates another account's sessions. An OAuth token rotation (refresh, same-account reauthentication) changes no version at all: the router swaps each request's credential for the account's current one (`openai-compat-router` `setRequestCredentialResolver`, implemented by `AISourceManager.resolveRequestCredentials`), so neither the source signature nor `computeCredentialsFingerprint` includes a sourced account's token or credential headers. Rebuilds destroy and recreate sessions at safe boundaries; session options are never mutated in place.
 - **Model selection is per-conversation.** A conversation pins its own `{ modelSourceId, modelId }`, stamped at creation from the active global selection and resolved at send/warm time by `helpers.ts getApiCredentialsForSelection` — the one resolver for every stored selection, a digital human's `userOverrides` included (app-chat, execute, memory consolidation). A selection with no source, or one whose account no longer exists, uses the global selection: signing out removes the account and signing in again creates a new one, so every conversation and digital human pinned to the old account would otherwise be stuck forever (`shared/types/ai-sources.ts resolveModelSelection` shows the same answer in the UI). An account that still exists but is unconfigured or unauthenticated fails rather than substituting another account. Credential resolution captures a source id before refreshing OAuth, then re-reads that same source through the manager's public `getSourceConfig`; a concurrent change to `currentId` cannot redirect the request. A pin change is detected by the per-conversation `credentialsFingerprint` and rebuilds that conversation's session. The desktop `ModelSelector` also updates the global selection — the last-used seed for new conversations and non-chat surfaces (apps use their own `userOverrides`). A selection-only change invalidates only legacy sessions without a source marker; managed unpinned sends re-resolve the selection and reconcile through their fingerprint. Concurrent creation never shares a different source's session, and a source switch while busy refuses (`SessionOptionsStaleError`, reason `source-switch`) rather than running on the previous account.
 - **A load-balancing group is a stored selection like an account.** `getApiCredentialsForSelection` asks `getGroup(modelSourceId)` first and returns the stand-in from `group-credentials.ts`: a placeholder endpoint and key that are never sent, `model: GROUP_MODEL_ID`, the group's name as `displayModel`, `isGroup: true`, and the smallest context window and output limit its usable members declare (image input only if all accept it). The engine starts one session whose limits hold whichever member answers; the router picks the member per request (`openai-compat-router/balancing/DESIGN.md`). Editing a group's order, strategy, name or a member's key rebuilds nothing — `getAiSourcesChange` names the group only when that capability envelope changes. `source-compatibility.ts` refuses a group for Codex. The engine prices every reply by the one session model, so a group conversation's dollar figures are left out of the UI.
-- **Session identity & rebuild triggers.** A conversation's live session is keyed by `conversationId` and rebuilt when its captured `credentialsGeneration` (global legacy epoch plus source id and source epoch), `credentialsFingerprint` (model/env, account identity headers — plus the key and credential headers only for descriptors without a source — profile ARN and selected-model Codex capabilities), `knowledgeFingerprint` (the RESOLVED knowledge-base set + workDir), or eager `inputsFingerprint` (prompt, MCP server names, permission rules, and a digest of the settings an in-process server keeps for the session's life — `markMcpServerSettings`, e.g. the email tools) differs. Generations travel with the credential snapshot through asynchronous SDK preparation and are captured before asynchronous creation work for legacy callers, never after it, so a racing config change cannot bless stale credentials. Source epoch storage is bounded by configured sources; deletion removes an epoch and re-adding the id receives a fresh epoch. Volatile request ids and catalog fetch timestamps do not churn fingerprints. Knowledge ids are computed cheaply per send via `knowledge-context.ts resolveConversationKnowledgeBaseIds`; resolved-not-declared so a KB whose indexing finishes after creation triggers a rebuild, and workDir so KB-chat vs normal turns never share a mis-rooted session. Rebuild requests converge on `pendingConsumerRebuilds` and are applied at safe points only: turn end (consumer), idle reuse (`hasConsumablePendingRebuild`), or immediately when safely idle. Busy windows that defer a rebuild: a caller-held session lease, an active turn, running team agents, in-flight creation, and a dispatched-but-unacknowledged turn (`turnsAwaitingInit`, cleared at `system:init`). Sending entries use `acquireV2Session`: the manager establishes its lease before resolving the acquisition, including callers sharing a warm-up's creation. The lease protects asynchronous thinking/memory preparation and SDK send acceptance. Both chat entries await `lease.send()`: dispatch marks awaiting-init before sending, retains the lease until the SDK's synchronous or asynchronous send settles, and closes only the owned instance on rejection before releasing in `finally`. Successful dispatch transfers protection to awaiting-init/the consumer; abandoned preparation releases in `finally`. Lease cleanup is instance-owned and never closes a successor under the same conversation id. Dispatch failure reporting runs through the lease's synchronous `onFailure` callback while that instance is still current, before cleanup; obsolete rejections still reach their original caller but cannot publish events or mutate conversation state. Preparation errors check `lease.isCurrent` before reporting. Neither check depends on a reservation surviving successful dispatch. Headless follow-ups retain the lease for their whole active execution and close it in `finally`; warm-up uses the unleased `getOrCreateV2Session`.
+- **Session identity & rebuild triggers.** A conversation's live session is keyed by `conversationId` and rebuilt when its captured `credentialsGeneration` (global legacy epoch plus source id and source epoch), `credentialsFingerprint` (model/env, account identity headers — plus the key and credential headers only for descriptors without a source — profile ARN and selected-model Codex capabilities), `knowledgeFingerprint` (the RESOLVED knowledge-base set + workDir), or eager `inputsFingerprint` (prompt, MCP server names, permission rules, and a digest of the settings an in-process server keeps for the session's life — `markMcpServerSettings`, e.g. the email tools) differs. Generations travel with the credential snapshot through asynchronous SDK preparation and are captured before asynchronous creation work for legacy callers, never after it, so a racing config change cannot bless stale credentials. Source epoch storage is bounded by configured sources; deletion removes an epoch and re-adding the id receives a fresh epoch. Volatile request ids and catalog fetch timestamps do not churn fingerprints. Knowledge ids are computed cheaply per send via `knowledge-context.ts resolveConversationKnowledgeBaseIds`; resolved-not-declared so a KB whose indexing finishes after creation triggers a rebuild, and workDir so KB-chat vs normal turns never share a mis-rooted session. Rebuild requests converge on `pendingConsumerRebuilds` and are applied at safe points only: turn end (consumer), idle reuse (`hasConsumablePendingRebuild`), or immediately when safely idle. Busy windows that defer a rebuild: a caller-held session lease, an active turn, running team agents, in-flight creation, and a dispatched-but-unacknowledged turn (`turnsAwaitingInit`, cleared at `system:init`). Sending entries use `acquireV2Session`: the manager establishes its lease before resolving the acquisition, including callers sharing a warm-up's creation. A caller arriving after that creation was invalidated waits for it to settle and re-evaluates the pending rebuild before acquiring a lease; a stale warm-up cannot consume its first message on the old tool catalog. The lease protects asynchronous thinking/memory preparation and SDK send acceptance. Both chat entries await `lease.send()`: dispatch marks awaiting-init before sending, retains the lease until the SDK's synchronous or asynchronous send settles, and closes only the owned instance on rejection before releasing in `finally`. Successful dispatch transfers protection to awaiting-init/the consumer; abandoned preparation releases in `finally`. Lease cleanup is instance-owned and never closes a successor under the same conversation id. Dispatch failure reporting runs through the lease's synchronous `onFailure` callback while that instance is still current, before cleanup; obsolete rejections still reach their original caller but cannot publish events or mutate conversation state. Preparation errors check `lease.isCurrent` before reporting. Neither check depends on a reservation surviving successful dispatch. Headless follow-ups acquire with `streamOwner: 'caller'`: sends retain the lease, do not register a consumer-owned awaiting-init marker, and remain valid for auto-continue. The caller closes its exact instance and releases in `finally`, so later work cannot reuse its old permissions. Warm-up uses the unleased `getOrCreateV2Session`.
 - **An MCP server that failed to connect is retried by rebuilding the session.** Engines connect MCP servers when a session starts and go on without one that failed (CC and the halo engine alike). A chat consumer hands each turn's `mcp_servers` report to `noteSessionMcpStatus`, which records the failed servers on the session and calls `requestSessionRebuild` — the deferral a toolset toggle gets, so a running turn finishes first and the next message starts on a fresh session. A tool result saying a server is not connected counts as the same failure: CC (2.1.89) can drop a server mid-session for good while its reports still say connected. A server seen connecting again afterwards (`onMcpServerRecovered` in `mcp-manager.ts`: a probe, a connection test or another session) rebuilds the sessions that reported it failed once more. Both rebuilds are spent per conversation and server; the budget outlives only the rebuild it asked for and is dropped when a session connects the server (a failure found by a tool call only after five minutes, so a server that connects but cannot serve calls rebuilds at most once in that time), when any other teardown ends the conversation's session (closed, evicted, idle cleanup, a credential rebuild), or when MCP configuration changes, so a server that passes Halo's probe but never connects in the engine cannot rebuild a session at every report. Codex reports every configured server as connected and dsh never reports a failure, so neither takes this path.
 
 - **Creation-time assembly is deferred and owned by the creation path.** `getOrCreateV2Session` deduplicates concurrent calls per conversation (in-flight promise map — a warm-up racing a send must never spawn two CC processes). Expensive/stateful inputs are passed as thunks and materialized only when a session is actually created, after any cleanup of the previous one: `buildMcpServers` (in-process MCP instances bind to exactly one session transport; a pre-built record could carry instances still bound to a torn-down session, whose connect failure the SDK swallows — tools silently vanish) and `resolveKnowledgeBases` (index.md reads + `# Knowledge` prompt section; deferred for cost — a reused session throws the resolution away).
@@ -218,6 +218,45 @@ the common engine interface. It maps spaces to opaque affinity keys and bridges
 host permissions, hooks and tools. Pooling, scheduling and their defaults belong
 to the SDK contract, not Halo's chat services.
 
+`tool-discovery.ts` owns Halo's MCP context-loading policy. The installed-app
+conversion tags each server object with its stable installation identity and
+effective context preference in a WeakMap; transport records, process environment
+and external-engine inputs carry none of that policy. The Halo adapter prepares
+the public SDK `toolDiscovery` option from the final mounted server set, after
+entry permissions and lazy server creation. Installed MCP defaults to deferred;
+the in-process `halo-apps` and `halo-email` servers are deferred; other servers
+retain the SDK's eager default. Explicit XML/JSON calling does not get this option.
+The SDK owns discovery, request representation and retained tool definitions.
+
+Effective preferences participate in Halo's eager session-input fingerprint.
+Space chat's lazy assembly instead follows the MCP `context` change event: only
+native Halo sessions that mounted the exact changed installation rebuild at the
+existing safe boundary. Installed dependency IDs come from the final server
+objects' provenance, after permission filtering and space overrides, not from
+normalized server names. Eager in-flight preparation knows that set immediately;
+lazy preparation publishes it synchronously before starting the Worker session.
+Only a not-yet-materialized lazy native creation may conservatively defer a
+rebuild. Explicit XML/JSON, unrelated installations and external engines are
+unaffected. These changes do not retry MCP connections. Context preferences never
+add a server to the caller's allowed set.
+
+Space toolset assembly and its guides are prepared together. Supported core
+capabilities, including Operate Halo and its scoped runtime credentials, are
+always available without a human enablement step. Capability availability is
+independent of native history representation; only the SDK decides how legacy
+or versioned discovery history is replayed. Menus and capability preparation do
+not inspect native transcripts. Explicit tool restrictions and caller-scoped
+execution policies remain with their existing owners.
+
+`resolved-sdk.createSession` accepts an optional host preparation callback with
+only an abort signal and the captured adapter's context-inspection operation.
+The same engine borrow covers inspection, tool preparation and session creation;
+an inactive non-default engine cannot close its pool between those steps. The
+callback itself never crosses the Worker boundary, and its inspection capability
+expires when it returns. Cancellation and preparation failure release the borrow
+without creating a session. Native transcript parsing runs in an existing Worker,
+not on Electron's main thread.
+
 Bootstrap initializes the runtime after the first screen and awaits its shutdown
 before releasing host tools. A worker-backed session must never register the main
 process PID as a killable engine process.
@@ -241,7 +280,7 @@ SDK stream event
   → stream-processor (SDK event → Thought)
   → appended to session Thought[]
   → emitted to renderer via agent:thought event
-  → optional: trigger permission-handler / subagent-handler / inject side-effects
+  → optional: trigger permission-handler / tool-message-handler / inject side-effects
 ```
 
 Key invariants:
@@ -316,14 +355,13 @@ cleanup cannot release a successor.
 about a surface; a branch on conversation kind inside this loop is the smell
 that the sink boundary is being bypassed.
 
-## 4) Subagent Model
+## 4) Collaboration ownership
 
-`subagent-handler.ts` manages nested agent invocations. A parent agent can spawn one or more subagents; each subagent runs in its own SDK session with:
-- Inherited MCP servers (configurable)
-- Scoped system prompt composed by `system-prompt.ts`
-- Results folded back into the parent's thought stream as a `subagent_result` thought
-
-Do not bypass `subagent-handler` for nested invocations — it owns the lifecycle, resource limits, and result translation.
+Collaboration belongs to the application runtime and reaches every engine as
+scoped MCP tools. This engine layer starts ordinary sessions and transports
+messages; it does not create a second member registry or native team lifecycle.
+Nested tool records and legacy transcript relationships remain readable through
+`tool-message-handler.ts` and the normal transcript renderer.
 
 ## 5) External Injection (Mid-Turn Delivery)
 
@@ -469,7 +507,7 @@ that may be safely rebuilt.
 | Add a new tool-approval flow | `permission-handler.ts` |
 | Let a non-user trigger push a message | `inject-message.ts` (do NOT invent a new injection path) |
 | Interrupt / pause / switch mid-turn | `control.ts` |
-| Change subagent behavior | `subagent-handler.ts` |
+| Change nested tool rendering | `tool-message-handler.ts` |
 | Register a new MCP server source | `mcp-manager.ts` |
 | Give a new out-of-process engine MCP or skills | `mcp/partition.ts` + `mcp/sdk-bridge.ts` (reuse as-is) and `skills.ts`; write only the engine's own config renderer |
 | Change MCP connectivity checks / failure classification | `mcp-probe.ts` |
@@ -480,7 +518,7 @@ that may be safely rebuilt.
 
 1. **No state duplication in renderer.** Renderer stores mirror authoritative main-process state via events only.
 2. **Never re-implement injection paths.** All external triggers go through `inject-message.ts`.
-3. **Never bypass `stream-processor`** when translating SDK events — subagent-handler and permission-handler compose with it, not around it.
+3. **Never bypass `stream-processor`** when translating SDK events — tool-message-handler and permission-handler compose with it, not around it.
 4. **Do not weaken the config-change invalidation contract.** Partial in-place session updates are forbidden; batch destroy + recreate is the only supported path.
 5. **Mirrors of CC-internal formats stay in one module and fail closed.** `mcp-auth-state.ts` reproduces CC's entry-key derivation and keychain naming; a CC upgrade that changes either must make the lookup miss, never make it match the wrong record. Revalidate when updating the recommended CC range.
 6. **Guard every `mainWindow` access** in async callbacks with `!mainWindow.isDestroyed()`.
@@ -547,6 +585,11 @@ renderer's last-used level only seeds a new conversation — passed to
 `createConversation`, so the warm-up that follows spawns at it — and never
 rides on a send, so a conversation without its own level runs at the model
 config.
+
+Space input metadata keeps the request's thinking flag and any API-picked level.
+Automatic continuations inherit the latest non-withdrawn human input's settings;
+peer and system records cannot change them. The conversation's current picked
+level still wins. This preserves explicit off after an idle session is reclaimed.
 
 `reasoning-effort.ts` is the only place they combine. Call sites pass them to
 `applyReasoningEffort(sdkOptions, thinkingEnabled, capabilities, requestedEffort)`
@@ -790,9 +833,38 @@ are handoffs too but are not losses and carry no notice.
 
 Opted-in Codex bindings pass `strictNativeResume: true`. A rejected `thread/resume` raises `NativeSessionResumeError` without starting a fresh thread; the session owner decides how to rebuild from neutral records. Startup failures close the app-server, RPC handlers and MCP bridge before returning. Legacy unbound Codex resume retains its earlier fallback contract.
 
+Dsh has no native resume. A necessary process replacement restores the recorded
+context through the same recovery slot before starting a new native session ID;
+without a readable record it fails. A resident session keeps its live context.
+The adapter also rejects direct resume requests instead of reusing an ID for an
+empty runtime.
+
 New space conversations carry `engineRoutingVersion: 1`, which makes their existing
 `engineId` the initial routing identity even before the first native session is
 ready. Legacy records are not backfilled: their old origin badge cannot identify
 current user intent. Historical automatic CC identities still follow the shared
 compatibility policy and route to Halo. Generic conversation updates cannot rewrite
 this version or initial identity; an explicit change uses `engineOverride` instead.
+
+## Host-owned collaboration
+
+Halo supplies the scoped collaboration MCP server for every engine. Engine-native
+Agent/Task and team-management tools are always withheld, independently of a
+user's optional tool restrictions. CC receives the deny list at its final CLI
+argument boundary. Codex disables both native multi-agent feature generations in
+thread configuration. The dsh composition and runtime bundle omit its native
+collaboration plugins entirely. The Halo SDK adapter selects hosted mode.
+
+Native execution catalogs are not advertised in engine capabilities or session
+initialization. Session liveness follows actual turns, queued input and leases;
+old native-team thoughts cannot pin an idle engine or force a different stop path.
+Historical transcript fields remain readable. `tool-message-handler.ts` handles
+ordinary tool-owned nested messages and external background-command progress,
+without owning a collaborator registry or detecting native teams.
+
+CC skill calls are checked at the engine boundary because `context: fork` can
+start native execution without calling the disabled Agent tool. The check reads
+cached, bounded metadata for the selected skill only; it performs no startup
+scan. Fork-mode and uninspectable skills are refused, as are direct commands
+that cannot be matched to an inspectable inline skill or a supported session
+command. Error messages require removing the fork setting before retrying.

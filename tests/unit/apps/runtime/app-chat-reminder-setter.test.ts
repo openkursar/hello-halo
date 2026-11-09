@@ -111,7 +111,7 @@ vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
     bus: { drainMailbox: () => {} },
   }),
 }))
-vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({ createTeamMcpServer }))
+vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({ createTeamMcpServer, createCoordinationMcpServer: () => ({ _isMcpServer: true, name: 'halo-team' }) }))
 
 const { buildUserSessionSdkOptions, getEngineCapabilities } = vi.hoisted(() => ({
   buildUserSessionSdkOptions: vi.fn((_input: Record<string, unknown>): Record<string, any> => ({})),
@@ -158,7 +158,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getDbMcpServers: vi.fn(() => null),
 }))
-vi.mock('../../../../src/main/services/agent/events', () => ({ onAgentEvent: () => ({ dispose: () => {} }), emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ emitHumanRequest: vi.fn(), onAgentEvent: () => ({ dispose: () => {} }), emitAgentEvent: vi.fn() }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))

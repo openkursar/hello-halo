@@ -116,9 +116,9 @@ describe('isSessionBusy', () => {
     expect(isSessionBusy('conv-idle')).toBe(false)
   })
 
-  it('is busy when idle between turns while its team is still working', async () => {
+  it('does not use archived native team thoughts to keep an idle engine alive', async () => {
     await withConsumer('conv-team', { isRunning: true, turn: null, teamThoughts: liveTeam })
-    expect(isSessionBusy('conv-team')).toBe(true)
+    expect(isSessionBusy('conv-team')).toBe(false)
   })
 
   it('is not busy when the consumer has stopped', async () => {

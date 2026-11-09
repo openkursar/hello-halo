@@ -40,6 +40,8 @@ import type { MaterializedCordisConfig } from '../../../../../src/main/services/
 import { startMessagesStub, textReply, type MessagesStub, type StubReply } from './messages-stub'
 import { createApp } from '../../../../../src/main/openai-compat-router/server/router'
 import { encodeBackendConfig } from '../../../../../src/main/openai-compat-router/utils'
+import { openSessionWriter, readChatHandoffHistory } from '../../../../../src/main/apps/runtime/session-store'
+import { prependEngineHandoff, serializeEngineHandoff } from '../../../../../src/main/services/agent/engine-handoff'
 
 // The router's egress goes through Electron's session-aware fetch; a plain
 // fetch is the same request without the app's proxy settings.
@@ -215,6 +217,34 @@ describe.skipIf(!enabled)('dsh adapter against a real runtime', () => {
     return frames
   }
 
+  it('receives its persisted assignment after replacement with a new native session', async () => {
+    useScript(() => textReply('The assignment is retained.'))
+    const configuration = materializeCordisConfig(dataDir, { workDir })
+    const original = await createSession(configuration)
+    const writer = openSessionWriter(workDir, 'temporary-reviewer', 'chat')
+    const assignment = 'MEMBER_PRIVATE_ASSIGNMENT: retain cobalt-729 and report to source-handle.'
+    writer.writeTrigger(assignment)
+    try {
+      for (const frame of await runTurn(original, assignment)) writer.writeEvent(frame)
+    } finally {
+      await original.close()
+    }
+    const context = serializeEngineHandoff({ ...readChatHandoffHistory(workDir, 'temporary-reviewer', 'chat'), sourceEngine: 'dsh', targetEngine: 'dsh' })
+    const origin = useScript(() => textReply('I can continue from the recorded assignment.'))
+    const replacement = await createSession(configuration)
+    try {
+      await runTurn(replacement, prependEngineHandoff('Report the private reference from your original assignment.', context.text))
+      expect(replacement.sessionId).not.toBe(original.sessionId)
+      const request = stub.requests[origin]
+      expect(JSON.stringify(request.messages)).toContain(assignment)
+      expect(JSON.stringify(request.messages)).toContain('The assignment is retained.')
+      expect(JSON.stringify(request.system)).not.toContain(assignment)
+      expect(request.messages.filter((message: any) => message.role === 'user')).toHaveLength(1)
+    } finally {
+      await replacement.close()
+    }
+  }, 120_000)
+
   it('runs a shell tool and streams the turn from prompt to result', async () => {
     const advertisedTools: string[] = []
     const captured: any[] = []
@@ -235,10 +265,11 @@ describe.skipIf(!enabled)('dsh adapter against a real runtime', () => {
       // request header, so assert there — a plugin that fails to mount, or a
       // backend package that stops resolving, would otherwise pass unnoticed as
       // a quietly less capable agent.
+      expect(advertisedTools).not.toContain('subagent')
       expect(advertisedTools).toEqual(
         expect.arrayContaining([
           'read', 'write', 'edit', 'glob', 'grep', 'str_replace_editor', 'todo_write',
-          'bash', 'web_search', 'web_fetch', 'subagent', 'skill',
+          'bash', 'web_search', 'web_fetch', 'skill',
           'terminal_open', 'terminal_send', 'terminal_read',
           'terminal_list', 'terminal_signal', 'terminal_close',
         ])
@@ -403,23 +434,24 @@ describe.skipIf(!enabled)('dsh adapter against a real runtime', () => {
     // The full inversion: a tool whose body lives in Halo's heap, published on
     // loopback, dialled by the runtime's own client, and offered to the model
     // under Halo's `mcp__server__tool` convention.
+    let calls = 0
     const bridge = new SdkMcpBridge({
       halo: {
         version: '1.0.0',
         listTools: () => [
           {
-            name: 'echo',
-            description: 'Echo the input back',
+            name: 'spawn_agent',
+            description: 'Host collaboration fixture',
             inputSchema: { type: 'object', properties: { text: { type: 'string' } } },
           },
         ],
-        callTool: async () => ({ content: [{ type: 'text', text: 'echoed' }] }),
+        callTool: async () => { calls++; return { content: [{ type: 'text', text: 'host-collaboration-receipt' }] } },
       },
     })
     const urls = await bridge.start()
 
     const advertisedTools: string[] = []
-    useScript(() => textReply('ok'))
+    const origin = useScript(index => index === 0 ? { blocks: [{ type: 'tool_use', id: 'host-spawn', name: 'mcp__halo__spawn_agent', input: { text: 'Inspect.' } }], stopReason: 'tool_use' } : textReply('ok'))
     const session = await createSession(
       materializeCordisConfig(dataDir, {
         workDir,
@@ -434,7 +466,10 @@ describe.skipIf(!enabled)('dsh adapter against a real runtime', () => {
       await runTurn(session, 'say hi')
       // The very first turn: the session must not start before the runtime's
       // client has connected, or the tools exist only from turn two.
-      expect(advertisedTools).toContain('mcp__halo__echo')
+      expect(advertisedTools).toContain('mcp__halo__spawn_agent')
+      expect(advertisedTools).not.toContain('subagent')
+      expect(calls).toBe(1)
+      expect(JSON.stringify(stub.requests[origin + 1].messages)).toContain('host-collaboration-receipt')
     } finally {
       await session.close()
       await bridge.close()
@@ -593,37 +628,17 @@ describe.skipIf(!enabled)('dsh adapter against a real runtime', () => {
     }
   }, 120_000)
 
-  it('keeps answering a conversation whose runtime was restarted', async () => {
-    // Halo replays a conversation's persisted session id into every new
-    // runtime, and the runtime persists sessions under that id. A second
-    // process meeting the same id must still take the prompt — otherwise every
-    // conversation dies on the first model change or app restart.
-    const sessionId = `e2e-resume-${Date.now()}`
-    useScript(() => textReply('first'))
-    const first = await createSession(materializeCordisConfig(dataDir, { workDir }), undefined, {}, undefined, {
-      resume: sessionId,
-    })
+  it('rejects native resume before an empty replacement can reach the model', async () => {
+    const origin = useScript(() => textReply('first'))
+    const first = await createSession(materializeCordisConfig(dataDir, { workDir }))
     try {
-      const frames = await runTurn(first, 'one')
-      expect(frames[frames.length - 1]).toMatchObject({ type: 'result', is_error: false })
+      await runTurn(first, 'Remember the original task.')
     } finally {
       await first.close()
     }
-
-    useScript(() => textReply('second'))
-    const second = await createSession(materializeCordisConfig(dataDir, { workDir }), undefined, {}, undefined, {
-      resume: sessionId,
-    })
-    try {
-      const frames = await runTurn(second, 'two')
-      expect(frames[frames.length - 1]).toMatchObject({ type: 'result', is_error: false })
-      const text = frames
-        .filter((f) => f.type === 'stream_event' && f.event?.delta?.type === 'text_delta')
-        .map((f) => f.event.delta.text)
-        .join('')
-      expect(text).toContain('second')
-    } finally {
-      await second.close()
-    }
+    await expect(createSession(materializeCordisConfig(dataDir, { workDir }), undefined, {}, undefined, {
+      resume: first.sessionId,
+    })).rejects.toMatchObject({ code: 'NATIVE_SESSION_RESUME_FAILED', engineId: 'dsh' })
+    expect(stub.requests.slice(origin)).toHaveLength(1)
   }, 120_000)
 })

@@ -573,7 +573,6 @@ export interface EngineCapabilities {
     shellHeuristics: boolean;
   };
   todo: { states: TodoState[]; hasActiveForm: boolean };
-  subAgent: { model: 'declarative' | 'imperative' | 'none'; visibleLifecycle: boolean };
   features: {
     skills: boolean; mcp: boolean; hooks: boolean; permissionRules: boolean;
     sessionResume: boolean; sessionFork: boolean; interrupt: boolean;

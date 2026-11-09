@@ -229,4 +229,75 @@ export const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 9,
+    description: 'Persist activity for scoped execution actors without installing temporary collaborators',
+    up(db) {
+      db.exec(`
+        CREATE TABLE runtime_execution_actors (
+          id TEXT PRIMARY KEY,
+          installed_app_id TEXT UNIQUE REFERENCES installed_apps(id) ON DELETE CASCADE,
+          team_id TEXT,
+          epoch_id TEXT,
+          name TEXT,
+          CHECK ((installed_app_id IS NOT NULL AND installed_app_id = id AND team_id IS NULL AND epoch_id IS NULL)
+            OR (installed_app_id IS NULL AND team_id IS NOT NULL AND epoch_id IS NOT NULL))
+        );
+        CREATE INDEX idx_runtime_actors_work ON runtime_execution_actors(team_id, epoch_id)
+          WHERE installed_app_id IS NULL;
+        INSERT INTO runtime_execution_actors(id, installed_app_id) SELECT id, id FROM installed_apps;
+        CREATE TRIGGER runtime_installed_actor_insert AFTER INSERT ON installed_apps BEGIN
+          INSERT INTO runtime_execution_actors(id, installed_app_id) VALUES (NEW.id, NEW.id);
+        END;
+
+        CREATE TABLE runtime_continuation_transfer AS SELECT * FROM decision_continuations;
+        DROP TABLE decision_continuations;
+        CREATE TABLE activity_entries_v9 (
+          id TEXT PRIMARY KEY,
+          app_id TEXT NOT NULL REFERENCES runtime_execution_actors(id) ON DELETE CASCADE,
+          run_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          ts INTEGER NOT NULL,
+          session_key TEXT,
+          content_json TEXT NOT NULL,
+          user_response_json TEXT
+        );
+        INSERT INTO activity_entries_v9 SELECT * FROM activity_entries;
+        DROP TABLE activity_entries;
+        ALTER TABLE activity_entries_v9 RENAME TO activity_entries;
+        CREATE INDEX idx_entries_app ON activity_entries(app_id, ts DESC);
+        CREATE INDEX idx_entries_run ON activity_entries(run_id);
+        CREATE INDEX idx_entries_pending_escalation ON activity_entries(app_id, ts)
+          WHERE type = 'escalation' AND user_response_json IS NULL
+            AND json_extract(content_json, '$.resolution') IS NULL;
+        CREATE INDEX idx_entries_task ON activity_entries(
+          app_id, json_extract(content_json, '$.teamContext.teamId'),
+          json_extract(content_json, '$.teamContext.epochId'), ts DESC
+        );
+        CREATE TABLE decision_continuations (
+          entry_id TEXT PRIMARY KEY REFERENCES activity_entries(id) ON DELETE CASCADE,
+          app_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'queued',
+          attempts INTEGER NOT NULL DEFAULT 0,
+          receipt_published INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL,
+          error TEXT
+        );
+        INSERT INTO decision_continuations SELECT * FROM runtime_continuation_transfer;
+        DROP TABLE runtime_continuation_transfer;
+        CREATE INDEX idx_continuations_pending ON decision_continuations(status, updated_at);
+        CREATE INDEX idx_continuations_app ON decision_continuations(app_id, status);
+
+        CREATE TABLE app_session_environments_v9 (
+          session_key TEXT PRIMARY KEY,
+          app_id TEXT NOT NULL REFERENCES runtime_execution_actors(id) ON DELETE CASCADE,
+          environment_json TEXT NOT NULL
+        );
+        INSERT INTO app_session_environments_v9 SELECT * FROM app_session_environments;
+        DROP TABLE app_session_environments;
+        ALTER TABLE app_session_environments_v9 RENAME TO app_session_environments;
+      `)
+    },
+  },
+
 ]

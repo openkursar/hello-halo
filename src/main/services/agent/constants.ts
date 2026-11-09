@@ -8,7 +8,6 @@
  */
 
 import {
-  SPACE_TEAM_TOOL_NAMES,
   TEAM_MCP_SERVER_NAME,
   TEAM_TOOL_NAMES,
 } from '../../../shared/apps/team-types'
@@ -24,20 +23,18 @@ const TRANSPARENT_BUILTIN_TOOLS = new Set<string>([
 /**
  * Team tools that are coordination bookkeeping rather than work the user is
  * waiting to read. Deliberately excludes the ones whose result IS the answer —
- * `team_read_artifact` (opens a deliverable), `team_run`, `team_list`,
- * `team_status` — where the text before really is "let me go look".
+ * `team_read_artifact` opens a deliverable and begins a new text block.
  */
 const TRANSPARENT_TEAM_TOOLS = new Set<string>([
+  TEAM_TOOL_NAMES.spawn,
+  TEAM_TOOL_NAMES.stop,
   TEAM_TOOL_NAMES.send,
   TEAM_TOOL_NAMES.postTask,
   TEAM_TOOL_NAMES.updateTask,
   TEAM_TOOL_NAMES.postFinding,
   TEAM_TOOL_NAMES.readBoard,
-  TEAM_TOOL_NAMES.complete,
   TEAM_TOOL_NAMES.schedule,
   TEAM_TOOL_NAMES.unschedule,
-  SPACE_TEAM_TOOL_NAMES.collabStart,
-  SPACE_TEAM_TOOL_NAMES.collabSave,
 ])
 
 const TEAM_TOOL_PREFIX = `mcp__${TEAM_MCP_SERVER_NAME}__`
@@ -51,7 +48,7 @@ const TEAM_TOOL_PREFIX = `mcp__${TEAM_MCP_SERVER_NAME}__`
  * transitional and the next text block starts fresh.
  *
  * The name arrives as the engine reports it, so MCP tools are prefixed
- * (`mcp__halo-team__team_complete`). The prefix is stripped only for the team
+ * (`mcp__halo-team__team_send`). The prefix is stripped only for the team
  * server — matching bare names alone would let an unrelated server's
  * same-named tool through.
  */

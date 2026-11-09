@@ -47,6 +47,8 @@ export type {
 // ============================================
 
 export {
+  onHumanRequest,
+  emitHumanRequest,
   onAgentEvent,
   onAgentBroadcast,
   emitAgentEvent,
@@ -81,6 +83,7 @@ export type { ProcessStreamParams, StreamCallbacks, StreamResult } from './strea
 export {
   stopGeneration,
   onUserStop,
+  emitUserStop,
   onUserStopSettled,
   isGenerating,
   getActiveSessions,
@@ -201,3 +204,7 @@ export { planEngineHandoff, serializeEngineHandoff, prependEngineHandoff } from 
 export type { EngineHandoffPlan, EngineHandoffHistory, SerializedEngineHandoff } from './engine-handoff'
 /** Save-time account/protocol validation without a credential refresh or model request. */
 export { assertEngineSourceSelection } from './source-compatibility'
+
+export { isCollaborationEnabled } from './user-agent-settings'
+export { captureToolsetExecutionOptions } from './sdk-config'
+export { requestSessionRebuild } from './session-manager'

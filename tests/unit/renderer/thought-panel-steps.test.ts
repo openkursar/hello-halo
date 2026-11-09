@@ -15,7 +15,7 @@ vi.mock('../../../src/renderer/i18n', () => ({
 }))
 vi.mock('../../../src/renderer/components/chat/ArrivalCard', () => ({ ArrivalCard: () => null, arrivalIcon: () => () => null }))
 vi.mock('../../../src/renderer/components/chat/tool-result', () => ({ ToolResultViewer: ({ output }: { output: string }) => createElement('output', {}, output) }))
-vi.mock('../../../src/renderer/components/chat/SubAgentTimeline', () => ({ SubAgentTimeline: () => null }))
+vi.mock('../../../src/renderer/components/chat/NestedToolTimeline', () => ({ NestedToolTimeline: () => null }))
 vi.mock('../../../src/renderer/components/tool/TodoCard', () => ({ TodoCard: () => null }))
 
 import { ThoughtSteps } from '../../../src/renderer/components/chat/ThoughtPanel'

@@ -1,5 +1,5 @@
 /**
- * A temporary space collaboration, opened the way a person opens one: from the
+ * An older collaboration with installed members, opened the way a person opens one: from the
  * collaboration card in the space conversation that coordinates it.
  *
  * It has exactly one conversation — the room its coordinator talks to the team
@@ -49,7 +49,7 @@ test.describe('repaired collaboration history', () => {
   })
 })
 
-test('keeping a team saves its configuration without transferring the current task', async ({ window, collaboration }) => {
+test('keeping an older collaboration reuses its installed members without transferring the current task', async ({ window, collaboration }) => {
   await waitForHomePage(window)
   await window.getByText(COLLAB_CONVERSATION_TITLE, { exact: true }).first().click()
   await window.getByRole('button', { name: 'Open team view', exact: true }).click()
@@ -80,7 +80,7 @@ test('keeping a team saves its configuration without transferring the current ta
   await savedLink.click()
   const room = window.getByRole('region', { name: 'Task room' })
   await expect(room.getByRole('heading', { name: 'New task', exact: true })).toBeVisible()
-  await expect(room.getByRole('combobox', { name: 'Choose which of your digital humans to talk to' })).toHaveValue(saved.lead)
+  await expect(room.getByRole('combobox', { name: 'Choose who to talk to' })).toHaveValue(saved.lead)
   await window.screenshot({ path: 'tests/e2e/results/team-saved-configuration.png' })
   await window.setViewportSize({ width: 375, height: 812 })
   await expect(room.locator('textarea')).toBeVisible()

@@ -4,7 +4,7 @@ import type { GitRepository, GitRepositoryEntry, GitRepositoryPath } from '../..
 import { api } from '../../../../../api'
 import { useTranslation } from '../../../../../i18n'
 import { failureOf } from '../state/git-client'
-import { gitErrorMessage, repositorySelectionError, type GitFailure } from '../state/git-errors'
+import { repositorySelectionError, type GitFailure } from '../state/git-errors'
 import { Menu, MenuItem, MenuLabel, MenuNote, MenuSeparator } from '../shared/Menu'
 import { RepositoryPathDialog } from './RepositoryPathDialog'
 
@@ -16,12 +16,11 @@ export interface RepositoryPickerProps {
   disabled: boolean
   onSelectRepository: (root: string) => void
   onOpenRepository: (root: string) => Promise<GitFailure | null>
-  onForgetRepository: (root: string) => Promise<GitFailure | null>
   compact?: boolean
   touch?: boolean
 }
 
-export function RepositoryPicker({ repositories, unavailableRoots, selectedRepository, repo, disabled, onSelectRepository, onOpenRepository, onForgetRepository, compact, touch }: RepositoryPickerProps) {
+export function RepositoryPicker({ repositories, unavailableRoots, selectedRepository, repo, disabled, onSelectRepository, onOpenRepository, compact, touch }: RepositoryPickerProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [pathDialog, setPathDialog] = useState(false)
@@ -41,7 +40,6 @@ export function RepositoryPicker({ repositories, unavailableRoots, selectedRepos
     setOpen(false)
     setError(null)
   }
-  const showFailure = (failure: GitFailure) => setError(gitErrorMessage(failure, t))
   const openFolder = async () => {
     if (busy) return
     setError(null)
@@ -71,28 +69,6 @@ export function RepositoryPicker({ repositories, unavailableRoots, selectedRepos
       if (alive.current) setPending(false)
     }
   }
-  const forget = async (root: string) => {
-    if (busy) return
-    setPending(true)
-    setError(null)
-    const mine = ++request.current
-    try {
-      const failure = await onForgetRepository(root)
-      if (!alive.current || mine !== request.current) return
-      if (failure) showFailure(failure)
-      else close()
-    } catch (cause) {
-      console.warn('[ChangesView] Could not remove remembered repository:', failureOf(cause))
-      if (alive.current && mine === request.current) setError(t('Could not remove the repository from the list. Try again.'))
-    } finally {
-      if (alive.current) setPending(false)
-    }
-  }
-  const removal = (root: string) => (
-    <MenuItem disabled={busy} onSelect={() => void forget(root)} description={t('No files will be deleted.')}>
-      {t('Remove from list')}
-    </MenuItem>
-  )
   const summary = repo?.root === selectedRepository?.root ? repo : null
   const branch = summary ? summary.branch ?? (summary.head ? t('Detached at {{commit}}', { commit: summary.head }) : t('No commits yet')) : null
 
@@ -124,10 +100,9 @@ export function RepositoryPicker({ repositories, unavailableRoots, selectedRepos
               description={<span className="break-all">{item.root}{unavailableRoots.has(item.root) && <span className="ml-2 text-halo-warning">{t('Unavailable')}</span>}</span>}
               onSelect={() => { close(); onSelectRepository(item.root) }}
             >{item.name}</MenuItem>
-            {removal(item.root)}
           </div>
         ))}
-        <MenuSeparator />
+        {repositories.length > 0 && <MenuSeparator />}
         <MenuItem disabled={busy} icon={<FolderOpen size={14} />} onSelect={() => void openFolder()}>{t('Open repository…')}</MenuItem>
         <MenuNote>{t('Choose the repository folder itself, not a parent folder.')}</MenuNote>
         {error && <p role="alert" className="break-words px-2 py-2 text-xs text-destructive">{error}</p>}

@@ -12,12 +12,12 @@ export function declareClusterCases(suite, url, rows) {
   const filename = fileURLToPath(url)
   const root = path.resolve(path.dirname(filename), '../..')
   const source = fs.readFileSync(filename, 'utf8')
-  const cases = rows.map(({ nativeId, caseId, title, mode = 'none', requires = [], nodes = 3 }) => ({
+  const cases = rows.map(({ nativeId, caseId, title, mode = 'none', requires = [], nodes = 3, variant = {} }) => ({
     id: `cluster:${suite}:${nativeId}`, title, titlePath: [suite, title],
     file: path.relative(root, filename).split(path.sep).join('/'),
     line: source.slice(0, source.indexOf(`'${caseId}'`)).split('\n').length,
     project: `cluster:${suite}`, executor: 'cluster', expectedStatus: 'passed',
-    bindings: [{ caseId, evidence: 'integration', mode, variant: {} }],
+    bindings: [{ caseId, evidence: 'integration', mode, variant }],
     cluster: { suite, nativeId, requires, nodes },
   }))
   if (new Set(cases.map(test => test.id)).size !== cases.length) throw new Error(`Duplicate cluster declaration in ${suite}`)

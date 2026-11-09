@@ -27,4 +27,4 @@ export const DEFAULT_DISABLED_TOOLS = [
 ] as const
 
 /** Native CC Team tools; Halo exposes collaboration through the halo-team MCP server. */
-export const TEAM_TOOLS = ['TeamCreate', 'TeamDelete', 'SendMessage'] as const
+export const TEAM_TOOLS = ['Agent', 'Task', 'TeamCreate', 'TeamDelete', 'SendMessage'] as const

@@ -4,6 +4,8 @@
  */
 
 import { z } from 'zod'
+import { createCollaborationServer, type CollaborationOperations, type CollaborationCallContext, type CollaborationResult } from '@hello-halo/agent-sdk/collaboration'
+import type { ParticipantService, ParticipantSource } from '../../team'
 import { tool, createSdkMcpServer } from '../../../services/agent/resolved-sdk'
 import { TEAM_MCP_SERVER_NAME, TEAM_TOOL_NAMES, toActivitySubject } from '../../../../shared/apps/team-types'
 import { TeamBusError } from './message-bus'
@@ -88,6 +90,7 @@ export interface TeamMcpContext {
    * Absent for a turn with the owner's full reach, which hands nothing on.
    */
   origin?: TeamRequestOrigin
+  requestId?: string
   /**
    * The turn serves a guest of an IM chat this member fronts. Periodic checks
    * are standing instructions that keep spending the owner's model allowance
@@ -95,25 +98,27 @@ export interface TeamMcpContext {
    * a digital human's own chat has no such tool either.
    */
   servesGuest?: boolean
-  /** Deferred: applied after the lead's turn ends, never aborts mid-turn. */
-  requestComplete: (summary: string) => void
+  participants?: ParticipantService
+  spawnSource?: () => ParticipantSource
+  canSpawn?: () => boolean
+  privateAssistants?: {
+    spawn: NonNullable<CollaborationOperations['spawn_agent']>
+    resolveHandle(handle: string, all?: boolean): TeamMcpContext | null
+  }
+  publicationRefusal?: (absolutePath: string) => string | null
 }
 
 /**
- * Where a tool call finds its team context. A member session's context is
- * fixed at session creation (`createTeamMcpServer` wraps it in a constant
- * resolver). A SPACE conversation's tools are seeded before any collaboration
+ * Where a tool call finds its team context. Reused member sessions resolve
+ * their current turn's authority. A source conversation's tools are seeded before any collaboration
  * exists — its resolver looks the current collaboration up per call, so
- * `collab_start` and the first `team_send` work inside one turn, with no
+ * the first `spawn_agent` and `team_send` work inside one turn, with no
  * session rebuild in between.
  */
 export type ResolveTeamMcpContext = () => TeamMcpContext | null
 
 const NO_TEAM_CONTEXT =
-  'No agent team has been started in this chat. Start one with collab_start. These tools act only on the agent team of this chat; ' +
-  'for a standing team\'s work, use the Operate Halo calls in your instructions.'
-
-const TASK_STATUS_VALUES = ['pending', 'in_progress', 'done', 'rejected', 'blocked'] as const
+  'No collaborators have been created in this conversation. Use spawn_agent when independent work would help.'
 
 function textResult(text: string, isError = false) {
   return {
@@ -178,6 +183,11 @@ function acceptRef(
       message: explainArtifactRefRejection(resolved.reason, { ref, workDir: ctx.callerWorkDir, teamFolder }),
     }
   }
+  const refusal = ctx.publicationRefusal?.(resolved.absPath)
+  if (refusal) {
+    console.warn(`${LOG_TAG} publication refused by caller policy: team=${ctx.teamId} epoch=${ctx.epochId} caller=${ctx.callerAppId}`)
+    return { ok: false, message: refusal }
+  }
   // Compared in the STORED form: two refs collide as the board holds them, not
   // as they were typed.
   const conflict = ctx.blackboard.findPublishedRefConflict({
@@ -214,434 +224,285 @@ function busErrorResult(err: unknown) {
   return textResult(`Team operation failed: ${message}`, true)
 }
 
-function buildSendTool(resolve: ResolveTeamMcpContext) {
-  return tool(
-    TEAM_TOOL_NAMES.send,
-    'Send a message directly to a teammate. Use this to answer the requester; ' +
-      'the separate turn-end notification to the lead is not a substitute for ' +
-      'sending your result to the teammate who needs it.\n\n' +
-      "The message reaches a working teammate after their current tool call. This call " +
-      'returns as soon as the message is handed over. Replies and other incoming messages reach you ' +
-      'after your current tool call; you do not need to poll or end your turn to receive them. ' +
-      'End your turn when your own work is finished.\n\n' +
-      'Put large outputs on disk and share the path, not the text.\n\n' +
-      'Example: { "to": "researcher", "message": "Do task T1, details on the board" }',
-    {
-      to: z.string().describe('Target teammate name (member name within this team).'),
-      message: z.string().describe('Message body. Keep it directive and self-contained.'),
-    },
-    async (input) => {
-      const ctx = resolve()
-      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
-      try {
-        const toAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.to)
-        ctx.bus.assertCanContact(ctx.teamId, ctx.callerAppId, toAppId, ctx.collabMode)
+function buildSendOperation(resolve: ResolveTeamMcpContext): NonNullable<CollaborationOperations['team_send']> {
+  return async (input) => {
+    const ctx = resolve()
+    if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
+    try {
+      const toAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.to, ctx.epochId)
+      ctx.bus.assertCanContact(ctx.teamId, ctx.callerAppId, toAppId, ctx.collabMode, ctx.epochId)
+      const continuedRequest = ctx.participants?.continueTarget(ctx, toAppId)
 
-        const result = await ctx.bus.send({
-          teamId: ctx.teamId,
-          epochId: ctx.epochId,
-          fromAppId: ctx.callerAppId,
-          to: input.to,
-          message: input.message,
-          forwardDepth: ctx.forwardDepth,
-          ...(ctx.origin === 'guest' ? { origin: ctx.origin } : {}),
-        })
-        // A teammate send is always async; the sync receipt shape is unreachable
-        // from here (only a person's 1:1 chat asks for one).
-        if (!('messageId' in result)) {
-          return textResult(`Message sent to "${input.to}".`)
-        }
+      const result = await ctx.bus.send({
+        teamId: ctx.teamId,
+        epochId: ctx.epochId,
+        fromAppId: ctx.callerAppId,
+        to: toAppId,
+        message: input.message,
+        forwardDepth: ctx.forwardDepth,
+        ...(ctx.origin ? { origin: ctx.origin } : {}),
+        ...(typeof continuedRequest === 'string' ? { requestId: continuedRequest } : ctx.requestId ? { requestId: ctx.requestId } : {}),
+      })
+      // A teammate send is always async; the sync receipt shape is unreachable
+      // from here (only a person's 1:1 chat asks for one).
+      if (!('messageId' in result)) {
+        return textResult(`Message sent to "${input.to}".`)
+      }
 
-        if (result.delivery === 'undelivered') {
-          // Do NOT report success: the teammate's owner is offline/unreachable and
-          // there is no offline queue, so this will not arrive later.
-          return textResult(
-            `"${input.to}" is offline right now — this message was NOT delivered and will not be queued. ` +
-              `Reassign the work, or wait until they are back online and send again.`
-          )
-        }
-        if (result.delivery === 'queued') {
-          return textResult(
-            `Message queued for "${input.to}" (id: ${result.messageId}). They are busy with another turn ` +
-              `right now; it will be delivered the moment that turn ends. If this is urgent, consider ` +
-              `another teammate.`
-          )
-        }
-        if (result.delivery === 'mid_turn') {
-          // Worth telling apart from a plain hand-over: it says the teammate is
-          // mid-task, so an answer is not the next thing they will do — and from
-          // 'queued', which would have the sender wait for a turn to end that
-          // this message has already reached inside.
-          return textResult(
-            `Message delivered to "${input.to}" (id: ${result.messageId}) while they were working — they ` +
-              `see it at their next step, without being interrupted. They may be part-way through ` +
-              `something, so give them room to react; if they answer while you work, it arrives after your current tool call.`
-          )
-        }
-        if (result.remoteTarget) {
-          // Never "delivered" for another machine: acceptance by their machine is
-          // all this end can observe, and whether it woke the member is knowable
-          // only there. Said plainly because the alternative is a lead that waits
-          // indefinitely on a member that never ran, unable to tell the two apart.
-          return textResult(
-            `Message accepted for "${input.to}" (id: ${result.messageId}). They run on another machine, so ` +
-              `this end cannot confirm they actually started — silence is NOT evidence they are working. ` +
-              `Carry on with other work, and if nothing comes back, check whether they ever picked it up ` +
-              `(team_read_board) rather than waiting longer.`
-          )
-        }
+      if (result.delivery === 'undelivered') {
+        // Do NOT report success: the teammate's owner is offline/unreachable and
+        // there is no offline queue, so this will not arrive later.
         return textResult(
-          `Message delivered to "${input.to}" (id: ${result.messageId}). If they answer, it will arrive ` +
-            `after your current tool call while you continue working.`
+          `"${input.to}" is offline right now — this message was NOT delivered and will not be queued. ` +
+            `Reassign the work, or wait until they are back online and send again.`
         )
-      } catch (err) {
-        return busErrorResult(err)
       }
-    }
-  )
-}
-
-function buildPostTaskTool(resolve: ResolveTeamMcpContext) {
-  return tool(
-    TEAM_TOOL_NAMES.postTask,
-    'Create a task on the team board and assign it to a teammate. This only records the work: ' +
-      'it does not notify the teammate, so message them with team_send. Tasks should be ' +
-      'self-contained — a member must be able to execute one without the global ' +
-      'context.\n\n' +
-      'Example: { "title": "Scrape competitors", "assignee": "researcher" }',
-    {
-      title: z.string().describe('Short, self-contained task title.'),
-      assignee: z.string().describe('Teammate name to assign the task to.'),
-      parentId: z.string().optional().describe('Optional parent task id for subtasks.'),
-    },
-    async (input) => {
-      const ctx = resolve()
-      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
-      console.log(
-        `${LOG_TAG} ${TEAM_TOOL_NAMES.postTask}: team=${ctx.teamId} assignee="${input.assignee}" ` +
-          `title="${input.title.slice(0, 60)}"`
+      if (result.delivery === 'queued') {
+        return textResult(
+          `Message queued for "${input.to}" (id: ${result.messageId}). They are busy with another turn ` +
+            `right now; it will be delivered the moment that turn ends. If this is urgent, consider ` +
+            `another teammate.`
+        )
+      }
+      if (result.delivery === 'mid_turn') {
+        // Worth telling apart from a plain hand-over: it says the teammate is
+        // mid-task, so an answer is not the next thing they will do — and from
+        // 'queued', which would have the sender wait for a turn to end that
+        // this message has already reached inside.
+        return textResult(
+          `Message delivered to "${input.to}" (id: ${result.messageId}) while they were working — they ` +
+            `see it at their next step, without being interrupted. They may be part-way through ` +
+            `something, so give them room to react; if they answer while you work, it arrives after your current tool call.`
+        )
+      }
+      if (result.remoteTarget) {
+        // Never "delivered" for another machine: acceptance by their machine is
+        // all this end can observe, and whether it woke the member is knowable
+        // only there. Said plainly because the alternative is a lead that waits
+        // indefinitely on a member that never ran, unable to tell the two apart.
+        return textResult(
+          `Message accepted for "${input.to}" (id: ${result.messageId}). They run on another machine, so ` +
+            `this end cannot confirm they actually started — silence is NOT evidence they are working. ` +
+            `Carry on with other work, and if nothing comes back, check whether they ever picked it up ` +
+            `(team_read_board) rather than waiting longer.`
+        )
+      }
+      return textResult(
+        `Message delivered to "${input.to}" (id: ${result.messageId}). If they answer, it will arrive ` +
+          `after your current tool call while you continue working.`
       )
-      try {
-        const assigneeAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.assignee)
-        ctx.bus.assertCanContact(ctx.teamId, ctx.callerAppId, assigneeAppId, ctx.collabMode)
-
-        const { taskId } = ctx.blackboard.postTask({
-          teamId: ctx.teamId,
-          epochId: ctx.epochId,
-          callerAppId: ctx.callerAppId,
-          title: input.title,
-          assigneeAppId,
-          parentId: input.parentId,
-        })
-        record(ctx, {
-          kind: 'task_post',
-          targetAppId: assigneeAppId,
-          subject: toActivitySubject(input.title),
-          refId: taskId,
-          status: 'pending',
-        })
-        return textResult(`Task created (id: ${taskId}), assigned to "${input.assignee}".`)
-      } catch (err) {
-        return busErrorResult(err)
-      }
+    } catch (err) {
+      return busErrorResult(err)
     }
-  )
+  }
 }
 
-function buildUpdateTaskTool(resolve: ResolveTeamMcpContext) {
-  return tool(
-    TEAM_TOOL_NAMES.updateTask,
-    'Update a task on the team board: set its status, attach the file it produced, or ' +
-      'add a note. Update your own task when you finish it; the lead ' +
-      'may update any task.\n\n' +
-      'Example: { "taskId": "...", "status": "done", "resultRef": "competitors.md" }',
-    {
-      taskId: z.string().describe('Id of the task to update.'),
-      status: z
-        .enum(TASK_STATUS_VALUES)
-        .describe('New task status: pending | in_progress | done | rejected | blocked.'),
-      resultRef: z
-        .string()
-        .optional()
-        .describe(
-          'The file this task produced, as a path relative to your working directory (e.g. ' +
-            '"docs/design.md") or a path in your scratch folder. It must already exist, and its ' +
-            'name must be unused by other teammates — the update is refused otherwise. ' +
-            'Omit this when the task produced no file; put the outcome in note instead.'
-        ),
-      note: z.string().optional().describe('Short note (e.g. rejection reason or blocker).'),
-    },
-    async (input) => {
-      const ctx = resolve()
-      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
-      console.log(
-        `${LOG_TAG} ${TEAM_TOOL_NAMES.updateTask}: team=${ctx.teamId} task=${input.taskId} ` +
-          `status=${input.status}`
-      )
-      let resultRef: string | undefined
-      let receipt = ''
-      if (input.resultRef) {
-        const accepted = acceptRef(ctx, input.resultRef, { kind: 'task', taskId: input.taskId })
-        if (!accepted.ok) {
-          // Refused whole rather than applied without the ref: a task shown done
-          // with its deliverable silently dropped is the same false success this
-          // gate exists to end.
-          return textResult(`The task was NOT updated. ${accepted.message}`, true)
-        }
-        resultRef = accepted.ref
-        receipt = ` Attached ${accepted.receipt}.`
-      }
-      try {
-        ctx.blackboard.updateTask({
-          teamId: ctx.teamId,
-          epochId: ctx.epochId,
-          taskId: input.taskId,
-          status: input.status as TaskStatus,
-          resultRef,
-          note: input.note,
-          callerAppId: ctx.callerAppId,
-        })
-        // The task row keeps only its latest state, so without this act the fact
-        // that someone moved it — and when — is gone the moment it moves again.
-        record(ctx, {
-          kind: 'task_update',
-          subject: toActivitySubject(input.note ?? ''),
-          refId: input.taskId,
-          status: input.status as TaskStatus,
-        })
-        return textResult(`Task ${input.taskId} updated to "${input.status}".${receipt}`)
-      } catch (err) {
-        return busErrorResult(err)
-      }
+function buildPostTaskOperation(resolve: ResolveTeamMcpContext): NonNullable<CollaborationOperations['team_post_task']> {
+  return async (input) => {
+    const ctx = resolve()
+    if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
+
+    try {
+      const assigneeAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.assignee, ctx.epochId)
+      ctx.bus.assertCanContact(ctx.teamId, ctx.callerAppId, assigneeAppId, ctx.collabMode, ctx.epochId)
+
+      const { taskId } = ctx.blackboard.postTask({
+        teamId: ctx.teamId,
+        epochId: ctx.epochId,
+        callerAppId: ctx.callerAppId,
+        title: input.title,
+        assigneeAppId,
+        parentId: input.parentId,
+      })
+      record(ctx, {
+        kind: 'task_post',
+        targetAppId: assigneeAppId,
+        subject: toActivitySubject(input.title),
+        refId: taskId,
+        status: 'pending',
+      })
+      return textResult(`Task created (id: ${taskId}), assigned to "${input.assignee}".`)
+    } catch (err) {
+      return busErrorResult(err)
     }
-  )
+  }
 }
 
-function buildPostFindingTool(resolve: ResolveTeamMcpContext) {
-  return tool(
-    TEAM_TOOL_NAMES.postFinding,
-    'Append a shared finding to the team board (append-only; any member may ' +
-      'add). Use it to share an observation or a produced artifact with the ' +
-      'whole team.\n\n' +
-      'Provide at least one of content or ref.\n\n' +
-      'Example: { "content": "Competitor X dropped prices 20%", "ref": "notes.md" }',
-    {
-      content: z.string().optional().describe('Free-text finding. Required if ref is omitted.'),
-      ref: z
-        .string()
-        .optional()
-        .describe(
-          'A file inside your working directory, as a path relative to it (e.g. "docs/design.md"), ' +
-            'or a file in your scratch folder. The file must already exist — it is checked now, and ' +
-            'publishing fails if it is not there or is anywhere else. The name must also be unused ' +
-            'by other teammates, so prefer one that is clearly yours. Required if content is omitted.'
-        ),
-    },
-    async (input) => {
-      const ctx = resolve()
-      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
-      if (!input.content && !input.ref) {
-        return textResult('You must provide at least one of "content" or "ref".', true)
+function buildUpdateTaskOperation(resolve: ResolveTeamMcpContext): NonNullable<CollaborationOperations['team_update_task']> {
+  return async (input) => {
+    const ctx = resolve()
+    if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
+
+    let resultRef: string | undefined
+    let receipt = ''
+    if (input.resultRef) {
+      const accepted = acceptRef(ctx, input.resultRef, { kind: 'task', taskId: input.taskId })
+      if (!accepted.ok) {
+        // Refused whole rather than applied without the ref: a task shown done
+        // with its deliverable silently dropped is the same false success this
+        // gate exists to end.
+        return textResult(`The task was NOT updated. ${accepted.message}`, true)
       }
-      console.log(`${LOG_TAG} ${TEAM_TOOL_NAMES.postFinding}: team=${ctx.teamId} from=${ctx.callerAppId}`)
-      let ref: string | undefined
-      let receipt = ''
-      if (input.ref) {
-        const accepted = acceptRef(ctx, input.ref, { kind: 'finding', authorAppId: ctx.callerAppId })
-        if (!accepted.ok) return textResult(`Nothing was published. ${accepted.message}`, true)
-        ref = accepted.ref
-        receipt = ` Published ${accepted.receipt} — teammates read it with ` +
-          `${TEAM_TOOL_NAMES.readArtifact}(ref: "${accepted.ref}").`
-      }
-      try {
-        const { findingId } = ctx.blackboard.postFinding({
-          teamId: ctx.teamId,
-          epochId: ctx.epochId,
-          callerAppId: ctx.callerAppId,
-          content: input.content,
-          ref,
-        })
-        record(ctx, {
-          kind: 'finding',
-          subject: toActivitySubject(ref ?? input.content ?? ''),
-          refId: findingId,
-        })
-        return textResult(`Finding posted (id: ${findingId}).${receipt}`)
-      } catch (err) {
-        return busErrorResult(err)
-      }
+      resultRef = accepted.ref
+      receipt = ` Attached ${accepted.receipt}.`
     }
-  )
+    try {
+      ctx.blackboard.updateTask({
+        teamId: ctx.teamId,
+        epochId: ctx.epochId,
+        taskId: input.taskId,
+        status: input.status as TaskStatus,
+        resultRef,
+        note: input.note,
+        callerAppId: ctx.callerAppId,
+      })
+      // The task row keeps only its latest state, so without this act the fact
+      // that someone moved it — and when — is gone the moment it moves again.
+      record(ctx, {
+        kind: 'task_update',
+        subject: toActivitySubject(input.note ?? ''),
+        refId: input.taskId,
+        status: input.status as TaskStatus,
+      })
+      return textResult(`Task ${input.taskId} updated to "${input.status}".${receipt}`)
+    } catch (err) {
+      return busErrorResult(err)
+    }
+  }
 }
 
-function buildReadBoardTool(resolve: ResolveTeamMcpContext) {
-  return tool(
-    TEAM_TOOL_NAMES.readBoard,
-    'Read the team board: tasks, findings, and the member roster. Use this ' +
-      'to reconcile state instead of relying on your own (compactable) context.\n\n' +
-      'Each roster member also reports: `presence` ("online" | "offline" — check ' +
-      'this before dispatching so you skip/reassign offline teammates), `owner` ' +
-      '(who brought this teammate; null = runs on your machine), and `sameMachine` ' +
-      '(false = runs on a teammate\u2019s machine, so file paths from there are not ' +
-      'readable here — use team_read_artifact for their outputs).\n\n' +
-      '`checks` lists the periodic checks running in this piece of work: who set ' +
-      'each one, who it wakes, what it says and how many rounds it has run. Read ' +
-      'it before setting one (so you do not duplicate) and to find the one to stop.\n\n' +
-      'Recent activity is a bounded window. When there is more, the result says so ' +
-      'and gives you a file holding the complete record — Read or Grep that file ' +
-      'before deciding that something was never done.\n\n' +
-      'Optional filters: { "mine": true } for tasks assigned to you, ' +
-      '{ "status": "pending" } for tasks in a given state.',
-    {
-      mine: z.boolean().optional().describe('Only tasks assigned to you.'),
-      status: z
-        .enum(TASK_STATUS_VALUES)
-        .optional()
-        .describe('Only tasks in this status.'),
-    },
-    async (input) => {
-      const ctx = resolve()
-      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
-      console.log(
-        `${LOG_TAG} ${TEAM_TOOL_NAMES.readBoard}: team=${ctx.teamId} epoch=${ctx.epochId} ` +
-          `mine=${input.mine ?? false} status=${input.status ?? 'any'}`
-      )
-      try {
-        const snapshot = ctx.blackboard.readBoard(ctx.teamId, ctx.epochId, ctx.callerAppId, {
-          mine: input.mine,
-          status: input.status as TaskStatus | undefined,
-        })
-        // Only what the snapshot could not carry gets exported, and only then:
-        // a board whose history fits needs no file and writes none.
-        const history = ctx.archive?.materialize(ctx.teamId, ctx.epochId, snapshot.activities.length) ?? null
-        const board = renderBoardMarkdown(snapshot, { now: Date.now(), history })
-        // The same lines the turn's input carries, offered again at the moment
-        // the member has actually chosen to think about the board — which is
-        // when it is most likely to act on them.
-        const digest = ctx.digest?.render({
-          teamId: ctx.teamId,
-          epochId: ctx.epochId,
-          viewerAppId: ctx.callerAppId,
-        })
-        return textResult(digest ? `${board}\n\n${digest}` : board)
-      } catch (err) {
-        return busErrorResult(err)
-      }
+function buildPostFindingOperation(resolve: ResolveTeamMcpContext): NonNullable<CollaborationOperations['team_post_finding']> {
+  return async (input) => {
+    const ctx = resolve()
+    if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
+    if (!input.content && !input.ref) {
+      return textResult('You must provide at least one of "content" or "ref".', true)
     }
-  )
+
+    let ref: string | undefined
+    let receipt = ''
+    if (input.ref) {
+      const accepted = acceptRef(ctx, input.ref, { kind: 'finding', authorAppId: ctx.callerAppId })
+      if (!accepted.ok) return textResult(`Nothing was published. ${accepted.message}`, true)
+      ref = accepted.ref
+      receipt = ` Published ${accepted.receipt} — teammates read it with ` +
+        `${TEAM_TOOL_NAMES.readArtifact}(ref: "${accepted.ref}").`
+    }
+    try {
+      const { findingId } = ctx.blackboard.postFinding({
+        teamId: ctx.teamId,
+        epochId: ctx.epochId,
+        callerAppId: ctx.callerAppId,
+        content: input.content,
+        ref,
+      })
+      record(ctx, {
+        kind: 'finding',
+        subject: toActivitySubject(ref ?? input.content ?? ''),
+        refId: findingId,
+      })
+      return textResult(`Finding posted (id: ${findingId}).${receipt}`)
+    } catch (err) {
+      return busErrorResult(err)
+    }
+  }
 }
 
-function buildReadArtifactTool(resolve: ResolveTeamMcpContext) {
-  return tool(
-    TEAM_TOOL_NAMES.readArtifact,
-    'Read a teammate\u2019s published artifact by its reference, wherever it was ' +
-      'produced. Use this to open a deliverable a teammate shared — a finding\u2019s ' +
-      '`ref` or a task\u2019s `resultRef` from team_read_board.\n\n' +
-      'It fetches the file even when the teammate runs on another machine (where a ' +
-      'raw file path would be unreadable). If the owner is offline you get a clear ' +
-      'message instead of a hang — ask them to share the content, or retry later.\n\n' +
-      'Example: { "ref": "competitors.md" }',
-    {
-      ref: z
-        .string()
-        .describe(
-          'The artifact reference exactly as the board shows it (a finding ref or a task ' +
-            'resultRef). It is the producer\u2019s path, not yours — do not rewrite it.'
-        ),
-    },
-    async (input) => {
-      const ctx = resolve()
-      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
-      console.log(
-        `${LOG_TAG} ${TEAM_TOOL_NAMES.readArtifact}: team=${ctx.teamId} epoch=${ctx.epochId} ref="${input.ref}"`
-      )
-      if (!ctx.readArtifact) {
-        return textResult('Reading team artifacts is not available in this context.', true)
+function buildReadBoardOperation(resolve: ResolveTeamMcpContext): NonNullable<CollaborationOperations['team_read_board']> {
+  return async (input) => {
+    const ctx = resolve()
+    if (!ctx) return textResult('No collaborators have been created in this conversation.')
+
+    try {
+      const snapshot = ctx.blackboard.readBoard(ctx.teamId, ctx.epochId, ctx.callerAppId, {
+        mine: input.mine,
+        status: input.status as TaskStatus | undefined,
+      })
+      // Only what the snapshot could not carry gets exported, and only then:
+      // a board whose history fits needs no file and writes none.
+      const history = ctx.archive?.materialize(ctx.teamId, ctx.epochId, snapshot.activities.length) ?? null
+      const board = renderBoardMarkdown(snapshot, { now: Date.now(), history })
+      // The same lines the turn's input carries, offered again at the moment
+      // the member has actually chosen to think about the board — which is
+      // when it is most likely to act on them.
+      const digest = ctx.digest?.render({
+        teamId: ctx.teamId,
+        epochId: ctx.epochId,
+        viewerAppId: ctx.callerAppId,
+      })
+      return textResult(digest ? `${board}\n\n${digest}` : board)
+    } catch (err) {
+      return busErrorResult(err)
+    }
+  }
+}
+
+function buildReadArtifactOperation(resolve: ResolveTeamMcpContext): NonNullable<CollaborationOperations['team_read_artifact']> {
+  return async (input) => {
+    const ctx = resolve()
+    if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
+
+    if (!ctx.readArtifact) {
+      return textResult('Reading team artifacts is not available in this context.', true)
+    }
+    try {
+      const res = await ctx.readArtifact({
+        teamId: ctx.teamId,
+        epochId: ctx.epochId,
+        ref: input.ref,
+      })
+      if (!res.ok) {
+        return textResult(res.message ?? `Could not read artifact "${input.ref}".`, true)
       }
-      try {
-        const res = await ctx.readArtifact({
-          teamId: ctx.teamId,
-          epochId: ctx.epochId,
-          ref: input.ref,
-        })
-        if (!res.ok) {
-          return textResult(res.message ?? `Could not read artifact "${input.ref}".`, true)
-        }
-        // The reader asked for a ref; this is where it learns whose file it got.
-        const ownerLabel = res.producer
-          ? ` (produced by ${res.producer}${res.owner ? `, on ${res.owner}\u2019s machine` : ''})`
-          : res.owner
-            ? ` (produced on ${res.owner}\u2019s machine)`
-            : ''
-        const truncNote = res.truncated
-          ? `\n\n[Truncated: showing the first part of a ${res.bytes ?? 0}-byte file.]`
+      // The reader asked for a ref; this is where it learns whose file it got.
+      const ownerLabel = res.producer
+        ? ` (produced by ${res.producer}${res.owner ? `, on ${res.owner}\u2019s machine` : ''})`
+        : res.owner
+          ? ` (produced on ${res.owner}\u2019s machine)`
           : ''
-        return textResult(`Artifact "${input.ref}"${ownerLabel}:\n\n${res.content ?? ''}${truncNote}`)
-      } catch (err) {
-        return busErrorResult(err)
-      }
+      const truncNote = res.truncated
+        ? `\n\n[Truncated: showing the first part of a ${res.bytes ?? 0}-byte file.]`
+        : ''
+      return textResult(`Artifact "${input.ref}"${ownerLabel}:\n\n${res.content ?? ''}${truncNote}`)
+    } catch (err) {
+      return busErrorResult(err)
     }
-  )
+  }
 }
 
-function buildReadMemberTool(resolve: ResolveTeamMcpContext) {
-  return tool(
-    TEAM_TOOL_NAMES.readMember,
-    'Read what a teammate said and was told in this run — its own record, not its ' +
-      'report. Use it to check work against what the member claims, to find out why ' +
-      'something went wrong, or to gather what several members produced. Only the team ' +
-      'lead can use it.\n\n' +
-      'Pages run from the newest message backwards (about 8000 characters each) and show ' +
-      'the messages only — thinking and tool traces are not included, an assistant line ' +
-      'just says how many steps it took. When earlier messages exist the page ends with ' +
-      'the `before` value to pass for the next one. It also works for a member on another ' +
-      'machine; if its owner is unreachable you get a clear message instead of a hang.\n\n' +
-      'Example: { "member": "researcher" } then { "member": "researcher", "before": 31 }',
-    {
-      member: z.string().describe('Teammate whose record to read (member name).'),
-      before: z
-        .number()
-        .int()
-        .positive()
-        .optional()
-        .describe('Read the messages before this message number (the value the previous page gave). Omit for the newest page.'),
-    },
-    async (input) => {
-      const ctx = resolve()
-      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
-      if (!ctx.selfIsLead) {
-        return textResult('Only the team lead can read a member\u2019s record (team_read_member).', true)
-      }
-      if (ctx.origin) {
-        return textResult(
-          'A member\u2019s record is not available while serving a request from outside your owner\u2019s machine.',
-          true
-        )
-      }
-      console.log(
-        `${LOG_TAG} ${TEAM_TOOL_NAMES.readMember}: team=${ctx.teamId} epoch=${ctx.epochId} ` +
-          `member="${input.member}" before=${input.before ?? '-'}`
+function buildReadMemberOperation(resolve: ResolveTeamMcpContext): NonNullable<CollaborationOperations['team_read_member']> {
+  return async (input) => {
+    const ctx = resolve()
+    if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
+    if (ctx.origin) {
+      return textResult(
+        'A member\u2019s record is not available while serving a request from outside your owner\u2019s machine.',
+        true
       )
-      if (!ctx.readMemberRecord) {
-        return textResult('Reading a member\u2019s record is not available in this context.', true)
-      }
-      try {
-        const memberAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.member)
-        if (memberAppId === ctx.callerAppId) {
-          return textResult('That is you. This tool reads a teammate\u2019s record.', true)
-        }
-        const res = await ctx.readMemberRecord({
-          teamId: ctx.teamId,
-          epochId: ctx.epochId,
-          memberAppId,
-          ...(input.before !== undefined ? { before: input.before } : {}),
-        })
-        return res.ok ? textResult(renderMemberRecord(res)) : textResult(res.message, true)
-      } catch (err) {
-        return busErrorResult(err)
-      }
     }
-  )
+
+    if (!ctx.readMemberRecord) {
+      return textResult('Reading a member\u2019s record is not available in this context.', true)
+    }
+    try {
+      const memberAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.member, ctx.epochId)
+      if (!(ctx.participants?.canRead(ctx, memberAppId) ?? ctx.selfIsLead)) {
+        return textResult('This member record is not available to you. You may inspect collaborators you created or coordinate.', true)
+      }
+      if (memberAppId === ctx.callerAppId) {
+        return textResult('That is you. This tool reads a teammate\u2019s record.', true)
+      }
+      const res = await ctx.readMemberRecord({
+        teamId: ctx.teamId,
+        epochId: ctx.epochId,
+        memberAppId,
+        ...(input.before !== undefined ? { before: input.before } : {}),
+      })
+      return res.ok ? textResult(renderMemberRecord(res)) : textResult(res.message, true)
+    } catch (err) {
+      return busErrorResult(err)
+    }
+  }
 }
 
 function buildScheduleTool(resolve: ResolveTeamMcpContext) {
@@ -677,15 +538,13 @@ function buildScheduleTool(resolve: ResolveTeamMcpContext) {
     async (input) => {
       const ctx = resolve()
       if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
-      console.log(
-        `${LOG_TAG} ${TEAM_TOOL_NAMES.schedule}: team=${ctx.teamId} epoch=${ctx.epochId} ` +
-          `from=${ctx.callerAppId} to="${input.to}"`
-      )
+
       if (!ctx.checks) return textResult('Periodic checks are not available in this context.', true)
       try {
+        ctx.participants?.capture(ctx)()
         const schedule = parseScheduleInput(input)
-        const targetAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.to)
-        ctx.bus.assertCanContact(ctx.teamId, ctx.callerAppId, targetAppId, ctx.collabMode)
+        const targetAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.to, ctx.epochId)
+        ctx.bus.assertCanContact(ctx.teamId, ctx.callerAppId, targetAppId, ctx.collabMode, ctx.epochId)
 
         const check = ctx.checks.schedule({
           teamId: ctx.teamId,
@@ -731,12 +590,11 @@ function buildUnscheduleTool(resolve: ResolveTeamMcpContext) {
     async (input) => {
       const ctx = resolve()
       if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
-      console.log(
-        `${LOG_TAG} ${TEAM_TOOL_NAMES.unschedule}: team=${ctx.teamId} epoch=${ctx.epochId} to="${input.to}"`
-      )
+
       if (!ctx.checks) return textResult('Periodic checks are not available in this context.', true)
       try {
-        const targetAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.to)
+        ctx.participants?.capture(ctx)()
+        const targetAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.to, ctx.epochId)
         const stopped = ctx.checks.cancel({
           teamId: ctx.teamId,
           epochId: ctx.epochId,
@@ -782,83 +640,93 @@ function parseScheduleInput(input: { every?: string; cron?: string; once?: strin
   return { kind: 'once', once: at }
 }
 
-function buildCompleteTool(resolve: ResolveTeamMcpContext) {
-  return tool(
-    TEAM_TOOL_NAMES.complete,
-    'End the team run (for an agent team: close it, it is not used again). Call this ONLY when the whole goal is achieved and every ' +
-      'required task is verified done. Provide a concise summary of what the team ' +
-      'produced and where the artifacts are. Only the team lead may call this.\n\n' +
-      'Example: { "summary": "Daily competitor brief produced at brief.md" }',
-    {
-      summary: z.string().describe('Concise summary of the completed run.'),
-    },
-    async (input) => {
-      const ctx = resolve()
-      if (!ctx) return textResult(NO_TEAM_CONTEXT, true)
-      if (!ctx.selfIsLead) {
-        return textResult('Only the team lead can end the run (team_complete).', true)
-      }
-      console.log(`${LOG_TAG} ${TEAM_TOOL_NAMES.complete}: team=${ctx.teamId} epoch=${ctx.epochId}`)
+
+function guarded<T>(
+  resolve: ResolveTeamMcpContext,
+  factory: (scope: ResolveTeamMcpContext) => (input: T, context: CollaborationCallContext) => Promise<CollaborationResult>,
+  mutating = false,
+): (input: T, context: CollaborationCallContext) => Promise<CollaborationResult> {
+  return async (input, context) => {
+    const current = resolve()
+    const check = mutating && current?.participants ? current.participants.capture(current, context.signal)
+      : () => context.signal?.throwIfAborted()
+    check()
+    const scoped = current ? {
+      ...current,
+      bus: { ...current.bus, send: (request: Parameters<MessageBus['send']>[0]) => { check(); return current.bus.send(request) } },
+      blackboard: {
+        ...current.blackboard,
+        postTask: (request: Parameters<Blackboard['postTask']>[0]) => { check(); return current.blackboard.postTask(request) },
+        updateTask: (request: Parameters<Blackboard['updateTask']>[0]) => { check(); return current.blackboard.updateTask(request) },
+        postFinding: (request: Parameters<Blackboard['postFinding']>[0]) => { check(); return current.blackboard.postFinding(request) },
+        postActivity: (request: Parameters<Blackboard['postActivity']>[0]) => { check(); return current.blackboard.postActivity(request) },
+      },
+    } : null
+    const result = await factory(() => scoped)(input, context)
+    check()
+    return result
+  }
+}
+
+export function createCoordinationMcpServer(resolve: ResolveTeamMcpContext, options: {
+  spawn?: CollaborationOperations['spawn_agent']
+  readMember?: boolean
+  checks?: boolean
+  resolveHandle?: (handle: string, all?: boolean) => TeamMcpContext | null
+} = {}): SdkMcpServer {
+  const targetOperation = <T>(input: T, call: CollaborationCallContext, target: string,
+    factory: (scope: ResolveTeamMcpContext) => (input: T, context: CollaborationCallContext) => Promise<CollaborationResult>, mutating = false) => {
+    const privateContext = options.resolveHandle?.(target)
+    const operationContext = privateContext && !mutating ? { ...privateContext, origin: undefined } : privateContext
+    return guarded(operationContext ? () => operationContext : resolve, factory, mutating)(input, call)
+  }
+  const operations: CollaborationOperations = {
+    ...(options.spawn ? { spawn_agent: options.spawn } : {}),
+    team_send: (input, call) => targetOperation(input, call, input.to, buildSendOperation, true),
+    team_post_task: guarded(resolve, buildPostTaskOperation, true),
+    team_update_task: guarded(resolve, buildUpdateTaskOperation, true),
+    team_post_finding: guarded(resolve, buildPostFindingOperation, true),
+    team_read_board: guarded(resolve, buildReadBoardOperation),
+    team_read_artifact: guarded(resolve, buildReadArtifactOperation),
+    ...(options.readMember !== false ? { team_read_member: (input, call) => targetOperation(input, call, input.member, buildReadMemberOperation) } : {}),
+    team_stop: async input => {
+      const context = options.resolveHandle?.(input.to, input.to === 'all') ?? resolve()
+      if (!context?.participants) return textResult('Stopping collaborators is unavailable in this work context.', true)
       try {
-        // Recorded before the seal: sealEpoch clears the epoch's live state, and
-        // this act has to land inside the epoch it ends.
-        record(ctx, { kind: 'run_end', subject: toActivitySubject(input.summary), body: input.summary })
-        ctx.requestComplete(input.summary)
-        return textResult(
-          'Run will be sealed after this turn ends. The epoch and all member ' +
-            'transcripts are preserved as history. End your turn now.'
-        )
-      } catch (err) {
-        return busErrorResult(err)
+        return textResult(JSON.stringify(await context.participants.stop(context, input.to)))
+      } catch (error) {
+        if (error instanceof TeamBusError) return busErrorResult(error)
+        throw error
       }
-    }
-  )
+    },
+  }
+  const shared = createCollaborationServer(operations)
+  if (!options.checks) return shared
+  const checks = createSdkMcpServer({ name: TEAM_MCP_SERVER_NAME, tools: [buildScheduleTool(resolve), buildUnscheduleTool(resolve)] })
+  return {
+    type: 'sdk', name: TEAM_MCP_SERVER_NAME,
+    instance: {
+      name: TEAM_MCP_SERVER_NAME, version: shared.instance.version,
+      listTools: () => [...shared.instance.listTools(), ...checks.instance.listTools()],
+      callTool: async (name, input, context) => await shared.instance.callTool(name, input, context)
+        ?? checks.instance.callTool(name, input, context),
+    },
+  }
 }
 
-export function createTeamMcpServer(context: TeamMcpContext): SdkMcpServer {
-  const resolve: ResolveTeamMcpContext = () => context
-  const tools = [
-    buildSendTool(resolve),
-    buildPostTaskTool(resolve),
-    buildUpdateTaskTool(resolve),
-    buildPostFindingTool(resolve),
-    buildReadBoardTool(resolve),
-    buildReadArtifactTool(resolve),
-    // A member is never the lead of the team it serves in, so it is not offered
-    // a tool it could only be refused.
-    ...(context.selfIsLead ? [buildReadMemberTool(resolve)] : []),
-    ...(context.servesGuest ? [] : [buildScheduleTool(resolve), buildUnscheduleTool(resolve)]),
-    buildCompleteTool(resolve),
-  ]
-
-  console.log(
-    `${LOG_TAG} ${TEAM_MCP_SERVER_NAME} created: team=${context.teamId} ` +
-      `caller=${context.callerAppId} collabMode=${context.collabMode}` +
-      `${context.servesGuest ? ' guest=yes (no periodic checks)' : ''}`
-  )
-
-  return createSdkMcpServer({
-    name: TEAM_MCP_SERVER_NAME,
-    version: '1.0.0',
-    tools,
+export function createTeamMcpServer(context: TeamMcpContext, resolve: ResolveTeamMcpContext = () => context): SdkMcpServer {
+  const spawn = context.privateAssistants && context.canSpawn?.() !== false ? async (
+    input: Parameters<NonNullable<CollaborationOperations['spawn_agent']>>[0],
+    call: CollaborationCallContext,
+  ) => {
+    const current = resolve()
+    if (!current?.privateAssistants || current.canSpawn?.() === false) return textResult('Creating collaborators is not allowed in this context.', true)
+    return current.privateAssistants.spawn(input, call)
+  } : undefined
+  return createCoordinationMcpServer(resolve, {
+    spawn,
+    resolveHandle: (handle, all) => resolve()?.privateAssistants?.resolveHandle(handle, all) ?? null,
+    readMember: !!spawn || (!context.origin && context.selfIsLead),
+    checks: !context.servesGuest && !!context.checks,
   })
-}
-
-/**
- * The coordination tools a SPACE conversation gets when its team toolset is
- * enabled. Deliberately without `team_schedule`/`team_unschedule`: standing
- * timers are a persistent-team capability, not a one-collaboration one — a
- * saved team's lead gets them through the member server above.
- */
-export function buildCoordinationTools(resolve: ResolveTeamMcpContext) {
-  return [
-    buildSendTool(resolve),
-    buildPostTaskTool(resolve),
-    buildUpdateTaskTool(resolve),
-    buildPostFindingTool(resolve),
-    buildReadBoardTool(resolve),
-    buildReadArtifactTool(resolve),
-    buildReadMemberTool(resolve),
-    buildCompleteTool(resolve),
-  ]
 }

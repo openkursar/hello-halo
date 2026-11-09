@@ -33,7 +33,7 @@ let node
 
 const NO_ASK_SUFFIX =
   ' Never ask the user anything, never escalate for clarification — work only with what you are given, ' +
-  'make reasonable assumptions, and call team_complete when done.'
+  'make reasonable assumptions, then return a concise final answer and end your turn. Leave task archival to the person.'
 
 async function newSpace(name) {
   return apiOk(node, 'POST', '/api/spaces', { name, icon: '🧪' })
@@ -227,8 +227,12 @@ async function main() {
     const running = await waitRunning(team.id)
     const rested = running ? await waitIdle(team.id) : null
     const hasFindings = rested ? (await detail(team.id)).findings.length > 0 : false
-    mark(running && rested && hasFindings ? 'PASS' : 'FAIL',
-      `running=${!!running} rested=${rested?.team?.status} findings=${hasFindings}`)
+    const epochs = await apiOk(node, 'GET', `/api/teams/${team.id}/epochs`)
+    const retained = epochs.find(epoch => epoch.lifecycle === 'run')
+    const board = retained ? await apiOk(node, 'GET', `/api/teams/${team.id}/epochs/${retained.id}/board`) : null
+    const stillOpen = board?.epoch?.endedAt === null && board?.epoch?.workItem?.status === 'open'
+    mark(running && rested?.team?.status === 'idle' && hasFindings && stillOpen ? 'PASS' : 'FAIL',
+      `running=${!!running} rested=${rested?.team?.status} findings=${hasFindings} workStillOpen=${stillOpen}`)
   })
 
   await report.run('1.2.2', async (mark) => {
@@ -246,7 +250,7 @@ async function main() {
     const { team } = await createAiTeam({
       name: 'T123-Pause',
       goal: 'Work slowly: think for a bit, write a short note, then continue working on refinements indefinitely.' + NO_ASK_SUFFIX,
-      proposal: [{ memberName: 'Slow', role: 'worker', responsibility: 'Keep refining a short note, never call team_complete on your own.' }],
+      proposal: [{ memberName: 'Slow', role: 'worker', responsibility: 'Keep refining a short note until the person pauses the work.' }],
     })
     await apiOk(node, 'POST', `/api/teams/${team.id}/run`, {})
     await waitRunning(team.id, 20_000)
@@ -336,7 +340,7 @@ async function main() {
   await report.run('1.3.setup', async (mark) => {
     const { team } = await createAiTeam({
       name: 'T13-Chat',
-      goal: 'Work slowly and keep refining, never call team_complete on your own.' + NO_ASK_SUFFIX,
+      goal: 'Work slowly and keep refining until the person pauses the work.' + NO_ASK_SUFFIX,
       proposal: [{ memberName: 'Chatty', role: 'worker', responsibility: 'Keep working slowly; reply briefly to any direct message.' }],
     })
     chatTeam = team
@@ -544,7 +548,7 @@ async function main() {
     // Team runs record "activity" in their own epoch/board history, NOT in the
     // generic app_runtime activity_entries table (that table is populated by
     // execute.ts for standalone runs and report-tool.ts for report_to_user —
-    // a team turn that only calls team_post_finding/team_complete writes
+    // a team turn that only publishes shared findings writes
     // neither). The correct proxy for "activity recorded" here is a new epoch.
     const afterEpochs = rested ? await apiOk(node, 'GET', `/api/teams/${team.id}/epochs`) : null
     const epochRecorded = afterEpochs ? afterEpochs.length > beforeEpochs.length : false

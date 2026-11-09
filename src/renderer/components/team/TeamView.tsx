@@ -51,8 +51,9 @@ export function TeamView({ detail: teamDetail, onBack, spaceEntry = false }: { d
   const roomOnly = isEphemeral || (spaceEntry && !!teamDetail.team.coordinatorConversationId)
   const collabRoom = conversations.find(item => item.kind === 'collab') ?? null
   const task = roomOnly ? collabRoom : conversations.find(item => item.epochId === selectedId) ?? null
-  const detail = useMemo(() => detailForTask(teamDetail, task), [teamDetail, task])
-  const taskBoard = useTaskBoard(detail, task?.epochId ?? null)
+  const baseDetail = useMemo(() => detailForTask(teamDetail, task), [teamDetail, task])
+  const taskBoard = useTaskBoard(baseDetail, task?.epochId ?? null)
+  const detail = useMemo(() => detailForTask(teamDetail, task, taskBoard.board), [teamDetail, task, taskBoard.board])
   const [executionTarget, setExecutionTarget] = useState<string | undefined>()
   const [activityTarget, setActivityTarget] = useState<string | undefined>()
   const [decisionTarget, setDecisionTarget] = useState<string | undefined>()
@@ -83,8 +84,9 @@ export function TeamView({ detail: teamDetail, onBack, spaceEntry = false }: { d
   const setDefaultMember = useTeamViewPrefsStore(state => state.setDefaultMember)
   useEffect(() => {
     if (selectedMemberId && rosterMemberIds.includes(selectedMemberId)) return
+    if (task && !taskBoard.board && !taskBoard.failed) return
     setSelectedMemberId(initialMemberId)
-  }, [initialMemberId, rosterMemberIds, selectedMemberId])
+  }, [initialMemberId, rosterMemberIds, selectedMemberId, task, taskBoard.board, taskBoard.failed])
   const onTask = useCallback((id: string, decisionEntry = false, memberId?: string) => {
     const prefs = useTeamViewPrefsStore.getState()
     if (selectedId && selectedMemberId) prefs.rememberTaskMember(detail.team.id, selectedId, selectedMemberId)
@@ -92,7 +94,8 @@ export function TeamView({ detail: teamDetail, onBack, spaceEntry = false }: { d
     const targetDetail = detailForTask(teamDetail, item ?? null)
     const targetIds = targetDetail.roster.map(member => member.appId)
     const targetOwned = ownedTaskMembers(targetDetail, apps).map(member => member.appId)
-    let nextMember: string | null = memberId ?? prefs.memberByTask[detail.team.id]?.[id] ?? item?.memberAppId ?? targetOwned[0] ?? targetIds[0] ?? null
+    const rememberedMember = memberId ?? prefs.memberByTask[detail.team.id]?.[id]
+    let nextMember: string | null = rememberedMember ?? item?.memberAppId ?? targetOwned[0] ?? targetIds[0] ?? null
     if (item) setGroup(detail.team.id, taskGroup(item), true)
     setDecisionTarget(undefined)
     if (decisionEntry) {
@@ -104,7 +107,7 @@ export function TeamView({ detail: teamDetail, onBack, spaceEntry = false }: { d
         setDecisionTarget(decision.entryId)
       }
     }
-    if (!nextMember || !targetIds.includes(nextMember)) nextMember = targetOwned[0] ?? targetIds[0] ?? null
+    if (!nextMember || (!targetIds.includes(nextMember) && !rememberedMember && !decisionEntry)) nextMember = targetOwned[0] ?? targetIds[0] ?? null
     setSelectedMemberId(nextMember)
     if (nextMember) prefs.rememberTaskMember(detail.team.id, id, nextMember)
     if (nextMember && targetOwned.includes(nextMember)) setDefaultMember(detail.team.id, nextMember)
@@ -137,21 +140,24 @@ export function TeamView({ detail: teamDetail, onBack, spaceEntry = false }: { d
   // One room means nothing to list, search, filter or add — and its absence is
   // also what removes the way into a second conversation.
   const taskSidebar = roomOnly ? null : <TaskSidebar canCreate={!detail.legacyCoordinator} query={taskQuery} onQuery={setTaskQuery} status={taskStatus} onStatus={setTaskStatus} teamId={detail.team.id} roster={detail.roster} tasks={tasks} selectedId={selectedId} isOwner={!detail.team.hostNodeId} onSelect={id => onTask(id, conversations.some(item => item.epochId === id && item.waitingForMe))} onNew={newTask} />
-  const members = <MemberRail detail={detail} selectedAppId={selectedMemberId ?? undefined} writableAppIds={ownedMemberIds} onMember={onMember} onDetails={member => { setSettingsMember(member.appId); setDrawer('settings') }} onTask={(id, memberId, decisionId) => { onTask(id, false, memberId); if (decisionId) setDecisionTarget(decisionId) }} />
+  const members = <MemberRail detail={detail} selectedAppId={selectedMemberId ?? undefined} writableAppIds={ownedMemberIds} showSummary={width >= 640} onMember={onMember} onDetails={member => {
+    if (teamDetail.members.some(entry => entry.appId === member.appId)) { setSettingsMember(member.appId); setDrawer('settings') }
+    else { setExecutionTarget(member.appId); setActivityTarget(undefined); setDrawer('activity') }
+  }} onTask={(id, memberId, decisionId) => { onTask(id, false, memberId); if (decisionId) setDecisionTarget(decisionId) }} />
   return <div className="flex h-full min-h-0 flex-col">
     <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
       <button onClick={() => onBack ? onBack() : useTeamStore.getState().selectTeam(null)} aria-label={t('Back to teams')} className="rounded-lg p-2 hover:bg-secondary"><ArrowLeft size={18} /></button>
       <div className="flex min-w-0 flex-1 items-center gap-1">
         <h1 className="min-w-0 truncate text-sm font-medium">{detail.team.name}</h1>
-        <Popover>
+        {!isEphemeral && detail.team.goal.trim() && <Popover>
           <PopoverTrigger title={t('View team goal')} className="shrink-0 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
             <Info size={14} aria-hidden="true" />
           </PopoverTrigger>
           <PopoverContent align="start" sideOffset={6} className="max-h-[calc(100vh-1rem)] w-80 max-w-[calc(100vw-1rem)] overflow-y-auto p-4">
             <h2 className="text-sm font-medium">{t('Team goal')}</h2>
-            <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">{detail.team.goal.trim() || t('No team goal has been set.')}</p>
+            <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">{detail.team.goal}</p>
           </PopoverContent>
-        </Popover>
+        </Popover>}
       </div>
       {isEphemeral && <span className="hidden shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground sm:inline">{t('Temporary collaboration')}</span>}
       {isEphemeral && !detail.team.savedTeamId && <button disabled={saving} onClick={() => void saveTeam()} className="flex shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs text-primary hover:bg-secondary disabled:opacity-50"><BookmarkPlus size={13} aria-hidden="true" />{t('Keep this team')}</button>}
@@ -184,9 +190,20 @@ export function TeamView({ detail: teamDetail, onBack, spaceEntry = false }: { d
         <button onClick={() => { setDrawer(null); setInvite(true) }} className="flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs"><UserPlus size={14} />{t('Invite')}</button>
         <button disabled={runningAction || !!detail.legacyCoordinator} onClick={async () => {
           setRunningAction(true)
-          try { if (detail.team.currentEpochId) await useTeamStore.getState().pauseTeam(detail.team.id); else await useTeamStore.getState().runTeam(detail.team.id) }
+          try {
+            if (!detail.team.goal.trim()) newTask()
+            else {
+              const run = await useTeamStore.getState().runTeam(detail.team.id)
+              if (run) onTask(run.epochId)
+            }
+          }
           finally { setRunningAction(false) }
-        }} className="flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs">{detail.team.currentEpochId ? <Pause size={14} /> : <Play size={14} />}{detail.team.currentEpochId ? t('Pause') : t('Run')}</button>
+        }} className="flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs"><Play size={14} />{detail.team.goal.trim() ? t('Run') : t('New task')}</button>
+        {teamDetail.team.currentEpochId && <button disabled={runningAction} onClick={async () => {
+          setRunningAction(true)
+          try { await useTeamStore.getState().pauseTeam(detail.team.id) }
+          finally { setRunningAction(false) }
+        }} className="flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs"><Pause size={14} />{t('Pause')}</button>}
       </div>}
       {settingsMember && ownedMemberIds.includes(settingsMember) && <button onClick={() => {
         usePeopleViewStore.setState({ returnTeam: { teamId: detail.team.id, epochId: selectedId ?? undefined, appId: selectedMemberId ?? undefined }, returnPerson: null })

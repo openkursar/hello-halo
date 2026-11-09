@@ -59,7 +59,7 @@ import { initSpaceMemoryConsolidation, disposeSpaceMemoryConsolidation } from '.
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
-import { closeAllV2Sessions, initializeSdkRuntime, closeSdkRuntime } from '../services/agent'
+import { closeAllV2Sessions, initializeSdkRuntime, closeSdkRuntime, requestSessionRebuild } from '../services/agent'
 import { registerHealthHandlers } from '../ipc/health'
 import { initBackground, shutdownBackground, getBackgroundService, setDaemonStealthInjector } from '../platform/background'
 import { injectStealthScripts } from '../services/stealth'
@@ -79,14 +79,14 @@ import { recoverPersistedOffices } from './office-recovery'
 import { initIdentity, getLocalIdentity, getLocalPublicKeyPem, signWithLocalKey } from '../http/identity'
 import { verifyOfficeCredential } from '../http/auth'
 import { setFederationInbound, sendFederationFrameToClient, sendFederationFrameToClients, listOfficeClientIds, broadcastToAll, getSessionIdentity } from '../http/websocket'
-import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, withOwnerResolvedSpace, withExternalOrigin, createRelayCapture, createLocationAwareBlackboard, WsFederationClient, classifyArtifactFetchFailure, projectReplicaApplied } from '../apps/runtime/federation'
+import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, resolveMemberOwnerNode, withOwnerResolvedSpace, withExternalOrigin, createRelayCapture, createLocationAwareBlackboard, WsFederationClient, classifyArtifactFetchFailure, projectReplicaApplied } from '../apps/runtime/federation'
 import { getRemoteAccessStatus } from '../services/remote'
 import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtime/federation'
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
 import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck, TeamOfficeStatusKind, TeamVersionMismatch } from '../../shared/apps/team-types'
 import { parseTeamSessionKey, parseTeamChatKey, nativeChatAppId, isSpaceConversationId } from '../../shared/apps/im-keys'
-import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, releaseTeamMailOnTurnStart, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, createMemberWorkDirResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot, teamFolderDir } from '../apps/runtime/team'
-import { readTeamMemberMessages, isAppChatConversationGenerating } from '../apps/runtime/app-chat'
+import { disposeJoinedOfficeWork, createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, releaseTeamMailOnTurnStart, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createTeamMemberRecordReader, createTeamArtifactOpener, createLocalArtifactResolver, createLocalArtifactPathResolver, createMemberWorkDirResolver, RemoteArtifactError, pruneSharedFileCopies, defaultSharedCopyRoot, teamFolderDir, registerCollaborationLifecycle, deliverOwnedCollaborationSource, observeOwnedCollaborationSources } from '../apps/runtime/team'
+import { readTeamMemberMessages, isAppChatConversationGenerating, sendAppChatMessage } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
 import { createSpace, deleteSpace, getSpace, getSpaceDir } from '../services/space.service'
 import { retainSpaceWatcher, releaseSpaceWatcher } from '../services/watcher-host.service'
@@ -145,6 +145,8 @@ let digitalHumanConversations: { dispose(): void } | null = null
 let flushRelayCapture: (() => void) | null = null
 let onSystemResume: (() => void) | null = null
 let stopReleasingTeamMail: (() => void) | null = null
+let stopCollaborationLifecycle: (() => void) | null = null
+let stopOwnedCollaborationSources: (() => void) | null = null
 let taskStateService: Awaited<ReturnType<typeof initTaskState>> | null = null
 let stopModelCatalogFreshness: (() => void) | null = null
 let stopGroupRouting: (() => void) | null = null
@@ -684,12 +686,12 @@ async function initPlatformAndApps(): Promise<void> {
                   withExternalOrigin(request, {
                     teamName: team?.name,
                     fromMemberName: request.teamContext.fromAppId
-                      ? teamStore.getMember(teamId, request.teamContext.fromAppId)?.memberName ?? null
+                      ? teamStore.getMember(teamId, request.teamContext.fromAppId, request.teamContext.epochId)?.memberName ?? null
                       : null,
                     leadAppId: team?.leadAppId ?? null,
                     epoch: teamStore.getEpochById(request.teamContext.epochId),
                   }),
-                  (appId) => localSessionDeps.getMemberSpaceId(appId)
+                  (appId) => localSessionDeps.getMemberSpaceId(appId, teamId, request.teamContext.epochId)
                 )
               )
             } finally {
@@ -846,19 +848,15 @@ async function initPlatformAndApps(): Promise<void> {
           broadcastToAll(TEAM_EVENTS.updated, payload as unknown as Record<string, unknown>)
           sendToRenderer(TEAM_EVENTS.updated, payload)
         },
-        // Joiner-side: the host dissolved the office → tear down the local shadow
-        // exactly like an explicit leave. The manager already dropped the re-join
-        // connection record via leaveOffice; here we ALSO purge the mirrored team
-        // rows (team/members/edges/triggers) so the dissolved office does not
-        // resurrect in the list on the next restart, then project the removal to
-        // every view — mirroring leaveTeamOffice's teardown sequence.
+        // Execution profiles and workspace leases must survive until local teardown succeeds.
         onOfficeDissolvedRemote: (officeId) => {
-          teamStore.purgeJoinedOffice(officeId)
-          // Mark it host-initiated so the renderer tells the user their office was
-          // closed (a self leave / self dissolve stays silent — no reason set).
-          const event: TeamUpdatedEvent = { teamId: officeId, removed: true, removedReason: 'dissolved-remote' }
-          broadcastToAll(TEAM_EVENTS.updated, event as unknown as Record<string, unknown>)
-          sendToRenderer(TEAM_EVENTS.updated, event)
+          void disposeJoinedOfficeWork(teamStore, getActiveTeamRuntime(), officeId).then(() => {
+            const event: TeamUpdatedEvent = { teamId: officeId, removed: true, removedReason: 'dissolved-remote' }
+            broadcastToAll(TEAM_EVENTS.updated, event as unknown as Record<string, unknown>)
+            sendToRenderer(TEAM_EVENTS.updated, event)
+          }).catch(error => {
+            console.error(`[Bootstrap] Dissolved office retained because local cleanup failed: team=${officeId}`, error)
+          })
         },
         // Host-side: a joiner left → remove the members it brought via the same
         // path as a kick (member-removed projection + roster re-broadcast + lead
@@ -929,15 +927,7 @@ async function initPlatformAndApps(): Promise<void> {
       ? makeLocationAwareSessionDeps({
           local: localSessionDeps,
           selfNodeId: getLocalIdentity().id,
-          // Scoped to the turn's team: the same app can be a member of several
-          // teams with a different owner in each, so a cross-team first-match
-          // would route the wake to another office's owner. Falls back to any
-          // membership only for team-agnostic calls (no teamId).
-          resolveOwnerNode: (appId, teamId) => {
-            const memberships = teamStore.listMembersByAppId(appId)
-            const scoped = teamId ? memberships.find((m) => m.teamId === teamId) : undefined
-            return (scoped ?? memberships[0])?.ownerNodeId ?? SELF_NODE_ID
-          },
+          resolveOwnerNode: (appId, teamId, epochId) => resolveMemberOwnerNode(teamStore, appId, teamId, epochId),
           getRemoteSpaceId: (appId) => fedManager.getRemoteMemberSpaceId(appId),
           sendWake: (p) => fedManager.sendWakeToMember(p),
           // Return the unregister closure — session-deps stores it and calls it on
@@ -1139,13 +1129,17 @@ async function initPlatformAndApps(): Promise<void> {
         // mailbox or a vanished conversation reads as undelivered — loud, so
         // the sending member is told instead of waiting forever.
         deliverToSpaceCoordinator: async (request) => {
+          const owned = await deliverOwnedCollaborationSource(request, sendAppChatMessage)
+          if (owned.handled) return owned.disposition
+          const { teamId, epochId, requestId } = request.persist.metadata
           const result = await deliverExternalMessage({
             spaceId: request.spaceId,
             toConversationId: request.conversationId,
             turnInput: request.turnInput,
             identity: request.permissionIdentity,
             coalescingKey: request.coalescingKey,
-            ownWork: collabReportOwnership(teamStore, request.persist.metadata.teamId, request.conversationId),
+            ownWork: collabReportOwnership(teamStore, teamId, request.conversationId,
+              getTeamService()?.participants.reportGuard(teamId, epochId, requestId)),
             persist: {
               content: request.persist.content,
               source: 'team-message',
@@ -1177,7 +1171,7 @@ async function initPlatformAndApps(): Promise<void> {
         // Push each status flip (turn start/end, escalation) to joiners via the
         // coalesced roster refresh — without it a viewer's board froze on the
         // last projected status until an unrelated write refreshed the roster.
-        onMemberStatusChanged: (teamId) => getFederationManager()?.scheduleRosterRefresh(teamId),
+        onMemberStatusChanged: teamId => getFederationManager()?.scheduleRosterRefresh(teamId),
         // Person-level status (space rail, people switcher) counts team turns too.
         onMemberWorkChanged: (appId) => getAppRuntime()?.refreshAppState(appId),
         // "Waiting on its owner" is authored here and read by the whole office —
@@ -1269,7 +1263,11 @@ async function initPlatformAndApps(): Promise<void> {
         mgr?.projectMemberRemoved(teamId, appId)
         mgr?.broadcastRosterFor(teamId)
       },
-      onOfficeDissolved: (teamId) => getFederationManager()?.projectOfficeDissolved(teamId),
+      onOfficeDissolved: (teamId) => {
+        const source = teamStore.getTeamById(teamId)?.coordinatorConversationId
+        if (source) requestSessionRebuild(source, 'collaboration removed')
+        getFederationManager()?.projectOfficeDissolved(teamId)
+      },
       hasIssuedInvite: (teamId) => getFederationStore()?.hasCredentialForOffice(teamId) ?? false,
       onOfficeViewed: (teamId) => getFederationManager()?.noteOfficeViewed(teamId),
       // Run start/stop → push the live run-state (team running status + active
@@ -1280,6 +1278,16 @@ async function initPlatformAndApps(): Promise<void> {
       // scheduleRosterRefresh off each board write.
       onRunStateChanged: (teamId) => getFederationManager()?.broadcastRosterFor(teamId),
     })
+
+    teamStore.setWorkRemovedHandler((teamId, epochId) => {
+      const activityStore = getActivityStore()
+      if (!activityStore) throw new Error('Activity storage is unavailable while removing collaboration actors.')
+      activityStore.deleteParticipantActors(teamId, epochId)
+    })
+    stopCollaborationLifecycle?.()
+    stopCollaborationLifecycle = registerCollaborationLifecycle(getTeamService()!.participants)
+    stopOwnedCollaborationSources?.()
+    stopOwnedCollaborationSources = observeOwnedCollaborationSources()
 
     // A run left open by a previous session has nothing executing it — its
     // sessions died with that process — but it holds the team's run slot, so
@@ -1735,6 +1743,10 @@ export async function cleanupExtendedServices(): Promise<void> {
 
     // Team: Tear down the service + runtime accessor and the data layer before
     // the App Manager goes away (the service holds an App Manager reference).
+    stopOwnedCollaborationSources?.()
+    stopOwnedCollaborationSources = null
+    stopCollaborationLifecycle?.()
+    stopCollaborationLifecycle = null
     shutdownTeamService()
     stopReleasingTeamMail?.()
     stopReleasingTeamMail = null

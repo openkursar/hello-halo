@@ -29,7 +29,7 @@ import { registerSkillsRoutes } from './skills.routes'
 /**
  * Register all API routes.
  */
-export function registerApiRoutes(app: Express): void {
+export function registerApiRoutes(app: Express, options: { assistant?: boolean } = {}): void {
   registerConfigRoutes(app)
   registerAiSourcesRoutes(app)
   registerAiGroupsRoutes(app)
@@ -41,7 +41,7 @@ export function registerApiRoutes(app: Express): void {
   registerImRoutes(app)
   registerSystemRoutes(app)
   registerAppsRoutes(app)
-  registerTeamRoutes(app)
+  registerTeamRoutes(app, options)
   registerStoreRoutes(app)
   registerTlonRoutes(app)
   registerTaskRoutes(app)

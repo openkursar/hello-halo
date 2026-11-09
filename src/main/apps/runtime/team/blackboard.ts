@@ -4,28 +4,24 @@
  * from session state.
  */
 
-import { randomUUID } from 'crypto'
+import { createBlackboardWriter } from '@hello-halo/agent-sdk/collaboration'
+import type { PostTaskInput, UpdateTaskInput, PostFindingInput, PostActivityInput, PublishedRefClaim, PublishedRefConflict, BlackboardWriteRecord } from '@hello-halo/agent-sdk/collaboration'
+export type { PostTaskInput, UpdateTaskInput, PostFindingInput, PostActivityInput, PublishedRefClaim, PublishedRefConflict, BlackboardWriteRecord } from '@hello-halo/agent-sdk/collaboration'
 import { broadcastToAll } from '../../../http/websocket'
 import { sendToRenderer } from '../../../foundation/window.service'
 import { TEAM_EVENTS, isRemoteMember } from '../../../../shared/apps/team-types'
 import { findConflictingPublisher } from '../../team/artifact-refs'
 import type { TeamStore } from '../../team'
+import { listWorkMembers } from '../../team'
 import type {
   BlackboardTask,
-  BlackboardFinding,
   BlackboardSnapshot,
   RosterMember,
   RosterBusyEntry,
-  TaskStatus,
-  TeamActivity,
-  TeamActivityKind,
-  TeamActivityStatus,
   TeamReadBoardFilter,
   TeamMemberRuntimeStatus,
   TeamCheckView,
 } from '../../../../shared/apps/team-types'
-
-const LOG_TAG = '[Blackboard]'
 
 /**
  * How many acts the AGENT-facing snapshot carries. A long-running epoch
@@ -40,73 +36,6 @@ const LOG_TAG = '[Blackboard]'
  * see an act cannot tell it apart from one that never happened.
  */
 export const SNAPSHOT_ACTIVITY_LIMIT = 99
-
-export interface PostTaskInput {
-  teamId: string
-  epochId: string
-  callerAppId: string
-  title: string
-  assigneeAppId: string | null
-  parentId?: string
-}
-
-export interface UpdateTaskInput {
-  teamId: string
-  epochId: string
-  taskId: string
-  status: TaskStatus
-  resultRef?: string
-  note?: string
-  /**
-   * The member moving the task — not necessarily its assignee. The office admits
-   * a write from another machine only when it names a member that machine owns,
-   * so an update with no author is refused outright on any machine that owns more
-   * than one member. Absent only for the authority's own maintenance writes,
-   * which never cross that gate.
-   */
-  callerAppId?: string
-}
-
-export interface PostFindingInput {
-  teamId: string
-  epochId: string
-  callerAppId: string
-  content?: string
-  ref?: string
-}
-
-/**
- * Which publication form is claiming a ref, so the board can name the app that
- * will OWN it: a finding belongs to its author, a task's resultRef to the
- * ASSIGNEE — who may not be the member calling the tool.
- */
-export type PublishedRefClaim =
-  | { kind: 'finding'; authorAppId: string }
-  | { kind: 'task'; taskId: string }
-
-/** The teammate already publishing a ref someone else is about to claim. */
-export interface PublishedRefConflict {
-  memberName: string
-}
-
-/**
- * One coordination act to record. `id` may be supplied by a caller that already
- * owns a stable identifier (the message bus mints an envelope id before the act
- * is recorded), so the recorded row and the thing it describes share one key.
- */
-export interface PostActivityInput {
-  teamId: string
-  epochId: string
-  kind: TeamActivityKind
-  actorAppId: string
-  targetAppId?: string | null
-  subject: string
-  body?: string | null
-  refId?: string | null
-  correlationId?: string | null
-  status?: TeamActivityStatus | null
-  id?: string
-}
 
 export interface Blackboard {
   postTask(input: PostTaskInput): { taskId: string }
@@ -135,28 +64,6 @@ export interface Blackboard {
     ref: string
     claim: PublishedRefClaim
   }): PublishedRefConflict | null
-}
-
-/**
- * A structured blackboard write, surfaced AFTER a successful local store write so
- * a replication layer can sequence and replicate it. Notification-only — the
- * write has already been applied locally when it fires. `payload` is the full
- * structured row/patch so a hot-standby can apply it verbatim.
- */
-export interface BlackboardWriteRecord {
-  teamId: string
-  epochId: string
-  op:
-    | 'post_task'
-    | 'update_task'
-    | 'post_finding'
-    | 'post_activity'
-    | 'epoch_upsert'
-    | 'member_profile'
-    | 'check_upsert'
-    | 'check_delete'
-  payload: Record<string, unknown>
-  taskId?: string
 }
 
 export interface BlackboardDeps {
@@ -196,145 +103,17 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
   const { store } = deps
   const memberStatus = deps.getMemberStatus ?? (() => 'idle' as TeamMemberRuntimeStatus)
 
-  function notifyWrite(record: BlackboardWriteRecord): void {
-    if (!deps.onWrite) return
-    try {
-      deps.onWrite(record)
-    } catch (err) {
-      // Replication is best-effort relative to the local write; never let a
-      // replication-layer fault corrupt the authoritative local apply.
-      console.error(`${LOG_TAG} onWrite hook threw (write already applied):`, err)
-    }
-  }
+  const { postTask, updateTask, postFinding, postActivity } = createBlackboardWriter({
+    store,
+    onWrite: deps.onWrite,
+    onChange: (payload) => {
+      broadcastToAll(TEAM_EVENTS.blackboard, payload)
+      sendToRenderer(TEAM_EVENTS.blackboard, payload)
+    },
+  })
 
-  function emitTask(teamId: string, epochId: string, task: BlackboardTask): void {
-    const payload = { teamId, epochId, kind: 'task' as const, task }
-    broadcastToAll(TEAM_EVENTS.blackboard, payload)
-    sendToRenderer(TEAM_EVENTS.blackboard, payload)
-  }
-
-  function emitFinding(teamId: string, epochId: string, finding: BlackboardFinding): void {
-    const payload = { teamId, epochId, kind: 'finding' as const, finding }
-    broadcastToAll(TEAM_EVENTS.blackboard, payload)
-    sendToRenderer(TEAM_EVENTS.blackboard, payload)
-  }
-
-  function emitActivity(teamId: string, epochId: string, activity: TeamActivity): void {
-    const payload = { teamId, epochId, kind: 'activity' as const, activity }
-    broadcastToAll(TEAM_EVENTS.blackboard, payload)
-    sendToRenderer(TEAM_EVENTS.blackboard, payload)
-  }
-
-  function postTask(input: PostTaskInput): { taskId: string } {
-    const now = Date.now()
-    const task: BlackboardTask = {
-      id: randomUUID(),
-      teamId: input.teamId,
-      epochId: input.epochId,
-      title: input.title,
-      assigneeAppId: input.assigneeAppId,
-      status: 'pending',
-      resultRef: null,
-      note: null,
-      parentId: input.parentId ?? null,
-      createdByAppId: input.callerAppId,
-      createdAt: now,
-      updatedAt: now,
-    }
-    store.insertTask(task)
-    console.log(`${LOG_TAG} postTask: team=${input.teamId} epoch=${input.epochId} task=${task.id}`)
-    emitTask(input.teamId, input.epochId, task)
-    notifyWrite({
-      teamId: input.teamId,
-      epochId: input.epochId,
-      op: 'post_task',
-      payload: task as unknown as Record<string, unknown>,
-      taskId: task.id,
-    })
-    return { taskId: task.id }
-  }
-
-  function updateTask(input: UpdateTaskInput): void {
-    const now = Date.now()
-    store.updateTask(
-      input.taskId,
-      {
-        status: input.status,
-        ...(input.resultRef !== undefined ? { resultRef: input.resultRef } : {}),
-        ...(input.note !== undefined ? { note: input.note } : {}),
-      },
-      now
-    )
-    const task = store.getTaskById(input.taskId)
-    console.log(
-      `${LOG_TAG} updateTask: team=${input.teamId} task=${input.taskId} status=${input.status}`
-    )
-    if (task) emitTask(input.teamId, input.epochId, task)
-    notifyWrite({
-      teamId: input.teamId,
-      epochId: input.epochId,
-      op: 'update_task',
-      payload: {
-        taskId: input.taskId,
-        status: input.status,
-        ...(input.resultRef !== undefined ? { resultRef: input.resultRef } : {}),
-        ...(input.note !== undefined ? { note: input.note } : {}),
-        updatedAt: now,
-      },
-      taskId: input.taskId,
-    })
-  }
-
-  function postFinding(input: PostFindingInput): { findingId: string } {
-    const finding: BlackboardFinding = {
-      id: randomUUID(),
-      teamId: input.teamId,
-      epochId: input.epochId,
-      authorAppId: input.callerAppId,
-      body: input.content ?? null,
-      ref: input.ref ?? null,
-      createdAt: Date.now(),
-    }
-    store.insertFinding(finding)
-    console.log(`${LOG_TAG} postFinding: team=${input.teamId} epoch=${input.epochId} finding=${finding.id}`)
-    emitFinding(input.teamId, input.epochId, finding)
-    notifyWrite({
-      teamId: input.teamId,
-      epochId: input.epochId,
-      op: 'post_finding',
-      payload: finding as unknown as Record<string, unknown>,
-    })
-    return { findingId: finding.id }
-  }
-
-  function postActivity(input: PostActivityInput): { activityId: string } {
-    const activity: TeamActivity = {
-      id: input.id ?? randomUUID(),
-      teamId: input.teamId,
-      epochId: input.epochId,
-      kind: input.kind,
-      actorAppId: input.actorAppId,
-      targetAppId: input.targetAppId ?? null,
-      subject: input.subject,
-      body: input.body ?? null,
-      refId: input.refId ?? null,
-      correlationId: input.correlationId ?? null,
-      status: input.status ?? null,
-      createdAt: Date.now(),
-    }
-    store.insertActivity(activity)
-    emitActivity(input.teamId, input.epochId, activity)
-    notifyWrite({
-      teamId: input.teamId,
-      epochId: input.epochId,
-      op: 'post_activity',
-      payload: activity as unknown as Record<string, unknown>,
-    })
-    return { activityId: activity.id }
-  }
-
-  function buildRoster(teamId: string, tasks: BlackboardTask[]): RosterMember[] {
-    const members = store.listMembersByTeam(teamId)
+  function buildRoster(teamId: string, epochId: string, tasks: BlackboardTask[]): RosterMember[] {
+    const members = listWorkMembers(store, teamId, epochId)
     return members.map((m) => {
       const status = memberStatus(m.appId)
       const currentTask =
@@ -376,7 +155,7 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
   ): BlackboardSnapshot {
     let tasks = store.listTasksByEpoch(teamId, epochId)
     const findings = store.listFindingsByEpoch(teamId, epochId)
-    const roster = buildRoster(teamId, tasks)
+    const roster = buildRoster(teamId, epochId, tasks)
     const checks = deps.getChecks?.(teamId, epochId) ?? []
     // Subject only, and only the recent tail. The full text stays on the row for
     // the UI to open on demand — an agent that needs a message verbatim has it in

@@ -40,6 +40,12 @@ export type {
 } from './types'
 
 export type { TeamService, TeamServiceDeps } from './service'
+export type { TeamParticipants, ParticipantExecution } from './participants'
+export type { ParticipantService, ParticipantSource, CollaborationCaller } from './participant-service'
+export type { CollaborationSourceBinding, CollaborationSourceBindings } from './source-bindings'
+export type { TeamParticipant } from '../../../shared/apps/team-types'
+export { getWorkMember, findWorkMember, listWorkMembers, isWorkEdgeAllowed, workMemberPrincipalId } from './work-members'
+export type { WorkMember } from './work-members'
 export type { TeamArtifactGroup, TeamArtifact } from '../../../shared/apps/team-types'
 
 export { MIGRATION_NAMESPACE, migrations } from './migrations'
@@ -122,6 +128,7 @@ interface InitTeamServiceDeps {
   // to office peers by the injected federation layer (the service itself imports
   // no federation). Optional — absent in a non-federated build.
   onRosterMutated?: TeamServiceDeps['onRosterMutated']
+  onParticipantCreated?: TeamServiceDeps['onParticipantCreated']
   onMemberProfileChanged?: TeamServiceDeps['onMemberProfileChanged']
   onMemberRenamed?: TeamServiceDeps['onMemberRenamed']
   onRunStateChanged?: TeamServiceDeps['onRunStateChanged']
@@ -150,6 +157,7 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
     proposeMembersFromGoal: deps.proposeMembersFromGoal ?? proposeMembersViaSdk,
     getTriggerSync: deps.getTriggerSync,
     onRosterMutated: deps.onRosterMutated,
+    onParticipantCreated: deps.onParticipantCreated,
     onMemberProfileChanged: deps.onMemberProfileChanged,
     onMemberRenamed: deps.onMemberRenamed,
     onRunStateChanged: deps.onRunStateChanged,
@@ -179,3 +187,9 @@ export function shutdownTeamService(): void {
   serviceInstance = null
   console.log('[TeamService] Shutdown complete')
 }
+
+
+
+export type { RecipientAddress, RecipientFences } from './recipient-fences'
+
+export { releaseParticipantWorkspaces } from './participant-resources'

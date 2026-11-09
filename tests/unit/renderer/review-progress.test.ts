@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { deriveReviewProgress, reviewSpan, type ReviewProgressInput } from '../../../src/renderer/utils/review-progress'
+import { hasReviewReport, reviewReportHeadings } from '../../../src/shared/code-review-report'
 import { describeThoughtActivity, latestTodos } from '../../../src/renderer/utils/thought-activity'
 import type { Message, Thought } from '../../../src/renderer/types'
 import type { CollabSummary } from '../../../src/shared/apps/team-types'
@@ -19,6 +20,8 @@ const user = (id: string, content = '', extra: Partial<Message> = {}): Message =
   ({ id, role: 'user', content, timestamp: '2026-10-03T10:00:00.000Z', ...extra }) as Message
 const reply = (id: string, content: string, extra: Partial<Message> = {}): Message =>
   ({ id, role: 'assistant', content, timestamp: '2026-10-03T10:00:01.000Z', ...extra }) as Message
+
+const report = (label: string, language = 'en') => reviewReportHeadings(language).map(heading => `## ${heading}\n${label}`).join('\n\n')
 
 const record = (variant: 'quick' | 'team' = 'quick'): GitReviewRecord => ({
   repoRoot: '/r', conversationId: 'c', variant, scope: { kind: 'uncommitted' }, scopeLabel: 'U', snapshot: 'a'.repeat(40), fileCount: 1, startedAt: 1000,
@@ -44,7 +47,6 @@ function input(over: Partial<ReviewProgressInput> = {}): ReviewProgressInput {
     liveActivity: null,
     earlierTodos: null,
     collab: null,
-    collabEnd: null,
     ...over,
   }
 }
@@ -77,15 +79,16 @@ describe('deriveReviewProgress', () => {
 
   it('finishes a quick review with its last reply as the report, ignoring later chat', () => {
     const progress = deriveReviewProgress(input({
+      isGenerating: true, sessionError: 'Later work failed',
       conversation: withMessages(
-        reply('m1', '# Report', { tokenUsage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 100, cacheCreationTokens: 1, totalCostUsd: 0, contextWindow: 0 } }),
+        reply('m1', report('Report'), { tokenUsage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 100, cacheCreationTokens: 1, totalCostUsd: 0, contextWindow: 0 } }),
         user('m2', 'now fix it'),
         reply('m3', 'fixed'),
       ),
     }))
     expect(progress).toMatchObject({
       status: 'done',
-      report: { messageId: 'm1', content: '# Report' },
+      report: { messageId: 'm1', content: report('Report') },
       tokens: 116,
       endedAt: Date.parse('2026-10-03T10:05:00.000Z'),
       conversationTitle: 'Review · U',
@@ -114,29 +117,41 @@ describe('deriveReviewProgress', () => {
 
     it('waits for the collaboration before judging an idle conversation', () => {
       expect(deriveReviewProgress(team({ conversation: withMessages(reply('m1', 'Team is on it.')), collab: undefined })).status).toBe('loading')
-      expect(deriveReviewProgress(team({ collab: collab(false), collabEnd: undefined, conversation: withMessages(reply('m1', 'x')) })).status).toBe('running')
+
     })
 
-    it('is done once the team completed and the coordinator replied', () => {
+    it('finishes with a complete report while its collaboration remains open', () => {
       const progress = deriveReviewProgress(team({
-        conversation: withMessages(reply('m1', 'Team is on it.'), reply('m2', '# Team report')),
-        collab: collab(false),
-        collabEnd: { reason: 'completed', summary: 'Reviewed' },
+        conversation: withMessages(reply('m1', 'Team is on it.'), reply('m2', report('Team report'))),
+        collab: { ...collab(true), members: collab(true).members.map(member => ({ ...member, status: 'idle' })) },
       }))
       expect(progress).toMatchObject({ status: 'done', report: { messageId: 'm2' } })
       expect(progress.members?.[0].state).toBe('done')
     })
 
-    it('is stopped when its work was closed without team_complete, failed on timeout', () => {
-      const closed = { conversation: withMessages(reply('m1', 'Team is on it.')), collab: collab(false) }
-      expect(deriveReviewProgress(team({ ...closed, collabEnd: { reason: 'completed', summary: null } })).status).toBe('stopped')
-      expect(deriveReviewProgress(team({ ...closed, collabEnd: { reason: 'stopped', summary: null } })).status).toBe('stopped')
-      expect(deriveReviewProgress(team({ ...closed, collabEnd: { reason: 'timeout', summary: null } })).status).toBe('error')
+    it('shows a hand-off or truncated report as incomplete once execution is idle', () => {
+      const idle = { ...collab(true), members: collab(true).members.map(member => ({ ...member, status: 'idle' as const })) }
+      expect(deriveReviewProgress(team({ conversation: withMessages(reply('m1', 'Team is on it.')), collab: idle })).status).toBe('incomplete')
+      expect(deriveReviewProgress(team({ conversation: withMessages(reply('m1', '## Conclusion\nOnly the first section.')), collab: idle })).status).toBe('incomplete')
+    })
+
+    it('lets the source stop or failure win while remote work is still stopping', () => {
+      const working = { conversation: withMessages(reply('m1', 'Team is on it.')), collab: collab(true) }
+      expect(deriveReviewProgress(team({ ...working, sessionErrorType: 'interrupted' })).status).toBe('stopped')
+      expect(deriveReviewProgress(team({ ...working, sessionError: 'provider failed' })).status).toBe('error')
+      expect(deriveReviewProgress(team({ ...working, collab: { ...collab(true), stopped: true } })).status).toBe('stopped')
+      expect(deriveReviewProgress(team({ ...working, collab: { ...collab(true), stopped: true }, isGenerating: true })).status).toBe('running')
+      expect(deriveReviewProgress(team({ ...working, conversation: withMessages(reply('m1', report('partial'), { error: 'Stopped by user.' })) })).status).toBe('stopped')
+    })
+
+    it('does not call failed reviewer coverage complete just because the source formatted a report', () => {
+      const failed = { ...collab(true), members: collab(true).members.map(member => ({ ...member, status: 'error' as const })) }
+      expect(deriveReviewProgress(team({ conversation: withMessages(reply('m1', report('Partial coverage'))), collab: failed })).status).toBe('incomplete')
     })
 
     it('falls back to a single reviewer when no collaboration was ever made', () => {
-      const progress = deriveReviewProgress(team({ conversation: withMessages(reply('m1', '# Solo report')), collab: null }))
-      expect(progress).toMatchObject({ status: 'done', members: null, report: { content: '# Solo report' } })
+      const progress = deriveReviewProgress(team({ conversation: withMessages(reply('m1', report('Solo report'))), collab: null }))
+      expect(progress).toMatchObject({ status: 'done', members: null, report: { content: report('Solo report') } })
     })
   })
 })
@@ -161,5 +176,49 @@ describe('thought activity', () => {
       { content: 'b', status: 'pending', activeForm: undefined },
     ])
     expect(latestTodos([step({ toolName: 'Read' })])).toBeNull()
+  })
+})
+
+
+describe('review report recognition', () => {
+  it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'de', 'es', 'fr'])('recognizes the prescribed sections in %s without changing the text', language => {
+    expect(hasReviewReport(report('Reviewed.', language), language)).toBe(true)
+    expect(hasReviewReport(report('Reviewed.', language).replaceAll('## ', '').replaceAll('Reviewed.', ''), language)).toBe(false)
+  })
+
+  it('does not mistake quoted instructions for a complete report', () => {
+    expect(hasReviewReport('```markdown\n' + report('Example') + '\n```', 'en')).toBe(false)
+    expect(hasReviewReport('The team is reviewing the changes.', 'en')).toBe(false)
+    expect(hasReviewReport(report('None.').replace('## Structure summary\nNone.', ''), 'en')).toBe(false)
+  })
+
+  it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'de', 'es', 'fr'])('accepts ATX closing markers in %s', language => {
+    const text = reviewReportHeadings(language).map(heading => `## ${heading} ###  \nReviewed.`).join('\n\n')
+    expect(hasReviewReport(text, language)).toBe(true)
+  })
+
+  it('shows a closed-heading report unchanged as completed', () => {
+    const text = reviewReportHeadings('en').map(heading => `## ${heading} ##\nReviewed.`).join('\n\n')
+    const progress = deriveReviewProgress(input({ conversation: withMessages(reply('m1', text)) }))
+    expect(progress).toMatchObject({ status: 'done', report: { content: text } })
+  })
+
+  it('does not count closing markers as body or relax section order and fences', () => {
+    const headings = reviewReportHeadings('en')
+    const closed = headings.map(heading => `## ${heading} ##\nNone.`)
+    expect(hasReviewReport(headings.map(heading => `## ${heading}: ##`).join('\n'), 'en')).toBe(false)
+    expect(hasReviewReport([...closed].reverse().join('\n'), 'en')).toBe(false)
+    expect(hasReviewReport([...closed, closed[0]].join('\n'), 'en')).toBe(false)
+    expect(hasReviewReport('~~~markdown\n' + closed.join('\n') + '\n~~~', 'en')).toBe(false)
+    expect(hasReviewReport(closed.slice(0, -1).join('\n'), 'en')).toBe(false)
+  })
+
+  it.each(['## Conclusion##', '## Conclusion ## extra', '## Conclusion \\##', 'Conclusion ##'])('keeps non-closing hashes in %j as title text', first => {
+    expect(hasReviewReport(report('None.').replace('## Conclusion', first), 'en')).toBe(false)
+  })
+
+  it('accepts numbered, bold and inline section styles', () => {
+    const text = reviewReportHeadings('en').map((heading, index) => `${index + 1}. **${heading}**: None.`).join('\n')
+    expect(hasReviewReport(text, 'en')).toBe(true)
   })
 })

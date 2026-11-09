@@ -23,8 +23,35 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 
 import { computeSessionInputsFingerprint, markMcpServerSettings } from '../../../../src/main/services/agent/sdk-config'
 import { generatePromptInstructions } from '../../../../src/main/platform/memory/prompt'
+import { markInstalledMcpContext } from '../../../../src/main/services/agent/tool-discovery'
+import type { InstalledApp } from '../../../../src/shared/apps/app-types'
 
 describe('computeSessionInputsFingerprint', () => {
+  const withDiscovery = (engineId: string, summary: string, loading: 'eager' | 'deferred' = 'deferred') => ({
+    engineId,
+    mcpServers: { customer: markInstalledMcpContext({}, {
+      id: 'customer', spec: { type: 'mcp', description: 'Customers' },
+      userOverrides: { mcpContext: { loading, summary } },
+    } as InstalledApp) },
+  })
+
+  it('rebuilds Halo sessions for changed effective discovery preferences', () => {
+    const initial = computeSessionInputsFingerprint(withDiscovery('halo', 'Orders'))
+    expect(initial).toBe(computeSessionInputsFingerprint(withDiscovery('halo', 'Orders')))
+    expect(initial).not.toBe(computeSessionInputsFingerprint(withDiscovery('halo', 'Invoices')))
+    expect(initial).not.toBe(computeSessionInputsFingerprint(withDiscovery('halo', 'Orders', 'eager')))
+  })
+
+  it.each(['anthropic', 'codex', 'dsh'])('does not change %s inputs for Halo-only preferences', engineId => {
+    expect(computeSessionInputsFingerprint(withDiscovery(engineId, 'Orders')))
+      .toBe(computeSessionInputsFingerprint(withDiscovery(engineId, 'Invoices', 'eager')))
+  })
+
+  it.each(['xml', 'json'])('does not apply discovery preferences to explicit %s tool calling', toolCallingMode => {
+    expect(computeSessionInputsFingerprint({ ...withDiscovery('halo', 'Orders'), toolCallingMode }))
+      .toBe(computeSessionInputsFingerprint({ ...withDiscovery('halo', 'Invoices', 'eager'), toolCallingMode }))
+  })
+
   it('is stable for identical inputs', () => {
     const opts = { systemPrompt: 'You are Ada.', mcpServers: { 'web-search': {}, 'halo-docs': {} } }
     expect(computeSessionInputsFingerprint(opts)).toBe(computeSessionInputsFingerprint({ ...opts }))

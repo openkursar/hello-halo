@@ -12,16 +12,16 @@ const LOG_TAG = '[TeamCollabBinding]'
 
 /**
  * Whether a report to `conversationId` is still about work that conversation
- * started. Only a digital human's own chat is asked: a space conversation keeps
- * the admission it always had.
+ * started. The optional execution fence also revalidates queued reports after
+ * a stop, including when a later human request has already resumed the chat.
  */
 export function collabReportOwnership(
   store: Pick<TeamStore, 'getTeamById'>,
   teamId: string,
   conversationId: string,
-): (() => boolean) | undefined {
-  if (!nativeChatAppId(conversationId)) return undefined
-  return () => store.getTeamById(teamId)?.coordinatorConversationId === conversationId
+  current?: () => boolean,
+): (() => boolean) {
+  return () => store.getTeamById(teamId)?.coordinatorConversationId === conversationId && (current?.() ?? true)
 }
 
 /** A gone conversation dissolves its ephemeral collaboration and unbinds a saved one. */

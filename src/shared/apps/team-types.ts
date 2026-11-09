@@ -1,18 +1,33 @@
+import { SELF_NODE_ID, TEAM_LEAD_ADDRESS } from '@hello-halo/agent-sdk/collaboration/protocol'
+import type { TeamEnvelope, TeamTriggerContext, MemberTurnFate, TeamTurnEnding, TeamTurnEndReport, TeamSendAsyncResult, TeamSendSyncResult, TeamRequestOrigin, CollabMode } from '@hello-halo/agent-sdk/collaboration/protocol'
+export type { TeamEnvelope, TeamTriggerContext, MemberTurnFate, TeamTurnEnding, TeamTurnEndReport, TeamSendAsyncResult, TeamSendSyncResult, TeamRequestOrigin, CollabMode } from '@hello-halo/agent-sdk/collaboration/protocol'
+import { parseSpaceCoordinatorAppId, isRemoteMember } from '@hello-halo/agent-sdk/collaboration/protocol'
+export { TEAM_CIRCUIT_DEFAULTS, TEAM_ACTIVITY_SUBJECT_MAX, toActivitySubject, SELF_NODE_ID, TEAM_LEAD_ADDRESS, teamMemberAddress, spaceCoordinatorAppId, parseSpaceCoordinatorAppId, isRemoteMember } from '@hello-halo/agent-sdk/collaboration/protocol'
+
 /**
  * Shared team types — single source of truth consumed by main + renderer.
  * Must stay dependency-free and renderer-safe (no Node/Electron APIs).
  */
 
+import type { TaskStatus, BlackboardTask, BlackboardFinding, TeamActivity, TeamActivityKind, TeamActivityStatus } from '@hello-halo/agent-sdk/collaboration'
+export type { TaskStatus, BlackboardTask, BlackboardFinding, TeamActivity, TeamActivityKind, TeamActivityStatus } from '@hello-halo/agent-sdk/collaboration'
+
 import type { CapabilityPolicy } from './capability-policy'
 import { parseTeamChatKey, parseSpaceCollabChatKey } from './im-keys'
+
+/** Model-originated stop names the exact assignment it is authorized to interrupt. */
+export interface TeamStopController {
+  appId: string
+  requestId: string
+  origin?: TeamRequestOrigin
+}
 
 // ── Enumerations ──
 
 export type MemberSourcing = 'manual' | 'ai'
-export type CollabMode = 'structured' | 'free'
+
 export type EscalationRouting = 'user' | 'lead'
 export type TeamStatus = 'idle' | 'running' | 'waiting_user' | 'error'
-export type TaskStatus = 'pending' | 'in_progress' | 'done' | 'rejected' | 'blocked'
 export type EpochEndReason = 'completed' | 'stopped' | 'timeout' | 'error' | 'cleared'
 
 /**
@@ -144,6 +159,13 @@ export interface TeamMember {
   awaitingDecision?: boolean
 }
 
+/** A collaborator belongs to one piece of work, not the standing team roster. */
+export interface TeamParticipant extends TeamMember {
+  epochId: string
+  parentAppId: string
+  isTemporary: true
+}
+
 /**
  * The owner's answer to "what may my teammates make this digital human do".
  * Read in permissive mode: an unset switch grants, so the switches only ever
@@ -160,100 +182,6 @@ export interface TeamEdge {
   fromAppId: string
   toAppId: string
   sync: boolean
-}
-
-export interface BlackboardTask {
-  id: string
-  teamId: string
-  epochId: string
-  title: string
-  assigneeAppId: string | null
-  status: TaskStatus
-  /** File path to a produced artifact, not inline content. */
-  resultRef: string | null
-  note: string | null
-  parentId: string | null
-  createdByAppId: string
-  createdAt: number
-  updatedAt: number
-}
-
-export interface BlackboardFinding {
-  id: string
-  teamId: string
-  epochId: string
-  authorAppId: string
-  body: string | null
-  ref: string | null
-  createdAt: number
-}
-
-// ── Activity (what actually happened, as opposed to what state things are in) ──
-
-/**
- * What kind of coordination act an activity row records.
- *
- * Reads (`team_read_board`, `team_read_artifact`) are deliberately absent: they
- * change nothing, they are frequent, and a feed full of "X looked at the board"
- * pushes the acts that matter off the screen.
- */
-export type TeamActivityKind =
-  | 'message'
-  | 'reply'
-  | 'task_post'
-  | 'task_update'
-  | 'finding'
-  | 'check_set'
-  | 'check_stop'
-  | 'run_end'
-  | 'decision'
-
-/**
- * The state an act recorded — one notion, read against the act's kind:
- *   a message  → 'sent' (accepted for delivery) or 'undelivered' (never arrived,
- *                which is the opposite of "no reply yet", not a flavour of it);
- *   a reply    → how the turn the message started ended;
- *   a task_update → the status the task was put into.
- */
-export type TeamActivityStatus =
-  | 'sent'
-  | 'undelivered'
-  | 'ok'
-  | 'timeout'
-  | 'error'
-  | 'escalation'
-  | TaskStatus
-
-/**
- * One recorded coordination act. Append-only: a reply is a NEW row pointing back
- * at the message it answers (`correlationId`), never an edit of that message —
- * so the stream stays immutable, replicates as a single idempotent insert, and
- * needs no pre-image to roll back.
- *
- * The team's directed messages exist nowhere else as messages: each one only
- * passes through the sender's transcript (as a tool argument) and the receiver's
- * (as a turn input), on machines that may not be the same. This table is the
- * only place the office's own record of "who contacted whom" lives.
- */
-export interface TeamActivity {
-  id: string
-  teamId: string
-  epochId: string
-  kind: TeamActivityKind
-  /** Who acted. */
-  actorAppId: string
-  /** Who it was aimed at (message/reply/check); null for board writes. */
-  targetAppId: string | null
-  /** One line, already human-readable — what a feed row and a digest line show. */
-  subject: string
-  /** Full text, kept for detail-on-demand. Never rendered in a list or a digest. */
-  body: string | null
-  /** The task / finding / check / message id this act concerns. */
-  refId: string | null
-  /** Ties a reply to the message that caused it. */
-  correlationId: string | null
-  status: TeamActivityStatus | null
-  createdAt: number
 }
 
 // ── The record of what a borrowed turn actually did ──
@@ -301,14 +229,10 @@ export interface TeamToolAudit {
 export const TEAM_AUDIT_DETAIL_MAX = 160
 
 /** Subject lines are one line and short — a feed row, not a preview pane. */
-export const TEAM_ACTIVITY_SUBJECT_MAX = 80
+
 
 /** Collapse a message body to a single readable subject line. */
-export function toActivitySubject(text: string, max = TEAM_ACTIVITY_SUBJECT_MAX): string {
-  const firstLine = text.split('\n').find((l) => l.trim().length > 0)?.trim() ?? ''
-  const collapsed = firstLine.replace(/\s+/g, ' ')
-  return collapsed.length > max ? `${collapsed.slice(0, max - 1)}…` : collapsed
-}
+
 
 export interface TeamWorkItem {
   entryAppId?: string | null
@@ -514,7 +438,7 @@ export interface TeamPendingEscalation {
  *   'guest'     — a guest of an IM chat a team member fronts. Held to the
  *                 member's delegated policy, where silence refuses.
  */
-export type TeamRequestOrigin = 'colleague' | 'guest'
+
 
 /**
  * What a record written before origins had kinds stands for, given the piece of
@@ -531,123 +455,6 @@ export function legacyExternalOrigin(epoch: Pick<TeamEpoch, 'chatKey'> | null | 
 // ── Runtime-only structures (not persisted) ──
 
 /** In-memory message envelope used by the Message Bus. */
-export interface TeamEnvelope {
-  id: string
-  teamId: string
-  epochId: string
-  /** Null when a person wrote it: no digital human is behind the message. */
-  fromAppId: string | null
-  toAppId: string
-  body: string
-  correlationId: string
-  taskRef?: string
-  createdAt: number
-}
-
-/** Per-turn context injected by the Bus when waking a member. Transparent to the LLM. */
-export interface TeamTriggerContext {
-  teamId: string
-  epochId: string
-  correlationId: string
-  /**
-   * The teammate this turn came from. Null when no digital human is behind it:
-   * a run start, a person's message or a self-wake. The office record and the
-   * circuit budget both key on it.
-   */
-  fromAppId: string | null
-  /**
-   * Someone is holding a completion receipt for this turn. Only a non-agent
-   * caller sets it (a person's cross-machine 1:1 chat); it changes nothing about
-   * how the turn runs or what the member is told.
-   */
-  wait: boolean
-  taskId?: string
-  /**
-   * Drives inbound header rendering. 'periodic_check', 'human_message' and
-   * 'member_stopped' are delivered verbatim — the first and last carry their own
-   * header, and the middle one is a person's words, which no teammate framing
-   * may impersonate.
-   */
-  kind?: 'run_start' | 'message' | 'periodic_check' | 'human_message' | 'member_stopped'
-  /**
-   * Position of this turn in the chain that caused it; the circuit breaker's
-   * `maxForwardDepth` counts it. Must travel with the trigger — a chain that
-   * restarts at 0 on every hop never reaches the limit.
-   */
-  forwardDepth?: number
-  /**
-   * Who set THIS turn in motion, when it was not the owner's own machine — read
-   * per turn, never remembered for the next one. It decides what the turn may
-   * do (`app-chat`) and is the only thing that does.
-   *
-   * Stamped where a request crosses into this node — an inbound office wake, the
-   * office-credential 1:1 endpoint, a guest's IM message. From there it travels
-   * only on what a RESTRICTED turn itself sets in motion: the checks it sets,
-   * the question it asks, and — a guest's only — its `team_send`s. A turn
-   * running with the owner's full reach hands nothing on, and neither does any
-   * other runtime wake — except the notice reporting a guest's turn, for that
-   * one wake.
-   *
-   * A value arriving on the wire is the sender's claim: it is honored only when
-   * it narrows ('guest'), and otherwise replaced by 'colleague'. An older
-   * build's `external` mark is read through {@link legacyExternalOrigin}.
-   */
-  origin?: TeamRequestOrigin
-  /**
-   * The facts a turn-end notice reports, sent with the notice to a lead on
-   * another machine so that machine renders the notice itself. A notice is the
-   * runtime's own report, not anyone's request, so it carries no colleague's
-   * standing — which only holds while its words are the runtime's: a notice
-   * arriving without readable facts is handled as any other message from that
-   * machine.
-   */
-  turnEnded?: TeamTurnEndReport
-  /**
-   * A person's own 1:1 chat that crossed from another machine. Its `kind` is
-   * normalized to 'message' on arrival (the peer wrote it, so it buys no
-   * verbatim framing or owner reading); this only keeps the turn out of the
-   * lead's turn reports, as the same chat on one machine is. Reporting only.
-   */
-  personalChat?: boolean
-}
-
-/**
- * How a member's turn ended, in the only vocabulary the system can prove. There
- * is deliberately no `completed`: nothing here can see whether the work is done.
- */
-export type MemberTurnFate =
-  | { kind: 'ended' }
-  | { kind: 'error'; message: string }
-  | { kind: 'timeout' }
-  /** The wake never became a turn — so nothing about the member was observed. */
-  | { kind: 'never_ran'; reason: string }
-  /**
-   * A person stopped it by hand (the renderer/HTTP stop action) — never a
-   * failure to chase. Distinct from `error`: a hard stop lands in the same
-   * unconditional-reject path a crash does, so without this the lead would
-   * be sent after a teammate that was deliberately interrupted.
-   */
-  | { kind: 'stopped' }
-
-/** One member's ending, as a turn-end notice reports it (see `team/turn-report.ts`). */
-export interface TeamTurnEnding {
-  memberName: string
-  fate: MemberTurnFate
-  /**
-   * What the member filed during the turn; null when the turn was not watched
-   * end to end — "recorded nothing" and "not observed" are different claims.
-   */
-  did: string[] | null
-  requestSummary?: string
-  finalReply?: string
-}
-
-export interface TeamTurnEndReport {
-  endings: TeamTurnEnding[]
-  /** Endings dropped from a notice that grew too long, counted rather than lost. */
-  dropped: number
-}
-
 export interface TeamContext {
   teamId: string
   epochId: string
@@ -727,7 +534,12 @@ export interface TeamTriggerInput {
 
 export type TeamRunTriggerType = 'manual' | 'schedule' | 'http' | 'event'
 
-/** Distinct from TeamTriggerContext, which is the per-turn envelope inside an epoch. */
+/** The exact work accepted by a run request. */
+export interface TeamRunResult {
+  epochId: string
+}
+
+/** Distinct from TeamTriggerContext, which identifies an individual turn. */
 export interface TeamRunTrigger {
   type: TeamRunTriggerType
   triggerId?: string
@@ -874,60 +686,6 @@ export interface TeamSendInput {
   message: string
   purpose?: 'update' | 'result'
 }
-export interface TeamSendAsyncResult {
-  messageId: string
-  /**
-   * What happened to the send. Nothing is ever auto-delivered back, so this
-   * receipt is all the sender learns:
-   *   - 'undelivered' the target's owner was offline/unreachable at send time.
-   *                   There is no offline outbox, so it will NOT arrive later.
-   *   - 'queued'      the target is mid-turn and the message waits in its
-   *                   mailbox, to be read after that turn ends.
-   *                   Only knowable for a locally-owned target — a remote one
-   *                   queues on its OWNER, so it reads as a plain hand-over.
-   *   - 'mid_turn'    the target is mid-turn and the message went INTO that
-   *                   turn: they see it at their next step rather than after
-   *                   finishing. Nothing was interrupted, and no turn started
-   *                   for this message, so any answer still comes as their own
-   *                   `team_send`.
-   * Absent → handed over to the target's session now.
-   */
-  delivery?: 'undelivered' | 'queued' | 'mid_turn'
-  /**
-   * The target runs on another machine, so nothing here can say it actually
-   * started: the message was accepted for its owner's machine, and whether that
-   * machine woke the member is only knowable there. Callers must not report a
-   * remote hand-over as "delivered" — a lead told that waited 75 minutes on a
-   * member that never ran, with no way to tell waiting from never-arrived.
-   */
-  remoteTarget?: boolean
-}
-/**
- * Receipt for a send that waited on the woken turn's ending. Not reachable from
- * `team_send` — only a person's cross-machine 1:1 chat asks for one, so its UI
- * can distinguish "sent" from "never arrived".
- */
-export interface TeamSendSyncResult {
-  from: string
-  message: string
-  /**
-   * Delivery truth, so a non-delivery is never mistaken for a real (empty) reply:
-   *   - 'ok'          the turn ran and reported back (message may still be empty).
-   *   - 'queued'      the target was mid-turn; the message is in its mailbox and
-   *                   will be delivered when that turn ends. Nothing failed, and
-   *                   no reply is coming on THIS call — the completion that would
-   *                   answer it belongs to a turn this message did not start.
-   *   - 'mid_turn'    the target was mid-turn and the message went into that
-   *                   turn, so they are reading it now. Like 'queued' it starts
-   *                   no turn of its own, hence no reply on THIS call.
-   *   - 'timeout'     it was reachable but did not finish within the wait window.
-   *   - 'undelivered' the wake never reached the owner (offline/unreachable) or no
-   *                   completion signal ever came back — definitively NOT a reply.
-   * This is the seam the durable feed outbox later feeds (delivered/pending/failed).
-   */
-  status: 'ok' | 'queued' | 'mid_turn' | 'timeout' | 'undelivered'
-}
-
 export interface TeamPostTaskInput {
   title: string
   assignee: string
@@ -1106,11 +864,19 @@ export interface TeamEpochSummary {
   artifactCount?: number
 }
 
+/** Membership and live status without the work's activity or output history. */
+export interface EpochRoster {
+  members: TeamMember[]
+  roster: RosterMember[]
+}
+
 export interface EpochBoard {
   epoch: TeamEpoch
   tasks: BlackboardTask[]
   findings: BlackboardFinding[]
   members: TeamMember[]
+  /** Membership and live status in this work, including temporary collaborators. */
+  roster?: RosterMember[]
   /** What happened during this run/conversation, newest last. */
   activities?: TeamActivity[]
 }
@@ -1194,6 +960,8 @@ export interface CollabSummary {
   epochId: string
   /** False once the collaboration epoch is sealed (work finished). */
   active: boolean
+  /** The source requested cancellation; remote members may still be stopping. */
+  stopped?: boolean
   /** True once the user kept this team ("save as team"). */
   saved: boolean
   savedTeamId?: string
@@ -1330,7 +1098,7 @@ export interface TeamOfficeStatusEvent {
 export const TEAM_MCP_SERVER_NAME = 'halo-team'
 
 /** Sentinel owner-node id for a locally-owned team member (not federated). */
-export const SELF_NODE_ID = 'SELF'
+
 
 /**
  * Undelivered reason for a remote turn this node stopped waiting on because it
@@ -1347,25 +1115,7 @@ export const REMOTE_WAIT_ABANDONED_REASON = 'federation-stopped'
  * its "appId" is a sentinel: no app is installed behind it, and the delivery
  * layer routes anything addressed to it into the space conversation.
  */
-export const SPACE_COORDINATOR_MEMBER_NAME = 'coordinator'
-
-const SPACE_COORDINATOR_APP_PREFIX = 'space-conv-'
-
-/**
- * Sentinel appId representing a space conversation acting as a team
- * coordinator. Filename-safe (rides in team session keys) and parseable so the
- * bus can route deliveries for it away from app-chat.
- */
-export function spaceCoordinatorAppId(conversationId: string): string {
-  return `${SPACE_COORDINATOR_APP_PREFIX}${conversationId}`
-}
-
-/** The conversationId behind a coordinator sentinel appId, or null. */
-export function parseSpaceCoordinatorAppId(appId: string): string | null {
-  return appId.startsWith(SPACE_COORDINATOR_APP_PREFIX)
-    ? appId.slice(SPACE_COORDINATOR_APP_PREFIX.length)
-    : null
-}
+export const SPACE_COORDINATOR_MEMBER_NAME = TEAM_LEAD_ADDRESS
 
 export function isLegacyCoordinatorTeam(team: Pick<Team, 'ephemeral' | 'leadAppId'>): boolean {
   return team.ephemeral !== true && !!team.leadAppId && !!parseSpaceCoordinatorAppId(team.leadAppId)
@@ -1397,12 +1147,7 @@ export function isTeamFolderRef(ref: string): boolean {
  * being locally owned. A remote member's run transcript is not locally reloadable
  * — it exists only as relayed live frames until owner-served history arrives.
  */
-export function isRemoteMember(member: {
-  origin?: 'local' | 'remote'
-  ownerNodeId?: string
-}): boolean {
-  return member.origin === 'remote' && member.ownerNodeId !== SELF_NODE_ID
-}
+
 
 /**
  * Project a roster down to the members this machine can drive directly, lead
@@ -1482,6 +1227,8 @@ export function shouldShowRelayedTranscript(args: {
 
 /** Coordination tools, built once and served by both packagings of the server. */
 export const TEAM_TOOL_NAMES = {
+  spawn: 'spawn_agent',
+  stop: 'team_stop',
   send: 'team_send',
   postTask: 'team_post_task',
   updateTask: 'team_update_task',
@@ -1490,22 +1237,8 @@ export const TEAM_TOOL_NAMES = {
   readArtifact: 'team_read_artifact',
   /** Lead only: read a member's record of the run. */
   readMember: 'team_read_member',
-  complete: 'team_complete',
   schedule: 'team_schedule',
   unschedule: 'team_unschedule',
-} as const
-
-/**
- * Tools only a space conversation gets: assembling and keeping a temporary
- * collaboration, and delegating to a saved team. Meaningless to a member, who
- * is already inside exactly one team.
- */
-export const SPACE_TEAM_TOOL_NAMES = {
-  collabStart: 'collab_start',
-  collabSave: 'collab_save',
-  list: 'team_list',
-  run: 'team_run',
-  status: 'team_status',
 } as const
 
 export const TEAM_MIGRATION_NAMESPACE = 'app_team'
@@ -1560,10 +1293,7 @@ export const TEAM_IPC = {
   saveCollab: 'team:save-collab',
 } as const
 
-export const TEAM_CIRCUIT_DEFAULTS = {
-  maxMessages: 2000,
-  maxForwardDepth: 999,
-} as const
+
 
 /** Number-input bounds for the team circuit-limit overrides in settings. */
 export const TEAM_CIRCUIT_LIMIT_BOUNDS = {

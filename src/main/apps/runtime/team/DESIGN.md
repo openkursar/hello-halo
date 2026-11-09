@@ -6,30 +6,76 @@ the **Message Bus** (Actor-model directed messaging), the **Blackboard** (shared
 coordination facade over the team store), and the **team MCP tools** the digital
 humans call.
 
-The kernel primitives (`message-bus`, `blackboard`, `checks`, `team-tools`) do
-NOT import the session layer (`app-chat`, `report-tool`). The session-integration files in
-this same directory (`orchestration`, `index`, `team-prompt`, `lead`) provide the
-`TeamDeliveryHooks` implementation, the epoch lifecycle, the prompt layers, and
-the lead template, and wire the kernel to `app-chat` through injected deps — the
-direction stays downward and the cycle is broken by the runtime accessor in
-`index.ts` (mirrors `im-channels` `setActiveImChannelManager`, ARCHITECTURE §22.5).
+The shared SDK collaboration package owns the message bus, turn admission and
+nine-tool contract. Halo supplies scoped membership, SQLite persistence,
+federation transport and its application executor. `message-bus.ts` only adds
+Halo's notifications; it does not maintain a second queue.
+
+Model-facing rosters and message headers use `lead` as the lead's address. The
+shared bus resolves it through the team's lead identity before applying the
+existing permission checks. Stored names and source conversation identities do
+not need migration; a teammate named `lead` is addressed by its ID instead.
+
+## Member-private assistants
+
+A member's `spawn_agent` creates local work in an ephemeral collaboration bound
+to that member's exact team-session key, not in its public team or epoch. The
+source key identifies this internal use without another schema discriminator.
+Nested assistants use the same rule. The existing app-chat executor, bus and
+permission-aware mailbox remain the only execution and delivery owners.
+
+The member retains its public team tools unchanged. Only sends, record reads and
+stops addressed by a verified private participant handle route to its owned scope;
+unknown targets never fall back across scopes. Shared boards, artifacts and checks
+still address the public work. Private helpers coordinate on their own scope.
+
+Coordinator return delivery carries a typed parent team context and the original
+request authority. It enters app-chat's existing mailbox for the exact parent
+session, joining matching live work or resuming that session when idle. It is
+recorded as teammate input, never human authorization. Parent stop invalidates
+private descendants without cancelling a sibling member's request. Private scopes
+cannot be saved as explicit teams and are removed with their parent source.
+Parent epoch closure awaits `TeamService.disposePrivateCollaborations` before
+releasing parent resources. Joined-office disposal recursively closes and purges
+the same private scopes before deleting its replica; a failed descendant retains
+the remaining records and workspace leases for retry. Controller-conditional
+stops are local-only and refuse remote targets before changing any assignment.
+
+Deleting a team or joined replica calls `TeamRuntime.closeEpochResources`, not a
+business seal or replicated-task closure. The caller fences admission and awaits
+all private descendants first; orchestration's disposal option therefore does not
+re-enter descendant disposal. It closes sessions and pending decisions, while the
+runtime clears local checks and per-epoch caches without publishing epoch changes.
+A failed close leaves the original business history intact and propagates for retry.
 
 ## Layer position
 
-```
-runtime/team  (this module)
-  ├── may import: apps/team (TeamStore), platform/scheduler (SchedulerService),
-  │               services/agent/resolved-sdk (tool/createSdkMcpServer),
-  │               http/websocket (broadcastToAll), foundation/window.service (sendToRenderer)
-  └── MUST NOT import: app-chat.ts, orchestration.ts, report-tool.ts (the session layer)
-```
-
-The session layer depends downward on this module; this module never imports it.
-The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
+Kernel adapters (`message-bus`, `blackboard`, `checks`, `team-tools`) depend on
+`apps/team`, the SDK collaboration surface and platform services. They do not
+import app-chat execution. Integration modules (`index`, `orchestration`,
+`participant-execution`, `tool-session`, `source-delivery`) bind these adapters
+to the existing app-chat executor through injected or lazy dependencies.
+Bootstrap owns cross-module subscriptions and disposes them before their stores.
 
 ## Files
 
-- `message-bus.ts` — Registry/addressing, topology enforcement, the single
+- `tool-session.ts` — binds reusable endpoints to the active turn's authority.
+  A stop changes the generation, so an old endpoint cannot adopt a new request.
+- `collaboration-lifecycle.ts` — subscribes to human input and stop boundaries;
+  cancellation and session retirement do not require a model tool call.
+- `source-delivery.ts` — returns IM reports under the original source authority.
+  It rechecks authorization after mailbox waiting and before replies or files;
+  app-chat checks again immediately before model dispatch.
+
+- `membership.ts` — supplies the shared message bus with work-scoped membership.
+  Every delivery lookup carries its epoch; unscoped lookups retain the standing
+  roster. Stable identity handles and unambiguous names are accepted.
+- `participant-execution.ts` — resolves a local temporary participant into the
+  existing app-chat executor's configuration without installing an App. The
+  recorded workspace and model stay pinned. Personal memory is disabled; the
+  creation policy remains a floor and current source-app denials still apply.
+
+- `message-bus.ts` — Adapter over the shared registry/addressing, topology enforcement, the single
   per-session turn slot and the mailbox that queues behind it, turn-completion
   bookkeeping, per-epoch circuit breaker. Exports `createMessageBus(deps)` and
   the `TeamDeliveryHooks` / `TurnCompletion` contract the session layer
@@ -219,7 +265,7 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   the working directory stays THE working directory. Wherever no folder could
   be prepared, the prompt and every rejection message are byte-identical to the
   wording before the folder existed. The coordinating space conversation learns
-  its path from the `collab_start` result, never from its system prompt, which
+  its path from the scoped board, never from its system prompt, which
   was fixed before the collaboration existed. Per epoch because an epoch is one
   piece of work, and because published refs already resolve per (team, epoch);
   derived rather than stored so every machine of an office computes the same
@@ -471,12 +517,9 @@ gets provenance framing ("a teammate is reporting to you, not your user");
 system wakes (`member_stopped`, `periodic_check`) pass verbatim, they carry
 their own headers — and drops deliveries for a sealed collaboration with a log
 instead of an error, because the sender's turn already happened. The sealed
-check runs once, at hand-over: a message accepted while the collaboration was
-open is still delivered even if `completeCollab` lands while it waits behind a
-busy coordinator turn. Acceptance is the contract — a member's report that made
-it in before completion is context the coordinator should see, not stale
-traffic, and re-checking at drain would make delivery depend on how long the
-coordinator's queue happened to be. What the
+check runs at hand-over. Host cancellation also fences queued requests by their
+request identity, so a stopped request cannot become new work after the user
+resumes the source conversation. What the
 transcript keeps is the RAW body plus metadata (`source: 'team-message'`), so
 the renderer shows a teammate chip, never a fake user bubble. The conversation
 side of the hook is injected by bootstrap (`deliverToSpaceCoordinator` →
@@ -486,18 +529,20 @@ conversation layer.
 The space agent's own tools are the same `team-tools` builders with a per-call
 context resolver (`ResolveTeamMcpContext`): a space conversation's toolset is
 seeded before any collaboration exists, so the tools look the current
-collaboration up at call time — `collab_start` and the first `team_send` work
+collaboration up at call time — `spawn_agent` and the first `team_send` work
 inside one turn, with no session rebuild between them.
 
-A digital human's own native chat (default or local session, owner turn, no
-team context, not IM) mounts the same `halo-team` toolset from the toolset
-registry, so it coordinates exactly like a space conversation: its chat id is
-the `coordinatorConversationId`, and reports land through the digital-human
-conversation source. Those deliveries carry `ownWork`, which conversation-interop
-admits even while the digital human's conversation-collaboration switch is off —
-that switch governs other conversations reaching in, not the team the chat
-started. Deleting a local session releases its collaboration like deleting a
-space conversation (`onNativeChatDeleted`).
+A digital human's native or IM chat mounts the same tool contract within its
+conversation scope. IM collaboration requires the sender's effective grant.
+The host privately binds the original sender, recipient, permissions and IM
+context incarnation to the source request. Reports return to that conversation
+under that snapshot, where the source agent reviews them before replying.
+Revoked permissions, deleted chats and canceled requests cannot deliver late
+replies or files. These bindings are never part of office replication.
+
+Native source deliveries carry `ownWork`, so conversation-interop admits the
+chat's own reports even when cross-conversation collaboration is disabled.
+Deleting a local session releases its collaboration through `onNativeChatDeleted`.
 
 ## A person is not a member (`fromAppId === null`)
 
@@ -640,7 +685,7 @@ recoverable, and must never read as idle" below.
   still delivered when the current turn ends; the caller simply learns that now.
 - `deliverRuntimeWake({ envelope, trigger, onBusy }) → Promise<WakeDisposition>`
   A turn the RUNTIME asked for, not a member's `team_send`: the escalation
-  resume, the quiescence nudge, a due periodic check. No delivery receipt, no
+  resume or a due periodic check. No delivery receipt, no
   circuit charge — but the SAME busy gate as `send`, because the bus is the only
   component that knows a session already has a turn running or one in flight.
   A path that calls `wakeTarget` directly starts a second concurrent turn on one
@@ -662,30 +707,12 @@ recoverable, and must never read as idle" below.
   resolves a completion receipt if a non-agent caller is holding one, and drains
   the mailbox for that `sessionKey`.
 
-  **`sealPending` is the caller saying "I am about to seal this epoch", and it
-  suppresses the drain and nothing else.** The epoch-sealed guard above cannot
-  cover this: it asks whether the epoch is sealed *now*, and a deferred seal
-  (the lead called `team_complete`, so the seal waits for its turn to end) fires
-  in the caller's very next statement. In between, the drain handed a queued
-  envelope a turn — which the seal then tore down while it was still building
-  its session. That produced neither of the two endings this design allows: not
-  delivered, and not dropped-and-counted, but a turn that reached no model at
-  all (zero tokens), leaving a message in the transcript that will never be
-  answered, a wasted session build, and — because starting a turn calls
-  `noteEpochTurn`, which wakes a hibernated epoch — a sealed run stamped with
-  its outcome yet reading as still running, forever.
-
-  It suppresses the drain ALONE, deliberately, rather than reusing the early
-  return: a receipt someone is holding must still be settled, or the seal turns
-  a person's cross-machine chat into an hours-long silence.
-- `noteMemberTurnEnded` also handles a lead completing through direct app chat,
-  which has no bus-owned completion promise. It schedules an end-of-tick fallback:
-  an explicitly tracked bus-owned turn consumes its own pending seal only after
-  its result promise settles, preserving `sealPending` even if session cleanup
-  spans multiple ticks. A direct turn's fallback seals before its deferred
-  mailbox drain. Both paths use the same task-completion and epoch-archive
-  operation. Closed-task wakes discard remaining queued deliveries instead of
-  borrowing `sealPending` when no seal will follow.
+  `sealPending` suppresses mailbox drain while a caller is stopping or archiving
+  work. Completion receipts still settle. Host cancellation discards pending
+  deliveries; ending an ordinary turn does not close its work context.
+- `noteMemberTurnEnded` updates activity after an ordinary app-chat turn. It
+  drains only when the conversation has no active turn, and never marks the
+  business task complete.
 - `drainMailbox(sessionKey)` — the session layer's liveness nudge (drain #2
   above). Idempotent; a busy or reserved session is a no-op.
 - `isSessionOccupied(sessionKey)` — can this session take a turn: a streaming
@@ -769,11 +796,14 @@ the store — keeping the blackboard decoupled from session state.
 
 ## Team MCP context
 
-`createTeamMcpServer(context) → halo-team` with tools `team_send`,
-`team_post_task`, `team_update_task`, `team_post_finding`, `team_read_board`,
-`team_read_artifact`, `team_read_member` (lead only), `team_schedule`,
-`team_unschedule`, `team_complete`
-(`report` is the existing report_to_user, owned by the session layer — NOT here).
+`createTeamMcpServer(context) → halo-team` uses the SDK's shared schemas and parser:
+`spawn_agent`, `team_send`, `team_read_board`, `team_read_member`,
+`team_post_finding`, `team_read_artifact`, `team_post_task`, `team_update_task`,
+`team_stop`. Creation is offered only when the host supplies an authorized source
+configuration. Member records are offered only to authorized controllers and
+never during borrowed requests. Standing-team turns may additionally receive
+`team_schedule` and `team_unschedule`; guest turns never receive them.
+`report_to_user` remains owned by the session layer.
 `team_read_board`'s snapshot carries the epoch's periodic `checks`, so the tool
 that answers "what is already assigned" also answers "what is already watched".
 It renders through `board-render.ts` (markdown, not JSON) and, when its history
@@ -845,7 +875,7 @@ files here allowed to.
   `escalationRouting` never changes that here (see "The escalation preference is
   a prompt, not a gate"). Owns `reconcileAwaitingDecision` — what the office reads
   about a member waiting on its own person, derived rather than pushed (see "Who
-  is waiting on whom is derived, not routed"). Its own wakes (escalation resume, quiescence nudge,
+  is waiting on whom is derived, not routed"). Its own wakes (escalation resume,
   periodic check, turn-end report) go out through `bus.deliverRuntimeWake`, never `wakeTarget`
   directly — the bus owns the busy gate.
 - `team-prompt.ts` — `buildTeamEntry(ctx)` / `buildTeamConstraints(ctx)`, the
@@ -961,59 +991,60 @@ try first is a judgment, so it is stated in the prompt and left to the model —
 the same treatment `collabMode` gets. The cost is that a member inclined to ask
 humans will ask more often; that is a prompt to tune, not a call to intercept.
 
-## Triggers & entries — a team is triggerable like a digital human
+## Triggers and independent work
 
-A team is a first-class triggerable entity: every way a single digital human can
-be invoked, a team can too. Two execution modes mirror the digital-human dual
-path (§3.5):
+Each run request creates a distinct work context and wakes its lead with the
+current instruction. An explicit instruction takes precedence over the optional
+standing goal. Without either, admission fails before any model starts. The run
+API returns its exact `epochId`; a team’s display pointer never identifies which
+work a particular caller just started.
 
-- **Triggered run** (stateless ingress): `schedule` / `http` / `webhook` /
-  `file`. Each trigger opens a fresh `'run'` epoch (`startEpoch`), wakes the lead
-  once, and auto-seals on quiescence. Wiring lives in `team-triggers.ts`
-  (`createTeamTriggerScheduler`): `schedule` triggers become `kind='team'`
-  scheduler jobs; `webhook`/`file`/`wecom` triggers become EventRouter
-  subscriptions via the shared `sourceConfigToEventFilter` mapping
-  (`apps/runtime/event-filter-mapping.ts`, also used by the app runtime). Both
-  paths converge on the injected `runTeam`, guarded so triggers never overlap a
-  live run — see below.
-- **Conversation** (message-driven ingress): user UI / IM. Each inbound message
-  resumes the lead's session inside a long-lived `'conversation'` epoch scoped
-  **per chat** (`orchestration.ensureConversationEpoch(teamId, chatKey)` —
-  get-or-create by `(teamId, chatKey)`). One epoch per chat means 1:1 chats are
-  per-person and group chats are per-group, matching how a single digital human
-  keys IM sessions by `chatId`. Conversation epochs do NOT occupy
-  `team.currentEpochId` (that pointer is for the single run epoch), so many chats
-  — and a concurrent scheduled run — coexist without collision. They are never
-  auto-sealed on quiescence (going quiet after a reply is the normal "awaiting
-  next message" state); a single chat is sealed by `sealConversationEpoch` on
-  `/clear` with terminal reason `cleared` (the next inbound message opens a new
-  context), and all end on dissolve. The mode is persisted on
-  `team_epochs.lifecycle` (`'run' | 'conversation'`, v3) and the chat scope on
-  `team_epochs.chat_key` (v4); `getCurrentEpochForTeam` is filtered to run epochs
-  so open conversation epochs never shadow it.
+Manual requests may run concurrently. Schedule, event and ordinary HTTP triggers
+keep the team-level automatic no-overlap guard. Remote-browser user actions mark
+their trigger as manual, matching desktop behavior. The guard accounts for active
+turns, reserved/queued delivery, remote receipts, queued turn reports and decisions
+waiting on the owner. Once execution and delivery settle, automatic admission is
+released without closing the business task.
 
-### A run is live because a process is running it
+`activeRunEpochId` reports any engaged run for that guard. The runtime tracks
+multiple engaged runs; `team.currentEpochId` is only a projection for existing
+viewers/replicas, with pending decisions taking priority. Work status and member
+availability read observed activity, not every historical open task.
 
-The reentrancy guard asks the runtime's in-memory run slot
-(`TeamRuntime.activeRunEpochId`), never `team.currentEpochId`. The pointer is a
-projection of that slot for the UI and for joiners, and it outlives the process
-that wrote it. Guarding on it made one crash mid-run permanent: the epoch stayed
-open for good, every later trigger read "already running" and skipped silently,
-and the team never ran again — while still answering in conversations, which do
-not occupy the slot, so nothing looked wrong. The pointer is still written on
-start and cleared on seal; it is simply no longer what a trigger believes. A
-joined office is the exception and keeps reading it, because there the run really
-is happening on another node.
+Conversation contexts remain scoped by chat key. A person can continue an open
+context without creating a run. User archival and IM context clearing retain
+history and close the explicitly named task; background work cannot reopen an
+archived task. Team-wide pause stops open run contexts without selecting one by
+recency, and leaves independent conversations untouched.
 
-`recoverInterruptedRuns()` runs once at bootstrap, before triggers are
-rehydrated: every open run epoch on a hosted office is sealed as interrupted
-(`error`, the reason the History tab labels "Interrupted") and the slot is
-released. That is not killing work — the sessions died with the process that
-owned them — it is recording when the work stopped, so the next trigger starts a
-run instead of being refused by a ghost. The epoch keeps the record it already
-had: a run that stamped its summary and outcome had finished and was merely
-revived (a message re-opens its context), and re-classifying that would rewrite
-history.
+### Idle resources and recovery
+
+A quiet member does not prove that work is complete. There is no quiescence nudge,
+model completion call or automatic success classification. After two idle minutes,
+the host may evict idle engine objects through `evictIdleSession`; that operation
+preserves the task, transcripts, mailbox and periodic-check definitions. The host
+checks current execution ownership at eviction, so newly started work is retained.
+
+`recoverInterruptedRuns` handles the persisted active projection at bootstrap.
+It does not classify every open historical task as interrupted. Recorded pending
+decisions retain their guard without starting a model; live work owned by this
+process is never recovered as a dead execution. Existing history summaries and
+outcomes survive resource-only recovery.
+
+### Stable collaboration instructions
+
+A standard lead template describes coordination and verification, without freezing
+a standing goal into its persona. The runtime supplies the current goal only when
+one exists. Existing custom role prompts are retained; runtime context explicitly
+states the current collaboration protocol and that ending a turn requires no
+completion call.
+
+The stable system roster contains standing members and coordinators. Temporary
+participants are discovered on the work-scoped board; adding one does not change
+another member’s system prefix or rebuild its engine. A temporary caller is still
+resolved by its scoped identity. Its scratch directory is identity-based and does
+not change another member’s path. The UI board continues to show the full work
+roster.
 
 ### Team as an IM backend
 
@@ -1235,7 +1266,7 @@ session did before (`TeamTriggerContext.origin`):
 
 - **the owner's own** (no origin) — the owner, their digital humans on this
   machine working for each other, and every wake the runtime authors here (a
-  lead's sweep, a check set in an unrestricted turn, a quiescence nudge, a run
+  a check set in an unrestricted turn, a run
   start, a turn-end notice of the owner's or a colleague's work). No delegation
   at all: the owner's options, no gate, no record, and the owner's identity for
   live delivery — so these messages join the owner's running turn.
@@ -1286,28 +1317,14 @@ check's column (`apps/team` store), is kept as the strictest the column holds �
 the code pre-kinds records carry, read as they are (below) — never as the
 owner's own.
 
-**How far it travels.** Only on what a RESTRICTED turn itself sets in motion:
-the checks it sets (persisted with the row) and the questions it asks
-(persisted with the escalation, restored by `resumeFromEscalation`) — a
-standing instruction and an answered question are still that request — and,
-for a guest's request only, its `team_send`s (`TeamMcpContext.origin` →
-`SendInput.origin` → the next trigger). Without that, routing a stranger's
-request through one of the owner's own members would launder it into a local
-one. A colleague's request stops at the member it reached: what that member
-asks another of the owner's digital humans is the owner's own work, which no
-choice made for colleagues limits (`team-tools` send). A turn with full reach
-hands nothing on. Nothing else carries it — no other runtime wake, no session
-memory: when the turn that served a request is over, the member is the owner's
-again. The one exception is a guest's: a notice reporting what a guest's
-request produced wakes the lead as the guest's, for that one wake.
+**How far it travels.** A directed `team_send` preserves either outside origin
+(`guest` or `colleague`) even when the sender and recipient run on the same
+machine. The next turn uses the recipient's applicable policy and audit identity;
+full reach at the sender does not turn its request into owner work. Guest turns
+cannot install periodic checks. Permitted checks and escalations retain the
+origin of the request that created them across persistence and resumption.
+Explicit owner requests remain owner work, including ordinary local cooperation.
 
-**What it does not cover — a trade the owner accepted.** The origin restricts
-only the turn a request from outside directly drives, and what that restricted
-turn sets in motion as described above. So a colleague can have one of the
-owner's digital humans ask another for work, and that work runs with the
-owner's reach and stays off the owner's record; and what a full-reach turn sets
-in motion runs as the owner's own — Operate Halo included, though the
-colleague's own turn never gets it.
 What the owner's own turns READ that came from elsewhere — a colleague's result
 in a turn-end notice, the board, findings, published artifacts — is weighed by
 a digital human running with the owner's reach, at its own judgment. A turn
@@ -1387,11 +1404,10 @@ The owner's own turns, their digital humans working for each other included,
 leave no rows: they keep the engine's fast path, and recording them would file
 the owner's own work under a teammate's name. The hook that files executed
 calls is fixed when a session is built, so a session serving such a request is
-built with it (`app-chat`'s session creation context). Known bound: what a
-colleague's turn, restricted or not, hands to one of the owner's own members
-through `team_send`, and whatever a full-reach turn sets in motion, run as the
-owner's own and are not recorded. An empty audit therefore reads "no request
-from outside ran", not "nothing ran".
+built with it (`app-chat`'s session creation context). Directed teammate messages
+preserve outside origin, so their receiving turns
+remain on the outside-request record. An empty audit means no recorded outside
+request executed tools, not that nothing ran.
 
 The shared vocabulary (which tools exist, what an unstated permission means) is
 `shared/apps/capability-policy.ts`, and the enforcement is
@@ -1477,7 +1493,10 @@ A member on another machine receives messages immediately on the durable ctrl
 feed. Internal completion receipts preserve failure visibility without making
 the sending AI wait or holding a sender-side turn reservation. The owner applies
 the same gate, stamping incoming work a colleague's unless the sender says it is
-a guest's (see "Where a request came from").
+a guest's (see "Where a request came from"). Ordinary messages carry no new
+recipient-ticket query. A newly admitted external message without a host request
+identity starts a local request, so a previous stop cannot block later peer work;
+already queued input retains its assigned identity and remains cancellable.
 
 **The known cost.** A message handed to a running turn is context, not a queued
 item: if the model reads it and does nothing, nothing records that it was read.
@@ -1621,3 +1640,23 @@ space coordinator before live delivery. Local member reports keep the live path.
 Such a later turn still runs with owner capabilities, as it always did; scoping
 it is separate work. Existing custom lead prompts are not rewritten; the
 current runtime team prompt supplies the live-delivery contract.
+
+### Source collaboration lifecycle
+
+`collaboration-lifecycle.ts` binds genuine human-input and user-stop events to the
+participant service. Endpoint registration is memory-only; unused chats do not
+write request records. Source stop invalidates cached tool generations before
+awaiting member cancellation, discards queued mail, and prevents cancelled turn
+reports from waking the source. Only explicit controller continuation unlocks a
+stopped member. Idle resource disposal does not imply task completion.
+
+Turn-report quiescence includes batches awaiting handoff. `hasPendingEpoch` remains
+true until an accepted handoff or final discard settles; orchestration uses that
+fact to avoid scheduling new work in the gap before a report reaches the lead.
+
+
+Task-list activity uses the runtime's active session keys, including concurrency
+waiters and directly observed app-chat turns. Observed turns are correlation-keyed
+so an old ending cannot remove a newer live turn. Private assistants remain local;
+the ordinary remote-member overlay continues to describe standing teammates.
+Neither projection enumerates every historical work item to find participants.

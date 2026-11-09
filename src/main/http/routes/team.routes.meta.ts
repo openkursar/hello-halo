@@ -17,11 +17,11 @@ export const MODULE: RouteModuleMeta = {
     'GET /api/teams': {
       expose: 'ai',
       group: 'team',
-      summary: 'List teams, optionally only those owned by one space',
-      returns: '{success:true,data:[{id,name,status:"idle"|"running"|"waiting_user"|"error",memberCount,hasWaitingUser,waitingCount?,leadAppId,localMembers:[{appId,memberName,isLead}],hostNodeId?,ephemeral?,updatedAt}]}',
+      summary: 'List saved teams, optionally only those owned by one space',
+      returns: '{success:true,data:[{id,name,status:"idle"|"running"|"waiting_user"|"error",memberCount,hasWaitingUser,waitingCount?,leadAppId,localMembers:[{appId,memberName,isLead}],hostNodeId?,updatedAt}]}',
       notes: [
         'Optional query: ?spaceId=. Omitting it lists every space, which is what the Halo app shows; pass $HALO_SPACE_ID to narrow it, and say which of the two you did.',
-        'ephemeral:true is a temporary collaboration started from a conversation; it is hidden from the Teams page until saved (POST /api/teams/:teamId/save-collab).',
+        'Only saved teams appear in this directory. Work inside a conversation is managed through its current collaboration tools.',
         'hostNodeId set means the team is hosted on someone else\'s computer and was joined from here — it can be read and its members messaged, but not edited or run.',
       ].join('\n'),
     },
@@ -48,26 +48,18 @@ export const MODULE: RouteModuleMeta = {
       notes: 'Runs a model call, so it takes a few seconds. Show the draft to the user, then pass it as confirmedProposal to POST /api/teams with memberSourcing "ai".',
     },
     'GET /api/teams/collab-for-conversation/:conversationId': {
-      expose: 'ai',
-      group: 'team',
-      summary: 'Get the temporary collaboration started from one conversation',
-      returns: '{success:true,data:{teamId,name,goal,epochId,active,saved,members:[...]} | null}',
-      notes: 'conversationId is a space conversation id (GET /api/spaces/:spaceId/conversations). null means that conversation never started a collaboration.',
+      // Source UI and scoped tools own conversation collaboration.
+      expose: 'internal',
     },
     'POST /api/teams/:teamId/save-collab': {
-      expose: 'ai',
-      group: 'team',
-      summary: 'Keep a temporary collaboration as a persistent team',
-      body: '{"name": "optional new team name"}',
-      returns: '{success:true,data:{id,name,owningSpaceId,goal,leadAppId,status,...}}',
-      notes: 'Only when the user asked to keep it. If you hold the collab_save tool and the collaboration is the one in this conversation, use the tool.',
-      impact: 'reversible',
+      // Keeping a collaboration is an action in its source UI.
+      expose: 'internal',
     },
     'GET /api/teams/:teamId': {
       expose: 'ai',
       group: 'team',
-      summary: 'Get one team\'s own record',
-      returns: '{success:true,data:{id,name,owningSpaceId,goal,leadAppId,memberSourcing,collabMode,escalationRouting,status,currentEpochId,hostNodeId,ephemeral?,createdAt,updatedAt} | null}',
+      summary: 'Get one saved team\'s own record',
+      returns: '{success:true,data:{id,name,owningSpaceId,goal,leadAppId,memberSourcing,collabMode,escalationRouting,status,currentEpochId,hostNodeId,createdAt,updatedAt} | null}',
       notes: 'For members, edges, live board and waiting decisions use GET /api/teams/:teamId/detail.',
     },
     'GET /api/teams/:teamId/detail': {
@@ -163,6 +155,12 @@ export const MODULE: RouteModuleMeta = {
       summary: 'Get the tasks, findings and members of one run',
       returns: '{success:true,data:{epoch,tasks:[...],findings:[...],members:[...],activities?} | null}',
     },
+    'GET /api/teams/:teamId/epochs/:epochId/roster': {
+      expose: 'ai',
+      group: 'team',
+      summary: 'Read the members and live status of one work item without its history',
+      returns: '{success:true,data:{members:[...],roster:[...]} | null}',
+    },
     'GET /api/teams/:teamId/epochs/:epochId/artifacts': {
       expose: 'ai',
       group: 'team',
@@ -233,22 +231,23 @@ export const MODULE: RouteModuleMeta = {
     'POST /api/teams/:teamId/run': {
       expose: 'ai',
       group: 'team',
-      summary: 'Start a team run on its goal',
-      body: '{}',
-      returns: '{success:true}  — returns once the run has started; it continues in the background',
+      summary: 'Start independent work with a standing team',
+      body: '{"instruction":"Investigate the current issue","trigger":{"type":"manual"}}',
+      returns: '{success:true,data:{epochId}} — the accepted work continues in the background',
       notes: [
-        'This route carries no brief: the lead works from the team goal. If you hold the team_run tool, use it to hand over a concrete brief.',
-        'Fails for a temporary collaboration (save it first) and for a team hosted on another computer. Follow progress with GET /api/teams/:teamId/detail.',
+        'instruction is this work’s brief. When omitted, the standing goal is used; a team with no standing goal requires an instruction.',
+        'Explicit manual work may run concurrently. Without trigger.type="manual", HTTP-triggered work keeps the automatic no-overlap guard.',
+        'Use the returned epochId to follow this work. Do not infer it from a team’s current/latest pointer. Temporary collaborations and teams hosted elsewhere cannot be started through this route.',
       ].join('\n'),
       impact: 'reversible',
     },
     'POST /api/teams/:teamId/pause': {
       expose: 'ai',
       group: 'team',
-      summary: 'Stop the team\'s current run',
+      summary: 'Stop all open runs of this team',
       body: '{}',
       returns: '{success:true}',
-      notes: 'Seals the run as stopped; members mid-turn are stopped with it. Start again with POST /api/teams/:teamId/run.',
+      notes: 'Stops the team’s open run contexts and active member turns; it does not complete or delete their work. Independent conversation contexts are unchanged.',
       impact: 'reversible',
     },
     'GET /api/teams/:teamId/triggers': {
