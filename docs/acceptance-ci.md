@@ -82,26 +82,32 @@ nothing: wait for the run itself.
 day at 19:23 UTC with no input. Scheduled runs can be delayed or dropped, so look
 for a missing run for a given day, not only for failures.
 
-## Public checkout and private engine boundary
+## SDK in the application checkout
 
 The root package references `@hello-halo/agent-sdk` through the local path
-`src/sdk/halo-sdk`; that directory is not distributed in the public repository.
-Do not create a stub SDK to make installation or E2E appear successful.
+`src/sdk/halo-sdk`, which is part of this repository. `postinstall` compiles it
+(`scripts/build-sdk.mjs`, which installs the SDK's own locked dependencies first);
+`npm run build:sdk` rebuilds it on demand. Do not create a stub SDK to make
+installation or E2E appear successful.
 
 The helper installs with lifecycle scripts disabled, then explicitly runs the
-existing `postinstall` and `prepare` steps for Electron/native dependencies and
-host packaging binaries. `--ignore-scripts` means npm does not run these hooks
-itself. Two situations exist:
+existing `postinstall` and `prepare` steps for Electron/native dependencies, the
+SDK build and host packaging binaries. `--ignore-scripts` means npm does not run
+these hooks itself. The in-tree SDK is checked against the application lock like
+any other dependency and reported with the application revision; `sdk` and
+`bind-sdk` have nothing to do for it. The sections below apply only to a
+controller that deliberately tests a different, separately checked out SDK:
 
-- **No SDK checkout (public contributors).** Public dependencies install from the
+- **In-tree SDK (default).** Nothing to prepare beyond `install`.
+- **No SDK directory.** Public dependencies install from the
   lock, the helper removes only the dependency-only SDK placeholder that install
   generates, and SDK execution stays unavailable.
 - **A built, clean SDK checkout already at `src/sdk/halo-sdk` (maintainers, CI).**
   The install follows the release procedure: the lock is checked against the SDK,
-  npm links the checkout, and nothing is removed. This is what CI does.
+  npm links the checkout, and nothing is removed.
 
 ```bash
-# public contributors
+# in-tree SDK or none
 node scripts/acceptance/ci-prepare.mjs install
 ```
 
@@ -131,7 +137,7 @@ creation or modification blocks preparation and preserves the conflicting files
 for inspection. No changed lock is silently reset or ignored for baseline checks.
 
 The bundler externalizes the Halo SDK and runtime loading is lazy. Therefore
-catalog validation and discovery do not need the private SDK, and UI/service
+catalog validation and discovery do not need the SDK, and UI/service
 scenarios that do not execute that engine can use the public checkout. This is
 an architectural boundary, not a claim that every public-clone test currently
 passes. A clean-clone build and the chosen suite still have to pass on the target

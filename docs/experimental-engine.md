@@ -22,8 +22,8 @@ npm run build:experimental -- --arm64
 The build writes DMG and ZIP artifacts under `dist/experimental`. It does not
 publish, bump the production package version or use release signing credentials.
 `npm run install:experimental` installs only the explicitly named experimental
-application. The existing build prerequisites, including the independent Halo
-SDK package under `src/sdk/halo-sdk`, still apply.
+application. The existing build prerequisites, including the Halo SDK package under
+`src/sdk/halo-sdk` (built by `postinstall`, or `npm run build:sdk`), still apply.
 
 ## Choosing Claude Code
 

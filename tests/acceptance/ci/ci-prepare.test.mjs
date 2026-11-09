@@ -68,6 +68,15 @@ test('public installation removes only its newly generated dependency-only SDK p
   assert.equal(fs.existsSync(sdk), false)
 })
 
+test('an SDK tracked by the application repository needs no separate checkout, build or binding step', context => {
+  const { root, write } = workspace(context)
+  write('src/sdk/halo-sdk/package.json', JSON.stringify({ name: '@hello-halo/agent-sdk', version: '1.0.0' }))
+  execFileSync('git', ['init', '--quiet'], { cwd: root })
+  for (const command of ['sdk', 'bind-sdk']) {
+    assert.deepEqual(prepareDependencies(root, command, { environment: {}, run: () => assert.fail('nothing may run') }), { command, sdk: 'in-tree' })
+  }
+})
+
 test('real offline npm ci can install the public lock before a required local SDK checkout exists', context => {
   const { root, write, sdk, link } = workspace(context)
   const descriptor = { name: 'acceptance-public-install', version: '1.0.0', scripts: { prepare: 'node scripts/prepare.mjs' }, dependencies: { '@hello-halo/agent-sdk': 'file:src/sdk/halo-sdk' } }

@@ -104,7 +104,8 @@ test('logs the SDK revision and its uncommitted file count, and still builds whe
       return 'e7f264a\n';
     };
     assert.equal(revisionLine(checkout(sdkDir)), '[halo-sdk] SDK e7f264a · 2 uncommitted');
-    assert.equal(revisionLine(checkout(root)), '[halo-sdk] SDK revision unknown (not its own git checkout)');
+    assert.equal(revisionLine(checkout(root)), '[halo-sdk] SDK e7f264a · 2 uncommitted');
+    assert.equal(revisionLine(checkout(path.join(root, '..'))), '[halo-sdk] SDK revision unknown (not a git checkout)');
     assert.equal(revisionLine(() => { throw new Error('spawn git ENOENT'); }), '[halo-sdk] SDK revision unknown (git unavailable)');
   } finally {
     cleanup();
