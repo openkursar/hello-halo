@@ -162,6 +162,8 @@ export interface TeamRuntime {
   archive: BoardArchive
   discardReports(epochId: string): void
   isMemberReachable(appId: string, teamId: string): boolean
+  /** Whether a stop request can be sent to the member's owner right now. */
+  isMemberStopReachable(appId: string, teamId: string): boolean
   /**
    * What a TEAMMATE may make this member do, as its owner set it. Null =
    * unrestricted. Read by the chat entry point when a turn was started by
@@ -355,6 +357,14 @@ export interface CreateTeamRuntimeDeps {
    * Absent → all members treated as reachable (non-federated runtime).
    */
   checkMemberReachable?: (appId: string, teamId: string) => boolean
+  /**
+   * Whether a stop request to a member's owner can be sent right now — the stop
+   * path's own rule (offline, suspected-dead, or unrouted owners are refused),
+   * not the send gate above. Dissolution consults it so a silently-dropped peer
+   * does not block deletion during the window before presence marks it offline.
+   * Absent → all members treated as stoppable (non-federated runtime).
+   */
+  checkMemberStopReachable?: (appId: string, teamId: string) => boolean
   /**
    * Location-transparent published-artifact reader (bootstrap wires it to the
    * space service + federation manager). Powers the `team_read_artifact` tool.
@@ -571,6 +581,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     archive,
     discardReports: epochId => turnReport.clearEpoch(epochId),
     isMemberReachable: (appId, teamId) => deps.checkMemberReachable?.(appId, teamId) !== false,
+    isMemberStopReachable: (appId, teamId) => deps.checkMemberStopReachable?.(appId, teamId) !== false,
     teamFolders,
     getDelegatedPolicy: (teamId, appId, epochId) => {
       const member = store.getMember(teamId, appId)

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({ open: new Set<string>(), terminalAvailable: true }))
-vi.mock('../../../../../src/main/services/agent/toolsets/state', () => ({ getOpenToolsets: () => state.open }))
+vi.mock('../../../../../src/main/services/agent/toolsets/state', () => ({ getExcludedToolsets: () => new Set(), getOpenToolsets: () => state.open }))
 vi.mock('../../../../../src/main/services/ai-browser', () => ({
   AI_BROWSER_SYSTEM_PROMPT: 'Browser service guide.', createAIBrowserMcpServer: vi.fn(), getInteractiveBrowserContext: vi.fn(),
 }))

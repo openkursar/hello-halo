@@ -1518,6 +1518,38 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     if (failures.length) throw new AggregateError(failures, 'Some private assistants could not be closed. Their parent work was retained for cleanup.')
   }
 
+  /**
+   * Each stop is one network round trip, and a busy shared office can hold
+   * dozens of open or cleared conversations. A small worker pool keeps deletion
+   * latency low without flooding one peer or the relay; every target settles
+   * before the caller publishes dissolution.
+   */
+  const REMOTE_STOP_CONCURRENCY = 8
+
+  async function settleRemoteStops(
+    rt: TeamRuntime,
+    targets: ReadonlyArray<{ appId: string; teamId: string; epochId: string }>,
+  ): Promise<unknown[]> {
+    const failures: unknown[] = []
+    let next = 0
+    const workers = Array.from({ length: Math.min(REMOTE_STOP_CONCURRENCY, targets.length) }, async () => {
+      while (next < targets.length) {
+        const target = targets[next++]
+        if (!rt.isMemberStopReachable(target.appId, target.teamId)) {
+          console.warn(`${LOG_TAG} Skipped remote stop during deletion: team=${target.teamId} epoch=${target.epochId} app=${target.appId} owner unreachable`)
+          continue
+        }
+        try { await rt.stopMemberTurn(target) } catch (error) {
+          if (!rt.isMemberStopReachable(target.appId, target.teamId)) {
+            console.warn(`${LOG_TAG} Skipped failed remote stop during deletion: team=${target.teamId} epoch=${target.epochId} app=${target.appId} owner became unreachable`, error)
+          } else failures.push(error)
+        }
+      }
+    })
+    await Promise.all(workers)
+    return failures
+  }
+
   async function performDissolution(teamId: string, opts: { silent?: boolean }): Promise<void> {
     const team = store.getTeamById(teamId)
     if (!team) return
@@ -1541,17 +1573,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       failures.push(new Error('Team execution services are unavailable. The private scope was retained for cleanup.'))
     }
     try { await disposePrivateCollaborations(teamId) } catch (error) { failures.push(error) }
-    if (rt) for (const target of remoteStops) {
-      if (!rt.isMemberReachable(target.appId, teamId)) {
-        console.warn(`${LOG_TAG} Skipped remote stop during deletion: team=${teamId} epoch=${target.epochId} app=${target.appId} owner unreachable`)
-        continue
-      }
-      try { await rt.stopMemberTurn(target) } catch (error) {
-        if (!rt.isMemberReachable(target.appId, teamId)) {
-          console.warn(`${LOG_TAG} Skipped failed remote stop during deletion: team=${teamId} epoch=${target.epochId} app=${target.appId} owner became unreachable`, error)
-        } else failures.push(error)
-      }
-    }
+    if (rt) failures.push(...await settleRemoteStops(rt, remoteStops))
     // Revisit closed scopes too: a prior failed teardown must be retried before its rows or leases disappear.
     if (rt) for (const epoch of epochs) {
       try { await rt.closeEpochResources(teamId, epoch.id) } catch (error) { failures.push(error) }

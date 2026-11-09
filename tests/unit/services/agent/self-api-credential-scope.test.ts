@@ -20,7 +20,10 @@ vi.mock('../../../../src/main/services/ai-terminal', () => ({
   createTerminalMcpServer: vi.fn(), getGlobalTerminalContext: vi.fn(), isTerminalAvailable: () => false, AI_TERMINAL_SYSTEM_PROMPT: '',
 }))
 vi.mock('../../../../src/main/services/ocr', () => ({ createOcrMcpServer: vi.fn() }))
-vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({ getOpenToolsets: () => new Set() }))
+vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({
+  getOpenToolsets: () => new Set(),
+  getExcludedToolsets: () => new Set(),
+}))
 
 import { buildSdkEnv } from '../../../../src/main/services/agent/sdk-config'
 import { HALO_API_TOOLSET_ID, HALO_API_USAGE_GUIDE } from '../../../../src/main/services/api-ref'

@@ -863,8 +863,11 @@ ordinary tool-owned nested messages and external background-command progress,
 without owning a collaborator registry or detecting native teams.
 
 CC skill calls are checked at the engine boundary because `context: fork` can
-start native execution without calling the disabled Agent tool. The check reads
-cached, bounded metadata for the selected skill only; it performs no startup
-scan. Fork-mode and uninspectable skills are refused, as are direct commands
-that cannot be matched to an inspectable inline skill or a supported session
-command. Error messages require removing the fork setting before retrying.
+start native execution without calling the disabled Agent tool. The advertised
+command catalog is filtered once per session and reused while the advertised
+list is unchanged; a changed list (for example after `reload-skills`) is
+re-evaluated. The execution check itself reads cached, bounded metadata for the
+selected skill only; neither path scans skills at startup or on every turn.
+Fork-mode and uninspectable skills are refused, as are direct commands that
+cannot be matched to an inspectable inline skill or a supported session command.
+Error messages require removing the fork setting before retrying.

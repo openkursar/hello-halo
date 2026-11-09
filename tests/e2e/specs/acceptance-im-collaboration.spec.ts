@@ -8,7 +8,7 @@ import { acceptance } from '../fixtures/acceptance-app'
 import { createImCollaborationScript, question, later, started, acknowledged, assignment, raw, reviewed, probe, probeReply } from '../fixtures/acceptance-im-collaboration'
 import { modelTool, latestUserInput, type ModelRequest } from '../fixtures/acceptance-model'
 
-const authorityTools = ['Bash', 'team_read_member', 'create_automation_app', 'skill_manage'] as const
+const authorityTools = ['Bash', 'team_read_member'] as const
 const hasTool = (request: ModelRequest, name: string) => request.tools.some(tool => tool === name || tool.endsWith(`__${name}`))
 const toolAuthority = (request: ModelRequest) => Object.fromEntries(authorityTools.map(name => [name, hasTool(request, name)]))
 const refusal = /(?:\b(?:permissions?|access) denied\b|\bpermission to (?:use|call) [^\n]{1,120}(?:was|is|has been) denied\b|\bnot (?:allowed|permitted|granted|authorized)\b|Only files inside this workspace can be used here|\bunknown (?:tool|function)\b|\b(?:tool|function)[^\n]{0,180}(?:not found|not registered|unavailable))/i
@@ -31,17 +31,20 @@ for (const authority of ['owner', 'guest'] as const) {
       writeFileSync(outsideFile, outsideMarker)
       expect(existsSync(forbiddenWrite)).toBe(false)
     }
-    const flow = createImCollaborationScript({ onReview: authority === 'guest' ? request => {
-      for (const attempt of [
-        { id: 'callback-forbidden-write', tool: 'Write', input: { file_path: forbiddenWrite, content: 'This guest side effect must be refused.' } },
-        { id: 'callback-outside-read', tool: 'Read', input: { file_path: outsideFile } },
-      ]) {
-        const result = request.toolResults.find(result => result.id === attempt.id)
-        if (!result) return { tools: [modelTool(request, attempt.tool, attempt.input, attempt.id)] }
-        if (!probeResults.some(value => value.id === result.id)) probeResults.push(result)
-      }
-      return { text: reviewed }
-    } : undefined })
+    const flow = createImCollaborationScript({
+      deferredProbe: { name: 'list_automation_apps', id: 'im-authority' },
+      onReview: authority === 'guest' ? request => {
+        for (const attempt of [
+          { id: 'callback-forbidden-write', tool: 'Write', input: { file_path: forbiddenWrite, content: 'This guest side effect must be refused.' } },
+          { id: 'callback-outside-read', tool: 'Read', input: { file_path: outsideFile } },
+        ]) {
+          const result = request.toolResults.find(result => result.id === attempt.id)
+          if (!result) return { tools: [modelTool(request, attempt.tool, attempt.input, attempt.id)] }
+          if (!probeResults.some(value => value.id === result.id)) probeResults.push(result)
+        }
+        return { text: reviewed }
+      } : undefined,
+    })
     model.respond(flow.reply)
     try {
       const senderId = authority === 'owner' ? OWNER_ID : GUEST_ID
@@ -61,6 +64,16 @@ for (const authority of ['owner', 'guest'] as const) {
       const initial = flow.initialRequests[0], subsequent = flow.laterRequests[0]
       const owner = authority === 'owner' ? initial : subsequent
       const guest = authority === 'guest' ? initial : subsequent
+      if (authority === 'owner') {
+        expect(flow.probe?.error).toBeUndefined()
+        expect(flow.probe?.results.some(result => !result.error), 'The owner can call a discovered app tool').toBe(true)
+      } else {
+        expect(
+          flow.probe?.error !== undefined
+          || ((flow.probe?.results.length ?? 0) > 0 && flow.probe!.results.every(result => result.error)),
+          'A guest cannot discover or call the app service',
+        ).toBe(true)
+      }
       for (const name of authorityTools) {
         expect(hasTool(owner, name), `Owner receives ${name}`).toBe(true)
         expect(hasTool(guest, name), `Guest is not lent ${name}`).toBe(false)

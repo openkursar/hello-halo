@@ -47,8 +47,22 @@ export function createNativeSkillPolicy(options: CcOptions) {
   const commandRefusal = (name: string | undefined, requireKnown: boolean, catalog?: ReturnType<typeof readReadySessionSkills>): string | null => name === 'agents'
     ? 'Native agent management is unavailable. Use Halo team management.'
     : refusal(name, requireKnown && !sessionCommands.has(name ?? ''), catalog)
+  // CC advertises the same catalog on every turn's init frame. The filter's file
+  // checks are the costly part, so a repeated list reuses its computed answer;
+  // a changed list (for example after reload-skills) recomputes.
+  const filteredCatalogs = new Map<string, unknown[]>()
+  const FILTERED_CATALOG_LIMIT = 4
+  const cloneCommands = <T extends string | { name?: string; aliases?: string[] }>(commands: T[]): T[] =>
+    commands.map(command => {
+      if (typeof command === 'string') return command
+      const value = command as { name?: string; aliases?: string[] }
+      return ({ ...value, ...(value.aliases ? { aliases: [...value.aliases] } : {}) } as T)
+    })
   return {
     filterCommands<T extends string | { name?: string; aliases?: string[] }>(commands: T[]): T[] {
+      const key = JSON.stringify(commands)
+      const cached = filteredCatalogs.get(key)
+      if (cached) return cloneCommands(cached as T[])
       const catalog = commands.length ? readReadySessionSkills(options) ?? [] : []
       const reasons = new Map<string | undefined, string | null>()
       const hidden = new Map<string, number>()
@@ -63,7 +77,12 @@ export function createNativeSkillPolicy(options: CcOptions) {
         .map(command => typeof command === 'string' || !command.aliases ? command
           : Object.assign({}, command, { aliases: command.aliases.filter(allowed) }))
       if (hidden.size) console.warn('[CC] Command catalog filtered by host execution policy:', Object.fromEntries(hidden))
-      return filtered
+      if (filteredCatalogs.size >= FILTERED_CATALOG_LIMIT) {
+        const oldest = filteredCatalogs.keys().next().value
+        if (oldest !== undefined) filteredCatalogs.delete(oldest)
+      }
+      filteredCatalogs.set(key, filtered)
+      return cloneCommands(filtered)
     },
     setCommands(commands: Array<{ name?: string; aliases?: string[] }> | undefined): void {
       for (const command of commands ?? []) {
@@ -71,6 +90,8 @@ export function createNativeSkillPolicy(options: CcOptions) {
           for (const alias of command.aliases ?? []) sessionCommands.add(alias)
         }
       }
+      // Session-command aliases feed the decision, so earlier answers may be stale.
+      filteredCatalogs.clear()
     },
     hook: { matcher: 'Skill', hooks: [async (input: { tool_input?: { skill?: unknown } }) => {
       const reason = refusal(input.tool_input?.skill, true)

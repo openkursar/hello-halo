@@ -33,6 +33,7 @@ vi.mock('../../../../src/main/services/agent/toolsets/registry', () => ({
   getAvailableToolsets: () => [], getToolset: () => undefined,
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({
+  getExcludedToolsets: () => new Set(),
   getOpenToolsets: () => new Set(), markOpen: vi.fn(), markClosed: vi.fn(),
 }))
 vi.mock('../../../../src/main/services/web-search', () => ({ createWebSearchMcpServer: () => ({ name: 'web-search' }) }))

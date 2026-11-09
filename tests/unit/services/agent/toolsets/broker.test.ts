@@ -46,6 +46,7 @@ vi.mock('../../../../../src/main/services/agent/toolsets/registry', () => ({
 }))
 
 vi.mock('../../../../../src/main/services/agent/toolsets/state', () => ({
+  getExcludedToolsets: () => new Set(),
   getOpenToolsets: vi.fn((_s: string, c: string) => openSets.get(c) ?? new Set<string>()),
   markOpen: vi.fn((_space: string, conversation: string, id: string) => {
     const open = openSets.get(conversation) ?? new Set<string>()

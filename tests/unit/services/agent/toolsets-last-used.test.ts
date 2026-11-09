@@ -47,6 +47,7 @@ vi.mock('../../../../src/main/services/agent/toolsets/registry', () => ({
 // In-memory open-set (hoisted) standing in for the persisted per-conversation state.
 vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({
   getOpenToolsets: vi.fn(() => openSet),
+  getExcludedToolsets: vi.fn(() => new Set<string>()),
   markOpen: vi.fn((_s: string, _c: string, id: string) => (openSet.has(id) ? false : (openSet.add(id), true))),
   markClosed: vi.fn((_s: string, _c: string, id: string) => (openSet.has(id) ? (openSet.delete(id), true) : false))
 }))

@@ -227,4 +227,29 @@ describe('stop-turn frames survive the manager inbound path', () => {
 
     expect(aborts).toHaveLength(0)
   })
+
+  it('reports a remote owner stoppable until presence marks it suspect or offline', () => {
+    const host = hostWithJoiner(true)
+    teamStore.addMember({
+      teamId: OFFICE,
+      appId: 'app-remote-1',
+      memberName: 'remote-1',
+      role: '',
+      isLead: false,
+      aiProvisioned: false,
+      addedAt: 2,
+      ownerNodeId: JOINER_NODE,
+      origin: 'remote',
+      memberIdentity: 'remote-1',
+      scopeJson: null,
+    })
+
+    expect(host.isMemberStopReachable('app-remote-1', OFFICE)).toBe(true)
+    federationStore.setNodeStatus(OFFICE, JOINER_NODE, 'suspect', Date.now())
+    // The send gate still treats a suspect peer as reachable; a stop does not.
+    expect(host.isMemberReachable('app-remote-1', OFFICE)).toBe(true)
+    expect(host.isMemberStopReachable('app-remote-1', OFFICE)).toBe(false)
+    federationStore.setNodeStatus(OFFICE, JOINER_NODE, 'offline', Date.now())
+    expect(host.isMemberStopReachable('app-remote-1', OFFICE)).toBe(false)
+  })
 })

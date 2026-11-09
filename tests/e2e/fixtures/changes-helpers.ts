@@ -113,6 +113,27 @@ export function diffCard(window: Page, title: string): Locator {
 }
 
 /**
+ * Bring one file's diff on screen. Small diffs keep every card mounted, but
+ * large ones browse one file at a time, so the file must be selected before
+ * its card exists.
+ */
+export async function showFileDiff(window: Page, title: string): Promise<void> {
+  // Switching repositories re-renders the stack: give the selected card a
+  // moment to mount before deciding that the file list has to select it.
+  await expect.poll(() => diffCardPaths(window), { timeout: 2500 }).toContain(title).catch(() => {})
+  if ((await diffCardPaths(window)).includes(title)) {
+    await expect(diffCard(window, title)).toBeVisible()
+    return
+  }
+  await ensureFilePanel(window)
+  const row = filePanel(window).locator(`button[title="${title}"]`).first()
+  await expect(row).toBeVisible()
+  await row.click()
+  await expect.poll(() => diffCardPaths(window)).toContain(title)
+  await expect(diffCard(window, title)).toBeVisible()
+}
+
+/**
  * Double-click a word inside an element, as a person selects one. CodeMirror
  * keeps its own selection, so it has to come from the pointer, not the DOM API.
  */

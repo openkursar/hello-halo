@@ -102,6 +102,7 @@ function makeRuntime(store: TeamStore) {
     bus: { cancelSession: vi.fn(), continueSession: vi.fn() } as never,
     stopMemberTurn: vi.fn(async () => false),
     isMemberReachable: vi.fn((_appId: string, _teamId: string) => true),
+    isMemberStopReachable: vi.fn((_appId: string, _teamId: string) => true),
     closeEpochResources: vi.fn(async (_teamId: string, _epochId: string) => {}),
     sealConversationEpoch: vi.fn(async (_teamId: string, _epochId: string, _reason?: string) => {}),
     blackboard,
@@ -413,9 +414,9 @@ describe('TeamService', () => {
         f.store.insertEpoch({ id: 'work', teamId: team.id, lifecycle: 'run', startedAt: 1, endedAt: null, endReason: null, summary: 'Original' })
         f.store.addMember({ teamId: team.id, appId: 'remote', memberName: 'remote', role: '', isLead: false, aiProvisioned: false, addedAt: 1, ownerNodeId: 'other-node', origin: 'remote' })
         const history = f.store.getEpochById('work')
-        f.runtime.isMemberReachable.mockReturnValue(presence !== 'offline')
+        f.runtime.isMemberStopReachable.mockReturnValue(presence !== 'offline')
         f.runtime.stopMemberTurn.mockImplementation(async () => {
-          if (presence === 'disconnecting') f.runtime.isMemberReachable.mockReturnValue(false)
+          if (presence === 'disconnecting') f.runtime.isMemberStopReachable.mockReturnValue(false)
           throw new Error('Remote stop failed')
         })
         if (presence === 'online') {
@@ -430,6 +431,54 @@ describe('TeamService', () => {
         }
         expect(f.store.getTeamById(team.id)).toBeNull()
         expect(events).toEqual(['dissolved'])
+      } finally { f.dbManager.closeAll() }
+    })
+
+    it('skips a suspected-dead owner even while the send gate still reports it reachable', async () => {
+      const events: string[] = []
+      const f = buildService({ onOfficeDissolved: () => { events.push('dissolved') } })
+      try {
+        const team = await f.service.createTeam(manualInput({ members: [] }))
+        f.store.insertEpoch({ id: 'work', teamId: team.id, lifecycle: 'run', startedAt: 1, endedAt: null, endReason: null, summary: 'Original' })
+        f.store.addMember({ teamId: team.id, appId: 'remote', memberName: 'remote', role: '', isLead: false, aiProvisioned: false, addedAt: 1, ownerNodeId: 'other-node', origin: 'remote' })
+        // Split the two predicates exactly as they differ in production: a peer
+        // that stopped answering is still "reachable" for the send gate until
+        // presence marks it offline, but the stop path already refuses it.
+        f.runtime.isMemberReachable.mockReturnValue(true)
+        f.runtime.isMemberStopReachable.mockReturnValue(false)
+        await f.service.dissolveTeam(team.id)
+        expect(f.runtime.stopMemberTurn).not.toHaveBeenCalled()
+        expect(f.store.getTeamById(team.id)).toBeNull()
+        expect(events).toEqual(['dissolved'])
+      } finally { f.dbManager.closeAll() }
+    })
+
+    it('stops many remote conversations with bounded concurrency before publishing dissolution', async () => {
+      const events: string[] = []
+      let settled = 0
+      const f = buildService({ onOfficeDissolved: () => { events.push(`dissolved:${settled}`) } })
+      try {
+        const team = await f.service.createTeam(manualInput({ members: [] }))
+        f.store.insertEpoch({ id: 'work', teamId: team.id, lifecycle: 'run', startedAt: 1, endedAt: null, endReason: null, summary: null })
+        for (let i = 0; i < 12; i++) {
+          f.store.addMember({ teamId: team.id, appId: `remote-${i}`, memberName: `remote-${i}`, role: '', isLead: false, aiProvisioned: false, addedAt: 1, ownerNodeId: 'other-node', origin: 'remote' })
+        }
+        let inFlight = 0
+        let maxInFlight = 0
+        f.runtime.stopMemberTurn.mockImplementation(async () => {
+          inFlight++
+          maxInFlight = Math.max(maxInFlight, inFlight)
+          await new Promise(resolve => setTimeout(resolve, 10))
+          inFlight--
+          settled++
+          return true
+        })
+        await f.service.dissolveTeam(team.id)
+        expect(f.runtime.stopMemberTurn).toHaveBeenCalledTimes(12)
+        expect(maxInFlight).toBeGreaterThan(1)
+        expect(maxInFlight).toBeLessThanOrEqual(8)
+        expect(events).toEqual(['dissolved:12'])
+        expect(f.store.getTeamById(team.id)).toBeNull()
       } finally { f.dbManager.closeAll() }
     })
 

@@ -1168,6 +1168,11 @@ async function initPlatformAndApps(): Promise<void> {
         // send time. No federation manager (non-federated) → default reachable.
         checkMemberReachable: (appId, teamId) =>
           getFederationManager()?.isMemberReachable(appId, teamId) ?? true,
+        // The stop path refuses offline/suspected/unrouted owners; dissolution
+        // must see the same answer or a silent drop reads as stoppable and
+        // blocks deletion until presence marks the peer offline.
+        checkMemberStopReachable: (appId, teamId) =>
+          getFederationManager()?.isMemberStopReachable(appId, teamId) ?? true,
         // Push each status flip (turn start/end, escalation) to joiners via the
         // coalesced roster refresh — without it a viewer's board froze on the
         // last projected status until an unrelated write refreshed the roster.

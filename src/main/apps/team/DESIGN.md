@@ -96,10 +96,12 @@ Deletion fences admission and cancels requests without sealing business epochs.
 Both host dissolution and joined-office cleanup await descendant disposal, then
 call `TeamRuntime.closeEpochResources` for every epoch, including closed history
 from a failed attempt. Cleanup failure preserves epoch fields, summaries, outcomes
-and task metadata unchanged for retry. Reachable remote owners are stopped before
-dissolution is published; an unreachable owner (including a disconnect during
-stop) is logged and does not block local deletion. A reachable owner's stop error
-or a local resource-close error still prevents deletion.
+and task metadata unchanged for retry. Reachable remote owners are stopped with a
+bounded worker pool before dissolution is published; an unreachable owner
+(including a disconnect during stop, judged by the stop path's own
+offline/suspect/unrouted rule) is logged and does not block local deletion. A
+reachable owner's stop error or a local resource-close error still prevents
+deletion.
 
 ### Temporary work participants
 

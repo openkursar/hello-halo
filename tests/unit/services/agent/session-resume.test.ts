@@ -32,7 +32,7 @@ vi.mock('../../../../src/main/services/agent/knowledge-context', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({ publishToolsetContextMode, setSessionInvalidator: vi.fn(), buildCreationTimeServers: vi.fn(() => ({})) }))
 vi.mock('../../../../src/main/services/agent/toolsets/capability-index', () => ({ buildToolsetSection: vi.fn(() => '') }))
-vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({ dropConversationState: vi.fn(), getOpenToolsets: vi.fn(() => []) }))
+vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({ getExcludedToolsets: () => new Set(), dropConversationState: vi.fn(), getOpenToolsets: vi.fn(() => []) }))
 vi.mock('../../../../src/main/services/api-ref', () => ({ HALO_API_TOOLSET_ID: 'halo-api-ref' }))
 vi.mock('../../../../src/main/services/conversation.service', () => ({ getConversation: vi.fn(() => null) }))
 vi.mock('../../../../src/main/services/health', () => ({ registerProcess: vi.fn(), unregisterProcess: vi.fn(), getCurrentInstanceId: vi.fn(() => null) }))

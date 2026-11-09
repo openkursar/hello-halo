@@ -8,7 +8,7 @@ import { test as base, expect, WINDOW_SIZE } from '../fixtures/electron-with-git
 import { getAppEntryPath, launchElectronApp } from '../fixtures/electron'
 import { CONVERSATION_TITLE, SPACE_NAME, createGitWorkspace, type GitWorkspace } from '../fixtures/git-workspace'
 import { navigateToWorkspaces } from '../fixtures/helpers'
-import { diffCard, diffCardPaths, openChangesWithShortcut } from '../fixtures/changes-helpers'
+import { diffCard, diffCardPaths, openChangesWithShortcut, showFileDiff } from '../fixtures/changes-helpers'
 
 const DEEP_PATH = 'packages/sdk/deep-repo'
 const SHALLOW_PATH = 'auto-repo'
@@ -200,6 +200,12 @@ async function expectRepositoryDiff(window: Page, root: string): Promise<void> {
   await expect(window.locator('[data-file-key="src/app.ts"]')).toHaveCount(0)
 }
 
+/** The outer repository's seeded edit, which large diffs show only after selecting the file. */
+async function expectOuterRepositoryDiff(window: Page): Promise<void> {
+  await showFileDiff(window, 'src/app.ts')
+  await expect(diffCard(window, 'src/app.ts')).toContainText('hello, world')
+}
+
 async function openDeepRepository(app: ElectronApplication, window: Page, workspace: GitWorkspace): Promise<void> {
   await openChangesWithShortcut(window)
   await expect(picker(window)).toHaveAttribute('title', workspace.repoRoot)
@@ -230,7 +236,7 @@ test('discovers the nearest ignored repository from an opened file without mixin
   const before = treeSnapshot(workspace.repoRoot)
   await openChangesWithShortcut(window)
   await expect(picker(window)).toHaveAttribute('title', workspace.repoRoot)
-  await expect.poll(() => diffCardPaths(window)).toContain('src/app.ts')
+  await expectOuterRepositoryDiff(window)
   const deepRoot = path.join(workspace.repoRoot, DEEP_PATH)
   expect((await repositories(window, workspace)).repositories.map(repo => repo.root)).not.toContain(deepRoot)
 
@@ -264,7 +270,7 @@ test('retains an explicitly opened deep repository across switching and restarts
   await repositoryGroup(reopened, workspace.repoRoot).getByRole('menuitemradio').click()
   await expect(picker(reopened)).toHaveAttribute('title', workspace.repoRoot)
   await expect(repositoryMenu(reopened)).toHaveCount(0)
-  await expect.poll(() => diffCardPaths(reopened)).toContain('src/app.ts')
+  await expectOuterRepositoryDiff(reopened)
   await expectRemembered(reopened, workspace, deepRoot)
   expect(treeSnapshot(workspace.repoRoot)).toEqual(before)
 
@@ -319,7 +325,7 @@ for (const discovery of ['opened-file', 'shallow-child'] as const) {
       await repositoryGroup(reopened, workspace.repoRoot).getByRole('menuitemradio').click()
       await expect(repositoryMenu(reopened)).toHaveCount(0)
       await expect(picker(reopened)).toHaveAttribute('title', workspace.repoRoot)
-      await expect.poll(() => diffCardPaths(reopened)).toContain('src/app.ts')
+      await expectOuterRepositoryDiff(reopened)
       await expectRemembered(reopened, workspace, root)
 
       await openDeepFile(reopened)
@@ -376,7 +382,7 @@ test('restores legacy hidden paths as selectable known repositories and preserve
 
   await openChangesWithShortcut(reopened)
   await expect(picker(reopened)).toHaveAttribute('title', workspace.repoRoot)
-  await expect.poll(() => diffCardPaths(reopened)).toContain('src/app.ts')
+  await expectOuterRepositoryDiff(reopened)
   for (const [root, marker] of [[rememberedRoot, 'remembered-only'], [deepRoot, 'deep-only']]) {
     await openPicker(reopened)
     await expectNoRemoval(reopened, [workspace.repoRoot, rememberedRoot, deepRoot])
@@ -444,7 +450,7 @@ test('retains unavailable paths through retry, repository switching and restart'
   const whileMissing = treeSnapshot(workspace.repoRoot)
   await openChangesWithShortcut(reopened)
   await expect(picker(reopened)).toHaveAttribute('title', workspace.repoRoot)
-  await expect.poll(() => diffCardPaths(reopened)).toContain('src/app.ts')
+  await expectOuterRepositoryDiff(reopened)
   await expectRemembered(reopened, workspace, deepRoot)
   await openPicker(reopened)
   const group = repositoryGroup(reopened, deepRoot)
@@ -462,7 +468,7 @@ test('retains unavailable paths through retry, repository switching and restart'
   await expectNoRemoval(reopened, [workspace.repoRoot, deepRoot])
   await repositoryGroup(reopened, workspace.repoRoot).getByRole('menuitemradio').click()
   await expect(picker(reopened)).toHaveAttribute('title', workspace.repoRoot)
-  await expect.poll(() => diffCardPaths(reopened)).toContain('src/app.ts')
+  await expectOuterRepositoryDiff(reopened)
   await expectRemembered(reopened, workspace, deepRoot)
   expect(treeSnapshot(workspace.repoRoot)).toEqual(whileMissing)
   expect(treeSnapshot(movedRoot)).toEqual(deepBefore)
@@ -477,7 +483,7 @@ test('retains unavailable paths through retry, repository switching and restart'
   await openPicker(reopened)
   await expect(group.getByText('Unavailable', { exact: true })).toHaveCount(0)
   await repositoryGroup(reopened, workspace.repoRoot).getByRole('menuitemradio').click()
-  await expect.poll(() => diffCardPaths(reopened)).toContain('src/app.ts')
+  await expectOuterRepositoryDiff(reopened)
   expect(treeSnapshot(workspace.repoRoot)).toEqual(before)
 
   fs.renameSync(deepRoot, movedRoot)
@@ -492,7 +498,7 @@ test('retains unavailable paths through retry, repository switching and restart'
   await repositoryGroup(reopened, workspace.repoRoot).getByRole('menuitemradio').click()
   await expect(picker(reopened)).toHaveAttribute('title', workspace.repoRoot)
   await expect(repositoryMenu(reopened)).toHaveCount(0)
-  await expect.poll(() => diffCardPaths(reopened)).toContain('src/app.ts')
+  await expectOuterRepositoryDiff(reopened)
   await expectRemembered(reopened, workspace, deepRoot)
   expect(treeSnapshot(workspace.repoRoot)).toEqual(whileMissing)
   expect(treeSnapshot(movedRoot)).toEqual(deepBefore)
@@ -505,7 +511,7 @@ test('retains unavailable paths through retry, repository switching and restart'
   expect(fs.existsSync(deepRoot)).toBe(false)
   await openChangesWithShortcut(afterFailure)
   await expect(picker(afterFailure)).toHaveAttribute('title', workspace.repoRoot)
-  await expect.poll(() => diffCardPaths(afterFailure)).toContain('src/app.ts')
+  await expectOuterRepositoryDiff(afterFailure)
   await openPicker(afterFailure)
   const retained = repositoryGroup(afterFailure, deepRoot)
   await expectNoRemoval(afterFailure, [workspace.repoRoot, deepRoot])

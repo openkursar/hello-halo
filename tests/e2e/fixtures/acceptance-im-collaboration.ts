@@ -1,5 +1,6 @@
 import { collaboratorReceipt, hasRetiredDailyTeamTool } from './acceptance-collaboration'
 import { initialUserInput, latestUserInput, createModelGate, modelTool, type ModelRequest, type ModelReply } from './acceptance-model'
+import { planModelTool } from './acceptance-tool-discovery'
 
 export const question = 'Ask one collaborator to check alpha and bring the conclusion back to this group.'
 export const later = 'A different sender is here now. Just acknowledge this message.'
@@ -11,14 +12,29 @@ export const reviewed = 'I reviewed the collaborator’s evidence: alpha is conf
 export const probe = 'Confirm this group can continue with a fresh human request.'
 export const probeReply = 'This group can continue.'
 
-export function createImCollaborationScript(options: { onReview?: (request: ModelRequest) => ModelReply | undefined } = {}) {
+export interface DeferredProbeState {
+  name: string
+  id: string
+  results: ModelRequest['toolResults']
+  error?: string
+  done: boolean
+}
+
+export function createImCollaborationScript(options: {
+  onReview?: (request: ModelRequest) => ModelReply | undefined
+  /** A real tool this turn must discover through the client gateway before using it. */
+  deferredProbe?: { name: string; id: string }
+} = {}) {
   const gate = createModelGate()
   const errors: string[] = []
   const callbacks: ModelRequest[] = []
   const initialRequests: ModelRequest[] = []
   const laterRequests: ModelRequest[] = []
+  const deferred: DeferredProbeState | undefined = options.deferredProbe
+    ? { ...options.deferredProbe, results: [], done: false }
+    : undefined
   let memberStarted = false
-  const reply = (request: ModelRequest) => {
+  const reply = (request: ModelRequest): ModelReply => {
     if (hasRetiredDailyTeamTool(request)) errors.push('A retired team tool was advertised.')
     const initial = initialUserInput(request)
     const current = latestUserInput(request)
@@ -28,6 +44,18 @@ export function createImCollaborationScript(options: { onReview?: (request: Mode
     if (current.includes(raw)) { callbacks.push(request); return options.onReview?.(request) ?? { text: reviewed } }
     if (initial.includes(question)) {
       initialRequests.push(request)
+      if (deferred && !deferred.done) {
+        const result = request.toolResults.find(item => item.id === deferred.id)
+        if (result) {
+          deferred.results.push(result)
+          deferred.done = true
+        } else {
+          const plan = planModelTool(request, deferred.name, {}, deferred.id)
+          if ('call' in plan) return { tools: [plan.call] }
+          deferred.error = plan.error
+          deferred.done = true
+        }
+      }
       const result = request.toolResults.find(result => result.id === 'im-spawn')
       if (!result) return { tools: [modelTool(request, 'spawn_agent', { name: 'Checker', prompt: assignment }, 'im-spawn')] }
       try { collaboratorReceipt(result) }
@@ -37,6 +65,10 @@ export function createImCollaborationScript(options: { onReview?: (request: Mode
     errors.push(`Unexpected IM collaboration request ${request.sequence}`)
     return { text: 'No fixture work was requested.' }
   }
-  return { reply, callbacks, initialRequests, laterRequests, errors, release: gate.release, get memberStarted() { return memberStarted } }
+  return {
+    reply, callbacks, initialRequests, laterRequests, errors, release: gate.release,
+    get memberStarted() { return memberStarted },
+    get probe() { return deferred },
+  }
 }
 

@@ -8,7 +8,7 @@ import { getConfig, saveConfig } from '../../../foundation/config.service'
 import { emitAgentEvent } from '../events'
 import { buildBaseToolset } from './base'
 import { getAvailableToolsets, getToolset } from './registry'
-import { getOpenToolsets, markOpen, markClosed, setToolsetContextMode } from './state'
+import { getOpenToolsets, getExcludedToolsets, markOpen, markClosed, setToolsetContextMode } from './state'
 import { isToolsetIncluded, isToolsetConfigurable } from './selection'
 import { createBrokerMetaServer, CAPABILITIES_SERVER_NAME } from './meta-server'
 import type { ToolsetOpener, ToolsetScope, ToolsetStatus, ToolsetsChangedEvent, ToolsetContextMode } from './types'
@@ -108,15 +108,18 @@ export function buildMcpServerRecord(scope: ToolsetScope): Record<string, unknow
 
   // On-demand toolsets currently enabled for this conversation
   const openIds = getOpenToolsets(scope.spaceId, scope.conversationId)
+  const excludedIds = getExcludedToolsets(scope.spaceId, scope.conversationId)
   const mode = scope.toolContextMode ?? 'manual'
   if (mode === 'manual') {
     for (const id of scope.requiredToolsets ?? []) {
-      if (getToolset(id) && markOpen(scope.spaceId, scope.conversationId, id)) {
+      if (!excludedIds.has(id) && getToolset(id) && markOpen(scope.spaceId, scope.conversationId, id)) {
         emitChanged(scope, id, 'open', 'system')
       }
     }
   }
-  const selectedIds = getAvailableToolsets().filter(def => isToolsetIncluded(def, openIds, mode)).map(def => def.id)
+  const selectedIds = getAvailableToolsets()
+    .filter(def => isToolsetIncluded(def, openIds, mode, excludedIds))
+    .map(def => def.id)
   for (const id of selectedIds) {
     const def = getToolset(id)
     if (def) add(id, () => def.createServer(scope))
@@ -159,6 +162,9 @@ export function openToolset(
   const def = getToolset(toolsetId)
   if (!def) {
     return { ok: false, error: `Unknown or unavailable toolset: ${toolsetId}` }
+  }
+  if (getExcludedToolsets(scope.spaceId, scope.conversationId).has(toolsetId)) {
+    return { ok: false, error: `Toolset is excluded from this conversation: ${toolsetId}` }
   }
 
   const changed = markOpen(scope.spaceId, scope.conversationId, toolsetId)
@@ -218,7 +224,7 @@ export interface RequestToolsetResult {
 /** The agent may activate an available capability without a human enablement step. */
 export function requestToolset(scope: ToolsetScope, toolsetId: string): RequestToolsetResult {
   const def = getToolset(toolsetId)
-  if (!def) {
+  if (!def || getExcludedToolsets(scope.spaceId, scope.conversationId).has(toolsetId)) {
     return { ok: false, error: `Unknown or unavailable toolset: ${toolsetId}` }
   }
   if (isToolsetIncluded(def, getOpenToolsets(scope.spaceId, scope.conversationId), scope.toolContextMode ?? 'manual')) {
@@ -230,11 +236,12 @@ export function requestToolset(scope: ToolsetScope, toolsetId: string): RequestT
 /** Available capabilities, including those without a manual context control. */
 export function listToolsetStatuses(spaceId: string, conversationId: string, mode: ToolsetContextMode | 'pending' = 'manual'): ToolsetStatus[] {
   const open = getOpenToolsets(spaceId, conversationId)
+  const excluded = getExcludedToolsets(spaceId, conversationId)
   return getAvailableToolsets().map(def => ({
     id: def.id,
     displayName: def.displayName,
     summary: def.summary,
-    open: isToolsetIncluded(def, open, mode === 'pending' ? 'manual' : mode),
+    open: isToolsetIncluded(def, open, mode === 'pending' ? 'manual' : mode, excluded),
     ...(!isToolsetConfigurable(def, mode) ? { configurable: false } : {}),
   }))
 }

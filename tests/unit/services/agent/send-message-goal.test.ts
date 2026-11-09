@@ -30,7 +30,7 @@ vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({
   openToolset: vi.fn(() => ({ ok: true })),
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/capability-index', () => ({ buildToolsetSection: vi.fn(() => '') }))
-vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({ getOpenToolsets: vi.fn(() => new Set()) }))
+vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({ getExcludedToolsets: () => new Set(), getOpenToolsets: vi.fn(() => new Set()) }))
 vi.mock('../../../../src/main/services/api-ref', () => ({ HALO_API_TOOLSET_ID: 'halo-api-ref' }))
 vi.mock('../../../../src/main/services/tlon', () => ({ getKBChatContext: vi.fn(() => null) }))
 vi.mock('../../../../src/main/services/agent/knowledge-context', () => ({
