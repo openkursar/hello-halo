@@ -462,8 +462,7 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     description: 'Standard Compute OpenAI-compatible LLM gateway',
     website: 'https://standardcompute.com/',
     region: 'global',
-    icon: 'route',
-    notes: 'StandardCompute sends each request to the cheapest enabled model that can handle it, with automatic fallback. Model list fetched dynamically'
+    icon: 'route'
   },
   {
     id: 'requesty',
