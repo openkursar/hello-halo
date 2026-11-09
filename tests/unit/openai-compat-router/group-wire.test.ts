@@ -30,6 +30,7 @@ import { createApp } from '../../../src/main/openai-compat-router/server/router'
 import { replaceGroupBalancer } from '../../../src/main/openai-compat-router/server/group-balancer'
 import { setGroupPlanResolver, type GroupPlan } from '../../../src/main/openai-compat-router/server/request-groups'
 import type { AnthropicRequest, BackendConfig } from '../../../src/main/openai-compat-router/types'
+import { eventStreamFrame } from '../../e2e/fixtures/acceptance-kiro-upstream'
 import { handleGroupMessagesRequest } from '../../../src/main/openai-compat-router/server/group-dispatch'
 
 const CONFIGS: Record<string, BackendConfig> = {
@@ -145,6 +146,11 @@ class TimedConnection extends EventEmitter {
   json(body: unknown) { this.setHeader('content-type', 'application/json'); return this.end(JSON.stringify(body)) }
 }
 
+const kiroContent = (text: string) => eventStreamFrame(
+  { ':message-type': 'event', ':event-type': 'assistantResponseEvent', ':content-type': 'application/json' },
+  { content: text },
+)
+
 function timedAsk(res: TimedConnection) {
   return handleGroupMessagesRequest(
     { model: 'halo-auto', stream: true, max_tokens: 100, messages: [{ role: 'user', content: 'hello' }] } as AnthropicRequest,
@@ -160,7 +166,7 @@ describe('Kiro group deadlines through the real handler', () => {
     upstreams.set('kiro.test', init => new Response(new ReadableStream({
       start(controller) {
         body = controller
-        controller.enqueue(new TextEncoder().encode('{"content":"Kiro has already started answering."}'))
+        controller.enqueue(kiroContent('Kiro has already started answering.'))
         init.signal?.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')), { once: true })
       },
     })))
@@ -201,7 +207,7 @@ describe('Kiro group deadlines through the real handler', () => {
     vi.useFakeTimers()
     upstreams.set('kiro.test', init => new Response(new ReadableStream({
       start(controller) {
-        controller.enqueue(new TextEncoder().encode('{"content":"Kiro has started but does not finish."}'))
+        controller.enqueue(kiroContent('Kiro has started but does not finish.'))
         init.signal?.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')), { once: true })
       },
     })))
