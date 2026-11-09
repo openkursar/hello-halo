@@ -90,6 +90,7 @@ export type BuiltinProviderId =
   | 'cheaperinference'
   | 'atlascloud'
   | 'runcrate'
+  | 'standardcompute'
   | 'requesty'
   | 'groq'
   | 'mistral'

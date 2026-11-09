@@ -113,3 +113,31 @@ describe('Runcrate built-in provider', () => {
     ])
   })
 })
+
+describe('Standard Compute built-in provider', () => {
+  it('registers an OpenAI-compatible gateway provider with dynamic model discovery', () => {
+    const provider = getBuiltinProvider('standardcompute')
+
+    expect(provider).toMatchObject({
+      id: 'standardcompute',
+      authType: 'api-key',
+      apiUrl: 'https://api.stdcmpt.com/v1',
+      modelsUrl: 'https://api.stdcmpt.com/v1/models',
+      region: 'global'
+    })
+    expect(provider?.recommended).toBeUndefined()
+    expect(getAllProviderIds()).toContain('standardcompute')
+  })
+
+  it('defaults to the routed StandardCompute model, with vendor-prefixed pinned ids', () => {
+    expect(getDefaultModel('standardcompute')).toBe('StandardCompute')
+    expect(getBuiltinProvider('standardcompute')?.models.map(model => model.id)).toEqual([
+      'StandardCompute',
+      'anthropic/claude-sonnet-5.5',
+      'openai/gpt-5.6-sol',
+      'deepseek/deepseek-v4.1-flash',
+      'z-ai/glm-5.3',
+      'moonshotai/kimi-k3'
+    ])
+  })
+})
