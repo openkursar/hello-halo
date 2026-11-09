@@ -1,0 +1,158 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createSession, createSdkMcpServer, tool, type SDKSession } from '../index.js';
+import type { Options } from '../types/config.js';
+import type { ContentBlock, LlmProvider, ProviderRequest, StreamEvent } from '../types/provider.js';
+import type { SDKMessage } from './query-types.js';
+import { TranscriptWriter, getTranscriptPath } from './transcript.js';
+import { readHistoryReport } from './transcript-reader.js';
+import { readToolContextSnapshot } from './tool-context/index.js';
+
+const sessions: SDKSession[] = [];
+const directories: string[] = [];
+afterEach(async () => {
+  vi.restoreAllMocks();
+  for (const session of sessions.splice(0)) await session.close();
+  await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
+});
+const target = 'mcp__fixture__lookup';
+const use = (id: string, name: string, input: Record<string, unknown>): ContentBlock => ({ type: 'tool_use', id, name, input });
+const search = (id: string) => use(id, 'ToolSearch', { query: `select:${target}` });
+const invoke = (id: string) => use(id, 'CallTool', { tool: target, arguments: '{}' });
+const done: ContentBlock = { type: 'text', text: 'Done.' };
+function scripted(replies: ContentBlock[][]) {
+  const requests: ProviderRequest[] = [];
+  const provider: LlmProvider = {
+    id: 'clear-fixture', name: 'Clear fixture',
+    capabilities: () => ({ streaming: true, toolCalling: true, thinking: false, imageInput: false,
+      pdfInput: false, audioInput: false, videoInput: false, caching: false, systemPromptStyle: 'top_level' }),
+    createMessage: async () => { throw new Error('Clear must not call a model for a summary'); },
+    async *createMessageStream(request): AsyncGenerator<StreamEvent> {
+      const content = replies[requests.length] ?? [done];
+      requests.push(structuredClone({ ...request, providerOptions: undefined }));
+      yield { type: 'message_start', id: `response-${requests.length}`, model: request.model, usage: { input_tokens: 0, output_tokens: 0 } };
+      for (const [index, block] of content.entries()) {
+        yield { type: 'content_block_start', index, content_block: block.type === 'tool_use' ? { ...block, input: {} } : block };
+        if (block.type === 'tool_use') yield { type: 'input_json_delta', index, partialJson: JSON.stringify(block.input) };
+        yield { type: 'content_block_stop', index };
+      }
+      yield { type: 'message_delta', stopReason: content.some(block => block.type === 'tool_use') ? 'tool_use' : 'end_turn' };
+      yield { type: 'message_stop' };
+    },
+  };
+  return { provider, requests };
+}
+async function fixture(replies: ContentBlock[][] = [[search('before-search')], [invoke('before-call')], [done]]) {
+  const cwd = await mkdtemp(join(tmpdir(), 'tool-context-clear-')); directories.push(cwd);
+  const handler = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'Read complete.' }] }));
+  const model = scripted(replies);
+  const options: Options = { cwd, model: 'fixture', provider: model.provider,
+    env: { HOME: cwd, USERPROFILE: cwd, CLAUDE_CONFIG_DIR: join(cwd, 'records') }, tools: [], settingSources: [],
+    permissionMode: 'bypassPermissions', systemPrompt: 'Follow the user request.', maxTurns: 10,
+    turnEndChecks: { openWork: false, completion: false },
+    mcpServers: { fixture: createSdkMcpServer({ name: 'fixture', tools: [tool('lookup', 'Private complete lookup definition.', {}, handler)] }) },
+    toolDiscovery: { services: { fixture: { identity: 'installation', loading: 'deferred', summary: 'Fixture records.' } } },
+  };
+  const session = await createSession(options); sessions.push(session);
+  return { session, options, handler, requests: model.requests };
+}
+async function turn(session: SDKSession, input: string) {
+  await session.send(input);
+  const events: SDKMessage[] = [];
+  for await (const event of session.stream()) { events.push(event); if (event.type === 'result') break; }
+  return events;
+}
+const path = (session: SDKSession, options: Options) => getTranscriptPath(session.sessionId, options.cwd!, options);
+
+describe('clear is durable for versioned tool context', () => {
+  it.each([false, true])('does not restore cleared definitions, calls or user context (later input=%s)', async laterInput => {
+    const current = await fixture();
+    expect((await turn(current.session, 'BEFORE_CLEAR_CONTEXT')).at(-1)).toMatchObject({ is_error: false });
+    expect(current.handler).toHaveBeenCalledOnce();
+    const original = await readFile(path(current.session, current.options), 'utf8');
+    expect((await turn(current.session, '/clear')).at(-1)).toMatchObject({ is_error: false });
+    expect(current.requests).toHaveLength(3);
+    if (laterInput) expect((await turn(current.session, 'AFTER_CLEAR_CONTEXT')).at(-1)).toMatchObject({ is_error: false });
+    await current.session.close();
+    const active = await readHistoryReport(path(current.session, current.options));
+    expect(active.toolContextDamaged).toBeUndefined();
+    expect(readToolContextSnapshot(active.messages)?.definitions).toEqual([]);
+    expect(JSON.stringify(active.messages)).not.toContain('BEFORE_CLEAR_CONTEXT');
+    expect(JSON.stringify(active.messages)).not.toContain('before-call');
+    const stored = await readFile(path(current.session, current.options), 'utf8');
+    expect(stored.startsWith(original)).toBe(true);
+    expect(stored).toContain('compact_checkpoint');
+    const next = scripted([[invoke('stale-after-reopen')], [search('new-search')], [invoke('new-call')], [done]]);
+    const resumed = await createSession({ ...current.options, provider: next.provider, resume: current.session.sessionId, strictResume: true });
+    sessions.push(resumed);
+    const events = await turn(resumed, 'Use the tool for a new task.');
+    expect(events.at(-1)).toMatchObject({ is_error: false });
+    expect(events.filter(event => event.type === 'user').flatMap(event => event.message.content))
+      .toContainEqual(expect.objectContaining({ type: 'tool_result', tool_use_id: 'stale-after-reopen', is_error: true }));
+    expect(current.handler).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(next.requests[0].messages)).not.toContain('BEFORE_CLEAR_CONTEXT');
+    expect(JSON.stringify(next.requests[0].messages)).not.toContain('Private complete lookup definition.');
+    if (laterInput) expect(JSON.stringify(next.requests[0].messages)).toContain('AFTER_CLEAR_CONTEXT');
+  });
+
+  it('retains the prior live and durable state if the clear checkpoint fails', async () => {
+    const current = await fixture([[search('before-search')], [done], [invoke('after-failed-clear')], [done]]);
+    await turn(current.session, 'BEFORE_CLEAR_CONTEXT');
+    const original = await readFile(path(current.session, current.options), 'utf8');
+    const write = vi.spyOn(TranscriptWriter.prototype, 'writeCompactCheckpoint').mockRejectedValueOnce(new Error('Injected clear write failure'));
+    expect((await turn(current.session, '/clear')).at(-1)).toMatchObject({ is_error: true });
+    expect(write).toHaveBeenCalledOnce();
+    expect(await readFile(path(current.session, current.options), 'utf8')).toBe(original);
+    expect((await turn(current.session, 'Continue after the refused clear.')).at(-1)).toMatchObject({ is_error: false });
+    expect(current.handler).toHaveBeenCalledOnce();
+    expect(JSON.stringify(current.requests[2].messages)).toContain('BEFORE_CLEAR_CONTEXT');
+    await current.session.close();
+    expect(readToolContextSnapshot((await readHistoryReport(path(current.session, current.options))).messages)?.definitions)
+      .toHaveLength(1);
+  });
+
+  it('keeps a versioned empty baseline when the resumed host omitted discovery options', async () => {
+    const current = await fixture();
+    await turn(current.session, 'BEFORE_CLEAR_CONTEXT'); await current.session.close();
+    const next = scripted([[done]]);
+    const resumed = await createSession({ ...current.options, toolDiscovery: undefined, provider: next.provider,
+      resume: current.session.sessionId, strictResume: true });
+    sessions.push(resumed);
+    expect((await turn(resumed, '/clear')).at(-1)).toMatchObject({ is_error: false });
+    await resumed.close();
+    const report = await readHistoryReport(path(resumed, current.options));
+    expect(report.toolContextDamaged).toBeUndefined();
+    expect(readToolContextSnapshot(report.messages)).toMatchObject({ definitions: [], discoveryEntries: false });
+    expect(JSON.stringify(report.messages)).not.toContain('BEFORE_CLEAR_CONTEXT');
+  });
+
+  it('does not confirm or install a clear while its durable replacement is pending', async () => {
+    const current = await fixture();
+    await turn(current.session, 'BEFORE_CLEAR_CONTEXT');
+    const originalWrite = TranscriptWriter.prototype.writeCompactCheckpoint;
+    let entered!: () => void;
+    const writing = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const allowed = new Promise<void>(resolve => { release = resolve; });
+    vi.spyOn(TranscriptWriter.prototype, 'writeCompactCheckpoint').mockImplementationOnce(async function (messages, summary) {
+      entered();
+      await allowed;
+      return originalWrite.call(this, messages, summary);
+    });
+    let completed = false;
+    const clearing = turn(current.session, '/clear').then(events => { completed = true; return events; });
+    await writing;
+    try {
+      expect(completed).toBe(false);
+      const prior = await readHistoryReport(path(current.session, current.options));
+      expect(readToolContextSnapshot(prior.messages)?.definitions).toHaveLength(1);
+      expect(JSON.stringify(prior.messages)).toContain('BEFORE_CLEAR_CONTEXT');
+    } finally { release(); }
+    expect((await clearing).at(-1)).toMatchObject({ is_error: false });
+    const saved = await readHistoryReport(path(current.session, current.options));
+    expect(readToolContextSnapshot(saved.messages)?.definitions).toEqual([]);
+    expect(JSON.stringify(saved.messages)).not.toContain('BEFORE_CLEAR_CONTEXT');
+  });
+});

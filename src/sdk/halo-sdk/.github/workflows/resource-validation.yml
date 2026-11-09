@@ -1,0 +1,80 @@
+name: SDK resource validation
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      live:
+        description: Run live-model soak and compaction validation
+        type: boolean
+        default: false
+      provider:
+        description: Provider matching the SDK_TEST_API_KEY secret
+        type: choice
+        default: glm
+        options: [glm, deepseek]
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic:
+    name: Resource regression (${{ matrix.os }}, Node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [20, 22]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run test:resource-harness
+      - run: npm run test:resources
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: resource-results-${{ matrix.os }}-${{ matrix.node }}
+          path: validation/results/
+          retention-days: 14
+
+  live:
+    if: github.event_name == 'workflow_dispatch' && inputs.live
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: sdk-live-resource-validation
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Live soak and compaction
+        shell: bash
+        run: |
+          case "$SDK_TEST_PROVIDER" in
+            glm) validation_args=(--provider-type openai-compat --base-url https://open.bigmodel.cn/api/coding/paas/v4 --model glm-5.3-flash --thinking adaptive --effort low --max-output-tokens 8192) ;;
+            deepseek) validation_args=() ;;
+            *) echo 'Unsupported validation provider' >&2; exit 1 ;;
+          esac
+          npm run test:resources:soak -- "${validation_args[@]}"
+          npm run test:resources:live -- "${validation_args[@]}" --rounds 6 --context-window 8000 --require-compaction
+        env:
+          SDK_TEST_API_KEY: ${{ secrets.SDK_TEST_API_KEY }}
+          SDK_TEST_PROVIDER: ${{ inputs.provider }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: live-resource-results
+          path: validation/results/
+          retention-days: 30

@@ -1,0 +1,95 @@
+{
+  "name": "@hello-halo/agent-sdk",
+  "version": "1.0.0",
+  "description": "In-process agent engine implementing the ReAct loop, with layered context compaction, stagnation detection, and support for Anthropic and OpenAI-compatible providers.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "agent",
+    "llm",
+    "react-loop",
+    "tool-calling",
+    "anthropic",
+    "openai-compatible",
+    "mcp"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./worker": {
+      "types": "./dist/worker/index.d.ts",
+      "import": "./dist/worker/index.js"
+    },
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./collaboration": {
+      "types": "./dist/collaboration/index.d.ts",
+      "import": "./dist/collaboration/index.js"
+    },
+    "./collaboration/turn-gate": {
+      "types": "./dist/collaboration/turn-gate.d.ts",
+      "import": "./dist/collaboration/turn-gate.js"
+    },
+    "./collaboration/protocol": {
+      "types": "./dist/collaboration/protocol.d.ts",
+      "import": "./dist/collaboration/protocol.js"
+    },
+    "./collaboration/sdk": {
+      "types": "./dist/collaboration/sdk/index.d.ts",
+      "import": "./dist/collaboration/sdk/index.js"
+    },
+    "./collaboration/workspaces": {
+      "types": "./dist/collaboration/workspaces.d.ts",
+      "import": "./dist/collaboration/workspaces.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.zh-CN.md",
+    "docs",
+    "core/DESIGN.md",
+    "core/TRANSCRIPT.md",
+    "worker/DESIGN.md",
+    "worker/VALIDATION.md",
+    "search/DESIGN.md",
+    "search/VALIDATION.md",
+    "skills/DESIGN.md",
+    "validation/README.md",
+    "validation/BEHAVIOR.md",
+    "validation/STREAMING.md",
+    "swe-bench-eval/README.md",
+    "collaboration/DESIGN.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "npm run clean && tsc && node scripts/build-worker.mjs",
+    "dev": "tsc --watch",
+    "prepack": "npm run build",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:resources": "node validation/run.mjs --profile smoke",
+    "test:resource-harness": "node --test validation/*.test.mjs",
+    "test:resources:live": "node validation/run.mjs --profile smoke --live",
+    "test:resources:soak": "node validation/run.mjs --profile soak --live",
+    "benchmark:workers": "node scripts/benchmark-workers.mjs"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "eventsource-parser": "^3.0.0",
+    "minimatch": "^9.0.9",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.21.5",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}

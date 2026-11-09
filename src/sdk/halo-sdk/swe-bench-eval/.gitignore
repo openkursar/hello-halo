@@ -1,0 +1,7 @@
+.env.local
+data/*.jsonl
+runs/*
+!runs/.gitkeep
+logs/*
+!logs/.gitkeep
+*.db
