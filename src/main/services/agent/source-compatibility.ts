@@ -1,12 +1,16 @@
 import type { EngineId } from '../../../shared/types/engine'
 import type { StoredModelSelection } from '../../../shared/types/ai-sources'
 import { assertEngineSourceCompatible } from '../../../shared/engine-source'
-import { getAISourceManager } from '../ai-sources'
+import { getAISourceManager, getGroup } from '../ai-sources'
 
 /** Save-time validation reads the provider descriptor without refreshing a credential or contacting a model. */
 export async function assertEngineSourceSelection(engineId: EngineId, selection?: StoredModelSelection | null): Promise<void> {
   const manager = getAISourceManager()
   await manager.ensureInitialized()
+  if (selection?.modelSourceId && getGroup(selection.modelSourceId)) {
+    assertEngineSourceCompatible(engineId, { isGroup: true })
+    return
+  }
   const source = selection?.modelSourceId
     ? manager.getSourceConfig(selection.modelSourceId)
     : manager.getCurrentSourceConfig()

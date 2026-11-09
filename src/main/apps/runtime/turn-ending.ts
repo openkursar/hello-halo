@@ -31,8 +31,8 @@ export class AppChatTurnInterrupted extends Error {
 
 /** How `result`'s turn ended short, if it did. A stop the person asked for is not one. */
 export function turnEndingOf(result: StreamResult): AppChatTurnEnding | undefined {
-  if (result.wasAborted) return undefined
   if (result.hasErrorThought) return { kind: 'failed', error: result.errorThought?.content || 'The model response was interrupted.' }
+  if (result.wasAborted) return undefined
   if (result.reachedMaxTurns) {
     return result.maxTurnsLimit === undefined ? { kind: 'max_turns' } : { kind: 'max_turns', limit: result.maxTurnsLimit }
   }

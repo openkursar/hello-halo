@@ -19,6 +19,7 @@
  */
 
 import { readFileSync, renameSync } from 'fs'
+import { randomUUID } from 'crypto'
 import type { ImPushLink, ImSessionRecord } from '../../../shared/types/im-channel'
 import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
 import { buildTeamSessionKey } from '../../../shared/apps/im-keys'
@@ -136,8 +137,10 @@ export class ImSessionRegistry {
     if (existing) {
       const archiveChanged = existing.teamContext?.epochId !== opts?.teamContext?.epochId || existing.teamContext?.teamId !== opts?.teamContext?.teamId
       const contactChanged = !!opts?.contactId && existing.contactId !== opts.contactId
-      if (existing.instanceId !== instanceId || archiveChanged || contactChanged) {
+      const instanceChanged = existing.instanceId !== instanceId
+      if (instanceChanged || archiveChanged || contactChanged) {
         this.sessionRevisions.delete(existing)
+        if (existing.contextId) existing.contextId = randomUUID()
       }
       // displayName is intentionally NOT updated — stable after first registration
       existing.lastActiveAt = Date.now()
@@ -147,7 +150,7 @@ export class ImSessionRegistry {
       if (opts?.lastSender !== undefined) existing.lastSender = opts.lastSender
       if (opts?.lastMessage !== undefined) existing.lastMessage = truncateUtf16Safe(opts.lastMessage, 50)
       if (contactChanged) existing.contactId = opts!.contactId
-      this.requestPersist(archiveChanged || contactChanged)
+      this.requestPersist(instanceChanged || archiveChanged || contactChanged)
     } else {
       const source = classifySessionSource(channel)
       this.sessions.set(key, {
@@ -184,6 +187,7 @@ export class ImSessionRegistry {
     }
     if (session.teamContext?.teamId === teamContext?.teamId && session.teamContext?.epochId === teamContext?.epochId) return
     this.sessionRevisions.delete(session)
+    if (session.contextId) session.contextId = randomUUID()
     session.teamContext = teamContext ? { ...teamContext } : undefined
     this.requestPersist(true)
   }
@@ -280,6 +284,7 @@ export class ImSessionRegistry {
     const session = this.sessions.get(this.buildKey(appId, channel, chatId))
     if (!session) return
     this.sessionRevisions.delete(session)
+    if (session.contextId) session.contextId = randomUUID()
     session.lastMessage = undefined
     session.messageCount = 0
     this.requestPersist(true)
@@ -470,6 +475,16 @@ export class ImSessionRegistry {
       this.sessionRevisions.set(session, revision)
     }
     return revision
+  }
+
+  getSessionContextId(appId: string, channel: string, chatId: string): string | undefined {
+    const session = this.sessions.get(this.buildKey(appId, channel, chatId))
+    if (!session) return undefined
+    if (!session.contextId) {
+      session.contextId = randomUUID()
+      this.requestPersist(true)
+    }
+    return session.contextId
   }
 
   /**

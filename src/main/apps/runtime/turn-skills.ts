@@ -181,8 +181,8 @@ function preApprovalRefusal(
   if (hasContent(frontmatter.hooks) && !allowed.has('Bash')) {
     reasons.push('it runs commands of its own (hooks), and running any command is not allowed for this request')
   }
-  if (frontmatter.context === 'fork' && !allowed.has('Agent')) {
-    reasons.push('it runs as a sub-agent, which this request is not allowed')
+  if (frontmatter.context === 'fork') {
+    return `The skill "${skill.dirName}" requires a native fork, which this application does not run. Remove its fork setting and load the skill in the current conversation or a host collaborator.`
   }
   if (reasons.length === 0) return null
   return `The skill "${skill.dirName}" cannot run here: ${reasons.join('; ')}. ` +

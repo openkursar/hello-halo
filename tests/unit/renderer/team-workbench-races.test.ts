@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-const env = vi.hoisted(() => ({ runner: null as any, api: {} as Record<string, any>, live: { isGenerating: false, thoughts: [] }, entries: new Set<(data: any) => void>(), responses: new Set<(data: any) => void>(), histories: new Set<(data: any) => void>() }))
+const env = vi.hoisted(() => ({ runner: null as any, api: {} as Record<string, any>, live: { isGenerating: false, thoughts: [] }, entries: new Set<(data: any) => void>(), responses: new Set<(data: any) => void>(), histories: new Set<(data: any) => void>(), updates: new Set<(data: any) => void>() }))
 vi.mock('react', () => ({
   useState: (initial: any) => env.runner.state(initial), useRef: (initial: any) => env.runner.ref(initial),
   useMemo: (compute: any, deps: any[]) => env.runner.memo(compute, deps),
@@ -39,10 +39,22 @@ function mount<T>(hook: () => T) { const runner = new HookRunner(hook); runners.
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
 function listen(set: Set<any>) { return (callback: any) => { set.add(callback); return () => set.delete(callback) } }
 function prepare() {
-  env.api.onAppActivityEntry = listen(env.entries); env.api.onAppEscalationResolved = listen(env.responses); env.api.onTeamMemberHistory = listen(env.histories)
+  env.api.onTeamUpdated = listen(env.updates); env.api.onAppActivityEntry = listen(env.entries); env.api.onAppEscalationResolved = listen(env.responses); env.api.onTeamMemberHistory = listen(env.histories)
   env.api.teamChatMessages = vi.fn().mockResolvedValue({ success: true, data: [] })
 }
-afterEach(() => { runners.splice(0).forEach(runner => runner.close()); env.entries.clear(); env.responses.clear(); env.histories.clear(); env.live = { isGenerating: false, thoughts: [] }; vi.useRealTimers() })
+
+it('returns the task created by this Run even when detail already points at a newer parallel run', async () => {
+  prepare()
+  const detail: any = { team: { id: 'run-team', currentEpochId: 'other-run', name: 'Team' }, members: [], roster: [], activities: [] }
+  env.api.teamRun = vi.fn().mockResolvedValue({ success: true, data: { epochId: 'requested-run' } })
+  env.api.teamGetDetail = vi.fn().mockResolvedValue({ success: true, data: detail })
+  env.api.teamListConversations = vi.fn().mockResolvedValue({ success: true, data: [{ epochId: 'requested-run' }, { epochId: 'other-run' }] })
+  useTeamStore.setState({ currentTeamId: 'run-team', detail })
+  expect(await useTeamStore.getState().runTeam('run-team')).toEqual({ epochId: 'requested-run' })
+  expect(useTeamStore.getState().detail?.team.currentEpochId).toBe('other-run')
+  expect(env.api.teamListConversations).toHaveBeenCalledWith('run-team')
+})
+afterEach(() => { runners.splice(0).forEach(runner => runner.close()); env.entries.clear(); env.responses.clear(); env.histories.clear(); env.updates.clear(); env.live = { isGenerating: false, thoughts: [] }; vi.useRealTimers() })
 
 it('replays invalidation during an in-flight history request before resolving all readers', async () => {
   prepare()
@@ -53,10 +65,10 @@ it('replays invalidation during an in-flight history request before resolving al
   await Promise.resolve()
   invalidateTeamSessionHistory('a', 's', 't', 'e'); invalidateTeamSessionHistory('a', 's', 't', 'e')
   const third = loadTeamSessionHistory('a', 's', 't', 'e')
-  old.resolve({ success: true, data: [{ id: 'old', seq: 1 }] })
+  old.resolve({ success: true, data: [{ id: 'old', seq: 1, role: 'assistant', content: 'Earlier output' }] })
   for (let i = 0; i < 4; i++) await Promise.resolve()
   expect(env.api.teamChatMessages).toHaveBeenCalledTimes(2)
-  fresh.resolve({ success: true, data: [{ id: 'old', seq: 1 }, { id: 'final', seq: 2 }] })
+  fresh.resolve({ success: true, data: [{ id: 'old', seq: 1, role: 'assistant', content: 'Earlier output' }, { id: 'final', seq: 2, role: 'assistant', content: 'Final output' }] })
   for (const result of await Promise.all([first, second, third])) expect(result.data).toHaveLength(2)
   release()
 })
@@ -134,4 +146,83 @@ it('accepts a detail without optional activities without a render loop', async (
   const runner = mount(() => useTaskBoard(detail, 'e')); await runner.settle()
   expect(runner.result.activities).toEqual([])
   expect(env.api.teamEpochBoard).toHaveBeenCalledTimes(1)
+})
+
+
+it('coalesces scoped member status refreshes without reloading activity history', async () => {
+  prepare(); vi.useFakeTimers()
+  const detail: any = { team: { id: 't' }, activities: [], tasks: [], findings: [] }
+  env.api.teamEpochBoard = vi.fn().mockResolvedValue({ success: true, data: { epoch: { id: 'a', teamId: 't' }, activities: [{ id: 'history' }], tasks: [], findings: [], members: [], roster: [] } })
+  env.api.teamEpochRoster = vi.fn().mockResolvedValue({ success: true, data: { members: [{ appId: 'new' }], roster: [{ appId: 'new', status: 'working' }] } })
+  const runner = mount(() => useTaskBoard(detail, 'a'))
+  await runner.settle()
+  for (const event of [{ teamId: 'other', changed: ['members'] }, { teamId: 't', epochId: 'b', changed: ['members'] }, { teamId: 't', changed: ['board'] }]) {
+    for (const listener of env.updates) listener(event)
+  }
+  await vi.advanceTimersByTimeAsync(200); await runner.settle()
+  expect(env.api.teamEpochRoster).not.toHaveBeenCalled()
+  for (let i = 0; i < 10; i++) for (const listener of env.updates) listener({ teamId: 't', epochId: 'a', changed: [i % 2 ? 'members' : 'status'] })
+  await vi.advanceTimersByTimeAsync(199)
+  expect(env.api.teamEpochRoster).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(1); await runner.settle()
+  expect(env.api.teamEpochRoster).toHaveBeenCalledTimes(1)
+  expect(env.api.teamEpochBoard).toHaveBeenCalledTimes(1)
+  expect(runner.result.board?.roster).toEqual([{ appId: 'new', status: 'working' }])
+  expect(runner.result.activities).toEqual([{ id: 'history' }])
+  runner.close()
+  expect(env.updates.size).toBe(0)
+})
+
+it('replays one roster refresh after in-flight invalidation and drops a closed scope response', async () => {
+  prepare(); vi.useFakeTimers()
+  const detail: any = { team: { id: 't' }, activities: [], tasks: [], findings: [] }
+  env.api.teamEpochBoard = vi.fn().mockResolvedValue({ success: true, data: { epoch: { id: 'a', teamId: 't' }, activities: [], tasks: [], findings: [], members: [], roster: [] } })
+  const first = deferred<any>(), second = deferred<any>()
+  env.api.teamEpochRoster = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+  const runner = mount(() => useTaskBoard(detail, 'a')); await runner.settle()
+  const update = () => { for (const listener of env.updates) listener({ teamId: 't', epochId: 'a', changed: ['members'] }) }
+  update(); await vi.advanceTimersByTimeAsync(200)
+  update(); update(); await vi.advanceTimersByTimeAsync(200)
+  expect(env.api.teamEpochRoster).toHaveBeenCalledTimes(1)
+  first.resolve({ success: true, data: { members: [], roster: [{ appId: 'first' }] } }); await runner.settle()
+  await vi.advanceTimersByTimeAsync(200)
+  expect(env.api.teamEpochRoster).toHaveBeenCalledTimes(2)
+  runner.close()
+  second.resolve({ success: true, data: { members: [], roster: [{ appId: 'closed' }] } }); await runner.settle()
+  expect(runner.result.board?.roster).toEqual([{ appId: 'first' }])
+  expect(env.api.teamEpochBoard).toHaveBeenCalledTimes(1)
+})
+
+it('keeps a newer roster when the initial full board arrives later', async () => {
+  prepare(); vi.useFakeTimers()
+  const detail: any = { team: { id: 't' }, activities: [], tasks: [], findings: [] }
+  const board = deferred<any>()
+  env.api.teamEpochBoard = vi.fn().mockReturnValue(board.promise)
+  env.api.teamEpochRoster = vi.fn().mockResolvedValue({ success: true, data: { members: [{ appId: 'new' }], roster: [{ appId: 'new' }] } })
+  const runner = mount(() => useTaskBoard(detail, 'a')); await runner.settle()
+  for (const listener of env.updates) listener({ teamId: 't', epochId: 'a', changed: ['members'] })
+  await vi.advanceTimersByTimeAsync(200); await runner.settle()
+  board.resolve({ success: true, data: { epoch: { id: 'a', teamId: 't' }, activities: [{ id: 'history' }], tasks: [], findings: [], members: [], roster: [] } }); await runner.settle()
+  expect(runner.result.board?.roster).toEqual([{ appId: 'new' }])
+  expect(runner.result.activities).toEqual([{ id: 'history' }])
+})
+
+it('keeps a newer roster failure visible when an older board succeeds', async () => {
+  prepare(); vi.useFakeTimers()
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  try {
+    const detail: any = { team: { id: 't' }, activities: [], tasks: [], findings: [] }
+    const board = deferred<any>()
+    env.api.teamEpochBoard = vi.fn().mockReturnValue(board.promise)
+    env.api.teamEpochRoster = vi.fn().mockResolvedValue({ success: false, error: 'Connection unavailable' })
+    const runner = mount(() => useTaskBoard(detail, 'a')); await runner.settle()
+    for (const listener of env.updates) listener({ teamId: 't', epochId: 'a', changed: ['members'] })
+    await vi.advanceTimersByTimeAsync(200); await runner.settle()
+    board.resolve({ success: true, data: { epoch: { id: 'a', teamId: 't' }, activities: [], tasks: [], findings: [], members: [], roster: [] } }); await runner.settle()
+    expect(runner.result.failed).toBe(true)
+    expect(warn).toHaveBeenCalledTimes(1)
+    env.api.teamEpochBoard.mockResolvedValue({ success: true, data: { epoch: { id: 'a', teamId: 't' }, activities: [], tasks: [], findings: [], members: [], roster: [] } })
+    runner.result.retry(); runner.render(); await runner.settle()
+    expect(runner.result.failed).toBe(false)
+  } finally { warn.mockRestore() }
 })

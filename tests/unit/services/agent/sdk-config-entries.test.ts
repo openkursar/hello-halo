@@ -46,6 +46,7 @@ import {
 import { generatePromptInstructions, resolveMemoryLayout } from '../../../../src/main/platform/memory'
 import { modelCapabilitiesService } from '../../../../src/main/services/model-capabilities.service'
 import { DEFAULT_MAX_TURNS } from '../../../../src/shared/constants/agent-limits'
+import { isCollaborationEnabled, readUserAgentSettings } from '../../../../src/main/services/agent/user-agent-settings'
 import { DEFAULT_DISABLED_TOOLS, TEAM_TOOLS } from '../../../../src/shared/constants/disabled-tools'
 
 const credentials: ResolvedSdkCredentials = {
@@ -259,5 +260,33 @@ describe('the engine config directory', () => {
     state.config.agent = { configDirMode: 'halo' }
     expect((await buildUserSessionSdkOptions(params())).env.CLAUDE_CONFIG_DIR).toBe(state.haloConfigDir)
     expect((await buildInternalTaskSdkOptions(params())).env.CLAUDE_CONFIG_DIR).toBe(state.haloConfigDir)
+  })
+})
+
+
+describe('explicit collaboration settings', () => {
+  it('does not mistake mandatory native-tool denial for a user choice', async () => {
+    state.config = { agent: { disabledTools: [] } }
+    const options = await buildUserSessionSdkOptions(params())
+    expect(options.disallowedTools).toContain('Agent')
+    expect(isCollaborationEnabled()).toBe(true)
+    expect(readUserAgentSettings().collaborationEnabled).toBe(true)
+  })
+
+  it.each(['Agent', 'Task', 'spawn_agent', 'mcp__halo-team__spawn_agent'])('preserves an explicit %s denial', name => {
+    state.config = { agent: { disabledTools: [name] } }
+    expect(isCollaborationEnabled()).toBe(false)
+  })
+
+  it.each(['Agent', 'Task', 'spawn_agent', 'mcp__halo-team__spawn_agent'])('also preserves a digital human’s raw %s denial', name => {
+    state.config = { agent: { disabledTools: [] } }
+    expect(isCollaborationEnabled([name])).toBe(false)
+    state.config = { agent: { disabledTools: [name] } }
+    expect(isCollaborationEnabled([])).toBe(false)
+  })
+
+  it('keeps background command output and stopping independent of collaboration', () => {
+    state.config = { agent: { disabledTools: ['Read'] } }
+    expect(isCollaborationEnabled(['TaskOutput', 'TaskStop'])).toBe(true)
   })
 })

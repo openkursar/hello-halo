@@ -6,6 +6,7 @@ import type { Thought } from '../../../src/shared/types/transcript'
 import { expect, readAcceptanceConversation } from './acceptance-app'
 import type { AcceptanceModel, ModelRequest } from './acceptance-model'
 import { navigateToApps } from './helpers'
+import { replyWithModelTool } from './acceptance-tool-discovery'
 
 export async function mcpConnections(window: Page): Promise<InstalledApp[]> {
   return window.evaluate(async () => {
@@ -45,7 +46,7 @@ export async function changeMcpUrl(window: Page, name: string, url: string) {
   const configuration = window.getByRole('heading', { name: 'Configuration', exact: true }).locator('..')
   await configuration.getByRole('button', { name: 'Edit', exact: true }).click()
   await window.getByPlaceholder('https://...', { exact: true }).fill(url)
-  await window.getByRole('button', { name: 'Save', exact: true }).click()
+  await configuration.locator('..').getByRole('button', { name: 'Save', exact: true }).click()
   const confirmation = window.getByRole('dialog', { name: 'Save shared resource changes?', exact: true })
   await expect(confirmation).toBeVisible()
   await confirmation.getByRole('button', { name: 'Confirm change', exact: true }).click()
@@ -61,16 +62,11 @@ export function scriptMcpTurn(model: AcceptanceModel, label: string) {
   const question = `Use the connection for ${value}.`
   const answer = `Connection turn finished: ${value}.`
   const requests: ModelRequest[] = []
-  const missingTools: string[][] = []
+  const missingTools: string[] = []
   model.respond(request => {
     requests.push(request)
     if (request.toolResults.some(result => result.id === id)) return { text: answer }
-    const tools = request.tools.filter(name => name === 'echo_acceptance' || name.endsWith('__echo_acceptance'))
-    if (tools.length !== 1) {
-      missingTools.push(tools)
-      return { text: answer }
-    }
-    return { tools: [{ id, name: tools[0], input: { value } }] }
+    return replyWithModelTool(request, 'echo_acceptance', { value }, id, missingTools)
   })
   return { id, question, answer, value, requests, missingTools }
 }
@@ -79,9 +75,10 @@ export type McpTurn = ReturnType<typeof scriptMcpTurn>
 
 export function assertMcpModelResult(script: McpTurn, success: boolean) {
   expect(script.missingTools).toEqual([])
-  expect(script.requests).toHaveLength(2)
+  expect(script.requests.length).toBeGreaterThanOrEqual(2)
+  expect(script.requests.length).toBeLessThanOrEqual(4)
   expect(script.requests[0].lastUserText).toContain(script.question)
-  const results = script.requests[1].toolResults.filter(result => result.id === script.id)
+  const results = script.requests.at(-1)!.toolResults.filter(result => result.id === script.id)
   expect(results).toHaveLength(1)
   if (success) expect(results[0].text).toContain(`Service receipt: ${script.value}`)
   else {

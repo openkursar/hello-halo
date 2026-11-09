@@ -19,6 +19,7 @@ import {
   getCurrentModelName,
   findWithdrawnModel,
   AVAILABLE_MODELS,
+  GROUP_MODEL_ID,
   type AISourcesConfig,
   type AISource,
   type ModelOption,
@@ -28,6 +29,10 @@ import { isAnthropicProvider } from '../../types'
 import { useTranslation } from '../../i18n'
 import { useFreshModelCatalogs } from '../../hooks/useFreshModelCatalogs'
 import { groupModels, ModelAvailabilityNotice, ModelGroupHeading, ModelRowLabel } from '../ai-config/model-list-parts'
+import type { EngineId } from '../../../shared/types/engine'
+import { getEngineSourceCompatibility } from '../../../shared/engine-source'
+import { AutoTag, GroupIcon } from '../ai-groups/group-parts'
+import { groupTitle } from '../ai-groups/group-text'
 
 // ============================================
 // Types
@@ -41,6 +46,8 @@ interface AppModelSelectorProps {
   modelId?: string
   /** Optional recommendation text from spec author */
   recommendedModel?: string
+  /** The engine the app will run on, when known: a group it cannot use is not offered. */
+  engineId?: EngineId
   /** Called when user changes model selection */
   onChange: (sourceId: string | undefined, modelId: string | undefined) => void
 }
@@ -71,13 +78,14 @@ function getSourceDisplayName(source: AISource, t: (s: string) => string): strin
   return t('Custom API')
 }
 
-/** The label of what the app runs on: its own source and model, or the global selection. */
+/** The label of what the app runs on: its own source and model or group, or the global selection. */
 function resolveSelectionLabel(
   aiSources: AISourcesConfig,
   selected: ResolvedModelSelection,
   t: (s: string) => string
 ): string {
   if (!selected.own) return `${t('Follow global')} (${getCurrentModelName(aiSources)})`
+  if (selected.group) return groupTitle(selected.group.name, t)
 
   const model = getModelsForSource(selected.source).find(m => m.id === selected.modelId)
     ?? findWithdrawnModel(selected.source, selected.modelId)
@@ -93,6 +101,7 @@ export function AppModelSelector({
   modelSourceId,
   modelId,
   recommendedModel,
+  engineId,
   onChange,
 }: AppModelSelectorProps) {
   const { t } = useTranslation()
@@ -145,7 +154,7 @@ export function AppModelSelector({
   // Auto-expand the currently selected source section when opening
   useEffect(() => {
     if (isOpen) {
-      setExpandedSection(selected.own ? selected.source.id : null)
+      setExpandedSection(selected.group?.id ?? selected.source?.id ?? null)
     }
   }, [isOpen])
 
@@ -162,6 +171,9 @@ export function AppModelSelector({
     onChange(sourceId, selectedModelId)
     setIsOpen(false)
   }
+
+  const groups = aiSources.groups ?? []
+  const groupBlockedByEngine = engineId ? !getEngineSourceCompatibility(engineId, { isGroup: true }).compatible : false
 
   if (!config || aiSources.sources.length === 0) {
     return null
@@ -290,19 +302,73 @@ export function AppModelSelector({
                 </div>
               )
             })}
+
+            {/* Load-balancing groups: one choice each, the router picks the account per request */}
+            {groups.map(group => {
+              const isExpanded = expandedSection === group.id
+              const isSelectedGroup = selected.group?.id === group.id
+              return (
+                <div key={group.id}>
+                  <button
+                    type="button"
+                    className={`w-full px-3 py-2 text-left text-xs font-medium flex items-center justify-between hover:bg-secondary/50 transition-colors ${
+                      isSelectedGroup ? 'text-primary' : 'text-muted-foreground'
+                    }`}
+                    aria-expanded={isExpanded}
+                    onClick={() => setExpandedSection(prev => prev === group.id ? null : group.id)}
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <ChevronDown className={`w-3 h-3 shrink-0 transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
+                      <span className="truncate">{group.name}</span>
+                      <AutoTag />
+                    </div>
+                    {isSelectedGroup && (
+                      <span className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
+                    )}
+                  </button>
+
+                  {isExpanded && (
+                    <div className="bg-secondary/10 pb-1">
+                      <button
+                        disabled={groupBlockedByEngine || group.members.length === 0}
+                        onClick={() => handleSelectModel(group.id, GROUP_MODEL_ID)}
+                        className={`w-full px-3 py-2.5 text-left text-sm transition-colors flex items-center gap-2 pl-8 ${
+                          groupBlockedByEngine || group.members.length === 0 ? 'cursor-not-allowed opacity-60' : 'hover:bg-secondary/80'
+                        } ${isSelectedGroup ? 'text-primary' : 'text-foreground'}`}
+                      >
+                        {isSelectedGroup ? <Check className="w-3 h-3 flex-shrink-0" /> : <span className="w-3 flex-shrink-0" />}
+                        <GroupIcon className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate">{t('Choose automatically')}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">{t('{{count}} models', { count: group.members.length })}</span>
+                      </button>
+                      {groupBlockedByEngine && (
+                        <p className="px-3 py-1 pl-8 text-[11px] text-halo-warning">{t('Codex cannot use a load-balancing group. Choose a single model account or another engine.')}</p>
+                      )}
+                      {!groupBlockedByEngine && group.members.length === 0 && (
+                        <p className="px-3 py-1 pl-8 text-[11px] text-halo-warning">{t('This group has no models left. Edit it to add some before using it.')}</p>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="border-t border-border-faint" />
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
 
-      {selected.own && <ModelAvailabilityNotice source={selected.source} modelId={selected.modelId} withReplacement={false} />}
+      {selected.source && selected.own && <ModelAvailabilityNotice source={selected.source} modelId={selected.modelId} withReplacement={false} />}
 
       {/* Description text */}
       <p className="text-xs text-muted-foreground">
         {overrideRemoved
           ? t('The account it was set to use was removed, so it follows the global selection.')
-          : hasOverride
-            ? t('This app uses a dedicated model, independent of the global selection')
-            : t('Uses the globally selected model. Change in the header model selector.')}
+          : selected.group
+            ? t('This app uses a load-balancing group, independent of the global selection')
+            : hasOverride
+              ? t('This app uses a dedicated model, independent of the global selection')
+              : t('Uses the globally selected model. Change in the header model selector.')}
       </p>
     </div>
   )

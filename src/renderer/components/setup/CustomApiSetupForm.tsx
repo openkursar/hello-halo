@@ -9,15 +9,16 @@
  *      key, then tell us whose key it is" mental model.
  *   3. API URL auto-fills from the chosen provider and stays editable.
  *
- * No model picker is shown: the model list is resolved on save (live fetch for
- * OpenAI-compatible providers, static catalog otherwise) and the first model is
- * selected automatically. The user refines the model later in Settings / chat.
+ * Model-agnostic entries (OpenAI / Anthropic protocol) carry no curated list:
+ * an optional model ID field lets the user name one, and OpenAI-compatible
+ * endpoints are resolved by a live fetch on save. Vendor presets keep their
+ * static catalog. The user refines the model later in Settings / chat.
  *
  * Shares the provider catalog (`getApiKeyProviders`) and fetch/validate APIs
  * with `ProviderSelector`; only the layout is bespoke.
  */
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { Eye, EyeOff, Loader2, CheckCircle2, XCircle, ExternalLink } from 'lucide-react'
 import { api } from '../../api'
@@ -25,7 +26,16 @@ import { getBuiltinProvider, type AISource, type ModelOption, type ProviderId } 
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveLocalizedText, type ProviderDocsLink } from '../../../shared/types'
 import { formatModelFetchError } from '../../utils/model-fetch-error'
+import { createRequestGate } from '../../utils/request-gate'
 import { ProviderCatalogDropdown } from '../ai-config/ProviderCatalogDropdown'
+import {
+  EMPTY_MODEL_FIELD,
+  canBackfillTestedModel,
+  onModelTyped,
+  onTestSelected,
+  withoutTestSelection,
+  type ModelIdField
+} from './model-field'
 
 interface CustomApiSetupFormProps {
   /** Optional tutorial link from the login entry (e.g. "how to get a key"). */
@@ -41,65 +51,117 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
   const [showApiKey, setShowApiKey] = useState(false)
   const [providerId, setProviderId] = useState<ProviderId | ''>('')
   const [apiUrl, setApiUrl] = useState('')
+  const [modelField, setModelField] = useState<ModelIdField>(EMPTY_MODEL_FIELD)
+  const modelId = modelField.value
 
   const [isSaving, setIsSaving] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [validationResult, setValidationResult] = useState<{ valid: boolean; message?: string } | null>(null)
+  /** A resolve/validate result may only land while its inputs are still current. */
+  const requestGate = useRef(createRequestGate())
 
   const builtin = providerId ? getBuiltinProvider(providerId) : undefined
   const isAnthropic = providerId === 'anthropic' || builtin?.apiType === 'anthropic_passthrough'
+  const staticModels = builtin?.models ?? []
   const canSubmit = Boolean(apiKey.trim() && providerId)
 
   const handleProviderChange = (id: ProviderId) => {
+    requestGate.current.invalidate()
     setProviderId(id)
     setError(null)
     setValidationResult(null)
     const b = getBuiltinProvider(id)
     setApiUrl(b?.apiUrl || '')
+    setModelField(EMPTY_MODEL_FIELD)
   }
 
-  // Resolve the model list at save time: live fetch for OpenAI-compatible
-  // gateways, falling back to the provider's static catalog. Anthropic always
-  // uses its static list.
+  const handleApiKeyChange = (value: string) => {
+    requestGate.current.invalidate()
+    setApiKey(value)
+    setError(null)
+    setValidationResult(null)
+    setModelField(withoutTestSelection)
+  }
+
+  // A tested model belongs to the endpoint that answered it; a typed one stays.
+  const handleApiUrlChange = (value: string) => {
+    requestGate.current.invalidate()
+    setApiUrl(value)
+    setError(null)
+    setValidationResult(null)
+    setModelField(withoutTestSelection)
+  }
+
+  const handleModelIdChange = (value: string) => {
+    requestGate.current.invalidate()
+    setModelField(onModelTyped(value))
+    setError(null)
+    setValidationResult(null)
+  }
+
+  // Resolve the model at save time. A typed model ID is an explicit statement
+  // about the endpoint and wins. Otherwise an OpenAI-compatible gateway is
+  // asked for its list; a vendor preset falls back to its curated catalog.
   //
-  // A genuine fetch failure (bad key, auth, unreachable gateway) is returned as
-  // `fetchError` so the caller can surface why (#249) instead of letting the
-  // user enter the app with a broken credential. A successful-but-empty list
-  // still degrades silently to the static catalog — some gateways expose no
-  // `/models` endpoint, and blocking onboarding on that would be wrong.
+  // A credential rejection is always returned as `fetchError` so the user
+  // cannot enter the app with a broken key (#249). Other fetch failures are
+  // tolerated when the user named a model: many compatible gateways do not
+  // implement `/models` but serve chat just fine.
   const resolveModels = async (): Promise<{
     model: string
     availableModels: ModelOption[]
     fetchError?: string
   }> => {
-    const fallback = builtin?.models ?? []
-    const staticList = () => {
-      const model = fallback[0]?.id || ''
-      const availableModels = fallback.length > 0
-        ? fallback
-        : (model ? [{ id: model, name: model }] : [])
-      return { model, availableModels }
-    }
+    const typedModel = modelId.trim()
+    let fetched: ModelOption[] = []
 
     if (!isAnthropic && apiKey.trim() && apiUrl) {
       try {
         const res = await api.fetchModels(apiKey.trim(), apiUrl)
         if (!res.success) {
-          return { ...staticList(), fetchError: formatModelFetchError(t, res.code, res.error) }
-        }
-        if (res.data) {
-          const { models } = res.data as { models: ModelOption[] }
-          if (models.length > 0) {
-            return { model: models[0].id, availableModels: models }
+          const message = formatModelFetchError(t, res.code, res.error)
+          if (!typedModel || res.code === 'MODEL_FETCH_UNAUTHORIZED') {
+            return { model: '', availableModels: staticModels, fetchError: message }
           }
+        } else if (res.data) {
+          fetched = (res.data as { models: ModelOption[] }).models
         }
       } catch {
-        return { ...staticList(), fetchError: formatModelFetchError(t, 'MODEL_FETCH_NETWORK') }
+        if (!typedModel) {
+          return {
+            model: '',
+            availableModels: staticModels,
+            fetchError: formatModelFetchError(t, 'MODEL_FETCH_NETWORK')
+          }
+        }
       }
     }
 
-    return staticList()
+    if (typedModel) {
+      return {
+        model: typedModel,
+        availableModels: fetched.some(model => model.id === typedModel)
+          ? fetched
+          : [{ id: typedModel, name: typedModel }, ...fetched]
+      }
+    }
+
+    if (fetched.length > 0) {
+      return { model: fetched[0].id, availableModels: fetched }
+    }
+
+    if (staticModels.length > 0) {
+      return { model: staticModels[0].id, availableModels: staticModels }
+    }
+
+    return {
+      model: '',
+      availableModels: [],
+      fetchError: isAnthropic
+        ? t('Enter a model ID for this endpoint')
+        : t('No models found at this endpoint. Enter a model ID or check the URL.')
+    }
   }
 
   const handleSave = async () => {
@@ -112,14 +174,22 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
       return
     }
 
+    const token = requestGate.current.begin()
     setError(null)
     setIsSaving(true)
 
     try {
       const { model, availableModels, fetchError } = await resolveModels()
+      if (!requestGate.current.isCurrent(token)) {
+        setError(t('Configuration changed — review and save again'))
+        return
+      }
       if (fetchError) {
         setError(fetchError)
-        setIsSaving(false)
+        return
+      }
+      if (!model) {
+        setError(t('Please select a model'))
         return
       }
       const now = new Date().toISOString()
@@ -140,7 +210,8 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
 
       await onSave(source)
     } catch {
-      setError(t('Save failed'))
+      if (requestGate.current.isCurrent(token)) setError(t('Save failed'))
+    } finally {
       setIsSaving(false)
     }
   }
@@ -155,13 +226,30 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
       return
     }
 
+    const token = requestGate.current.begin()
     setError(null)
     setIsTesting(true)
     setValidationResult(null)
 
     try {
-      const model = builtin.models[0]?.id
+      const { model, fetchError } = await resolveModels()
+      if (!requestGate.current.isCurrent(token)) return
+      if (fetchError) {
+        setValidationResult({ valid: false, message: fetchError })
+        return
+      }
+      if (!model) {
+        setValidationResult({ valid: false, message: t('Please select a model') })
+        return
+      }
+      // Remember what was actually tested so Save cannot pick a different
+      // model. A typed value stays the user's; only an empty/test value is
+      // backfilled, and only where the field is visible.
+      if (canBackfillTestedModel(staticModels.length > 0, modelField)) {
+        setModelField(onTestSelected(model))
+      }
       const result = await api.validateApi(apiKey.trim(), apiUrl, isAnthropic ? 'anthropic' : 'openai', model)
+      if (!requestGate.current.isCurrent(token)) return
 
       if (!result.success || !result.data?.valid) {
         setValidationResult({ valid: false, message: result.data?.message || result.error || t('Connection failed') })
@@ -171,6 +259,7 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
         setValidationResult({ valid: true, message: t('Connection successful') })
       }
     } catch {
+      if (!requestGate.current.isCurrent(token)) return
       setValidationResult({ valid: false, message: t('Connection failed') })
     } finally {
       setIsTesting(false)
@@ -186,7 +275,7 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
           <input
             type={showApiKey ? 'text' : 'password'}
             value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
+            onChange={(e) => handleApiKeyChange(e.target.value)}
             placeholder={t('Enter your API Key')}
             className="w-full px-4 py-2.5 pr-12 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors"
           />
@@ -225,7 +314,7 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
         <input
           type="text"
           value={apiUrl}
-          onChange={(e) => setApiUrl(e.target.value)}
+          onChange={(e) => handleApiUrlChange(e.target.value)}
           placeholder="https://xxx.xxx.xxx"
           className="w-full px-4 py-2.5 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors"
         />
@@ -233,6 +322,26 @@ export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
           {t('Auto-filled when you pick a provider; editable for a custom proxy')}
         </p>
       </div>
+
+      {/* Protocol entries have no vendor catalog — let the user name a model.
+          OpenAI-compatible endpoints can resolve one by fetching instead. */}
+      {builtin && staticModels.length === 0 && (
+        <div className="mb-2">
+          <label className="block text-sm text-muted-foreground mb-2">{t('Model ID')}</label>
+          <input
+            type="text"
+            value={modelId}
+            onChange={(e) => handleModelIdChange(e.target.value)}
+            placeholder={isAnthropic ? 'claude-sonnet-5' : t('Optional — fetched from the endpoint')}
+            className="w-full px-4 py-2.5 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            {isAnthropic
+              ? t('Enter the model ID this endpoint serves.')
+              : t('Optional. Leave blank to fetch the endpoint\u2019s model list and use its first model.')}
+          </p>
+        </div>
+      )}
 
       {/* Error message */}
       {error && (

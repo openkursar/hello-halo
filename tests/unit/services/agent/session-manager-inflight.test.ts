@@ -75,6 +75,7 @@ import {
   consumePendingRebuild,
   markTurnDispatched,
   markTurnInitReceived,
+  handleMcpAppsChange,
   SessionOptionsStaleError,
 } from '../../../../src/main/services/agent/session-manager'
 import { getConfig, saveConfig, getCredentialsGeneration } from '../../../../src/main/foundation/config.service'
@@ -115,6 +116,27 @@ afterAll(() => {
 })
 
 describe('getOrCreateV2Session in-flight sharing', () => {
+  it('rebuilds an invalidated warm-up before handing it to a newly arriving sender', async () => {
+    const stale = fakeSession('stale-warmup')
+    const current = fakeSession('current-tools')
+    const preparation = deferred<ReturnType<typeof fakeSession>>()
+    createSession.mockReturnValueOnce(preparation.promise).mockResolvedValueOnce(current)
+    const original = { engineId: 'halo', model: 'm', mcpServers: {} }
+    const updated = { ...original, mcpServers: { installed: { type: 'http', url: 'http://127.0.0.1:1/mcp' } } }
+    const warming = getOrCreateV2Session('space', 'warm-config-change', original)
+    await flush()
+    handleMcpAppsChange(null)
+    const arriving = acquireV2Session('space', 'warm-config-change', updated)
+    preparation.resolve(stale)
+    await warming
+    const lease = await arriving
+    expect(lease.session).toBe(current)
+    expect(stale.close).toHaveBeenCalledTimes(1)
+    expect(stale.send).not.toHaveBeenCalled()
+    expect(createSession.mock.calls.at(-1)?.[0].mcpServers).toEqual(updated.mcpServers)
+    lease.release()
+  })
+
   it('a gated latecomer with DIFFERENT inputs does not share: it waits, then rebuilds on its own options', async () => {
     const conv = 'conv-gate-mismatch'
     const s1 = fakeSession('s1')
@@ -474,18 +496,15 @@ describe('independent account session lifecycle', () => {
     expect(second.close).not.toHaveBeenCalled()
   })
 
-  it.each(['turn', 'awaiting-init', 'team'])('defers an account change at the %s boundary until safely idle', async (boundary) => {
+  it.each(['turn', 'awaiting-init'])('defers an account change at the %s boundary until safely idle', async (boundary) => {
     const first = fakeSession('old-a')
     const replacement = fakeSession('new-a')
     const state = {
       turn: boundary === 'turn' ? { thoughts: [] } : null,
-      teamThoughts: boundary === 'team'
-        ? [{ type: 'tool_use', toolName: 'Agent', id: 'task', toolInput: { team_name: 'crew' } }]
-        : [],
     }
     startConsumer.mockReturnValueOnce({
       isRunning: true, getActiveSessionState: () => state.turn,
-      getTeamLifecycleThoughts: () => state.teamThoughts, stop: vi.fn(),
+      stop: vi.fn(),
     })
     createSession.mockResolvedValueOnce(first).mockResolvedValueOnce(replacement)
     await getOrCreateV2Session('space', 'conv-busy-a', accountOptions('account-a'), undefined, undefined, {} as never)
@@ -496,7 +515,6 @@ describe('independent account session lifecycle', () => {
     expect(first.close).not.toHaveBeenCalled()
 
     state.turn = null
-    state.teamThoughts = []
     markTurnInitReceived('conv-busy-a')
     await expect(getOrCreateV2Session('space', 'conv-busy-a', accountOptions('account-a', 'test-refreshed-a'))).resolves.toBe(replacement)
     expect(first.close).toHaveBeenCalledTimes(1)
@@ -672,12 +690,15 @@ describe('independent account session lifecycle', () => {
   it('keeps a manager-owned headless lease protected until the execution release boundary', async () => {
     const first = fakeSession('account-a')
     createSession.mockResolvedValueOnce(first)
-    const lease = await acquireV2Session('space', 'run-lease', accountOptions('account-a'))
+    const lease = await acquireV2Session('space', 'run-lease', accountOptions('account-a'), undefined, undefined,
+      undefined, undefined, undefined, undefined, { streamOwner: 'caller' })
     reconfigure('account-a')
     await flush()
     expect(first.close).not.toHaveBeenCalled()
     registerActiveSession('run-lease', createSessionState('space', 'run-lease', new AbortController()))
-    lease.session.send('headless turn')
+    await lease.send('headless turn')
+    await lease.send('headless continuation')
+    expect(first.send).toHaveBeenCalledTimes(2)
     expect(consumePendingRebuild('run-lease')).toBe(false)
     expect(evictIdleSession('run-lease', 'budget')).toBe(false)
     expect(first.close).not.toHaveBeenCalled()
@@ -687,6 +708,31 @@ describe('independent account session lifecycle', () => {
     expect(first.close).toHaveBeenCalledTimes(1)
     expect(activeSessions.has('run-lease')).toBe(false)
     expect(isSessionBusy('run-lease')).toBe(false)
+    expect(v2Sessions.has('run-lease')).toBe(false)
+    const restricted = fakeSession('restricted')
+    createSession.mockResolvedValueOnce(restricted)
+    const next = await acquireV2Session('space', 'run-lease', {
+      ...accountOptions('account-a'), disallowedTools: ['mcp__fixture__lookup'],
+    }, undefined, undefined, undefined, undefined, undefined, undefined, { streamOwner: 'caller' })
+    expect(next.session).toBe(restricted)
+    expect(createSession.mock.calls.at(-1)?.[0].disallowedTools).toEqual(['mcp__fixture__lookup'])
+    next.close()
+    next.release()
+  })
+
+  it('retires a caller-owned stream after rejected send acceptance without retaining init state', async () => {
+    const first = fakeSession('account-a')
+    const error = new Error('headless transport rejection')
+    first.send.mockRejectedValueOnce(error)
+    createSession.mockResolvedValueOnce(first)
+    const lease = await acquireV2Session('space', 'run-send-error', accountOptions('account-a'), undefined, undefined,
+      undefined, undefined, undefined, undefined, { streamOwner: 'caller' })
+    await expect(lease.send('headless turn')).rejects.toBe(error)
+    lease.close()
+    lease.release()
+    expect(first.close).toHaveBeenCalledTimes(1)
+    expect(v2Sessions.has('run-send-error')).toBe(false)
+    expect(isSessionBusy('run-send-error')).toBe(false)
   })
 
   it('cleans up a failed dispatch exactly once without leaving awaiting-init protection', async () => {

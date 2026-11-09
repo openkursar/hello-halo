@@ -102,7 +102,7 @@ Halo is a local-first Electron AI product with:
 
 ### 3.6 Performance
 
-- **Performance is a hard requirement**: do not regress startup speed, runtime responsiveness, or memory behavior.
+- **Assess performance before implementation**, including small changes; added costs follow the `product-principles` §1 human-approval gate.
 - Essential startup path must remain minimal; heavy work stays in extended/lazy init.
 - Automation model is trigger-driven (schedule/event/manual), not always-on token consumption.
 

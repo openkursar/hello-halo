@@ -50,16 +50,16 @@ scenarios:
         zh: 用真实工具执行文件搜索、附带搜索程序、Office 库及大图读取。
       - en: Observe the main process command resolution before and after work, and verify the Office executable and loaded libraries come from this package or its isolated generated shim. The search command comes from the external Claude Code installation, which this package does not ship.
         zh: 在工作前后观察主进程命令解析，并核实 Office 执行程序及实际加载库来自当前包或其隔离生成的入口脚本。搜索程序由外部 Claude Code 安装提供，本包并不附带。
-      - en: Verify that project agents and commands are advertised to the model.
-        zh: 确认项目代理和命令已提供给模型。
+      - en: Verify that project commands remain available while native delegation tools and obsolete agent profiles are not advertised.
+        zh: 确认项目命令仍可用，而原生委派工具和旧代理目录不会提供给模型。
     expected:
       - en: Each tool returns a successful result; the Office tools run from the packaged runtime.
         zh: 每个工具返回成功结果；Office 工具来自打包运行时。
     requirements:
       - packaged-app
     notes:
-      en: This case establishes only Claude Code behavior, including its project .claude/agents discovery. The fixture excludes inherited developer command paths without adding bundle paths itself; production runtime initialization remains active. External rg resolution invalidates the host-command exclusion claim. Available system node is diagnostic only; the actual Office executable and library origins establish whether it was used. Main PATH observation and Bash command receipts are separate from an internal Grep spawn trace. Earlier results lacking these engine and command-origin observations do not retroactively establish them.
-      zh: 本场景仅验证 Claude Code 行为，包括项目 .claude/agents 发现。测试排除继承的开发工具路径，不自行添加包路径，保留产品运行时初始化。主进程解析到外部 rg 时，不能声称已排除宿主命令。系统 node 可用性仅作诊断，是否借用由实际 Office 执行程序及库来源判断。主进程 PATH 观测和 Bash 命令回执不等于内部 Grep 进程跟踪。缺少这些引擎与命令来源观测的旧结果不能被追认为已满足。
+      en: This case establishes only Claude Code behavior, including refusal to expose obsolete project agent profiles. The fixture excludes inherited developer command paths without adding bundle paths itself; production runtime initialization remains active. External rg resolution invalidates the host-command exclusion claim. Available system node is diagnostic only; the actual Office executable and library origins establish whether it was used. Main PATH observation and Bash command receipts are separate from an internal Grep spawn trace. Earlier results lacking these engine and command-origin observations do not retroactively establish them.
+      zh: 本场景仅验证 Claude Code 行为，包括不暴露旧项目代理配置。测试排除继承的开发工具路径，不自行添加包路径，保留产品运行时初始化。主进程解析到外部 rg 时，不能声称已排除宿主命令。系统 node 可用性仅作诊断，是否借用由实际 Office 执行程序及库来源判断。主进程 PATH 观测和 Bash 命令回执不等于内部 Grep 进程跟踪。缺少这些引擎与命令来源观测的旧结果不能被追认为已满足。
   - id: terminal.environment.packaged-tools-halo
     title:
       en: Use packaged search and document tools with Halo SDK
@@ -94,8 +94,8 @@ scenarios:
       - packaged-app
       - halo-sdk
     notes:
-      en: A Claude Code pass or a fallback engine is not evidence for this case. Project command discovery is covered; automatic .claude/agents discovery is not asserted for Halo SDK. The fixture supplies only system command directories and does not install tools or add package vendor paths. External rg resolution invalidates host-command exclusion; system node availability alone is not a failure when the actual Office executable and libraries are package-owned. Command origins are retained before and after work, with no claim that Bash provenance alone identifies an internal Grep spawn. Earlier host-assisted results remain historical evidence of their original environment.
-      zh: Claude Code 通过或降级引擎不能作为本场景证据。覆盖项目命令发现，不对 Halo SDK 断言自动发现 .claude/agents。测试只提供系统命令目录，不安装工具或补入包内 vendor 路径。解析到外部 rg 时不能声称排除了宿主命令；实际 Office 执行程序及库属于当前包时，不仅因系统 node 可用而判失败。保留工作前后来源记录，不用 Bash 来源代替内部 Grep 启动证明。旧的宿主辅助运行结果只保留其原环境的历史证据。
+      en: A Claude Code pass or a fallback engine is not evidence for this case. Project commands remain covered; native delegation and obsolete project agent catalogs must remain unavailable. The fixture supplies only system command directories and does not install tools or add package vendor paths. External rg resolution invalidates host-command exclusion; system node availability alone is not a failure when the actual Office executable and libraries are package-owned. Command origins are retained before and after work, with no claim that Bash provenance alone identifies an internal Grep spawn. Earlier host-assisted results remain historical evidence of their original environment.
+      zh: Claude Code 通过或降级引擎不能作为本场景证据。覆盖项目命令发现，同时原生委派和旧项目代理目录必须保持不可用。测试只提供系统命令目录，不安装工具或补入包内 vendor 路径。解析到外部 rg 时不能声称排除了宿主命令；实际 Office 执行程序及库属于当前包时，不仅因系统 node 可用而判失败。保留工作前后来源记录，不用 Bash 来源代替内部 Grep 启动证明。旧的宿主辅助运行结果只保留其原环境的历史证据。
   - id: terminal.environment.windows-shell
     title:
       en: Open the Windows terminal without MSYS assumptions

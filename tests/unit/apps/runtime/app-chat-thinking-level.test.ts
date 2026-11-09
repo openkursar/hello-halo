@@ -7,6 +7,14 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
+const authority = vi.hoisted(() => ({ current: null as ReturnType<typeof import('./fixtures/participant-service').createScopedParticipantService> | null }))
+vi.mock('../../../../src/main/apps/team', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../src/main/apps/team')>()
+  const { createScopedParticipantService } = await import('./fixtures/participant-service')
+  authority.current = createScopedParticipantService()
+  return { ...actual, getTeamService: () => ({ participants: authority.current!.service, getCollaborationScope: () => null, getCollabForConversation: () => null }) }
+})
+
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   unstable_v2_createSession: vi.fn(),
   tool: vi.fn((opts: any) => ({ ...opts, _isTool: true })),
@@ -63,6 +71,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
 }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({
+  emitUserStop: vi.fn(),
   stopGeneration,
   getSessionState: (id: string) =>
     consumers.has(id)
@@ -94,7 +103,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
 
-vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn(), onAgentEvent: vi.fn(() => () => {}) }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ emitHumanRequest: vi.fn(), emitAgentEvent: vi.fn(), onAgentEvent: vi.fn(() => () => {}) }))
 vi.mock('../../../../src/main/services/agent/stream-processor', () => ({ processStream: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/message-utils', () => ({ buildMessageContent: vi.fn(), formatCanvasContext: () => '' }))
 
@@ -183,6 +192,8 @@ const imTurn = {
 
 describe('the digital human’s own thinking level', () => {
   beforeEach(() => {
+  authority.current!.reset()
+  authority.current!.allow('office', 'task', 'person')
     levels.overrides = {}
     vi.spyOn(console, 'error').mockImplementation(() => {})
   })

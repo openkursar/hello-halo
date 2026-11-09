@@ -18,6 +18,7 @@ import type { ImageAttachment } from './image-attachment'
 import type { MessageTask } from './message-task'
 import type { KBSource } from './tlon'
 import type { SkillNotice } from './skills'
+import type { ReasoningEffortLevel } from '../constants/reasoning-effort'
 
 // ============================================
 // Thought process
@@ -25,7 +26,7 @@ import type { SkillNotice } from './skills'
 
 export type ThoughtType = 'thinking' | 'text' | 'tool_use' | 'tool_result' | 'system' | 'result' | 'error'
 
-/** Progress tracking for a Task/Agent tool_use thought. */
+/** Progress reported by an external engine for a tool's background task. */
 export interface TaskProgress {
   taskId: string
   status: 'running' | 'completed' | 'failed' | 'stopped'
@@ -59,7 +60,7 @@ export interface Thought {
     isError: boolean
     timestamp: string
   }
-  /** Sub-agent support: links this thought to a parent Task tool_use */
+  /** Stored parent thought ID for nested tool messages. */
   parentToolUseId?: string
   taskProgress?: TaskProgress
 }
@@ -150,6 +151,7 @@ export interface TranscriptProvenanceMetadata {
   /** Team delivery. `fromMemberName` is null for system-authored notices. */
   teamId?: string
   epochId?: string
+  requestId?: string
   teamName?: string
   fromMemberName?: string | null
   teamTriggerKind?: string
@@ -167,6 +169,8 @@ export interface TranscriptProvenance {
 }
 
 export interface TranscriptMessageMetadata extends TranscriptProvenanceMetadata {
+  /** Source input settings inherited by automatic continuations, including explicit off. */
+  reasoning?: { thinkingEnabled: boolean; effort?: ReasoningEffortLevel }
   /** Lightweight file changes for immediate display without loading thoughts */
   fileChanges?: FileChangesSummary
   /** The goal the user set with this message (user messages only). */

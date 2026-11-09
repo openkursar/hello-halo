@@ -13,7 +13,7 @@
  * subprocess; the session layer is a fake whose send() settles the round.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi, type MockInstance } from 'vitest'
 
 // ============================================
 // Mocks (must be declared before importing app-chat)
@@ -64,6 +64,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
 }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({
+  emitUserStop: vi.fn(),
   stopGeneration: vi.fn(async () => {}),
   getSessionState: () => ({ isActive: false, thoughts: [] }),
 }))
@@ -102,6 +103,16 @@ const { buildPromptContext, getDelegatedPolicy } = vi.hoisted(() => ({
 // Partial: only the accessor is faked, so modules that merely read the runtime
 // (live instances, the board) keep their real implementations.
 const teamRuntimeReady = vi.hoisted(() => ({ current: true }))
+const teamAuthority = vi.hoisted(() => ({ ready: true,
+  current: null as ReturnType<typeof import('./fixtures/participant-service').createScopedParticipantService> | null,
+}))
+vi.mock('../../../../src/main/apps/team', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../src/main/apps/team')>()
+  const { createScopedParticipantService } = await import('./fixtures/participant-service')
+  teamAuthority.current = createScopedParticipantService()
+  return { ...actual, getTeamService: () => teamAuthority.ready
+    ? { participants: teamAuthority.current!.service, getCollaborationScope: () => null, getCollabForConversation: () => null } : null }
+})
 vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getActiveTeamRuntime: () => teamRuntimeReady.current ? ({
@@ -120,6 +131,7 @@ vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
 }))
 vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({
   createTeamMcpServer: () => ({ _isMcpServer: true, name: 'halo-team' }),
+  createCoordinationMcpServer: (_resolve: unknown, options: unknown) => ({ _isMcpServer: true, name: 'halo-team', coordination: options }),
 }))
 // The base toolset reaches the digital-human tools through the app bridge.
 vi.mock('../../../../src/main/services/app-bridge', async (importOriginal) => ({
@@ -172,7 +184,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getDbMcpServers: vi.fn(() => null),
 }))
-vi.mock('../../../../src/main/services/agent/events', () => ({ onAgentEvent: () => ({ dispose: () => {} }), emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ onAgentEvent: () => ({ dispose: () => {} }), emitAgentEvent: vi.fn(), emitHumanRequest: vi.fn() }))
 // A borrowed turn lists the skills it could load; none here.
 const { listLoadableSkillCopies } = vi.hoisted(() => ({ listLoadableSkillCopies: vi.fn((_spaceId: string): unknown[] => []) }))
 vi.mock('../../../../src/main/apps/skill-discovery', () => ({ listLoadableSkillCopies }))
@@ -350,14 +362,20 @@ import { resolveCredentialsForSdk } from '../../../../src/main/services/agent/sd
 import { requestAppMemoryConsolidation, prepareMemoryForTurn, appMemorySettings, loadSpaceTopicsForTurn } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
 import { generatePromptInstructions } from '../../../../src/main/platform/memory'
 import { describeSelfInstance, formatInstanceTag } from '../../../../src/main/apps/runtime/live-instances'
-import { setImPermissionContext, clearImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
+import { setImPermissionContext, clearImPermissionContext, type ImPermissionContext } from '../../../../src/main/apps/runtime/im-permission-registry'
 import { setActiveImChannelManager } from '../../../../src/main/apps/runtime/im-channels'
 import { buildTeamSessionKey } from '../../../../src/shared/apps/team-types'
 import { fullCapabilityPolicy } from '../../../../src/shared/apps/capability-policy'
 import { registerToolset } from '../../../../src/main/services/agent/toolsets'
 import { buildLocalSessionKey, getAppChatConversationId } from '../../../../src/shared/apps/im-keys'
+import * as conversationMcp from '../../../../src/main/apps/conversation-mcp'
 
 beforeEach(() => {
+  teamAuthority.ready = true
+  teamAuthority.current!.reset()
+  for (const epochId of ['epoch-1', 'epoch-context-window', 'policy-snapshot', 'restricted-live-input', 'epoch-outside', 'external-authority-missing', 'external-authority-message']) {
+    teamAuthority.current!.allow('team-1', epochId, 'app-member')
+  }
   app.userOverrides = undefined
   getPromptInstructions.mockImplementation(generatePromptInstructions)
   send.mockClear()
@@ -437,6 +455,59 @@ function keptMemberContext(): void {
     roster: [],
   })
 }
+
+describe('source authority at dispatch', () => {
+  it.each([true, false])('revalidates a source after engine acquisition (revoked=%s) before recording or sending it', async revoked => {
+    keptMemberContext()
+    beginRound.mockClear()
+    sink.writeUserMessage.mockClear()
+    let current = true, entered = false
+    let release!: () => void
+    const ready = new Promise<void>(resolve => { release = resolve })
+    const acquire = vi.mocked(acquireV2Session).getMockImplementation()!
+    vi.mocked(acquireV2Session).mockImplementationOnce(async (...args) => {
+      entered = true
+      await ready
+      return acquire(...args)
+    })
+    const onAdmitted = vi.fn()
+    const running = sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId: getAppChatConversationId(app.id),
+      message: 'Review this collaborator report before replying.', collaborationRequestId: 'original-request', canStart: () => current, onAdmitted,
+      recorded: { content: 'Original collaborator report.', provenance: { source: 'team-message', metadata: { teamId: 'source-team', epochId: 'source-work' } } },
+    })
+    const settled = running.then(() => undefined, error => error)
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true))
+      expect(sink.writeUserMessage).not.toHaveBeenCalled()
+      current = !revoked
+    } finally { release() }
+    expect(await settled).toBeUndefined()
+    expect(onAdmitted).toHaveBeenCalledOnce()
+    if (revoked) {
+      expect(send).not.toHaveBeenCalled()
+      expect(beginRound).not.toHaveBeenCalled()
+      expect(sink.writeUserMessage).not.toHaveBeenCalled()
+    } else {
+      expect(send).toHaveBeenCalledOnce()
+      expect(beginRound).toHaveBeenCalledOnce()
+      expect(sink.writeUserMessage).toHaveBeenCalledWith('Original collaborator report.', undefined, undefined,
+        expect.objectContaining({ source: 'team-message' }), undefined)
+    }
+  })
+
+  it('refuses a team delivery while collaboration admission is unavailable', async () => {
+    keptMemberContext()
+    vi.mocked(acquireV2Session).mockClear()
+    sink.writeUserMessage.mockClear()
+    teamAuthority.ready = false
+    try {
+      await expect(sendAppChatMessage(memberTurn())).rejects.toThrow(/collaboration|Collaboration/)
+      expect(acquireV2Session).not.toHaveBeenCalled()
+      expect(send).not.toHaveBeenCalled()
+      expect(sink.writeUserMessage).not.toHaveBeenCalled()
+    } finally { teamAuthority.ready = true }
+  })
+})
 
 describe('a temporary collaboration member mounts no memory and no digital-human tools', () => {
   it('passes a digital human explicit engine choice to history preparation', async () => {
@@ -950,25 +1021,26 @@ describe('a request from outside never operates Halo', () => {
   })
 })
 
-describe('the owner\u2019s own chats have team collaboration built in', () => {
-  const createServer = vi.fn((scope: { conversationId: string }) => ({ _isMcpServer: true, name: 'halo-team', scope }))
+describe('owned source chats share the collaboration tools with explicit guest grants', () => {
+  let createServer: MockInstance<Parameters<typeof conversationMcp.createSpaceTeamMcpServer>, ReturnType<typeof conversationMcp.createSpaceTeamMcpServer>>
   const GUIDE = 'Team collaboration guide (test)'
 
   beforeAll(() => {
     registerToolset({
       id: 'halo-team', displayName: 'Team', summary: 'test', usageGuide: GUIDE,
-      isAvailable: () => true, createServer,
+      isAvailable: () => true, createServer: () => ({ _isMcpServer: true, name: 'halo-team' }) as never,
     })
   })
 
   beforeEach(() => {
     buildUserSessionSdkOptions.mockClear()
-    createServer.mockClear()
+    createServer = vi.spyOn(conversationMcp, 'createSpaceTeamMcpServer')
     buildPromptContext.mockReturnValue(null)
     vi.mocked(getApiCredentialsForSelection).mockResolvedValue({ provider: 'anthropic', sourceId: 'dh-source', model: 'dh-model' } as never)
   })
 
   afterEach(() => {
+    createServer.mockRestore()
     vi.mocked(getApiCredentialsForSelection).mockResolvedValue({ provider: 'anthropic' } as never)
   })
 
@@ -981,36 +1053,40 @@ describe('the owner\u2019s own chats have team collaboration built in', () => {
     const other = buildLocalSessionKey(app.id, 'chat-b')
     for (const conversationId of [getAppChatConversationId(app.id), local, other]) {
       await sendAppChatMessage(ownerTurn(conversationId === getAppChatConversationId(app.id) ? undefined : conversationId))
-      expect(mountedSurfaces().mcpServers['halo-team']).toMatchObject({ scope: { conversationId } })
+      expect(mountedSurfaces().mcpServers['halo-team']).toMatchObject({ coordination: { spawn: expect.any(Function) } })
       expect(mountedSurfaces().systemPrompt).toContain(GUIDE)
-      expect(createServer).toHaveBeenLastCalledWith({
+      expect(createServer).toHaveBeenLastCalledWith(expect.objectContaining({
         spaceId: 'space-1', conversationId, workDir: environment.workDir,
         modelSelection: { modelSourceId: 'dh-source', modelId: 'dh-model' },
-      })
+        collaborationEnabled: true, canSpawn: expect.any(Function),
+      }), expect.any(Function), expect.any(Function))
     }
     expect(createServer.mock.calls.map(([scope]) => scope.conversationId)).toEqual([getAppChatConversationId(app.id), local, other])
   })
 
-  it('mounts nothing for an IM chat, whether the sender is the owner or a guest', async () => {
+  it('offers IM collaboration to its owner and to an explicitly granted guest', async () => {
     const conversationId = `app-chat:${app.id}:wecom-bot:group:group-7`
     const turn = {
       appId: app.id, spaceId: 'space-1', conversationId, message: 'organize a team',
       imSession: { channel: 'wecom-bot', chatType: 'group' as const, displayName: 'Group', sessionId: 'inst:group-7' },
     }
     try {
-      for (const sender of [
-        { senderId: 'owner', senderName: 'Owner', isOwner: true, ownerIds: ['owner'] },
-        { senderId: 'guest', senderName: 'Guest', isOwner: false, guestPolicy: {} },
-      ]) {
+      const senders: Array<[ImPermissionContext, boolean]> = [
+        [{ senderId: 'owner', senderName: 'Owner', isOwner: true, ownerIds: ['owner'] }, true],
+        [{ senderId: 'guest', senderName: 'Guest', isOwner: false, guestPolicy: {} }, false],
+        [{ senderId: 'guest', senderName: 'Guest', isOwner: false, guestPolicy: { allowCollaboration: true, allowedTools: [] } }, true],
+      ]
+      for (const [sender, expected] of senders) {
         setImPermissionContext(conversationId, sender)
         await sendAppChatMessage(turn)
-        expect(mountedSurfaces().mcpServers).not.toHaveProperty('halo-team')
-        expect(mountedSurfaces().systemPrompt).not.toContain(GUIDE)
+        expect(Boolean(mountedSurfaces().mcpServers['halo-team'])).toBe(expected)
+        expect(mountedSurfaces().systemPrompt.includes(GUIDE)).toBe(expected)
+        if (expected) expect(mountedSurfaces().mcpServers['halo-team']).toMatchObject({ coordination: { spawn: expect.any(Function) } })
       }
     } finally {
       clearImPermissionContext(conversationId)
     }
-    expect(createServer).not.toHaveBeenCalled()
+    expect(createServer).toHaveBeenCalledTimes(2)
   })
 
   it('mounts nothing on a chat key of another digital human', async () => {
@@ -1075,7 +1151,7 @@ describe('a person asking about team work is told which standing teams it serves
     await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId: `app-chat:${app.id}:local:direct:ask-team`, message: 'How is the release going?' })
     const prompt = mountedSurfaces().systemPrompt
     expect(prompt).toContain('- Release crew (teamId team-release) — your role: Tester')
-    expect(prompt).toContain('This chat is your own, outside all of them.')
+    expect(prompt).toContain('This conversation has its own work context. These memberships do not change it.')
     expect(prompt).toContain('$HALO_API_URL/api/teams/<teamId>/conversations')
     expect(listStandingTeams).toHaveBeenCalledWith(app.id)
   })
@@ -1130,7 +1206,7 @@ describe('a person asking about team work is told which standing teams it serves
     expect(mountedSurfaces().systemPrompt).toBe(first)
   })
 
-  it('beside the agent-team tools of its own chat, one section holds both kinds of team; an IM chat without them is told nothing of the tools', async () => {
+  it('uses the same collaboration guide in native and owner IM chats beside standing memberships', async () => {
     registerToolset({
       id: 'halo-team', displayName: 'Team', summary: 'test', usageGuide: 'Team collaboration guide (test)',
       isAvailable: () => true, createServer: () => ({ _isMcpServer: true, name: 'halo-team' }) as never,
@@ -1149,9 +1225,9 @@ describe('a person asking about team work is told which standing teams it serves
         appId: app.id, spaceId: 'space-1', conversationId, message: 'Tell the tester the release is done.',
         imSession: { channel: 'wecom-bot', chatType: 'direct' as const, displayName: 'Owner', sessionId: 'inst:owner-asks' },
       })
-      expect(mountedSurfaces().mcpServers).not.toHaveProperty('halo-team')
+      expect(mountedSurfaces().mcpServers).toHaveProperty('halo-team')
       expect(promptHasTeams()).toBe(true)
-      expect(mountedSurfaces().systemPrompt).not.toContain(guide)
+      expect(mountedSurfaces().systemPrompt).toContain(guide)
     } finally {
       clearImPermissionContext(conversationId)
     }

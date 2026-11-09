@@ -95,6 +95,8 @@ export interface InstalledApp {
     memory?: import('../../../shared/types/memory').MemorySettings
     /** MCP servers only: tools turned off on the card; see the shared InstalledApp. */
     disabledTools?: string[]
+    /** MCP servers only: Halo SDK loading preferences; see the shared InstalledApp. */
+    mcpContext?: import('../../../shared/apps/mcp-context').McpContextPreferences
     /** Internal file authority; never writable through updateOverrides. */
     skill?: SkillInstallationState
   }
@@ -187,6 +189,7 @@ export type SpecUpgradedHandler = (appId: string, outcome: SpecUpgradeOutcome) =
 
 /** Callback fired after a spec change gave an App a different `name`. */
 export type AppRenamedHandler = (appId: string, previousName: string, name: string) => void
+export type AppAuthorityChangedHandler = (appId: string) => void
 
 /** Unsubscribe function returned by event registration */
 export type Unsubscribe = () => void
@@ -637,4 +640,6 @@ export interface AppManagerService {
    * App's name. Returns an unsubscribe function.
    */
   onAppRenamed(handler: AppRenamedHandler): Unsubscribe
+  /** Permission or workspace changes invalidate outstanding authority-bound work. */
+  onAppAuthorityChanged(handler: AppAuthorityChangedHandler): Unsubscribe
 }

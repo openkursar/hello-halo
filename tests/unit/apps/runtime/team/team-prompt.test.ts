@@ -95,17 +95,14 @@ describe('buildTeamImBridge', () => {
     expect(out).toContain('before you write the reply')
   })
 
-  it.each([true, false])('warns that a teammate answer cannot land inside this turn (isLead=%s)', (isLead) => {
-    // The person's turn runs under their own standing; a teammate's answer runs
-    // under the teammate's, so it never joins this turn.
+  it.each([true, false])('distinguishes live replies from different-permission continuations (isLead=%s)', (isLead) => {
     const out = buildTeamImBridge(im, isLead)
     expect(out).toContain('team_send')
-    expect(out).toContain('cannot')
-    expect(out).toContain('later as a new turn')
-    expect(out).toContain('Two short messages')
-    // No wait=* advice: there is no primitive that lands a result in this turn.
+    expect(out).toContain('permissions can arrive between tool calls')
+    expect(out).toContain('processed in a separate turn')
     expect(out).not.toContain('wait=true')
     expect(out).not.toContain('wait=false')
+    expect(out).not.toContain('Two short messages')
   })
 
   it('reflects a direct chat type', () => {
@@ -116,6 +113,32 @@ describe('buildTeamImBridge', () => {
 })
 
 describe('buildTeamEntry — no per-turn content', () => {
+  it('uses one lead address even when an existing source has the old stored name', () => {
+    const context = makeCtx({ collabMode: 'structured', selfIsLead: false, selfMemberName: 'Alice', roster: [
+      { ...localMate, appId: 'source', memberName: 'coordinator', role: '', isLead: true },
+      { ...localMate, appId: 'other', memberName: 'lead' },
+    ] })
+    const out = buildTeamEntry(context)
+    expect(out).toContain('to="lead"')
+    expect(out).toContain('to="other"')
+    expect(out).toContain('actual requester')
+    expect(out).not.toContain('coordinator')
+    expect(buildTeamConstraints(context).join('\n')).not.toContain('coordinator')
+  })
+
+  it('omits absent and temporary goals while describing the available collaboration protocol', () => {
+    const noGoal = buildTeamEntry(makeCtx({ goal: '' }))
+    expect(noGoal).not.toContain('### Standing Team Goal')
+    expect(noGoal).toContain('spawn_agent')
+    expect(noGoal).toContain('No team-completion tool call is required')
+    expect(noGoal).toContain('Temporary collaborators')
+    expect(noGoal).toContain('With one collaborator')
+    const temporary = buildTeamEntry(makeCtx({ temporaryCollaboration: true, goal: 'Historical temporary goal' }))
+    expect(temporary).not.toContain('Historical temporary goal')
+    expect(temporary).not.toContain('member of the standing team')
+    expect(buildTeamEntry(makeCtx())).toContain('Produce the competitor brief')
+  })
+
   // The Entry is baked into the session's system prompt, which is part of the
   // agent session's reuse fingerprint. Anything that changes per turn rebuilds
   // the subprocess on every turn and kills the one still streaming.

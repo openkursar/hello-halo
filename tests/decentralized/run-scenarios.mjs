@@ -18,6 +18,7 @@
 import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
+import { participantScenarioIds, startParticipantModel, runParticipantScenarios } from './participant-scenarios.mjs'
 import { checkedRunPath, declareClusterCases, isMain, startAcceptanceRun } from './_acceptance.mjs'
 import {
   PROJECT_ROOT,
@@ -45,6 +46,9 @@ import {
 } from './_lib.mjs'
 
 export const acceptanceCases = declareClusterCases('federation', import.meta.url, [
+  { nativeId: 'P1', caseId: 'offices.cluster.scoped-participant', title: 'A remote member keeps its local assistant private and shares its own summary', mode: 'scripted' },
+  { nativeId: 'P2', caseId: 'offices.cluster.scoped-participant-cancel', title: 'A parent stops its internal assistant without a late wake and continues new human work', mode: 'scripted', variant: { action: 'stop' } },
+  { nativeId: 'P3', caseId: 'offices.cluster.scoped-participant-cancel', title: 'Deleting a shared team closes internal helpers and preserves independent digital humans', mode: 'scripted', variant: { action: 'delete' } },
   { nativeId: 'A1', caseId: 'offices.cluster.independent-identities', title: 'Independent nodes expose distinct identities and working endpoints' },
   { nativeId: 'A2', caseId: 'offices.cluster.identity-restart', title: 'A restarted node retains its identity' },
   { nativeId: 'A3', caseId: 'offices.cluster.profile-isolation', title: 'Node ports and data directories remain isolated' },
@@ -178,7 +182,16 @@ async function main() {
   }
   let failure
   let manifest
+  let participantModel
   try {
+  const scripted = ARGS.only?.filter(id => participantScenarioIds.includes(id)) ?? []
+  if (scripted.length) {
+    if (ARGS.only.some(id => !participantScenarioIds.includes(id)) || !ARGS.results || ARGS.noStart) {
+      throw new Error('Scripted participant checks require their own fresh cluster selection and an explicit results directory.')
+    }
+    checkedRunPath(PROJECT_ROOT, ARGS.results)
+    participantModel = await startParticipantModel(path.join(path.dirname(path.resolve(ARGS.results)), 'participant-model'))
+  }
   if (ARGS.noStart) {
     manifest = loadManifest(CLUSTER_DIR)
   } else {
@@ -206,12 +219,16 @@ async function main() {
     await categoryK(host, joiners, hasModel)
     await categoryL(host, joiners)
     await categoryM(host, joiners)
+    await runParticipantScenarios({ host, joiners, fixture: participantModel, buildOffice, reporter, want })
   } finally {
     writeResults(manifest, hasModel)
     if (!ARGS.noStart) clusterStop(CLUSTER_DIR)
   }
   } catch (error) { failure = error; throw error }
-  finally { acceptance?.finish(reporter.records, failure) }
+  finally {
+    try { await participantModel?.close() }
+    finally { acceptance?.finish(reporter.records, failure) }
+  }
 }
 
 // ── A. Cluster & identity ────────────────────────────────────────────────────

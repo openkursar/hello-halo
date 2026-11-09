@@ -53,6 +53,7 @@ function build(busSend: (input: SendInputSeen) => unknown) {
     // Never reached: a message opens no conversation for its caller.
     ensureConversationEpoch: vi.fn((_teamId: string, _chatKey: string) => ({ id: 'conv-epoch-1' })),
     bus: {
+      continueSession: vi.fn(),
       send: vi.fn(async (input: SendInputSeen) => {
         sends.push(input)
         return busSend(input)
@@ -116,7 +117,7 @@ function seedTeam(store: TeamStore, opts?: { leadAppId?: string | null; ephemera
   return { teamId, epochId }
 }
 
-describe('E-1 — teamService.sendToMember (host-operator dispatch)', () => {
+describe('teamService.sendToMember (host-operator dispatch)', () => {
   let dbManager: DatabaseManager
   beforeEach(() => {
     broadcastToAll.mockClear()

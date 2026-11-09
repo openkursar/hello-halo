@@ -190,6 +190,30 @@ describe('a failed model request the engine told as an assistant message', () =>
   })
 })
 
+describe('terminal result failures', () => {
+  it.each([false, true])('keeps a result-only failure once, including partial content=%s', partial => {
+    const messages = convertEventsToMessages([
+      user('hello', 1), { _ts: ts(2), type: 'system', subtype: 'init' },
+      ...(partial ? [assistant([text('partial answer')], 3)] : []),
+      { _ts: ts(4), type: 'result', subtype: 'error_during_execution', is_error: true, result: 'API Error: unavailable' },
+    ])
+    expect(messages).toHaveLength(2)
+    expect(messages[1]).toMatchObject({ role: 'assistant', content: partial ? 'partial answer' : '', error: 'API Error: unavailable' })
+  })
+
+  it('does not turn a known cancellation acknowledgement or step limit into a provider error', () => {
+    for (const terminal of [
+      { subtype: 'error_during_execution', result: 'Operation was aborted', errors: ['Operation was aborted'] },
+      { subtype: 'error_max_turns', result: 'Max turns exceeded', errors: ['Max turns exceeded'] },
+    ]) {
+      const messages = convertEventsToMessages([user('hello', 1), assistant([text('partial answer')], 2),
+        { _ts: ts(3), type: 'result', is_error: true, ...terminal }])
+      expect(messages[1]).toMatchObject({ content: 'partial answer' })
+      expect(messages[1].error).toBeUndefined()
+    }
+  })
+})
+
 describe('message id stability', () => {
   it('keeps every already-visible message id (and role) in every longer prefix of the log', () => {
     const events = sampleRun()

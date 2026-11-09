@@ -1,15 +1,17 @@
 import { randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse, type ClientRequest } from 'node:http'
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse, type ClientRequest, type Server } from 'node:http'
 import type { Socket } from 'node:net'
 import { join } from 'node:path'
 import type { Locator, Page } from '@playwright/test'
 import type { AISourcesConfig } from '../../../src/shared/types/ai-sources'
 import { test as base, expect } from './acceptance-management'
-import { startAcceptanceModel } from './acceptance-model'
+import { startAcceptanceModel, type AcceptanceModel } from './acceptance-model'
 
 export const PROVIDER_RESPONSE = 'Local provider configuration verified'
 export type ProviderEndpoint = 'primary' | 'secondary'
+/** A second loopback port, for tests that need a genuine origin change. */
+export type ProviderGatewayOrigin = 'default' | 'alternate'
 
 export interface ProviderGatewayRequest {
   endpoint: ProviderEndpoint | 'unknown'
@@ -21,10 +23,12 @@ export interface ProviderGatewayRequest {
 }
 
 export interface ProviderGateway {
-  url(endpoint: ProviderEndpoint): string
+  url(endpoint: ProviderEndpoint, origin?: ProviderGatewayOrigin): string
   key(endpoint: ProviderEndpoint): string
   requests: ProviderGatewayRequest[]
   errors: string[]
+  /** Replaces what the local model answers (PROVIDER_RESPONSE by default); a reply may be a deliberate provider rejection. */
+  respond: AcceptanceModel['respond']
   close(): Promise<void>
 }
 
@@ -145,32 +149,64 @@ export async function startProviderGateway(): Promise<ProviderGateway> {
     })
   }
 
-  const server = createServer((request, response) => {
-    void serve(request, response).catch((error: NodeJS.ErrnoException) => {
-      if (!closing && !request.aborted) errors.push(`Provider gateway failed: code=${error.code ?? error.name}`)
-      if (!response.destroyed && !response.headersSent) response.writeHead(500, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: { message: 'Local provider failed' } }))
-      else response.destroy()
+  const servers = new Set<Server>()
+  function createGatewayServer(): Server {
+    const server = createServer((request, response) => {
+      void serve(request, response).catch((error: NodeJS.ErrnoException) => {
+        if (!closing && !request.aborted) errors.push(`Provider gateway failed: code=${error.code ?? error.name}`)
+        if (!response.destroyed && !response.headersSent) response.writeHead(500, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: { message: 'Local provider failed' } }))
+        else response.destroy()
+      })
     })
-  })
-  server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)) })
-  try {
+    server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)) })
+    servers.add(server)
+    return server
+  }
+
+  function portOf(server: Server): number {
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('The provider gateway has no loopback TCP address')
+    return address.port
+  }
+
+  async function listen(server: Server): Promise<void> {
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
-  } catch (error) { await model.close(); throw error }
-  const address = server.address()
-  if (!address || typeof address === 'string') { await model.close(); throw new Error('The provider gateway has no loopback TCP address') }
+  }
+
+  const server = createGatewayServer()
+  const alternateServer = createGatewayServer()
+  let defaultPort: number
+  let alternatePort: number
+  try {
+    await listen(server)
+    await listen(alternateServer)
+    defaultPort = portOf(server)
+    alternatePort = portOf(alternateServer)
+  } catch (error) {
+    for (const started of servers) started.close()
+    await model.close()
+    throw error
+  }
+
   return {
-    url(endpoint) { return `http://127.0.0.1:${address.port}/${endpoint}/v1` },
+    url(endpoint, origin = 'default') {
+      return `http://127.0.0.1:${origin === 'alternate' ? alternatePort : defaultPort}/${endpoint}/v1`
+    },
     key(endpoint) { return keys[endpoint] },
     requests,
     errors,
+    respond: model.respond,
     async close() {
       if (closing) return
       closing = true
       for (const request of forwarding) request.destroy()
       for (const socket of sockets) socket.destroy()
-      server.closeAllConnections()
-      try { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
-      finally { await model.close() }
+      for (const started of servers) started.closeAllConnections()
+      try {
+        await Promise.all([...servers].map(started => new Promise<void>((resolve, reject) => {
+          started.close(error => error ? reject(error) : resolve())
+        })))
+      } finally { await model.close() }
     },
   }
 }

@@ -122,6 +122,10 @@ entries must be authored by that peer and addressed to this node; subscribe,
 ack, nack and unsubscribe may only address this node's feed for that peer. The
 payload's claimed sender never supplies wake authority. This prevents one office
 member from publishing as another node or subscribing to another peer's receipts.
+Unsupported historical control entries advance the cursor without executing an
+action and log their type and sequence, so retired participant publications cannot
+block subsequent ordinary wakes. The feed's normal retention policy is unchanged;
+there is no migration that deletes stored publication records.
 The session plane (`../session-feed.ts`) is the second consumer: per-session
 transcript feeds. The office authority keeps a copy of every one and serves it
 from its mirror. A joiner copies only the feeds a local viewer shows.

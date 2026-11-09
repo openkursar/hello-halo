@@ -18,7 +18,8 @@ import type {
   GitCommitRequest,
   GitCommitResult,
   GitFileContents,
-  GitRepository,
+  GitRepositoryEntry,
+  GitRepositoryList,
   GitReviewRecord,
   GitSyncResult,
   GitWorkingTreeStatus,
@@ -38,13 +39,16 @@ export type GitPhase = 'loading' | 'ready' | 'no-git' | 'no-repo' | 'error'
 export interface GitChangesState {
   phase: GitPhase
   git: GitAvailability | null
-  repositories: GitRepository[]
+  repositories: GitRepositoryEntry[]
+  /** Failed selected status reads; pruned whenever repository paths are removed. */
+  unavailableRoots: ReadonlySet<string>
+  repositoryBusy: boolean
   repoRoot: string | null
   status: GitWorkingTreeStatus | null
   list: GitChangeList | null
   /** The compare scope itself failed (snapshot pruned, branch gone); the rest of the view still works. */
   listError: GitFailure | null
-  /** The last load failed; data from an earlier load may still be shown. */
+  /** The selected repository or its path list could not be loaded. */
   loadError: GitFailure | null
   review: GitReviewRecord | null
   refreshing: boolean
@@ -63,6 +67,14 @@ export interface GitChangesState {
   operation: 'commit' | 'push' | 'sync' | null
 }
 
+/** A selected root alone is not evidence that its diff has loaded. */
+export function gitRevealReadiness(state: Pick<GitChangesState, 'phase' | 'refreshing' | 'repoRoot' | 'status' | 'list'>): 'pending' | 'ready' | 'unavailable' {
+  if (state.refreshing || state.phase === 'loading') return 'pending'
+  return state.phase === 'ready' && state.repoRoot !== null
+    && state.status?.repo.root === state.repoRoot && state.list !== null
+    ? 'ready' : 'unavailable'
+}
+
 export type FileContentsValue = GitFileContents & { size: number }
 
 export interface GitChangesController {
@@ -73,7 +85,9 @@ export interface GitChangesController {
   /** A load for a focus or tab return: skipped right after another one. */
   refreshIfStale(): void
   selectRepository(root: string): Promise<void>
+  openRepository(root: string): Promise<GitFailure | null>
   setScope(scope: StoredCompareScope): Promise<void>
+  resetWorkingDirectory(): Promise<void>
   setReview(review: GitReviewRecord | null): void
   stage(paths: string[]): Promise<GitFailure | null>
   unstage(paths: string[]): Promise<GitFailure | null>
@@ -90,6 +104,7 @@ export interface GitChangesController {
   dispose(): void
 }
 
+const MAX_VISIBLE_REPOSITORIES = 1_385
 const NEW_CHANGES_DEBOUNCE_MS = 1_000
 const STALE_AFTER_MS = 2_000
 /** File content reads in flight at once: as many as the main process runs at a time (each costs two git processes). */
@@ -129,6 +144,8 @@ export function createGitChangesController(
     phase: 'loading',
     git: null,
     repositories: [],
+    unavailableRoots: new Set(),
+    repositoryBusy: false,
     repoRoot: null,
     status: null,
     list: null,
@@ -147,6 +164,12 @@ export function createGitChangesController(
   const reads = new RequestQueue(CONTENT_READS_IN_FLIGHT)
 
   let generation = 0
+  let directoryGeneration = 0
+  let selectionVersion = 0
+  let repositoriesDirty = true
+  let repositoryGeneration = 0
+  let repositoryRequest: { known: Promise<void>; shallow: Promise<void> } | null = null
+  let discoveryError: GitFailure | null = null
   let lastLoadAt = 0
   let disposed = false
   let checkTimer: ReturnType<typeof setTimeout> | null = null
@@ -155,6 +178,64 @@ export function createGitChangesController(
   /** A check was skipped while the window was hidden. */
   let checkWhenShown = false
   let treeVersion = 0
+  const discoveries = new Map<string, GitRepositoryEntry>()
+  const stopDiscovery = gitClient.onRepositoryDiscovered(spaceId, (repository) => {
+    if (disposed) return
+    const previous = get().repositories.find((item) => item.root === repository.root)
+    if (!previous && get().repositories.length >= MAX_VISIBLE_REPOSITORIES) {
+      console.warn('[ChangesView] Discovered repository omitted: repository list limit reached')
+      return
+    }
+    discoveries.set(repository.root, repository)
+    if (discoveries.size > 64) discoveries.delete(discoveries.keys().next().value!)
+    if (previous?.remembered === repository.remembered) return
+    set((state) => ({ repositories: previous
+      ? state.repositories.map((item) => item.root === repository.root ? repository : item)
+      : [...state.repositories, repository] }))
+  })
+
+  function publishRepositories(found: GitRepositoryList, replace: boolean): void {
+    const current = get()
+    const merged = new Map<string, GitRepositoryEntry>()
+    for (const repository of replace ? [] : current.repositories) merged.set(repository.root, repository)
+    for (const repository of found.repositories) merged.set(repository.root, repository)
+    for (const repository of discoveries.values()) merged.set(repository.root, repository)
+    if (merged.size > MAX_VISIBLE_REPOSITORIES) console.warn('[ChangesView] Repository paths omitted: repository list limit reached', { spaceId })
+    const repositories = [...merged.values()].slice(0, MAX_VISIBLE_REPOSITORIES)
+    const roots = new Set(repositories.map((repository) => repository.root))
+    set({
+      git: found.git,
+      repositories,
+      unavailableRoots: new Set([...current.unavailableRoots].filter((root) => roots.has(root))),
+    })
+  }
+
+  function listRepositories(): { known: Promise<void>; shallow: Promise<void> } {
+    if (!repositoriesDirty && repositoryRequest) return repositoryRequest
+    repositoriesDirty = false
+    discoveryError = null
+    discoveries.clear()
+    const mine = ++repositoryGeneration
+    const known = gitClient.listRepositories(spaceId, { shallow: false }).then((found) => {
+      if (!disposed && mine === repositoryGeneration) publishRepositories(found, true)
+    }, (error: unknown) => {
+      if (!disposed && mine === repositoryGeneration) repositoriesDirty = true
+      throw error
+    })
+    const shallow = known.then(async () => {
+      if (disposed || mine !== repositoryGeneration || !get().git?.available) return
+      try {
+        const found = await gitClient.listRepositories(spaceId, { shallow: true })
+        if (!disposed && mine === repositoryGeneration) publishRepositories(found, false)
+      } catch (error) {
+        if (disposed || mine !== repositoryGeneration) return
+        discoveryError = failureOf(error)
+        console.warn('[ChangesView] Shallow repository discovery could not complete:', { spaceId, ...discoveryError })
+      }
+    }, () => {})
+    repositoryRequest = { known, shallow }
+    return repositoryRequest
+  }
 
   const latestReview = async (root: string): Promise<GitReviewRecord | null> => {
     try {
@@ -166,7 +247,8 @@ export function createGitChangesController(
     }
   }
 
-  const loadList = async (root: string, review: GitReviewRecord | null) => {
+  const loadList = async (root: string, review: GitReviewRecord | null, mine: number) => {
+    if (disposed || mine !== generation) return { list: null, listError: null }
     if (memory.scope.kind === 'since-review' && !review) memory.scope = { kind: 'uncommitted' }
     try {
       return { list: await gitClient.getChanges(spaceId, root, resolveScope(memory.scope, review)), listError: null }
@@ -176,43 +258,71 @@ export function createGitChangesController(
   }
 
   async function load(options: { relist?: boolean } = {}): Promise<void> {
+    if (disposed || mutationBusy()) return
+    if (options.relist) repositoriesDirty = true
     const mine = ++generation
+    let loadingRoot: string | null = null
     lastLoadAt = Date.now()
     set({ refreshing: true })
     try {
-      let { git, repositories } = get()
-      if (options.relist || !git) {
-        const found = await gitClient.listRepositories(spaceId)
-        if (mine !== generation) return
-        git = found.git
-        repositories = found.repositories
+      if (repositoriesDirty || !get().git || !get().repoRoot) {
+        const request = listRepositories()
+        await request.known
+        if (mine !== generation || disposed) return
+        const wanted = memory.repoRoot ?? initialRepoRoot
+        if (get().git?.available && (get().repositories.length === 0 || (wanted && !get().repositories.some((repository) => repository.root === wanted)))) {
+          await request.shallow
+        }
       }
+      if (mine !== generation || disposed) return
+      const { git, repositories } = get()
+      if (!git) return
       if (!git.available) {
-        set({ phase: 'no-git', git, repositories: [], repoRoot: null, status: null, list: null, refreshing: false, loadError: null })
+        cache.clear()
+        set({ phase: 'no-git', repoRoot: null, status: null, list: null, review: null, listError: null, refreshing: false, loadError: null, newChanges: 0 })
         return
       }
       if (repositories.length === 0) {
-        set({ phase: 'no-repo', git, repositories, repoRoot: null, status: null, list: null, refreshing: false, loadError: null })
+        memory.repoRoot = undefined
+        memory.detail = null
+        memory.forced = []
+        if (memory.scope.kind === 'commit') memory.scope = { kind: 'uncommitted' }
+        cache.clear()
+        set({ phase: discoveryError ? 'error' : 'no-repo', repoRoot: null, status: null, list: null, review: null, listError: null, newChanges: 0, refreshing: false, loadError: discoveryError })
         return
       }
       const wanted = memory.repoRoot ?? initialRepoRoot
-      const root = repositories.find((repo) => repo.root === wanted)?.root ?? repositories[0].root
+      const chosen = repositories.find((repo) => repo.root === wanted) ?? repositories[0]
+      const root = chosen.root
+      if (root !== get().repoRoot) prepareRepository(root)
       memory.repoRoot = root
+      loadingRoot = root
 
       const reviewRequest = latestReview(root)
       const [status, review, { list, listError }] = await Promise.all([
-        gitClient.getStatus(spaceId, root),
+        gitClient.getStatus(spaceId, root, chosen.remembered ? undefined : true).then((status) => {
+          if (!disposed && mine === generation && status.remembered) {
+            const repository = { ...chosen, remembered: true }
+            discoveries.set(root, repository)
+            if (discoveries.size > 64) discoveries.delete(discoveries.keys().next().value!)
+            set((state) => ({ repositories: state.repositories.map((entry) => entry.root === root ? repository : entry) }))
+          }
+          if (!disposed && mine === generation && get().unavailableRoots.has(root)) {
+            const unavailableRoots = new Set(get().unavailableRoots)
+            unavailableRoots.delete(root)
+            set({ unavailableRoots })
+          }
+          return status
+        }),
         reviewRequest,
         memory.scope.kind === 'since-review'
-          ? reviewRequest.then((found) => loadList(root, found))
-          : loadList(root, null),
+          ? reviewRequest.then((found) => loadList(root, found, mine))
+          : loadList(root, null, mine),
       ])
       if (mine !== generation || disposed) return
       cache.clear()
       set((state) => ({
         phase: 'ready',
-        git,
-        repositories,
         repoRoot: root,
         status,
         review,
@@ -225,16 +335,25 @@ export function createGitChangesController(
       }))
     } catch (error) {
       if (mine !== generation || disposed) return
+      generation++
       const failure = failureOf(error)
-      if (failure.code === 'GIT_NOT_A_REPOSITORY' && !options.relist) {
-        memory.repoRoot = undefined
-        return load({ relist: true })
-      }
-      if (failure.code === 'GIT_UNAVAILABLE') {
-        set({ phase: 'no-git', git: { available: false, reason: 'not-runnable', detail: failure.error }, refreshing: false })
-        return
-      }
-      set((state) => ({ phase: state.phase === 'ready' ? 'ready' : 'error', loadError: failure, refreshing: false }))
+      console.warn('[ChangesView] Repository could not be loaded:', { spaceId, root: loadingRoot, reason: failure.code ?? failure.error?.split('\n', 1)[0] })
+      cache.clear()
+      set((state) => {
+        const unavailableRoots = new Set(state.unavailableRoots)
+        if (loadingRoot && state.repositories.some((repository) => repository.root === loadingRoot)) unavailableRoots.add(loadingRoot)
+        return {
+          phase: 'error',
+          status: null,
+          list: null,
+          review: null,
+          listError: null,
+          loadError: failure,
+          unavailableRoots,
+          newChanges: 0,
+          refreshing: false,
+        }
+      })
     }
   }
 
@@ -257,14 +376,57 @@ export function createGitChangesController(
     await load(options)
   }
 
-  async function selectRepository(root: string): Promise<void> {
-    if (root === get().repoRoot) return
+  function mutationBusy(): boolean {
+    return get().operation !== null || get().busyPaths.size > 0
+  }
+
+  function prepareRepository(root: string): void {
+    const previous = memory.repoRoot ?? get().repoRoot
     memory.repoRoot = root
-    memory.detail = null
-    // A commit picked in the old repository's graph is not one of the new repository's.
-    if (memory.scope.kind === 'commit') memory.scope = { kind: 'uncommitted' }
-    set({ list: null, status: null, review: null, listError: null })
+    if (previous && previous !== root) {
+      memory.detail = null
+      memory.forced = []
+      // A commit picked in the old repository's graph is not one of the new repository's.
+      if (memory.scope.kind === 'commit') memory.scope = { kind: 'uncommitted' }
+    }
+    cache.clear()
+    set({ repoRoot: root, list: null, status: null, review: null, listError: null, loadError: null, newChanges: 0, refreshing: true })
+  }
+
+  async function selectRepository(root: string): Promise<void> {
+    if (disposed || mutationBusy() || !get().repositories.some((repository) => repository.root === root)) return
+    selectionVersion++
+    if (root === get().repoRoot && !get().unavailableRoots.has(root)) return
+    prepareRepository(root)
     await load()
+  }
+
+  async function openRepository(root: string): Promise<GitFailure | null> {
+    if (disposed || mutationBusy() || get().repositoryBusy) return { code: 'GIT_BUSY' }
+    const selectedAtStart = selectionVersion
+    const directoryAtStart = directoryGeneration
+    set({ repositoryBusy: true })
+    try {
+      const repository = await gitClient.openRepository(spaceId, root)
+      if (disposed || directoryAtStart !== directoryGeneration) return null
+      generation++
+      repositoryGeneration++
+      repositoryRequest = null
+      repositoriesDirty = true
+      const entry: GitRepositoryEntry = { root: repository.root, name: repository.name, relativePath: repository.relativePath, remembered: true }
+      set((state) => ({ repositories: state.repositories.some((item) => item.root === entry.root)
+        ? state.repositories.map((item) => item.root === entry.root ? entry : item)
+        : [...state.repositories, entry] }))
+      if (selectedAtStart === selectionVersion) prepareRepository(repository.root)
+      await load({ relist: true })
+      return disposed ? null : get().loadError
+    } catch (error) {
+      const failure = failureOf(error)
+      console.warn('[ChangesView] Could not open remembered repository:', { spaceId, root, code: failure.code })
+      return failure
+    } finally {
+      if (!disposed && directoryAtStart === directoryGeneration) set({ repositoryBusy: false })
+    }
   }
 
   async function setScope(scope: StoredCompareScope): Promise<void> {
@@ -274,6 +436,26 @@ export function createGitChangesController(
     // must not pass for the commit's while the commit's loads.
     if (scope.kind === 'commit') set({ list: null, listError: null })
     await load()
+  }
+
+  async function resetWorkingDirectory(): Promise<void> {
+    if (disposed) return
+    directoryGeneration++
+    generation++
+    repositoryGeneration++
+    selectionVersion++
+    repositoryRequest = null
+    repositoriesDirty = true
+    discoveries.clear()
+    gitClient.invalidateDiscovery(spaceId)
+    memory.repoRoot = undefined
+    memory.detail = null
+    memory.forced = []
+    memory.scope = { kind: 'uncommitted' }
+    initialRepoRoot = undefined
+    cache.clear()
+    set({ phase: 'loading', git: null, repositories: [], unavailableRoots: new Set(), repositoryBusy: false, repoRoot: null, status: null, list: null, review: null, listError: null, loadError: null, newChanges: 0, refreshing: true })
+    await load({ relist: true })
   }
 
   function setReview(review: GitReviewRecord | null): void {
@@ -293,6 +475,7 @@ export function createGitChangesController(
 
   async function onPaths(run: (root: string) => Promise<void>, paths: string[], changesWorkingTree = false): Promise<GitFailure | null> {
     const root = get().repoRoot
+    if (disposed || get().repositoryBusy || get().refreshing) return { code: 'GIT_BUSY' }
     if (!root) return null
     setBusy(paths, true)
     try {
@@ -310,6 +493,7 @@ export function createGitChangesController(
 
   async function commit(request: GitCommitRequest): Promise<{ result: GitCommitResult } | { failure: GitFailure }> {
     const root = get().repoRoot
+    if (disposed || get().repositoryBusy || get().refreshing) return { failure: { code: 'GIT_BUSY' } }
     if (!root) return { failure: { code: 'GIT_NOT_A_REPOSITORY' } }
     set({ operation: request.push ? 'push' : 'commit' })
     try {
@@ -324,6 +508,7 @@ export function createGitChangesController(
 
   async function sync(): Promise<{ result: GitSyncResult } | { failure: GitFailure }> {
     const root = get().repoRoot
+    if (disposed || get().repositoryBusy || get().refreshing) return { failure: { code: 'GIT_BUSY' } }
     if (!root) return { failure: { code: 'GIT_NOT_A_REPOSITORY' } }
     set({ operation: 'sync' })
     try {
@@ -415,7 +600,9 @@ export function createGitChangesController(
     refresh,
     refreshIfStale,
     selectRepository,
+    openRepository,
     setScope,
+    resetWorkingDirectory,
     setReview,
     stage: (paths) => onPaths((root) => gitClient.stage(spaceId, root, paths), paths),
     unstage: (paths) => onPaths((root) => gitClient.unstage(spaceId, root, paths), paths),
@@ -428,7 +615,11 @@ export function createGitChangesController(
     dismissNewChanges: () => set({ newChanges: 0 }),
     dispose: () => {
       disposed = true
+      stopDiscovery()
+      discoveries.clear()
       generation++
+      repositoryGeneration++
+      repositoryRequest = null
       if (checkTimer) clearTimeout(checkTimer)
       cache.clear()
     },

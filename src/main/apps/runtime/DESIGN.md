@@ -109,8 +109,10 @@ digital-human chat in `app-chat.ts`) rather than routing through the space chat'
   release token prevents the old `finally` from releasing a successor. The next
   admission probes a hold whose transport died without an exit notification.
   Abandoned live preparation still releases in `finally`.
-  A manager-owned follow-up holds its lease and active session for the entire
-  execution, including auto-continue, then closes its own instance and releases
+  A manager-owned follow-up sets `streamOwner: 'caller'` and holds its lease and
+  active session for the entire execution, including auto-continue. Sending does
+  not transfer ownership to a chat consumer or leave an unacknowledged-init marker.
+  The caller then closes its own instance and releases
   before unregistering. Its cleanup cannot close a successor; transient runs close directly.
 
 **What is Runtime's own**: session lifecycle and persistence (the run JSONL, not the
@@ -259,13 +261,11 @@ serving that digital human or fronting its team:
 
 ### 2.5 Activity Layer in SQLite
 
-**Decision**: `automation_runs` and `activity_entries` tables in the app-level
-SQLite database, with FOREIGN KEY to `installed_apps` with CASCADE DELETE.
-
-**Rationale**:
-- Structured data enables querying (by app, by type, by time range).
-- FK CASCADE ensures cleanup when an App is uninstalled.
-- Matches the architecture doc's schema design exactly.
+`automation_runs` belong to installed Apps. Activity entries and session
+environments belong to execution actors: an installed App, or a temporary
+participant bound to one team and work context. Installed actors retain the
+App deletion cascade; temporary actor cleanup shares the work-deletion transaction.
+All actor types use the same activity and durable decision tables.
 
 ### 2.6 Concurrency: Simple Counting Semaphore
 
@@ -520,6 +520,25 @@ IM identity rules do not impose a separate blanket guest policy. They direct
 the model to the current turn's actual capability grants. Notification guidance
 also requires the guest notification grant as well as the app's configured
 tool availability; withdrawing that grant removes the usage instructions.
+
+Temporary collaboration from an IM conversation keeps a private source binding
+per human request. It captures that request's caller and permission terms, the
+exact app/channel/chat address and the session context incarnation; it never
+reads the group's latest sender as the authority of a delayed result. The
+binding contains no message body and is absent from office replication.
+`team/source-delivery` routes the result through the same app-chat mailbox as
+ordinary input. Same-authority work can join a running turn; other authority
+waits. Mailbox admission is acknowledged independently of the model's ending,
+so a collaborator does not wait for the coordinator's full reply to finish its
+own send. Only the source AI's reviewed reply is pushed to the original IM chat.
+
+The IM adapter revalidates the binding before admission, deferred execution,
+file sending and final reply. Channel or app authority changes revoke exactly
+the captured request IDs durably, even when settings are restored afterwards;
+they do not stop unrelated new input in that conversation. Clearing or changing
+the IM recipient replaces its persisted context incarnation. Source stop uses
+the shared request-cancellation fence. IM results never fall back to generic
+cross-conversation delivery when their private binding is unavailable.
 The assembler call itself is one line:
 
 ```ts
@@ -1672,8 +1691,7 @@ CREATE TABLE activity_entries (
   session_key TEXT,
   content_json TEXT NOT NULL,
   user_response_json TEXT,
-  FOREIGN KEY (app_id) REFERENCES installed_apps(id) ON DELETE CASCADE,
-  FOREIGN KEY (run_id) REFERENCES automation_runs(run_id) ON DELETE CASCADE
+  FOREIGN KEY (app_id) REFERENCES runtime_execution_actors(id) ON DELETE CASCADE
 );
 CREATE INDEX idx_entries_app ON activity_entries(app_id, ts DESC);
 ```
@@ -1996,6 +2014,29 @@ The backup is an audit/recovery source, not another live activity store. A rollb
 requires restoring a pre-upgrade database copy before launching an older binary;
 never lower the migration version on a live upgraded database.
 
+Migration 9 introduces `runtime_execution_actors`. Installed actors reference
+`installed_apps`; an insertion trigger and migration backfill cover new and
+existing Apps. Temporary actors hold only identity, display name and exact
+team/epoch scope, never an App installation or copied execution configuration.
+The activity-parent rebuild first preserves and removes the continuation leaf,
+then restores every continuation row against the new parent within the same
+migration transaction. Session environments change to the same actor FK.
+
+App-chat registers an already resolved participant before it can report. A repeat
+registration with unchanged identity/name writes nothing. Temporary reports must
+name the actor's original team and epoch. Their decision answers use the existing
+outbox, resolve the participant from that exact scope, and retain current source
+permission checks. An unavailable source leaves an accepted answer failed and
+retryable; it does not silently choose another task or block other continuations.
+The owner inbox includes temporary questions without listing them as installed
+people. Participant execution environments stay in their private execution profile.
+
+`TeamStore.setWorkRemovedHandler` connects actual work deletion to
+`ActivityStore.deleteParticipantActors` after both stores initialize. The callback
+runs inside the deletion transaction and must propagate failures; deleting a team
+or leaving a joined office cannot leave its activity behind after partial cleanup.
+Stops, idle eviction, archival and saving configuration do not call this cleanup.
+
 An answer and its outbox row commit in one synchronous transaction. Repeating the
 same answer returns the stored answer; a conflicting answer fails. Deadlines and
 closure are checked against authoritative data in that transaction. Answer time is
@@ -2153,6 +2194,15 @@ Remote, tool-started and scheduled runs keep their pages in the hidden host.
 
 
 ## Memory and file boundaries of a digital human
+
+Native Halo turns mark the SDK's client `ToolSearch` as metadata discovery in
+`ActiveDelegation`. It reads only the MCP catalog already narrowed by capability
+policy and tool prohibitions, so it does not require a separate business-tool
+grant. The flag is captured per turn and is absent for external engines and
+explicit XML/JSON calling. An explicit SDK `disallowedTools` entry still removes
+the search tool or refuses an incompatible deferred configuration. `CallTool`
+has no delegation exemption: the SDK restores the real target before permission
+checks, file guards, execution and audit records.
 
 - Its own memory: read and written by every turn (owner, team, IM guest), under
   the memory lock; off entirely when the owner turns memory off

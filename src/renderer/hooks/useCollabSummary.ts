@@ -38,6 +38,7 @@ function sameCollab(a: CollabSummary | null | undefined, b: CollabSummary | null
     && a.goal === b.goal
     && a.epochId === b.epochId
     && a.active === b.active
+    && a.stopped === b.stopped
     && a.saved === b.saved
     && a.members.length === b.members.length
     && a.members.every((m, i) => sameMember(m, b.members[i]))

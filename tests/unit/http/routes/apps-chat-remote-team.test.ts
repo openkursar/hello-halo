@@ -30,6 +30,8 @@ import { spaceCollabChatKey, spaceCoordinatorAppId } from '../../../../src/share
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
+const teamExecution = vi.hoisted(() => ({ ready: true }))
+
 const sendAppChatMessage = vi.fn<[Record<string, unknown>], Promise<void>>()
 const injectIntoAppChatWhenLive = vi.fn()
 const stopAppChat = vi.fn<[string], Promise<void>>()
@@ -98,7 +100,12 @@ const getTeamById = vi.fn(() => ({ leadAppId: 'ordinary-lead', ephemeral: false 
 const getMember = vi.fn<[string, string], { appId: string; origin?: 'local' | 'remote'; ownerNodeId?: string } | null>()
 
 vi.mock('../../../../src/main/apps/team', () => ({
+  getTeamService: () => teamExecution.ready ? { participants: {} } : null,
   getTeamStore: () => ({
+    recipientFences: { read: (target: { teamId: string; epochId: string; appId: string }) => {
+      if (getEpochById(target.epochId)?.teamId !== target.teamId || !getMember(target.teamId, target.appId)) throw new Error('Unknown recipient')
+      return 'current-owner-incarnation'
+    } },
     getTeamById: () => getTeamById(),
     getEpochById: (epochId: string) => getEpochById(epochId),
     getMember: (teamId: string, appId: string) => getMember(teamId, appId),
@@ -142,6 +149,7 @@ function post(base: string, path: string, body: unknown): Promise<Response> {
 }
 
 beforeEach(() => {
+  teamExecution.ready = true
   vi.clearAllMocks()
   sendAppChatMessage.mockResolvedValue(undefined)
   injectIntoAppChatWhenLive.mockResolvedValue('delivered')
@@ -180,6 +188,25 @@ describe('team sessions over the remote HTTP path', () => {
       expect(injected.status).toBe(kind === 'legacy' ? 409 : 400)
       expect(sendAppChatMessage).not.toHaveBeenCalled()
       expect(injectIntoAppChatWhenLive).not.toHaveBeenCalled()
+    })
+  })
+
+  it('returns service-unavailable before admitting team sends while keeping history and stop accessible', async () => {
+    teamExecution.ready = false
+    await withServer(async base => {
+      for (const action of ['send', 'inject']) {
+        const response = await post(base, `/api/apps/${LEAD_APP}/chat/${action}`, { spaceId: 'space-a', conversationId: TEAM_KEY, message: 'New work' })
+        expect(response.status).toBe(503)
+        expect(await response.json()).toEqual({ success: false, error: 'Team execution is not yet initialized. Please try again shortly.' })
+      }
+      expect(sendAppChatMessage).not.toHaveBeenCalled()
+      expect(injectIntoAppChatWhenLive).not.toHaveBeenCalled()
+      const history = await fetch(`${base}/api/apps/${LEAD_APP}/chat/messages?spaceId=space-a&conversationId=${encodeURIComponent(TEAM_KEY)}`)
+      expect(history.status).toBe(200)
+      expect((await history.json()).success).toBe(true)
+      const stopped = await post(base, `/api/apps/${LEAD_APP}/chat/stop`, { conversationId: TEAM_KEY })
+      expect(stopped.status).toBe(200)
+      expect(stopAppChatConversation).toHaveBeenCalledWith(TEAM_KEY)
     })
   })
 

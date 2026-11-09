@@ -112,11 +112,17 @@ vi.mock('../../../../src/main/services/notification.service', () => ({
   notifyAppEvent: vi.fn(),
 }))
 
-const { getActiveTeamRuntimeMock } = vi.hoisted(() => ({
+const { getActiveTeamRuntimeMock, getTeamStoreMock } = vi.hoisted(() => ({
+  getTeamStoreMock: vi.fn(),
   getActiveTeamRuntimeMock: vi.fn(),
 }))
 vi.mock('../../../../src/main/apps/runtime/team', () => ({
   getActiveTeamRuntime: getActiveTeamRuntimeMock,
+}))
+
+vi.mock('../../../../src/main/apps/team', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../../../src/main/apps/team')>()),
+  getTeamStore: getTeamStoreMock,
 }))
 
 // Mock AI browser (imports electron BrowserWindow)
@@ -212,6 +218,8 @@ vi.mock('../../../../src/main/services/workday-calendar', () => ({
 
 import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../src/main/platform/store/types'
+import { TeamStore } from '../../../../src/main/apps/team/store'
+import { migrations as teamMigrations } from '../../../../src/main/apps/team/migrations'
 import { ActivityStore } from '../../../../src/main/apps/runtime/store'
 import {
   MIGRATION_NAMESPACE as RUNTIME_MIGRATION_NS,
@@ -1674,6 +1682,15 @@ describe('AppRuntimeService', () => {
   let mockMemory: any
   let mockBackground: any
 
+  function persistMockApp(appId: string): void {
+    const app = mockAppManager.getApp(appId)
+    if (!app) throw new Error(`Missing installed fixture: ${appId}`)
+    dbManager.getAppDatabase().prepare(`INSERT OR IGNORE INTO installed_apps
+      (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(appId, appId, app.spaceId ?? null, JSON.stringify(app.spec), app.status,
+        JSON.stringify(app.userConfig ?? {}), JSON.stringify(app.userOverrides ?? {}), JSON.stringify(app.permissions ?? { granted: [], denied: [] }), Date.now())
+  }
+
   // Helper to create the service
   function createService() {
     return createAppRuntimeService({
@@ -2597,6 +2614,96 @@ describe('AppRuntimeService', () => {
     })
   })
 
+  describe('temporary participant decisions', () => {
+    let teamStore: TeamStore
+    const actor = { appId: 'temporary-reviewer', teamId: 'team', epochId: 'original-work', name: 'Reviewer' }
+    const resume = vi.fn(async (input: { onStarted?: () => void; onSettled?: () => void }) => {
+      input.onStarted?.(); input.onSettled?.(); return true
+    })
+    beforeEach(() => {
+      const db = dbManager.getAppDatabase()
+      dbManager.runMigrations(db, 'app_team', teamMigrations)
+      teamStore = new TeamStore(db)
+      teamStore.insertTeam({ id: 'team', name: 'Team', owningSpaceId: 'space', goal: '', leadAppId: null,
+        memberSourcing: 'manual', collabMode: 'free', escalationRouting: 'user', status: 'idle',
+        currentEpochId: 'newer-work', createdAt: 1, updatedAt: 1 })
+      for (const id of ['original-work', 'newer-work']) teamStore.insertEpoch({ id, teamId: 'team', startedAt: 1, endedAt: null, endReason: null, summary: null, lifecycle: 'conversation' })
+      teamStore.participants.insert({ teamId: 'team', epochId: actor.epochId, appId: actor.appId, parentAppId: 'lead', memberName: actor.name,
+        role: 'Reviewer', addedAt: 1, isLead: false, aiProvisioned: false, isTemporary: true }, {
+        modelSelection: { modelSourceId: 'fixture', modelId: 'fixture' }, engineId: 'halo', prompt: 'Review',
+        permissions: { granted: [], denied: [] }, environment: { spaceId: 'space', spacePath: '/fixture', workDir: '/fixture', memoryDir: '/fixture/member' },
+      })
+      store.registerParticipantActor(actor)
+      store.insertEntry({ id: 'participant-question', appId: actor.appId, runId: 'chat', type: 'escalation', ts: 1,
+        sessionKey: `app-chat:${actor.appId}:team:team:original-work`,
+        content: { summary: 'Choose a route?', teamContext: { teamId: 'team', epochId: actor.epochId, origin: 'colleague' } } })
+      getTeamStoreMock.mockReturnValue(teamStore)
+      resume.mockClear()
+      getActiveTeamRuntimeMock.mockReturnValue({ resumeFromEscalation: resume, reconcileAwaitingDecision: vi.fn(), blackboard: { postActivity: vi.fn() } })
+      mockAppManager.getApp.mockReturnValue(null)
+    })
+    afterEach(() => { getTeamStoreMock.mockReset(); getActiveTeamRuntimeMock.mockReset() })
+
+    it('answers and resumes the exact original work without an installed App', async () => {
+      const service = createService()
+      await service.respondToEscalation(actor.appId, 'participant-question', { ts: 1, text: 'Route A' })
+      await vi.waitFor(() => expect(store.getEntry('participant-question')?.continuation?.status).toBe('completed'))
+      expect(resume).toHaveBeenCalledWith(expect.objectContaining({ appId: actor.appId, teamId: 'team', epochId: 'original-work', origin: 'colleague' }))
+      expect(dbManager.getAppDatabase().prepare('SELECT id FROM installed_apps').all()).toEqual([])
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalled()
+    })
+
+    it('recovers an accepted participant answer after restart through the existing durable queue', async () => {
+      store.acceptDecision(actor.appId, 'participant-question', { text: 'Route B' })
+      store.updateContinuation('participant-question', 'running')
+      store = new ActivityStore(dbManager.getAppDatabase())
+      const service = createService()
+      await service.activateAll()
+      await vi.waitFor(() => expect(store.getEntry('participant-question')?.continuation?.status).toBe('completed'))
+      expect(resume).toHaveBeenCalledTimes(1)
+      expect(resume).toHaveBeenCalledWith(expect.objectContaining({ epochId: 'original-work' }))
+      await service.deactivateAll()
+    })
+
+    it('refuses another actor and a deleted participant without accepting an answer or selecting newer work', async () => {
+      const service = createService()
+      await expect(service.respondToEscalation('other', 'participant-question', { ts: 1, text: 'Route A' })).rejects.toThrow()
+      teamStore.participants.remove('team', actor.epochId, actor.appId)
+      await expect(service.respondToEscalation(actor.appId, 'participant-question', { ts: 1, text: 'Route A' })).rejects.toThrow()
+      expect(store.getEntry('participant-question')?.userResponse).toBeUndefined()
+      expect(resume).not.toHaveBeenCalled()
+    })
+
+    it('retains an accepted answer as retryable when its source identity is unavailable and refuses fresh answers', async () => {
+      const execution = teamStore.participants.getExecution('team', actor.epochId, actor.appId)!
+      teamStore.participants.updateExecution('team', actor.epochId, actor.appId, { ...execution, sourceAppId: 'missing-source' })
+      const service = createService()
+      await expect(service.respondToEscalation(actor.appId, 'participant-question', { ts: 1, text: 'Route A' })).rejects.toThrow(/source identity is unavailable/)
+      expect(store.getEntry('participant-question')?.userResponse).toBeUndefined()
+      store.acceptDecision(actor.appId, 'participant-question', { text: 'Already accepted' })
+      await service.activateAll()
+      expect(store.getEntry('participant-question')?.continuation?.status).toBe('failed')
+      expect(resume).not.toHaveBeenCalled()
+      await service.deactivateAll()
+    })
+
+    it('lets the owner dismiss a known question even when its source can no longer execute', async () => {
+      const execution = teamStore.participants.getExecution('team', actor.epochId, actor.appId)!
+      teamStore.participants.updateExecution('team', actor.epochId, actor.appId, { ...execution, sourceAppId: 'missing-source' })
+      const service = createService()
+      await expect(service.dismissEscalation('another-actor', 'participant-question')).rejects.toThrow()
+      await service.dismissEscalation(actor.appId, 'participant-question')
+      expect(store.getEntry('participant-question')?.content.resolution?.reason).toBe('dismissed')
+      expect(resume).not.toHaveBeenCalled()
+    })
+
+    it('lets the owner dismiss a participant question without an installation', async () => {
+      await createService().dismissEscalation(actor.appId, 'participant-question')
+      expect(store.getEntry('participant-question')?.content.resolution?.reason).toBe('dismissed')
+      expect(resume).not.toHaveBeenCalled()
+    })
+  })
+
   describe('respondToEscalation', () => {
     let testAppId: string
 
@@ -2828,6 +2935,7 @@ describe('AppRuntimeService', () => {
         userOverrides: {},
         spaceId: 'space-im',
       })
+      persistMockApp(testAppId)
     })
 
     afterEach(() => {
@@ -2863,6 +2971,7 @@ describe('AppRuntimeService', () => {
 
       expect(firstMessage()).toMatch(/^Manually triggered run for "test-automation"\. Time: \S+$/)
       expect(firstMessage()).not.toContain(chatText)
+      expect(store.getEntriesForApp(testAppId)).toHaveLength(1)
     })
 
     it('leaves them out of a scheduled run', async () => {
@@ -2877,6 +2986,7 @@ describe('AppRuntimeService', () => {
 
       expect(firstMessage()).toMatch(/^Scheduled run for "test-automation" — subscription "daily" \(every 1h\)\. Time: \S+$/)
       expect(firstMessage()).not.toContain(chatText)
+      expect(store.getEntriesForApp(testAppId)).toHaveLength(1)
     })
   })
 
@@ -2900,6 +3010,7 @@ describe('AppRuntimeService', () => {
         userOverrides: {},
         spaceId: 'space-001',
       })
+      persistMockApp(testAppId)
     })
 
     const description = () => vi.mocked(executeRun).mock.calls.at(-1)?.[0].trigger.description
@@ -3271,6 +3382,7 @@ describe('AppRuntimeService', () => {
         userOverrides,
         spaceId: 'space-001',
       })
+      persistMockApp(testAppId)
     }
 
     it('sends a desktop notification when notificationLevel is "all" and the run succeeds', async () => {
@@ -3279,6 +3391,7 @@ describe('AppRuntimeService', () => {
 
       await service.triggerManually(testAppId)
 
+      expect(store.getEntriesForRun(MOCK_RUN_ID)).toEqual([expect.objectContaining({ type: 'run_complete', appId: testAppId })])
       expect(notifyAppEvent).toHaveBeenCalledTimes(1)
       const [title, , options] = vi.mocked(notifyAppEvent).mock.calls[0]
       expect(title).toBe(createTestSpec().name)
@@ -3307,11 +3420,6 @@ describe('AppRuntimeService', () => {
       seedApp({ notificationLevel: 'all' })
       // report-tool.ts sends its own notification and records a completion
       // entry for the run; executeWithConcurrency must see it and skip.
-      const db = dbManager.getAppDatabase()
-      db.prepare(`
-        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(testAppId, 'test-app', 'space-001', JSON.stringify(createTestSpec()), 'active', '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
       store.insertRun({
         runId: MOCK_RUN_ID,
         appId: testAppId,
@@ -3352,6 +3460,7 @@ describe('AppRuntimeService', () => {
         userOverrides: {},
         spaceId: 'space-001',
       })
+      persistMockApp(testAppId)
     }
 
     /** Hold the next run open so the test can observe the in-flight window. */
@@ -3794,7 +3903,7 @@ describe('AppRuntimeService', () => {
       seedApp('waiting_user')
       seedQuestion('run-a', 'entry-a', 1000)
       const reconcileAwaitingDecision = vi.fn()
-      getActiveTeamRuntimeMock.mockReturnValue({ reconcileAwaitingDecision })
+      getActiveTeamRuntimeMock.mockReturnValue({ reconcileAwaitingDecision, isMemberWorking: () => false })
       createService()
       const onStatusChange = mockAppManager.onAppStatusChange.mock.calls[0][0]
 
@@ -3863,7 +3972,7 @@ describe('AppRuntimeService', () => {
     it('rejects invalid runtime answers before publishing or starting a continuation', async () => {
       seedQuestion()
       const reconcileAwaitingDecision = vi.fn()
-      getActiveTeamRuntimeMock.mockReturnValue({ reconcileAwaitingDecision })
+      getActiveTeamRuntimeMock.mockReturnValue({ reconcileAwaitingDecision, isMemberWorking: () => false })
       const service = createService()
       const invalid = [null, { text: 5 }, { answers: [] }, { text: '<the owner’s answer>' }, { choice: 'Approve' }]
       for (const response of invalid) {
@@ -3887,6 +3996,7 @@ describe('AppRuntimeService', () => {
     it('uses current permissions when queued execution finally obtains a resource slot', async () => {
       const apps = new Map(Array.from({ length: 11 }, (_, index) => [`person-${index}`, { ...app, id: `person-${index}`, permissions: { granted: ['ai-browser'], denied: [] } }]))
       mockAppManager.getApp.mockImplementation((id: string) => apps.get(id))
+      for (const id of apps.keys()) persistMockApp(id)
       const releases: Array<() => void> = []
       vi.mocked(executeRun).mockImplementation(async (options: any) => {
         if (options.app.id !== 'person-10') await new Promise<void>(resolve => releases.push(resolve))

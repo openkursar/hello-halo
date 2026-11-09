@@ -26,15 +26,14 @@ void function _i18nThoughtKeys(t: (k: string) => string) {
 }
 
 // ============================================
-// Sub-agent grouping
+// Nested tool grouping
 // ============================================
 
 export const NO_CHILD_THOUGHTS: Thought[] = []
 
 /**
- * Sub-agent steps grouped under their parent Task/Agent step id. A parent whose
- * steps did not change keeps its array from `previous`, so its memoized row is
- * not re-rendered when an unrelated step streams in.
+ * Unchanged groups reuse their previous arrays so unrelated streaming updates
+ * do not re-render a parent's memoized row.
  */
 export function groupChildThoughts(
   thoughts: readonly Thought[],
@@ -67,14 +66,14 @@ export interface ThoughtPanelModel {
   /** The steps it was derived from. */
   readonly thoughts: readonly Thought[]
   /**
-   * Timeline steps: no final result, no sub-agent steps (nested under their
+   * Timeline steps: no final result, no nested tool steps (nested under their
    * Task), no TodoWrite (one card below). A tool result stays only when it
    * found no call to merge into.
    */
   readonly display: readonly Thought[]
   /** Session notices stay visible outside the collapsible thought details. */
   readonly notices: readonly Thought[]
-  /** Sub-agent steps by parent step id (see `groupChildThoughts`). */
+  /** Nested tool steps by parent step id (see `groupChildThoughts`). */
   readonly childGroups: ReadonlyMap<string, Thought[]>
   /** The latest TodoWrite call that carries its input. */
   readonly latestTodo: Thought | null

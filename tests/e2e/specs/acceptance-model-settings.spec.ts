@@ -76,6 +76,8 @@ test('a custom provider saved through settings supplies the connection check and
   const name = 'Local configured provider'
   await openAdd(window)
   await fillProvider(window, { name, url: providerGateway.url('primary'), key: providerGateway.key('primary') })
+  await expect(aiSection(window).getByText('No models loaded', { exact: true })).toBeVisible()
+  await expect(aiSection(window).getByRole('button', { name: 'Fetch Models', exact: true })).toBeEnabled()
   await fetchAndChoose(window, 'gpt-4o-mini')
   await successfulConnection(window)
   await saveProvider(window, name)
@@ -111,7 +113,15 @@ test('editing a provider rotates its endpoint and key without creating a duplica
   await saveProvider(window, 'Original local account')
   const original = readProviderConfiguration(managementApp.profile).sources[0]
   await editProvider(window, original.name)
-  await fillProvider(window, { name: 'Updated local account', url: providerGateway.url('secondary'), key: providerGateway.key('secondary') })
+  // A custom model belongs to the old endpoint too; it must not survive either.
+  await setCustomModel(window, 'old-custom-model')
+  // `primary` and `secondary` share an origin; use the alternate port so this
+  // is a real endpoint change (path-only edits deliberately keep the list).
+  const rotatedUrl = providerGateway.url('secondary', 'alternate')
+  await fillProvider(window, { name: 'Updated local account', url: rotatedUrl, key: providerGateway.key('secondary') })
+  // The saved model and custom-model mode belonged to the old endpoint.
+  await expect(aiSection(window).getByLabel('Use custom model ID', { exact: true })).not.toBeChecked()
+  await expect(aiSection(window).getByText('No models loaded', { exact: true })).toBeVisible()
   await fetchAndChoose(window, 'gpt-4o-mini')
   await successfulConnection(window)
   await saveProvider(window, 'Updated local account', 'Update')
@@ -120,7 +130,7 @@ test('editing a provider rotates its endpoint and key without creating a duplica
   expect(saved.sources).toHaveLength(1)
   expect(saved.currentId).toBe(original.id)
   expect(saved.sources[0]).toMatchObject({ id: original.id, model: 'gpt-4o-mini' })
-  expect([providerGateway.url('secondary'), `${providerGateway.url('secondary')}/chat/completions`]).toContain(saved.sources[0].apiUrl)
+  expect([rotatedUrl, `${rotatedUrl}/chat/completions`]).toContain(saved.sources[0].apiUrl)
 
   const reopened = await managementApp.restart()
   await openSettings(reopened)
@@ -159,9 +169,10 @@ test('credentials are concealed by default and reopening the editor restores con
 
 test('a rejected key shows errors for model fetching and connection testing and can be corrected in place', modelSettingsAcceptance('models.accounts.rejected-key'), async ({ providerGateway, managementApp, window }) => {
   await openAdd(window)
-  await fillProvider(window, { name: 'Recoverable account', url: providerGateway.url('primary'), key: 'invalid-local-fixture-key', model: 'gpt-4o' })
+  await fillProvider(window, { name: 'Recoverable account', url: providerGateway.url('primary'), key: 'invalid-local-fixture-key' })
   await aiSection(window).getByRole('button', { name: 'Fetch Models', exact: true }).click()
   await expect(aiSection(window).getByText('Invalid API Key or no permission', { exact: false })).toBeVisible()
+  await setCustomModel(window, 'gpt-4o')
   await aiSection(window).getByRole('button', { name: 'Test connection', exact: true }).click()
   await expect(aiSection(window).getByText('Invalid API key', { exact: true })).toBeVisible({ timeout: 30000 })
   await expect(aiSection(window).getByText('Connection successful', { exact: true })).toHaveCount(0)

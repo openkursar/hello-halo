@@ -15,8 +15,7 @@
  *   disable-model-invocation - Prevent Claude from auto-loading (default: false)
  *   allowed-tools            - Comma-separated tool list, e.g. "Read, Grep, Glob"
  *   model                    - Override model when skill is active
- *   context                  - "fork" to run in a subagent
- *   agent                    - Subagent type when context=fork
+ *   context                  - engine execution context, validated before loading
  *   hooks                    - Lifecycle hooks scoped to this skill
  *
  * See https://code.claude.com/docs/en/skills#frontmatter-reference

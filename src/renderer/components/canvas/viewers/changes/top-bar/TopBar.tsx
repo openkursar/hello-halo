@@ -5,8 +5,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
-import { BookMarked, ChevronDown, Clock3, GitBranch, Loader2, Search } from 'lucide-react'
-import type { GitRepository, GitReviewRecord, GitRevisionOption } from '../../../../../../shared/types/git'
+import { ChevronDown, Clock3, GitBranch, Loader2, Search } from 'lucide-react'
+import type { GitReviewRecord, GitRevisionOption } from '../../../../../../shared/types/git'
 import { useTranslation } from '../../../../../i18n'
 import { failureOf, gitClient } from '../state/git-client'
 import { gitErrorMessage } from '../state/git-errors'
@@ -17,6 +17,7 @@ import { formatTime } from '../shared/format'
 import type { ChangeTotals } from '../model/view-files'
 import type { ChangesPage, StoredCompareScope } from '../../../../../types/changes-view'
 import type { ChangesLayout } from '../shared/use-container-width'
+import { RepositoryPicker, type RepositoryPickerProps } from './RepositoryPicker'
 
 const TRIGGER = 'inline-flex min-w-0 items-center gap-1.5 rounded-sm px-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60'
 
@@ -25,11 +26,8 @@ function triggerHeight(layout: ChangesLayout): string {
   return layout.stacked ? 'h-10' : 'h-7'
 }
 
-interface TopBarProps {
+interface TopBarProps extends RepositoryPickerProps {
   spaceId: string
-  repositories: GitRepository[]
-  repo: GitRepository | null
-  onSelectRepository: (root: string) => void
   scope: StoredCompareScope
   review: GitReviewRecord | null
   /** "Since last review" cannot load: its snapshot is gone. */
@@ -48,7 +46,7 @@ interface TopBarProps {
 
 export function TopBar(props: TopBarProps) {
   const { t } = useTranslation()
-  const { repo, totals, layout } = props
+  const { totals, layout } = props
   // A narrower canvas keeps the controls and drops the totals (the overview and the file list still have them).
   const stats = totals && (
     <span className="flex shrink-0 items-center gap-2">
@@ -62,7 +60,7 @@ export function TopBar(props: TopBarProps) {
   )
   const pickers = (
     <>
-      {repo && <RepositoryPicker {...props} repo={repo} />}
+      <RepositoryPicker {...props} compact={layout.hideMinorStats} touch={layout.stacked} />
       <ScopePicker {...props} />
     </>
   )
@@ -100,60 +98,6 @@ export function TopBar(props: TopBarProps) {
   )
 }
 
-function RepositoryPicker({ repositories, repo, onSelectRepository, layout }: TopBarProps & { repo: GitRepository }) {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  const anchorRef = useRef<HTMLButtonElement>(null)
-  const branch = repo.branch ?? (repo.head ? t('Detached at {{commit}}', { commit: repo.head }) : t('No commits yet'))
-  const label = (
-    <>
-      {/* Below the widest step the icons give their room to the names. */}
-      {!layout.hideMinorStats && <BookMarked size={14} className="shrink-0 text-faint-foreground" aria-hidden />}
-      <span className="truncate font-semibold text-foreground">{repo.name}</span>
-      {!layout.hideMinorStats && <span className="hidden truncate text-[12px] text-subtle-foreground min-[460px]:inline">{branch}</span>}
-    </>
-  )
-
-  if (repositories.length <= 1) {
-    return <span className={`inline-flex ${triggerHeight(layout)} min-w-0 max-w-[220px] shrink items-center gap-1.5 px-1.5 text-[13px]`} title={repo.root}>{label}</span>
-  }
-
-  return (
-    <>
-      <button
-        ref={anchorRef}
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title={repo.root}
-        className={`${TRIGGER} ${triggerHeight(layout)} max-w-[220px] shrink-[0.3]`}
-      >
-        {label}
-        <ChevronDown size={12} className="shrink-0" aria-hidden />
-      </button>
-      <Menu open={open} onClose={() => setOpen(false)} anchorRef={anchorRef} label={t('Repositories in this space')}>
-        <MenuLabel>{t('Repositories in this space')}</MenuLabel>
-        {repositories.map((item) => (
-          <MenuItem
-            key={item.root}
-            checked={item.root === repo.root}
-            description={[item.branch ?? item.head ?? t('No commits yet'), item.relativePath].filter(Boolean).join(' · ')}
-            onSelect={() => {
-              setOpen(false)
-              onSelectRepository(item.root)
-            }}
-          >
-            {item.name}
-          </MenuItem>
-        ))}
-        <MenuSeparator />
-        <MenuNote>{t('Halo looks in the space folder and the folders directly inside it.')}</MenuNote>
-      </Menu>
-    </>
-  )
-}
-
 function ScopePicker({ spaceId, repo, scope, review, snapshotMissing, onScope, layout }: TopBarProps) {
   const { t, i18n } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -175,6 +119,7 @@ function ScopePicker({ spaceId, repo, scope, review, snapshotMissing, onScope, l
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
+        disabled={!repo}
         aria-label={t('Compare: {{scope}}', { scope: scopeLabel(scope, t) })}
         title={scopeLabel(scope, t)}
         className={`${TRIGGER} ${triggerHeight(layout)} min-w-[64px]`}

@@ -31,7 +31,7 @@ import { TeamStore } from '../../../../src/main/apps/team/store'
 import { MIGRATION_NAMESPACE, migrations } from '../../../../src/main/apps/team/migrations'
 import { createTeamService, parseProposedMembers } from '../../../../src/main/apps/team/service'
 import type { TeamServiceDeps } from '../../../../src/main/apps/team/service'
-import { AI_MEMBER_HARD_LIMIT } from '../../../../src/shared/apps/team-types'
+import { AI_MEMBER_HARD_LIMIT, spaceCoordinatorAppId } from '../../../../src/shared/apps/team-types'
 import type {
   CreateTeamInput,
   ProposedMember,
@@ -99,7 +99,11 @@ function makeRuntime(store: TeamStore) {
     readBoard: vi.fn(() => ({ tasks: [], findings: [], roster: [] })),
   }
   return {
-    bus: {} as never,
+    bus: { cancelSession: vi.fn(), continueSession: vi.fn() } as never,
+    stopMemberTurn: vi.fn(async () => false),
+    isMemberReachable: vi.fn((_appId: string, _teamId: string) => true),
+    closeEpochResources: vi.fn(async (_teamId: string, _epochId: string) => {}),
+    sealConversationEpoch: vi.fn(async (_teamId: string, _epochId: string, _reason?: string) => {}),
     blackboard,
     checks: { viewForTeam: () => [], cancelById: vi.fn() } as never,
     startEpoch,
@@ -326,6 +330,109 @@ describe('TeamService', () => {
   })
 
   describe('dissolveTeam — orphan cleanup', () => {
+    it('fences every idle collaboration scope before awaiting close without changing history', async () => {
+      const team = { id: 'ephemeral-team', name: 'Temporary', owningSpaceId: SPACE_A, goal: '', leadAppId: spaceCoordinatorAppId('source-chat'),
+        memberSourcing: 'manual' as const, collabMode: 'free' as const, escalationRouting: 'user' as const, status: 'idle' as const,
+        currentEpochId: null, createdAt: 1, updatedAt: 1, ephemeral: true, coordinatorConversationId: 'source-chat' }
+      ctx.store.insertTeam(team)
+      ctx.store.addMember({ teamId: team.id, appId: team.leadAppId, memberName: 'lead', role: '', isLead: true, aiProvisioned: false, addedAt: 1 })
+      ctx.service.participants.beginRequest('source-chat', 'source-request')
+      const sourceGuard = ctx.service.participants.captureSource('source-chat')
+      for (const [id, lifecycle] of [['conversation', 'conversation'], ['parallel-a', 'run'], ['parallel-b', 'run']] as const) {
+        ctx.store.insertEpoch({ id, teamId: team.id, lifecycle, startedAt: 1, endedAt: null, endReason: null, summary: null })
+      }
+      ctx.store.participants.insert({ teamId: team.id, epochId: 'conversation', appId: 'temporary', parentAppId: team.leadAppId!,
+        memberName: 'temporary', role: '', isLead: false, aiProvisioned: false, isTemporary: true, addedAt: 1 })
+      let release!: () => void
+      const blocked = new Promise<void>(resolve => { release = resolve })
+      ctx.runtime.closeEpochResources.mockImplementation(async () => { await blocked })
+      const pending = ctx.service.dissolveTeam(team.id)
+      try {
+        expect(() => sourceGuard()).toThrow(/stopped/ )
+        expect(ctx.service.participants.requestAllowed('source-request')).toBe(false)
+        expect(ctx.store.listEpochsByTeam(team.id).every(epoch => epoch.endedAt === null && epoch.endReason === null)).toBe(true)
+        expect(ctx.store.getTeamById(team.id)).not.toBeNull()
+        expect(ctx.store.participants.getById('temporary')).not.toBeNull()
+        await expect(ctx.service.updateTeam(team.id, { name: 'Late mutation' })).rejects.toThrow(/being deleted/)
+      } finally { release(); await pending }
+      expect(ctx.runtime.closeEpochResources.mock.calls.map(call => call[1]).sort()).toEqual(['conversation', 'parallel-a', 'parallel-b'])
+      expect(ctx.store.getTeamById(team.id)).toBeNull()
+      expect(ctx.store.participants.getById('temporary')).toBeNull()
+    })
+
+    it('retains completed history after failed deletion and retries every scope before publishing dissolution', async () => {
+      const events: string[] = []
+      const f = buildService({ onOfficeDissolved: () => { events.push('dissolved') } })
+      try {
+        const team = await f.service.createTeam(manualInput({ members: [] }))
+        for (const id of ['first', 'second']) f.store.insertEpoch({ id, teamId: team.id, lifecycle: 'run', startedAt: 1, endedAt: null, endReason: null, summary: null })
+        f.store.endEpoch('first', 20, 'completed', 'Published result', 'output')
+        f.store.updateWorkItem('first', { status: 'completed' })
+        const history = f.store.listEpochsByTeam(team.id)
+        f.runtime.closeEpochResources.mockRejectedValueOnce(new Error('Close failed'))
+        await expect(f.service.dissolveTeam(team.id)).rejects.toThrow(/retained/)
+        expect(f.store.listEpochsByTeam(team.id)).toEqual(history)
+        expect(f.runtime.sealConversationEpoch).not.toHaveBeenCalled()
+        expect(f.store.getTeamById(team.id)).not.toBeNull()
+        expect(f.runtime.closeEpochResources).toHaveBeenCalledTimes(2)
+        expect(events).toEqual([])
+        await f.service.dissolveTeam(team.id)
+        expect(f.runtime.closeEpochResources).toHaveBeenCalledTimes(4)
+        expect(events).toEqual(['dissolved'])
+        expect(f.store.getTeamById(team.id)).toBeNull()
+      } finally { f.dbManager.closeAll() }
+    })
+
+    it('waits for remote owners to stop before broadcasting office dissolution', async () => {
+      const order: string[] = []
+      const f = buildService({ onOfficeDissolved: () => { order.push('dissolved') } })
+      try {
+        const team = await f.service.createTeam(manualInput({ members: [] }))
+        f.store.insertEpoch({ id: 'work', teamId: team.id, lifecycle: 'run', startedAt: 1, endedAt: null, endReason: null, summary: null })
+        f.store.addMember({ teamId: team.id, appId: 'remote', memberName: 'remote', role: '', isLead: false, aiProvisioned: false, addedAt: 1, ownerNodeId: 'other-node', origin: 'remote' })
+        let release!: () => void
+        const blocked = new Promise<void>(resolve => { release = resolve })
+        f.runtime.stopMemberTurn.mockImplementation(async () => { await blocked; order.push('owner-stopped'); return true })
+        f.runtime.closeEpochResources.mockImplementation(async () => { order.push('scope-closed') })
+        const pending = f.service.dissolveTeam(team.id)
+        try {
+          await vi.waitFor(() => expect(f.runtime.stopMemberTurn).toHaveBeenCalledOnce())
+          expect(order).toEqual([])
+          expect(f.store.getTeamById(team.id)).not.toBeNull()
+          expect(f.runtime.closeEpochResources).not.toHaveBeenCalled()
+        } finally { release(); await pending }
+        expect(order).toEqual(['owner-stopped', 'scope-closed', 'dissolved'])
+      } finally { f.dbManager.closeAll() }
+    })
+
+    it.each(['offline', 'disconnecting', 'online'] as const)('handles %s remote stop without corrupting history', async (presence) => {
+      const events: string[] = []
+      const f = buildService({ onOfficeDissolved: () => { events.push('dissolved') } })
+      try {
+        const team = await f.service.createTeam(manualInput({ members: [] }))
+        f.store.insertEpoch({ id: 'work', teamId: team.id, lifecycle: 'run', startedAt: 1, endedAt: null, endReason: null, summary: 'Original' })
+        f.store.addMember({ teamId: team.id, appId: 'remote', memberName: 'remote', role: '', isLead: false, aiProvisioned: false, addedAt: 1, ownerNodeId: 'other-node', origin: 'remote' })
+        const history = f.store.getEpochById('work')
+        f.runtime.isMemberReachable.mockReturnValue(presence !== 'offline')
+        f.runtime.stopMemberTurn.mockImplementation(async () => {
+          if (presence === 'disconnecting') f.runtime.isMemberReachable.mockReturnValue(false)
+          throw new Error('Remote stop failed')
+        })
+        if (presence === 'online') {
+          await expect(f.service.dissolveTeam(team.id)).rejects.toThrow(/retained/)
+          expect(f.store.getEpochById('work')).toEqual(history)
+          expect(events).toEqual([])
+          f.runtime.stopMemberTurn.mockResolvedValue(true)
+          await f.service.dissolveTeam(team.id)
+        } else {
+          await f.service.dissolveTeam(team.id)
+          expect(f.runtime.stopMemberTurn).toHaveBeenCalledTimes(presence === 'offline' ? 0 : 1)
+        }
+        expect(f.store.getTeamById(team.id)).toBeNull()
+        expect(events).toEqual(['dissolved'])
+      } finally { f.dbManager.closeAll() }
+    })
+
     it('deletes AI members + the provisioned lead, keeps manual members', async () => {
       // Manual member (existing-1) + AI member + provisioned lead.
       const team = await ctx.service.createTeam(
@@ -464,6 +571,22 @@ describe('TeamService', () => {
   })
 
   describe('run / pause', () => {
+    it('supports an empty standing goal and requires instructions when work starts', async () => {
+      const team = await ctx.service.createTeam(manualInput({ goal: '' }))
+      expect(team.goal).toBe('')
+      await expect(ctx.service.runTeam(team.id)).rejects.toThrow(/Provide an instruction/)
+      expect(ctx.runtime.startEpoch).not.toHaveBeenCalled()
+      expect(await ctx.service.runTeam(team.id, { type: 'manual' }, 'Investigate this issue.')).toEqual({ epochId: 'epoch-1' })
+      expect(ctx.runtime.startEpoch).toHaveBeenCalledWith(team.id, { type: 'manual' }, 'Investigate this issue.')
+    })
+
+    it('creates a lead-only AI team without inventing roles for an absent goal', async () => {
+      const team = await ctx.service.createTeam(manualInput({ goal: undefined, memberSourcing: 'ai', members: [] }))
+      expect(team.goal).toBe('')
+      expect(ctx.store.listMembersByTeam(team.id)).toHaveLength(1)
+      expect(ctx.appManager.install).toHaveBeenCalledTimes(1)
+    })
+
     it('runTeam delegates to runtime.startEpoch', async () => {
       const team = await ctx.service.createTeam(manualInput())
       await ctx.service.runTeam(team.id)
@@ -778,6 +901,15 @@ describe('TeamService', () => {
   })
 
   describe('proposeMembers', () => {
+    it('does not call a model to invent a team when the goal is absent', async () => {
+      const propose = vi.fn(async () => [])
+      const local = buildService({ proposeMembersFromGoal: propose })
+      try {
+        expect(await local.service.proposeMembers('   ', SPACE_A)).toEqual([])
+        expect(propose).not.toHaveBeenCalled()
+      } finally { local.dbManager.closeAll() }
+    })
+
     it('caps the proposer output at the hard limit', async () => {
       const big: ProposedMember[] = Array.from({ length: AI_MEMBER_HARD_LIMIT + 4 }, (_, i) => ({
         memberName: `m${i}`,

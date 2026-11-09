@@ -152,6 +152,21 @@ describe('ctrl-feed — reliable control-plane delivery', () => {
     expect(h.wakesAtOwner[0]).toMatchObject({ correlationId: 'corr-1', from: AUTH, appId: 'app-a' })
   })
 
+  it('consumes retired participant entries without executing them or blocking the next ordinary wake', () => {
+    const frame: FeedSyncFrame = {
+      kind: 'feed-entries', officeId: OFFICE, feedKey: AUTH_CTRL_KEY, more: false, upToSeq: 2,
+      entries: [
+        { seq: 1, hlc: '0'.repeat(16), fid: 'retired-participant', type: 'participant', ts: 1,
+          payload: { target: OWNER, message: { kind: 'publish', participant: { appId: 'private' } } } },
+        { seq: 2, hlc: '0'.repeat(16), fid: 'ordinary-wake', type: 'wake', ts: 2,
+          payload: { target: OWNER, from: AUTH, correlationId: 'after-retired', request: makeRequest() } },
+      ],
+    }
+    h.ownerFeed.handleFrame(AUTH, frame)
+    h.ownerFeed.handleFrame(AUTH, frame)
+    expect(h.wakesAtOwner).toEqual([{ correlationId: 'after-retired', from: AUTH, appId: 'app-x' }])
+  })
+
   it('refuses a peer publishing entries under another author identity', () => {
     h.ownerFeed.handleFrame('untrusted-peer', {
       kind: 'feed-entries', officeId: OFFICE, feedKey: AUTH_CTRL_KEY, more: false, upToSeq: 1,

@@ -6,6 +6,8 @@
 
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest'
 import { rmSync } from 'fs'
+import { join } from 'path'
+import * as cli from '../../../../src/main/services/git/cli'
 import { Gate } from '../../../../src/main/services/git/gate'
 import { getChangeList, readFileContents } from '../../../../src/main/services/git'
 import { initRepo, isolateGit, makeTempDir } from './_repo'
@@ -134,6 +136,33 @@ describe('readFileContents under a burst', () => {
   afterAll(() => {
     restoreGit()
     rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('keeps linked-worktree identity checks inside the content gate', async () => {
+    const linked = join(dir, 'linked')
+    const repo = initRepo(join(dir, 'source'))
+    repo.write('file.txt', 'content\n')
+    repo.commitAll('base')
+    repo.git('worktree', 'add', '-q', '-b', 'linked', linked)
+    const list = await getChangeList('s', linked, { kind: 'uncommitted' })
+    const run = cli.runGit
+    let running = 0
+    let peak = 0
+    const spy = vi.spyOn(cli, 'runGit').mockImplementation(async (...args) => {
+      running++
+      peak = Math.max(peak, running)
+      try { return await run(...args) } finally { running-- }
+    })
+    try {
+      const results = await Promise.allSettled(Array.from({ length: 60 }, () => readFileContents('s', linked, {
+        scope: list.scope, beforeRevision: list.beforeRevision, path: 'file.txt',
+      })))
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(35)
+      expect(peak).toBeLessThanOrEqual(6)
+      expect(spy.mock.calls.filter(([, args]) => args.includes('--absolute-git-dir'))).toHaveLength(35)
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('answers what fits in the line, refuses the rest as GIT_BUSY, and serves again afterwards', async () => {

@@ -91,7 +91,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
 
-vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn(), onAgentEvent: vi.fn(() => () => {}) }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ emitHumanRequest: vi.fn(), emitAgentEvent: vi.fn(), onAgentEvent: vi.fn(() => () => {}) }))
 vi.mock('../../../../src/main/services/agent/stream-processor', () => ({ processStream: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/message-utils', () => ({ buildMessageContent: vi.fn(), formatCanvasContext: () => '' }))
 

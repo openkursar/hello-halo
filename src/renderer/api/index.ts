@@ -8,6 +8,7 @@
  */
 import { authApi } from './auth.api'
 import { configApi } from './config.api'
+import { aiGroupsApi } from './ai-groups.api'
 import { spaceApi } from './space.api'
 import { conversationApi } from './conversation.api'
 import { agentApi } from './agent.api'
@@ -39,6 +40,7 @@ import { skillsApi } from './skills.api'
 export const api = {
   ...authApi,
   ...configApi,
+  ...aiGroupsApi,
   ...spaceApi,
   ...conversationApi,
   ...agentApi,

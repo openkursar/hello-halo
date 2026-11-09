@@ -1,16 +1,16 @@
 {
-  "totalRoutes": 323,
+  "totalRoutes": 332,
   "expose": {
-    "ai": 208,
+    "ai": 207,
     "wrapped": 11,
-    "internal": 104,
+    "internal": 114,
     "unlabeled": 0
   },
   "groups": {
     "conversation": 12,
     "workspace": 28,
     "digital-human": 54,
-    "team": 32,
+    "team": 31,
     "knowledge-base": 22,
     "channels": 22,
     "settings": 17,
@@ -20,6 +20,7 @@
   "files": [
     "config",
     "ai-sources",
+    "ai-groups",
     "space",
     "agent",
     "terminal",

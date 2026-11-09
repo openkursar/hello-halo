@@ -12,6 +12,7 @@ import { makeTempDir } from './_repo'
 const { spaces } = vi.hoisted(() => ({ spaces: new Map<string, string>() }))
 vi.mock('../../../../src/main/services/space.service', () => ({
   getSpaceDir: (spaceId: string) => spaces.get(spaceId) ?? '',
+  getSpace: (spaceId: string) => spaces.has(spaceId) ? { path: spaces.get(spaceId), isTemp: false } : null,
 }))
 
 const posix = process.platform !== 'win32'

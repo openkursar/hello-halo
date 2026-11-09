@@ -65,8 +65,6 @@
  *   turn/end                                → cached stop reason for `result`
  *   request/header                          → cached tool catalogue for init
  *   request/context                         → cached model name for init
- *   subagent.started                        → system.task_started
- *   subagent.finished                       → system.task_notification
  *   descendant session events               → assistant / user frames tagged
  *                                             with parent_tool_use_id
  *   session.status idle (own session)       → handled by the adapter, which
@@ -82,8 +80,6 @@ import type {
   DshSessionEventNotification,
   DshSessionStatusNotification,
   DshStreamChunk,
-  DshSubagentFinishedNotification,
-  DshSubagentStartedNotification,
   DshTokenUsage,
   DshTurnEndReason,
 } from './types/dsh-protocol'
@@ -156,7 +152,6 @@ export class DshEventNormalizer {
   /** Tool call ids already surfaced as a `tool_use` during this turn. */
   private emittedToolCallIds = new Set<string>()
   /** Tool call ids dispatched but not yet resolved, newest last. */
-  private openToolCallIds: string[] = []
   /** Unresolved calls to the runtime's todo tool. */
   private readonly todoToolCallIds = new Set<string>()
   private hasToolUseInTurn = false
@@ -178,8 +173,6 @@ export class DshEventNormalizer {
   /** Tool schema names from the most recent `request/header`. */
   private toolCatalogue: string[] = []
 
-  /** Descendant session id → the parent tool_use id that spawned it. */
-  private readonly descendants = new Map<string, string>()
 
   constructor(context: DshNormalizerContext) {
     this.context = context
@@ -187,9 +180,9 @@ export class DshEventNormalizer {
       `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`)
   }
 
-  /** Session ids this normalizer accepts events for: own plus descendants. */
+  /** Only the captured session may contribute events to this turn. */
   isKnownSession(sessionId: string): boolean {
-    return sessionId === this.context.sessionId || this.descendants.has(sessionId)
+    return sessionId === this.context.sessionId
   }
 
   /** True once the interval's terminal `result` frame has been produced. */
@@ -252,10 +245,6 @@ export class DshEventNormalizer {
     switch (notification.method) {
       case 'session.event':
         return this.handleSessionEvent(notification.payload as DshSessionEventNotification)
-      case 'subagent.started':
-        return this.handleSubagentStarted(notification.payload as DshSubagentStartedNotification)
-      case 'subagent.finished':
-        return this.handleSubagentFinished(notification.payload as DshSubagentFinishedNotification)
       case 'halo.assistant-stream':
         return this.handleAssistantStream(notification.payload as DshAssistantStreamNotification)
       case 'session.status':
@@ -283,7 +272,7 @@ export class DshEventNormalizer {
     const event = payload?.event
     if (!sessionId || !event?.type) return []
     if (sessionId !== this.context.sessionId) {
-      return this.descendants.has(sessionId) ? this.handleDescendantEvent(sessionId, event) : []
+      return []
     }
     if (!this.turnOpen) return []
 
@@ -339,7 +328,7 @@ export class DshEventNormalizer {
 
   /**
    * One live frame of the model call in flight. Descendants' streams stay
-   * inside the child, as with the CC subagent protocol.
+   * inside their owning session.
    *
    * `start` opens an attempt. A second one within a step is a retry of a
    * failed call: that call's partial blocks are closed without aggregating,
@@ -448,7 +437,6 @@ export class DshEventNormalizer {
     if (!callId) return []
     const harnessName = typeof data.name === 'string' ? data.name : ''
     if (isTodoTool(harnessName)) this.todoToolCallIds.add(callId)
-    this.openToolCallIds.push(callId)
 
     // The chunk stream normally already produced this tool_use. `tool/call` is
     // the authoritative record, so it doubles as the fallback for a runtime
@@ -468,7 +456,6 @@ export class DshEventNormalizer {
   private handleToolResult(data: Record<string, any>): CcFrame[] {
     const result = readToolResult(data)
     if (!result) return []
-    this.openToolCallIds = this.openToolCallIds.filter((id) => id !== result.toolUseId)
     this.todoToolCallIds.delete(result.toolUseId)
     return [userWithToolResult(result.toolUseId, result.content, result.isError)]
   }
@@ -487,78 +474,6 @@ export class DshEventNormalizer {
     frames.push(...this.aggregateBlock(state))
     frames.push(userWithToolResult(state.toolId, 'Todos updated', false))
     return frames
-  }
-
-  // ==========================================================================
-  // Subagents
-  // ==========================================================================
-
-  /**
-   * Children run inside the runtime, so Halo watches rather than drives them.
-   * `subagent.started` names the parent and child sessions but not the tool
-   * call that spawned the child; the delegating `tool/call` is the one still
-   * awaiting its result when the child appears, which is what links the two.
-   */
-  private handleSubagentStarted(payload: DshSubagentStartedNotification): CcFrame[] {
-    const childSessionId = payload?.childSessionId
-    const parentSessionId = payload?.parentSessionId
-    if (!childSessionId || !parentSessionId) return []
-    if (!this.isKnownSession(parentSessionId)) return []
-
-    const parentToolUseId = this.openToolCallIds[this.openToolCallIds.length - 1]
-    this.descendants.set(childSessionId, parentToolUseId ?? childSessionId)
-    if (!parentToolUseId) return []
-    return [{
-      type: 'system',
-      subtype: 'task_started',
-      session_id: this.context.sessionId,
-      task_id: childSessionId,
-      tool_use_id: parentToolUseId,
-    }]
-  }
-
-  private handleSubagentFinished(payload: DshSubagentFinishedNotification): CcFrame[] {
-    const childSessionId = payload?.childSessionId
-    if (!childSessionId || !this.descendants.has(childSessionId)) return []
-    return [{
-      type: 'system',
-      subtype: 'task_notification',
-      session_id: this.context.sessionId,
-      task_id: childSessionId,
-      status: taskStatusFrom(payload?.status, payload?.stopReason),
-    }]
-  }
-
-  /**
-   * Descendant sessions reach the timeline as the CC subagent protocol does:
-   * complete assistant / user frames tagged with `parent_tool_use_id`, which
-   * `stream-processor` routes to `subagent-handler` without knowing the
-   * engine. Their token-level chunks stay inside the child.
-   */
-  private handleDescendantEvent(sessionId: string, event: DshSessionEvent): CcFrame[] {
-    const parentToolUseId = this.descendants.get(sessionId)
-    if (!parentToolUseId) return []
-    const data = event.data ?? {}
-
-    if (event.type === 'assistant/message') {
-      const content = (data.message as DshMessage | undefined)?.content
-      const blocks = toCcContent(Array.isArray(content) ? content : [])
-      if (blocks.length === 0) return []
-      return [{
-        type: 'assistant',
-        parent_tool_use_id: parentToolUseId,
-        message: { id: this.newId('dsh-sub'), role: 'assistant', content: blocks },
-      }]
-    }
-    if (event.type === 'tool/result') {
-      const result = readToolResult(data)
-      if (!result) return []
-      return [{
-        ...userWithToolResult(result.toolUseId, result.content, result.isError),
-        parent_tool_use_id: parentToolUseId,
-      }]
-    }
-    return []
   }
 
   // ==========================================================================
@@ -896,7 +811,6 @@ export class DshEventNormalizer {
     this.blocks.clear()
     this.deliveredBlockIndexes.clear()
     this.emittedToolCallIds.clear()
-    this.openToolCallIds = []
     this.todoToolCallIds.clear()
     this.hasToolUseInTurn = false
     this.stepUsage = null
@@ -905,7 +819,6 @@ export class DshEventNormalizer {
     this.lastTurnEnd = null
     this.failureMessage = null
     this.finalText = ''
-    this.descendants.clear()
   }
 }
 
@@ -952,7 +865,6 @@ const TOOL_NAME_MAP: Record<string, string> = {
   todo_write: 'TodoWrite',
   ask_user_question: 'AskUserQuestion',
   skill: 'Skill',
-  subagent: 'Task',
 }
 
 function mapToolName(name: string): string {
@@ -990,23 +902,6 @@ function flattenBlocks(blocks: DshContentBlock[] | undefined): string {
     if (block?.type === 'image') return '[image]'
     return JSON.stringify(block)
   }).join('\n')
-}
-
-/** Project harness content blocks onto the CC block shapes subagent-handler reads. */
-function toCcContent(blocks: DshContentBlock[]): unknown[] {
-  const out: unknown[] = []
-  for (const block of blocks) {
-    if (block?.type === 'text' && block.text) out.push({ type: 'text', text: block.text })
-    else if (block?.type === 'tool-call') {
-      out.push({
-        type: 'tool_use',
-        id: block.id ?? '',
-        name: mapToolName(block.name ?? ''),
-        input: parseJsonObject(block.arguments ?? ''),
-      })
-    }
-  }
-  return out
 }
 
 function extractToolNames(header: unknown): string[] {
@@ -1062,12 +957,6 @@ function resultOutcome(
     return { subtype: 'error_during_execution', isError: false, stopReason: 'interrupted' }
   }
   return { subtype: 'success', isError: false, stopReason: 'end_turn' }
-}
-
-function taskStatusFrom(status: string | undefined, stopReason: string | undefined): string {
-  if (status === 'ok' && (stopReason === undefined || stopReason === 'completed')) return 'completed'
-  if (stopReason === 'aborted') return 'stopped'
-  return status === 'ok' ? 'completed' : 'failed'
 }
 
 function addUsage(base: DshTokenUsage | null, next: DshTokenUsage): DshTokenUsage {

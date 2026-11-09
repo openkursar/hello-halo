@@ -124,8 +124,8 @@ function GoalSection({ team, first, readOnly }: { team: TeamDetail['team']; firs
           className="w-full rounded-lg border border-border bg-secondary px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
         />
       </label>
-      <label className="mt-3 block space-y-1">
-        <span className="text-xs text-muted-foreground">{t('Goal')}</span>
+      {(!readOnly || draft.trim()) && <label className="mt-3 block space-y-1">
+        <span className="text-xs text-muted-foreground">{t('Goal (optional)')}</span>
         {/* A joined office keeps the plain disabled field: the editor exists to
             open a dialog, and there is nothing here to open. */}
         {readOnly ? (
@@ -147,10 +147,10 @@ function GoalSection({ team, first, readOnly }: { team: TeamDetail['team']; firs
         )}
         {!readOnly && (
           <p className="text-xs text-muted-foreground/70">
-            {t('The lead will decompose this goal into tasks for the team.')}
+            {t('Add a standing goal, or give the team instructions when starting work.')}
           </p>
         )}
-      </label>
+      </label>}
     </Section>
   )
 }

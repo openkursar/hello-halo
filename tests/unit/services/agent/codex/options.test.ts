@@ -52,6 +52,10 @@ beforeEach(() => {
 })
 
 describe('Codex captured-account egress', () => {
+  it('always disables native collaboration while retaining the host MCP bridge', async () => {
+    const resolved = await resolveCodexOptions({ cwd: '/work', apiCredentials: credentials() })
+    expect(resolved.threadParams.config).toMatchObject({ features: { multi_agent: false, multi_agent_v2: false } })
+  })
   it('carries the selected account descriptor instead of the global account', async () => {
     const resolved = await resolveCodexOptions({ cwd: '/work', env: { HALO_AI_SOURCE_ID: 'account-a' }, apiCredentials: credentials(), pickedReasoningEffort: 'high' })
     expect(state.getApiCredentials).not.toHaveBeenCalled()

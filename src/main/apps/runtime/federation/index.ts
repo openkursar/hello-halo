@@ -104,7 +104,7 @@ export type {
   RosterSnapshot,
   RosterFrame,
 } from './types'
-export { makeLocationAwareSessionDeps, withOwnerResolvedSpace, withExternalOrigin } from './session-deps'
+export { makeLocationAwareSessionDeps, resolveMemberOwnerNode, withOwnerResolvedSpace, withExternalOrigin } from './session-deps'
 export type { LocationAwareSessionDepsConfig } from './session-deps'
 export { createRelayCapture, createStreamReplay } from './relay'
 // ── M2 authority/replication composition (re-exported for bootstrap wiring) ──

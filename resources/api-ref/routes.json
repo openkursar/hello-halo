@@ -79,6 +79,30 @@
     "group": "settings"
   },
   {
+    "method": "POST",
+    "path": "/api/ai-groups"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/ai-groups/:groupId"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/ai-groups/:groupId"
+  },
+  {
+    "method": "GET",
+    "path": "/api/ai-groups/:groupId/health"
+  },
+  {
+    "method": "POST",
+    "path": "/api/ai-groups/:groupId/release-rest"
+  },
+  {
+    "method": "POST",
+    "path": "/api/ai-groups/routes"
+  },
+  {
     "method": "GET",
     "path": "/api/spaces/halo",
     "group": "workspace"
@@ -956,13 +980,11 @@
   },
   {
     "method": "GET",
-    "path": "/api/teams/collab-for-conversation/:conversationId",
-    "group": "team"
+    "path": "/api/teams/collab-for-conversation/:conversationId"
   },
   {
     "method": "POST",
-    "path": "/api/teams/:teamId/save-collab",
-    "group": "team"
+    "path": "/api/teams/:teamId/save-collab"
   },
   {
     "method": "GET",
@@ -1022,6 +1044,11 @@
   {
     "method": "GET",
     "path": "/api/teams/:teamId/epochs/:epochId/board",
+    "group": "team"
+  },
+  {
+    "method": "GET",
+    "path": "/api/teams/:teamId/epochs/:epochId/roster",
     "group": "team"
   },
   {
@@ -1385,6 +1412,14 @@
   {
     "method": "POST",
     "path": "/api/git/repositories"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/discover-repository"
+  },
+  {
+    "method": "POST",
+    "path": "/api/git/open-repository"
   },
   {
     "method": "POST",

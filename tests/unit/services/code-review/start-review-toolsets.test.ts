@@ -72,8 +72,9 @@ vi.mock('../../../../src/main/services/agent', async () => {
   return {
     ...(await vi.importActual<object>('../../../../src/main/services/agent/prompt-text')),
     getToolset,
+    isCollaborationEnabled: () => true,
     getActiveEngine: () => 'halo',
-  resolveDefaultEngine: async () => 'halo',
+    resolveDefaultEngine: async () => 'halo',
     openToolset: broker.openToolset,
     closeToolset: broker.closeToolset,
     getWorkingDir: (spaceId: string) => `/spaces/${spaceId}`,

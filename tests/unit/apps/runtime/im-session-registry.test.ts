@@ -125,6 +125,22 @@ describe('ImSessionRegistry — session revisions', () => {
     expect(reg.getSessionRevision('app1', 'feishu-bot', 'chat-1')).toBeUndefined()
   })
 
+  it('persists a lazy context incarnation across restart and replaces it on clear or recipient changes', async () => {
+    reg.register('app1', 'wecom-bot', 'chat-1', 'group', 'inst-1')
+    expect(reg.findSession('app1', 'wecom-bot', 'chat-1')?.contextId).toBeUndefined()
+    const context = reg.getSessionContextId('app1', 'wecom-bot', 'chat-1')
+    reg.register('app1', 'wecom-bot', 'chat-1', 'group', 'inst-1', { lastSender: 'Another sender' })
+    reg.setProactive('app1', 'wecom-bot', 'chat-1', true)
+    expect(reg.getSessionContextId('app1', 'wecom-bot', 'chat-1')).toBe(context)
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(file, 'utf8'))[0].contextId).toBe(context))
+    expect(new ImSessionRegistry(file).getSessionContextId('app1', 'wecom-bot', 'chat-1')).toBe(context)
+    reg.resetActivity('app1', 'wecom-bot', 'chat-1')
+    const cleared = reg.getSessionContextId('app1', 'wecom-bot', 'chat-1')
+    expect(cleared).not.toBe(context)
+    reg.register('app1', 'wecom-bot', 'chat-1', 'group', 'inst-2')
+    expect(reg.getSessionContextId('app1', 'wecom-bot', 'chat-1')).not.toBe(cleared)
+  })
+
   it('preserves revisions across normal repeated inbound messages, pushes, names and unrelated edits', () => {
     reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1', original)
     reg.setProactive('app1', 'wecom-bot', 'chat-1', true)

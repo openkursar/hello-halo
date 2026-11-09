@@ -8,7 +8,8 @@
  * - All providers support OpenAI-compatible chat/completions API
  * - Anthropic is the only exception (native Claude API)
  * - Providers are organized by region (China / Overseas)
- * - Each provider has a default model list that can be fetched dynamically
+ * - Vendor presets may carry a curated model list; protocol entries do not,
+ *   because their model namespace belongs to whatever endpoint is configured
  */
 
 import type { AuthType, ModelOption, ProviderId } from '../types/ai-sources'
@@ -33,8 +34,11 @@ export interface BuiltinProvider {
   apiType?: 'chat_completions' | 'responses' | 'anthropic_passthrough'
   /** Models list endpoint (for dynamic fetching) */
   modelsUrl?: string
-  /** Pre-configured model list */
-  models: ModelOption[]
+  /**
+   * Curated fallback models. Vendor presets may carry one; protocol entries
+   * (OpenAI API / Claude API) must not, since the endpoint owns the namespace.
+   */
+  models?: ModelOption[]
   /** Provider description */
   description?: string
   /** Official website */
@@ -84,12 +88,8 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     authType: 'api-key',
     apiUrl: 'https://api.openai.com/v1',
     modelsUrl: 'https://api.openai.com/v1/models',
-    models: [
-      { id: 'gpt-4o', name: 'GPT-4o' },
-      { id: 'gpt-4o-mini', name: 'GPT-4o Mini' },
-      { id: 'o1', name: 'o1' },
-      { id: 'o1-mini', name: 'o1-mini' }
-    ],
+    // No vendor defaults: this entry also fronts every compatible gateway, so
+    // the model must come from that endpoint or from the user.
     description: 'Official and all compatible providers',
     website: 'https://platform.openai.com/',
     region: 'global',
@@ -101,16 +101,8 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     name: 'Claude (Anthropic) API',
     authType: 'api-key',
     apiUrl: 'https://api.anthropic.com',
-    models: [
-      { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' },
-      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
-      { id: 'claude-fable-5', name: 'Claude Fable 5' },
-      { id: 'claude-fable-5-1', name: 'Claude Fable 5.1' },
-      { id: 'claude-opus-5-5', name: 'Claude Opus 5.5' },
-      { id: 'claude-opus-5', name: 'Claude Opus 5' },
-      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
-      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5' }
-    ],
+    // Same rule for the Anthropic wire format: a compatible proxy serves its
+    // own model namespace, never the official Claude list.
     description: 'Official and compatible proxies',
     website: 'https://console.anthropic.com/',
     region: 'global',
@@ -685,7 +677,7 @@ export function getProviderDisplayInfo(id: ProviderId): {
  */
 export function getDefaultModel(id: ProviderId): string | undefined {
   const provider = getBuiltinProvider(id)
-  return provider?.models[0]?.id
+  return provider?.models?.[0]?.id
 }
 
 /**

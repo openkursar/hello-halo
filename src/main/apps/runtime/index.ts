@@ -96,6 +96,7 @@ export type {
   ActivityEntryType,
   ActivityQueryOptions,
   PendingDecisionQuery,
+  ParticipantActivityActor,
   RunQueryOptions,
   RunStats,
   EscalationResponse,
@@ -281,24 +282,15 @@ export async function initAppRuntime(
 
   // Resident engine sessions are budgeted from here for every chat entry.
   initSessionBudget()
-  // Team collaboration is an opt-in toolset, not an always-on server: its tool
-  // surface (and usage guide) enters a space conversation only when the user
-  // flips the switch, the same shape as ai-browser / ai-terminal. Registered
-  // from the apps tier because the team service lives here; the registry is a
-  // downward import.
+  // Apps owns collaboration execution; registration keeps the broker's dependency downward.
   registerToolset({
     id: TEAM_MCP_SERVER_NAME,
+    contextManaged: true,
     displayName: 'Team Collaboration',
-    summary: 'Spin up an agent team of AI teammates to work in parallel, coordinate them, and hand jobs to standing teams.',
+    summary: 'Create collaborators for independent work, exchange messages, and share useful findings and artifacts.',
     usageGuide: TEAM_TOOLSET_GUIDE,
     isAvailable: () => true,
-    createServer: (scope) =>
-      createSpaceTeamMcpServer({
-        spaceId: scope.spaceId,
-        conversationId: scope.conversationId,
-        workDir: scope.workDir,
-        modelSelection: scope.modelSelection,
-      }),
+    createServer: (scope) => createSpaceTeamMcpServer(scope),
   })
   // Keep the shared MCP status cache honest: probe on enable/install/update,
   // drop stale entries on pause/uninstall.

@@ -481,14 +481,6 @@
   },
   {
     "method": "GET",
-    "path": "/api/teams/collab-for-conversation/:conversationId"
-  },
-  {
-    "method": "POST",
-    "path": "/api/teams/:teamId/save-collab"
-  },
-  {
-    "method": "GET",
     "path": "/api/teams/:teamId"
   },
   {
@@ -534,6 +526,10 @@
   {
     "method": "GET",
     "path": "/api/teams/:teamId/epochs/:epochId/board"
+  },
+  {
+    "method": "GET",
+    "path": "/api/teams/:teamId/epochs/:epochId/roster"
   },
   {
     "method": "GET",

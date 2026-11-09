@@ -68,6 +68,12 @@ export function ReviewCard(props: ReviewCardProps) {
       {state.kind === 'stopped' && (
         <Header title={t('Review stopped')} actions={<><ConversationButton {...props} /><ReviewAgain {...props} variant={state.variant} /></>} />
       )}
+      {state.kind === 'incomplete' && (
+        <>
+          <Header title={t('Review incomplete')} actions={<><ConversationButton {...props} /><ReviewAgain {...props} variant={state.variant} /></>} />
+          <p className="text-[12.5px] text-muted-foreground">{t('The conversation has no complete review report yet. Open it to inspect the available results.')}</p>
+        </>
+      )}
       {state.kind === 'failed' && (
         <>
           <Header title={t('The review ended without a report')} actions={<><ConversationButton {...props} /><ReviewAgain {...props} variant={state.variant} /></>} />
@@ -85,6 +91,7 @@ function announcement(state: ReviewCardState, t: Translate): string {
     case 'running': return state.variant === 'team' ? t('Team review in progress') : t('Quick review in progress')
     case 'done': return state.variant === 'team' ? t('Team review report') : t('Quick review report')
     case 'stopped': return t('Review stopped')
+    case 'incomplete': return t('Review incomplete')
     case 'failed': return t('The review ended without a report')
     default: return ''
   }
@@ -147,7 +154,7 @@ function IdleBody({ team, nothingToReview, starting, onStart, deleted }: ReviewC
           description={t('Three agents review architecture, regressions, and performance & prompts separately, then challenge each other\'s findings.')}
           meta={t('Usually 5–15 min · follows your project\'s rules')}
           note={teamUnavailable ? t('Team review isn\'t available right now') : undefined}
-          warning={teamUnavailable ? undefined : t('Starts 3 sub-agents · uses about 4–6× the tokens')}
+          warning={teamUnavailable ? undefined : t('Starts 3 collaborators · uses about 4–6× the tokens')}
           disabled={busy || nothingToReview || teamUnavailable}
           busy={starting === 'team'}
           onClick={() => onStart('team')}
@@ -395,7 +402,7 @@ function ReviewAgain({ team, starting, nothingToReview, onStart }: ReviewCardPro
           description={teamUnavailable ? t('Team review isn\'t available right now') : undefined}
           onSelect={() => pick('team')}
         >
-          {t('Team review · 3 sub-agents, more tokens')}
+          {t('Team review · 3 collaborators, more tokens')}
         </MenuItem>
       </Menu>
     </>

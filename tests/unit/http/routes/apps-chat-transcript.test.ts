@@ -31,6 +31,7 @@ vi.mock('../../../../src/main/http/routes/_shared', () => ({
 
 const getEpochById = vi.fn()
 vi.mock('../../../../src/main/apps/team', () => ({
+  getTeamService: () => null,
   getTeamStore: () => ({ getEpochById: (id: string) => getEpochById(id), getMember: () => ({ appId: 'app-1' }) }),
 }))
 

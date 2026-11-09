@@ -2,7 +2,7 @@
  * services/git — git for a space's repositories, run through the git CLI.
  *
  * Every function takes the space id first and serves only repositories found
- * in that space (its folder, or a direct sub-folder holding a `.git`); paths
+ * within that space (including explicitly opened or file-discovered roots); paths
  * are repository-relative and never leave the working tree. Failures throw
  * GitError with a stable GitErrorCode. Nothing runs at startup, nothing polls.
  *
@@ -11,7 +11,7 @@
 
 export { GitError, isGitError } from './errors'
 export { getGitAvailability } from './locate'
-export { listRepositories, resolveRepository } from './repositories'
+export { listRepositories, resolveRepository, discoverRepository, openRepository } from './repositories'
 export { getWorkingTreeStatus } from './status'
 /** `assertCompareScope` validates a scope from a client (throws GIT_INVALID_ARGUMENT), revision syntax included. */
 export { getChangeList, assertCompareScope } from './changes'

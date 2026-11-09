@@ -1,14 +1,6 @@
 /**
- * The self-API credential, the manual tool and the usage guide are one
- * capability with one switch. The bug this pins shipped because they were
- * three independent decisions: the tool was always-on for space chat only,
- * the credential was hardcoded true there, and the prompt paragraph was baked
- * into the base system prompt every digital human also receives — so an
- * automation run was instructed to call a tool it did not have and could not
- * have authenticated.
- *
- * These cases assert the coupling at each of the three points rather than the
- * env-builder in isolation, which is what let the prompt half drift.
+ * The core API tool, guide and credentials travel together. Core availability
+ * must not leak owner authority into guest or external-origin turns.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -21,8 +13,20 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
 
+vi.mock('../../../../src/main/services/ai-browser', () => ({
+  createAIBrowserMcpServer: vi.fn(), getInteractiveBrowserContext: vi.fn(), AI_BROWSER_SYSTEM_PROMPT: '',
+}))
+vi.mock('../../../../src/main/services/ai-terminal', () => ({
+  createTerminalMcpServer: vi.fn(), getGlobalTerminalContext: vi.fn(), isTerminalAvailable: () => false, AI_TERMINAL_SYSTEM_PROMPT: '',
+}))
+vi.mock('../../../../src/main/services/ocr', () => ({ createOcrMcpServer: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({ getOpenToolsets: () => new Set() }))
+
 import { buildSdkEnv } from '../../../../src/main/services/agent/sdk-config'
-import { HALO_API_TOOLSET_ID } from '../../../../src/main/services/api-ref'
+import { HALO_API_TOOLSET_ID, HALO_API_USAGE_GUIDE } from '../../../../src/main/services/api-ref'
+import { getToolset } from '../../../../src/main/services/agent/toolsets/registry'
+import { isToolsetIncluded, isToolsetConfigurable } from '../../../../src/main/services/agent/toolsets/selection'
+import { buildToolsetSection } from '../../../../src/main/services/agent/toolsets/capability-index'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..')
 const read = (rel: string) => readFileSync(join(repoRoot, rel), 'utf-8')
@@ -51,10 +55,16 @@ describe('self-API credentials', () => {
 })
 
 describe('self-API capability coupling', () => {
-  it('is registered as a toolset, not as an always-on server', () => {
-    expect(read('src/main/services/agent/toolsets/registry.ts')).toContain('HALO_API_TOOLSET_ID')
-    // The always-on block in the broker is what made the tool present in
-    // sessions whose prompt and credentials disagreed with it.
+  it.each(['automatic', 'manual'] as const)('supplies the core tool and guide together with no saved switch in %s mode', mode => {
+    const definition = getToolset(HALO_API_TOOLSET_ID)!
+    expect(definition).toBeDefined()
+    expect(definition.contextManaged).toBe(true)
+    expect(definition.isAvailable()).toBe(true)
+    expect(definition.createServer).toEqual(expect.any(Function))
+    expect(definition.usageGuide).toBe(HALO_API_USAGE_GUIDE)
+    expect(isToolsetIncluded(definition, new Set(), mode)).toBe(true)
+    expect(isToolsetConfigurable(definition, mode)).toBe(false)
+    expect(buildToolsetSection('space-a', 'conversation-a', mode)).toContain(HALO_API_USAGE_GUIDE.trim())
     expect(read('src/main/services/agent/toolsets/broker.ts')).not.toContain('createApiRefMcpServer')
   })
 
@@ -67,17 +77,25 @@ describe('self-API capability coupling', () => {
     expect(prompt).not.toContain('HALO_API_URL')
   })
 
-  it('gates the credential on the same switch at every chat entry point', () => {
-    // quick.md hard rule 13: a turn feature must cover all three entry points.
-    for (const rel of [
-      'src/main/services/agent/send-message.ts',
-      'src/main/services/agent/session-manager.ts',
-      'src/main/apps/runtime/app-chat.ts',
-      'src/main/apps/runtime/execute.ts',
-    ]) {
+  it('supplies space credentials alongside creation-time core servers and guides', () => {
+    for (const rel of ['src/main/services/agent/send-message.ts', 'src/main/services/agent/session-manager.ts']) {
       const source = read(rel)
-      expect(source, `${rel} must pass selfApiAccess`).toContain('selfApiAccess:')
-      expect(source, `${rel} must not hardcode selfApiAccess`).not.toContain('selfApiAccess: true')
+      expect(source, rel).toMatch(/selfApiAccess:\s*true/)
+      expect(source, rel).toMatch(/buildCreationTimeServers\s*\(/)
+      expect(source, rel).toMatch(/buildToolsetSection\s*\(/)
+    }
+  })
+
+  it('couples app credentials, tools and prompt guides to the same caller-scoped decision', () => {
+    for (const rel of ['src/main/apps/runtime/app-chat.ts', 'src/main/apps/runtime/execute.ts']) {
+      const source = read(rel)
+      expect(source, rel).toMatch(/selfApiAccess:\s*usesHaloApi\b/)
+      expect(source, rel).toMatch(/usesHaloApi\s*\?\s*\{\s*'halo-api-ref':\s*createApiRefMcpServer\(\)/)
+      expect(source, rel).toMatch(/\busesHaloApi\s*,/)
+      expect(source, rel).not.toMatch(/selfApiAccess:\s*true/)
+    }
+    for (const rel of ['src/main/apps/runtime/prompt.ts', 'src/main/apps/runtime/prompt/identity.ts']) {
+      expect(read(rel), rel).toMatch(/if\s*\((?:options|input)\.usesHaloApi\)\s*\{[^}]*HALO_API_USAGE_GUIDE/)
     }
   })
 
@@ -90,9 +108,11 @@ describe('self-API capability coupling', () => {
     }
   })
 
-  it('withholds the capability from IM guests', () => {
-    // Guests can have Bash removed, and buildGuestMcpServers drops the server
-    // for them; the credential and guide must be withheld on the same branch.
-    expect(read('src/main/apps/runtime/app-chat.ts')).toContain("permCtx?.isOwner !== false")
+  it('withholds the app capability from guests, external origins and disposable members', () => {
+    const source = read('src/main/apps/runtime/app-chat.ts')
+    const decision = source.match(/const usesHaloApi\s*=\s*([^\n]+)/)?.[1]
+    expect(decision).toBeDefined()
+    const conditions = decision!.split('&&').map(condition => condition.trim()).sort()
+    expect(conditions).toEqual(['!disposableMember', '!origin', 'permCtx?.isOwner !== false'].sort())
   })
 })

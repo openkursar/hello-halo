@@ -1444,6 +1444,7 @@ function sendKiroError(res: ExpressResponse, errorType: string, message: string)
 
 export interface KiroRequestHandlerOptions {
   timeoutMs?: number
+  headersTimeoutMs?: number
   debug?: boolean
 }
 
@@ -1515,6 +1516,9 @@ export async function handleKiroRequest(
     console.warn('[KiroAdapter] Request timeout, aborting')
     controller.abort()
   }, timeoutMs)
+  const headersTimeoutHandle = options.headersTimeoutMs === undefined || options.headersTimeoutMs >= timeoutMs ? undefined : setTimeout(() => {
+    controller.abort()
+  }, options.headersTimeoutMs)
 
   try {
     const upstreamResp = await proxyFetch(backendUrl, {
@@ -1524,6 +1528,7 @@ export async function handleKiroRequest(
       signal: controller.signal
     })
 
+    clearTimeout(headersTimeoutHandle)
     console.log(`[KiroAdapter] Upstream HTTP ${upstreamResp.status}`)
 
     if (!upstreamResp.ok) {
@@ -1586,6 +1591,7 @@ export async function handleKiroRequest(
     console.error('[KiroAdapter] Request error:', msg)
     return sendKiroError(res, 'api_error', msg)
   } finally {
+    clearTimeout(headersTimeoutHandle)
     clearTimeout(timeoutHandle)
   }
 }

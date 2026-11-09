@@ -94,7 +94,7 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
   </span> : undefined
   const picker = member && !task?.readonly && ids.includes(member.appId) && own.length > 1 ? <label className="flex min-w-0 items-center gap-1.5 rounded-lg border border-border bg-background pl-1.5 text-xs">
     <span className="shrink-0"><AutomationAvatar name={member.memberName} size={20} /></span>
-    <select aria-label={t('Choose which of your digital humans to talk to')} title={member.memberName} value={appId ?? ''} onChange={event => {
+    <select aria-label={t('Choose who to talk to')} title={member.memberName} value={appId ?? ''} onChange={event => {
       setDefault(detail.team.id, event.target.value)
       const target = detail.roster.find(item => item.appId === event.target.value)
       if (target) onSelectMember(target)
@@ -137,6 +137,6 @@ export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreate
       emptyContent={<TaskStartGuide tasks={tasks} onTask={onTask} />}
       emptyTitle={task ? t('No messages yet') : t('What would you like the team to do?')}
       emptyHint={task ? undefined : t('Send your first message to create a task. Your digital human will coordinate with the team.')}
-    /> : <div className="min-h-0 flex-1 overflow-y-auto p-4">{timeline([])}<p className="mt-6 text-center text-sm text-muted-foreground">{t('Bring one of your digital humans into this team to start talking.')}</p></div>}
+    /> : <div className="min-h-0 flex-1 overflow-y-auto p-4">{timeline([])}<p className="mt-6 text-center text-sm text-muted-foreground">{task && !boardState.board && !boardState.failed ? t('Loading task…') : t('Bring one of your digital humans into this team to start talking.')}</p></div>}
   </section>
 }

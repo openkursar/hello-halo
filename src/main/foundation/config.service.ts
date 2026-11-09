@@ -20,6 +20,7 @@ import type {
   ModelOption
 } from '../../shared/types'
 import { DEFAULT_MODEL } from '../../shared/types'
+import { getGroupEnvelopeSignature, normalizeGroups } from '../../shared/ai-groups'
 import type { CcRuntimeConfig } from '../../shared/types/cc-runtime'
 import { BUILTIN_PROVIDERS, getBuiltinProvider } from '../../shared/constants'
 import { applyNewToolsetDefaults } from '../../shared/constants/toolsets'
@@ -538,6 +539,15 @@ export interface ApiConfigChange {
 type ApiConfigChangeHandler = (change?: ApiConfigChange) => void
 const apiConfigChangeHandlers: ApiConfigChangeHandler[] = []
 
+type AiSourcesConfigChangeHandler = (sources: AISourcesConfig | undefined) => void
+const aiSourcesConfigChangeHandlers = new Set<AiSourcesConfigChangeHandler>()
+
+/** Saved account/group snapshots for memory-only routing; does not invalidate engine sessions. */
+export function onAiSourcesConfigChange(handler: AiSourcesConfigChangeHandler): () => void {
+  aiSourcesConfigChangeHandlers.add(handler)
+  return () => { aiSourcesConfigChangeHandlers.delete(handler) }
+}
+
 // ============================================================================
 // CREDENTIALS GENERATION COUNTER
 // ============================================================================
@@ -550,7 +560,8 @@ let nextSourceCredentialsGeneration = 0
 const sourceCredentialsGenerations = new Map<string, number>()
 
 function syncSourceCredentialsGenerations(aiSources?: AISourcesConfig): void {
-  const sourceIds = new Set(aiSources?.sources.map(source => source.id) ?? [])
+  // A group's id stands for it the way an account's does: a session on it is stale when what it took from the group changed.
+  const sourceIds = new Set([...(aiSources?.sources.map(source => source.id) ?? []), ...(aiSources?.groups?.map(group => group.id) ?? [])])
   for (const id of sourceCredentialsGenerations.keys()) {
     if (!sourceIds.has(id)) sourceCredentialsGenerations.delete(id)
   }
@@ -1137,9 +1148,9 @@ function migrateAiSourcesToV2(parsed: Record<string, any>): AISourcesConfig {
   const raw = parsed?.aiSources
   const now = new Date().toISOString()
 
-  // Already v2 format - return as is
+  // Already v2 format - return as is, with any stored groups repaired of damage
   if (isV2AiSources(raw)) {
-    return raw
+    return raw.groups === undefined ? raw : { ...raw, groups: normalizeGroups(raw.groups) }
   }
 
   // Initialize empty v2 config
@@ -1166,6 +1177,7 @@ function migrateAiSourcesToV2(parsed: Record<string, any>): AISourcesConfig {
   if (hasLegacyApiOnly) {
     const provider = legacyApi.provider === 'openai' ? 'openai' : 'anthropic'
     const builtin = getBuiltinProvider(provider)
+    const builtinModels = builtin?.models ?? []
 
     const source: AISource = {
       id: uuidv4(),
@@ -1175,7 +1187,9 @@ function migrateAiSourcesToV2(parsed: Record<string, any>): AISourcesConfig {
       apiUrl: legacyApi.apiUrl || builtin?.apiUrl || 'https://api.anthropic.com',
       apiKey: legacyApi.apiKey,
       model: legacyApi.model || DEFAULT_MODEL,
-      availableModels: builtin?.models || [{ id: legacyApi.model || DEFAULT_MODEL, name: legacyApi.model || 'Default' }],
+      availableModels: builtinModels.length > 0
+        ? builtinModels
+        : [{ id: legacyApi.model || DEFAULT_MODEL, name: legacyApi.model || 'Default' }],
       createdAt: now,
       updatedAt: now
     }
@@ -1195,6 +1209,7 @@ function migrateAiSourcesToV2(parsed: Record<string, any>): AISourcesConfig {
       const custom = v1Config.custom
       const provider = custom.provider === 'openai' ? 'openai' : 'anthropic'
       const builtin = getBuiltinProvider(provider)
+      const builtinModels = builtin?.models ?? []
 
       const source: AISource = {
         id: custom.id || uuidv4(),
@@ -1205,7 +1220,9 @@ function migrateAiSourcesToV2(parsed: Record<string, any>): AISourcesConfig {
         apiKey: custom.apiKey,
         model: custom.model || DEFAULT_MODEL,
         availableModels: custom.availableModels?.map(id => ({ id, name: id })) ||
-          builtin?.models || [{ id: custom.model || DEFAULT_MODEL, name: custom.model || 'Default' }],
+          (builtinModels.length > 0
+            ? builtinModels
+            : [{ id: custom.model || DEFAULT_MODEL, name: custom.model || 'Default' }]),
         createdAt: now,
         updatedAt: now
       }
@@ -1329,6 +1346,19 @@ function getAiSourcesChange(previous?: AISourcesConfig, next?: AISourcesConfig):
     const before = previousSources.get(id)
     const after = nextSources.get(id)
     if (!before || !after || getSourceCredentialsSignature(before) !== getSourceCredentialsSignature(after)) {
+      sourceIds.push(id)
+    }
+  }
+  // A group's id stands for it the way a source's id stands for an account: sessions on it rebuild when what they took from it changed.
+  const previousGroups = new Map(previous?.groups?.map(group => [group.id, group]) ?? [])
+  const nextGroups = new Map(next?.groups?.map(group => [group.id, group]) ?? [])
+  for (const id of new Set([...previousGroups.keys(), ...nextGroups.keys()])) {
+    const before = previousGroups.get(id)
+    const after = nextGroups.get(id)
+    if (
+      !before || !after ||
+      getGroupEnvelopeSignature(before, previous?.sources) !== getGroupEnvelopeSignature(after, next?.sources)
+    ) {
       sourceIds.push(id)
     }
   }
@@ -1631,6 +1661,14 @@ export function saveConfig(config: HaloConfigPatch): HaloConfig {
   const tmpPath = `${configPath}.tmp`
   writeFileSync(tmpPath, JSON.stringify(toWrite, null, 2))
   renameSync(tmpPath, configPath)
+
+  if (config.aiSources !== undefined) {
+    for (const handler of aiSourcesConfigChangeHandlers) {
+      try { handler(newConfig.aiSources) } catch (error) {
+        console.error('[Config] Saved AI source snapshot could not reach a subscriber:', error)
+      }
+    }
+  }
 
   if (config.api || config.aiSources) {
     const apiChanged = !!config.api && (

@@ -15,7 +15,7 @@
  */
 
 import { randomUUID } from 'crypto'
-import { getTeamStore } from '../apps/team'
+import { getTeamStore, getTeamService } from '../apps/team'
 import { nativeChatAppId, parseTeamSessionKey, resolveHttpConversationId } from '../../shared/apps/im-keys'
 import { isRemoteMember, parseSpaceCoordinatorAppId, isLegacyCoordinatorTeam, isReadonlyCollaboration } from '../../shared/apps/team-types'
 import type { TeamTriggerContext } from '../../shared/apps/team-types'
@@ -80,7 +80,7 @@ export function resolveAppChatTarget(appId: string, conversationId: unknown): Ap
   // app is not installed on this machine, so nothing here could run its turn:
   // without this the send is accepted, answered 200, and only fails later inside
   // a fire-and-forget promise the caller never sees. Its own machine serves it.
-  const member = store.getMember(teamId, appId)
+  const member = store.getMember(teamId, appId, epochId)
   if (!member) {
     return { ok: false, status: 403, error: 'This digital human is not a member of that team' }
   }
@@ -109,6 +109,10 @@ export function resolveAppChatTarget(appId: string, conversationId: unknown): Ap
 export function resolveAppChatSendTarget(appId: string, conversationId: unknown): AppChatTargetResult {
   const target = resolveAppChatTarget(appId, conversationId)
   if (!target.ok || !target.teamContext) return target
+  if (!getTeamService()?.participants) {
+    console.warn(`[AppChatTarget] send refused: team=${target.teamContext.teamId} epoch=${target.teamContext.epochId} reason=execution-services-unavailable`)
+    return { ok: false, status: 503, error: 'Team execution is not yet initialized. Please try again shortly.' }
+  }
   const store = getTeamStore()!
   const { teamId, epochId } = target.teamContext
   const team = store.getTeamById(teamId)
@@ -121,7 +125,9 @@ export function resolveAppChatSendTarget(appId: string, conversationId: unknown)
     console.warn(`[AppChatTarget] send refused: team=${teamId} epoch=${epochId} reason=source-task-readonly`)
     return { ok: false, status: 400, error: 'This task is read-only.' }
   }
-  return target
+  return { ...target, teamContext: { ...target.teamContext,
+    requestId: randomUUID(), recipientFence: store.recipientFences.read({ teamId, epochId, appId }),
+  } }
 }
 
 /**

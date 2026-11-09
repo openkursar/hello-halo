@@ -4,21 +4,13 @@
  * inherit the depth of the turn it is sending from, or every hop restarts at 0
  * and the limit is never reached.
  *
- * The SDK's tool() wrapper is mocked to expose the handler directly; the bus is
- * a stub because the assertion is about what the tool hands it.
+ * The real shared parser invokes the handler; the bus records inherited depth.
  */
 
 import { describe, it, expect, vi } from 'vitest'
 
-vi.mock('../../../../../src/main/services/agent/resolved-sdk', () => ({
-  tool: (name: string, description: string, inputSchema: unknown, handler: unknown) => ({
-    name,
-    description,
-    inputSchema,
-    handler,
-  }),
-  createSdkMcpServer: (options: { tools: Array<{ name: string }> }) => options,
-}))
+vi.mock('../../../../../src/main/services/agent/resolved-sdk', async () =>
+  import('../../../../../src/main/services/agent/mcp/sdk-server'))
 
 import { createTeamMcpServer } from '../../../../../src/main/apps/runtime/team/team-tools'
 import type { TeamMcpContext } from '../../../../../src/main/apps/runtime/team/team-tools'
@@ -51,15 +43,11 @@ function callSend(ctxOverrides: Partial<TeamMcpContext>): {
     bus,
     blackboard: {} as Blackboard,
     callerWorkDir: '/tmp',
-    requestComplete: () => {},
     ...ctxOverrides,
   }
 
-  const server = createTeamMcpServer(ctx) as unknown as {
-    tools: Array<{ name: string; handler: (input: Record<string, unknown>) => Promise<ToolReply> }>
-  }
-  const found = server.tools.find((t) => t.name === TEAM_TOOL_NAMES.send)!
-  return { sends, call: () => found.handler({ to: 'researcher', message: 'go' }) }
+  const server = createTeamMcpServer(ctx)
+  return { sends, call: async () => (await server.instance.callTool(TEAM_TOOL_NAMES.send, { to: 'researcher', message: 'go' })) as ToolReply }
 }
 
 describe('team_send forward depth', () => {

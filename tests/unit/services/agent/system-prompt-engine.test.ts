@@ -101,6 +101,7 @@ describe('system prompt per engine', () => {
         expect(prompt).toContain('create new personal skills in .agents/skills')
         expect(prompt).toContain('Store-installed and built-in skills live in the same folders')
         expect(prompt).toContain('Manage them with the capability library or skill_manage')
+        if (engineId === 'halo') expect(prompt).toContain('If ToolSearch is offered instead, discover the skill-management tool before calling it.')
         expect(prompt).not.toContain('private runtime skill directories')
         expect(prompt).not.toContain('/custom/agent-config/skills')
         expect(prompt).toMatch(/(?:Claude SDK|Agent|Agent runtime) config: \/custom\/agent-config/)

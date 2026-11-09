@@ -32,8 +32,8 @@ import { Emitter } from '../platform/event'
 export interface McpAppChange {
   appId: string
   specId: string
-  /** `tools`: the server's tools turned on or off; its connection is unchanged. */
-  action: 'installed' | 'uninstalled' | 'reinstalled' | 'paused' | 'resumed' | 'updated' | 'moved' | 'status' | 'tools'
+  /** `tools` changes permissions; `context` changes Halo-only loading. Neither changes the connection. */
+  action: 'installed' | 'uninstalled' | 'reinstalled' | 'paused' | 'resumed' | 'updated' | 'moved' | 'status' | 'tools' | 'context'
 }
 
 /**

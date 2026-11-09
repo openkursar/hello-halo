@@ -25,6 +25,9 @@ export type {
   AISourceUser,
   AISource,
   AISourcesConfig,
+  AIGroup,
+  AIGroupMember,
+  AIGroupStrategy,
   OAuthSourceConfig,
   CustomSourceConfig,
   LegacyAISourcesConfig,
@@ -50,6 +53,10 @@ export {
   createEmptyAISourcesConfig,
   getCurrentSource,
   getSourceById,
+  getGroupById,
+  isSelected,
+  removeSourceFromGroups,
+  GROUP_MODEL_ID,
   getCurrentModelName,
   findWithdrawnModel,
   activeModelReplacement,
@@ -98,8 +105,6 @@ export * from './im-channel'
 // Tlon knowledge base types (cross-process)
 export * from './tlon'
 
-// Agent definition types (for custom subagent configurations)
-export type { AgentDefinition, AgentMcpServerSpec, PermissionMode, McpServerConfigForProcessTransport } from './agent-definition'
 
 // File changes types (shared between main process agent and renderer diff)
 export type { FileChangesSummary, ThoughtLike } from '../file-changes'

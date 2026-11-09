@@ -91,12 +91,10 @@ function act(overrides: Partial<TeamActivity> = {}): TeamActivity {
 }
 
 describe('board rendering', () => {
-  it('names members instead of app ids, since names are what every tool takes', () => {
+  it('uses short member addresses while preserving task identifiers', () => {
     const out = renderBoardMarkdown(snapshot({ tasks: [task()] }), { now: NOW })
 
     expect(out).toContain('| researcher |')
-    // An app id in the output is a dead end: no tool accepts one and nothing
-    // maps it back to a name for the reader.
     expect(out).not.toContain(RESEARCHER_APP)
     expect(out).not.toContain(LEAD_APP)
   })
@@ -156,7 +154,17 @@ describe('board rendering', () => {
     const out = renderBoardMarkdown(snapshot(), { now: NOW })
 
     expect(out).toMatch(/researcher \|.*\| offline \| alice's \|/)
-    expect(out).toMatch(/lead \(lead\) \|.*\| online \| yours \|/)
+    expect(out).toMatch(/lead \| lead \|.*\| online \| yours \|/)
+  })
+
+  it('shows the reserved lead address for old source names and IDs for same-named peers', () => {
+    const data = snapshot()
+    data.roster[0].memberName = 'coordinator'
+    data.roster[1].memberName = 'lead'
+    const out = renderBoardMarkdown(data, { now: NOW })
+    expect(out).toContain('| lead | lead |')
+    expect(out).toContain(`| lead | ${RESEARCHER_APP} |`)
+    expect(out).not.toContain('coordinator')
   })
 
   describe('a bounded history read', () => {

@@ -14,6 +14,7 @@ vi.mock('../../../../src/renderer/api', () => ({
     onArtifactChangedBatch: () => () => {},
     onMemoryPressure: () => () => {},
     getMemoryPressure: async () => 'normal',
+    gitDiscoverRepository: vi.fn(async () => ({ success: true, data: null })),
     readArtifactContent: async () => ({ success: true, data: { content: 'x', mimeType: 'text/plain' } }),
     isRemoteMode: () => false,
     hideBrowserView: vi.fn(async () => ({ success: true })),

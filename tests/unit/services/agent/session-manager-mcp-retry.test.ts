@@ -34,6 +34,7 @@ const { toolsetRebuild } = vi.hoisted(() => ({ toolsetRebuild: { listener: null 
 vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({
   setSessionInvalidator: (listener: (id: string) => void) => { toolsetRebuild.listener = listener },
   buildCreationTimeServers: vi.fn(() => ({})),
+  publishToolsetContextMode: vi.fn(),
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/capability-index', () => ({ buildToolsetSection: vi.fn(() => '') }))
 vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({
@@ -76,6 +77,9 @@ import {
   v2Sessions,
 } from '../../../../src/main/services/agent/session-manager'
 import { sendIntoLiveTurn } from '../../../../src/main/services/agent/live-turn'
+import { markInstalledMcpContext } from '../../../../src/main/services/agent/tool-discovery'
+import type { InstalledApp } from '../../../../src/shared/apps/app-types'
+import { applyCapabilityPolicy } from '../../../../src/main/apps/runtime/capability-policy'
 import { buildImSessionKey } from '../../../../src/shared/apps/im-keys'
 
 function fakeSession() {
@@ -89,7 +93,8 @@ function fakeSession() {
 interface ConsumerState { isRunning: boolean; turn: unknown }
 
 /** Opens a session whose consumer the test controls: idle by default. */
-async function open(conversationId: string, consumer: ConsumerState = { isRunning: true, turn: null }) {
+async function open(conversationId: string, consumer: ConsumerState = { isRunning: true, turn: null },
+  engineId?: string, spaceId = 'space', options: Record<string, any> = {}) {
   const session = fakeSession()
   createSession.mockResolvedValueOnce(session)
   startConsumer.mockReturnValueOnce({
@@ -98,7 +103,7 @@ async function open(conversationId: string, consumer: ConsumerState = { isRunnin
     getTeamLifecycleThoughts: () => [],
     stop: vi.fn(),
   })
-  await getOrCreateV2Session('space', conversationId, { systemPrompt: 'p', model: 'm' }, undefined, undefined, {} as never)
+  await getOrCreateV2Session(spaceId, conversationId, { ...options, systemPrompt: 'p', model: 'm', ...(engineId ? { engineId } : {}) }, undefined, undefined, {} as never)
   return session
 }
 
@@ -120,6 +125,117 @@ afterEach(() => {
 
 afterAll(() => {
   stopSessionCleanup()
+})
+
+describe('MCP context preference changes', () => {
+  const server = (appId: string) => markInstalledMcpContext({ command: 'fixture' }, { id: appId, spec: { type: 'mcp' }, userOverrides: {} } as InstalledApp)
+  const contextOptions = () => ({ mcpServers: { customer: server('installed') } })
+  const change = { appId: 'installed', specId: 'customer', action: 'context' as const }
+
+  it('rebuilds only Halo sessions in the changed scope', async () => {
+    const halo = await open('halo', undefined, 'halo', 'space', contextOptions())
+    const otherSpace = await open('other-space', undefined, 'halo', 'elsewhere', contextOptions())
+    const cc = await open('cc', undefined, 'anthropic', 'space', contextOptions())
+    const codex = await open('codex', undefined, 'codex', 'space', contextOptions())
+    const dsh = await open('dsh', undefined, 'dsh', 'space', contextOptions())
+    handleMcpAppsChange('space', change)
+    expect(halo.close).toHaveBeenCalledOnce()
+    for (const session of [otherSpace, cc, codex, dsh]) expect(session.close).not.toHaveBeenCalled()
+    handleMcpAppsChange(null, change)
+    expect(otherSpace.close).toHaveBeenCalledOnce()
+    for (const session of [cc, codex, dsh]) expect(session.close).not.toHaveBeenCalled()
+  })
+
+  it('keeps the running turn accepting input and applies the new preference at its safe boundary', async () => {
+    const session = await open('halo-live', { isRunning: true, turn: { thoughts: [] } }, 'halo', 'space', contextOptions())
+    handleMcpAppsChange('space', change)
+    expect(session.close).not.toHaveBeenCalled()
+    expect(sendIntoLiveTurn('halo-live', 'additional instruction', undefined, { onWithdrawn: () => {} })).toBe(true)
+    expect(session.sendIntoLiveTurn).toHaveBeenCalledOnce()
+    expect(consumePendingRebuild('halo-live')).toBe(true)
+  })
+
+  it.each(['halo', 'codex'])('handles an %s session still being created', async engineId => {
+    let finish!: (session: ReturnType<typeof fakeSession>) => void
+    const preparing = new Promise<ReturnType<typeof fakeSession>>(resolve => { finish = resolve })
+    createSession.mockImplementationOnce(() => preparing)
+    startConsumer.mockReturnValueOnce({
+      isRunning: true, getActiveSessionState: () => null,
+      getTeamLifecycleThoughts: () => [], stop: vi.fn(),
+    })
+    const pending = getOrCreateV2Session('space', 'preparing', { ...contextOptions(), engineId, systemPrompt: 'p', model: 'm' }, undefined, undefined, {} as never)
+    await vi.waitFor(() => expect(createSession).toHaveBeenCalledOnce())
+    handleMcpAppsChange('space', change)
+    const session = fakeSession()
+    finish(session)
+    await pending
+    expect(session.close).not.toHaveBeenCalled()
+    expect(consumePendingRebuild('preparing')).toBe(engineId === 'halo')
+  })
+
+  it('matches exact installations, including a space override, and excludes explicit XML/JSON sessions', async () => {
+    const native = await open('native', undefined, 'halo', 'space', contextOptions())
+    const overridden = await open('overridden', undefined, 'halo', 'space', { mcpServers: { customer: server('space-override') } })
+    const unrelated = await open('unrelated', undefined, 'halo', 'space', { mcpServers: { records: server('other-installation') } })
+    const xml = await open('xml', undefined, 'halo', 'space', { ...contextOptions(), toolCallingMode: 'xml' })
+    const json = await open('json', undefined, 'halo', 'space', { ...contextOptions(), toolCallingMode: 'json' })
+    handleMcpAppsChange(null, change)
+    expect(native.close).toHaveBeenCalledOnce()
+    for (const session of [overridden, unrelated, xml, json]) expect(session.close).not.toHaveBeenCalled()
+    handleMcpAppsChange('space', { ...change, appId: 'space-override' })
+    expect(overridden.close).toHaveBeenCalledOnce()
+    expect(unrelated.close).not.toHaveBeenCalled()
+  })
+
+  it('tracks the final MCP pool after a borrowed app-chat policy removes a service', async () => {
+    const offered = { allowed: server('installed'), withheld: server('not-granted') }
+    const options: Record<string, any> = { mcpServers: offered }
+    applyCapabilityPolicy(options, { policy: { allowedTools: [], allowedUserMcp: ['allowed'] }, mode: 'strict', mcpServers: offered, dbMcpServers: offered })
+    const session = await open('borrowed', undefined, 'halo', 'space', options)
+    expect([...v2Sessions.get('borrowed')!.mcpContextAppIds!]).toEqual(['installed'])
+    handleMcpAppsChange('space', { ...change, appId: 'not-granted' })
+    expect(session.close).not.toHaveBeenCalled()
+    handleMcpAppsChange('space', change)
+    expect(session.close).toHaveBeenCalledOnce()
+  })
+
+  it.each([false, true])('narrows a materialized in-flight pool (lazy=%s)', async lazy => {
+    let finish!: (session: ReturnType<typeof fakeSession>) => void
+    const preparing = new Promise<ReturnType<typeof fakeSession>>(resolve => { finish = resolve })
+    createSession.mockImplementationOnce(() => preparing)
+    const mounted = { unrelated: server('other-installation') }
+    const pending = getOrCreateV2Session('space', 'prepared-pool', { engineId: 'halo', ...(lazy ? {} : { mcpServers: mounted }) },
+      undefined, undefined, undefined, undefined, lazy ? () => mounted : undefined)
+    await vi.waitFor(() => expect(createSession).toHaveBeenCalledOnce())
+    handleMcpAppsChange('space', change)
+    const session = fakeSession()
+    finish(session)
+    await pending
+    expect(session.close).not.toHaveBeenCalled()
+    expect(consumePendingRebuild('prepared-pool')).toBe(false)
+    expect([...v2Sessions.get('prepared-pool')!.mcpContextAppIds!]).toEqual(['other-installation'])
+  })
+
+  it('conservatively defers a native creation whose lazy server pool is not yet materialized', async () => {
+    let release!: () => void
+    let entered!: () => void
+    const hold = new Promise<void>(resolve => { release = resolve })
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const session = fakeSession()
+    createSession.mockImplementationOnce(async (options, prepare) => {
+      entered()
+      await hold
+      await prepare({ signal: options.abortController.signal })
+      return session
+    })
+    const pending = getOrCreateV2Session('space', 'unmaterialized', { engineId: 'halo' }, undefined, undefined, undefined, undefined,
+      () => ({ customer: server('installed') }), undefined, { toolsetInstructions: () => '' })
+    await started
+    handleMcpAppsChange('space', change)
+    release()
+    await pending
+    expect(consumePendingRebuild('unmaterialized')).toBe(true)
+  })
 })
 
 describe('rebuild after an MCP server failed to connect', () => {

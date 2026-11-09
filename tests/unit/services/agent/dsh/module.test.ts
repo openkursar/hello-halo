@@ -107,18 +107,13 @@ describe('dsh module facade', () => {
     )
   })
 
-  it('resumes the session id Halo persisted instead of minting a new one', async () => {
-    const client = fakeClient()
-    createDshRuntimeClient.mockReturnValue(client)
-
-    const session = await createDshSdkModule().createSession({
-      cwd: '/work',
-      resume: 'conversation-session-id',
-    })
-    session.send('hello')
-
-    await vi.waitFor(() => expect(client.prompt).toHaveBeenCalled())
-    expect(client.prompt.mock.calls[0][0]).toBe('conversation-session-id')
+  it('rejects native resume without starting a runtime or losing its bridge', async () => {
+    const mcpBridge = { close: vi.fn().mockResolvedValue(undefined) }
+    resolveDshOptions.mockResolvedValue({ launch: LAUNCH, init: INIT, mcpBridge })
+    await expect(createDshSdkModule().createSession({ cwd: '/work', resume: 'conversation-session-id' }))
+      .rejects.toMatchObject({ code: 'NATIVE_SESSION_RESUME_FAILED', engineId: 'dsh' })
+    expect(createDshRuntimeClient).not.toHaveBeenCalled()
+    expect(mcpBridge.close).toHaveBeenCalledOnce()
   })
 
   /**

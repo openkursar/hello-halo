@@ -40,7 +40,6 @@ import { processStream, type StreamResult } from './stream-processor'
 import type { TurnSink } from './turn-sink'
 import { emitAgentEvent } from './events'
 import { createSessionState, consumePendingRebuild, markTurnInitReceived, failPendingSessionTurns, noteSessionMcpStatus } from './session-manager'
-import { hasActiveTeamTasks, isTeamLifecycleThought } from './subagent-handler'
 import { endApiRetry } from './api-retry'
 
 // ============================================
@@ -58,11 +57,6 @@ export interface ConsumerHandle {
   readonly isRunning: boolean
   /** Get the current turn's SessionState (for injection, stop, etc.) */
   getActiveSessionState(): SessionState | null
-  /** Get team lifecycle thoughts (Agent team spawns / TeamDelete) accumulated
-   * across all completed turns of this session. Used by session-manager and
-   * control to detect active team agents while the consumer idles between
-   * turns — the spawn may be several turns in the past. */
-  getTeamLifecycleThoughts(): Thought[]
   /** Update the display model name used for thought parsing (and the
    * source-resolved context window shown in token usage).
    * Called by sendMessage to keep both in sync after model switches
@@ -106,11 +100,6 @@ interface ConsumerState {
   readTurnSnapshot: (() => StreamResult) | null
   /** Running flag */
   running: boolean
-  /** Team lifecycle thoughts (Agent team spawns / TeamDelete) accumulated
-   * across completed turns. Persists between turns so session-manager can
-   * detect active team agents while the consumer idles; reset when the team
-   * is disbanded. */
-  teamLifecycleThoughts: Thought[]
 }
 
 // ============================================
@@ -145,7 +134,6 @@ export function startConsumer(
     turnStartedAt: null,
     readTurnSnapshot: null,
     running: true,
-    teamLifecycleThoughts: [],
   }
 
   let sinkStopped = false
@@ -199,9 +187,6 @@ export function startConsumer(
     },
     getActiveSessionState() {
       return state.currentSessionState
-    },
-    getTeamLifecycleThoughts() {
-      return state.teamLifecycleThoughts
     },
     updateDisplayModel(newDisplayModel: string, newContextWindow?: number) {
       if (state.displayModel !== newDisplayModel) {
@@ -310,17 +295,6 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
         sink.onTurnComplete(result)
         if (state.consumerAbort.signal.aborted) break
 
-        // Accumulate team lifecycle thoughts across turns: a team spawned in an
-        // earlier turn must keep blocking session rebuilds and idle cleanup while
-        // the consumer idles between turns (CC subprocess still has agents working).
-        // Reset once the team is disbanded (TeamDelete succeeded) so a future team
-        // in this session starts from a clean slate.
-        const teamThoughts = [
-          ...state.teamLifecycleThoughts,
-          ...result.thoughts.filter(isTeamLifecycleThought),
-        ]
-        state.teamLifecycleThoughts = hasActiveTeamTasks(teamThoughts) ? teamThoughts : []
-
         state.turnStartedAt = null
         agentCompleteEmitted = true
         emitAgentEvent('agent:complete', spaceId, conversationId, {
@@ -345,8 +319,7 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
           break
         }
 
-        // Keep consuming until every team agent has reported back.
-        if (!hasActiveTeamTasks(state.teamLifecycleThoughts) && consumePendingRebuild(conversationId)) {
+        if (consumePendingRebuild(conversationId)) {
           console.log(`[Consumer][${conversationId}] Rebuild pending, breaking for rebuild`)
           break
         }

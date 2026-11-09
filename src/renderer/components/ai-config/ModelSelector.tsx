@@ -11,7 +11,7 @@ import { useState, useRef, useEffect } from 'react'
 import { ChevronDown, ChevronRight, Plus, Sparkles, X, Check, RefreshCw } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsStore } from '../../stores/apps.store'
-import { useChatStore } from '../../stores/chat.store'
+import { useChatStore, selectActiveConversationId, useIsGenerating } from '../../stores/chat.store'
 import { useActiveModelTarget, type ActiveModelTarget } from '../../hooks/useActiveModelTarget'
 import { openPersonModelSettings } from '../../utils/people-navigation'
 import { api } from '../../api'
@@ -20,6 +20,8 @@ import {
   resolveModelSelection,
   getSourceAccountName,
   AVAILABLE_MODELS,
+  GROUP_MODEL_ID,
+  type AIGroup,
   type AISourcesConfig,
   type AISource,
   type Conversation,
@@ -27,17 +29,27 @@ import {
 } from '../../types'
 import { ThinkingLevelControl } from './ThinkingLevelControl'
 import { ConversationEngineSection } from './ConversationEngineSelector'
+import { GroupModelCard } from '../ai-groups/GroupModelCard'
+import { GroupRouteStatus } from '../ai-groups/GroupRouteStatus'
+import { AutoTag, GroupIcon } from '../ai-groups/group-parts'
+import { groupTitle } from '../ai-groups/group-text'
 import {
   groupModels,
   ModelAvailabilityNotice,
   ModelBadgePill,
   ModelGroupHeading,
+  ModelNotice,
   ModelOfferFacts,
   ModelRowLabel
 } from './model-list-parts'
 import { useTranslation } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { useDismiss } from '../../hooks/useDismiss'
 import { useFreshModelCatalogs } from '../../hooks/useFreshModelCatalogs'
+import { useConversationGroupRoute } from '../../hooks/useConversationGroupRoute'
+import { useConversationEngineId } from '../../hooks/useConversationEngine'
+import { openGroupEditor } from '../../utils/group-navigation'
+import { getEngineSourceCompatibility } from '../../../shared/engine-source'
 import { trackHome } from '../../services/home-telemetry'
 import { isAnthropicProvider } from '../../types'
 import { validateModelCapabilityOverride } from '../../../shared/model-capability-overrides'
@@ -62,6 +74,53 @@ function useCurrentConversation(): Conversation | null {
 }
 
 /**
+ * The one choice a group offers. A group a conversation's engine cannot use, or
+ * one with no models left, says so here instead of failing after a send. Mounted
+ * only for an open group, so nobody else pays for the engine lookup.
+ */
+function GroupChoiceRow({ group, selected, conversationId, spaceId, engineOverride, onChoose }: {
+  group: AIGroup
+  selected: boolean
+  conversationId: string | null
+  spaceId: string | null
+  engineOverride?: Conversation['engineOverride']
+  onChoose: () => void
+}) {
+  const { t } = useTranslation()
+  const liveEngine = useConversationEngineId(conversationId, spaceId)
+  const engine = engineOverride ?? liveEngine
+  const blocked = engine ? !getEngineSourceCompatibility(engine, { isGroup: true }).compatible : false
+  const empty = group.members.length === 0
+  const disabled = blocked || empty
+  return (
+    <>
+      <button
+        disabled={disabled}
+        onClick={onChoose}
+        className={`w-full flex items-center gap-2 rounded-md py-2 pl-7 pr-2.5 text-left text-[13px] transition-colors ease-halo ${
+          disabled ? 'cursor-not-allowed text-muted-foreground opacity-60' : 'text-foreground hover:bg-secondary'
+        } ${selected ? 'bg-secondary/60 font-medium' : ''}`}
+      >
+        <GroupIcon className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate">{t('Choose automatically')}</span>
+        <span className="shrink-0 text-[11px] text-muted-foreground">{t('{{count}} models', { count: group.members.length })}</span>
+        {selected && <Check className="w-3.5 h-3.5 shrink-0 text-primary" />}
+      </button>
+      {blocked && (
+        <ModelNotice tone="warning" className="py-1 pl-7 pr-2.5">
+          {t('Codex cannot use a load-balancing group. Choose a single model account or another engine.')}
+        </ModelNotice>
+      )}
+      {empty && !blocked && (
+        <ModelNotice tone="warning" className="py-1 pl-7 pr-2.5">
+          {t('This group has no models left. Edit it to add some before using it.')}
+        </ModelNotice>
+      )}
+    </>
+  )
+}
+
+/**
  * Model list content (sources accordion + footer actions).
  * Shared by the desktop dropdown and the mobile bottom sheet.
  * Calls onDone when a selection/action should close the container.
@@ -71,6 +130,7 @@ function ModelList({ onDone }: { onDone: () => void }) {
   const { config, setConfig, navigate } = useAppStore()
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [refreshStatus, setRefreshStatus] = useState<'success' | 'cached' | 'failed' | null>(null)
+  const [selectionError, setSelectionError] = useState<string | null>(null)
   const spaceId = useChatStore(state => state.currentSpaceId)
   useFreshModelCatalogs(true)
 
@@ -82,9 +142,11 @@ function ModelList({ onDone }: { onDone: () => void }) {
   const conversationId = target.kind === 'conversation' ? target.conversationId : null
   const currentConversation = target.kind === 'conversation' ? target.conversation : null
   const selected = resolveModelSelection(aiSources, currentConversation)
+  const groups = aiSources.groups ?? []
+  const chosenGroup = aiSources.currentGroupId ? groups.find(group => group.id === aiSources.currentGroupId) : undefined
 
   // State for expanded sections (accordion)
-  const [expandedSection, setExpandedSection] = useState<string | null>(selected.source?.id ?? null)
+  const [expandedSection, setExpandedSection] = useState<string | null>(selected.source?.id ?? selected.group?.id ?? null)
 
   const toggleSection = (sourceId: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -107,8 +169,10 @@ function ModelList({ onDone }: { onDone: () => void }) {
       await chat.setConversationModel(spaceId, conversationId, sourceId, modelId)
     }
 
-    // 2. Update the global last-used selection (source first if needed, then model)
-    if (aiSources.currentId !== sourceId) {
+    // 2. Update the global last-used selection (source first if needed, then
+    //    model). Picking an account also leaves a chosen group, which the
+    //    switch clears even when the account is already the current one.
+    if (aiSources.currentId !== sourceId || chosenGroup) {
       const switchResult = await api.aiSourcesSwitchSource(sourceId)
       if (!switchResult.success) {
         console.error('[ModelSelector] Failed to switch source:', switchResult.error)
@@ -119,6 +183,30 @@ function ModelList({ onDone }: { onDone: () => void }) {
     const result = await api.aiSourcesSetModel(modelId)
     if (result.success && result.data) {
       setConfig({ ...config, aiSources: result.data as AISourcesConfig })
+    }
+    onDone()
+  }
+
+  // A group is one choice: the conversation is pinned to it and new chats
+  // start on it; which account answers is the router's decision per request.
+  const handleSelectGroup = async (group: AIGroup) => {
+    trackHome('home.composer.model', { action: 'select', kind: 'conversation' })
+    setSelectionError(null)
+    const chat = useChatStore.getState()
+    const spaceId = chat.currentSpaceId
+    if (spaceId && conversationId) {
+      const saved = await chat.setConversationModel(spaceId, conversationId, group.id, GROUP_MODEL_ID)
+      if (!saved) {
+        console.warn('[ModelSelector] Group selection not applied because the conversation pin was not saved', { conversationId, groupId: group.id })
+        setSelectionError(t('The group selection could not be saved. Please try again.'))
+        return
+      }
+    }
+    const switchResult = await api.aiSourcesSwitchSource(group.id)
+    if (switchResult.success && switchResult.data) {
+      setConfig({ ...config, aiSources: switchResult.data as AISourcesConfig })
+    } else {
+      console.error('[ModelSelector] Failed to choose group:', switchResult.error)
     }
     onDone()
   }
@@ -189,7 +277,7 @@ function ModelList({ onDone }: { onDone: () => void }) {
       {/* Iterate all configured sources */}
       {aiSources.sources.map(source => {
         const isExpanded = expandedSection === source.id
-        const isActiveSource = aiSources.currentId === source.id
+        const isActiveSource = !chosenGroup && aiSources.currentId === source.id
         const models = getModelsForSource(source)
         const displayName = getSourceDisplayName(source)
 
@@ -247,6 +335,43 @@ function ModelList({ onDone }: { onDone: () => void }) {
         )
       })}
 
+      {/* Load-balancing groups sit at the same level as accounts, and offer one choice each. */}
+      {groups.map(group => {
+        const isExpanded = expandedSection === group.id
+        const isSelected = selected.group?.id === group.id
+        return (
+          <div key={group.id} className="px-1.5 pb-1.5">
+            <button
+              type="button"
+              onClick={(e) => toggleSection(group.id, e)}
+              aria-expanded={isExpanded}
+              title={groupTitle(group.name, t)}
+              className={`w-full flex items-center gap-1.5 rounded-md px-2.5 py-2 text-xs hover:bg-secondary hover:text-foreground transition-colors ease-halo ${
+                isExpanded ? 'text-foreground' : 'text-muted-foreground'
+              }`}
+            >
+              <ChevronRight className={`w-3 h-3 shrink-0 transition-transform ease-halo ${isExpanded ? 'rotate-90' : ''}`} />
+              <span className="min-w-0 flex-1 truncate text-left font-medium">{group.name}</span>
+              <AutoTag />
+              {chosenGroup?.id === group.id && <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-primary" title={t('Active')} />}
+            </button>
+
+            {isExpanded && (
+              <GroupChoiceRow
+                group={group}
+                selected={isSelected}
+                conversationId={conversationId}
+                spaceId={spaceId}
+                engineOverride={currentConversation?.engineOverride}
+                onChoose={() => handleSelectGroup(group)}
+              />
+            )}
+          </div>
+        )
+      })}
+
+      {selectionError && <p role="alert" className="px-3 py-2 text-xs text-destructive">{selectionError}</p>}
+
       {refreshStatus && (
         <p role="status" className="px-3 py-2 text-xs text-muted-foreground">
           {refreshStatus === 'cached'
@@ -299,7 +424,8 @@ export function ModelSelectSheet({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const [isAnimatingOut, setIsAnimatingOut] = useState(false)
 
-  const { name: currentModelName, model: currentModel } = useConversationModel()
+  const { name: modelName, model: currentModel, group: currentGroup } = useConversationModel()
+  const currentModelName = currentGroup ? groupTitle(modelName, t) : modelName
 
   const handleClose = () => {
     setIsAnimatingOut(true)
@@ -362,6 +488,7 @@ export function ModelSelectSheet({ onClose }: { onClose: () => void }) {
         <div className="overflow-auto" style={{ maxHeight: 'calc(60vh - 150px)' }}>
           {/* Inside the scrolling area: a taller fixed header would push the list's end off the sheet. */}
           <ModelOfferFacts model={currentModel} className="px-4 pt-3 pb-1" />
+          {currentGroup && <SheetGroupRoute groupId={currentGroup.id} />}
           <ModelList onDone={handleClose} />
         </div>
       </div>
@@ -369,29 +496,23 @@ export function ModelSelectSheet({ onClose }: { onClose: () => void }) {
   )
 }
 
-/**
- * Closes an open dropdown on a click outside `ref` or on Escape. The click
- * path is fixed at dispatch, so a click whose target that same click swaps out
- * (the model card's name opening the list) still counts as inside.
- */
-function useDismiss(ref: React.RefObject<HTMLElement>, open: boolean, close: () => void) {
-  const closeRef = useRef(close)
-  closeRef.current = close
-  useEffect(() => {
-    if (!open) return
-    const handleClick = (event: MouseEvent) => {
-      if (ref.current && !event.composedPath().includes(ref.current)) closeRef.current()
-    }
-    const handleKey = (event: KeyboardEvent) => { if (event.key === 'Escape') closeRef.current() }
-    // Deferred so the click that opened it doesn't close it.
-    const timer = setTimeout(() => document.addEventListener('click', handleClick), 0)
-    document.addEventListener('keydown', handleKey)
-    return () => {
-      clearTimeout(timer)
-      document.removeEventListener('click', handleClick)
-      document.removeEventListener('keydown', handleKey)
-    }
-  }, [open, ref])
+/** Where the open conversation's group is sending it, at the top of the phone sheet; only mounted for a group. */
+function SheetGroupRoute({ groupId }: { groupId: string }) {
+  const conversation = useCurrentConversation()
+  const route = useConversationGroupRoute(conversation, groupId)
+  const live = useIsGenerating()
+  return <GroupRouteStatus route={route} live={live} className="px-4 pt-3 pb-1" />
+}
+
+/** Where the group a digital human runs on is sending its chat; only mounted for a group, so nothing else pays for it. */
+function DigitalHumanGroupRoute({ groupId }: { groupId: string }) {
+  const activeConversationId = useChatStore(selectActiveConversationId)
+  const sessionId = useChatStore(state => activeConversationId
+    ? state.conversationCache.get(activeConversationId)?.engineBinding?.sessionId
+    : undefined)
+  const route = useConversationGroupRoute(activeConversationId ? { id: activeConversationId, sessionId } : null, groupId)
+  const live = useIsGenerating()
+  return <GroupRouteStatus route={route} live={live} center className="mt-2" />
 }
 
 /**
@@ -405,8 +526,9 @@ function DigitalHumanModelButton({ target }: { target: Extract<ActiveModelTarget
   const ref = useRef<HTMLDivElement>(null)
   // Its own account and model, or the global selection when it has none or
   // its account was removed — what its turns actually run on.
-  const { source, modelId, own } = resolveModelSelection(aiSources, target)
-  const modelName = getModelDisplayName(aiSources, target.modelSourceId, target.modelId)
+  const { source, modelId, own, group } = resolveModelSelection(aiSources, target)
+  const plainName = getModelDisplayName(aiSources, target.modelSourceId, target.modelId)
+  const modelName = group ? groupTitle(plainName, t) : plainName
   const app = useAppsStore(state => state.apps.find(a => a.id === target.appId))
 
   useDismiss(ref, isOpen, () => setIsOpen(false))
@@ -431,6 +553,7 @@ function DigitalHumanModelButton({ target }: { target: Extract<ActiveModelTarget
           <div className="text-center text-xs text-muted-foreground">{t('{{name}} uses', { name: target.appName })}</div>
           <div className="mt-0.5 text-center text-[15px] font-semibold text-foreground break-words">{modelName}</div>
           {source && <ModelAvailabilityNotice source={source} modelId={modelId} withReplacement={!own} className="mt-2" />}
+          {group && <DigitalHumanGroupRoute groupId={group.id} />}
           <div className="mt-3">
             {/* One level for the whole digital human, on every entry. */}
             <ThinkingLevelControl
@@ -483,11 +606,11 @@ function formatContextWindow(tokens: number): string {
 function useConversationModel() {
   const aiSources = useAiSources()
   const conversation = useCurrentConversation()
-  const { source, modelId } = resolveModelSelection(aiSources, conversation)
+  const { source, modelId, group } = resolveModelSelection(aiSources, conversation)
   const model = source?.availableModels.find(m => m.id === modelId)
   const name = getModelDisplayName(aiSources, conversation?.modelSourceId, conversation?.modelId)
-  const configuredEffort = modelId ? source?.modelOverrides?.[modelId]?.reasoningEffort : undefined
-  return { aiSources, source, modelId, model, name, configuredEffort }
+  const configuredEffort = modelId && source ? source.modelOverrides?.[modelId]?.reasoningEffort : undefined
+  return { aiSources, source, modelId, model, name, group: group ?? null, configuredEffort }
 }
 
 /** The user's per-model settings win over the catalog, as they do at runtime; a malformed one is ignored there too. */
@@ -509,10 +632,14 @@ function CurrentModelCard({ onSwitch }: { onSwitch: () => void }) {
   const navigate = useAppStore(state => state.navigate)
   const conversation = useCurrentConversation()
   const spaceId = useChatStore(state => state.currentSpaceId)
-  const { aiSources, source, modelId, model, name } = useConversationModel()
+  const { aiSources, source, modelId, model, name, group } = useConversationModel()
   const { contextWindow, vision } = resolveCardFacts(source, modelId, model)
   // The card shows cost and offers that change over time, like the list.
   useFreshModelCatalogs(true)
+
+  if (group) {
+    return <GroupConversationCard group={group} sources={aiSources.sources} conversation={conversation} spaceId={spaceId} onSwitch={onSwitch} />
+  }
 
   // Nothing to run on: no account at all, or none selected.
   if (!source) {
@@ -577,6 +704,33 @@ function CurrentModelCard({ onSwitch }: { onSwitch: () => void }) {
   )
 }
 
+/** The card for a conversation on a group; it alone follows the router's reports. */
+function GroupConversationCard({ group, sources, conversation, spaceId, onSwitch }: {
+  group: AIGroup
+  sources: AISource[]
+  conversation: Conversation | null
+  spaceId: string | null
+  onSwitch: () => void
+}) {
+  const route = useConversationGroupRoute(conversation, group.id)
+  const live = useIsGenerating()
+  return (
+    <GroupModelCard
+      group={group}
+      sources={sources}
+      route={route}
+      live={live}
+      onSwitch={onSwitch}
+      onEdit={() => openGroupEditor(group.id)}
+    >
+      <div className="mt-3 px-1.5">
+        <ConversationThinkingLevel />
+      </div>
+      {conversation && spaceId && <div className="mt-3"><ConversationEngineSection key={conversation.id} conversation={conversation} spaceId={spaceId} /></div>}
+    </GroupModelCard>
+  )
+}
+
 /** The slider bound to the open conversation, saved on it. */
 function ConversationThinkingLevel() {
   const { configuredEffort } = useConversationModel()
@@ -609,7 +763,8 @@ function ConversationModelSelector() {
   const [maxHeight, setMaxHeight] = useState<number>()
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  const { name: currentModelName } = useConversationModel()
+  const { name: modelName, group: currentGroup } = useConversationModel()
+  const currentModelName = currentGroup ? groupTitle(modelName, t) : modelName
 
   // The mobile sheet handles its own dismissal.
   useDismiss(dropdownRef, isOpen && !isMobile, () => setIsOpen(false))
@@ -637,11 +792,12 @@ function ConversationModelSelector() {
         title={currentModelName}
         aria-label={currentModelName}
       >
-        {/* Mobile: show Sparkles icon */}
-        <Sparkles className="w-4 h-4 sm:hidden" />
-        {/* Desktop: model name */}
+        {/* Mobile: show Sparkles icon (a group has its own glyph) */}
+        {currentGroup ? <GroupIcon className="w-4 h-4 sm:hidden" /> : <Sparkles className="w-4 h-4 sm:hidden" />}
+        {/* Desktop: model name; a group keeps its own name and a steady "Auto" mark, whichever model is serving */}
         <div className="hidden sm:flex items-center gap-1.5 min-w-0">
-          <span className="truncate max-w-[140px]">{currentModelName}</span>
+          <span className={`truncate ${currentGroup ? 'max-w-[110px]' : 'max-w-[140px]'}`}>{currentGroup ? modelName : currentModelName}</span>
+          {currentGroup && <AutoTag />}
         </div>
         <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>

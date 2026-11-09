@@ -30,7 +30,7 @@ import {
 import type { DiffReferenceSource } from '../../../../../shared/types/content-reference'
 import type { GitReviewRecord } from '../../../../../shared/types/git'
 import type { DetailState, StoredCompareScope } from '../../../../types/changes-view'
-import { createGitChangesController, type GitChangesController, type GitChangesState } from './state/git-changes-store'
+import { createGitChangesController, gitRevealReadiness, type GitChangesController, type GitChangesState } from './state/git-changes-store'
 import { describeGitError, gitErrorMessage, type GitErrorText } from './state/git-errors'
 import { DiffStack, type DiffStackHandle, type StackAnchor } from './diff/DiffStack'
 import { DiffTools } from './diff/DiffTools'
@@ -39,6 +39,7 @@ import { diffFromGit, type DiffPart, type LoadedDiff } from './diff/diff-content
 import { expandCollapsedAt, originalLines, revealBeforeInUnified, unfoldReferencedLines, type DiffEditorHandle, type DiffSide } from './diff/diff-editor'
 import type { CardGate } from './diff/FileDiffCard'
 import { TopBar } from './top-bar/TopBar'
+import { RepositoryPicker } from './top-bar/RepositoryPicker'
 import { GitGraphPage } from './graph/GitGraphPage'
 import { FilePanel } from './panel/FilePanel'
 import { FileDrawer } from './panel/FileDrawer'
@@ -128,10 +129,20 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
   const { showConfirm, DialogComponent } = useConfirmDialog()
   const notify = useNotificationStore((s) => s.show)
   const workDir = useSpaceStore((s) => (s.currentSpace?.id === source.spaceId ? s.currentSpace.workingDir ?? s.currentSpace.path : null))
+  const previousWorkDir = useRef(workDir)
+  useEffect(() => {
+    if (!workDir || previousWorkDir.current === workDir) return
+    const previous = previousWorkDir.current
+    previousWorkDir.current = workDir
+    if (previous) void controller.resetWorkingDirectory()
+  }, [controller, workDir])
 
   const phase = useGit(controller, (s) => s.phase)
+  const revealReadiness = useGit(controller, gitRevealReadiness)
   const git = useGit(controller, (s) => s.git)
   const repositories = useGit(controller, (s) => s.repositories)
+  const unavailableRoots = useGit(controller, (s) => s.unavailableRoots)
+  const repositoryBusy = useGit(controller, (s) => s.repositoryBusy)
   const repoRoot = useGit(controller, (s) => s.repoRoot)
   const status = useGit(controller, (s) => s.status)
   const list = useGit(controller, (s) => s.list)
@@ -144,7 +155,9 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
   const recount = useGit(controller, (s) => s.recount)
   const busyPaths = useGit(controller, (s) => s.busyPaths)
   const operation = useGit(controller, (s) => s.operation)
-  const repo = status?.repo ?? repositories.find((r) => r.root === repoRoot) ?? null
+  const selectedRepository = repositories.find((repository) => repository.root === repoRoot) ?? null
+  const repo = status?.repo.root === repoRoot ? status.repo : null
+  const writesDisabled = repositoryBusy || refreshing || operation !== null
 
   // Lifetime: load on mount (opening or coming back to the tab), on window focus, on file events (hint only).
   useEffect(() => {
@@ -173,7 +186,7 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
     if (!active || active === document.body) rootRef.current?.focus({ preventScroll: true })
   }, [])
 
-  const repoName = repo?.name
+  const repoName = selectedRepository?.name
   useEffect(() => {
     setTabTitle(tabIdRef.current, repoName ? `${t('Changes')} · ${repoName}` : t('Changes'))
   }, [repoName, setTabTitle, t])
@@ -297,6 +310,7 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
     if (failure) reportFailure(gitErrorMessage(failure, t))
   }, [controller, reportFailure, t])
   const discard = useCallback(async (file: ViewFile) => {
+    const repository = controller.store.getState().repoRoot
     const name = baseName(file.path)
     const untracked = file.state === 'untracked'
     const ok = await showConfirm(untracked
@@ -312,7 +326,7 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
           cancelLabel: t('Cancel'),
           variant: 'danger',
         })
-    if (!ok) return
+    if (!ok || controller.store.getState().repoRoot !== repository) return
     const failure = await controller.discard([file.path])
     if (failure) reportFailure(gitErrorMessage(failure, t))
   }, [controller, reportFailure, showConfirm, t])
@@ -370,37 +384,37 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
       <IconButton size="sm" label={t('Open file')} onClick={() => openInEditor(file)}><FileCode2 size={13} /></IconButton>
     )
     if (group === 'staged') {
-      return <>{open}<IconButton size="sm" label={t('Unstage')} onClick={() => void unstage([file])}><Minus size={13} /></IconButton></>
+      return <>{open}<IconButton size="sm" disabled={writesDisabled} label={t('Unstage')} onClick={() => void unstage([file])}><Minus size={13} /></IconButton></>
     }
     if (group === 'unstaged') {
       return (
         <>
           {open}
-          <IconButton size="sm" label={t('Discard')} onClick={() => void discard(file)}><Undo2 size={13} /></IconButton>
-          <IconButton size="sm" label={t('Stage')} onClick={() => void stage([file])}><Plus size={13} /></IconButton>
+          <IconButton size="sm" disabled={writesDisabled} label={t('Discard')} onClick={() => void discard(file)}><Undo2 size={13} /></IconButton>
+          <IconButton size="sm" disabled={writesDisabled} label={t('Stage')} onClick={() => void stage([file])}><Plus size={13} /></IconButton>
         </>
       )
     }
     return open || null
-  }, [busyPaths, openInEditor, unstage, discard, stage, t])
+  }, [busyPaths, writesDisabled, openInEditor, unstage, discard, stage, t])
   const groupActions = useCallback((group: PanelGroup): ReactNode => {
-    if (group.id === 'staged') return <IconButton size="sm" label={t('Unstage all')} onClick={() => void unstage([...group.files])}><Minus size={13} /></IconButton>
-    if (group.id === 'unstaged') return <IconButton size="sm" label={t('Stage all')} onClick={() => void stage([...group.files])}><Plus size={13} /></IconButton>
+    if (group.id === 'staged') return <IconButton size="sm" disabled={writesDisabled} label={t('Unstage all')} onClick={() => void unstage([...group.files])}><Minus size={13} /></IconButton>
+    if (group.id === 'unstaged') return <IconButton size="sm" disabled={writesDisabled} label={t('Stage all')} onClick={() => void stage([...group.files])}><Plus size={13} /></IconButton>
     return null
-  }, [stage, unstage, t])
+  }, [stage, unstage, writesDisabled, t])
   const cardActions = useCallback((file: ViewFile): ReactNode => (
     <>
       {scopeIsWorkingTree && !conflictedPaths.has(file.path) && (busyPaths.has(file.path) ? BUSY
         : unstagedPaths.has(file.path)
-          ? <IconButton size="sm" label={t('Stage file')} onClick={() => void stage([file])}><Plus size={14} /></IconButton>
+          ? <IconButton size="sm" disabled={writesDisabled} label={t('Stage file')} onClick={() => void stage([file])}><Plus size={14} /></IconButton>
           : stagedPaths.has(file.path)
-            ? <IconButton size="sm" label={t('Unstage file')} onClick={() => void unstage([file])}><Minus size={14} /></IconButton>
+            ? <IconButton size="sm" disabled={writesDisabled} label={t('Unstage file')} onClick={() => void unstage([file])}><Minus size={14} /></IconButton>
             : null)}
       {file.state !== 'deleted' && (
         <IconButton size="sm" label={t('Open in editor')} onClick={() => openInEditor(file)}><FileCode2 size={14} /></IconButton>
       )}
     </>
-  ), [scopeIsWorkingTree, conflictedPaths, busyPaths, unstagedPaths, stagedPaths, stage, unstage, openInEditor, t])
+  ), [scopeIsWorkingTree, conflictedPaths, busyPaths, writesDisabled, unstagedPaths, stagedPaths, stage, unstage, openInEditor, t])
 
   // Work for the diff stack, done once it shows the file: the page may only just have switched, and
   // the stack mounts in the render that follows.
@@ -516,27 +530,45 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
   // that holds the file; what this view cannot show opens as a file instead.
   const reveal = tab.reveal
   const switchingFor = useRef<number | null>(null)
+  const activeReveal = useRef<number | null>(null)
+  useEffect(() => {
+    activeReveal.current = reveal?.seq ?? null
+    return () => { activeReveal.current = null }
+  }, [reveal])
   useEffect(() => {
     if (!reveal) return
-    const consume = () => consumeReveal(tabIdRef.current, reveal.seq)
+    const consume = () => {
+      activeReveal.current = null
+      consumeReveal(tabIdRef.current, reveal.seq)
+    }
     if (reveal.page === 'overview') {
       update({ page: 'overview', detail: null })
       consume()
       return
     }
-    if (!reveal.path || phase !== 'ready' || !repoRoot) return
+    if (!reveal.path || revealReadiness === 'pending') return
     const path = reveal.path
     const owner = deepestRootOf(repositories.map((r) => r.root), path)
     if (owner && owner !== repoRoot) {
-      if (switchingFor.current === reveal.seq) return
+      if (switchingFor.current === reveal.seq) {
+        consume()
+        void revealFileAt(path, fileTarget(reveal))
+        return
+      }
       switchingFor.current = reveal.seq
-      update({ forced: [] })
       void controller.selectRepository(owner).then(() => {
-        if (controller.store.getState().repoRoot === owner) return
+        if (activeReveal.current !== reveal.seq) return
+        const state = controller.store.getState()
+        if (state.repoRoot === owner || gitRevealReadiness(state) === 'pending') return
         // The repository could not be shown: open the file rather than keep the request forever.
         consume()
         void revealFileAt(path, fileTarget(reveal))
       })
+      return
+    }
+    if (revealReadiness === 'unavailable' || !repoRoot) {
+      consume()
+      void revealFileAt(path, fileTarget(reveal))
       return
     }
     consume()
@@ -558,7 +590,7 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
       (editors) => showReference(editors[0], reveal),
       () => { void revealFileAt(path, fileTarget(reveal)) }
     ), true)
-  }, [reveal, phase, repoRoot, repositories, files, controller, consumeReveal, passes, update, memory, queueStackAction])
+  }, [reveal, revealReadiness, repoRoot, repositories, files, controller, consumeReveal, passes, update, memory, queueStackAction])
 
   useEffect(() => {
     const action = stackAction.current
@@ -597,11 +629,20 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
     />
   )
 
+  const repositoryPicker = {
+    repositories,
+    unavailableRoots,
+    selectedRepository,
+    repo,
+    disabled: repositoryBusy || operation !== null || busyPaths.size > 0,
+    onSelectRepository: (root: string) => { void controller.selectRepository(root) },
+    onOpenRepository: controller.openRepository,
+  }
   const snapshotMissing = listError?.code === 'GIT_SNAPSHOT_MISSING'
   let page: ReactNode
   if (phase === 'loading') page = <LoadingState />
   else if (phase === 'no-git' && git && !git.available) page = <NoGitState git={git} onRetry={() => void controller.load({ relist: true })} />
-  else if (phase === 'no-repo') page = <NoRepositoryState />
+  else if (phase === 'no-repo') page = <NoRepositoryState><RepositoryPicker {...repositoryPicker} touch /></NoRepositoryState>
   else if (phase === 'error') page = <LoadErrorState message={gitErrorMessage(loadError ?? {}, t)} onRetry={() => void controller.load({ relist: true })} />
   else if (memory.page === 'overview' && !detail) {
     page = (
@@ -671,10 +712,6 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
     update({ forced: [] })
     void controller.setScope(scope)
   }
-  const changeRepository = (root: string) => {
-    update({ forced: [] })
-    void controller.selectRepository(root)
-  }
 
   const panel = phase === 'ready' && (
     <FilePanel
@@ -704,6 +741,7 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
           initialMessage={memory.commitMessage}
           onDraftChange={keepDraft}
           operation={operation}
+          disabled={repositoryBusy || refreshing || busyPaths.size > 0}
           onCommit={commit}
           onSync={() => void sync()}
           error={commitError}
@@ -718,9 +756,7 @@ export function GitChangesView({ tab, source }: { tab: TabState; source: GitSour
       {phase !== 'loading' && phase !== 'no-git' && phase !== 'no-repo' && (
         <TopBar
           spaceId={source.spaceId}
-          repositories={repositories}
-          repo={repo}
-          onSelectRepository={changeRepository}
+          {...repositoryPicker}
           scope={memory.scope}
           review={review}
           snapshotMissing={snapshotMissing}

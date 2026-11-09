@@ -92,7 +92,7 @@ describe('external Claude Code protocol', () => {
     const session = createSession({ env, disallowedTools: ['TodoWrite'] })
     const initialized = await session.query.initializationResult()
     expect(initialized).toMatchObject({ todoTools: 'true', tasks: 'false' })
-    expect(initialized.argv).toEqual(expect.arrayContaining(['--disallowedTools', 'TodoWrite']))
+    expect(initialized.argv).toEqual(expect.arrayContaining(['--disallowedTools', 'Agent,Task,TeamCreate,TeamDelete,SendMessage,TodoWrite']))
     expect(env).toMatchObject({ CLAUDE_CODE_ENABLE_TODO_TOOLS: 'false', CLAUDE_CODE_ENABLE_TASKS: 'true' })
   })
 
@@ -129,7 +129,7 @@ describe('external Claude Code protocol', () => {
       allowedTools: ['Read'], disallowedTools: ['Write'], additionalDirectories: ['/workspace'],
       thinking: { type: 'enabled', budgetTokens: 1234 }, effort: 'high', extraArgs: { 'dangerously-skip-permissions': null },
     }, { example: { type: 'sse', url: 'http://127.0.0.1/mcp' } })
-    expect(args).toEqual(expect.arrayContaining(['--include-partial-messages', '--replay-user-messages', '--allowedTools', 'Read', '--disallowedTools', 'Write', '--max-thinking-tokens', '1234', '--setting-sources=user,project']))
+    expect(args).toEqual(expect.arrayContaining(['--include-partial-messages', '--replay-user-messages', '--allowedTools', 'Read', '--disallowedTools', 'Agent,Task,TeamCreate,TeamDelete,SendMessage,Write', '--max-thinking-tokens', '1234', '--setting-sources=user,project']))
     expect(JSON.parse(args[args.indexOf('--mcp-config') + 1])).toEqual({ mcpServers: { example: { type: 'sse', url: 'http://127.0.0.1/mcp' } } })
   })
 })

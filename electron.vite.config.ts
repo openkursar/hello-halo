@@ -115,12 +115,13 @@ export default defineConfig({
       // named imports from 'electron'. Bundle ESM-only packages (uuid, open,
       // proxy-agent) that cannot be require()'d. @xterm/headless is also bundled
       // for CJS-ESM interop. node-pty and better-sqlite3 stay external (native addons).
-      externalizeDepsPlugin({ exclude: ['@xterm/headless', '@electron-toolkit/utils', 'uuid', 'open', 'proxy-agent'] }),
+      externalizeDepsPlugin({ exclude: ['@xterm/headless', '@electron-toolkit/utils', 'uuid', 'open', 'proxy-agent', '@hello-halo/agent-sdk'] }),
       haloWorkerSetup(),
     ],
     build: {
       sourcemap: true,
       rollupOptions: {
+        // SDK engines load dynamically; synchronous collaboration imports are bundled for CommonJS.
         external: ['@hello-halo/agent-sdk', '@hello-halo/agent-sdk/worker', '@openai/codex-sdk'],
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
@@ -137,7 +138,8 @@ export default defineConfig({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin(), sandboxedPreloads()],
+    // The shared collaboration protocol is pure code; sandboxed preload cannot require the package.
+    plugins: [externalizeDepsPlugin({ exclude: ['@hello-halo/agent-sdk'] }), sandboxedPreloads()],
     build: {
       rollupOptions: {
         input: {

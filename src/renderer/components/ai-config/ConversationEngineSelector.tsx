@@ -6,7 +6,7 @@ import { useAppStore } from '../../stores/app.store'
 import { saveConversationEngineOverride, useConversationEngineId } from '../../hooks/useConversationEngine'
 import { resolveModelSelection, type Conversation, type EngineAvailabilityReport } from '../../types'
 import { ENGINE_IDS, isEngineId, type EngineId } from '../../../shared/types/engine'
-import { getEngineSourceCompatibility } from '../../../shared/engine-source'
+import { engineSourceOf, getEngineSourceCompatibility } from '../../../shared/engine-source'
 
 export function ConversationEngineSection({ conversation, spaceId }: { conversation: Conversation; spaceId: string }) {
   const { t } = useTranslation()
@@ -32,13 +32,17 @@ export function ConversationEngineSelector({ conversation, spaceId }: { conversa
   const mounted = useRef(true)
   const pending = useRef(false)
   const labels: Record<EngineId, string> = { halo: t('Halo SDK'), anthropic: t('Claude Code'), codex: t('Codex SDK'), dsh: t('DeepSeek dsh') }
-  const selectedSource = sources?.version === 2 ? resolveModelSelection(sources, conversation).source : undefined
+  const selectedSource = sources?.version === 2 ? engineSourceOf(resolveModelSelection(sources, conversation)) : undefined
   const current = actualEngine ?? report?.defaultEngine ?? report?.activeEngine ?? 'halo'
   const chosen = draft || current
   const changed = draft !== (conversation.engineOverride ?? '')
   const unavailable = Boolean(report && !report.engines.find(item => item.engineId === chosen)?.available)
   const accountCompatibility = getEngineSourceCompatibility(chosen, selectedSource)
   const accountMismatch = !accountCompatibility.compatible
+  const incompatibleLabel = (engine: EngineId): string | null => {
+    const result = getEngineSourceCompatibility(engine, selectedSource)
+    return result.compatible ? null : result.code === 'codex-unsupported-group' ? t('Incompatible with a group') : t('Incompatible account')
+  }
   const switching = Boolean(conversation.engineOverride && actualEngine && conversation.engineOverride !== actualEngine)
 
   const load = async () => {
@@ -90,14 +94,16 @@ export function ConversationEngineSelector({ conversation, spaceId }: { conversa
       className="min-h-11 w-full min-w-0 rounded-md border border-border bg-secondary px-2 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50 sm:min-h-8"
     >
       <option value="">{t('Keep current engine')}</option>
-      {ENGINE_IDS.map(engine => <option key={engine} value={engine} disabled={!report?.engines.find(item => item.engineId === engine)?.available || !getEngineSourceCompatibility(engine, selectedSource).compatible}>
-        {labels[engine]}{report && !report.engines.find(item => item.engineId === engine)?.available ? ` · ${t('Unavailable')}` : !getEngineSourceCompatibility(engine, selectedSource).compatible ? ` · ${t('Incompatible account')}` : ''}
+      {ENGINE_IDS.map(engine => <option key={engine} value={engine} disabled={!report?.engines.find(item => item.engineId === engine)?.available || incompatibleLabel(engine) !== null}>
+        {labels[engine]}{report && !report.engines.find(item => item.engineId === engine)?.available ? ` · ${t('Unavailable')}` : incompatibleLabel(engine) ? ` · ${incompatibleLabel(engine)}` : ''}
       </option>)}
     </select>
     {loading && <p role="status" className="flex items-center gap-1 text-muted-foreground"><Loader2 aria-hidden="true" className="h-3 w-3 animate-spin" />{t('Checking…')}</p>}
     {!accountCompatibility.compatible && <p className="text-halo-warning">{accountCompatibility.code === 'delegated-requires-cc'
       ? t('This account requires Claude Code. Choose Claude Code or another model account.')
-      : t('Codex supports OpenAI-compatible Chat Completions and Responses accounts. Choose another account or another engine.')}</p>}
+      : accountCompatibility.code === 'codex-unsupported-group'
+        ? t('Codex cannot use a load-balancing group. Choose a single model account or another engine.')
+        : t('Codex supports OpenAI-compatible Chat Completions and Responses accounts. Choose another account or another engine.')}</p>}
     {unavailable && <button type="button" className="text-primary underline" onClick={() => navigate('settings')}>{t('Set up this engine in Settings')}</button>}
     {switching && !changed && <div role="status" className="space-y-1 text-muted-foreground">
       <p>{t('{{engine}} will take over at the next idle turn.', { engine: labels[conversation.engineOverride!] })}</p>

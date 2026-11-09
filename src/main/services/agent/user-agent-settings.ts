@@ -28,16 +28,25 @@ export interface UserAgentSettings {
   disabledTools?: string[]
   /** Whether Halo can manage digital humans (halo-apps tools and the prompt line about them). */
   digitalHumansEnabled: boolean
+  collaborationEnabled: boolean
 }
 
 /** What an internal task runs with: the user's settings say nothing about work they never asked for. */
 export const INTERNAL_TASK_SETTINGS: UserAgentSettings = {
   promptProfile: 'halo',
   digitalHumansEnabled: false,
+  collaborationEnabled: false,
 }
 
 export function isDigitalHumansEnabled(): boolean {
   return getConfig().agent?.enableDigitalHumans !== false
+}
+
+/** Reads only explicit user choices, before native-tool deny rules are appended. */
+export function isCollaborationEnabled(disabledTools?: readonly string[]): boolean {
+  const withheld = (names?: readonly string[]) => names?.some(name =>
+    name === 'Agent' || name === 'Task' || name === 'spawn_agent' || name === 'mcp__halo-team__spawn_agent') === true
+  return !withheld(getConfig().agent?.disabledTools) && !withheld(disabledTools)
 }
 
 export function readUserAgentSettings(): UserAgentSettings {
@@ -47,5 +56,6 @@ export function readUserAgentSettings(): UserAgentSettings {
     promptProfile: agent?.promptProfile,
     disabledTools: agent?.disabledTools,
     digitalHumansEnabled: agent?.enableDigitalHumans !== false,
+    collaborationEnabled: isCollaborationEnabled(),
   }
 }

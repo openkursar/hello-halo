@@ -47,36 +47,8 @@ import {
 } from '../../foundation/path-containment'
 import { isEngineControlFileName, isEngineControlFolderName } from '../../../shared/engine-control-files'
 
-export interface TurnFileAccess {
-  /** The session's working directory; relative paths resolve against it */
-  cwd: string
-  /** Memory content this turn may write — also readable */
-  memoryWritable: string[]
-  /** Memory content this turn may only read */
-  memoryReadable: string[]
-  /** Exact files handed to this turn */
-  attachedFiles: string[]
-  /** Folders of the skills granted to this turn, readable only */
-  skillFolders?: string[]
-  /** Where a granted file tool may reach */
-  workspaceRoots: string[]
-  /** Folders inside the workspace that stay closed except for memory */
-  closed: string[]
-  /**
-   * Closed folders the Claude engine's deny rules leave out, because a file of
-   * this turn may live there (persisted images). The hook still refuses every
-   * other file in them.
-   */
-  hookGuarded: string[]
-  /** System records inside the memory folders, closed even to recursion */
-  memorySystemPaths: string[]
-  /**
-   * An engine's own configuration folders, under whatever name they have — a
-   * configuration folder set by the owner may sit inside the workspace. Never
-   * written by a file tool, like the engine folders by name.
-   */
-  engineConfigDirs?: string[]
-}
+import type { TurnFileAccess } from '../../../shared/apps/capability-policy'
+export type { TurnFileAccess } from '../../../shared/apps/capability-policy'
 
 export const READ_FILE_TOOLS: readonly string[] = ['Read', 'Glob', 'Grep']
 export const WRITE_FILE_TOOLS: readonly string[] = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']

@@ -44,6 +44,7 @@ class Session {
 
 function makeModule(id: string) {
   const module = {
+    readSessionToolContextMode: vi.fn(async (_id: string, _options: unknown, _controls: { signal: AbortSignal; group?: string }) => 'deferred' as const),
     initialize: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     createSession: vi.fn(async (options: Record<string, any>) => new Session(options)),
@@ -241,5 +242,57 @@ describe('session-owned engine registry', () => {
     expect(server.instance.listTools()[0]).toMatchObject({ annotations: { readOnlyHint: true }, _meta: { searchHint: 'echo', alwaysLoad: true } })
     expect(await server.instance.callTool('echo', { text: 'hello' }, { signal: controller.signal })).toEqual({ content: [{ type: 'text', text: 'hello' }] })
     expect(handler).toHaveBeenCalledWith({ text: 'hello' }, { signal: controller.signal })
+  })
+})
+
+
+describe('captured session preparation', () => {
+  it('keeps a non-default Halo runtime borrowed from inspection through creation', async () => {
+    state.configured = 'anthropic'
+    await sdk.initSdk()
+    const ready = deferred()
+    const release = deferred()
+    let scope: import('../../../../src/main/services/agent/resolved-sdk').SessionPreparation | undefined
+    const pending = sdk.createSession({ engineId: 'halo', model: 'test', workerGroup: 'space' }, async preparation => {
+      scope = preparation
+      expect(await preparation.readSessionToolContextMode!('stored', { cwd: '/work' })).toBe('deferred')
+      ready.resolve()
+      await release.promise
+      return { engineId: 'halo', model: 'prepared', workerGroup: 'space' }
+    })
+    await ready.promise
+    const module = state.modules.get('halo')![0]
+    await sdk.closeSdkRuntime('halo')
+    expect(module.close).not.toHaveBeenCalled()
+    release.resolve()
+    const session = await pending
+    expect(state.modules.get('halo')).toHaveLength(1)
+    expect(module.initialize).toHaveBeenCalledOnce()
+    expect(module.createSession).toHaveBeenCalledOnce()
+    expect(session.getModel()).toBe('prepared')
+    await expect(scope!.readSessionToolContextMode!('escaped', { cwd: '/work' })).rejects.toThrow('only available during preparation')
+    session.close(); await session.flush(); await settle()
+    expect(module.close).toHaveBeenCalledOnce()
+  })
+
+  it.each(['cancel', 'shutdown'])('releases preparation without creating a session on %s', async action => {
+    state.configured = 'anthropic'
+    await sdk.initSdk()
+    const ready = deferred()
+    const controller = new AbortController()
+    const pending = sdk.createSession({ engineId: 'halo', abortController: controller }, async preparation => {
+      ready.resolve()
+      await new Promise<void>((_resolve, reject) => preparation.signal.addEventListener('abort', () => reject(preparation.signal.reason), { once: true }))
+      return { engineId: 'halo' }
+    })
+    const rejected = expect(pending).rejects.toBeDefined()
+    await ready.promise
+    const module = state.modules.get('halo')![0]
+    if (action === 'shutdown') await sdk.closeSdkRuntime()
+    else controller.abort(new Error('cancel preparation'))
+    await rejected
+    await settle()
+    expect(module.createSession).not.toHaveBeenCalled()
+    expect(module.close).toHaveBeenCalledOnce()
   })
 })

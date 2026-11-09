@@ -37,7 +37,7 @@ export interface TeamTriggerSchedulerDeps {
   store: TeamStore
   /** Routes 'webhook' | 'file' | 'wecom' triggers; the event-kind counterpart of scheduler. */
   eventRouter: EventRouter
-  runTeam: (teamId: string, trigger: TeamRunTrigger) => Promise<void>
+  runTeam: (teamId: string, trigger: TeamRunTrigger) => Promise<unknown>
   /**
    * The run epoch the team is executing right now, or null — the reentrancy
    * guard both trigger kinds ask before starting a run. Deliberately not

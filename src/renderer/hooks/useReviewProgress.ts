@@ -14,9 +14,8 @@
  * nothing unless the todo list or the current action changed.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { api } from '../api'
 import { useChatStore } from '../stores/chat.store'
 import { useComposerReferencesStore } from '../stores/composer-references.store'
 import { useCollabSummary } from './useCollabSummary'
@@ -26,10 +25,9 @@ import {
   deriveReviewProgress,
   EMPTY_REVIEW_PROGRESS,
   reviewSpan,
-  type CollabEnd,
   type ReviewProgress,
 } from '../utils/review-progress'
-import type { CollabSummary, TeamEpochSummary } from '../../shared/apps/team-types'
+import type { CollabSummary } from '../../shared/apps/team-types'
 import type { GitReviewRecord } from '../../shared/types/git'
 import type { Thought } from '../types'
 
@@ -62,11 +60,10 @@ function liveSignals(thoughts: readonly Thought[] | undefined): LiveSignals {
 
 /**
  * What a remount should not wait for: the last collaboration read per review
- * conversation, and how it ended. Bounded; a card shows one review at a time.
+ * conversation. Bounded; a card shows one review at a time.
  */
 const TEAM_MEMORY_LIMIT = 20
 const collabMemory = new Map<string, CollabSummary | null>()
-const endMemory = new Map<string, CollabEnd | null>()
 
 function remember<T>(memory: Map<string, T>, key: string, value: T): void {
   memory.delete(key)
@@ -88,12 +85,6 @@ export function useReviewProgress(record: GitReviewRecord | null, spaceId: strin
   const team = record?.variant === 'team'
   const fetchedCollab = useCollabSummary(team ? conversationId : null)
   const collab = fetchedCollab === undefined && conversationId ? collabMemory.get(conversationId) : fetchedCollab
-  const endEpochId = collab && !collab.active ? collab.epochId : null
-  const [end, setEnd] = useState<{ epochId: string; end: CollabEnd | null } | null>(null)
-  const collabEnd = !endEpochId
-    ? undefined
-    : end?.epochId === endEpochId ? end.end : endMemory.get(endEpochId)
-
   // Read in once, without selecting or warming it.
   const openedRef = useRef<string | null>(null)
   useEffect(() => {
@@ -117,27 +108,6 @@ export function useReviewProgress(record: GitReviewRecord | null, spaceId: strin
     if (conversationId && fetchedCollab !== undefined) remember(collabMemory, conversationId, fetchedCollab)
   }, [conversationId, fetchedCollab])
 
-  // Whether the team finished or was stopped is read once its work has ended.
-  const endTeamId = collab && !collab.active ? collab.teamId : null
-  useEffect(() => {
-    if (!endTeamId || !endEpochId || collabEnd !== undefined) return
-    let cancelled = false
-    const settle = (value: CollabEnd | null) => {
-      remember(endMemory, endEpochId, value)
-      if (!cancelled) setEnd({ epochId: endEpochId, end: value })
-    }
-    api.teamListEpochs(endTeamId)
-      .then(res => {
-        const epoch = res.success ? ((res.data as TeamEpochSummary[] | undefined) ?? []).find(e => e.id === endEpochId) : undefined
-        settle(epoch ? { reason: epoch.endReason, summary: epoch.summary } : null)
-      })
-      .catch(error => {
-        console.warn('[ReviewProgress] Could not read how the review team ended:', error)
-        settle(null)
-      })
-    return () => { cancelled = true }
-  }, [endTeamId, endEpochId, collabEnd])
-
   // A starting turn clears its steps: keep showing the list the reviewer last wrote.
   const liveTodos = useMemo(() => (live.todosKey ? JSON.parse(live.todosKey) as TodoItem[] : null), [live.todosKey])
   const liveActivity = useMemo(() => (live.activityKey ? JSON.parse(live.activityKey) as ThoughtActivity : null), [live.activityKey])
@@ -156,7 +126,7 @@ export function useReviewProgress(record: GitReviewRecord | null, spaceId: strin
     }
     return null
   }, [messages])
-  const stillRunning = isGenerating || !!collab?.active
+  const stillRunning = isGenerating || !!collab?.members.some(member => member.status === 'working' || member.status === 'waiting_user')
   const stepsReadRef = useRef<string | null>(null)
   useEffect(() => {
     if (!conversationId || !stillRunning || heldTodos || !latestReply || latestReply.thoughts !== null) return
@@ -184,29 +154,20 @@ export function useReviewProgress(record: GitReviewRecord | null, spaceId: strin
       liveActivity,
       earlierTodos,
       collab: team ? collab : null,
-      collabEnd: team ? collabEnd : null,
     })
-  }, [record, loadError, conversation, isGenerating, sessionError, sessionErrorType, liveTodos, liveActivity, earlierTodos, team, collab, collabEnd])
+  }, [record, loadError, conversation, isGenerating, sessionError, sessionErrorType, liveTodos, liveActivity, earlierTodos, team, collab])
 }
 
-/**
- * Stop a review: its current turn and, for a team review, the members still
- * working for it. The team's work is then closed without a summary, which is
- * how the card tells a stopped team review from a finished one.
- */
+/** The source-chat stop also cancels its collaboration and pending callbacks. */
 export async function stopReview(conversationId: string): Promise<void> {
   await useChatStore.getState().stopGeneration(conversationId)
-  try {
-    const res = await api.teamCollabForConversation(conversationId)
-    const collab = res.success ? (res.data as CollabSummary | null) : null
-    if (!collab?.active) return
-    await Promise.all(collab.members
-      .filter(m => m.status === 'working' || m.status === 'waiting_user')
-      .map(m => api.teamStopMember({ teamId: collab.teamId, appId: m.appId, epochId: collab.epochId })))
-    await api.teamArchiveConversation(collab.teamId, collab.epochId)
-  } catch (error) {
-    console.warn('[ReviewProgress] Could not stop the review team:', error)
-  }
+  useChatStore.setState(state => {
+    const session = state.sessions.get(conversationId)
+    if (!session) return state
+    const sessions = new Map(state.sessions)
+    sessions.set(conversationId, { ...session, errorType: 'interrupted', error: null })
+    return { sessions }
+  })
 }
 
 /** Show the review conversation in the chat, bringing the chat on screen if the canvas covers it. */

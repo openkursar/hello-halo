@@ -254,7 +254,7 @@ try {
     'include its exact receipt in the very next check command, along with all receipts received earlier. Do not wait for your turn to end.',
     'Continue your own six checks even if all reports arrive early. If a report is still missing after six checks, perform up to six more individual checks.',
     'When all reports have arrived, finish remaining checks, then provide one final review containing all three exact receipt strings and the findings.',
-    'Do not call team_complete: this regression needs to observe member-ending notices naturally. Do not send acknowledgments or new tasks back to members.',
+    'Let member turns end naturally; task archival belongs to the person. Do not send acknowledgments or new tasks back to members.',
     'If only a turn-ending notice arrives after you finished, end quietly without a new report.',
   ].join('\n')
   let sendFailure

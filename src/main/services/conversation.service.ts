@@ -20,6 +20,7 @@ import { getHaloSpace, getSpace, hasSpace, listSpaces, touchSpaceActivity } from
 import { getSeedKBIds } from './tlon'
 import { getConfig } from '../foundation/config.service'
 import type { EngineId } from '../../shared/types/engine'
+import { GROUP_MODEL_ID } from '../../shared/types/ai-sources'
 import { isEngineSessionBinding, sameEngineSessionState, type EngineSessionBinding, type EngineSessionState, type EngineHandoffHistory } from '../../shared/types/engine-session'
 import { v4 as uuidv4 } from 'uuid'
 import { previewFromMessages, titleFromFirstMessage } from '../../shared/conversation-title'
@@ -104,8 +105,9 @@ export interface Conversation extends ConversationMeta {
    * so legacy conversations (created before these fields existed) and pins
    * whose account was removed keep working without migration.
    *
-   * `modelSourceId` is the `AISource.id`; `modelId` is the wire model id within
-   * that source. Always written together (both set or both absent).
+   * `modelSourceId` is the `AISource.id` or the id of a load-balancing group;
+   * `modelId` is the wire model id within that source (a group has one fixed
+   * model). Always written together (both set or both absent).
    */
   modelSourceId?: string
   modelId?: string
@@ -731,7 +733,17 @@ export function createConversation(
   try {
     const cfg = getConfig()
     const aiSources = cfg?.aiSources
-    if (aiSources?.version === 2 && aiSources.currentId) {
+    // The group the user chose last starts the conversation, unless the engine cannot use one.
+    const group = aiSources?.version === 2 && aiSources.currentGroupId && engineId !== 'codex'
+      ? aiSources.groups?.find(g => g.id === aiSources.currentGroupId)
+      : undefined
+    if (aiSources?.version === 2 && aiSources.currentGroupId && engineId === 'codex') {
+      console.log('[Conversation] New conversation does not start on the chosen group: the Codex engine cannot use one')
+    }
+    if (group) {
+      modelSourceId = group.id
+      modelId = GROUP_MODEL_ID
+    } else if (aiSources?.version === 2 && aiSources.currentId) {
       const currentSource = aiSources.sources.find(s => s.id === aiSources.currentId)
       if (currentSource) {
         modelSourceId = currentSource.id

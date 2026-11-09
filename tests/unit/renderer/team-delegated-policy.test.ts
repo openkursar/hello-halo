@@ -29,6 +29,8 @@ vi.mock('../../../src/renderer/stores/apps.store', () => ({
 vi.mock('../../../src/renderer/components/ui/HelpHint', () => ({ HelpHint: () => null }))
 
 import {
+  allowsBuiltin,
+  allowsCollaboration,
   capabilityPolicyFromPreset,
   colleagueReach,
   fullCapabilityPolicy,
@@ -165,8 +167,34 @@ describe('the invite screen recognises what is saved', () => {
 
   it('names nothing for a policy that is none of the answers', () => {
     expect(presetOfDelegatedPolicy({ ...capabilityPolicyFromPreset('read_only'), allowedSkills: ['pdf'] }, INVENTORY)).toBeNull()
-    // The engine's old name for the sub-agent tool does not grant it.
-    expect(presetOfDelegatedPolicy({ ...fullCapabilityPolicy(), allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task', 'Bash', 'Write', 'Edit', 'NotebookEdit'] }, INVENTORY)).toBeNull()
+    expect(presetOfDelegatedPolicy({ ...fullCapabilityPolicy(), allowCollaboration: false }, INVENTORY)).toBeNull()
+  })
+
+  it.each(['Agent', 'Task'])('honors explicit collaboration grants and denials over the legacy %s entry', legacy => {
+    const full = fullCapabilityPolicy()
+    const allowedTools = [...full.allowedTools!, legacy]
+    const granted = { ...full, allowedTools }
+    const denied = { ...granted, allowCollaboration: false }
+    expect(granted.allowCollaboration).toBe(true)
+    expect(allowsCollaboration(granted, 'strict')).toBe(true)
+    expect(presetOfDelegatedPolicy(granted, INVENTORY)).toBe('full')
+    expect(allowsCollaboration(denied, 'strict')).toBe(false)
+    expect(grantsEverything(denied, INVENTORY)).toBe(false)
+    expect(colleagueReach(denied, INVENTORY)).toBe('strict')
+    expect(presetOfDelegatedPolicy(denied, INVENTORY)).toBeNull()
+    expect(allowsBuiltin(granted, legacy, 'strict')).toBe(false)
+    expect(allowsBuiltin(granted, legacy, 'permissive')).toBe(false)
+  })
+
+  it.each(['Agent', 'Task'])('reads legacy %s as collaboration only when no explicit answer was saved', legacy => {
+    const { allowCollaboration: _allowCollaboration, ...oldPolicy } = fullCapabilityPolicy()
+    const granted = { ...oldPolicy, allowedTools: [...oldPolicy.allowedTools!, legacy] }
+    expect(allowsCollaboration(granted, 'strict')).toBe(true)
+    expect(presetOfDelegatedPolicy(granted, INVENTORY)).toBe('full')
+    expect(allowsCollaboration(oldPolicy, 'strict')).toBe(false)
+    expect(grantsEverything(oldPolicy, INVENTORY)).toBe(false)
+    expect(presetOfDelegatedPolicy(oldPolicy, INVENTORY)).toBeNull()
+    expect(allowsBuiltin(granted, legacy, 'strict')).toBe(false)
   })
 
   it('counts an "everything" saved with lists only when they name all there is', () => {

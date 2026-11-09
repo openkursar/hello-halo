@@ -211,8 +211,8 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
       onTurnComplete({ correlationId: p.correlationId, outcome: p.outcome, from: parseFeedIdKey(officeId, feedKey).author })
       return
     }
-    // Unknown ctrl entry types are consumed (cursor advances) but not acted on, so
-    // a forward-compatible sender never stalls an older consumer.
+    // Unknown entries must not strand later wakes behind an unsupported operation.
+    console.warn(`[CtrlFeed] control entry not executed office=${officeId} feed=${feedKey} seq=${entry.seq} type=${entry.type} reason=unsupported-entry`)
   }
 
   const feed: FeedService = createFeedService({

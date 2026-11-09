@@ -1,17 +1,17 @@
 import type { EngineId } from '../../../shared/types/engine'
 
-export type EngineIssue = 'account-needs-cc' | 'account-cc-ready' | 'codex-account' | 'cc-missing'
+export type EngineIssue = 'account-needs-cc' | 'account-cc-ready' | 'codex-account' | 'codex-group' | 'cc-missing'
 
 /**
  * Why a conversation cannot run as configured. `ccAvailable` is undefined
  * until it is known; an account that needs Claude Code is reported meanwhile.
  */
-export function resolveEngineIssue(input: { engine: EngineId; delegated: boolean; accountCompatible: boolean; ccAvailable?: boolean }): EngineIssue | null {
+export function resolveEngineIssue(input: { engine: EngineId; delegated: boolean; accountCompatible: boolean; group?: boolean; ccAvailable?: boolean }): EngineIssue | null {
   if (input.delegated) {
     if (input.engine === 'anthropic') return input.ccAvailable === false ? 'account-needs-cc' : null
     return input.ccAvailable ? 'account-cc-ready' : 'account-needs-cc'
   }
-  if (!input.accountCompatible) return 'codex-account'
+  if (!input.accountCompatible) return input.group ? 'codex-group' : 'codex-account'
   return input.engine === 'anthropic' && input.ccAvailable === false ? 'cc-missing' : null
 }
 

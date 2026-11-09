@@ -8,12 +8,12 @@ not here:
   one digital human on its own schedule -> digital-human
   installing a digital human to use as a member -> digital-human
   binding an IM chat to a team member -> channels
-  assembling a temporary team inside this conversation -> use the collab_start tool
+  assigning independent work inside this conversation -> use the spawn_agent tool
 
 operations on this page:
-  GET    /api/teams                                                  List teams, optionally only those owned by one space
+  GET    /api/teams                                                  List saved teams, optionally only those owned by one space
   POST   /api/teams                                                  Create a persistent team, with a lead provisioned for it
-  GET    /api/teams/<teamId>                                         Get one team's own record
+  GET    /api/teams/<teamId>                                         Get one saved team's own record
   PATCH  /api/teams/<teamId>                                         Edit a team's name, goal, mode, escalation routing or lead
   DELETE /api/teams/<teamId>                                         Dissolve a team   !! destructive - narrower: DELETE /api/teams/<teamId>/members/<appId>
   GET    /api/teams/<teamId>/artifacts                               List files each member produced in the current or latest run
@@ -28,6 +28,7 @@ operations on this page:
   GET    /api/teams/<teamId>/epochs                                  List a team's runs and conversations (history), newest first
   GET    /api/teams/<teamId>/epochs/<epochId>/artifacts              List files produced during one run
   GET    /api/teams/<teamId>/epochs/<epochId>/board                  Get the tasks, findings and members of one run
+  GET    /api/teams/<teamId>/epochs/<epochId>/roster                 Read the members and live status of one work item without its history
   GET    /api/teams/<teamId>/federation/presence                     See which computers of a shared team are online
   POST   /api/teams/<teamId>/leave                                   Leave a team hosted on someone else's computer   !! destructive
   POST   /api/teams/<teamId>/members                                 Add an existing digital human to a team
@@ -35,20 +36,18 @@ operations on this page:
   DELETE /api/teams/<teamId>/members/<appId>                         Remove a member from a team   !! destructive
   POST   /api/teams/<teamId>/members/<appId>/send                    Send a message to one team member in one conversation and wait for its reply
   POST   /api/teams/<teamId>/members/<appId>/stop                    Stop the turn one team member is running in one conversation
-  POST   /api/teams/<teamId>/pause                                   Stop the team's current run
-  POST   /api/teams/<teamId>/run                                     Start a team run on its goal
-  POST   /api/teams/<teamId>/save-collab                             Keep a temporary collaboration as a persistent team
+  POST   /api/teams/<teamId>/pause                                   Stop all open runs of this team
+  POST   /api/teams/<teamId>/run                                     Start independent work with a standing team
   GET    /api/teams/<teamId>/triggers                                List a team's schedules and other triggers
   POST   /api/teams/<teamId>/triggers                                Add a schedule, file or WeCom trigger to a team, or change one
   DELETE /api/teams/<teamId>/triggers/<triggerId>                    Remove a schedule or other trigger from a team   !! destructive - narrower: POST /api/teams/<teamId>/triggers
-  GET    /api/teams/collab-for-conversation/<conversationId>         Get the temporary collaboration started from one conversation
   POST   /api/teams/propose-members                                  Draft AI member roles for a team goal (creates nothing)
 
-GET    /api/teams                                                  List teams, optionally only those owned by one space
+GET    /api/teams                                                  List saved teams, optionally only those owned by one space
      curl -s "$HALO_API_URL/api/teams" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
-     # out: {success:true,data:[{id,name,status:"idle"|"running"|"waiting_user"|"error",memberCount,hasWaitingUser,waitingCount?,leadAppId,localMembers:[{appId,memberName,isLead}],hostNodeId?,ephemeral?,updatedAt}]}
+     # out: {success:true,data:[{id,name,status:"idle"|"running"|"waiting_user"|"error",memberCount,hasWaitingUser,waitingCount?,leadAppId,localMembers:[{appId,memberName,isLead}],hostNodeId?,updatedAt}]}
      # note: Optional query: ?spaceId=. Omitting it lists every space, which is what the Halo app shows; pass $HALO_SPACE_ID to narrow it, and say which of the two you did.
-     # note: ephemeral:true is a temporary collaboration started from a conversation; it is hidden from the Teams page until saved (POST /api/teams/:teamId/save-collab).
+     # note: Only saved teams appear in this directory. Work inside a conversation is managed through its current collaboration tools.
      # note: hostNodeId set means the team is hosted on someone else's computer and was joined from here — it can be read and its members messaged, but not edited or run.
 
 POST   /api/teams                                                  Create a persistent team, with a lead provisioned for it
@@ -64,9 +63,9 @@ POST   /api/teams                                                  Create a pers
      # note: Creates digital humans (the lead, and AI-sourced members) as a side effect; on any failure the whole team is rolled back.
      # note: Create a persistent team only when the user asked for one. Members' delegated permissions are set in the Halo app — see this page's withheld list.
 
-GET    /api/teams/<teamId>                                         Get one team's own record
+GET    /api/teams/<teamId>                                         Get one saved team's own record
      curl -s "$HALO_API_URL/api/teams/<teamId>" -H "Authorization: Bearer $HALO_API_TOKEN"
-     # out: {success:true,data:{id,name,owningSpaceId,goal,leadAppId,memberSourcing,collabMode,escalationRouting,status,currentEpochId,hostNodeId,ephemeral?,createdAt,updatedAt} | null}
+     # out: {success:true,data:{id,name,owningSpaceId,goal,leadAppId,memberSourcing,collabMode,escalationRouting,status,currentEpochId,hostNodeId,createdAt,updatedAt} | null}
      # note: For members, edges, live board and waiting decisions use GET /api/teams/:teamId/detail.
 
 PATCH  /api/teams/<teamId>                                         Edit a team's name, goal, mode, escalation routing or lead
@@ -161,6 +160,10 @@ GET    /api/teams/<teamId>/epochs/<epochId>/board                  Get the tasks
      curl -s "$HALO_API_URL/api/teams/<teamId>/epochs/<epochId>/board" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {success:true,data:{epoch,tasks:[...],findings:[...],members:[...],activities?} | null}
 
+GET    /api/teams/<teamId>/epochs/<epochId>/roster                 Read the members and live status of one work item without its history
+     curl -s "$HALO_API_URL/api/teams/<teamId>/epochs/<epochId>/roster" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{members:[...],roster:[...]} | null}
+
 GET    /api/teams/<teamId>/federation/presence                     See which computers of a shared team are online
      curl -s "$HALO_API_URL/api/teams/<teamId>/federation/presence" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {success:true,data:{officeId,role:"host"|"joined",nodes:[{nodeId,displayName,status,lastSeen}],authority} | null}
@@ -225,7 +228,7 @@ POST   /api/teams/<teamId>/members/<appId>/stop                    Stop the turn
      # out: {success:true,data:{ok,stopped,reason?}}  — stopped:false means nothing was running
      # note: epochId is required, as for send. To stop the whole team run instead, POST /api/teams/:teamId/pause.
 
-POST   /api/teams/<teamId>/pause                                   Stop the team's current run
+POST   /api/teams/<teamId>/pause                                   Stop all open runs of this team
      # note: reversible — can be undone or corrected afterward.
      curl -sX POST "$HALO_API_URL/api/teams/<teamId>/pause" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
@@ -233,28 +236,19 @@ POST   /api/teams/<teamId>/pause                                   Stop the team
           -d '{}'
      # body: {}
      # out: {success:true}
-     # note: Seals the run as stopped; members mid-turn are stopped with it. Start again with POST /api/teams/:teamId/run.
+     # note: Stops the team’s open run contexts and active member turns; it does not complete or delete their work. Independent conversation contexts are unchanged.
 
-POST   /api/teams/<teamId>/run                                     Start a team run on its goal
+POST   /api/teams/<teamId>/run                                     Start independent work with a standing team
      # note: reversible — can be undone or corrected afterward.
      curl -sX POST "$HALO_API_URL/api/teams/<teamId>/run" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
           -H "Content-Type: application/json" \
-          -d '{}'
-     # body: {}
-     # out: {success:true}  — returns once the run has started; it continues in the background
-     # note: This route carries no brief: the lead works from the team goal. If you hold the team_run tool, use it to hand over a concrete brief.
-     # note: Fails for a temporary collaboration (save it first) and for a team hosted on another computer. Follow progress with GET /api/teams/:teamId/detail.
-
-POST   /api/teams/<teamId>/save-collab                             Keep a temporary collaboration as a persistent team
-     # note: reversible — can be undone or corrected afterward.
-     curl -sX POST "$HALO_API_URL/api/teams/<teamId>/save-collab" \
-          -H "Authorization: Bearer $HALO_API_TOKEN" \
-          -H "Content-Type: application/json" \
-          -d '{"name":"optional new team name"}'
-     # body: {"name": "optional new team name"}
-     # out: {success:true,data:{id,name,owningSpaceId,goal,leadAppId,status,...}}
-     # note: Only when the user asked to keep it. If you hold the collab_save tool and the collaboration is the one in this conversation, use the tool.
+          -d '{"instruction":"Investigate the current issue","trigger":{"type":"manual"}}'
+     # body: {"instruction":"Investigate the current issue","trigger":{"type":"manual"}}
+     # out: {success:true,data:{epochId}} — the accepted work continues in the background
+     # note: instruction is this work’s brief. When omitted, the standing goal is used; a team with no standing goal requires an instruction.
+     # note: Explicit manual work may run concurrently. Without trigger.type="manual", HTTP-triggered work keeps the automatic no-overlap guard.
+     # note: Use the returned epochId to follow this work. Do not infer it from a team’s current/latest pointer. Temporary collaborations and teams hosted elsewhere cannot be started through this route.
 
 GET    /api/teams/<teamId>/triggers                                List a team's schedules and other triggers
      curl -s "$HALO_API_URL/api/teams/<teamId>/triggers" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
@@ -278,11 +272,6 @@ DELETE /api/teams/<teamId>/triggers/<triggerId>                    Remove a sche
      curl -sX DELETE "$HALO_API_URL/api/teams/<teamId>/triggers/<triggerId>" -H "Authorization: Bearer $HALO_API_TOKEN"
      # out: {success:true}
      # note: To pause one without losing it, POST /api/teams/:teamId/triggers with its triggerId and "enabled": false (not a webhook trigger — see this page's withheld list).
-
-GET    /api/teams/collab-for-conversation/<conversationId>         Get the temporary collaboration started from one conversation
-     curl -s "$HALO_API_URL/api/teams/collab-for-conversation/<conversationId>" -H "Authorization: Bearer $HALO_API_TOKEN"
-     # out: {success:true,data:{teamId,name,goal,epochId,active,saved,members:[...]} | null}
-     # note: conversationId is a space conversation id (GET /api/spaces/:spaceId/conversations). null means that conversation never started a collaboration.
 
 POST   /api/teams/propose-members                                  Draft AI member roles for a team goal (creates nothing)
      curl -sX POST "$HALO_API_URL/api/teams/propose-members" \

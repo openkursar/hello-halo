@@ -28,9 +28,10 @@ import { api } from '../../api'
 import { useSpaceStore } from '../../stores/space.store'
 import { useAppStore } from '../../stores/app.store'
 import { resolveModelSelection } from '../../types'
-import { getEngineSourceCompatibility } from '../../../shared/engine-source'
+import { engineSourceOf, getEngineSourceCompatibility } from '../../../shared/engine-source'
 import { useEngineId } from '../../stores/engine.store'
 import { AppModelSelector } from './AppModelSelector'
+import { groupTitle } from '../ai-groups/group-text'
 import { AppEngineSelector } from './AppEngineSelector'
 import { AppNotifyChannelsSection } from './AppNotifyChannelsSection'
 import { AppCapabilitiesSection } from './AppCapabilitiesSection'
@@ -618,18 +619,20 @@ function SettingsTab({ app, appId, showWorkdayCalendar, spaceName, t, onRequireR
   const aiSources = useAppStore(state => state.config?.aiSources)
   const defaultEngine = useEngineId() ?? 'halo'
   const modelSelection = aiSources?.version === 2 ? resolveModelSelection(aiSources, app.userOverrides) : undefined
-  const sourceCompatibility = getEngineSourceCompatibility(app.userOverrides.engineId ?? defaultEngine, modelSelection?.source)
-  useEffect(() => { setModelError(null) }, [appId, app.userOverrides.engineId, modelSelection?.source?.id, modelSelection?.modelId])
+  const sourceCompatibility = getEngineSourceCompatibility(app.userOverrides.engineId ?? defaultEngine, modelSelection && engineSourceOf(modelSelection))
+  useEffect(() => { setModelError(null) }, [appId, app.userOverrides.engineId, modelSelection?.source?.id ?? modelSelection?.group?.id, modelSelection?.modelId])
   const saveEngineModelOverrides = async (patch: Record<string, unknown>): Promise<boolean> => {
     const result = await api.appUpdateOverrides(appId, patch)
     if (!result.success) throw new Error(result.error ?? 'The engine selection could not be saved. Please try again.')
     await useAppsStore.getState().refreshApp(appId)
     return true
   }
-  // An override naming a removed account follows the global selection.
-  const ownModel = modelSelection?.own
-    ? app.userOverrides.modelId
-    : undefined
+  // An override naming a removed account follows the global selection; one naming a group reads as the group.
+  const ownModel = modelSelection?.group
+    ? groupTitle(modelSelection.group.name, t)
+    : modelSelection?.own
+      ? app.userOverrides.modelId
+      : undefined
   const consumedCapabilities = ['ai-browser', 'ai-terminal', 'email', 'im-push'].filter(p => resolvePermission(app, p)).length
   const modelSummary = ownModel ?? specRecommendedModel ?? t('Default')
   const missingRequiredConfig = findMissingRequiredConfig(configSchema, app.userConfig)
@@ -920,6 +923,7 @@ function SettingsTab({ app, appId, showWorkdayCalendar, spaceName, t, onRequireR
             modelSourceId={app.userOverrides.modelSourceId}
             modelId={app.userOverrides.modelId}
             recommendedModel={specRecommendedModel}
+            engineId={app.userOverrides.engineId ?? defaultEngine}
             onChange={async (sourceId, modelId) => {
               setModelError(null)
               setModelSaving(true)
@@ -933,7 +937,7 @@ function SettingsTab({ app, appId, showWorkdayCalendar, spaceName, t, onRequireR
           {modelSaving && <p role="status" className="text-xs text-muted-foreground">{t('Saving…')}</p>}
           {modelError && <p role="alert" className="text-xs text-destructive">{modelError}</p>}
           {!sourceCompatibility.compatible && (
-            <p role="alert" className="text-xs text-destructive">{t(sourceCompatibility.message)}</p>
+            <p role="alert" className="text-xs text-destructive">{sourceCompatibility.code === 'codex-unsupported-group' ? t('Codex cannot use a load-balancing group. Choose a single model account or another engine.') : t(sourceCompatibility.message)}</p>
           )}
         </div>
 

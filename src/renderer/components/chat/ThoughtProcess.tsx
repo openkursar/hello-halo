@@ -56,7 +56,7 @@ export const ThoughtProcess = memo(function ThoughtProcess({ thoughts, isThinkin
     [isThinking, thoughts]
   )
 
-  // Timeline steps, sub-agent groups, the latest todo list and the error count,
+  // Timeline steps, nested tool groups, the latest todo list and the error count,
   // re-derived only for the steps that changed since the previous render.
   const modelRef = useRef<ThoughtPanelModel | null>(null)
   const model = useMemo(() => {

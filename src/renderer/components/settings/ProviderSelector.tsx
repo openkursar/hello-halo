@@ -14,7 +14,7 @@
  * - Model selection with search and fetch capability
  */
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import {
   ChevronDown, Search, Check, Loader2, Eye, EyeOff, ExternalLink, X, RefreshCw
@@ -39,6 +39,8 @@ import { resolveModelSelection } from './model-selection'
 import type { ModelCapabilityOverride } from '../../../shared/types/model-capabilities'
 import { usePresetModels } from '../../hooks/usePresetModels'
 import { ProviderCatalogDropdown } from '../ai-config/ProviderCatalogDropdown'
+import { endpointIdentity } from '../../utils/endpoint-identity'
+import { createRequestGate } from '../../utils/request-gate'
 
 interface ProviderSelectorProps {
   aiSources: AISourcesConfig
@@ -105,6 +107,8 @@ export function ProviderSelector({
   const [showApiKey, setShowApiKey] = useState(false)
   const [isValidating, setIsValidating] = useState(false)
   const [isFetchingModels, setIsFetchingModels] = useState(false)
+  /** A fetch result may only land while its endpoint and key are still current. */
+  const fetchGate = useRef(createRequestGate())
   const [validationResult, setValidationResult] = useState<{
     valid: boolean
     message?: string
@@ -230,9 +234,9 @@ export function ProviderSelector({
   useEffect(() => {
     if (currentProvider && !editingSource) {
       setApiUrl(currentProvider.apiUrl)
-      setSelectedModel(currentProvider.models[0]?.id || '')
+      setSelectedModel(currentProvider.models?.[0]?.id || '')
       setSourceName(t(currentProvider.name))
-      setFetchedModels(currentProvider.models)
+      setFetchedModels(currentProvider.models ?? [])
     }
   }, [selectedProvider, currentProvider, editingSource])
 
@@ -249,14 +253,43 @@ export function ProviderSelector({
 
   // Handle provider selection
   const handleSelectProvider = (providerId: ProviderId) => {
+    fetchGate.current.invalidate()
     setSelectedProvider(providerId)
     setApiKey('')
+    setIsFetchingModels(false)
     setValidationResult(null)
     setFetchedModels([])
+    setSelectedModel('')
     setShowCustomModel(false)
     setCustomModelDraft('')
     setCommittedCustomModelId('')
     setCustomModelError(null)
+  }
+
+  const handleApiKeyChange = (value: string) => {
+    fetchGate.current.invalidate()
+    setApiKey(value)
+    setIsFetchingModels(false)
+    setValidationResult(null)
+  }
+
+  /**
+   * A model list and custom model belong to the endpoint they were chosen for.
+   * Changing the origin resets the whole model choice; a path edit keeps it.
+   */
+  const handleApiUrlChange = (value: string) => {
+    fetchGate.current.invalidate()
+    setApiUrl(value)
+    setIsFetchingModels(false)
+    if (endpointIdentity(value) === endpointIdentity(apiUrl)) return
+    setFetchedModels([])
+    setSelectedModel('')
+    setShowCustomModel(false)
+    setCustomModelDraft('')
+    setCommittedCustomModelId('')
+    setCustomModelError(null)
+    setShowModelDropdown(false)
+    setValidationResult(null)
   }
 
   // Handle delete model from list
@@ -287,11 +320,15 @@ export function ProviderSelector({
       return
     }
 
+    const token = fetchGate.current.begin()
+    const requestKey = apiKey
+    const requestUrl = apiUrl
     setIsFetchingModels(true)
     setValidationResult(null)
 
     try {
-      const response = await api.fetchModels(apiKey, apiUrl)
+      const response = await api.fetchModels(requestKey, requestUrl)
+      if (!fetchGate.current.isCurrent(token)) return
 
       if (!response.success || !response.data) {
         setValidationResult({
@@ -311,13 +348,14 @@ export function ProviderSelector({
 
       setValidationResult({ valid: true, message: t('Found ${count} models').replace('${count}', String(models.length)) })
     } catch {
+      if (!fetchGate.current.isCurrent(token)) return
       console.error('[ProviderSelector] Failed to fetch models')
       setValidationResult({
         valid: false,
         message: formatModelFetchError(t, 'MODEL_FETCH_NETWORK')
       })
     } finally {
-      setIsFetchingModels(false)
+      if (fetchGate.current.isCurrent(token)) setIsFetchingModels(false)
     }
   }
 
@@ -331,7 +369,7 @@ export function ProviderSelector({
     const finalModel = finalModelId
 
     if (!finalModel) {
-      setValidationResult({ valid: false, message: t('Please select a model') })
+      setValidationResult({ valid: false, message: t('Fetch the model list or enter a custom model ID first') })
       return
     }
 
@@ -346,7 +384,7 @@ export function ProviderSelector({
       // model is always present in the persisted list.
       const availableModels: ModelOption[] = effectiveModelList.length > 0
         ? [...effectiveModelList]
-        : (currentProvider?.models ? [...currentProvider.models] : [{ id: finalModel, name: finalModel }])
+        : (currentProvider?.models?.length ? [...currentProvider.models] : [{ id: finalModel, name: finalModel }])
 
       if (!availableModels.some(m => m.id === finalModel)) {
         availableModels.unshift({ id: finalModel, name: finalModel })
@@ -433,7 +471,7 @@ export function ProviderSelector({
 
     const finalModel = finalModelId
     if (!finalModel) {
-      setValidationResult({ valid: false, message: t('Please select a model') })
+      setValidationResult({ valid: false, message: t('Fetch the model list or enter a custom model ID first') })
       return
     }
 
@@ -745,7 +783,7 @@ export function ProviderSelector({
               <input
                 type={showApiKey ? 'text' : 'password'}
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
+                onChange={(e) => handleApiKeyChange(e.target.value)}
                 placeholder="sk-..."
                 className="w-full px-3 py-2 pr-10 bg-input border border-border rounded-lg
                          text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
@@ -768,7 +806,7 @@ export function ProviderSelector({
             <input
               type="text"
               value={apiUrl}
-              onChange={(e) => setApiUrl(e.target.value)}
+              onChange={(e) => handleApiUrlChange(e.target.value)}
               placeholder={currentProvider?.apiUrl || 'https://api.example.com/v1'}
               className="w-full px-3 py-2 bg-input border border-border rounded-lg
                        text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
@@ -784,18 +822,20 @@ export function ProviderSelector({
               <label className="block text-sm font-medium text-muted-foreground">
                 {t('Model')}
               </label>
-              <button
-                onClick={handleFetchModels}
-                disabled={isFetchingModels || !apiKey}
-                className="flex items-center gap-1 text-sm text-primary hover:text-primary/80 disabled:opacity-50"
-              >
-                {isFetchingModels ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : (
-                  <Search size={14} />
-                )}
-                {t('Fetch Models')}
-              </button>
+              {effectiveModelList.length > 0 && (
+                <button
+                  onClick={handleFetchModels}
+                  disabled={isFetchingModels || !apiKey}
+                  className="flex items-center gap-1 text-sm text-primary hover:text-primary/80 disabled:opacity-50"
+                >
+                  {isFetchingModels ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Search size={14} />
+                  )}
+                  {t('Fetch Models')}
+                </button>
+              )}
             </div>
 
             {/* Custom model toggle */}
@@ -814,6 +854,28 @@ export function ProviderSelector({
 
             {showCustomModel ? (
               renderCustomModelInput()
+            ) : effectiveModelList.length === 0 ? (
+              <div className="rounded-lg border border-border bg-input px-3 py-3">
+                <p className="text-sm text-muted-foreground">{t('No models loaded')}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {t('Fetch the model list from this endpoint or use a custom model ID.')}
+                </p>
+                {!apiKey && (
+                  <p className="mt-1 text-xs text-muted-foreground">{t('Enter an API Key first.')}</p>
+                )}
+                <button
+                  onClick={handleFetchModels}
+                  disabled={isFetchingModels || !apiKey}
+                  className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:text-primary/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isFetchingModels ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <RefreshCw size={14} />
+                  )}
+                  {t('Fetch Models')}
+                </button>
+              </div>
             ) : (
               <div className="relative">
                 <button

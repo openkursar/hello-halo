@@ -45,7 +45,13 @@ describe('turnEndingOf', () => {
   it('does not treat a stop the person asked for as one', () => {
     expect(turnEndingOf(result({ wasAborted: true, isInterrupted: true }))).toBeUndefined()
     expect(turnEndingOf(result({ wasAborted: true, reachedMaxTurns: true }))).toBeUndefined()
-    expect(turnEndingOf(result({ wasAborted: true, hasErrorThought: true, errorThought: { type: 'error', content: 'Operation was aborted' } as StreamResult['errorThought'] }))).toBeUndefined()
+  })
+
+  it.each(['internal', 'user', 'controller'] as const)('keeps an actual engine failure when the same turn was also stopped by %s', stopReason => {
+    const reason = 'API Error: 429 request quota exceeded'
+    expect(turnEndingOf(result({ wasAborted: true, stopReason, hasErrorThought: true,
+      errorThought: { type: 'error', content: reason } as StreamResult['errorThought'] })))
+      .toEqual({ kind: 'failed', error: reason })
   })
 
   it('names a failed model request with the engine\'s reason, or a fallback when it gave none', () => {

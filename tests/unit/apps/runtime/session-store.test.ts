@@ -464,14 +464,13 @@ describe('convertEventsToMessages', () => {
     })
 
     it('concatenates text across a transparent MCP tool, which arrives prefixed', () => {
-      // The engine reports MCP tools as `mcp__<server>__<tool>`. Matching bare
-      // names only used to drop the agent's own summary before team_complete.
+      // MCP prefixes must not turn coordination bookkeeping into a text boundary.
       const events: StoredEvent[] = [
         assistantText('# Report\n\nHere is what the team produced.'),
-        assistantToolUse(`mcp__${TEAM_MCP_SERVER_NAME}__${TEAM_TOOL_NAMES.complete}`, 'tool-1', {
-          summary: 'done',
+        assistantToolUse(`mcp__${TEAM_MCP_SERVER_NAME}__${TEAM_TOOL_NAMES.postFinding}`, 'tool-1', {
+          content: 'Verified review result',
         }),
-        userToolResult('tool-1', 'Run will be sealed after this turn ends.'),
+        userToolResult('tool-1', 'Finding published.'),
         assistantText('The team has finished.'),
       ]
 
@@ -850,7 +849,7 @@ describe('convertEventsToMessages', () => {
       expect(messages[0].content).toBe('Real bubble text')
     })
 
-    it('ignores result.result when the result is an error', () => {
+    it('preserves a result failure without presenting it as answer text', () => {
       const events: StoredEvent[] = [
         userTrigger('Do x', '2026-01-01T00:00:00.000Z'),
         resultWithText('fatal error detail', true, '2026-01-01T00:00:01.000Z'),
@@ -858,9 +857,14 @@ describe('convertEventsToMessages', () => {
 
       const messages = convertEventsToMessages(events)
 
-      // No assistant bubble fabricated from an error result.
-      expect(messages).toHaveLength(1)
+      expect(messages).toHaveLength(2)
       expect(messages[0]).toMatchObject({ role: 'user', content: 'Do x' })
+      expect(messages[1]).toMatchObject({
+        role: 'assistant',
+        content: '',
+        error: 'fatal error detail',
+        timestamp: '2026-01-01T00:00:01.000Z',
+      })
     })
 
     it('associates each turn result with its own bubble across multiple turns', () => {

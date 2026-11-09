@@ -26,6 +26,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 // Mocks (must be declared before importing app-chat)
 // ============================================
 
+const authority = vi.hoisted(() => ({ current: null as ReturnType<typeof import('./fixtures/participant-service').createScopedParticipantService> | null }))
+vi.mock('../../../../src/main/apps/team', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../src/main/apps/team')>()
+  const { createScopedParticipantService } = await import('./fixtures/participant-service')
+  authority.current = createScopedParticipantService()
+  return { ...actual, getTeamService: () => ({ participants: authority.current!.service, getCollaborationScope: () => null, getCollabForConversation: () => null }) }
+})
+
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   unstable_v2_createSession: vi.fn(),
   tool: vi.fn((opts: any) => ({ ...opts, _isTool: true })),
@@ -60,6 +68,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
 }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({
+  emitUserStop: vi.fn(),
   stopGeneration: vi.fn(async () => {}),
   getSessionState: () => ({ isActive: false, thoughts: [] }),
 }))
@@ -124,7 +133,7 @@ vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
     bus: { drainMailbox: () => {} },
   }),
 }))
-vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({ createTeamMcpServer }))
+vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({ createTeamMcpServer, createCoordinationMcpServer: () => ({ _isMcpServer: true, name: 'halo-team' }) }))
 
 const { buildUserSessionSdkOptions, getEngineCapabilities } = vi.hoisted(() => ({
   buildUserSessionSdkOptions: vi.fn((_input: Record<string, unknown>): Record<string, any> => ({})),
@@ -171,7 +180,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getDbMcpServers: vi.fn(() => null),
 }))
-vi.mock('../../../../src/main/services/agent/events', () => ({ onAgentEvent: () => ({ dispose: () => {} }), emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ emitHumanRequest: vi.fn(), onAgentEvent: () => ({ dispose: () => {} }), emitAgentEvent: vi.fn() }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
@@ -347,6 +356,7 @@ const anyone: ImPermissionContext = { senderId: 'someone', senderName: 'Someone'
 let epochSeq = 0
 function teamChat(): { conversationId: string; epochId: string } {
   const epochId = `epoch-${++epochSeq}`
+  authority.current!.allow(TEAM_ID, epochId, app.id)
   return { conversationId: buildTeamSessionKey(app.id, TEAM_ID, epochId), epochId }
 }
 
@@ -390,7 +400,7 @@ async function turnEndNotice(chat: ReturnType<typeof teamChat>, origin?: 'guest'
   const report = createTurnReport({
     store: {
       getTeamById: () => ({ id: TEAM_ID, leadAppId: app.id, collabMode: 'free' }),
-      getEpochById: () => ({ id: chat.epochId, endedAt: null }),
+      getEpochById: () => ({ id: chat.epochId, teamId: TEAM_ID, endedAt: null }),
       getMember: (_teamId: string, appId: string) => ({ appId, memberName: appId === app.id ? 'desk' : 'researcher' }),
       getTaskById: () => null,
     } as unknown as TeamStore,
@@ -440,6 +450,7 @@ function teamToolsOrigin(): string | undefined {
 }
 
 beforeEach(() => {
+  authority.current!.reset()
   buildUserSessionSdkOptions.mockClear()
   createTeamMcpServer.mockClear()
   noteMemberTurnEnded.mockClear()
@@ -560,7 +571,7 @@ describe('work a guest set in motion stays restricted when it comes back', () =>
 
     expect(runsCommands(chat.conversationId)).toBe(false)
     expect(teamToolsOrigin()).toBe('guest')
-    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ origin: 'guest' }))
+    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ origin: 'guest' }), { report: true })
   })
 
   it('after a restart has forgotten the chat sender, it is held to the delegated policy, strictly', async () => {
@@ -625,14 +636,14 @@ describe('a member reports its own ending with the origin it ran under', () => {
     const chat = teamChat()
     setImPermissionContext(chat.conversationId, guest)
     await sendAppChatMessage(imTurn(chat, true))
-    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ origin: 'guest' }))
+    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ origin: 'guest' }), { report: true })
 
     const teammate = teamChat()
     await sendAppChatMessage({
       appId: app.id, spaceId: 'space-1', message: '[Team message from lead] go', conversationId: teammate.conversationId,
       teamContext: trigger(teammate.epochId, { kind: 'message', fromAppId: 'app-lead', origin: 'colleague' }),
     })
-    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ origin: 'colleague' }))
+    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ origin: 'colleague' }), { report: true })
   })
 
   it('an owner turn ends with no outside origin', async () => {
@@ -657,7 +668,7 @@ describe('a member reports its own ending with the origin it ran under', () => {
     })
     await sendAppChatMessage(imTurn(chat))
 
-    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ fate: { kind: 'error', message: reason } }))
+    expect(noteMemberTurnEnded).toHaveBeenLastCalledWith(expect.objectContaining({ fate: { kind: 'error', message: reason } }), { report: true })
   })
 })
 

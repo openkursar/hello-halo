@@ -18,6 +18,7 @@ const view = vi.hoisted(() => ({
   conversationsError: null,
   isLoadingConversations: false,
   selectedConversationId: 'standalone' as string | null,
+  board: null as any,
 }))
 
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }) }))
@@ -46,7 +47,7 @@ vi.mock('../../../src/renderer/components/team/workbench/TaskSidebar', async () 
 })
 vi.mock('../../../src/renderer/components/team/workbench/TaskRoom', async () => {
   const { createElement } = await import('react')
-  return { TaskRoom: (props: { task: { epochId: string } | null }) => createElement('main', { 'data-room': props.task?.epochId ?? 'new' }) }
+  return { TaskRoom: (props: { task: { epochId: string } | null; detail: { roster: Array<{ appId: string }> }; selectedAppId?: string }) => createElement('main', { 'data-room': props.task?.epochId ?? 'new', 'data-participants': props.detail.roster.map(member => member.appId).join(','), 'data-selected': props.selectedAppId }) }
 })
 vi.mock('../../../src/renderer/components/team/workbench/MemberRail', async () => {
   const { createElement } = await import('react')
@@ -54,7 +55,7 @@ vi.mock('../../../src/renderer/components/team/workbench/MemberRail', async () =
 })
 vi.mock('../../../src/renderer/components/team/workbench/TeamActivityDrawer', () => ({ TeamActivityDrawer: () => null }))
 vi.mock('../../../src/renderer/components/team/workbench/WorkbenchDrawer', () => ({ WorkbenchDrawer: () => null }))
-vi.mock('../../../src/renderer/components/team/workbench/useTaskBoard', () => ({ useTaskBoard: () => null }))
+vi.mock('../../../src/renderer/components/team/workbench/useTaskBoard', () => ({ useTaskBoard: () => ({ board: view.board, activities: [], failed: false, retry: () => {} }) }))
 vi.mock('../../../src/renderer/components/team/workbench/model', () => ({
   taskGroup: () => 'mine',
   visibleTasks: (tasks: unknown[]) => tasks,
@@ -102,4 +103,23 @@ describe('team view opened from a space conversation', () => {
     expect(html).toContain('data-task-sidebar')
     expect(html).toContain('Team settings')
   })
+})
+
+
+it('projects the selected work participants into the room on desktop and narrow screens without exposing an empty goal', () => {
+  const member = { appId: 'temporary', memberName: 'Investigator', isLead: false, isTemporary: true }
+  view.board = { epoch: { id: 'standalone', teamId: 'team' }, members: [member], roster: [{ ...member, spaceId: 'space', sameMachine: true }] }
+  try {
+    for (const width of [1600, 375]) {
+      vi.stubGlobal('window', { innerWidth: width, addEventListener: () => {}, removeEventListener: () => {} })
+      const html = render({ ephemeral: false }, false)
+      expect(html).toContain('data-participants="temporary"')
+      expect(html).toContain('data-selected="temporary"')
+      expect(html).not.toContain('View team goal')
+      expect(html).toContain('aria-label="Members"')
+    }
+  } finally {
+    view.board = null
+    vi.stubGlobal('window', { innerWidth: 1600, addEventListener: () => {}, removeEventListener: () => {} })
+  }
 })

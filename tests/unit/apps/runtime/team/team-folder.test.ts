@@ -80,6 +80,16 @@ describe('team-folder', () => {
       expect(Array.from(name('审'.repeat(200))).length).toBe(64)
     })
 
+    it('keeps temporary folders fixed and prevents late temporary arrivals from moving standing folders', () => {
+      const standing = member('standing', 'Reviewer', 100)
+      const temporary = { ...member('temporary', 'reviewer', 1), isTemporary: true }
+      const original = memberFolderName(standing, [standing])
+      expect(memberFolderName(standing, [standing, temporary])).toBe(original)
+      const own = memberFolderName(temporary, [standing, temporary])
+      expect(own).toMatch(/^participant-[a-f0-9]{24}$/)
+      expect(memberFolderName({ ...temporary, memberName: 'Renamed' }, [temporary])).toBe(own)
+    })
+
     it('gives two members that reduce to one folder two folders', () => {
       const first = member('app-first-1', 'Reviewer', 1)
       const later = member('app-later-2', 'reviewer', 2)

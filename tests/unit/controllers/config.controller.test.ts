@@ -127,6 +127,31 @@ describe('managed account configuration writes', () => {
     expect(incoming.appearance).toEqual({ theme: 'light' })
   })
 
+  it('keeps the live load-balancing groups and chosen group, whatever a stale snapshot carries', () => {
+    const group = { id: 'g', name: 'Daily', strategy: 'priority', members: [{ sourceId: 'a', modelId: 'm' }], createdAt: 'c', updatedAt: 'u' }
+    const staleGroup = { ...group, name: 'Old name', members: [] }
+    const incoming = { aiSources: { version: 2, currentId: 'a', sources: [live], groups: [staleGroup], currentGroupId: 'gone' } }
+    preserveManagedSources(incoming, { aiSources: { version: 2, currentId: 'a', sources: [live], groups: [group], currentGroupId: 'g' } })
+    expect(incoming.aiSources).toEqual({ version: 2, currentId: 'a', sources: [live], groups: [group], currentGroupId: 'g' })
+  })
+
+  it('cannot create groups from a snapshot of a configuration that has none', () => {
+    const incoming = { aiSources: { version: 2, currentId: 'a', sources: [live], groups: [{ id: 'g' }], currentGroupId: 'g' } }
+    preserveManagedSources(incoming, { aiSources: { version: 2, currentId: 'a', sources: [live] } })
+    expect(incoming.aiSources).toEqual({ version: 2, currentId: 'a', sources: [live] })
+  })
+
+  it('takes an account\'s models out of the groups when a save drops the account', () => {
+    const custom = { id: 'custom', authType: 'api-key', apiKey: 'key' }
+    const group = {
+      id: 'g', name: 'Daily', strategy: 'priority', createdAt: 'c', updatedAt: 'u',
+      members: [{ sourceId: 'custom', modelId: 'm' }, { sourceId: 'a', modelId: 'm' }],
+    }
+    const incoming = { aiSources: { version: 2, currentId: 'a', sources: [] as unknown[] } }
+    preserveManagedSources(incoming, { aiSources: { version: 2, currentId: 'a', sources: [live, custom], groups: [group] } })
+    expect((incoming.aiSources as any).groups[0].members).toEqual([{ sourceId: 'a', modelId: 'm' }])
+  })
+
   it('rejects malformed or duplicate-id snapshots instead of erasing account state', () => {
     expect(() => preserveManagedSources({ aiSources: null }, {})).toThrow('Invalid AI sources')
     expect(() => preserveManagedSources({ aiSources: { version: 2, sources: [live, live] } }, {})).toThrow('Duplicate AI source ids')

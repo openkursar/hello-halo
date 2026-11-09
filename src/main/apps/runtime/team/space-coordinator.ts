@@ -10,6 +10,7 @@
  * stay importable without it).
  */
 
+import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 import { isRemoteMember, parseSpaceCoordinatorAppId } from '../../../../shared/apps/team-types'
 import type { TeamEnvelope, TeamTriggerContext } from '../../../../shared/apps/team-types'
 import type { TeamStore } from '../../team'
@@ -20,6 +21,7 @@ const LOG_TAG = '[TeamSpaceCoord]'
 /** One team message as the space conversation receives it. */
 export interface CoordinatorDeliveryRequest {
   permissionIdentity: string
+  parentTeam?: { teamId: string; epochId: string; appId: string; correlationId: string }
   coalescingKey?: string
   spaceId: string
   conversationId: string
@@ -29,6 +31,7 @@ export interface CoordinatorDeliveryRequest {
   persist: {
     content: string
     metadata: {
+      requestId?: string
       teamId: string
       epochId: string
       teamName: string
@@ -55,8 +58,8 @@ function renderTurnInput(
   if (kind === 'member_stopped' || kind === 'periodic_check' || !fromMemberName) return body
   return (
     `[Team message from ${fromMemberName} — collaboration "${teamName}". ` +
-    `A teammate is reporting to you, the coordinator; this is not a message from your user. ` +
-    `Weigh it against the goal, coordinate further work with the team tools if needed, ` +
+    `A teammate is reporting to you, the lead; this is not a message from your user. ` +
+    `Weigh it against the current request, coordinate further work with the team tools if needed, ` +
     `and tell the user only what matters.]\n\n${body}`
   )
 }
@@ -92,7 +95,7 @@ export function createCoordinatorDelivery(deps: {
     }
 
     const memberSender = !!trigger.fromAppId && !parseSpaceCoordinatorAppId(trigger.fromAppId)
-    const sender = memberSender ? store.getMember(envelope.teamId, trigger.fromAppId!) ?? null : null
+    const sender = memberSender ? store.getMember(envelope.teamId, trigger.fromAppId!, envelope.epochId) ?? null : null
     const fromMemberName = sender?.memberName ?? null
     // A sender on another machine, or one no longer in the collaboration, never
     // joins the owner's running turn: its message runs as a turn of its own right
@@ -105,7 +108,9 @@ export function createCoordinatorDelivery(deps: {
         `kind=${trigger.kind ?? 'message'}`
     )
 
+    const parent = parseTeamSessionKey(conversationId)
     return deliver({
+      ...(parent ? { parentTeam: { ...parent, correlationId: envelope.correlationId } } : {}),
       permissionIdentity: fromElsewhere ? 'external' : 'owner',
       coalescingKey,
       spaceId: team.owningSpaceId,
@@ -114,6 +119,7 @@ export function createCoordinatorDelivery(deps: {
       persist: {
         content: envelope.body,
         metadata: {
+          requestId: trigger.requestId ?? envelope.requestId,
           teamId: envelope.teamId,
           epochId: envelope.epochId,
           teamName: team.name,

@@ -30,6 +30,7 @@
  * the seeded space (the only one) and its conversation.
  */
 
+import { seedSdkAliases } from './seed-sdk-bundle'
 import { execFileSync } from 'child_process'
 import fs from 'fs'
 import os from 'os'
@@ -330,6 +331,7 @@ function seedWorker(): string {
     platform: 'node',
     format: 'cjs',
     packages: 'external',
+    alias: seedSdkAliases,
     outfile,
     external: ['better-sqlite3', 'electron', '@parcel/watcher'],
     logLevel: 'silent',

@@ -227,14 +227,14 @@ describe('permission-aware delivery', () => {
     expect(dispatch).toHaveBeenCalledTimes(2)
   })
 
-  it('retains bounded caller-provided identifiers in batch logs without logging message bodies', async () => {
+  it('retains bounded identifiers in explicitly enabled traces without message bodies', async () => {
     let busy = true
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     try {
       const gate = createTurnGate<Job>({
         isBusy: () => busy, getJobIdentity: entry => entry.identity,
         dispatch: async () => {}, mergeJobs: entries => ({ ...entries[0], messages: entries.flatMap(entry => entry.messages) }),
-      }, { describeJob: entry => `messageId=${entry.key}` })
+      }, { describeJob: entry => `messageId=${entry.key}`, trace: line => console.log(line) })
       for (const key of ['id-one', 'id-two', 'id-three', 'id-four']) await gate.deliver('chat', job('private message body', 'owner', key))
       log.mockClear()
       busy = false

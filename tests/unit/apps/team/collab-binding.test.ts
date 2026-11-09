@@ -19,8 +19,12 @@ function fakeStore(teams: Array<{ id: string; coordinatorConversationId: string 
 }
 
 describe('collabReportOwnership', () => {
-  it('leaves a space conversation\u2019s admission untouched', () => {
-    expect(collabReportOwnership(fakeStore([{ id: 't', coordinatorConversationId: spaceChat, ephemeral: true }]), 't', spaceChat)).toBeUndefined()
+  it('checks a space report against both its source binding and captured execution fence', () => {
+    let current = true
+    const check = collabReportOwnership(fakeStore([{ id: 't', coordinatorConversationId: spaceChat, ephemeral: true }]), 't', spaceChat, () => current)
+    expect(check()).toBe(true)
+    current = false
+    expect(check()).toBe(false)
   })
 
   it('owns a digital human\u2019s chat only while the collaboration is bound to that very chat', () => {

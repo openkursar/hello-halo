@@ -8,6 +8,12 @@ import { getEngineAvailability } from './engine-availability'
 import { defaultCapabilitiesFor, type EngineCapabilities } from './capabilities'
 import { tool as defineTool, createSdkMcpServer as defineMcpServer } from './mcp/sdk-server'
 import { withClaudeCodeSkills } from './skill-availability'
+import type { ReadSessionToolContextModeOptions, SessionToolContextMode } from '@hello-halo/agent-sdk/worker'
+
+export interface SessionPreparation {
+  signal: AbortSignal
+  readSessionToolContextMode?: (sessionId: string, options: ReadSessionToolContextModeOptions) => Promise<SessionToolContextMode>
+}
 
 interface SdkModule {
   createSession?: (options: any) => Promise<any>
@@ -18,6 +24,8 @@ interface SdkModule {
   close?: () => Promise<void>
   diagnostics?: () => unknown
   setLogger?: (...args: any[]) => void
+  readSessionToolContextMode?: (sessionId: string, options: ReadSessionToolContextModeOptions,
+    controls: { signal: AbortSignal; group?: string }) => Promise<SessionToolContextMode>
 }
 
 interface EngineEntry {
@@ -256,14 +264,34 @@ function ownSession(session: any, engineId: EngineId, borrow: EngineBorrow): any
   })
 }
 
-export async function createSession(options: Record<string, any>): Promise<any> {
+export async function createSession(
+  options: Record<string, any>,
+  prepare?: (preparation: SessionPreparation) => Promise<Record<string, any>>,
+): Promise<any> {
   await waitForSdkInitialization()
   const engineId = options.engineId ?? await resolveDefaultEngine()
   const borrow = await borrowEngine(engineId, options.abortController?.signal)
-  const { engineId: _engineId, engineHandoffContent: _engineHandoffContent, engineHandoffRecovered: _engineHandoffRecovered, ...sessionOptions } = options
   try {
     const create = borrow.module.createSession ?? borrow.module.unstable_v2_createSession
     if (!create) throw new EngineUnavailableError(engineId, 'The adapter does not expose session creation')
+    const inspect = borrow.module.readSessionToolContextMode
+    let preparing = true
+    let preparedOptions = options
+    try {
+      if (prepare) preparedOptions = await prepare({
+        signal: borrow.controller.signal,
+        ...(inspect ? { readSessionToolContextMode: async (sessionId: string, readOptions: ReadSessionToolContextModeOptions) => {
+          if (!preparing) throw new Error('Session context inspection is only available during preparation')
+          borrow.controller.signal.throwIfAborted()
+          return inspect(sessionId, readOptions, { signal: borrow.controller.signal, group: options.workerGroup })
+        } } : {}),
+      })
+    } finally { preparing = false }
+    borrow.controller.signal.throwIfAborted()
+    if (preparedOptions.engineId !== undefined && preparedOptions.engineId !== engineId) {
+      throw new Error('Session preparation cannot change the captured execution engine')
+    }
+    const { engineId: _engineId, engineHandoffContent: _engineHandoffContent, engineHandoffRecovered: _engineHandoffRecovered, ...sessionOptions } = preparedOptions
     const prepared = { ...sessionOptions, abortController: borrow.controller }
     const session = await create(engineId === 'anthropic' ? withClaudeCodeSkills(prepared) : prepared)
     return ownSession(session, engineId, borrow)

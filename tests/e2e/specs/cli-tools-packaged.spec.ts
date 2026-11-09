@@ -21,7 +21,7 @@ import { navigateToChat } from '../fixtures/helpers'
 
 test.setTimeout(180000)
 
-const AGENT = 'packaged-probe-probe-agent'
+const LEGACY_AGENT = 'packaged-probe-probe-agent'
 const COMMAND = 'packaged-probe-probe-command'
 const NEEDLE = 'packaged-probe-needle-text'
 
@@ -43,7 +43,8 @@ interface ScriptedModel {
   url: string
   /** Tool results by tool_use id, once the CLI has sent them back. */
   results: Map<string, ToolResult>
-  sawAgent: boolean
+  nativeDelegation: Set<string>
+  legacyProfileAdvertised: boolean
   sawCommand: boolean
   close(): Promise<void>
 }
@@ -74,7 +75,7 @@ async function startScriptedModel(workDir: string): Promise<ScriptedModel> {
     { type: 'tool_use', id: 'toolu_office', name: 'Bash', input: { command: `printf 'ACCEPTANCE_OFFICE_SHIM='; command -v halo-node; halo-node -e "require('exceljs'); require('docx'); console.log('office-runtime-ok'); console.log('ACCEPTANCE_OFFICE_ORIGIN='+JSON.stringify({execPath:process.execPath,exceljs:require.resolve('exceljs'),docx:require.resolve('docx')}))"`, description: 'Load the Office libraries and report their actual executable and module paths' } },
     { type: 'tool_use', id: 'toolu_image', name: 'Read', input: { file_path: path.join(workDir, 'packaged-probe-large.png') } },
   ]
-  const model: Omit<ScriptedModel, 'url' | 'close'> = { results: new Map(), sawAgent: false, sawCommand: false }
+  const model: Omit<ScriptedModel, 'url' | 'close'> = { results: new Map(), nativeDelegation: new Set(), legacyProfileAdvertised: false, sawCommand: false }
 
   const server = http.createServer((req, res) => {
     let body = ''
@@ -87,8 +88,11 @@ async function startScriptedModel(workDir: string): Promise<ScriptedModel> {
       }
       const request = JSON.parse(body || '{}') as { stream?: boolean; tools?: Array<{ name: string; description?: string }>; messages?: Array<{ content: unknown }> }
       const messages = JSON.stringify(request.messages ?? [])
-      // Newer Claude Code lists available agents in a conversation reminder instead of the Agent tool's description.
-      if (request.tools?.some(tool => tool.name === 'Agent' && tool.description?.includes(AGENT)) || messages.includes(AGENT)) model.sawAgent = true
+      for (const tool of request.tools ?? []) {
+        if (['Agent', 'Task', 'TeamCreate', 'TeamDelete', 'SendMessage'].includes(tool.name)) model.nativeDelegation.add(tool.name)
+        if (tool.description?.includes(LEGACY_AGENT)) model.legacyProfileAdvertised = true
+      }
+      if (messages.includes(LEGACY_AGENT)) model.legacyProfileAdvertised = true
       if (messages.includes(COMMAND)) model.sawCommand = true
 
       for (const message of request.messages ?? []) {
@@ -155,11 +159,11 @@ function largePng(width = 2400, height = 1600): Buffer {
   ])
 }
 
-/** The folder a new conversation's engine starts in, with a project agent and command of its own. */
+/** Existing native profiles must not re-enable delegation; project commands still load. */
 function seedProject(workDir: string): void {
   fs.mkdirSync(path.join(workDir, '.claude', 'agents'), { recursive: true })
   fs.mkdirSync(path.join(workDir, '.claude', 'commands'), { recursive: true })
-  fs.writeFileSync(path.join(workDir, '.claude', 'agents', `${AGENT}.md`), `---\nname: ${AGENT}\ndescription: Project subagent the packaged check looks for\n---\nYou are a probe.\n`)
+  fs.writeFileSync(path.join(workDir, '.claude', 'agents', `${LEGACY_AGENT}.md`), `---\nname: ${LEGACY_AGENT}\ndescription: Legacy profile that must remain unavailable\n---\nYou are a probe.\n`)
   fs.writeFileSync(path.join(workDir, '.claude', 'commands', `${COMMAND}.md`), `---\ndescription: Project command the packaged check looks for\n---\nSay probe.\n`)
   fs.writeFileSync(path.join(workDir, 'packaged-probe-needle.txt'), `${NEEDLE}\n`)
   fs.writeFileSync(path.join(workDir, 'packaged-probe-large.png'), largePng())
@@ -172,8 +176,7 @@ for (const [sdkEngine, caseId] of [
   test.describe(`Packaged tools with ${sdkEngine === 'anthropic' ? 'Claude Code' : 'Halo'}`, () => {
     test.use({ sdkEngine, hostCommands: 'system-only', explicitClaudeCode: sdkEngine === 'anthropic' })
 
-    const discovery = sdkEngine === 'anthropic' ? 'project agents and commands' : 'project commands'
-    test(`the packaged AI can search files, run the bundled ripgrep and Office runtime, read large images, and sees ${discovery}`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId, evidence: 'app-e2e', mode: 'scripted', variant: {} }) } }, async ({ electronApp, window }, testInfo) => {
+    test(`the packaged AI can search files, run the bundled ripgrep and Office runtime, read large images, sees project commands and exposes no native delegation`, { annotation: { type: 'acceptance', description: JSON.stringify({ caseId, evidence: 'app-e2e', mode: 'scripted', variant: {} }) } }, async ({ electronApp, window }, testInfo) => {
       expect(await electronApp.evaluate(({ app }) => app.isPackaged)).toBe(true)
       const engine = await window.evaluate(() => (window as unknown as { halo: HaloAPI }).halo.getEngineAvailability())
       const state = engine.data as { activeEngine?: string; degradedFrom?: string | null; engines?: Array<{ engineId: string; available: boolean; version: string; fingerprint: string }> } | undefined
@@ -249,7 +252,8 @@ for (const [sdkEngine, caseId] of [
         expect.soft(toolOrigins.office.libraries.exceljs.origin, 'exceljs must load from this package’s Office runtime').toBe('package')
         expect.soft(toolOrigins.office.libraries.docx.origin, 'docx must load from this package’s Office runtime').toBe('package')
         expect.soft(result('toolu_image'), 'Read of an oversized image').toMatchObject({ isError: false, hasImage: true })
-        if (sdkEngine === 'anthropic') expect.soft(model.sawAgent, 'Claude Code project subagent offered to the model').toBe(true)
+        expect.soft([...model.nativeDelegation], 'Only Halo collaboration may delegate work').toEqual([])
+        expect.soft(model.legacyProfileAdvertised, 'An obsolete project profile is not a usable agent catalog').toBe(false)
         expect.soft(model.sawCommand, 'project command offered to the model').toBe(true)
       } finally {
         try {
@@ -267,7 +271,7 @@ for (const [sdkEngine, caseId] of [
             grepBoundary: 'Main PATH resolution is observed separately from the Bash rg command; this is not an internal Grep spawn trace.',
             hostObservations, toolOrigins, hostObservationError,
           }, null, 2), contentType: 'application/json' })
-          await testInfo.attach('packaged-tool-results', { body: JSON.stringify({ requestedEngine: sdkEngine, activeEngine: state?.activeEngine, degradedFrom: state?.degradedFrom, results: Object.fromEntries(model.results), sawAgent: model.sawAgent, sawCommand: model.sawCommand }, null, 2), contentType: 'application/json' })
+          await testInfo.attach('packaged-tool-results', { body: JSON.stringify({ requestedEngine: sdkEngine, activeEngine: state?.activeEngine, degradedFrom: state?.degradedFrom, results: Object.fromEntries(model.results), nativeDelegation: [...model.nativeDelegation], legacyProfileAdvertised: model.legacyProfileAdvertised, sawCommand: model.sawCommand }, null, 2), contentType: 'application/json' })
         } finally {
           await model.close()
         }

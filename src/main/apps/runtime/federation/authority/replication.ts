@@ -474,6 +474,10 @@ export function createReplication(deps: ReplicationDeps): Replication {
   }
 
   function captureLocalWrite(record: BlackboardWriteRecord): void {
+    if (record.op === 'participant_upsert') {
+      console.warn(`${LOG_TAG} local write not replicated office=${officeId} reason=private-participant`)
+      return
+    }
     // A member write re-entering via applyMemberWrite carries its original fid;
     // a genuine authority-originated local write mints a fresh one.
     const fid = pendingMemberFid ?? randomUUID()
@@ -593,6 +597,9 @@ export function createReplication(deps: ReplicationDeps): Replication {
         // Roster replication mutates the federation membership ledger, not the
         // team blackboard tables — no blackboard row changes (return false).
         deps.applyRosterChange?.(frame.op, frame.payload)
+        return false
+      default:
+        console.warn(`${LOG_TAG} replica entry retained without apply office=${officeId} seq=${frame.seq} op=${frame.op} reason=unsupported-operation`)
         return false
     }
   }

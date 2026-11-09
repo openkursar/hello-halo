@@ -110,7 +110,7 @@ export interface LocalArtifactResolverDeps {
    * and resolving a ref against the wrong one makes every artifact unreadable.
    * Null when unknown. See {@link createMemberWorkDirResolver}.
    */
-  getWorkDirForApp: (appId: string, teamId: string) => string | null
+  getWorkDirForApp: (appId: string, teamId: string, epochId?: string) => string | null
   /**
    * The folder of a piece of work on this machine (`TeamFolders.sharedDir`),
    * where `team:` refs live. Absent → `team:` refs do not resolve here.
@@ -141,11 +141,13 @@ export type ResolveLocalArtifactPath = (params: {
  * which left every file the coordinator published unreadable to its members.
  */
 export function createMemberWorkDirResolver(deps: {
-  store: Pick<TeamStore, 'getTeamById'>
+  store: Pick<TeamStore, 'getTeamById'> & Partial<Pick<TeamStore, 'participants'>>
   getAppSpaceId: (appId: string) => string | null
   getSpaceWorkDir: (spaceId: string) => string | null
-}): (appId: string, teamId: string) => string | null {
-  return (appId, teamId) => {
+}): (appId: string, teamId: string, epochId?: string) => string | null {
+  return (appId, teamId, epochId) => {
+    const execution = epochId ? deps.store.participants?.getExecution(teamId, epochId, appId) : null
+    if (execution) return execution.environment.workDir
     const spaceId = parseSpaceCoordinatorAppId(appId)
       ? deps.store.getTeamById(teamId)?.owningSpaceId ?? null
       : deps.getAppSpaceId(appId)
@@ -178,14 +180,14 @@ export function createLocalArtifactPathResolver(
     // working directory, so without this a ref published in another machine's
     // name could reach a local member's unpublished file.
     if (teamRef) {
-      const producer = deps.store.getMember(teamId, resolution.authorAppId)
-      if (producer ? isRemoteMember(producer) : !deps.getWorkDirForApp(resolution.authorAppId, teamId)) {
+      const producer = deps.store.getMember(teamId, resolution.authorAppId, epochId)
+      if (producer ? isRemoteMember(producer) : !deps.getWorkDirForApp(resolution.authorAppId, teamId, epochId)) {
         console.warn(`${LOG_TAG} local team artifact refused: team=${teamId} epoch=${epochId} producer=${resolution.authorAppId} reason=local-ownership-unavailable`)
         return null
       }
     }
     const roots = {
-      workDir: teamRef ? null : deps.getWorkDirForApp(resolution.authorAppId, teamId),
+      workDir: teamRef ? null : deps.getWorkDirForApp(resolution.authorAppId, teamId, epochId),
       teamFolder: teamRef ? deps.getTeamFolderDir?.(teamId, epochId) ?? null : null,
     }
     const resolved = resolvePublishedRef(roots, ref)
@@ -253,7 +255,7 @@ export function createTeamArtifactReader(deps: TeamArtifactReaderDeps): ReadTeam
   const inlineCap = deps.inlineCapBytes ?? DEFAULT_INLINE_CAP_BYTES
 
   return async ({ teamId, epochId, ref }) => {
-    const members = deps.store.listMembersByTeam(teamId)
+    const members = deps.store.listMembersByTeam(teamId, epochId)
     const nameOf = (appId: string): string =>
       members.find((m) => m.appId === appId)?.memberName ?? 'a teammate'
 
@@ -425,7 +427,7 @@ export function createTeamArtifactOpener(deps: TeamArtifactOpenerDeps): OpenTeam
     // says nothing about the swap.
     if (resolution.kind === 'ambiguous') return { ok: false, ref, reason: 'ambiguous' }
 
-    const member = deps.store.listMembersByTeam(teamId).find((m) => m.appId === resolution.authorAppId)
+    const member = deps.store.getMember(teamId, resolution.authorAppId, epochId)
     if (!member || !isRemoteMember(member)) {
       const absPath = deps.resolveLocalPath({ teamId, epochId, ref })
       return absPath

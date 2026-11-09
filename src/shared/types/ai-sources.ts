@@ -367,6 +367,38 @@ export interface AISource {
 }
 
 /**
+ * The one model id a group offers. The engine sees a single stable model, and
+ * the router picks the account and model that serves each request.
+ */
+export const GROUP_MODEL_ID = 'halo-auto'
+
+/** How a group picks among its models for a conversation that has none yet. */
+export type AIGroupStrategy = 'priority' | 'spread'
+
+/** One account and model a group may use. The list order is the priority order. */
+export interface AIGroupMember {
+  sourceId: string
+  modelId: string
+}
+
+/**
+ * A load-balancing group: several accounts × models selectable as one target.
+ * It holds no credentials; every member keeps its own account, and requests
+ * fail over between members at the router.
+ */
+export interface AIGroup {
+  /** Unique identifier, UUID format; a stored selection's `modelSourceId` may name it */
+  id: string
+  name: string
+  strategy: AIGroupStrategy
+  members: AIGroupMember[]
+  /** ISO 8601 */
+  createdAt: string
+  /** ISO 8601 */
+  updatedAt: string
+}
+
+/**
  * AI Sources configuration (stored in config.json)
  */
 export interface AISourcesConfig {
@@ -376,6 +408,14 @@ export interface AISourcesConfig {
   currentId: string | null
   /** All configured sources */
   sources: AISource[]
+  /** Load-balancing groups; absent until the user creates one */
+  groups?: AIGroup[]
+  /**
+   * The group the user chose last. New conversations are pinned to it while it
+   * exists; `currentId` stays a real account, which features that cannot use a
+   * group (direct calls, background tasks) run on.
+   */
+  currentGroupId?: string | null
 }
 
 // ============================================================================
@@ -612,6 +652,16 @@ export function getSourceById(config: AISourcesConfig, id: string): AISource | n
   return config.sources.find(s => s.id === id) || null
 }
 
+/** Group by ID; null when it does not exist. */
+export function getGroupById(config: AISourcesConfig, id: string): AIGroup | null {
+  return config.groups?.find(group => group.id === id) ?? null
+}
+
+/** Whether `id`, an account or a group, is what the configuration has selected for new conversations. */
+export function isSelected(config: AISourcesConfig, id: string): boolean {
+  return config.currentGroupId ? config.currentGroupId === id : config.currentId === id
+}
+
 /** The signed-in account a source shows: OAuth and Claude Code CLI sources have one. */
 export function getSourceAccountName(source: AISource): string | undefined {
   return source.authType === 'oauth' || source.authType === 'delegated' ? source.user?.name : undefined
@@ -634,14 +684,19 @@ export interface StoredModelSelection {
   modelId?: string
 }
 
-/** The account and model a stored selection runs on; `own` when they are the selection's. */
+/**
+ * The account and model a stored selection runs on; `own` when they are the
+ * selection's. A selection naming a group has no single account: the group
+ * decides per request, so only the group is known.
+ */
 export type ResolvedModelSelection =
-  | { source: AISource; modelId: string; own: boolean }
-  | { source: null; modelId: undefined; own: false }
+  | { source: AISource; modelId: string; own: boolean; group?: undefined }
+  | { source: null; modelId: undefined; own: false; group?: undefined }
+  | { source: null; modelId: typeof GROUP_MODEL_ID; own: true; group: AIGroup }
 
 /**
- * What a stored selection runs on. A selection naming an account that no
- * longer exists is the same as no selection: the current global account and
+ * What a stored selection runs on. A selection naming an account or group that
+ * no longer exists is the same as no selection: the current global account and
  * its model — the rule the main process resolves credentials by
  * (services/agent helpers `getApiCredentialsForSelection`).
  */
@@ -649,19 +704,23 @@ export function resolveModelSelection(
   config: AISourcesConfig,
   selection: StoredModelSelection | null | undefined
 ): ResolvedModelSelection {
-  const pinned = selection?.modelSourceId ? getSourceById(config, selection.modelSourceId) : null
+  const pinnedId = selection?.modelSourceId
+  const pinned = pinnedId ? getSourceById(config, pinnedId) : null
   if (pinned) return { source: pinned, modelId: selection?.modelId || pinned.model, own: true }
+  const group = pinnedId ? getGroupById(config, pinnedId) : null
+  if (group) return { source: null, modelId: GROUP_MODEL_ID, own: true, group }
   const source = getCurrentSource(config)
   return source ? { source, modelId: source.model, own: false } : { source: null, modelId: undefined, own: false }
 }
 
-/** The name of the model a stored selection runs on (see resolveModelSelection). */
+/** The name of the model a stored selection runs on (see resolveModelSelection); a group's own name for a group. */
 export function getModelDisplayName(
   config: AISourcesConfig,
   sourceId?: string,
   modelId?: string
 ): string {
   const selected = resolveModelSelection(config, { modelSourceId: sourceId, modelId })
+  if (selected.group) return selected.group.name
   if (!selected.source) return 'No model'
 
   const modelOption = selected.source.availableModels.find(m => m.id === selected.modelId)
@@ -773,6 +832,24 @@ export function updateSource(
 }
 
 /**
+ * Groups without the models of a source that is going away. A group left with
+ * no models stays, so its owner can repair or delete it. Returns the same
+ * array when no group used the source.
+ */
+export function removeSourceFromGroups(
+  groups: AIGroup[] | undefined,
+  sourceId: string,
+  now: string = new Date().toISOString()
+): AIGroup[] | undefined {
+  if (!groups?.some(group => group.members.some(member => member.sourceId === sourceId))) return groups
+  return groups.map(group =>
+    group.members.some(member => member.sourceId === sourceId)
+      ? { ...group, members: group.members.filter(member => member.sourceId !== sourceId), updatedAt: now }
+      : group
+  )
+}
+
+/**
  * Delete a source
  */
 export function deleteSource(config: AISourcesConfig, id: string): AISourcesConfig {
@@ -784,10 +861,12 @@ export function deleteSource(config: AISourcesConfig, id: string): AISourcesConf
     newCurrentId = newSources.length > 0 ? newSources[0].id : null
   }
 
+  const groups = removeSourceFromGroups(config.groups, id)
   return {
     ...config,
     sources: newSources,
-    currentId: newCurrentId
+    currentId: newCurrentId,
+    ...(groups ? { groups } : {})
   }
 }
 

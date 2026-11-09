@@ -34,8 +34,12 @@ const STOPPED_UNREAD = 'stopped before it was read'
 /** The owner's own words to this chat; anything a teammate, a reminder, a guest or another machine sent is not. */
 export function isPersonRequest(request: AppChatRequest): boolean {
   const team = request.teamContext
-  return (!team || (team.kind === 'human_message' && !team.origin)) && !request.refreshBeforeDelivery
+  const ownerTeamInput = !!team && !team.origin && (team.kind === 'human_message'
+    || (team.kind === undefined && request.humanInput === true))
+  return (!team || ownerTeamInput) && !request.refreshBeforeDelivery
     && !request.recorded?.provenance && request.imPermission?.isOwner !== false
+    && !request.recordedMessages?.some(message => message.provenance
+      || (message.teamOrigin?.kind && message.teamOrigin.kind !== 'human_message'))
 }
 
 /** Handed back after a stop: delivered again later, recorded once, its earlier callers already answered. */
@@ -217,10 +221,15 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
         onResult: (content, ending) => notify(item => item.onResult?.(content, ending)),
         // Every merged item shares this conversation's chat: push the one reply once.
         onReply: (content, ending) => {
-          const target = requests.find(item => item.onReply)
-          try { target?.onReply?.(content, ending) } catch (error) {
-            console.error(`[AppChatDelivery] Delivery callback failed: conversation=${conversationId}`, error)
+          for (const target of requests) {
+            if (!target.onReply) continue
+            try { if (target.onReply(content, ending) !== false) return true }
+            catch (error) {
+              console.error(`[AppChatDelivery] Delivery callback failed: conversation=${conversationId}`, error)
+              return true
+            }
           }
+          return false
         },
       }
       void run({ ...request, onHeldBack: heldBack, onSessionRetired: () => releaseDispatch(conversationId, generation) }).then(
@@ -266,6 +275,9 @@ export function createAppChatDelivery(run: (request: AppChatRequest) => Promise<
         void gate.deliver(conversationId, {
           identity,
           messages: [{ request: { ...request, imPermission }, resolve, reject }],
+        }).then(disposition => {
+          try { request.onAdmitted?.(disposition) }
+          catch (error) { console.error(`[AppChatDelivery] Admission callback failed: conversation=${conversationId}`, error) }
         }).catch(error => {
           reportAdmissionFailure(request, error)
           reject(error)

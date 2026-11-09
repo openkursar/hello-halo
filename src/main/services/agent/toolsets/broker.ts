@@ -1,29 +1,17 @@
 /**
- * Toolset Broker - Orchestration
- *
- * Assembles the complete in-process MCP server set for a session and seeds it at
- * session creation (buildCreationTimeServers → buildMcpServerRecord). Every engine
- * receives its in-process servers up front: the base toolset (base.ts), the
- * broker meta server, and the currently-open toolsets. Only external process-based
- * MCP servers (user-installed apps) are passed separately by the caller.
- *
- * Toolsets are toggled by the user from the composer's "+" menu. A change persists
- * to the conversation record and schedules a session rebuild, so the new set is
- * seeded at the next session creation. There is deliberately NO runtime hot-swap:
- * one uniform mechanism across all engines (creation-time seed + rebuild-on-change)
- * keeps the agent hot path free of mid-turn MCP machinery. The AI never opens a
- * toolset itself — it asks the user to enable one (request_toolset), which the user
- * grants via the same toggle. The runtime may open one automatically (opener
- * 'system', e.g. the non-vision image fallback opening OCR before session creation).
+ * Builds fresh in-process MCP servers at session creation. The native context
+ * mode selects automatic capabilities; actual grants and legacy context
+ * selections remain user-controlled and rebuild only at a safe boundary.
  */
 
 import { getConfig, saveConfig } from '../../../foundation/config.service'
 import { emitAgentEvent } from '../events'
 import { buildBaseToolset } from './base'
 import { getAvailableToolsets, getToolset } from './registry'
-import { getOpenToolsets, markOpen, markClosed } from './state'
+import { getOpenToolsets, markOpen, markClosed, setToolsetContextMode } from './state'
+import { isToolsetIncluded, isToolsetConfigurable } from './selection'
 import { createBrokerMetaServer, CAPABILITIES_SERVER_NAME } from './meta-server'
-import type { ToolsetOpener, ToolsetScope, ToolsetStatus, ToolsetsChangedEvent } from './types'
+import type { ToolsetOpener, ToolsetScope, ToolsetStatus, ToolsetsChangedEvent, ToolsetContextMode } from './types'
 
 /**
  * Complete in-process MCP server set seeded at session creation: always-on
@@ -120,17 +108,26 @@ export function buildMcpServerRecord(scope: ToolsetScope): Record<string, unknow
 
   // On-demand toolsets currently enabled for this conversation
   const openIds = getOpenToolsets(scope.spaceId, scope.conversationId)
-  for (const id of openIds) {
+  const mode = scope.toolContextMode ?? 'manual'
+  if (mode === 'manual') {
+    for (const id of scope.requiredToolsets ?? []) {
+      if (getToolset(id) && markOpen(scope.spaceId, scope.conversationId, id)) {
+        emitChanged(scope, id, 'open', 'system')
+      }
+    }
+  }
+  const selectedIds = getAvailableToolsets().filter(def => isToolsetIncluded(def, openIds, mode)).map(def => def.id)
+  for (const id of selectedIds) {
     const def = getToolset(id)
     if (def) add(id, () => def.createServer(scope))
   }
 
   // The "capabilities" meta server (request_toolset) is present only while at
   // least one optional toolset is disabled — nothing to request once all are on.
-  const hasDisabled = getAvailableToolsets().some(def => !openIds.has(def.id))
+  const hasDisabled = getAvailableToolsets().some(def => isToolsetConfigurable(def, mode) && !openIds.has(def.id))
   if (hasDisabled) {
     record[CAPABILITIES_SERVER_NAME] = createBrokerMetaServer(scope, {
-      list: () => listToolsetStatuses(scope.spaceId, scope.conversationId),
+      list: () => listToolsetStatuses(scope.spaceId, scope.conversationId, mode),
       request: (id) => requestToolset(scope, id)
     })
   }
@@ -218,34 +215,39 @@ export interface RequestToolsetResult {
   alreadyOpen?: boolean
 }
 
-/**
- * The AI asks the user to enable a toolset. This does NOT open it (only the user
- * can, via the toggle) — it emits a UI hint so the renderer highlights that
- * toolset's switch, and returns metadata so the meta-server can craft guidance.
- */
+/** The agent may activate an available capability without a human enablement step. */
 export function requestToolset(scope: ToolsetScope, toolsetId: string): RequestToolsetResult {
   const def = getToolset(toolsetId)
   if (!def) {
     return { ok: false, error: `Unknown or unavailable toolset: ${toolsetId}` }
   }
-  if (getOpenToolsets(scope.spaceId, scope.conversationId).has(toolsetId)) {
+  if (isToolsetIncluded(def, getOpenToolsets(scope.spaceId, scope.conversationId), scope.toolContextMode ?? 'manual')) {
     return { ok: true, displayName: def.displayName, alreadyOpen: true }
   }
-  const payload = { conversationId: scope.conversationId, spaceId: scope.spaceId, toolsetId, displayName: def.displayName }
-  emitAgentEvent('toolsets:requested', scope.spaceId, scope.conversationId, payload as unknown as Record<string, unknown>)
-  console.log(`[Toolsets][${scope.conversationId}] AI requested user enable ${toolsetId}`)
-  return { ok: true, displayName: def.displayName }
+  return openToolset(scope, toolsetId, 'ai')
 }
 
-/** Current toolset statuses for the composer's "+" menu */
-export function listToolsetStatuses(spaceId: string, conversationId: string): ToolsetStatus[] {
+/** Available capabilities, including those without a manual context control. */
+export function listToolsetStatuses(spaceId: string, conversationId: string, mode: ToolsetContextMode | 'pending' = 'manual'): ToolsetStatus[] {
   const open = getOpenToolsets(spaceId, conversationId)
   return getAvailableToolsets().map(def => ({
     id: def.id,
     displayName: def.displayName,
     summary: def.summary,
-    open: open.has(def.id)
+    open: isToolsetIncluded(def, open, mode === 'pending' ? 'manual' : mode),
+    ...(!isToolsetConfigurable(def, mode) ? { configurable: false } : {}),
   }))
+}
+
+/** The controls follow the successfully created session, including during a pending engine change. */
+export function publishToolsetContextMode(spaceId: string, conversationId: string, mode: ToolsetContextMode): void {
+  setToolsetContextMode(conversationId, mode)
+  const payload: ToolsetsChangedEvent = {
+    spaceId, conversationId,
+    open: [...getOpenToolsets(spaceId, conversationId)],
+    statuses: listToolsetStatuses(spaceId, conversationId, mode),
+  }
+  emitAgentEvent('toolsets:changed', spaceId, conversationId, payload as unknown as Record<string, unknown>)
 }
 
 function emitChanged(

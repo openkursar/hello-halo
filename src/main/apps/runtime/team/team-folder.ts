@@ -65,6 +65,7 @@ interface RosterEntry {
   appId: string
   memberName: string
   addedAt: number
+  isTemporary?: boolean
 }
 
 /**
@@ -73,6 +74,7 @@ interface RosterEntry {
  * member that joined first keeps it and the later one is told apart by its app id.
  */
 export function memberFolderName(self: RosterEntry, roster: readonly RosterEntry[]): string {
+  if (self.isTemporary) return `participant-${createHash('sha256').update(self.appId).digest('hex').slice(0, 24)}`
   const suffix = self.appId.replace(/[^0-9A-Za-z]/g, '').slice(0, 8) || 'member'
   const base = sanitizeMemberName(self.memberName)
   if (!base) return suffix
@@ -82,7 +84,7 @@ export function memberFolderName(self: RosterEntry, roster: readonly RosterEntry
     other.addedAt < self.addedAt || (other.addedAt === self.addedAt && other.appId < self.appId)
   const taken = roster.some(
     (other) =>
-      other.appId !== self.appId && joinedEarlier(other) && sanitizeMemberName(other.memberName).toLowerCase() === key
+      !other.isTemporary && other.appId !== self.appId && joinedEarlier(other) && sanitizeMemberName(other.memberName).toLowerCase() === key
   )
   return taken ? `${base}-${suffix}` : base
 }
@@ -118,7 +120,7 @@ export function createTeamFolders(deps: {
 
   return {
     forMember(teamId, epochId, appId) {
-      const roster = store.listMembersByTeam(teamId)
+      const roster = store.listMembersByTeam(teamId, epochId)
       const self = roster.find((m) => m.appId === appId)
       if (!self) return null
       const shared = teamFolderDir(root, teamId, epochId)
@@ -135,7 +137,7 @@ export function createTeamFolders(deps: {
     ofTaskAssignee(teamId, epochId, taskId) {
       const task = store.getTaskById(taskId)
       if (!task?.assigneeAppId || task.teamId !== teamId || task.epochId !== epochId) return null
-      const roster = store.listMembersByTeam(teamId)
+      const roster = store.listMembersByTeam(teamId, epochId)
       const assignee = roster.find((m) => m.appId === task.assigneeAppId)
       if (!assignee || isRemoteMember(assignee)) return null
       return join(teamFolderDir(root, teamId, epochId), memberFolderName(assignee, roster))

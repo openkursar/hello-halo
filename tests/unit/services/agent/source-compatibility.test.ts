@@ -3,11 +3,13 @@ const manager = vi.hoisted(() => ({
   ensureInitialized: vi.fn(async () => {}), getSourceConfig: vi.fn(), getCurrentSourceConfig: vi.fn(),
   getBackendConfigForSource: vi.fn(), ensureValidToken: vi.fn(),
 }))
-vi.mock('../../../../src/main/services/ai-sources', () => ({ getAISourceManager: () => manager }))
+const groups = vi.hoisted(() => new Set<string>())
+vi.mock('../../../../src/main/services/ai-sources', () => ({ getGroup: (id: string) => groups.has(id) ? { id } : null, getAISourceManager: () => manager }))
 import { assertEngineSourceSelection } from '../../../../src/main/services/agent/source-compatibility'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  groups.clear()
   const source = { id: 'selected', authType: 'oauth', provider: 'provider', model: 'model-a' }
   manager.getSourceConfig.mockReturnValue(source)
   manager.getCurrentSourceConfig.mockReturnValue(source)
@@ -41,5 +43,15 @@ describe('save-time engine selection preflight', () => {
     manager.getBackendConfigForSource.mockReturnValue(null)
     await expect(assertEngineSourceSelection('codex')).resolves.toBeUndefined()
     expect(manager.ensureValidToken).not.toHaveBeenCalled()
+  })
+  it('lets every engine but Codex keep a load-balancing group, and checks no account for it', async () => {
+    groups.add('group-1')
+    for (const engineId of ['halo', 'anthropic', 'dsh'] as const) {
+      await expect(assertEngineSourceSelection(engineId, { modelSourceId: 'group-1' })).resolves.toBeUndefined()
+    }
+    await expect(assertEngineSourceSelection('codex', { modelSourceId: 'group-1' }))
+      .rejects.toMatchObject({ code: 'ENGINE_SOURCE_INCOMPATIBLE', issue: 'codex-unsupported-group' })
+    expect(manager.getSourceConfig).not.toHaveBeenCalled()
+    expect(manager.getBackendConfigForSource).not.toHaveBeenCalled()
   })
 })

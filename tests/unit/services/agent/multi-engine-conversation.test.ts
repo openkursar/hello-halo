@@ -33,7 +33,7 @@ vi.mock('../../../../src/main/services/tlon', () => ({ getSeedKBIds: () => [], g
 vi.mock('../../../../src/main/services/conversation-interop', () => ({ getPendingConversationInputIds: (id: string) => { m.pendingHistoryReads++; return m.pendingHistoryIds.get(id) ?? [] } }))
 vi.mock('../../../../src/main/services/agent/initialization', () => ({ waitForSdkInitialization: async () => {} }))
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
-  createSession: m.create,
+  createSession: async (options: any, prepare?: (scope: any) => Promise<any>) => m.create(prepare ? await prepare({ signal: options.abortController.signal, readSessionToolContextMode: async () => 'full' }) : options),
   getActiveEngine: () => m.defaultEngine, getDefaultEngine: () => m.defaultEngine, getStartupEngine: () => 'anthropic',
   resolveDefaultEngine: async () => m.defaultEngine, ensureEngineAvailable: async () => {}, getEngineCapabilities: () => ({}),
 }))
@@ -48,11 +48,11 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
 vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
   resolveCredentialsForSdk: m.resolveCredentials,
   buildUserSessionSdkOptions: async (input: any) => ({ engineId: input.engineId, model: 'test-model', cwd: input.workDir, systemPrompt: `system-${input.engineId}`, sourceId: 'account', env: {} }),
-  computeCredentialsFingerprint: (options: any) => JSON.stringify([options.model, options.sourceId]),
+  computeCredentialsFingerprint: (options: any) => JSON.stringify([options.model, options.sourceId, options.reasoningEffort, options.pickedReasoningEffort]),
   computeSessionInputsFingerprint: (options: any) => JSON.stringify([options.systemPrompt, options.permissionMode]),
   getSdkSourceId: (options: any) => options.sourceId,
 }))
-vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({ setSessionInvalidator: () => {}, buildCreationTimeServers: () => ({}), openToolset: () => ({ ok: true }) }))
+vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({ publishToolsetContextMode: vi.fn(), setSessionInvalidator: () => {}, buildCreationTimeServers: () => ({}), openToolset: () => ({ ok: true }) }))
 vi.mock('../../../../src/main/services/agent/toolsets/capability-index', () => ({ buildToolsetSection: () => '' }))
 vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({ dropConversationState: () => {}, getOpenToolsets: () => new Set() }))
 vi.mock('../../../../src/main/services/api-ref', () => ({ HALO_API_TOOLSET_ID: 'api' }))
@@ -62,15 +62,14 @@ vi.mock('../../../../src/main/services/agent/mcp-probe', () => ({ probeUnhealthy
 vi.mock('../../../../src/main/services/agent/knowledge-context', () => ({ resolveConversationKnowledgeBases: () => [], resolveConversationKnowledgeBaseIds: () => [] }))
 vi.mock('../../../../src/main/services/agent/space-memory', () => ({ resolveSpaceMemorySession: () => null, buildSpaceMemoryPreamble: async () => '' }))
 vi.mock('../../../../src/main/services/agent/image-attachments', () => ({ prepareNonVisionImageFallback: () => null, OCR_TOOLSET_ID: 'ocr' }))
-vi.mock('../../../../src/main/services/agent/reasoning-effort', () => ({ applyReasoningEffort: () => 0, applySessionReasoningEffort: () => {}, pickReasoningEffort: () => undefined }))
 vi.mock('../../../../src/main/services/agent/goal', () => ({ prepareGoalInput: (value: any) => value, setGoalForTurn: async () => {} }))
 vi.mock('../../../../src/main/services/agent/goal/draft', () => ({ getGoalDraft: () => null, applyGoalDraft: () => {} }))
-vi.mock('../../../../src/main/services/agent/subagent-handler', () => ({ hasActiveTeamTasks: () => false, isTeamLifecycleThought: () => false, handleSubAgentMessage: () => {}, handleTaskStarted: () => {}, handleTaskProgress: () => {}, handleTaskNotification: () => {} }))
+vi.mock('../../../../src/main/services/agent/tool-message-handler', () => ({ handleToolMessage: () => {}, handleTaskStarted: () => {}, handleTaskProgress: () => {}, handleTaskNotification: () => {} }))
 vi.mock('../../../../src/main/services/agent/stored-session', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../../src/main/services/agent/stored-session')>()
   return { ...actual, prepareStoredSession: async (options: Parameters<typeof actual.prepareStoredSession>[0]) => m.realStoredSession ? actual.prepareStoredSession(options) : true }
 })
-vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: m.events }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ emitHumanRequest: vi.fn(), emitAgentEvent: m.events }))
 vi.mock('../../../../src/main/services/health', () => ({ registerProcess: () => {}, unregisterProcess: () => {}, getCurrentInstanceId: () => null, onAgentError: () => {}, runPpidScanAndCleanup: async () => {} }))
 vi.mock('../../../../src/main/services/notification.service', () => ({ notifyTaskComplete: () => {} }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({ analytics: { track: async () => {}, trackErrorSurface: () => {} } }))
@@ -140,7 +139,7 @@ function fakeSession(options: any) {
 async function settled(conversationId: string) {
   await vi.waitFor(() => { expect(isSessionBusy(conversationId)).toBe(false) }, { timeout: 2000, interval: 5 })
 }
-const send = (id: string, message: string) => sendMessage({ spaceId: 'space', conversationId: id, message })
+const send = (id: string, message: string) => sendMessage({ spaceId: 'space', conversationId: id, message, thinkingEnabled: true })
 function seeded(engineId: EngineId = 'anthropic') {
   const conversation = createConversation('space', 'Test', undefined, { engineId })
   addMessage('space', conversation.id, { role: 'user', content: 'ORIGINAL_USER_DECISION' })
@@ -162,6 +161,69 @@ afterEach(async () => { closeAllV2Sessions(); await new Promise(resolve => setTi
 afterAll(() => stopSessionCleanup())
 
 describe('production conversation engine continuation', () => {
+  it.each([
+    { thinkingEnabled: true, effort: undefined, expected: 'high' },
+    { thinkingEnabled: false, effort: undefined, expected: 'off' },
+    { thinkingEnabled: true, effort: 'off' as const, expected: 'off' },
+    { thinkingEnabled: false, effort: 'max' as const, expected: 'max' },
+  ])('inherits source reasoning $expected and restores Dsh context after reclamation', async ({ thinkingEnabled, effort, expected }) => {
+    m.defaultEngine = 'dsh'
+    const { id } = createConversation('space', 'Source', undefined, { engineId: 'dsh' })
+    await sendMessage({ spaceId: 'space', conversationId: id, message: 'ORIGINAL_COLLABORATION_TASK', thinkingEnabled, reasoningEffort: effort })
+    await settled(id)
+    const original = m.sessions[0]
+    expect(original.options.reasoningEffort).toBe(expected)
+    addMessage('space', id, { role: 'assistant', content: 'Waiting for the collaborator.', toolCalls: [{
+      id: 'accepted-spawn', name: 'mcp__halo-team__spawn_agent', input: {}, status: 'success',
+      output: JSON.stringify({ handle: 'accepted-member-handle', name: 'Checker', status: 'accepted' }),
+    }] })
+    addMessage('space', id, { role: 'system', source: 'team-message', content: 'Quoted settings must not control the source.', metadata: { reasoning: { thinkingEnabled: !thinkingEnabled, effort: 'minimal' } } })
+    addMessage('space', id, { role: 'user', content: 'Withdrawn settings', metadata: { inputOutcome: 'stopped', reasoning: { thinkingEnabled: !thinkingEnabled, effort: 'minimal' } } })
+    const source = createChatConversationSource()
+    const deliver = (content: string) => source.dispatchBatch!('space', id, [{ turnInput: content, record: { content, source: 'team-message', metadata: {} } }])
+    await deliver('FIRST_MEMBER_REPORT'); await settled(id)
+    expect(m.create).toHaveBeenCalledOnce()
+    expect(original.sent.at(-1)).toBe('FIRST_MEMBER_REPORT')
+    closeV2Session(id)
+    await deliver('REPORT_AFTER_RECLAMATION'); await settled(id)
+    const resumed = m.sessions[1]
+    expect(resumed.options.reasoningEffort).toBe(expected)
+    expect(resumed.options.pickedReasoningEffort).toBe(effort)
+    expect(resumed.options.resume).toBeUndefined()
+    expect(resumed.sessionId).not.toBe(original.sessionId)
+    const input = String(resumed.sent[0])
+    expect(input).toContain('ORIGINAL_COLLABORATION_TASK')
+    expect(input).toContain('accepted-member-handle')
+    expect(input).toContain('FIRST_MEMBER_REPORT')
+    expect(input.match(/REPORT_AFTER_RECLAMATION/g)).toHaveLength(1)
+    expect(getConversationEngineState('space', id)?.binding).toMatchObject({ engineId: 'dsh', sessionId: resumed.sessionId })
+  })
+
+  it('uses the new conversation pin and recorded context when Dsh must rebuild', async () => {
+    const id = seeded('dsh')
+    await send(id, 'CONTINUE_WITH_HIGH_REASONING'); await settled(id)
+    const original = m.sessions[0]
+    updateConversation('space', id, { reasoningEffort: 'off' })
+    await createChatConversationSource().dispatchBatch!('space', id, [{ turnInput: 'NEW_MEMBER_REPORT', record: { content: 'NEW_MEMBER_REPORT', source: 'team-message', metadata: {} } }])
+    await settled(id)
+    const replacement = m.sessions[1]
+    expect(replacement.options).toMatchObject({ reasoningEffort: 'off', pickedReasoningEffort: 'off' })
+    expect(replacement.options.resume).toBeUndefined()
+    expect(replacement.sessionId).not.toBe(original.sessionId)
+    expect(String(replacement.sent[0])).toContain('ORIGINAL_USER_DECISION')
+    expect(String(replacement.sent[0])).toContain('CONTINUE_WITH_HIGH_REASONING')
+    expect(original.close).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a cold Dsh binding without readable history instead of resuming an empty session', async () => {
+    const { id } = createConversation('space', 'Source', undefined, { engineId: 'dsh' })
+    saveConversationEngineBinding('space', id, { version: 1, engineId: 'dsh', sessionId: 'unreadable-native-id' }, {})
+    await send(id, 'DO_NOT_LOSE_PRIOR_WORK')
+    expect(m.create).not.toHaveBeenCalled()
+    expect(getConversationEngineState('space', id)?.binding?.sessionId).toBe('unreadable-native-id')
+    expect(getConversation('space', id)?.messages.some(message => message.error?.includes('no readable history'))).toBe(true)
+  })
+
   it('shares warm-up with the first send and injects history exactly once', async () => {
     const id = seeded()
     expect((await updateThroughController('space', id, { engineOverride: 'halo' })).success).toBe(true)

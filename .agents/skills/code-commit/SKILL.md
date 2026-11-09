@@ -9,14 +9,22 @@ description: Must be invoked when the user asks to commit code, submit code, or 
 
 ### 1. Review Changes
 
-Run `git status` and `git diff` in the repository to understand all current changes.
+Run `git status` and `git diff` in the owning Git repository to understand all current changes. For SDK work, read repository `src/sdk/halo-sdk/AGENTS.md` and `src/sdk/halo-sdk/TESTING.md`; inspect its working tree explicitly while it remains a nested checkout. An ignored SDK path is not an empty change set.
 
 ### 2. Pre-commit Checks
 
-Start with the automated gate (2.1), then review all changed files by hand (2.2-2.4).
+Start with the checks for the actual scope (2.1), then review all changed files by hand (2.2-2.4).
 **If any issues are found, report them to the user and wait for confirmation before committing.**
 
 #### 2.1 Automated Gate (blocking)
+
+- **SDK-only:** run the required checks in `src/sdk/halo-sdk/TESTING.md` from the SDK directory; the host gate is not a substitute.
+- **Halo-only:** run the root gate below.
+- **Both:** run both scopes and the affected integration checks.
+
+All scopes use this commit workflow in the owning repository. The root gate does not yet invoke SDK suites; documentation does not add that coverage.
+
+Halo root gate:
 
 ```bash
 npm run precommit:gate

@@ -73,6 +73,7 @@ function seedTeam(store: TeamStore) {
     memberSourcing: 'manual', collabMode: 'structured', escalationRouting: 'user',
     status: 'idle', currentEpochId: null, createdAt: now, updatedAt: now,
   })
+  store.insertEpoch({ id: 'epoch-x', teamId: TEAM, startedAt: now, endedAt: null, endReason: null, summary: null, lifecycle: 'conversation' })
   store.addMember({
     teamId: TEAM, appId: LEAD, memberName: 'lead', role: 'Lead',
     isLead: true, aiProvisioned: false, addedAt: now,
@@ -144,6 +145,15 @@ describe('teamService.stopMember', () => {
 
     expect(res).toEqual({ ok: true, stopped: true })
     expect(ctx.stops).toEqual([{ appId: WORKER, teamId: TEAM, epochId: 'run-1' }])
+  })
+
+  it('refuses an unavailable work context before resolving the member or stopping execution', async () => {
+    const ctx = build(true)
+    dbManager = ctx.dbManager
+    seedTeam(ctx.store)
+    expect(await ctx.service.stopMember({ teamId: TEAM, appId: WORKER, epochId: 'missing-work' }))
+      .toEqual({ ok: false, stopped: false, reason: 'CONVERSATION_NOT_FOUND' })
+    expect(ctx.stops).toHaveLength(0)
   })
 
   it('refuses a member that is not on this team', async () => {

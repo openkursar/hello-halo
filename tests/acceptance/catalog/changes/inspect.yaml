@@ -11,6 +11,7 @@ basis: documented
 references:
   - src/main/services/git/DESIGN.md
   - tests/e2e/specs/changes-view.spec.ts
+  - tests/e2e/specs/changes-repositories.spec.ts
 promises:
   scopes:
     en: The change list and diff agree with the chosen comparison scope and repository.
@@ -27,7 +28,220 @@ promises:
   reply:
     en: A reply’s recorded edits open read-only and remain distinct from current staging operations.
     zh: 某轮回复记录的编辑以只读方式打开，与当前暂存操作区分。
+  repository-records:
+    en: Verified file discoveries, selected shallow repositories and explicitly opened paths remain known across application restarts, including when a path becomes unavailable. No repository, including the space's default repository, can be hidden or removed from the list. Previously hidden paths become selectable known entries again; remembering or recovering them does not modify project files or Git metadata.
+    zh: 已验证的文件发现、选中过的浅层仓库和主动打开的路径会跨重启持续记住，包括暂时不可用的路径。任何仓库（包括空间默认仓库）均不能从列表隐藏或移除。旧版隐藏的路径重新成为可选择的已知记录；记住或恢复这些记录不修改项目文件或 Git 元数据。
+  repository-selection:
+    en: The repository picker lists known paths without checking every repository. Only the selected repository is validated and loaded, so a slow unrelated path does not block my current changes. A failed selection stays selected and is marked unavailable; its path stays in the list while I switch to a healthy repository or retry.
+    zh: 仓库选择器只列出已知路径，不逐个检查仓库。仅校验和加载选中的仓库，慢的无关路径不阻塞当前变更。选择失败后保留选择并标记不可用；切换到健康仓库或重试时，该路径仍保留在列表中。
+  repository-picker:
+    en: Opening or canceling the picker leaves my selection, remembered paths and project files unchanged and does not recursively discover repositories. A parent folder or a repository outside the space is rejected without changing my current repository.
+    zh: 打开或取消选择器不改变当前选择、记住的路径或项目文件，也不递归发现仓库。普通父目录或空间外仓库会被拒绝，且不改变当前仓库。
 scenarios:
+  - id: changes.inspect.opened-file-repository
+    title:
+      en: Discover the nearest repository from an opened file
+      zh: 从已打开文件发现最近的仓库
+    verifies: [scopes]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    steps:
+      - en: With the outer repository already listed, open a file inside an ignored third-level independent repository, then return to Changes.
+        zh: 外层仓库已经列出时，打开被忽略的三级独立仓库内的文件，然后返回变更。
+    expected:
+      - en: The repository picker includes the deep repository; selecting it shows its own changes rather than the outer repository's.
+        zh: 仓库选择器包含深层仓库，选择后展示其自身修改而非外层修改。
+  - id: changes.inspect.deep-repositories
+    title:
+      en: Explicitly open and remember a deep repository
+      zh: 主动打开并记住深层仓库
+    verifies: [scopes, repository-records]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A space contains an ignored independent repository three directories deep and a second unopened deep repository.
+        zh: 空间包含位于三级目录、被外层忽略的独立仓库，以及另一个尚未打开的深层仓库。
+    steps:
+      - en: Use Open repository to choose the deep repository folder itself, then restart the application using the same isolated profile.
+        zh: 用主动打开仓库选择该深层仓库自身目录，然后使用同一隔离配置重启应用。
+      - en: Without opening a file in that repository, select its remembered path and inspect its changes.
+        zh: 不打开该仓库内的文件，选择记住的路径并查看其变更。
+      - en: Inspect the repository menu, switch to the outer repository, then restart the application again and reselect the deep repository.
+        zh: 检查仓库菜单，切换到外层仓库，然后再次重启并重新选择深层仓库。
+    expected:
+      - en: The explicit path is remembered across both restarts and selects only that repository's changes; the unopened deep repository is not added.
+        zh: 主动打开的路径在两次重启后均保留，选中后仅展示该仓库的变更；尚未打开的深层仓库不会加入列表。
+      - en: The menu offers no removal action for either the deep or default outer repository; switching repositories leaves both paths available without changing project files or Git metadata.
+        zh: 菜单对深层仓库及默认外层仓库均不提供移除操作；切换后两个路径仍可选择，项目文件和 Git 元数据均不变。
+  - id: changes.inspect.automatic-repository-records
+    title:
+      en: Keep automatically discovered repositories across switching and restart
+      zh: 自动发现的仓库在切换和重启后持续保留
+    verifies: [scopes, repository-records]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    variants:
+      discovery: [opened-file, shallow-child]
+    preconditions:
+      - en: An isolated space contains an ignored independent repository reached either by opening a file three directories deep or by shallow discovery of a direct child, plus another unopened deep repository.
+        zh: 隔离空间包含被忽略的独立仓库，分别通过打开三级目录内文件或浅扫描直接子目录发现；另有一个尚未打开的深层仓库。
+    steps:
+      - en: Trigger the selected automatic discovery route and select the resulting repository without using Open repository; for a shallow child, check the known path list before selecting it.
+        zh: 触发指定自动发现入口并选择发现的仓库，不使用主动打开仓库；浅层子仓库在选择前先检查已知路径列表。
+      - en: Close all canvas tabs and restart both application processes with the same profile; inspect the known path list before opening Changes or any file from that repository.
+        zh: 关闭所有画布标签，使用同一配置重启主进程和渲染进程；在打开变更或该仓库内任何文件前检查已知路径列表。
+      - en: Switch to the outer repository, open and reactivate the discovered repository's file, then return to Changes and inspect the repository menu.
+        zh: 切换到外层仓库，打开并再次激活已发现仓库内的文件，再返回变更并检查仓库菜单。
+      - en: Close the canvas and restart again; inspect the known path list before opening Changes, then select the remembered repository without using Open repository.
+        zh: 关闭画布并再次重启；在打开变更前检查已知路径列表，然后不使用主动打开仓库而直接选择记住的仓库。
+    expected:
+      - en: A shallow child is not remembered merely because it appears in the picker. After successful selection, automatic discovery is remembered across both restarts without reopening its file or relying on a fresh shallow scan; its own diff stays separate from the outer repository.
+        zh: 浅层子仓库不会仅因出现在选择器中就被记住。选择成功后自动发现会持久保存，两次重启后无需重开文件或依赖新一轮浅扫描便仍在列表中；其差异与外层仓库分离。
+      - en: Switching repositories and reactivating a file keep one remembered entry; neither it nor the default outer repository has a removal action, and the other unopened deep repository stays absent.
+        zh: 切换仓库和再次激活文件后只保留一条记住记录；它和默认外层仓库均不提供移除操作，另一个尚未打开的深层仓库始终不在列表中。
+      - en: The remembered repository remains selectable without an explicit reopen, and project files, ignored or untracked content, and Git metadata remain unchanged.
+        zh: 无需主动重新打开，记住的仓库始终可选；项目文件、被忽略或未跟踪内容及 Git 元数据均不变。
+  - id: changes.inspect.legacy-repository-records
+    title:
+      en: Restore previously hidden repositories from an older profile
+      zh: 从旧版配置恢复曾被隐藏的仓库
+    verifies: [scopes, repository-records, repository-selection]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated profile has version 2 repository records containing one remembered deep path and dismissed paths for another deep repository and the default outer repository.
+        zh: 隔离配置中的 version 2 仓库记录包含一个记住的深层路径，以及另一个深层仓库和默认外层仓库的 dismissed 路径。
+    steps:
+      - en: Restart with that profile and read the known paths before opening Changes or any file from those repositories.
+        zh: 使用该配置重启，在打开变更或这些仓库内任何文件前读取已知路径。
+      - en: Open Changes and select each deep repository from the menu without using Open repository; inspect the default repository's menu entry too.
+        zh: 打开变更，不使用主动打开仓库而从菜单逐个选择深层仓库，同时检查默认仓库的菜单记录。
+      - en: Explicitly open one additional repository, close the canvas and restart; inspect the remembered paths and select the formerly hidden repository again.
+        zh: 主动打开另一个仓库，关闭画布并重启；检查记住的路径并再次选择旧版隐藏的仓库。
+    expected:
+      - en: Both old lists are combined into selectable known paths on the first read, including the default repository, without reopening files or the repository folders. That read leaves the older record file unchanged.
+        zh: 首次读取即将旧版两个列表合并为可选择的已知路径，包括默认仓库；无需重开文件或仓库目录。该读取不改写旧记录文件。
+      - en: Each selected deep repository shows only its own changes, and the menu offers no removal action for any entry.
+        zh: 逐个选择深层仓库均仅展示各自变更，菜单对任何记录均不提供移除操作。
+      - en: Saving the additional path writes version 3 records with only workingDir and roots; the older remembered and hidden paths survive that write and another restart, with project files and Git metadata unchanged.
+        zh: 保存新增路径后写入 version 3 记录，除版本号外仅有 workingDir 和 roots；旧版记住及隐藏的路径在该写入和再次重启后均保留，项目文件和 Git 元数据不变。
+    notes:
+      en: The test seeds only its isolated profile and uses the real application reader and UI. It does not exercise record limits, version 1 input or malformed legacy data; those need separate storage-level verification.
+      zh: 测试仅预置自身隔离配置，使用真实应用读取及界面。不覆盖记录数量限制、version 1 输入或畸形旧数据；这些需要单独的存储层验证。
+  - id: changes.inspect.repository-boundary
+    title:
+      en: Reject invalid repository folders without losing the current selection
+      zh: 拒绝无效仓库目录且不丢失当前选择
+    verifies: [scopes, repository-picker]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    variants:
+      selection: [parent-folder, outside-repository]
+    preconditions:
+      - en: A healthy deep repository is selected; an ordinary parent folder and an independent repository outside the space are available as controlled picker results.
+        zh: 当前选中健康的深层仓库；测试选择框可返回普通父目录或空间外独立仓库。
+    steps:
+      - en: Choose the invalid folder with Open repository and dismiss the error.
+        zh: 使用主动打开仓库选择无效目录，然后关闭错误提示。
+    expected:
+      - en: A clear error explains that the repository folder must be inside the space; the selected repository, its diff and remembered paths remain unchanged.
+        zh: 清晰错误说明必须选择空间内的仓库目录；当前仓库、差异及记住的路径保持不变。
+      - en: Neither the project nor the rejected folder has any file or Git metadata changed.
+        zh: 项目及被拒绝目录内的文件和 Git 元数据均未改变。
+  - id: changes.inspect.repository-unavailable
+    title:
+      en: Validate a remembered path on selection and recover without losing repository access
+      zh: 选择时校验记住的路径，失败后仍能访问其他仓库并恢复
+    verifies: [scopes, repository-records, repository-selection]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A remembered deep repository is moved outside the space while the application is closed, leaving the outer repository healthy.
+        zh: 应用关闭时将记住的深层仓库移到空间外，外层仓库保持健康。
+    steps:
+      - en: Restart the application, load the outer repository's changes and open the repository picker.
+        zh: 重启应用，加载外层仓库变更并打开仓库选择器。
+      - en: Select the missing remembered path, inspect its failed state, then switch back to the healthy repository.
+        zh: 选择已缺失的记住路径，检查失败状态，再切回健康仓库。
+      - en: Select the failed entry again, restore its directory and choose Try again.
+        zh: 再次选择失败记录，恢复目录并点击重试。
+      - en: Switch away, move the directory again and select it to fail; switch to the healthy repository, close the canvas and restart once more while the path is still missing.
+        zh: 切换到其他仓库，再次移走目录并选择使其失败；切回健康仓库，关闭画布，保持路径缺失并再次重启。
+      - en: Select the retained missing path after restart, restore its directory and choose Try again.
+        zh: 重启后选择仍保留的缺失路径，恢复目录并点击重试。
+    expected:
+      - en: The missing path is initially listed and selectable without a precomputed unavailable label, and the healthy repository loads normally.
+        zh: 缺失路径起初仍按路径显示且可选择，不预先标记不可用；健康仓库正常加载。
+      - en: Only its failed selected load marks the entry unavailable; selection is retained, no stale diff is shown, and switching to a healthy repository remains possible without losing either path.
+        zh: 仅在选择加载失败后标记该记录不可用；保留选择且不展示旧差异，仍可切回健康仓库且不丢失任一路径。
+      - en: Retry after directory restoration loads its own changes and clears the unavailable state. Another failure, repository switch and restart keep the path remembered and selectable; neither it nor the default repository has a removal action, and retry works again after restoration.
+        zh: 恢复目录后重试可加载自身变更并清除不可用状态。再次失败、切换仓库和重启后，该路径仍记住且可选；它和默认仓库均不提供移除操作，再次恢复目录后仍可重试成功。
+      - en: Apart from the controlled directory moves, no project files or Git metadata are changed or deleted.
+        zh: 除测试控制的目录移动外，项目文件和 Git 元数据均未被修改或删除。
+  - id: changes.inspect.repository-picker-cancel
+    title:
+      en: Open and cancel repository pickers without changing the project
+      zh: 打开及取消仓库选择器不改变项目
+    verifies: [scopes, repository-picker]
+    platforms: [darwin, win32, linux]
+    profiles: [fast, regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    preconditions:
+      - en: A healthy remembered deep repository is selected and another deep repository has never been opened.
+        zh: 当前选中健康且已记住的深层仓库，另一个深层仓库从未打开。
+    steps:
+      - en: Open the repository menu and close it with Escape, then open the native folder picker and cancel it.
+        zh: 打开仓库菜单并按 Escape 关闭，再打开系统目录选择框并取消。
+    expected:
+      - en: The current repository, diff and remembered paths remain unchanged; the unopened deep repository is not added and no error is shown.
+        zh: 当前仓库、差异及记住的路径均不变；尚未打开的深层仓库不加入列表，也不显示错误。
+      - en: Escape restores focus to the picker, and project files and Git metadata remain byte-for-byte unchanged with their modes and file modification times preserved.
+        zh: Escape 将焦点还给选择器；项目文件及 Git 元数据逐字节不变，权限及文件修改时间保持不变。
+    notes:
+      en: The executable test checks the discovery result and filesystem snapshot; it does not instrument filesystem traversal or prove the absence of internal reads.
+      zh: 可执行测试检查发现结果和文件系统快照，不监测目录遍历，也不证明内部完全没有读取。
+  - id: changes.inspect.repository-unrelated-slow-path
+    title:
+      en: A slow unselected repository does not delay current changes
+      zh: 慢的未选中仓库不延迟当前变更
+    verifies: [repository-selection]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: planned
+    preconditions:
+      - en: The space has one healthy selected repository and a remembered unselected repository on a controllably slow filesystem.
+        zh: 空间有一个健康的选中仓库，以及位于可控慢文件系统上的记住但未选中仓库。
+    steps:
+      - en: Hold access to the unrelated path, then open Changes and its repository picker.
+        zh: 阻塞无关路径的访问，然后打开变更及仓库选择器。
+    expected:
+      - en: The known paths and selected repository's changes become usable while the unrelated path remains blocked; only selecting that path initiates its validation and load.
+        zh: 无关路径仍阻塞时，已知路径及选中仓库变更即可使用；仅选择该路径才开始校验和加载。
+    notes:
+      en: Missing-path recovery does not establish slow-filesystem isolation; this requires an independent real-application binding without replacing application handlers.
+      zh: 缺失路径恢复不证明慢文件系统隔离；本场景需独立的真实应用绑定，不可替换应用处理器。
   - id: changes.inspect.scopes
     title:
       en: Switch comparison scopes

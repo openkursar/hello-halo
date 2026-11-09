@@ -14,12 +14,23 @@ function body(req: Request): Record<string, unknown> {
 
 export function registerGitRoutes(app: Express): void {
   app.post('/api/git/repositories', async (req: Request, res: Response) => {
-    res.json(await gitController.listGitRepositories(body(req).spaceId))
+    const { spaceId, options } = body(req)
+    res.json(await gitController.listGitRepositories(spaceId, options))
+  })
+
+  app.post('/api/git/discover-repository', async (req: Request, res: Response) => {
+    const { spaceId, filePath } = body(req)
+    res.json(await gitController.discoverGitRepository(spaceId, filePath))
+  })
+
+  app.post('/api/git/open-repository', async (req: Request, res: Response) => {
+    const { spaceId, repoRoot } = body(req)
+    res.json(await gitController.openGitRepository(spaceId, repoRoot))
   })
 
   app.post('/api/git/status', async (req: Request, res: Response) => {
-    const { spaceId, repoRoot } = body(req)
-    res.json(await gitController.getGitStatus(spaceId, repoRoot))
+    const { spaceId, repoRoot, remember } = body(req)
+    res.json(await gitController.getGitStatus(spaceId, repoRoot, remember))
   })
 
   app.post('/api/git/changes', async (req: Request, res: Response) => {

@@ -235,12 +235,10 @@ describe('what a member added later holds for other computers', () => {
   })
 
   it('holds a lead provisioned after a saved collaboration was shared like any late member', async () => {
-    const before = await ctx.service.createCollab({
-      owningSpaceId: SPACE, conversationId: 'conv-1', name: 'Crew', goal: 'Compare',
-      modelSelection: { modelSourceId: 'source', modelId: 'model' },
-      members: [{ memberName: 'researcher', role: 'Researcher', responsibility: 'Collect sources' }],
-    })
-    await ctx.service.completeCollab(before.team.id, 'done')
+    const before = await ctx.service.ensureCollaboration({ owningSpaceId: SPACE, conversationId: 'conv-1', title: 'Crew' })
+    ctx.store.updateTeamFields(before.team.id, { goal: 'Compare' })
+    await ctx.service.addMember(before.team.id, { appId: 'existing-1', memberName: 'researcher', role: 'Researcher' })
+    await ctx.service.archiveConversation(before.team.id, before.epochId)
     ctx.store.clearEphemeral(before.team.id)
     invite(before.team.id)
 

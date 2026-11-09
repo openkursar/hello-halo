@@ -6,7 +6,7 @@ vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text
 vi.mock('../../../src/renderer/stores/chat.store', () => ({ holdOpenThoughts: () => () => {} }))
 vi.mock('../../../src/renderer/components/chat/ArrivalCard', () => ({ ArrivalCard: () => null, arrivalIcon: () => () => null }))
 vi.mock('../../../src/renderer/components/chat/tool-result', () => ({ ToolResultViewer: () => null }))
-vi.mock('../../../src/renderer/components/chat/SubAgentTimeline', () => ({ SubAgentTimeline: () => null }))
+vi.mock('../../../src/renderer/components/chat/NestedToolTimeline', () => ({ NestedToolTimeline: () => null }))
 vi.mock('../../../src/renderer/components/tool/TodoCard', () => ({ TodoCard: () => null }))
 
 import { ThoughtPanel } from '../../../src/renderer/components/chat/ThoughtPanel'

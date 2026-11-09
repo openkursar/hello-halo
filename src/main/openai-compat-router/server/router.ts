@@ -7,8 +7,11 @@
 import express, { type Express, type Request, type Response } from 'express'
 import type { AnthropicRequest } from '../types'
 import { decodeBackendConfig, DELEGATED_ROUTING_HEADER } from '../utils'
+import { GROUP_MODEL_ID } from '../../../shared/types/ai-sources'
 import { handleMessagesRequest, handleCountTokensRequest } from './request-handler'
 import { handleResponsesRequest } from './codex-responses-handler'
+import { handleGroupMessagesRequest } from './group-dispatch'
+import { resolveGroupPlan } from './request-groups'
 import { withCurrentCredentials } from './request-credentials'
 
 export interface RouterOptions {
@@ -71,12 +74,6 @@ export function createApp(options: RouterOptions = {}): Express {
 
     console.log(`[Router] in_detail endpoint=/v1/messages method=${req.method} url=${req.url} from=${req.ip || ''}:${req.socket?.remotePort ?? ''} backend_host=${(() => { try { return new URL(decodedConfig.url).host } catch { return decodedConfig.url } })()} model_override=${decodedConfig.model || ''} api_type=${decodedConfig.apiType || ''} ts=${Date.now()}`)
 
-    const credentialed = await withCurrentCredentials(decodedConfig)
-    if ('error' in credentialed) {
-      return res.status(401).json({ type: 'error', error: { type: 'authentication_error', message: credentialed.error } })
-    }
-
-    // Handle the request
     // Forward all SDK headers for transparent passthrough, excluding hop-by-hop
     // headers and those that will be overridden by fetchAnthropicUpstream.
     // Upstream may validate any header at any time — we must not silently drop them.
@@ -95,6 +92,28 @@ export function createApp(options: RouterOptions = {}): Express {
 
     const rawBody = (req as any).rawBody as Buffer | undefined
 
+    // A load-balancing group is named by id in the session's config; each member
+    // brings its own account's credential, so the session's own is not resolved.
+    const groupPlan = decodedConfig.sourceId ? resolveGroupPlan(decodedConfig.sourceId) : null
+    if (groupPlan) {
+      return handleGroupMessagesRequest(anthropicRequest, decodedConfig, groupPlan, res, {
+        debug, timeoutMs, sdkHeaders, queryString, rawBody
+      })
+    }
+    if (decodedConfig.model === GROUP_MODEL_ID) {
+      console.warn(`[Router] group_missing source=${decodedConfig.sourceId ?? ''}: the group this session names no longer exists`)
+      return res.status(404).json({
+        type: 'error',
+        error: { type: 'not_found_error', message: 'This load-balancing group no longer exists. Choose another model.' }
+      })
+    }
+
+    const credentialed = await withCurrentCredentials(decodedConfig)
+    if ('error' in credentialed) {
+      return res.status(401).json({ type: 'error', error: { type: 'authentication_error', message: credentialed.error } })
+    }
+
+    // Handle the request
     await handleMessagesRequest(anthropicRequest, credentialed.config, res, {
       debug, timeoutMs, sdkHeaders, queryString, rawBody
     })
@@ -124,6 +143,13 @@ export function createApp(options: RouterOptions = {}): Express {
     }
 
     console.log(`[Router] in_detail endpoint=/v1/responses method=${req.method} url=${req.url} from=${req.ip || ''}:${req.socket?.remotePort ?? ''} backend_host=${(() => { try { return new URL(decodedConfig.url).host } catch { return decodedConfig.url } })()} model_override=${decodedConfig.model || ''} api_type=${decodedConfig.apiType || ''} ts=${Date.now()}`)
+
+    if (decodedConfig.sourceId && (resolveGroupPlan(decodedConfig.sourceId) || decodedConfig.model === GROUP_MODEL_ID)) {
+      console.warn(`[Router] group_refused endpoint=/v1/responses source=${decodedConfig.sourceId}: groups are served on the Messages endpoint only`)
+      return res.status(400).json({
+        error: { type: 'invalid_request_error', message: 'Load-balancing groups are not available on this endpoint.' }
+      })
+    }
 
     const credentialed = await withCurrentCredentials(decodedConfig)
     if ('error' in credentialed) {

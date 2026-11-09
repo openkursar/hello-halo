@@ -40,9 +40,25 @@ export {
   getRouterInfo,
   isRouterRunning,
   createApp,
-  setRequestCredentialResolver
+  setRequestCredentialResolver,
+  setGroupPlanResolver,
+  onGroupRouteFact,
+  getGroupHealth,
+  clearGroupRest,
+  resetGroupSource,
+  getGroupSessionMember,
+  forgetGroup
 } from './server'
-export type { RequestCredentials, RequestCredentialResolver } from './server'
+export type {
+  RequestCredentials,
+  RequestCredentialResolver,
+  GroupPlan,
+  GroupMemberPlan,
+  GroupPlanResolver,
+  GroupRouteFact,
+  GroupRouteMember
+} from './server'
+export type { MemberHealth, MemberRef, GroupShape } from './balancing'
 
 // ============================================================================
 // Converters

@@ -3,10 +3,8 @@
  * back the manual page for a capability group; execution is plain curl through
  * the Bash tool, so nothing new is added to the execution surface.
  *
- * Loaded as an on-demand toolset (`toolsets/registry.ts`), which is what keeps
- * the manual, the `HALO_API_*` credentials and the usage guide from ever
- * disagreeing about whether a session has this capability: all three derive
- * from the same toolset being enabled.
+ * Core space conversations receive the reference, usage guide and scoped
+ * runtime credentials together, without a manual enablement step.
  *
  * This module reads generated files and nothing else. It imports no
  * controller, route or service: every coupling to the HTTP surface happens at
@@ -20,10 +18,7 @@ import { createSdkMcpServer, tool } from '../agent/resolved-sdk'
 import { API_REF_GROUP_IDS, API_REF_GROUPS } from './groups'
 
 /**
- * Toolset id, MCP server name, and — for digital humans — the permission id.
- * Exported so the switch that loads the tool, the switch that injects the
- * `HALO_API_*` credentials and the switch that appends the usage guide are
- * literally the same identifier rather than three copies of a string.
+ * Shared identity for the reference server and caller-scoped execution policy.
  */
 export const HALO_API_TOOLSET_ID = 'halo-api-ref'
 
@@ -64,7 +59,7 @@ const GROUP_PARAM_DESCRIPTION = API_REF_GROUP_IDS.map(
 ).join('\n')
 
 /**
- * Appended to the system prompt only while this toolset is enabled
+ * Appended to the system prompt wherever this core capability is supplied
  * (`toolsets/capability-index.ts`). It is the counterpart of the tool
  * description: that one is read when the model is choosing a tool, this one
  * when it is deciding whether the task is reachable at all.

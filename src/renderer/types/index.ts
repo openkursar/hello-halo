@@ -38,6 +38,9 @@ export { DEFAULT_MODEL, getCurrentModelName, hasAnyAISource };
 export type {
   AISource,
   AISourcesConfig,
+  AIGroup,
+  AIGroupMember,
+  AIGroupStrategy,
   AISourceUser,
   AISourceType,
   AuthType,
@@ -75,6 +78,8 @@ export {
   findWithdrawnModel,
   activeModelReplacement,
   getSourceById,
+  getGroupById,
+  GROUP_MODEL_ID,
   getSourceAccountName,
   isSourceConfigured,
   createSource,
@@ -568,7 +573,6 @@ export interface EngineCapabilities {
     shellHeuristics: boolean;
   };
   todo: { states: TodoState[]; hasActiveForm: boolean };
-  subAgent: { model: 'declarative' | 'imperative' | 'none'; visibleLifecycle: boolean };
   features: {
     skills: boolean; mcp: boolean; hooks: boolean; permissionRules: boolean;
     sessionResume: boolean; sessionFork: boolean; interrupt: boolean;

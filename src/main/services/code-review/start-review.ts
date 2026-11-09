@@ -9,7 +9,7 @@
 
 import { getConfig } from '../../foundation/config.service'
 import { createConversation } from '../conversation.service'
-import { closeToolset, getToolset, getWorkingDir, openToolset, sendMessage, resolveDefaultEngine } from '../agent'
+import { closeToolset, getToolset, getWorkingDir, openToolset, sendMessage, resolveDefaultEngine, isCollaborationEnabled } from '../agent'
 import { createSnapshot, getChangeList, isGitError, resolveRepository } from '../git'
 import { TEAM_MCP_SERVER_NAME } from '../../../shared/apps/team-types'
 import type {
@@ -28,11 +28,10 @@ const LOG_TAG = '[CodeReview]'
 /** Whether a team review can run now. Cheap: reads the toolset registry and config only. */
 export function getReviewAvailability(): CodeReviewAvailability {
   // Registered by the apps runtime at startup; absent until it is up, or if it failed.
-  if (!getToolset(TEAM_MCP_SERVER_NAME)) return { team: { available: false, reason: 'team-unavailable' } }
-  // No setting offers this, but a hand-edited config can withhold the team tools,
-  // and a review conversation opening the toolset would not get past it.
+  if (!getToolset(TEAM_MCP_SERVER_NAME) || !isCollaborationEnabled()) return { team: { available: false, reason: 'team-unavailable' } }
+  // Whole-server exclusions still apply independently of delegation permission.
   const disabled = getConfig().agent?.disabledTools ?? []
-  if (disabled.some(tool => tool.startsWith(`mcp__${TEAM_MCP_SERVER_NAME}`))) {
+  if (disabled.some(tool => tool === `mcp__${TEAM_MCP_SERVER_NAME}` || tool === `mcp__${TEAM_MCP_SERVER_NAME}__*`)) {
     return { team: { available: false, reason: 'team-unavailable' } }
   }
   return { team: { available: true } }

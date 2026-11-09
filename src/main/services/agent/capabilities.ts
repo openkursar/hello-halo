@@ -4,7 +4,7 @@
  *
  * The renderer reads these flags via `agent:get-engine-capabilities` and uses
  * them to drive UI affordances (e.g. show "thinking..." placeholder when
- * reasoning is final-only, collapse subagent details when subagent model is
+ * reasoning is final-only, adapt tool rendering when the tool representation is
  * imperative). This keeps UI components engine-agnostic — they branch on
  * capability flags, never on engineId.
  *
@@ -93,17 +93,6 @@ export interface EngineCapabilities {
     /** Whether todos carry an `activeForm` (present continuous label) field. */
     hasActiveForm: boolean
   }
-  subAgent: {
-    /**
-     * - `declarative`: engine surfaces structured Task/Agent lifecycle (CC).
-     * - `imperative`: engine drives sub-tasks via its own runtime; Halo only
-     *   sees a flat tool stream. UI collapses to a compact card.
-     * - `none`: no subagents.
-     */
-    model: 'declarative' | 'imperative' | 'none'
-    /** Whether sub-agent task lifecycle events are observable from outside. */
-    visibleLifecycle: boolean
-  }
   prompt: {
     /**
      * The runtime writes its own agent guidance from the tools it actually
@@ -172,14 +161,13 @@ export const ANTHROPIC_CAPABILITIES: EngineCapabilities = {
   tools: {
     native: [
       'Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob',
-      'WebSearch', 'WebFetch', 'TodoWrite', 'Task',
+      'WebSearch', 'WebFetch', 'TodoWrite',
       'Skill', 'AskUserQuestion', 'NotebookEdit', 'Mcp',
     ],
     synthetic: [],
     shellHeuristics: true,
   },
   todo: { states: ['pending', 'in_progress', 'completed'], hasActiveForm: true },
-  subAgent: { model: 'declarative', visibleLifecycle: true },
   prompt: { nativeAgentGuidance: false },
   features: {
     skills: true,

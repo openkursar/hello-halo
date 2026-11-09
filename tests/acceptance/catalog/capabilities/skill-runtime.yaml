@@ -8,7 +8,7 @@ references:
   - tests/acceptance/skills-requirements.md
 promises:
   use: Use preserves conversation drafts and waits for sending; the SDK loads the selected effective copy and its relative resources rather than another namesake.
-  disable: Disabling preserves files and removes that copy consistently from new SDK catalogs, skill calls, commands and subagents without interrupting existing work.
+  disable: Disabling preserves files and removes that copy consistently from new SDK catalogs, skill calls, commands and collaborators without interrupting existing work.
   content: Current saved files govern new work; old context may remain, explicit reload may read new content and missing old paths cannot silently resolve to a different namesake.
   engines: Every skill in the shared skill folders works on the actual session engine without a notice, a forced engine switch, a configuration change or a concealed basic-path regression.
   management: AI and UI management share file truth, scope, precedence and authorization, and diagnose real availability without invented certainty or background scans.
@@ -45,14 +45,14 @@ scenarios:
     automation: planned
     requirements: [halo-sdk]
     variants:
-      entry: [space-chat, person-chat, im-session, manual-run, scheduled-run, team-member, subagent]
+      entry: [space-chat, person-chat, im-session, manual-run, scheduled-run, team-member, collaborator]
     steps:
       - Keep existing work active, disable one copy, compare all package bytes, start fresh work through the entry, inspect catalog/tool/command requests, restart and reenable.
     expected:
       - New sessions consistently omit disabled copies with no auto-scan bypass; relative applicability follows the entry's environment. Reenable restores the effective copy.
       - Files remain unchanged; restart and content update do not reenable. Existing/reused sessions are not interrupted and may retain old context.
       - 'Explicit authorized file reading is still possible: disable is not a sandbox or a grant of extra permissions.'
-    notes: All required entries need their own actual invocation evidence; one space-chat test cannot establish automation, team or subagent behavior. Controlled IM fixtures must never use personal recipients.
+    notes: All required entries need their own actual invocation evidence; one space-chat test cannot establish automation, team or collaborator behavior. Controlled IM fixtures must never use personal recipients.
   - id: capabilities.skill-runtime.content
     title: Observe saved changes without promising frozen old-session content
     verifies: [content, use]

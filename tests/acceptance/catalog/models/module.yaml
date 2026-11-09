@@ -8,6 +8,11 @@ description:
   zh: 配置账户，选择兼容的模型与执行引擎。
 paths:
   - src/renderer/components/ai-config/**
+  - src/renderer/components/ai-groups/**
+  - src/renderer/stores/ai-group-route.store.ts
+  - src/shared/ai-groups.ts
+  - src/main/controllers/ai-groups.controller.ts
+  - src/main/http/routes/ai-groups.routes.ts
   - src/renderer/components/settings/AISourcesSection.tsx
   - src/renderer/components/settings/ModelConfigPanel.tsx
   - src/main/services/ai-sources/**
@@ -16,6 +21,8 @@ paths:
   - src/renderer/components/settings/ProviderSelector.tsx
   - src/main/services/api-validator.service.ts
   - src/renderer/utils/model-fetch-error.ts
+  - src/renderer/utils/endpoint-identity.ts
+  - src/renderer/utils/request-gate.ts
   - src/shared/data/model-capabilities.json
   - src/shared/constants/model-capabilities.ts
   - src/shared/constants/model-runtime-limits.ts

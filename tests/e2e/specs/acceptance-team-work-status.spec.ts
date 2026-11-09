@@ -82,7 +82,7 @@ async function expectSwitcher(page: Page, status: 'Working' | 'Standing by') {
 async function sendInTeamView(page: Page, memberAppId: string) {
   await openTeamCard(page, teamName)
   const room = page.getByRole('region', { name: 'Task room', exact: true })
-  const target = room.getByRole('combobox', { name: 'Choose which of your digital humans to talk to', exact: true })
+  const target = room.getByRole('combobox', { name: 'Choose who to talk to', exact: true })
   await expect(room.locator('textarea')).toBeVisible()
   await target.selectOption(memberAppId)
   await expect(target).toHaveValue(memberAppId)

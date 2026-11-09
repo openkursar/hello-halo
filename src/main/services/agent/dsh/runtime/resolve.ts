@@ -35,7 +35,7 @@ import { getHeadlessElectronPath } from '../../helpers'
  * settles plugin entries independently: a Node that cannot import one plugin
  * still completes the handshake and serves a quietly smaller tool set instead
  * of failing. Node 20.16 advertised 12 of the 17 tools that way, losing
- * read/write/edit/todo_write/subagent with no error the user could see.
+ * read/write/edit/todo_write with no error the user could see.
  */
 const MIN_NODE_VERSION: readonly [number, number] = [22, 19]
 

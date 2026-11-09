@@ -14,6 +14,7 @@ export interface SkillMetadata {
   description: string
   argumentHint?: string
   whenToUse?: string
+  executionContext?: string
   error?: string
 }
 
@@ -31,7 +32,7 @@ export function parseSkillMetadata(content: string, fallbackName: string): Skill
   if (match) {
     const doc = parseDocument(match[1], { schema: 'failsafe', logLevel: 'silent' })
     if (doc.errors.length || !isMap(doc.contents)) return { name: fallbackName, description: '', error: 'The skill header is not valid YAML.' }
-    fields = Object.fromEntries(['name', 'description', 'argument-hint', 'whenToUse'].flatMap(key => {
+    fields = Object.fromEntries(['name', 'description', 'argument-hint', 'whenToUse', 'context'].flatMap(key => {
       const value = doc.get(key)
       return typeof value === 'string' ? [[key, value.trim()]] : []
     }))
@@ -43,7 +44,8 @@ export function parseSkillMetadata(content: string, fallbackName: string): Skill
   const description = fields.description || body.split(/\r?\n/).find(line => line.trim() && !line.trim().startsWith('#'))?.trim() || ''
   const error = !name || name.length > 128 || name.toLowerCase() === 'list' || /[\\/\u0000-\u001f<>"&]/.test(name)
     ? 'The skill name is invalid or reserved.' : undefined
-  return { name, description, argumentHint: fields['argument-hint'], whenToUse: fields.whenToUse, ...(error ? { error } : {}) }
+  return { name, description, argumentHint: fields['argument-hint'], whenToUse: fields.whenToUse,
+    ...(fields.context ? { executionContext: fields.context } : {}), ...(error ? { error } : {}) }
 }
 
 export function readSkillMetadata(filePath: string): SkillMetadata {

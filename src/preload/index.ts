@@ -46,6 +46,8 @@ import { gitRpc } from '../shared/rpc/contracts/git.contract'
 import { browserRpc } from '../shared/rpc/contracts/browser.contract'
 import { codeReviewRpc } from '../shared/rpc/contracts/code-review.contract'
 import { configRpc } from '../shared/rpc/contracts/config.contract'
+import { aiGroupsRpc } from '../shared/rpc/contracts/ai-groups.contract'
+import { GROUP_ROUTE_EVENT, type GroupRouteInfo } from '../shared/types/ai-groups-runtime'
 import { agentRpc } from '../shared/rpc/contracts/agent.contract'
 import { terminalRpc } from '../shared/rpc/contracts/terminal.contract'
 import { artifactRpc } from '../shared/rpc/contracts/artifact.contract'
@@ -64,6 +66,8 @@ import type {
   TeamEdge,
   ProposedMember,
   TeamRunTrigger,
+  TeamRunResult,
+  EpochRoster,
   TeamTriggerInput,
 } from '../shared/apps/team-types'
 import { taskRpc } from '../shared/rpc/contracts/task.contract'
@@ -155,6 +159,15 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   aiSourcesAddSource: (source: unknown) => Promise<IpcResponse>
   aiSourcesUpdateSource: (sourceId: string, updates: unknown) => Promise<IpcResponse>
   aiSourcesDeleteSource: (sourceId: string) => Promise<IpcResponse>
+
+  // Load-balancing groups
+  aiGroupsCreate: RpcClient<typeof aiGroupsRpc>['aiGroupsCreate']
+  aiGroupsUpdate: RpcClient<typeof aiGroupsRpc>['aiGroupsUpdate']
+  aiGroupsDelete: RpcClient<typeof aiGroupsRpc>['aiGroupsDelete']
+  aiGroupsHealth: RpcClient<typeof aiGroupsRpc>['aiGroupsHealth']
+  aiGroupsReleaseRest: RpcClient<typeof aiGroupsRpc>['aiGroupsReleaseRest']
+  aiGroupsRoutes: RpcClient<typeof aiGroupsRpc>['aiGroupsRoutes']
+  onAIGroupRoute: (callback: (data: GroupRouteInfo) => void) => () => void
 
   // Space
   getHaloSpace: () => Promise<IpcResponse>
@@ -677,7 +690,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   teamRemoveMember: (input: { teamId: string; appId: string }) => Promise<IpcResponse>
   teamSetEdges: (input: { teamId: string; edges: TeamEdge[] }) => Promise<IpcResponse>
   teamProposeMembers: (input: { goal: string; owningSpaceId: string }) => Promise<IpcResponse>
-  teamRun: (teamId: string, trigger?: TeamRunTrigger) => Promise<IpcResponse>
+  teamRun: (teamId: string, trigger?: TeamRunTrigger, instruction?: string) => Promise<IpcResponse<TeamRunResult>>
   teamPause: (teamId: string) => Promise<IpcResponse>
   teamGetDetail: (teamId: string) => Promise<IpcResponse>
   /** Triggers (team as a first-class triggerable entity). */
@@ -696,6 +709,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   teamListEpochs: (teamId: string) => Promise<IpcResponse>
   /** Tasks/findings/members snapshot for one past run. */
   teamEpochBoard: (input: { teamId: string; epochId: string }) => Promise<IpcResponse>
+  teamEpochRoster: (input: { teamId: string; epochId: string }) => Promise<IpcResponse<EpochRoster | null>>
   /** Products produced during one specific run. */
   teamEpochArtifacts: (input: { teamId: string; epochId: string }) => Promise<IpcResponse>
   teamToolAudit: (input: { teamId: string; appId?: string; limit?: number }) => Promise<IpcResponse>
@@ -806,6 +820,8 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
 
   // Git (changes view): repositories of a space, status, change lists, writes
   gitListRepositories: GitRpcClient['gitListRepositories']
+  gitDiscoverRepository: GitRpcClient['gitDiscoverRepository']
+  gitOpenRepository: GitRpcClient['gitOpenRepository']
   gitGetStatus: GitRpcClient['gitGetStatus']
   gitGetChanges: GitRpcClient['gitGetChanges']
   gitGetFileContents: GitRpcClient['gitGetFileContents']
@@ -908,6 +924,8 @@ const api: HaloAPI = {
 
   // Config + AI Sources CRUD (derived from configRpc contract)
   ...bindRpc(configRpc),
+  ...bindRpc(aiGroupsRpc),
+  onAIGroupRoute: (callback) => createEventListener(GROUP_ROUTE_EVENT, callback),
   onCredentialDecryptFailed: (callback) => createEventListener('credential:decrypt-failed', callback),
   onModelCatalogChanged: (callback) => createEventListener('ai-sources:catalog-changed', callback),
 
@@ -1130,7 +1148,7 @@ const api: HaloAPI = {
   teamRemoveMember: (input) => ipcRenderer.invoke(TEAM_IPC.removeMember, input),
   teamSetEdges: (input) => ipcRenderer.invoke(TEAM_IPC.setEdges, input),
   teamProposeMembers: (input) => ipcRenderer.invoke(TEAM_IPC.proposeMembers, input),
-  teamRun: (teamId, trigger) => ipcRenderer.invoke(TEAM_IPC.run, teamId, trigger),
+  teamRun: (teamId, trigger, instruction) => ipcRenderer.invoke(TEAM_IPC.run, teamId, trigger, instruction),
   teamPause: (teamId) => ipcRenderer.invoke(TEAM_IPC.pause, teamId),
   teamGetDetail: (teamId) => ipcRenderer.invoke(TEAM_IPC.getDetail, teamId),
   teamListArtifacts: (teamId) => ipcRenderer.invoke(TEAM_IPC.listArtifacts, teamId),
@@ -1141,6 +1159,7 @@ const api: HaloAPI = {
   teamChatMessages: (input) => ipcRenderer.invoke('team:chat-messages', input),
   teamListEpochs: (teamId) => ipcRenderer.invoke('team:list-epochs', teamId),
   teamEpochBoard: (input) => ipcRenderer.invoke('team:epoch-board', input),
+  teamEpochRoster: (input) => ipcRenderer.invoke('team:epoch-roster', input),
   teamEpochArtifacts: (input) => ipcRenderer.invoke('team:epoch-artifacts', input),
   teamToolAudit: (input) => ipcRenderer.invoke('team:tool-audit', input),
   teamGenerateInvite: (input) => ipcRenderer.invoke(TEAM_IPC.generateInvite, input),

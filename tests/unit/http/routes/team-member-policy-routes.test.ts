@@ -56,6 +56,7 @@ const add = (body: unknown) => send('POST', '/api/teams/team-1/members', body)
 const rewrite = (body: unknown) => send('PATCH', '/api/teams/team-1/members/app-1', body)
 
 const MALFORMED: [string, unknown][] = [
+  ['a non-boolean collaboration permission', { allowCollaboration: 'yes' }],
   ['a list', ['Read']],
   ['a tool list written as one string', { allowedTools: 'Read,Write' }],
   ['a list holding a non-string', { allowedTools: ['Read', 7] }],

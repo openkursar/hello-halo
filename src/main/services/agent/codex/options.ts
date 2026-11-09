@@ -208,20 +208,8 @@ async function buildThreadConfig(
     tools: {
       web_search: hasMcpServer(sdkOptions.mcpServers, 'web-search'),
     },
-    // codex's spawn_agent has two schema variants. v1 (legacy) exposes BOTH
-    // `message` and `items` and rejects when both are populated, so a model
-    // that defensively passes `items: []` alongside a real `message` trips
-    // the "Provide either message or items, but not both" validator (see
-    // codex-rs/core/src/tools/handlers/multi_agents_common.rs:170). v2 keeps
-    // only `message`, matching how Halo wants sub-agents invoked. Selecting
-    // v2 also activates the modern collab-tools surface (wait_agent /
-    // close_agent / send_input / resume_agent) under `Feature::MultiAgentV2`
-    // (codex-rs/tools/src/tool_config.rs:179-180,257). The feature ships
-    // disabled by default in codex (`default_enabled: false`) so we MUST
-    // opt in via thread/start config.
-    features: {
-      multi_agent_v2: true,
-    },
+    // Halo owns collaboration for every engine, including when a user config enables it.
+    features: { multi_agent: false, multi_agent_v2: false },
   }
 
   if (Object.keys(codexMcpServers).length > 0) {

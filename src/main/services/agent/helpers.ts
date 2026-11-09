@@ -10,7 +10,7 @@ import { join, dirname, basename } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { getTempSpacePath, getCredentialsGeneration } from '../../foundation/config.service'
 import { getSpace } from '../space.service'
-import { getAISourceManager } from '../ai-sources'
+import { getAISourceManager, getGroup } from '../ai-sources'
 import { getAppManager } from '../app-bridge'
 import type { McpSpec } from '../../apps/spec/schema'
 import type { InstalledApp } from '../../../shared/apps/app-types'
@@ -25,6 +25,8 @@ import { sanitizeCatalogModelCapability } from '../../../shared/model-catalog'
 import { isMcpCommandBlocked } from '../security-policy'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
 import { assertDelegatedAuthReady } from './cli-auth'
+import { resolveGroupCredentials } from './group-credentials'
+import { markInstalledMcpContext } from './tool-discovery'
 
 // ============================================
 // Headless Electron Path Management
@@ -227,7 +229,8 @@ export async function getApiCredentials(): Promise<ApiCredentials> {
 
 /**
  * Credentials for a stored selection — a conversation's pin or a digital
- * human's override. A selection naming an account that no longer exists is
+ * human's override; a group's are the one stand-in the router recognizes. A
+ * selection naming an account or group that no longer exists is
  * the same as no selection and runs on the current global account: signing
  * out removes the account and signing in again creates a new one, so
  * everything pinned to the old account would otherwise be stuck forever. An
@@ -243,6 +246,14 @@ export async function getApiCredentialsForSelection(
   const sourceId = selection?.modelSourceId
   if (sourceId) {
     if (manager.getSourceConfig(sourceId)) return resolveSourceCredentials(manager, sourceId, selection.modelId)
+    const group = getGroup(sourceId)
+    if (group) {
+      return resolveGroupCredentials(group, {
+        readSource: id => manager.getSourceConfig(id),
+        capabilitiesOf: resolveCapabilitiesFromSource,
+        credentialsGeneration: id => getCredentialsGeneration(id),
+      })
+    }
     console.warn(`[AgentService] Selected source ${sourceId} no longer exists; using the current source`)
   }
   return getApiCredentials()
@@ -424,7 +435,7 @@ export function appToSdkServerConfig(app: InstalledApp): Record<string, unknown>
     serverConfig.headers = mcpServer.headers
   }
 
-  return serverConfig
+  return markInstalledMcpContext(serverConfig, app)
 }
 
 /**

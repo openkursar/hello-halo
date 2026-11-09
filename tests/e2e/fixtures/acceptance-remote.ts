@@ -79,7 +79,8 @@ export const test = base.extend<RemoteFixtures>({
         async login(code = status.server.token!) {
           await page.getByPlaceholder('Access Code', { exact: true }).fill(code)
           await page.getByRole('button', { name: 'Connect', exact: true }).click()
-          await expect(page.getByRole('button', { name: 'Conversation', exact: true }).first()).toBeVisible({ timeout: 30000 })
+          await expect(page.getByRole('button', { name: 'Conversation', exact: true })
+            .or(page.getByRole('button', { name: 'Navigate', exact: true })).first()).toBeVisible({ timeout: 30000 })
           expect(await page.evaluate(() => 'halo' in globalThis)).toBe(false)
         },
         disconnect: () => link!.disconnect(),

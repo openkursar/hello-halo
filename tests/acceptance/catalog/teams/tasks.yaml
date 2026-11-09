@@ -25,6 +25,9 @@ promises:
   lifetime:
     en: Archived tasks remain readable and reopen only on a human request.
     zh: 归档任务仍可读，仅在人的请求下重新开启。
+  optional-goal:
+    en: I can assemble a standing team without a standing goal and give it instructions when starting work.
+    zh: 我能在不设常驻目标的情况下组建持久团队，开始工作时再给出指示。
   layout:
     en: The task room and its drawers remain usable in narrow layouts and both themes.
     zh: 任务房间及抽屉在窄屏和两种主题中仍可使用。
@@ -302,3 +305,57 @@ scenarios:
     expected:
       - en: The eventual rejection restores the original text in the active matching composer.
         zh: 最终拒绝将原文字恢复到匹配的活动输入框。
+
+  - id: teams.tasks.temporary-participants
+    title:
+      en: Keep temporary collaborators inside their task
+      zh: 临时协作者只出现在所属任务中
+    verifies: [scope, draft, ownership, layout]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated renderer fixture provides a standing team with two tasks, local and remote temporary participants in only the first task, and a pending local participant decision.
+        zh: 隔离界面数据提供一个持久团队和两个任务，只有第一个任务含本地及远端临时参与者，并含本地参与者待确认事项。
+    steps:
+      - en: Select each temporary participant, inspect its history, switch tasks and return with an unsent draft.
+        zh: 选择各临时参与者并读取历史，带未发送草稿切换任务再返回。
+      - en: Inspect a temporary participant's activity, open standing team settings, then use the member drawer at mobile width in both themes.
+        zh: 查看临时参与者活动并打开常驻团队设置，再在手机宽度下使用两种主题的成员抽屉。
+      - en: Deliver a burst of member status notifications while observing reads for the selected work.
+        zh: 连续投递成员状态通知，并观察当前任务的读取请求。
+    expected:
+      - en: Temporary participants and their histories appear only in their task; a local participant can be addressed and its decision is reachable, while a remote participant remains read-only.
+        zh: 临时参与者及历史只出现在所属任务；可向本地参与者发消息并看到其待确认事项，远端参与者保持只读。
+      - en: The task/member draft survives switching. Temporary participants are absent from standing member settings, and the narrow layout does not overflow.
+        zh: 任务及成员草稿在切换后保留；临时参与者不进入常驻成员设置，窄屏不横向溢出。
+      - en: Status notifications refresh the lightweight roster without rereading full activity history.
+        zh: 状态通知仅刷新轻量成员信息，不重新读取完整活动历史。
+    notes:
+      en: Application handlers are replaced. This verifies renderer ownership and interaction, not backend participant creation, federation or model decisions.
+      zh: 应用接口使用替身；验证界面所有权与交互，不证明后端参与者创建、跨端同步或模型决策。
+
+  - id: teams.tasks.optional-goal
+    title:
+      en: Create a standing team without requiring a goal
+      zh: 创建持久团队时不强制填写目标
+    verifies: [optional-goal]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: ui
+    mode: none
+    automation: automated
+    preconditions:
+      - en: An isolated renderer fixture provides a workspace and existing digital humans and records the creation request.
+        zh: 隔离界面数据提供工作空间和已有数字人，并记录创建请求。
+    steps:
+      - en: Open New team, enter a name, select an existing member, leave the goal empty and create.
+        zh: 打开新建团队，输入名称并选择已有成员，目标留空后创建。
+    expected:
+      - en: Creation is submitted once with an empty goal, the dialog closes after success, and no empty goal panel is offered.
+        zh: 创建请求携带空目标且只提交一次，成功后对话框关闭，不展示空目标面板。
+    notes:
+      en: This verifies form admission and request shape. Application creation and persistence are separate backend evidence.
+      zh: 验证表单准入和请求形状；应用创建与持久化需要独立后端证据。

@@ -614,7 +614,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const sessionPlan = prepareAppEngineSession({ engineId, explicitEngine: Boolean(app.userOverrides?.engineId), state: engineState, legacySessionId, spacePath: environment.spacePath, appId: app.id, runId, conversationId: sessionKey })
     if (sessionPlan.engineHandoffContent) sdkOptions.engineHandoffContent = sessionPlan.engineHandoffContent
     if (sessionPlan.strictNativeResume) sdkOptions.strictNativeResume = true
-    const resumeGates = sessionPlan.recoverNativeSession ? { recoverNativeSession: sessionPlan.recoverNativeSession } : undefined
+    const resumeGates = { streamOwner: 'caller' as const, recoverNativeSession: sessionPlan.recoverNativeSession }
 
     // No displayModel: automation runs drive their own processStream(), so they
     // must not start a persistent session consumer (that would fight over the

@@ -163,6 +163,27 @@ describe('owner-served turn abort (a stop travels to the machine running the tur
     expect(nodes.V.office.stopTurn.pendingCount()).toBe(0)
   })
 
+  it('refuses conditional stops before sending instead of asking an older owner to ignore conditions', async () => {
+    let calls = 0
+    const nodes = build({ ids: [VIEWER, OWNER], stopByOwner: async () => { calls++; return true } })
+    for (const conditions of [{ expectedRequestId: 'assignment' }, { controller: { appId: 'controller' } }]) {
+      const request = { ownerNodeId: OWNER, teamId: OFFICE, appId: 'wkr', epochId: EPOCH, ...conditions }
+      await expect(nodes.V.office.stopTurn.stop(request)).rejects.toThrow('stop-conditions-unsupported')
+    }
+    expect(calls).toBe(0)
+    expect(nodes.V.office.stopTurn.pendingCount()).toBe(0)
+  })
+
+  it('refuses conditional inbound stops without aborting an owned member', async () => {
+    let calls = 0
+    const nodes = build({ ids: [VIEWER, OWNER], stopByOwner: async () => { calls++; return true } })
+    const frame = { kind: 'stop-turn-request' as const, officeId: OFFICE, teamId: OFFICE,
+      fromNode: VIEWER, appId: 'wkr', epochId: EPOCH, fid: 'conditional', expectedRequestId: 'old-assignment' }
+    nodes.O.office.stopTurn.handleRequest(VIEWER, frame)
+    await Promise.resolve()
+    expect(calls).toBe(0)
+  })
+
   it('nothing was running: answered false, not raised as a failure', async () => {
     const nodes = build({ ids: [VIEWER, OWNER], stopByOwner: async () => false })
 

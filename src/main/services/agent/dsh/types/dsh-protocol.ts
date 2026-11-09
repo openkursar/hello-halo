@@ -117,8 +117,6 @@ export interface DshSessionPromptResult {
 export const DshNotificationMethod = {
   SessionEvent: 'session.event',
   SessionStatus: 'session.status',
-  SubagentStarted: 'subagent.started',
-  SubagentFinished: 'subagent.finished',
   /** Halo's own relay (`runtimes/dsh/plugins/assistant-stream.ts`), not part of the SDK protocol. */
   AssistantStream: 'halo.assistant-stream',
 } as const
@@ -220,17 +218,4 @@ export interface DshSessionEventNotification {
 export interface DshSessionStatusNotification {
   sessionId?: string
   status?: string
-}
-
-export interface DshSubagentStartedNotification {
-  parentSessionId?: string
-  childSessionId?: string
-}
-
-export interface DshSubagentFinishedNotification {
-  parentSessionId?: string
-  childSessionId?: string
-  status?: string
-  stopReason?: string
-  lastAssistantMessage?: DshContentBlock[]
 }

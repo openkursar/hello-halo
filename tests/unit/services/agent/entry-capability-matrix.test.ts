@@ -25,6 +25,14 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
+const authority = vi.hoisted(() => ({ current: null as ReturnType<typeof import('../../apps/runtime/fixtures/participant-service').createScopedParticipantService> | null }))
+vi.mock('../../../../src/main/apps/team', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../src/main/apps/team')>()
+  const { createScopedParticipantService } = await import('../../apps/runtime/fixtures/participant-service')
+  authority.current = createScopedParticipantService()
+  return { ...actual, getTeamService: () => ({ participants: authority.current!.service, getCollabForConversation: () => null }) }
+})
+
 // ============================================
 // Shared, mutable test state
 // ============================================
@@ -36,6 +44,7 @@ const state = vi.hoisted(() => ({
   ccConfigDir: '',
   /** Options the session layer received, most recent last. */
   sessions: [] as Array<Record<string, any>>,
+  engineId: 'anthropic',
   engine: { features: { permissionRules: true, hooks: true } } as unknown,
   teamContext: null as unknown,
   memoryEnabled: true,
@@ -70,8 +79,8 @@ vi.mock('../../../../src/main/foundation/config.service', () => ({
 
 vi.mock('../../../../src/main/services/agent/resolved-sdk', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../src/main/services/agent/resolved-sdk')>()),
-  getDefaultEngine: () => 'anthropic', getStartupEngine: () => 'anthropic',
-  resolveDefaultEngine: async () => 'anthropic', ensureEngineAvailable: async () => {},
+  getDefaultEngine: () => state.engineId, getStartupEngine: () => 'anthropic',
+  resolveDefaultEngine: async () => state.engineId, ensureEngineAvailable: async () => {},
   getActiveEngine: () => null,
   getEngineCapabilities: () => state.engine,
   createSession: vi.fn(async () => {
@@ -131,7 +140,7 @@ vi.mock('../../../../src/main/services/agent/control', () => ({
   stopGeneration: vi.fn(async () => {}),
   getSessionState: () => ({ isActive: false, thoughts: [] }),
 }))
-vi.mock('../../../../src/main/services/agent/events', () => ({
+vi.mock('../../../../src/main/services/agent/events', () => ({ emitHumanRequest: vi.fn(),
   emitAgentEvent: vi.fn(),
   onAgentEvent: () => ({ dispose: () => {} }),
 }))
@@ -157,9 +166,10 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getMcpServersForRequires: vi.fn(() => ({})),
   getDisabledMcpTools: vi.fn(() => state.disabledMcpTools),
 }))
-vi.mock('../../../../src/main/services/agent/permission-handler', () => ({
-  createCanUseTool: vi.fn(() => vi.fn()),
-}))
+vi.mock('../../../../src/main/services/agent/permission-handler', async original => {
+  const actual = await original<typeof import('../../../../src/main/services/agent/permission-handler')>()
+  return { ...actual, createCanUseTool: vi.fn(actual.createCanUseTool) }
+})
 vi.mock('../../../../src/main/services/agent/knowledge-context', () => ({
   resolveConversationKnowledgeBases: vi.fn(() => []),
   resolveConversationKnowledgeBaseIds: vi.fn(() => []),
@@ -345,6 +355,7 @@ vi.mock('../../../../src/main/apps/runtime/team', async (importOriginal) => ({
   }),
 }))
 vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({
+  createCoordinationMcpServer: () => ({ _isMcpServer: true, name: 'halo-team' }),
   createTeamMcpServer: () => ({ _isMcpServer: true, name: 'halo-team' }),
 }))
 
@@ -602,8 +613,12 @@ afterAll(() => {
 })
 
 beforeEach(() => {
+  authority.current!.reset()
+  authority.current!.allow('team-1', 'epoch-1', 'app-1')
+  authority.current!.allow('team-1', 'epoch-im', 'app-1')
   app.permissions = { granted: [], denied: [] } as any
   state.config = { agent: {}, notificationChannels: {} }
+  state.engineId = 'anthropic'
   state.teamContext = null
   state.engine = { features: { permissionRules: true, hooks: true } }
   state.memoryEnabled = true
@@ -806,3 +821,17 @@ describe('entry x conversation collaboration: halo-conversations', () => {
  * - The system prompt names the halo config directory whatever `configDirMode`
  *   is; only the subprocess's CLAUDE_CONFIG_DIR follows it.
  */
+
+
+describe('borrowed entry client discovery permissions', () => {
+  it.each(['digital human chat (IM guest)', 'team-fronted IM chat (guest)'] as const)('%s captures the execution engine for its metadata gate', async row => {
+    for (const engineId of ['halo', 'anthropic']) {
+      state.engineId = engineId
+      await ROW_DRIVERS[row]()
+      const options = state.sessions.at(-1)!
+      const control = { signal: new AbortController().signal }
+      expect(await options.canUseTool('ToolSearch', { query: 'customer' }, control)).toMatchObject({ behavior: engineId === 'halo' ? 'allow' : 'deny' })
+      expect(await options.canUseTool('CallTool', { tool: 'Bash', arguments: '{}' }, control)).toMatchObject({ behavior: 'deny' })
+    }
+  })
+})

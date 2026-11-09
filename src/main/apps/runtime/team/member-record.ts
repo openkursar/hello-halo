@@ -125,7 +125,7 @@ export function createTeamMemberRecordReader(deps: TeamMemberRecordReaderDeps): 
   const defaultBudget = deps.charBudget ?? MEMBER_RECORD_PAGE_CHARS
 
   return async ({ teamId, epochId, memberAppId, before, charBudget }) => {
-    const member = deps.store.getMember(teamId, memberAppId)
+    const member = deps.store.getMember(teamId, memberAppId, epochId)
     if (!member) {
       return { ok: false, reason: 'not-a-member', message: 'That teammate is not a member of this team.' }
     }

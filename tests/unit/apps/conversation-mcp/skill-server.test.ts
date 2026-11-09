@@ -26,9 +26,9 @@ vi.mock('../../../../src/main/store', () => ({ installFromStore: vi.fn() }))
 vi.mock('../../../../src/main/store/registry.service', () => ({ installRequiredSkills: vi.fn() }))
 vi.mock('../../../../src/main/apps/team', () => ({ getTeamService: () => null }))
 vi.mock('../../../../src/main/apps/runtime/team', () => ({ getActiveTeamRuntime: () => null }))
-vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({ buildCoordinationTools: () => [] }))
+vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({ createCoordinationMcpServer: () => ({ name: 'halo-team' }) }))
 vi.mock('../../../../src/main/foundation/config.service', () => ({ getConfig: () => settings, saveConfig: vi.fn() }))
-vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn(), emitHumanRequest: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/toolsets/registry', () => ({
   getAvailableToolsets: () => [], getToolset: () => undefined,
 }))
@@ -107,7 +107,7 @@ describe('skill management in the assembled Halo Apps server', () => {
     expect((await other.tools.find(tool => tool.name === 'create_automation_app')!.handler({ spec: '{}' })).content[0].text)
       .toContain('Read the authoring guide first')
     expect(createSpaceTeamMcpServer).toBeTypeOf('function')
-    expect(TEAM_TOOLSET_GUIDE).toContain('## Agent teams and standing teams')
+    expect(TEAM_TOOLSET_GUIDE).toContain('Use collaborators when work can progress independently')
   })
 
   it.each([undefined, 'global'] as const)('lists the requested %s scope with opaque references and pagination', async scope => {

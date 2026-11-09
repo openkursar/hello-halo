@@ -43,7 +43,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getApiCredentialsForSelection: vi.fn(async () => ({ provider: 'anthropic', model: 'm' })),
   getDbMcpServers: vi.fn(() => null),
 }))
-vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ emitHumanRequest: vi.fn(), emitAgentEvent: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   getSessionEngineId: () => undefined, isSessionBusy: () => false,
   acquireV2Session: m.acquireV2Session,
@@ -103,7 +103,7 @@ describe('sendMessage with a goal', () => {
 
     await sendMessage(request)
 
-    expect(m.addMessage.mock.calls[0][2].metadata).toEqual({ goal: { objective: 'Ship', doneWhen: [] } })
+    expect(m.addMessage.mock.calls[0][2].metadata).toEqual({ goal: { objective: 'Ship', doneWhen: [] }, reasoning: { thinkingEnabled: false } })
     expect(m.setGoalForTurn).toHaveBeenCalledWith('space-1', 'conv-1', session, { objective: 'Ship', doneWhen: [] }, false)
     expect(m.updateMessageById).not.toHaveBeenCalled()
   })
@@ -114,6 +114,6 @@ describe('sendMessage with a goal', () => {
     await sendMessage(request)
 
     expect(m.setGoalForTurn).not.toHaveBeenCalled()
-    expect(m.updateMessageById).toHaveBeenCalledWith('space-1', 'conv-1', 'msg-1', { metadata: {} })
+    expect(m.updateMessageById).toHaveBeenCalledWith('space-1', 'conv-1', 'msg-1', { metadata: { reasoning: { thinkingEnabled: false } } })
   })
 })

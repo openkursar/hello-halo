@@ -45,12 +45,10 @@ function assertProcess(terminal: OpenedTerminal, space: ManagedSpace) {
   return value
 }
 
-async function enableTerminal(page: Page) {
+async function assertAutomaticTerminal(page: Page) {
   await page.getByRole('button', { name: 'Add files, context and capabilities', exact: true }).click()
-  const option = page.getByRole('menuitemcheckbox', { name: /^AI Terminal\b/ })
-  await expect(option).toHaveCount(1)
-  if (await option.getAttribute('aria-checked') !== 'true') await option.click()
-  await expect(option).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByRole('menuitemcheckbox', { name: /Operate Halo/ })).toHaveCount(0)
+  await expect(page.getByRole('menuitemcheckbox', { name: /^AI Terminal\b/ })).toHaveCount(0)
   await page.keyboard.press('Escape')
 }
 
@@ -71,7 +69,7 @@ async function assertTerminalTools(page: Page, turn: { spaceId: string; conversa
 }
 
 async function touchWithAi(page: Page, model: AcceptanceModel, terminal: OpenedTerminal, control?: TerminalInfo) {
-  await enableTerminal(page)
+  await assertAutomaticTerminal(page)
   const reads = [{ info: terminal.info, ready: terminal.program.ready }, ...(control ? [{ info: control, ready: undefined }] : [])]
     .map(target => ({ ...target, id: marker('terminal_read') }))
   const issues: string[] = []
@@ -129,7 +127,7 @@ test('AI terminal tools and user keyboard input reach the same real interactive 
   await enterWorkspace(window, space)
   const terminal = await openOwnedTerminal(terminalApp, 'shared', space.id)
   const processBefore = assertProcess(terminal, space)
-  await enableTerminal(window)
+  await assertAutomaticTerminal(window)
   const aiInput = marker('AI'), userInput = marker('USER')
   const secondQuestion = 'Read the terminal again after my keyboard response.'
   const observed = { initial: false, write: false, human: false }

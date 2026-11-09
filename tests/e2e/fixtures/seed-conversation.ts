@@ -20,6 +20,7 @@
  * schema-identical to what the chat UI would have written.
  */
 
+import { seedSdkAliases } from './seed-sdk-bundle'
 import path from 'path'
 import fs from 'fs'
 import { spawnSync } from 'child_process'
@@ -69,6 +70,7 @@ function getBundledWorker(): string {
     platform: 'node',
     format: 'cjs',
     packages: 'external',
+    alias: seedSdkAliases,
     outfile,
     // Native addons load at run time from node_modules; esbuild cannot bundle them.
     external: ['better-sqlite3', 'electron', '@parcel/watcher'],

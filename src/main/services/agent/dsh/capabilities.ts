@@ -3,7 +3,7 @@
  *
  * Describes what Halo can actually observe through the runtime's stdio
  * JSON-RPC surface (`initialize` / `session/prompt` / `shutdown` plus the
- * `session.event`, `session.status`, `subagent.*` notifications, and the live
+ * `session.event`, `session.status` notifications, and the live
  * assistant stream Halo's own plugin relays beside them). The wire carries
  * whole session-log envelopes, so the streaming vocabulary is rich, but the
  * request surface is narrow: there is no cancel method, no resume, and the
@@ -62,7 +62,6 @@ export const DSH_CAPABILITIES: EngineCapabilities = {
       { kind: 'WebSearch', from: 'web_search', lossy: true },
       { kind: 'WebFetch', from: 'web_fetch', lossy: true },
       { kind: 'TodoWrite', from: 'todo_write', lossy: true },
-      { kind: 'Task', from: 'subagent', lossy: true },
       { kind: 'Skill', from: 'skill', lossy: true },
     ],
     shellHeuristics: false,
@@ -70,15 +69,6 @@ export const DSH_CAPABILITIES: EngineCapabilities = {
   // `todo/write` is a whole-list snapshot of three-state entries with no
   // stable id and no activeForm label.
   todo: { states: ['pending', 'in_progress', 'completed'], hasActiveForm: false },
-  // `subagent.started` / `subagent.finished` carry the lineage edges, and the
-  // adapter tags descendant session events with their parent tool call, so
-  // the timeline gets the same structure CC provides. `finished` is only
-  // emitted for in-process children; out-of-process ones end silently.
-  subAgent: { model: 'declarative', visibleLifecycle: true },
-  // The runtime's system prompt is assembled from one section per mounted
-  // plugin, each written against the tool it registers under the snake_case
-  // name the model actually sees. Halo adding a CC-named tool policy on top
-  // would contradict it and point at tools that are not there.
   prompt: { nativeAgentGuidance: true },
   features: {
     // The composition mounts the runtime's filesystem skill provider pointed

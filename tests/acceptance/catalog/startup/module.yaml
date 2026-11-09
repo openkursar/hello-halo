@@ -9,6 +9,8 @@ description:
 paths:
   - src/renderer/pages/SetupPage.tsx
   - src/renderer/components/setup/**
+  - src/renderer/utils/endpoint-identity.ts
+  - src/renderer/utils/request-gate.ts
   - src/renderer/components/onboarding/**
   - src/renderer/components/layout/**
   - src/renderer/stores/app.store.ts

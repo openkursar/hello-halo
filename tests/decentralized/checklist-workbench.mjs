@@ -160,31 +160,41 @@ try {
     const otherGroups = await apiOk(node, 'GET', `/api/teams/${team.id}/epochs/${taskB.epochId}/artifacts`)
     assert(!otherGroups.flatMap(group => group.artifacts).some(file => file.name.endsWith('reviewer-verification.md')))
   })
-  await check('lead completion preserves both task identity and collaboration history', async () => {
-    await send(taskA.epochId, lead, 'All verification work is done and approved. Call team_complete now with summary="WORKBENCH_COMPLETE: verified collaboration and reviewer output." Do not delegate or start more work.')
-    const completed = await pollUntil(async () => (await conversations()).find(task => task.epochId === taskA.epochId && task.completed), { timeoutMs: 120000, intervalMs: 1500 })
-    if (!completed) await completionDiagnostics(taskA.epochId, lead)
-    assert(completed, 'Explicit completion did not mark the task complete')
+  await check('natural completion leaves work open until human archival, preserving its identity and history', async () => {
+    await send(taskA.epochId, lead, 'Reply with WORKBENCH_READY_TO_ARCHIVE. All requested verification work is done. End your turn without more delegation; I will archive the task.')
+    assert(await waitAnswer(taskA.epochId, lead, 'WORKBENCH_READY_TO_ARCHIVE'))
+    assert.equal((await conversations()).find(task => task.epochId === taskA.epochId)?.completed, false)
+    const before = await apiOk(node, 'GET', `/api/teams/${team.id}/epochs/${taskA.epochId}/board`)
+    await apiOk(node, 'DELETE', `/api/teams/${team.id}/conversations/${taskA.epochId}`)
+    const completed = (await conversations()).find(task => task.epochId === taskA.epochId)
+    assert.equal(completed?.completed, true)
     const board = await apiOk(node, 'GET', `/api/teams/${team.id}/epochs/${taskA.epochId}/board`)
-    assert(board.activities.some(activity => activity.kind === 'run_end'))
+    assert.equal(board.epoch.id, taskA.epochId)
+    assert.equal(board.epoch.endReason, 'completed')
+    assert.equal(board.epoch.workItem.status, 'completed')
+    assert.deepEqual(board.tasks.map(task => task.id).sort(), before.tasks.map(task => task.id).sort())
+    assert.deepEqual(board.findings.map(finding => finding.id).sort(), before.findings.map(finding => finding.id).sort())
     assert(board.activities.some(activity => activity.kind === 'message'))
     assert((await history(taskA.epochId, lead)).some(message => message.content.includes('WORKBENCH_HELLO')))
   })
 
-  await check('direct app chat completion closes its task without losing the conversation', async () => {
-    const task = await apiOk(node, 'POST', `/api/teams/${team.id}/conversations`, { title: 'Direct completion verification' })
+  await check('direct app chat ends naturally and human archival retains its conversation', async () => {
+    const task = await apiOk(node, 'POST', `/api/teams/${team.id}/conversations`, { title: 'Direct archival verification' })
     const conversationId = `app-chat:${lead}:team:${team.id}:${task.epochId}`
     await apiOk(node, 'POST', `/api/apps/${lead}/chat/send`, {
-      spaceId: space.id,
-      conversationId,
-      message: 'This verification task requires no other work. Call team_complete now with summary="WORKBENCH_DIRECT_COMPLETE: verified direct conversation completion." Do not delegate, ask questions, or start more work. End your turn after the tool call.',
+      spaceId: space.id, conversationId,
+      message: 'Reply with WORKBENCH_DIRECT_READY. Do not delegate or use tools. End your turn; I will archive this task.',
     })
-    const completed = await pollUntil(async () => (await conversations()).find(row => row.epochId === task.epochId && row.completed), { timeoutMs: 180000, intervalMs: 1500 })
-    if (!completed) await completionDiagnostics(task.epochId, lead)
-    assert(completed, 'Direct chat completion did not mark the task complete')
+    assert(await waitAnswer(task.epochId, lead, 'WORKBENCH_DIRECT_READY'))
+    assert.equal((await conversations()).find(row => row.epochId === task.epochId)?.completed, false)
+    await apiOk(node, 'DELETE', `/api/teams/${team.id}/conversations/${task.epochId}`)
+    assert.equal((await conversations()).find(row => row.epochId === task.epochId)?.completed, true)
     const board = await apiOk(node, 'GET', `/api/teams/${team.id}/epochs/${task.epochId}/board`)
-    assert(board.activities.some(activity => activity.kind === 'run_end' && (activity.body || activity.subject).includes('WORKBENCH_DIRECT_COMPLETE')))
-    assert((await history(task.epochId, lead)).some(message => message.role === 'user' && message.content.includes('WORKBENCH_DIRECT_COMPLETE')))
+    assert.equal(board.epoch.endReason, 'completed')
+    assert.equal(board.epoch.workItem.status, 'completed')
+    const messages = await history(task.epochId, lead)
+    assert(messages.some(message => message.role === 'user' && message.content.includes('WORKBENCH_DIRECT_READY')))
+    assert(messages.some(message => message.role === 'assistant' && message.content.includes('WORKBENCH_DIRECT_READY')))
     assert.equal((await history(task.epochId, observer)).length, 0)
   })
 

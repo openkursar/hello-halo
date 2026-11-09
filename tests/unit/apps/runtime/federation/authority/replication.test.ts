@@ -126,6 +126,17 @@ describe('replication — authority commit + heir inclusion (O-R5-1/2)', () => {
 
   afterEach(() => dbManager.closeAll())
 
+  it('does not publish a private participant write from the shared SDK surface', () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      repl.captureLocalWrite({ teamId: OFFICE, epochId: 'epoch-1', op: 'participant_upsert', payload: { appId: 'private-helper' } })
+      expect(broadcasts).toEqual([])
+      expect(sent).toEqual([])
+      expect(committedSeq).toBe(0)
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('reason=private-participant'))
+    } finally { warning.mockRestore() }
+  })
+
   function ack(from: string, ackedSeq: number) {
     const frame: AckFrame = {
       kind: 'ack',
@@ -137,6 +148,18 @@ describe('replication — authority commit + heir inclusion (O-R5-1/2)', () => {
     }
     repl.handleAck(from, frame)
   }
+
+  it('retains unsupported historical publication in the log without promoting it into membership', () => {
+    const historical = { kind: 'blackboard-replicate', officeId: OFFICE, fromNode: AUTHORITY,
+      seq: 1, term: 1, op: 'participant_upsert', fid: 'historical-participant', committedSeq: 1,
+      payload: { teamId: OFFICE, epochId: 'epoch-1', appId: 'private-child' } } as unknown as BlackboardReplicateFrame
+    repl.handleReplicate(AUTHORITY, historical)
+    expect(authorityStore.listLogAfter(OFFICE, 0, 10)[0]).toMatchObject({ op: 'participant_upsert', payload: historical.payload })
+    expect(teamStore.listMembersByTeam(OFFICE)).toEqual([])
+    expect(teamStore.participants.getById('private-child')).toBeNull()
+    repl.handleReplicate(AUTHORITY, { ...historical, seq: 2, op: 'post_task', fid: 'ordinary-task', payload: makeTaskPayload('after-history') })
+    expect(teamStore.getTaskById('after-history')).not.toBeNull()
+  })
 
   it('O-R5-2: majority WITHOUT heir does not commit; heir ack commits', () => {
     const rec: BlackboardWriteRecord = {

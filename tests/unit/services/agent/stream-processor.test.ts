@@ -40,6 +40,7 @@ vi.mock('../../../../src/main/foundation/logging', () => ({ isDeveloperMode: () 
 import { processStream, type StreamResult } from '../../../../src/main/services/agent/stream-processor'
 import { computeContextUsed } from '../../../../src/main/services/agent/context-usage'
 import type { SessionState, Thought, TokenUsage } from '../../../../src/main/services/agent/types'
+import { convertEventsToMessages, type StoredEvent } from '../../../../src/main/apps/runtime/session-transcript'
 
 // ============================================
 // Helpers
@@ -231,6 +232,129 @@ describe('processStream interruption and retirement', () => {
     expect(onComplete).toHaveBeenCalledWith(result)
     expect(readPastResult).toBe(false)
     expect(JSON.stringify(emitAgentEvent.mock.calls)).not.toContain('Drained output')
+  })
+
+  const abortResult = () => ({ type: 'result', subtype: 'error_during_execution', is_error: true,
+    result: 'Operation was aborted', errors: ['Operation was aborted'], session_id: 'sess-1' })
+  const errorEvents = () => emitAgentEvent.mock.calls.filter(([channel]) => channel === 'agent:error').map(([, , , data]) => data)
+
+  it.each(['', 'The saved question is waiting for an answer.'])('does not report an internal turn cut as an error with content %j', async content => {
+    const abortController = new AbortController()
+    const result = await processStream(baseParams({
+      abortController,
+      messageContent: undefined,
+      v2Session: { async *stream() {
+        yield systemInit()
+        if (content) yield assistantText('m1', content)
+        abortController.abort('internal')
+        yield abortResult()
+      } },
+    }))
+    expect(result).toMatchObject({ finalContent: content, stopReason: 'internal', wasAborted: true, hasErrorThought: false, drainTimedOut: false })
+    expect(errorEvents()).toEqual([])
+    expect(track.mock.calls.filter(([event, data]) => event === 'llm.invocation' && data.status === 'error')).toEqual([])
+  })
+
+  it.each(['user', 'controller'] as const)('still reports a %s stop without calling it a provider failure', async reason => {
+    const abortController = new AbortController()
+    const result = await processStream(baseParams({ abortController, messageContent: undefined, v2Session: { async *stream() {
+      yield systemInit()
+      yield assistantText('m1', 'Partial answer.')
+      abortController.abort(reason)
+      yield abortResult()
+    } } }))
+    expect(result).toMatchObject({ stopReason: reason, wasAborted: true, hasErrorThought: false })
+    expect(errorEvents()).toEqual([expect.objectContaining({ errorType: 'interrupted', error: reason === 'user'
+      ? 'Stopped by user.' : 'Stopped by the collaborator that assigned this work.' })])
+  })
+
+  it('retains a question receipt and later committed tool results while draining', async () => {
+    const abortController = new AbortController()
+    const recorded: StoredEvent[] = []
+    const receipt = { type: 'user', message: { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'question', content: 'Escalation sent to user (entry: decision-1).' },
+    ] } }
+    const result = await processStream(baseParams({ abortController,
+      callbacks: { onRawMessage: message => {
+        recorded.push(message as StoredEvent)
+        if (message === receipt) abortController.abort('internal')
+      } },
+      v2Session: fakeSession([
+        systemInit(),
+        { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'question', name: 'report_to_user' } } },
+        { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } },
+        { type: 'stream_event', event: { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'write', name: 'Write' } } },
+        { type: 'stream_event', event: { type: 'content_block_stop', index: 1 } },
+        { type: 'assistant', message: { id: 'm1', role: 'assistant', content: [
+          { type: 'tool_use', id: 'question', name: 'report_to_user', input: { type: 'escalation', message: 'Approve the release?' } },
+          { type: 'tool_use', id: 'write', name: 'Write', input: { file_path: '/tmp/release.txt', content: 'prepared' } },
+        ] } },
+        receipt,
+        { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'write', content: 'File written.' }] } },
+        assistantText('ignored', 'Late answer must not become a delivered reply.'),
+        abortResult(),
+      ]),
+    }))
+    const messages = convertEventsToMessages(recorded)
+    const tools = messages.flatMap(message => message.thoughts ?? []).filter(thought => thought.type === 'tool_use')
+    expect(tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'report_to_user', toolResult: expect.objectContaining({ output: 'Escalation sent to user (entry: decision-1).' }) }),
+      expect.objectContaining({ toolName: 'Write', toolResult: expect.objectContaining({ output: 'File written.' }) }),
+    ]))
+    expect(JSON.stringify(messages)).not.toContain('Late answer')
+    expect(JSON.stringify(messages)).not.toContain('Operation was aborted')
+    expect(result).toMatchObject({ stopReason: 'internal', wasAborted: true, hasErrorThought: false })
+    expect(result.thoughts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'Write', toolResult: expect.objectContaining({ output: 'File written.' }) }),
+    ]))
+    expect(errorEvents()).toEqual([])
+  })
+
+  it.each(['internal', 'user', 'controller'] as const)('preserves a real provider failure that arrives after a %s stop', async reason => {
+    const abortController = new AbortController()
+    const recorded: StoredEvent[] = []
+    const failure = 'API Error: 429 request quota exceeded'
+    const result = await processStream(baseParams({ abortController, messageContent: undefined,
+      callbacks: { onRawMessage: message => recorded.push(message as StoredEvent) },
+      v2Session: { async *stream() {
+        yield systemInit()
+        yield assistantText('m1', 'Partial answer.')
+        abortController.abort(reason)
+        yield { type: 'result', subtype: 'error_during_execution', is_error: true, result: failure, errors: [failure] }
+      } },
+    }))
+    expect(result).toMatchObject({ stopReason: reason, wasAborted: true, hasErrorThought: true, errorThought: { content: failure } })
+    expect(errorEvents()).toEqual([expect.objectContaining({ error: failure })])
+    expect(recorded).toContainEqual(expect.objectContaining({ type: 'result', is_error: true, result: failure }))
+    expect(convertEventsToMessages(recorded).some(message => message.error === failure)).toBe(true)
+  })
+
+  it('does not overwrite a provider failure when a stop races with its result callback', async () => {
+    const abortController = new AbortController()
+    const failure = 'API Error: upstream unavailable'
+    const result = await processStream(baseParams({ abortController,
+      callbacks: { onRawMessage: message => { if ((message as { type?: string }).type === 'result') abortController.abort('user') } },
+      v2Session: fakeSession([systemInit(), assistantText('m1', 'Partial answer.'),
+        { type: 'result', subtype: 'error_during_execution', is_error: true, result: failure }]),
+    }))
+    expect(result).toMatchObject({ stopReason: 'user', wasAborted: true, hasErrorThought: true })
+    expect(errorEvents()).toEqual([expect.objectContaining({ error: failure })])
+  })
+
+  it('finishes normally when an internal cut races with a successful result', async () => {
+    const abortController = new AbortController()
+    const result = await processStream(baseParams({ abortController,
+      callbacks: { onRawMessage: message => { if ((message as { type?: string }).type === 'result') abortController.abort('internal') } },
+      v2Session: fakeSession([systemInit(), assistantText('m1', 'Waiting for the owner.'), resultCarrying('Waiting for the owner.')]),
+    }))
+    expect(result).toMatchObject({ stopReason: 'internal', wasAborted: true, hasErrorThought: false, finalContent: 'Waiting for the owner.' })
+    expect(errorEvents()).toEqual([])
+  })
+
+  it('keeps an unexpected native interruption visible without a host stop', async () => {
+    await processStream(baseParams({ v2Session: fakeSession([systemInit(), assistantText('m1', 'Partial answer.'),
+      { type: 'result', subtype: 'error_during_execution', is_error: false }]) }))
+    expect(errorEvents()).toEqual([expect.objectContaining({ error: 'Model response interrupted unexpectedly.', errorType: 'interrupted' })])
   })
 })
 

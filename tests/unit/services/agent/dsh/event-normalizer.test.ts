@@ -337,79 +337,16 @@ describe('DshEventNormalizer — session filtering', () => {
   })
 })
 
-describe('DshEventNormalizer — subagents', () => {
-  const CHILD = 'sess-child'
-
-  function runDelegation(): any[] {
-    const normalizer = createNormalizer()
-    return runTurn(normalizer, [
-      sessionEvent(SESSION, 'step/start', { turn: 1, step: 1 }),
-      toolCall(SESSION, 1, 1, 'call-sub', 'subagent', '{"task":"research"}'),
-      subagentStarted(SESSION, CHILD),
-      sessionEvent(CHILD, 'assistant/message', {
-        turn: 1,
-        step: 1,
-        message: {
-          id: 'child-1',
-          role: 'assistant',
-          content: [{ type: 'tool-call', id: 'child-call', name: 'read', arguments: '{"path":"a.md"}' }],
-        },
-      }),
-      sessionEvent(CHILD, 'tool/result', {
-        turn: 1,
-        step: 1,
-        message: {
-          id: 'child-r',
-          role: 'tool',
-          toolCallId: 'child-call',
-          content: [{ type: 'text', text: 'file body' }],
-          source: { kind: 'tool', callId: 'child-call' },
-        },
-      }),
-      subagentFinished(SESSION, CHILD),
-      toolResult(SESSION, 1, 1, 'call-sub', 'done'),
-      sessionEvent(SESSION, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
-      sessionStatus(SESSION, 'idle'),
-    ])
-  }
-
-  it('links the child session to the delegating tool call', () => {
-    const started = runDelegation().find((f) => f.subtype === 'task_started')
-    expect(started).toMatchObject({ type: 'system', task_id: CHILD, tool_use_id: 'call-sub' })
-  })
-
-  it('tags descendant messages with parent_tool_use_id so the shared router nests them', () => {
-    const frames = runDelegation()
-    const childAssistant = frames.find((f) => f.type === 'assistant' && f.parent_tool_use_id)
-    expect(childAssistant).toMatchObject({ parent_tool_use_id: 'call-sub' })
-    expect(childAssistant.message.content[0]).toMatchObject({ type: 'tool_use', name: 'Read', id: 'child-call' })
-
-    const childResult = frames.find((f) => f.type === 'user' && f.parent_tool_use_id)
-    expect(childResult.message.content[0]).toMatchObject({ tool_use_id: 'child-call', content: 'file body' })
-  })
-
-  it('closes the child lifecycle with a task notification', () => {
-    const finished = runDelegation().find((f) => f.subtype === 'task_notification')
-    expect(finished).toMatchObject({ task_id: CHILD, status: 'completed' })
-  })
-
-  it('reports a failed child run as failed', () => {
-    const normalizer = createNormalizer()
-    const frames = runTurn(normalizer, [
-      sessionEvent(SESSION, 'step/start', { turn: 1, step: 1 }),
-      toolCall(SESSION, 1, 1, 'call-sub', 'subagent', '{}'),
-      subagentStarted(SESSION, CHILD),
-      subagentFinished(SESSION, CHILD, 'error', 'error'),
-      sessionStatus(SESSION, 'idle'),
-    ])
-    expect(frames.find((f) => f.subtype === 'task_notification')).toMatchObject({ status: 'failed' })
-  })
-
-  it('ignores a subagent started by a session it does not track', () => {
+describe('DshEventNormalizer — session isolation', () => {
+  it('does not admit another session through legacy lineage notifications', () => {
     const normalizer = createNormalizer()
     normalizer.beginTurn()
-    expect(normalizer.handle(subagentStarted('unrelated', 'other-child'))).toEqual([])
-    expect(normalizer.isKnownSession('other-child')).toBe(false)
+    expect(normalizer.handle(subagentStarted(SESSION, 'foreign'))).toEqual([])
+    expect(normalizer.handle(subagentFinished(SESSION, 'foreign'))).toEqual([])
+    expect(normalizer.isKnownSession('foreign')).toBe(false)
+    expect(normalizer.handle(sessionEvent('foreign', 'assistant/message', {
+      message: { role: 'assistant', content: [{ type: 'text', text: 'PRIVATE_OTHER_SESSION' }] },
+    }))).toEqual([])
   })
 })
 

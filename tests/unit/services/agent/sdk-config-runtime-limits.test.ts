@@ -24,8 +24,9 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 }))
 
 import { resolveSdkRuntimeLimits } from '../../../../src/main/services/agent/sdk-config'
+import { resolveGroupCredentials } from '../../../../src/main/services/agent/group-credentials'
 import { getApiCredentials } from '../../../../src/main/services/agent/helpers'
-import type { AISource } from '../../../../src/shared/types/ai-sources'
+import type { AIGroup, AISource } from '../../../../src/shared/types/ai-sources'
 import type { ModelCapabilityOverride } from '../../../../src/shared/types/model-capabilities'
 
 const state = vi.hoisted(() => ({ source: undefined as AISource | undefined }))
@@ -134,6 +135,30 @@ describe('resolveSdkRuntimeLimits', () => {
     expect(
       resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 131_072 })
     ).toEqual({ maxOutputTokens: 64_000, autoCompactWindow: 131_072 })
+  })
+
+  it.each([true, false])('keeps the known output cap of a mixed group (known first: %s)', knownFirst => {
+    const sources = ['known', 'unknown'].map(id => ({
+      id, name: id, provider: 'custom', authType: 'api-key', apiKey: 'fixture',
+      apiUrl: 'https://example.invalid', model: 'model', availableModels: [], createdAt: '', updatedAt: '',
+    } satisfies AISource))
+    const members = sources.map(source => ({ sourceId: source.id, modelId: source.model }))
+    const group: AIGroup = {
+      id: 'group', name: 'Mixed', strategy: 'priority', createdAt: '', updatedAt: '',
+      members: knownFirst ? members : members.reverse(),
+    }
+    const credentials = resolveGroupCredentials(group, {
+      readSource: id => sources.find(source => source.id === id) ?? null,
+      capabilitiesOf: source => ({
+        contextWindow: 200_000,
+        maxOutputTokens: source.id === 'known' ? 8_192 : 64_000,
+      }),
+      credentialsGeneration: () => 1,
+    })
+    expect(resolveSdkRuntimeLimits(credentials.capabilities)).toEqual({
+      maxOutputTokens: 8_192, autoCompactWindow: 200_000,
+    })
+    expect(warnSpy).toHaveBeenCalledTimes(1)
   })
 
   it.each<{

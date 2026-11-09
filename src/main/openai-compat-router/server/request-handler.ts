@@ -39,6 +39,8 @@ import { applyRetryPolicy, getUpstreamError, sendError } from './error-response'
 export interface RequestHandlerOptions {
   debug?: boolean
   timeoutMs?: number
+  /** A group's connect/header deadline, separate from a provider's full-response timeout. */
+  headersTimeoutMs?: number
   /** Anthropic SDK headers from the incoming request (anthropic-version, anthropic-beta, etc.) */
   sdkHeaders?: Record<string, string>
   /** Raw query string from the incoming request URL (e.g., "beta=true") */
@@ -364,7 +366,7 @@ async function handleAnthropicPassthrough(
   const anthUpstreamStartTs = Date.now()
   try {
     const upstreamResp = await fetchAnthropicUpstream(
-      targetUrl, apiKey, fetchBody, timeoutMs, sdkHeaders, customHeaders, clientAbort.signal
+      targetUrl, apiKey, fetchBody, Math.min(timeoutMs, options.headersTimeoutMs ?? timeoutMs), sdkHeaders, customHeaders, clientAbort.signal
     )
     console.log(`[RequestHandler] upstream_ok wire=anthropic status=${upstreamResp.status} duration_ms=${Date.now() - anthUpstreamStartTs} stream=${anthropicRequest.stream ?? false} tools=${toolCount} url=${targetUrl}`)
 
@@ -448,7 +450,8 @@ async function handleOpenAIConversion(
   res: ExpressResponse,
   options: RequestHandlerOptions
 ): Promise<void> {
-  const { debug = false, timeoutMs = DEFAULT_TIMEOUT_MS, sdkHeaders } = options
+  const { debug = false, sdkHeaders } = options
+  const timeoutMs = Math.min(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, options.headersTimeoutMs ?? options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
   const { url: backendUrl, key: apiKey, model, headers: customHeaders, apiType: configApiType, adapterId } = config
 
   // Validate URL has valid endpoint suffix
@@ -701,7 +704,7 @@ export async function handleMessagesRequest(
   }
 
   if (configApiType === 'kiro') {
-    return handleKiroRequest(request, config, res, { timeoutMs: options.timeoutMs })
+    return handleKiroRequest(request, config, res, { timeoutMs: options.timeoutMs, headersTimeoutMs: options.headersTimeoutMs })
   }
 
   return handleOpenAIConversion(request, config, res, options)

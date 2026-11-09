@@ -51,6 +51,7 @@ export function getToolset(id: string): ToolsetDefinition | undefined {
 
 registerToolset({
   id: 'ai-browser',
+  contextManaged: true,
   displayName: 'Web Control',
   summary: 'Control an embedded real browser: navigate pages, click/fill/snapshot, run scripts, inspect network.',
   usageGuide: AI_BROWSER_SYSTEM_PROMPT,
@@ -66,6 +67,7 @@ registerToolset({
 
 registerToolset({
   id: 'ai-terminal',
+  contextManaged: true,
   displayName: 'Terminal',
   summary: 'Interactive terminals: run commands, SSH into remote hosts, drive REPLs, and background long-running tasks.',
   usageGuide: AI_TERMINAL_SYSTEM_PROMPT,
@@ -79,6 +81,7 @@ registerToolset({
 
 registerToolset({
   id: 'ocr',
+  contextManaged: true,
   displayName: 'Text Extraction (OCR)',
   summary: 'Extract text from local images on-device (zero token): batch screenshots/scans, verbatim extraction, or reading images when the model has no vision.',
   usageGuide:
@@ -92,19 +95,10 @@ registerToolset({
   createServer: () => createOcrMcpServer()
 })
 
-/**
- * The id doubles as the MCP server name, so it stays `halo-api-ref` (the tool
- * is `mcp__halo-api-ref__halo_api_ref`); the display name describes the
- * capability the user is granting, which is operating Halo itself.
- *
- * Being a toolset is what keeps the three halves of this capability from
- * disagreeing: the manual tool, the `HALO_API_*` credentials
- * (`selfApiAccess` in sdk-config) and the usage guide are all derived from
- * this one switch. When it was always-on, the prompt told every session to
- * call a tool that only some of them had.
- */
+/** Halo's API reference is a core capability, paired with the scoped runtime credentials. */
 registerToolset({
   id: HALO_API_TOOLSET_ID,
+  contextManaged: true,
   displayName: 'Operate Halo',
   summary:
     "Operate Halo itself over its local HTTP API: spaces, conversations, digital humans, knowledge bases, channels, settings and the app store.",

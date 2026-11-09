@@ -10,14 +10,16 @@ title. Its first user message carries a `CodeReviewTask` (`shared/types/message-
 and no text; the transcript shows it as a task card, the model reads Halo's
 built-in instructions for it (`review-instructions.ts`), which the agent engine
 frames as the `<halo_task>` block without knowing what they say. The report is the
-conversation's last reply within the review, shown as written — nothing parses
-or scores it. The user can open the conversation, keep talking there, or stop it.
+conversation's last reply within the review, shown as written. Its content is
+never rewritten or scored. The progress card checks the shared report-section
+contract to distinguish a report from a hand-off note. The user can open the
+conversation, keep talking there, or stop it.
 
 ## 2) Starting one (`start-review.ts`)
 
 1. Team review only: refuse with `team-unavailable` when the `halo-team` toolset
-   is not registered (apps runtime not up) or a hand-edited `disabledTools`
-   withholds its tools. There is no setting that turns team collaboration off.
+   is not registered (apps runtime not up), explicit collaboration permission
+   is off, or a hand-edited `disabledTools` withholds the server.
 2. `resolveRepository` (the repository must be one the space discovered),
    `createSnapshot` and `getChangeList` through `services/git`'s index, taken
    together so the snapshot is the working tree the list describes. Any git
@@ -49,9 +51,16 @@ service starts one.
 
 Read by the renderer from the review conversation itself
 (`renderer/hooks/useReviewProgress.ts`): the live turn, the stored transcript
-and, for a team review, the collaboration it ran. A team review runs while its
-collaboration is active; once it ends, the epoch's end reason and whether
-`team_complete` left a summary tell a finished review from a stopped one.
+and, for a team review, the collaboration it ran. A team review follows the source conversation and the members actually working,
+not whether the collaboration remains open. A source stop or failure wins while
+remote members finish cancelling. The final reply must contain the prescribed
+report sections with content; a hand-off or partial reply is shown as incomplete,
+never as a completed review or an indefinitely running collaboration. The report
+text is displayed unchanged; structural recognition does not assess its quality.
+
+Stopping uses the ordinary source-chat stop, which cancels its collaboration
+requests and pending callbacks. It does not archive the collaboration. A stop
+request is not confirmation that every remote process has already stopped.
 
 ## 4) The instructions (`review-instructions.ts`)
 
@@ -61,8 +70,11 @@ snapshot holds files git does not track), the changed files (400 named, the
 rest by directory), project rules first, a todo list for progress, what to look
 for — prompt changes reviewed one by one — the three kinds of finding with
 `path:line` evidence, and the report contract in the user's language. The team
-variant adds the three-member collaboration, cross-examination and the
-reviewer's own verification, with a solo fallback. Fields that are not the
+variant creates three independent reviewers with `spawn_agent`, including each
+complete assignment in its creation prompt. Follow-up messages address the
+returned handle. Cross-examination and the reviewer's own verification precede
+the final report, with no team-completion tool. Missing collaboration falls back
+to a solo review with the limitation stated in the report. Fields that are not the
 user's own pass the agent's `inlineText` / `inlinePath` / `inlineCode`.
 
 The repository under review is untrusted input: one rule says everything read

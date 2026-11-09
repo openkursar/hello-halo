@@ -22,8 +22,8 @@ promises:
     en: Known lower limits for specific legacy models and generations remain intact; provider catalog limits take precedence over generic defaults and family guesses.
     zh: 明确的旧型号与旧代际低额度保持不变；服务商目录限制优先于通用默认值和家族推测。
   execution:
-    en: Halo SDK and Claude Code receive the effective budget shown in Model Config, subject to existing runtime safety bounds; an unknown model does not silently fall back to a different engine budget.
-    zh: Halo SDK 与 Claude Code 收到模型配置所显示的有效预算，并遵守现有运行安全边界；未知模型不会静默退回另一套引擎预算。
+    en: Halo SDK and Claude Code receive the effective budget shown in Model Config, subject to runtime safety bounds; an unknown model does not silently fall back to a different engine budget. Halo SDK treats the saved output value as a work-response ceiling, adjusts each request to remaining context and explicit provider rejection evidence, and uses a separate bounded allowance for internal summaries without rewriting the saved value.
+    zh: Halo SDK 与 Claude Code 收到模型配置所显示的有效预算，并遵守运行安全边界；未知模型不会静默退回另一套引擎预算。Halo SDK 将保存的输出值作为工作回复上限，按剩余上下文及服务端明确拒绝证据调整每次请求；内部总结使用独立有界额度，不改写保存值。
   overrides:
     en: Explicit per-model budget, vision and thinking choices survive saving and restarting and take precedence over updated defaults.
     zh: 用户明确设置的各模型预算、视觉及思考选择在保存、重启后保持，优先于更新后的默认值。

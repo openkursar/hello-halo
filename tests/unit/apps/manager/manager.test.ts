@@ -1052,6 +1052,21 @@ describe('AppManager', () => {
   // ===========================================================================
 
   describe('permissions', () => {
+    it('announces only effective authority changes, with no late callback after unsubscribe', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      const changed = vi.fn()
+      const unsubscribe = service.onAppAuthorityChanged(changed)
+      service.grantPermission(appId, 'filesystem:read')
+      service.grantPermission(appId, 'filesystem:read')
+      service.revokePermission(appId, 'filesystem:read')
+      service.grantPermission(appId, 'filesystem:read')
+      service.updateOverrides(appId, { spaceMemoryAccess: true })
+      service.updateOverrides(appId, { spaceMemoryAccess: true })
+      expect(changed.mock.calls).toEqual(Array.from({ length: 4 }, () => [appId]))
+      unsubscribe()
+      service.revokePermission(appId, 'filesystem:read')
+      expect(changed).toHaveBeenCalledTimes(4)
+    })
     it('should grant a permission', async () => {
       const appId = await service.install(TEST_SPACE_ID, createTestSpec())
 

@@ -1,0 +1,162 @@
+version: 1
+id: capabilities.mcp-context
+module: capabilities
+title:
+  en: Choose how Halo SDK loads an MCP service
+  zh: 选择 Halo SDK 如何加载 MCP 服务
+story:
+  en: I can choose on-demand or always-loaded tools and describe a service without changing its connection or permissions.
+  zh: 我能选择按需或始终加载工具，并描述服务用途，而不改变连接或权限。
+basis: documented
+references:
+  - src/main/apps/manager/DESIGN.md
+  - src/renderer/components/apps/DESIGN.md
+  - tests/unit/apps/manager/mcp-context.test.ts
+  - tests/unit/renderer/mcp-context-settings.test.ts
+  - tests/e2e/specs/acceptance-mcp-context.spec.ts
+promises:
+  defaults:
+    en: A service without a loading override defaults to on demand. Preferences remain editable without an active conversation or healthy connection.
+    zh: 没有加载覆盖设置的服务默认按需加载；没有活动会话或健康连接也能编辑偏好。
+  scope:
+    en: These preferences affect Halo SDK only. Connection enablement, authentication and disabled tools remain independent; older conversations keep their original context.
+    zh: 这些偏好仅影响 Halo SDK；连接启用、认证和禁用工具保持独立，旧会话保留原上下文。
+  save:
+    en: Saving identifies the shared impact and preserves unrelated fields. Cancelling writes nothing; a failed save retains the draft.
+    zh: 保存时说明共享影响并保留其他字段；取消不写入，保存失败保留草稿。
+  description:
+    en: A description accepts at most 512 Unicode code points. Blank text or null clears the override and restores automatic description sourcing. Unknown fields and invalid values are rejected before persistence.
+    zh: 用途说明最多接受 512 个 Unicode 码点；空白或 null 清除覆盖并恢复自动来源，未知字段和非法值在保存前被拒绝。
+  retention:
+    en: Preferences survive restart, author upgrades, scope changes and reinstall.
+    zh: 偏好在重启、作者升级、作用域变更和重新安装后保留。
+  isolation:
+    en: Loading preferences and the capability description never enter the MCP process environment or exported service specification.
+    zh: 加载偏好和用途说明不进入 MCP 进程环境或导出的服务规格。
+scenarios:
+  - id: capabilities.mcp-context.edit
+    title:
+      en: Edit and confirm loading preferences on a shared connection
+      zh: 编辑并确认共享连接的加载偏好
+    verifies: [defaults, save, description]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk, chromium-browser]
+    variants:
+      client: [desktop, remote-mobile]
+    preconditions:
+      - An installed MCP service has no loading override and no active engine session; its endpoint is unavailable.
+    steps:
+      - Open the connection details, select Always loaded and enter a description, inspect shared impact and cancel.
+      - Confirm the same draft, reopen the details, then clear only the description and save again.
+    expected:
+      - Default loading is On demand, all fields are usable and the SDK-only explanation remains visible.
+      - Cancelling leaves stored values unchanged; confirming persists the selected mode and description, and clearing the description preserves the mode.
+      - Mobile-width controls and shared-impact content remain readable and usable.
+    notes: Bound to real application tests for desktop and a 390-pixel remote browser. Both begin without sending a model request and with an unavailable MCP endpoint. Failure retention is a separate required scenario.
+  - id: capabilities.mcp-context.validation
+    title: Enforce the same bounded preference contract over desktop and remote transport
+    verifies: [description, scope]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk, chromium-browser]
+    variants:
+      client: [desktop, remote]
+    steps:
+      - Save a 512-code-point description containing supplementary Unicode characters through the real override API.
+      - Try 513 characters, an unknown nested field, an invalid loading value and an override on a digital human.
+      - Clear one field with null and inspect the remaining settings and connection state.
+    expected:
+      - Valid values persist; every invalid request fails without a partial write.
+      - Clearing one field preserves its sibling and leaves connection authentication, status and disabled tools unchanged.
+  - id: capabilities.mcp-context.retain
+    title: Keep personal loading preferences as a connection changes
+    verifies: [retention, scope]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      lifecycle: [restart, author-upgrade, scope-move, reinstall]
+    steps:
+      - Save a loading mode, description and disabled-tool preference on a controlled MCP service.
+      - Perform the selected lifecycle action through the real application and reopen the service.
+    expected:
+      - The preferences and disabled tools survive alongside the unchanged connection configuration.
+    notes: All four variants have application bindings. Preferences are saved through the real detail UI. Author upgrade uses a controlled local registry plus the real store refresh and apply-upgrade APIs, verifies the fetched author package and installed version, then reloads and reopens the UI; it does not use the user-edit spec API as a substitute. Scope move uses the real move API and verifies persistence and visibility under the destination Scope filter, with absence under Global. Reinstall uses the real soft-uninstall and reinstall APIs, verifies the removed card's Reinstall control, and reopens the detail UI. These bindings do not claim that the lifecycle actions were triggered by UI buttons or that the application journeys have already passed.
+  - id: capabilities.mcp-context.no-leak
+    title: Keep context preferences out of the service environment and export
+    verifies: [isolation]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk]
+    steps:
+      - Save a loading mode and capability description through the real detail card of a controlled stdio MCP service.
+      - Run the real connection probe, inspect the child process's selective environment receipt, and export the service through the application API.
+    expected:
+      - Ordinary MCP configuration reaches the child while the loading mode and capability description do not.
+      - The export contains neither the personal context override nor the custom capability description.
+    notes: The fixture records only synthetic markers and preference fields, never a complete environment. This checks the real connection probe and export, not a model-driven tool call.
+  - id: capabilities.mcp-context.save-failure
+    title: Retain a loading preference draft when persistence fails
+    verifies: [save]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: none
+    automation: automated
+    requirements: [halo-sdk, chromium-browser]
+    variants:
+      client: [desktop, remote-mobile]
+    steps:
+      - Edit a loading preference and confirm its shared impact, then reject the write through a controlled storage failure.
+    expected:
+      - The real application reports failure, retains the draft and leaves stored values unchanged.
+    notes: Desktop and 390-pixel remote bindings use an isolated database trigger that rejects only this MCP installation's override write. Real application handlers and transports remain in use. After checking the error and retained draft, the fixture removes the trigger, retries through the UI and verifies persisted values after reload. These bindings have not established a passing application journey until executed.
+  - id: capabilities.mcp-context.engine-scope
+    title: Apply loading preferences only at a safe Halo SDK boundary
+    verifies: [scope, defaults]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements: [halo-sdk]
+    variants:
+      engine: [halo, anthropic, codex, dsh]
+    preconditions:
+      - The selected engine is installed and runnable in an isolated application profile. Unavailable engines remain unverified.
+    steps:
+      - Keep a turn on the selected engine in a pending tool call and edit its service loading preference.
+      - Release the tool, send later work and inspect requests, session identity, connection receipts and the unchanged completed result.
+    expected:
+      - Current work is retained; later supported Halo work applies the new preference without a redundant connection probe.
+      - External-engine inputs and sessions do not change because of this preference.
+    notes: The Halo binding holds an actual MCP call while saving eager loading and a description through the UI, verifies that the pending call and its fixed declarations are preserved without an additional connection probe, then exercises eager and deferred later turns. External engines that are unavailable remain explicitly unverified, not passing variants.
+  - id: capabilities.mcp-context.legacy
+    title: Preserve the original tool context of an older conversation
+    verifies: [scope]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - An isolated Halo conversation has a valid transcript predating tool discovery state.
+    steps:
+      - Edit the MCP loading preference and continue the existing conversation, then start a new conversation with the same service.
+    expected:
+      - The older conversation retains its full tool context and recorded calls; the new conversation uses the saved loading preference.
+    notes: The fixture uses the public SDK without tool discovery to create a valid full-mode journal while the isolated application is closed. It binds that history to the existing conversation, changes eager loading to deferred through the application UI, and verifies direct old-format calls, unchanged native journal prefix and conversation messages, and discovered calls in a new conversation. No product handler or native history reader is replaced.

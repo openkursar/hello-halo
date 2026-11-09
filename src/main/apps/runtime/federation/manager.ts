@@ -36,7 +36,7 @@ import type { TeamStore, BlackboardTask } from '../../team'
 import { createOfficeAuthority, type OfficeAuthority } from './authority/office-authority'
 import { createScopeGate } from './authority/scope-gate'
 import type { ReadMemberHistory } from './authority/history-fetch'
-import { STOP_ERR_OWNER_UNREACHABLE, type StopMemberTurn } from './authority/stop-turn'
+import { STOP_ERR_CONDITIONS_UNSUPPORTED, STOP_ERR_OWNER_UNREACHABLE, type StopMemberTurn } from './authority/stop-turn'
 import type { OwnerStatus } from './authority/reconcile'
 import type { MemberWriteRecord, ReplicaAppliedBatch } from './authority/replication'
 import type { OutboundBlackboardWrite } from './authority/location-aware-blackboard'
@@ -3463,6 +3463,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     payload: Record<string, unknown>,
     epochId = ''
   ): void {
+    if (op === 'participant_upsert') {
+      console.warn(`${LOG_TAG} shared write refused office=${teamId} reason=private-participant`)
+      return
+    }
     if (servedFederation(teamId)) {
       getOfficeAuthority(teamId)?.captureLocalWrite({ teamId, epochId, op, payload })
       if (op === 'epoch_upsert') scheduleRosterRefresh(teamId)
@@ -3496,6 +3500,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     payload: Record<string, unknown>,
     taskId?: string
   ): boolean {
+    if (op === 'participant_upsert') {
+      console.warn(`${LOG_TAG} forwarded write refused office=${teamId} reason=private-participant`)
+      return true
+    }
     const host = hosted.get(teamId)
     if (!host) return false
     const authorityNode = believedAuthorityNode(teamId)
@@ -3643,6 +3651,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     appId: string
     epochId: string
   }): Promise<boolean> {
+    if ('controller' in params || 'expectedRequestId' in params) {
+      console.warn(`${LOG_TAG} stop not sent office=${params.officeId} app=${params.appId} reason=${STOP_ERR_CONDITIONS_UNSUPPORTED}`)
+      return Promise.reject(new Error(STOP_ERR_CONDITIONS_UNSUPPORTED))
+    }
     const authority = getOfficeAuthority(params.officeId)
     if (!authority) {
       return Promise.reject(new Error(`stop: office not present or M2 off office=${params.officeId}`))

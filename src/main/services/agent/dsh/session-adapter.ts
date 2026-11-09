@@ -12,7 +12,7 @@
  *      harness SDK defines — from the durable `agent/inbox/spliced` receipt
  *      carrying our message id, through the session's next whole-agent `idle`.
  *      This adapter owns that interval and filters the broadcast down to its
- *      own session plus the descendants `subagent.started` discloses.
+ *      captured session only.
  *
  *   2. There is no cancel method on the wire. `interrupt()` closes the runtime
  *      — see the method for what that costs.
@@ -25,6 +25,7 @@
  */
 
 import { randomUUID } from 'crypto'
+import { NativeSessionResumeError } from '../../../../shared/types/engine-session'
 import { DshEventNormalizer } from './event-normalizer'
 import type { SdkMcpBridge } from '../mcp/sdk-bridge'
 import type { SessionLiveInputOptions } from '../types'
@@ -163,6 +164,7 @@ export class DshSession {
   }
 
   static async create(sdkOptions: Record<string, any>): Promise<DshSession> {
+    if (sdkOptions.resume) throw new NativeSessionResumeError('dsh', String(sdkOptions.resume))
     const factory = (sdkOptions.runtimeClientFactory as DshRuntimeClientFactory | undefined)
       ?? registeredRuntimeFactory
     if (!factory) {
@@ -180,10 +182,7 @@ export class DshSession {
       env: (sdkOptions.env as Record<string, string>) || {},
       cwd: init.cwd,
     }
-    // A resumed conversation replays Halo's persisted session id. The harness
-    // creates the agent+session pair lazily on first prompt, so an id it has
-    // never seen is valid input rather than an error.
-    const sessionId = (sdkOptions.resume as string | undefined) || randomUUID()
+    const sessionId = randomUUID()
 
     const session = new DshSession(
       sessionId,

@@ -68,6 +68,7 @@ function node(nodeId: string, displayName: string, joinedAt: number): OfficeNode
     identity: `id-${nodeId}`,
     displayName,
     joinedAt,
+    advertisedUrl: null,
     lastSeen: joinedAt,
     status: 'online',
   }
@@ -98,6 +99,14 @@ describe('authority/escalation-routing', () => {
   afterEach(() => dbManager.closeAll())
 
   describe('member kind → task-originator owner (AC-7.5)', () => {
+    it('does not give retained private participants a federation escalation identity', () => {
+      store.insertEpoch({ id: 'work', teamId: TEAM_ID, startedAt: 1, endedAt: null, endReason: null, summary: null, lifecycle: 'conversation' })
+      store.participants.insert({ appId: 'temporary', teamId: TEAM_ID, epochId: 'work', parentAppId: ORIGINATOR_REMOTE,
+        memberName: 'temporary', role: '', isLead: false, aiProvisioned: false, isTemporary: true, addedAt: 1, ownerNodeId: NODE_B, origin: 'remote' })
+      expect(resolveEscalationTarget({ kind: 'member', teamId: TEAM_ID, taskOriginatorAppId: 'temporary', store, federationStore }).ownerNodeId).toBeNull()
+      expect(store.participants.getById('temporary')).not.toBeNull()
+    })
+
     it('routes to the remote originator’s owner node (positive)', () => {
       const out = resolveEscalationTarget({
         kind: 'member',

@@ -52,7 +52,7 @@ export function TeamEmptyState({ hasTeams, onNewTeam, onJoinOffice }: TeamEmptyS
           <div className="space-y-1.5">
             <p className="text-base font-medium text-foreground">{t('Create your first team')}</p>
             <p className="max-w-md text-sm text-muted-foreground">
-              {t('Group a set of digital humans into a team and describe a goal in plain words — a lead will break it down and coordinate them to get it done.')}
+              {t('Bring digital humans together and give them work when you need it. You can also set a standing goal.')}
             </p>
           </div>
           <div className="mt-1 flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">

@@ -20,7 +20,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 const store = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
 const saveConfig = vi.hoisted(() => vi.fn())
 const proxyFetch = vi.hoisted(() => vi.fn())
+const resetGroupSource = vi.hoisted(() => vi.fn())
 vi.mock('../../../../src/main/services/proxy-fetch', () => ({ proxyFetch }))
+vi.mock('../../../../src/main/openai-compat-router', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../../src/main/openai-compat-router')>(),
+  resetGroupSource,
+}))
 let uuidCounter = vi.hoisted(() => ({ n: 0 }))
 
 vi.mock('../../../../src/main/foundation/config.service', async (importOriginal) => {
@@ -56,6 +61,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 }))
 
 import { AISourceManager } from '../../../../src/main/services/ai-sources/manager'
+import { getConfig } from '../../../../src/main/foundation/config.service'
 import type { AISource, AISourcesConfig, OAuthSourceConfig, OAuthStartResult } from '../../../../src/shared/types'
 import type { ProviderResult } from '../../../../src/shared/interfaces'
 
@@ -339,6 +345,14 @@ describe('OAuth multi-account _accounts upsert', () => {
     await loginWithAccounts(mgr, [{ key: 'k-a3', label: 'Org A', id: 'acc-a' }, { key: 'k-b', label: 'Org B', id: 'acc-b' }])
     const saved = store.value.aiSources as AISourcesConfig
     expect(saved.currentId).toBe(saved.sources.find(source => source.user?.uid === 'acc-b')!.id)
+  })
+
+  it('forgets what a group learned about an account that signs in again, and nothing about one just added', async () => {
+    const listed = oauthSource({ id: 'listed', provider: 'acct-prov' as never, user: { name: '', uid: 'acc-a' } })
+    seed({ currentId: 'listed', sources: [listed] })
+    resetGroupSource.mockClear()
+    await loginWithAccounts(new AISourceManager(), [{ key: 'k-a2', label: 'Org A', id: 'acc-a' }, { key: 'k-b', label: 'Org B', id: 'acc-b' }])
+    expect(resetGroupSource.mock.calls).toEqual([['listed']])
   })
 })
 
@@ -1646,28 +1660,50 @@ describe('user-initiated switch telemetry', () => {
 
 describe('syncBuiltinModels (constructor)', () => {
   it('injects newly-added builtin models into a purely-builtin saved list', () => {
-    // Only two of openai's builtin models saved → sync fills in the rest.
+    // Only part of a vendor preset's builtin list saved → sync fills the rest.
+    seed({
+      currentId: 's1',
+      sources: [apiKeySource({ provider: 'deepseek', availableModels: [{ id: 'deepseek-flash', name: 'DeepSeek Flash' }] })]
+    })
+    new AISourceManager()
+    const saved = store.value.aiSources as AISourcesConfig
+    const ids = saved.sources[0].availableModels.map(m => m.id)
+    expect(ids).toContain('deepseek-flash')
+    expect(ids).toContain('deepseek-v4-pro')
+    expect(saveConfig).toHaveBeenCalled()
+  })
+
+  it('preserves a saved list whose model is no longer in the current preset', () => {
+    seed({
+      currentId: 's1',
+      sources: [apiKeySource({ provider: 'deepseek', availableModels: [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }] })]
+    })
+    new AISourceManager()
+    const saved = store.value.aiSources as AISourcesConfig
+    expect(saved.sources[0].availableModels.map(m => m.id)).toEqual(['deepseek-v4-flash'])
+    expect(saveConfig).not.toHaveBeenCalled()
+  })
+
+  it('leaves a user-fetched list untouched (contains a non-builtin model id)', () => {
+    seed({
+      currentId: 's1',
+      sources: [apiKeySource({ provider: 'deepseek', availableModels: [{ id: 'deepseek-v4-flash', name: 'x' }, { id: 'my-custom-model', name: 'custom' }] })]
+    })
+    new AISourceManager()
+    const saved = store.value.aiSources as AISourcesConfig
+    expect(saved.sources[0].availableModels.map(m => m.id)).toEqual(['deepseek-v4-flash', 'my-custom-model'])
+    // No dirty write from sync (constructor may still not save at all).
+    expect(saveConfig).not.toHaveBeenCalled()
+  })
+
+  it('leaves a protocol entry list untouched when it has no builtin catalog', () => {
     seed({
       currentId: 's1',
       sources: [apiKeySource({ provider: 'openai', availableModels: [{ id: 'gpt-4o', name: 'GPT-4o' }] })]
     })
     new AISourceManager()
     const saved = store.value.aiSources as AISourcesConfig
-    const ids = saved.sources[0].availableModels.map(m => m.id)
-    expect(ids).toContain('gpt-4o')
-    expect(ids).toContain('o1')
-    expect(saveConfig).toHaveBeenCalled()
-  })
-
-  it('leaves a user-fetched list untouched (contains a non-builtin model id)', () => {
-    seed({
-      currentId: 's1',
-      sources: [apiKeySource({ provider: 'openai', availableModels: [{ id: 'gpt-4o', name: 'x' }, { id: 'my-custom-model', name: 'custom' }] })]
-    })
-    new AISourceManager()
-    const saved = store.value.aiSources as AISourcesConfig
-    expect(saved.sources[0].availableModels.map(m => m.id)).toEqual(['gpt-4o', 'my-custom-model'])
-    // No dirty write from sync (constructor may still not save at all).
+    expect(saved.sources[0].availableModels.map(m => m.id)).toEqual(['gpt-4o'])
     expect(saveConfig).not.toHaveBeenCalled()
   })
 })
@@ -1783,5 +1819,197 @@ describe('vendor presentation and withdrawn models', () => {
     mgr.setCurrentModel('kept')
     expect(stored().modelReplacement).toBeUndefined()
     expect(stored().withdrawnModels).toEqual(history)
+  })
+})
+
+describe('load-balancing groups', () => {
+  const group = (extra: Record<string, unknown> = {}) => ({
+    id: 'g', name: 'Daily', strategy: 'priority', createdAt: 't', updatedAt: 't',
+    members: [{ sourceId: 's1', modelId: 'm1' }, { sourceId: 's2', modelId: 'm1' }], ...extra,
+  })
+  const stored = () => store.value.aiSources as AISourcesConfig
+
+  it('keeps groups and the chosen group when an account is added', () => {
+    seed({ currentId: 's1', sources: [apiKeySource({ id: 's1' })], groups: [group()] as never, currentGroupId: 'g' })
+    new AISourceManager().addSource(apiKeySource({ id: 's3' }))
+    expect(stored().groups).toEqual([group()])
+    expect(stored().currentGroupId).toBe('g')
+  })
+
+  it('takes a deleted account\'s models out of its groups and keeps the groups, even an empty one', () => {
+    seed({
+      currentId: 's1',
+      sources: [apiKeySource({ id: 's1' }), apiKeySource({ id: 's2' })],
+      groups: [group(), group({ id: 'only', name: 'Only', members: [{ sourceId: 's1', modelId: 'm1' }] })] as never,
+      currentGroupId: 'g',
+    })
+    const cfg = new AISourceManager().deleteSource('s1')
+    expect(cfg.groups?.map(item => [item.id, item.members.map(member => member.sourceId)])).toEqual([['g', ['s2']], ['only', []]])
+    expect(cfg.currentGroupId).toBe('g')
+    expect(stored()).toEqual(cfg)
+  })
+
+  it('saves account deletions and their group changes in the same snapshot', () => {
+    seed({ currentId: 's1', sources: [apiKeySource({ id: 's1' }), apiKeySource({ id: 's2' }), apiKeySource({ id: 's3' })], groups: [group()] as never })
+    const mgr = new AISourceManager()
+    saveConfig.mockClear()
+    mgr.deleteSource('s3')
+    expect(saveConfig).toHaveBeenLastCalledWith({ aiSources: stored() })
+    expect(stored().groups).toEqual([group()])
+    mgr.deleteSource('s2')
+    expect(saveConfig).toHaveBeenLastCalledWith({ aiSources: stored() })
+    expect(stored().groups?.[0].members).toEqual([{ sourceId: 's1', modelId: 'm1' }])
+    expect(saveConfig).toHaveBeenCalledTimes(2)
+  })
+
+  it('chooses a group for new conversations without moving the selected account, and reports no account switch', () => {
+    seed({ currentId: 's1', sources: [apiKeySource({ id: 's1' })], groups: [group({ members: [{ sourceId: 's1', modelId: 'm1' }] })] as never })
+    const result = new AISourceManager().switchCurrentSource('g')
+    expect(result).toMatchObject({ currentId: 's1', currentGroupId: 'g' })
+    expect(track).not.toHaveBeenCalled()
+  })
+
+  it('returns to an account when the user picks one, forgetting the chosen group', () => {
+    seed({
+      currentId: 's1', sources: [apiKeySource({ id: 's1' }), apiKeySource({ id: 's2' })],
+      groups: [group()] as never, currentGroupId: 'g',
+    })
+    const result = new AISourceManager().switchCurrentSource('s2')
+    expect(result.currentId).toBe('s2')
+    expect(result).not.toHaveProperty('currentGroupId')
+    expect(result.groups).toEqual([group()])
+  })
+
+  it('keeps the chosen group when a sign-in selects an account on its own', () => {
+    seed({ currentId: 's1', sources: [apiKeySource({ id: 's1' }), apiKeySource({ id: 's2' })], groups: [group()] as never, currentGroupId: 'g' })
+    const result = new AISourceManager().setCurrentSource('s2')
+    expect(result).toMatchObject({ currentId: 's2', currentGroupId: 'g' })
+  })
+
+  it('does not take an unknown id for a group', () => {
+    seed({ currentId: 's1', sources: [apiKeySource({ id: 's1' })], groups: [group()] as never })
+    const result = new AISourceManager().switchCurrentSource('nope')
+    expect(result).toMatchObject({ currentId: 's1' })
+    expect(result).not.toHaveProperty('currentGroupId')
+  })
+
+  describe('what a group has learned about an account', () => {
+    beforeEach(() => resetGroupSource.mockClear())
+
+    it('is forgotten when its key or endpoint is edited, which makes an earlier rest meaningless', () => {
+      seed({ currentId: 's1', sources: [apiKeySource({ id: 's1', apiKey: 'sk-old', apiUrl: 'api.example.com' })] })
+      const mgr = new AISourceManager()
+      mgr.updateSource('s1', { apiKey: 'sk-new' })
+      mgr.updateSource('s1', { apiUrl: 'other.example.com' })
+      expect(resetGroupSource.mock.calls).toEqual([['s1'], ['s1']])
+    })
+
+    it('is kept when only its name, its model or the same key is saved again', () => {
+      seed({ currentId: 's1', sources: [apiKeySource({ id: 's1', apiKey: 'sk-same' })] })
+      const mgr = new AISourceManager()
+      mgr.updateSource('s1', { name: 'Renamed' })
+      mgr.updateSource('s1', { model: 'other-model' })
+      mgr.updateSource('s1', { apiKey: 'sk-same' })
+      expect(resetGroupSource).not.toHaveBeenCalled()
+    })
+
+    it('is forgotten when the account is deleted', () => {
+      seed({ currentId: 's1', sources: [apiKeySource({ id: 's1' }), apiKeySource({ id: 's2' })] })
+      new AISourceManager().deleteSource('s2')
+      expect(resetGroupSource.mock.calls).toEqual([['s2']])
+    })
+  })
+
+  describe('a member\'s config', () => {
+    it('is the account\'s config for that model, with its credential', async () => {
+      seed({ currentId: 's1', sources: [apiKeySource({ id: 's1', apiUrl: 'api.example.com' })] })
+      const backend = await new AISourceManager().resolveMemberBackend('s1', 'gpt-5')
+      expect(backend).toMatchObject({ sourceId: 's1', model: 'gpt-5', key: 'sk-test', url: 'http://api.example.com/v1/chat/completions' })
+    })
+
+    it.each([
+      ['an account that was removed', () => seed({ sources: [] }), 'removed'],
+      ['the Claude Code CLI account', () => seed({ sources: [apiKeySource({ id: 's1', authType: 'delegated' })] }), 'cannot be used in a group'],
+      ['an account without a key', () => seed({ sources: [apiKeySource({ id: 's1', apiKey: undefined })] }), 'no API key'],
+      ['a signed-out account', () => seed({ sources: [oauthSource({ id: 's1', accessToken: undefined })] }), 'signed out'],
+    ])('is refused for %s', async (_label, arrange, message) => {
+      arrange()
+      await expect(new AISourceManager().resolveMemberBackend('s1', 'm')).rejects.toThrow(message)
+    })
+
+    it('renews a managed account\'s token for the model first', async () => {
+      seed({ sources: [oauthSource({ id: 'o1' })] })
+      const mgr = new AISourceManager()
+      const renew = vi.spyOn(mgr, 'ensureValidToken').mockResolvedValue({ success: true })
+      const backend = await mgr.resolveMemberBackend('o1', 'glm-4.6')
+      expect(renew).toHaveBeenCalledWith('o1', 'glm-4.6')
+      expect(backend.sourceId).toBe('o1')
+    })
+
+    it('keeps the stored token when a renewal fails, as a single account does, so one network blip does not rest the account', async () => {
+      seed({ sources: [oauthSource({ id: 'o1' })] })
+      const mgr = new AISourceManager()
+      vi.spyOn(mgr, 'ensureValidToken').mockResolvedValue({ success: false, error: 'network down' })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const backend = await mgr.resolveMemberBackend('o1', 'glm-4.6')
+      expect(backend.sourceId).toBe('o1')
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('using the stored token'))
+      warn.mockRestore()
+    })
+
+    it('is refused when the account vanished while its token was being renewed', async () => {
+      seed({ sources: [oauthSource({ id: 'o1' })] })
+      const mgr = new AISourceManager()
+      vi.spyOn(mgr, 'ensureValidToken').mockImplementation(async () => {
+        seed({ sources: [] })
+        return { success: false, error: 'gone' }
+      })
+      await expect(mgr.resolveMemberBackend('o1', 'glm-4.6')).rejects.toThrow('removed')
+    })
+
+    describe('remembering a member\'s config', () => {
+      it('answers from memory for a minute, so a long turn does not read the settings on every request', async () => {
+        seed({ sources: [apiKeySource({ id: 's1', apiUrl: 'api.example.com' })] })
+        const mgr = new AISourceManager()
+        const now = vi.spyOn(Date, 'now')
+        now.mockReturnValue(1_000)
+        const first = await mgr.resolveMemberBackend('s1', 'gpt-5')
+        const reads = vi.mocked(getConfig).mock.calls.length
+        now.mockReturnValue(30_000)
+        expect(await mgr.resolveMemberBackend('s1', 'gpt-5')).toBe(first)
+        expect(vi.mocked(getConfig).mock.calls.length).toBe(reads)
+        now.mockReturnValue(62_000)
+        expect(await mgr.resolveMemberBackend('s1', 'gpt-5')).not.toBe(first)
+        now.mockRestore()
+      })
+
+      it('keeps one answer per model, and drops them all when the account is edited', async () => {
+        seed({ sources: [apiKeySource({ id: 's1', apiKey: 'sk-old', apiUrl: 'api.example.com' })] })
+        const mgr = new AISourceManager()
+        const one = await mgr.resolveMemberBackend('s1', 'm1')
+        const two = await mgr.resolveMemberBackend('s1', 'm2')
+        expect(one.model).toBe('m1')
+        expect(two.model).toBe('m2')
+        mgr.updateSource('s1', { apiKey: 'sk-new' })
+        expect((await mgr.resolveMemberBackend('s1', 'm1')).key).toBe('sk-new')
+        expect((await mgr.resolveMemberBackend('s1', 'm2')).key).toBe('sk-new')
+      })
+
+      it('does not outlive the account', async () => {
+        seed({ currentId: 's1', sources: [apiKeySource({ id: 's1' }), apiKeySource({ id: 's2' })] })
+        const mgr = new AISourceManager()
+        await mgr.resolveMemberBackend('s2', 'm1')
+        mgr.deleteSource('s2')
+        await expect(mgr.resolveMemberBackend('s2', 'm1')).rejects.toThrow('removed')
+      })
+
+      it('does not keep a refusal', async () => {
+        seed({ sources: [apiKeySource({ id: 's1', apiKey: undefined })] })
+        const mgr = new AISourceManager()
+        await expect(mgr.resolveMemberBackend('s1', 'm1')).rejects.toThrow('no API key')
+        seed({ sources: [apiKeySource({ id: 's1', apiKey: 'sk-fixed' })] })
+        await expect(mgr.resolveMemberBackend('s1', 'm1')).resolves.toMatchObject({ key: 'sk-fixed' })
+      })
+    })
   })
 })

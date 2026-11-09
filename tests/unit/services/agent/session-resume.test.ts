@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
-const { createSession, getActiveEngine, paths } = vi.hoisted(() => ({
+const { createSession, getActiveEngine, paths, readSessionToolContextMode, publishToolsetContextMode } = vi.hoisted(() => ({
+  readSessionToolContextMode: vi.fn(), publishToolsetContextMode: vi.fn(),
   createSession: vi.fn(),
   getActiveEngine: vi.fn(() => 'halo'),
   paths: { userData: '', home: '' },
@@ -15,7 +16,10 @@ vi.mock('os', async importOriginal => {
   const homedir = () => paths.home || globalThis.__HALO_TEST_DIR__ || '/tmp/halo-resume-config-placeholder'
   return { ...actual, homedir, default: { ...actual, homedir } }
 })
-vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ createSession, getActiveEngine }))
+vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
+  createSession: async (options: any, prepare?: (scope: any) => Promise<any>) => createSession(prepare ? await prepare({ signal: options.abortController.signal, readSessionToolContextMode }) : options),
+  getActiveEngine,
+}))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({ analytics: { track: vi.fn(), trackErrorSurface: vi.fn() } }))
 vi.mock('../../../../src/main/services/agent/session-consumer', () => ({ startConsumer: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/conversation-sink', () => ({ createConversationSink: vi.fn() }))
@@ -26,14 +30,14 @@ vi.mock('../../../../src/main/services/agent/knowledge-context', () => ({
   resolveConversationKnowledgeBases: vi.fn(() => []),
   resolveConversationKnowledgeBaseIds: vi.fn(() => []),
 }))
-vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({ setSessionInvalidator: vi.fn(), buildCreationTimeServers: vi.fn(() => ({})) }))
+vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({ publishToolsetContextMode, setSessionInvalidator: vi.fn(), buildCreationTimeServers: vi.fn(() => ({})) }))
 vi.mock('../../../../src/main/services/agent/toolsets/capability-index', () => ({ buildToolsetSection: vi.fn(() => '') }))
 vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({ dropConversationState: vi.fn(), getOpenToolsets: vi.fn(() => []) }))
 vi.mock('../../../../src/main/services/api-ref', () => ({ HALO_API_TOOLSET_ID: 'halo-api-ref' }))
 vi.mock('../../../../src/main/services/conversation.service', () => ({ getConversation: vi.fn(() => null) }))
 vi.mock('../../../../src/main/services/health', () => ({ registerProcess: vi.fn(), unregisterProcess: vi.fn(), getCurrentInstanceId: vi.fn(() => null) }))
 
-import { acquireV2Session, getOrCreateV2Session, closeAllV2Sessions, stopSessionCleanup } from '../../../../src/main/services/agent/session-manager'
+import { acquireV2Session, getOrCreateV2Session, closeAllV2Sessions, markTurnInitReceived, stopSessionCleanup } from '../../../../src/main/services/agent/session-manager'
 import { NativeSessionResumeError } from '../../../../src/shared/types/engine-session'
 import { stopGeneration } from '../../../../src/main/services/agent/control'
 
@@ -44,6 +48,8 @@ beforeEach(() => {
   paths.userData = join(directory, 'app-data')
   paths.home = join(directory, 'home')
   getActiveEngine.mockReturnValue('halo')
+  readSessionToolContextMode.mockReset()
+  publishToolsetContextMode.mockReset()
   createSession.mockResolvedValue({
     close: vi.fn(),
     query: { transport: { isReady: () => true, onExit: () => () => {} } },
@@ -154,11 +160,18 @@ it('refuses to start empty when no transcript exists', async () => {
   expect(createSession).not.toHaveBeenCalled()
 })
 
-it.each(['codex', 'dsh'])('leaves %s resumption to its adapter', async engine => {
-  getActiveEngine.mockReturnValue(engine)
+it('leaves Codex resumption to its adapter', async () => {
+  getActiveEngine.mockReturnValue('codex')
   const { configDir, sessionId, resume } = fixture()
   await resume(configDir)
   expect(createSession.mock.calls[0][0].resume).toBe(sessionId)
+})
+
+it('refuses a cold Dsh id without a recorded-context recovery source', async () => {
+  getActiveEngine.mockReturnValue('dsh')
+  const { configDir, resume } = fixture()
+  await expect(resume(configDir)).rejects.toBeInstanceOf(NativeSessionResumeError)
+  expect(createSession).not.toHaveBeenCalled()
 })
 
 describe('continuing from the transcript when the stored record is lost', () => {
@@ -205,11 +218,14 @@ describe('continuing from the transcript when the stored record is lost', () => 
   })
 
   it('preserves the original file when strict restore fails without fallback history', async () => {
-    const { configDir, sessionId, save } = fixture()
+    const { configDir, sessionId, transcript, save } = fixture()
     save(configDir)
+    const original = readFileSync(transcript(configDir), 'utf8')
     createSession.mockRejectedValueOnce(new NativeSessionResumeError('halo', sessionId)).mockResolvedValue(session())
     await expect(lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => '' })).rejects.toBeInstanceOf(NativeSessionResumeError)
     expect(createSession).toHaveBeenCalledOnce()
+    expect(readFileSync(transcript(configDir), 'utf8')).toBe(original)
+    expect(publishToolsetContextMode).not.toHaveBeenCalled()
   })
 
   it('does not ask other engines for a strict restore', async () => {
@@ -220,5 +236,106 @@ describe('continuing from the transcript when the stored record is lost', () => 
     await lease({ root: configDir, sessionId, workDir: join(directories[0], 'workspace'), recover: () => 'Historical context.' })
     expect(createSession.mock.calls[0][0]).toMatchObject({ resume: sessionId })
     expect(createSession.mock.calls[0][0]).not.toHaveProperty('strictResume')
+  })
+})
+
+
+describe('toolset preparation after native history resolution', () => {
+  it('migrates history before preparing automatic tools without inspecting the native format', async () => {
+    const { configDir, sessionId, transcript, save } = fixture()
+    const source = join(paths.home, '.claude')
+    save(source)
+    const original = readFileSync(transcript(source), 'utf8')
+    const servers = vi.fn((mode: string | undefined) => {
+      expect(readFileSync(transcript(configDir), 'utf8')).toBe(original)
+      return { [mode!]: { command: 'fixture' } }
+    })
+    const instructions = vi.fn((mode: string) => `\n\nGuide: ${mode}`)
+    const conversationId = randomUUID()
+    const options = { engineId: 'halo', model: 'test', systemPrompt: 'Base', env: { CLAUDE_CONFIG_DIR: configDir } }
+    const first = await getOrCreateV2Session('space', conversationId, options, sessionId, join(directories[0], 'workspace'), undefined, undefined, servers, undefined, { toolsetInstructions: instructions })
+    expect(servers).toHaveBeenCalledWith('automatic')
+    expect(instructions).toHaveBeenCalledWith('automatic')
+    expect(createSession.mock.calls[0][0]).toMatchObject({
+      resume: sessionId, strictResume: true,
+      mcpServers: { automatic: { command: 'fixture' } },
+      systemPrompt: 'Base\n\nGuide: automatic',
+    })
+    expect(servers.mock.invocationCallOrder[0]).toBeLessThan(createSession.mock.invocationCallOrder[0])
+    expect(publishToolsetContextMode).toHaveBeenCalledWith('space', conversationId, 'automatic')
+    expect(publishToolsetContextMode.mock.invocationCallOrder[0]).toBeGreaterThan(createSession.mock.invocationCallOrder[0])
+    const reused = await getOrCreateV2Session('space', conversationId, options, sessionId, join(directories[0], 'workspace'), undefined, undefined, servers, undefined, { toolsetInstructions: instructions })
+    expect(reused).toBe(first)
+    expect(readSessionToolContextMode).not.toHaveBeenCalled()
+    expect(readFileSync(transcript(source), 'utf8')).toBe(original)
+    expect(servers).toHaveBeenCalledOnce()
+    expect(instructions).toHaveBeenCalledOnce()
+    expect(createSession).toHaveBeenCalledOnce()
+    expect(publishToolsetContextMode).toHaveBeenCalledOnce()
+  })
+
+  it('rebuilds automatic tools and guides after the engine refuses native restore, preserving the record', async () => {
+    const { configDir, sessionId, transcript, save } = fixture()
+    save(configDir)
+    const original = readFileSync(transcript(configDir), 'utf8')
+    const native = { close: vi.fn(), send: vi.fn(async (_message: unknown) => {}), query: { transport: { isReady: () => true, onExit: () => () => {} } } }
+    createSession.mockImplementationOnce(async () => {
+      expect(publishToolsetContextMode).not.toHaveBeenCalled()
+      throw new NativeSessionResumeError('halo', sessionId)
+    }).mockResolvedValueOnce(native)
+    const recover = vi.fn(() => 'Historical context: latest recorded turn.').mockReturnValueOnce('Historical context: kept the files.')
+    const servers = vi.fn((mode: string | undefined) => ({ [mode!]: { command: 'fixture' } }))
+    const instructions = vi.fn((mode: string) => `\n\nGuide: ${mode}`)
+    const sink = { onTurnComplete: vi.fn(), onContinuedFromRecord: vi.fn() }
+    const conversationId = randomUUID()
+    const acquired = await acquireV2Session('space', conversationId, {
+      engineId: 'halo', model: 'test', systemPrompt: 'Base', env: { CLAUDE_CONFIG_DIR: configDir },
+    }, sessionId, join(directories[0], 'workspace'), { sink } as never, undefined, servers, undefined, {
+      toolsetInstructions: instructions,
+      recoverNativeSession: recover,
+    })
+    expect(createSession).toHaveBeenCalledTimes(2)
+    const [restore, fallback] = createSession.mock.calls.map(([options]) => options)
+    expect(restore).toMatchObject({ resume: sessionId, strictResume: true })
+    expect(fallback).toMatchObject({
+      engineHandoffRecovered: true, engineHandoffContent: 'Historical context: kept the files.',
+      resume: undefined, strictResume: undefined,
+    })
+    expect(servers.mock.calls).toEqual([['automatic'], ['automatic']])
+    expect(instructions.mock.calls).toEqual([['automatic'], ['automatic']])
+    for (const options of [restore, fallback]) {
+      expect(options.mcpServers).toEqual({ automatic: { command: 'fixture' } })
+      expect(options.systemPrompt).toBe('Base\n\nGuide: automatic')
+    }
+    expect(fallback.mcpServers).not.toBe(restore.mcpServers)
+    expect(recover).toHaveBeenCalledTimes(2)
+    expect(recover.mock.invocationCallOrder[0]).toBeGreaterThan(createSession.mock.invocationCallOrder[0])
+    expect(recover.mock.invocationCallOrder[1]).toBeGreaterThan(createSession.mock.invocationCallOrder[1])
+    expect(readSessionToolContextMode).not.toHaveBeenCalled()
+    expect(readFileSync(transcript(configDir), 'utf8')).toBe(original)
+    expect(publishToolsetContextMode).toHaveBeenCalledOnce()
+    expect(publishToolsetContextMode).toHaveBeenCalledWith('space', conversationId, 'automatic')
+    expect(publishToolsetContextMode.mock.invocationCallOrder[0]).toBeGreaterThan(createSession.mock.invocationCallOrder[1])
+    await acquired.send('Next question')
+    markTurnInitReceived(conversationId)
+    const next = await acquireV2Session('space', conversationId, {
+      engineId: 'halo', model: 'test', systemPrompt: 'Base', env: { CLAUDE_CONFIG_DIR: configDir },
+    }, sessionId, join(directories[0], 'workspace'), { sink } as never, undefined, servers, undefined, {
+      toolsetInstructions: instructions, recoverNativeSession: recover,
+    })
+    expect(next.session).toBe(native)
+    await next.send('Another question')
+    markTurnInitReceived(conversationId)
+    next.release()
+    expect(createSession).toHaveBeenCalledTimes(2)
+    expect(publishToolsetContextMode).toHaveBeenCalledOnce()
+    expect(recover).toHaveBeenCalledTimes(2)
+    expect(sink.onContinuedFromRecord).toHaveBeenCalledOnce()
+    expect(sink.onContinuedFromRecord.mock.invocationCallOrder[0]).toBeLessThan(native.send.mock.invocationCallOrder[0])
+    expect(native.send.mock.calls[0][0]).toContain('Historical context: latest recorded turn.')
+    expect(native.send.mock.calls[0][0]).not.toContain('Historical context: kept the files.')
+    expect(native.send.mock.calls[0][0]).toContain('Next question')
+    expect(native.send.mock.calls[1][0]).toBe('Another question')
+    acquired.release()
   })
 })

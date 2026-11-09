@@ -15,7 +15,7 @@ import {
   updateConfig,
 } from '../controllers/config.controller'
 import { runConfigProbe, emitConfigChange } from '../services/health'
-import type { AISourcesConfig, AISource } from '../../shared/types'
+import { isSelected, type AISourcesConfig, type AISource } from '../../shared/types'
 import { configRpc } from '../../shared/rpc/contracts/config.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -188,10 +188,10 @@ export function registerConfigHandlers(): void {
         const result = manager.switchCurrentSource(sourceId)
         const notSaved = notSavedWhileConfigUnreadable()
         if (notSaved) return notSaved
-        if (result.currentId !== sourceId) {
+        if (!isSelected(result, sourceId)) {
           return { success: false, error: `Source not found: ${sourceId}` }
         }
-        emitConfigChange(['aiSources.currentId'])
+        emitConfigChange([result.currentGroupId === sourceId ? 'aiSources.currentGroupId' : 'aiSources.currentId'])
         runConfigProbe().catch(err => console.error('[Settings] ai-sources:switch-source - Probe failed:', err))
         return { success: true, data: maskOAuthFields({ aiSources: result }).aiSources }
       } catch (error: unknown) {

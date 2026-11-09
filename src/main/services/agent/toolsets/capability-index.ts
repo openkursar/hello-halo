@@ -1,30 +1,21 @@
-/**
- * Toolset Broker - System-prompt section
- *
- * Appends the full usage guide of each currently-ENABLED optional toolset to the
- * system prompt, so the AI has rich cross-tool guidance for capabilities that are
- * actually available (their mcp__<id>__* tools).
- *
- * Awareness of DISABLED toolsets (and how to ask the user to enable one) is NOT
- * here — it lives in the `request_toolset` tool's own description (meta-server.ts),
- * which is present only while something is disabled. Keeping it there avoids a
- * redundant resident index and the "generic MCP manager" framing.
- */
+/** Usage guides follow the same mode-aware selection as the mounted servers. */
 
 import { getAvailableToolsets } from './registry'
 import { getOpenToolsets } from './state'
+import { isToolsetIncluded } from './selection'
+import type { ToolsetContextMode } from './types'
 
-/**
- * Build the enabled-toolset guides section for a conversation's system prompt.
- * Returns an empty string when no toolset is enabled.
- */
-export function buildToolsetSection(spaceId: string, conversationId: string): string {
+const AUTOMATIC_CONTEXT_GUIDANCE = `# Capability availability in this conversation
+Supported browser, terminal, OCR and collaboration capabilities are supplied automatically. Operate Halo is a core capability: its API reference and scoped runtime credentials are available without a human enablement step. Do not ask the user to enable capability switches, even if an older Halo guide describes them. Use the tools exposed in this session and discover further tools when the engine provides a discovery entry.
+Explicit tool restrictions, connection settings and caller-specific execution policies remain effective. A missing or denied tool does not authorize bypassing those restrictions.`
+
+/** Captured once at session creation. */
+export function buildToolsetSection(spaceId: string, conversationId: string, mode: ToolsetContextMode = 'manual'): string {
   const open = getOpenToolsets(spaceId, conversationId)
-  if (open.size === 0) return ''
 
-  let out = ''
+  let out = '\n\n' + AUTOMATIC_CONTEXT_GUIDANCE
   for (const def of getAvailableToolsets()) {
-    if (open.has(def.id) && def.usageGuide) {
+    if (isToolsetIncluded(def, open, mode) && def.usageGuide) {
       out += '\n\n' + def.usageGuide.trim()
     }
   }

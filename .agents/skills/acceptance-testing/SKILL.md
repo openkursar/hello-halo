@@ -5,6 +5,11 @@ description: Maintain Halo's user-outcome acceptance catalog, choose and run its
 
 # Halo acceptance testing
 
+SDK-only verification starts at repository `src/sdk/halo-sdk/AGENTS.md` and
+`src/sdk/halo-sdk/TESTING.md`; it does not require Electron. When SDK changes
+affect a Halo user journey or host integration, also use the applicable stories
+and this workflow. SDK simulation, app E2E and live-model evidence are distinct.
+
 Read [the catalog contract](../../../tests/acceptance/FORMAT.md) before changing
 acceptance assets. For runner setup, nightly execution, or public-clone limits,
 read [the CI guide](../../../docs/acceptance-ci.md).
@@ -58,12 +63,19 @@ done; this is the purpose of the system, and nobody needs to ask you to.
 
 1. Name the affected modules: the stories under `tests/acceptance/catalog/` whose
    promises the change touches, and the modules that depend on them.
-2. Run them where they cause no disturbance. The build host that CI uses owns a
-   graphical session for this; running Electron locally opens windows on whoever
-   is working at the desk, so do that only when asked. CI tests a branch that
-   exists on the source repository. Committing and publishing one still follow the
-   `code-commit` and `gh-publish` rules and need the human's trigger or
-   authorization. Once the branch is there, dispatch the modules:
+2. Choose and run the appropriate environment autonomously. Starting isolated
+   application instances, opening test windows and running local GUI/Electron
+   acceptance are part of authorized development and verification; they need no
+   separate human confirmation. Possible windows or focus changes are not a
+   reason to stop and ask. Minimize interference, use isolated profiles, and close
+   only test processes owned by the run. Never reuse or stop the user's normal app
+   instance. Honor an explicit user restriction, but do not invent one.
+
+   Prefer an available isolated graphical runner; use local isolated instances
+   when suitable. CI tests a branch that exists on the source repository.
+   Committing and publishing still follow `code-commit` and `gh-publish` and need
+   their own authorization; local testing does not require a commit or push first.
+   Once a suitable branch is available, dispatch the modules:
 
    ```bash
    node scripts/acceptance/ci-dispatch.mjs --source-ref <branch> --module <id> --module <id>
@@ -75,8 +87,10 @@ done; this is the purpose of the system, and nobody needs to ask you to.
    `halo.acceptanceAccount` in the local Git config (see
    [the CI guide](../../../docs/acceptance-ci.md#triggering-a-run-and-reading-its-result)).
    If a receipt already exists for the request, query it; never send the same
-   request twice. If dispatch is not configured or the branch cannot be published,
-   say that acceptance was not run instead of implying coverage.
+   request twice. If CI is unavailable, use a suitable local isolated run rather
+   than treating publication as a testing prerequisite. If no usable environment
+   remains, report the concrete blocker and what was not run, not an assumed
+   requirement for human permission to open test windows.
 3. Wait for the run and read its findings, not its color. The step succeeds when
    the run is complete, whatever scenarios failed:
    `gh run download <run-id> -R <controller> -n quality-<run-id>-<attempt>` gives
@@ -88,7 +102,11 @@ done; this is the purpose of the system, and nobody needs to ask you to.
    regressions of your change. An incomplete run says nothing about the product;
    repair the failing stage or report it.
 4. Report in product terms: what a user would now notice, which scenarios ran,
-   which failed and why, and what stayed unverified.
+   which failed and why, and what stayed unverified. State whether the actual
+   application was launched and which real journeys ran. Builds, unit tests,
+   scripted-model harness tests and prepared drivers do not establish application
+   acceptance. Do not describe a candidate as verified or ready while required
+   application journeys remain unexecuted.
 
 ## Execution and interpretation
 

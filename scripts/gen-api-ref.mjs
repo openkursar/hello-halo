@@ -68,7 +68,7 @@ const CONT_INDENT = '          '
  * endpoints answer 404 "no such path"; and order, for the reason above.
  */
 const ROUTE_FILES = [
-  'config', 'ai-sources', 'space', 'agent', 'terminal', 'artifact',
+  'config', 'ai-sources', 'ai-groups', 'space', 'agent', 'terminal', 'artifact',
   'notify', 'im', 'system', 'apps', 'team', 'store', 'tlon', 'task',
   'git', 'code-review', 'skills',
 ]
@@ -88,7 +88,7 @@ function assertRouteFilesMatchRegistrationOrder() {
   }
 
   const body = source.slice(source.indexOf('export function registerApiRoutes'))
-  const registered = [...body.matchAll(/^\s*(\w+)\(app\)/gm)]
+  const registered = [...body.matchAll(/^\s*(\w+)\(app(?:\s*,\s*options)?\)/gm)]
     .map(([, fn]) => moduleOf.get(fn))
     .filter(Boolean)
 

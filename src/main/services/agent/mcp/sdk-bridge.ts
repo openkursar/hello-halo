@@ -14,6 +14,8 @@
  */
 
 import http, { type IncomingMessage, type ServerResponse } from 'http'
+import { randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { AddressInfo } from 'net'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
@@ -24,16 +26,33 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import type { SdkMcpServerInstance } from './types'
 
+interface BridgeClient {
+  name: string
+  server: Server
+  transport: StreamableHTTPServerTransport
+  id?: string
+}
+
+const MAX_BRIDGE_CLIENTS = 128
+
 export class SdkMcpBridge {
   private server: http.Server | null = null
   private port: number | null = null
   private readonly dialled = new Set<string>()
   private readonly dialWaiters: Array<() => void> = []
+  private readonly clients = new Set<BridgeClient>()
+  private readonly sessions = new Map<string, BridgeClient>()
+  private readonly requestContext = new AsyncLocalStorage<{ servedCatalogue: boolean }>()
+  private activeCalls = 0
+  private stateTimer: ReturnType<typeof setInterval> | undefined
+  private closed = false
+  private closing: Promise<void> | undefined
 
   constructor(private readonly instances: Record<string, SdkMcpServerInstance>) {}
 
   /** Start listening and return the URL for each server, keyed by name. */
   async start(): Promise<Record<string, string>> {
+    if (this.closed) throw new Error('The MCP bridge has closed')
     if (this.server && this.port) return this.urls()
 
     this.server = http.createServer((req, res) => {
@@ -94,13 +113,48 @@ export class SdkMcpBridge {
     })
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    return this.closing ??= this.closeClients()
+  }
+
+  private async closeClients(): Promise<void> {
+    this.closed = true
     const server = this.server
     this.server = null
     this.port = null
     if (!server) return
+    clearInterval(this.stateTimer)
+    this.stateTimer = undefined
+    const settled = await Promise.allSettled([...this.clients].map(client => client.server.close()))
+    for (const result of settled) {
+      if (result.status === 'rejected') console.warn('[Agent][mcp] Client shutdown failed:', result.reason)
+    }
+    this.clients.clear()
+    this.sessions.clear()
     server.closeAllConnections?.()
     await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+
+  diagnostics(): { sessions: number; activeCalls: number } {
+    return { sessions: this.clients.size, activeCalls: this.activeCalls }
+  }
+
+  private beginCall(): () => void {
+    if (this.closed) throw new Error('The MCP bridge is closing')
+    this.activeCalls++
+    if (!this.stateTimer && !this.closed) {
+      this.stateTimer = setInterval(() => {
+        console.log(`[Agent][mcp] Bridge state: sessions=${this.clients.size} activeCalls=${this.activeCalls}`)
+      }, 300000)
+      this.stateTimer.unref?.()
+    }
+    return () => {
+      this.activeCalls--
+      if (this.activeCalls === 0) {
+        clearInterval(this.stateTimer)
+        this.stateTimer = undefined
+      }
+    }
   }
 
   private allDialled(): boolean {
@@ -123,8 +177,9 @@ export class SdkMcpBridge {
   }
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (this.closed) { res.writeHead(503); res.end('MCP bridge is closing'); return }
     const name = decodeURIComponent((req.url || '').split('?')[0].replace(/^\/mcp\//, ''))
-    const instance = this.instances[name]
+    const instance = Object.hasOwn(this.instances, name) ? this.instances[name] : undefined
     if (!instance) {
       res.writeHead(404, { 'content-type': 'text/plain' })
       res.end('Unknown MCP server')
@@ -135,17 +190,59 @@ export class SdkMcpBridge {
     // that has connected but not yet read the catalogue has registered nothing
     // its model can call. The flag is raised when the response is on the wire,
     // not when the handler runs, so the wait ends no earlier than the answer.
-    let servedCatalogue = false
-    const mcpServer = createMcpServerForInstance(name, instance, () => { servedCatalogue = true })
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-    await mcpServer.connect(transport)
-    res.on('close', () => {
-      void mcpServer.close().catch(() => {})
-    })
+    const id = req.headers['mcp-session-id']
+    let client: BridgeClient | undefined
+    if (id !== undefined) {
+      client = typeof id === 'string' ? this.sessions.get(id) : undefined
+      if (!client || client.name !== name) {
+        console.warn(`[Agent][mcp] Unknown client session refused: server=${name}`)
+        res.writeHead(404); res.end('Unknown MCP session'); return
+      }
+    } else {
+      if (this.clients.size >= MAX_BRIDGE_CLIENTS) {
+        console.warn(`[Agent][mcp] Client capacity reached: sessions=${this.clients.size}`)
+        res.writeHead(503); res.end('MCP client capacity reached'); return
+      }
+      const mcpServer = createMcpServerForInstance(name, instance, () => {
+        const request = this.requestContext.getStore()
+        if (request) request.servedCatalogue = true
+      }, () => this.beginCall())
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: randomUUID,
+        onsessioninitialized: sessionId => {
+          if (this.closed || !this.clients.has(created)) throw new Error('MCP bridge closed during initialization')
+          created.id = sessionId
+          this.sessions.set(sessionId, created)
+        },
+        onsessionclosed: sessionId => {
+          this.sessions.delete(sessionId)
+          this.clients.delete(created)
+        },
+      })
+      const created: BridgeClient = { name, server: mcpServer, transport }
+      this.clients.add(created)
+      transport.onclose = () => {
+        this.clients.delete(created)
+        if (created.id) this.sessions.delete(created.id)
+      }
+      try { await mcpServer.connect(transport) }
+      catch (error) { this.clients.delete(created); throw error }
+      if (this.closed || res.destroyed) {
+        console.warn(`[Agent][mcp] Client initialization cancelled: server=${name}`)
+        await mcpServer.close()
+        if (!res.destroyed) { res.writeHead(503); res.end('MCP bridge is closing') }
+        return
+      }
+      client = created
+      res.on('close', () => {
+        if (!created.id) void mcpServer.close().catch(error => console.warn('[Agent][mcp] Uninitialized client cleanup failed:', error))
+      })
+    }
+    const context = { servedCatalogue: false }
     res.on('finish', () => {
-      if (servedCatalogue) this.markDialled(name)
+      if (context.servedCatalogue) this.markDialled(name)
     })
-    await transport.handleRequest(req, res)
+    await this.requestContext.run(context, () => client!.transport.handleRequest(req, res))
   }
 }
 
@@ -153,6 +250,7 @@ function createMcpServerForInstance(
   name: string,
   instance: SdkMcpServerInstance,
   onToolsListed: () => void,
+  beginCall: () => () => void,
 ): Server {
   const server = new Server(
     { name, version: instance.version || '1.0.0' },
@@ -171,9 +269,12 @@ function createMcpServerForInstance(
     }
   })
 
-  server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
-    const result = await instance.callTool(request.params.name, request.params.arguments || {})
-    return normalizeToolResult(result)
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<CallToolResult> => {
+    const finish = beginCall()
+    try {
+      const result = await instance.callTool(request.params.name, request.params.arguments || {}, { signal: extra.signal })
+      return normalizeToolResult(result)
+    } finally { finish() }
   })
 
   return server

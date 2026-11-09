@@ -12,6 +12,7 @@ references:
   - src/renderer/components/team/workbench/DESIGN.md
   - src/main/apps/runtime/team/DESIGN.md
   - tests/e2e/specs/team-render.spec.ts
+  - tests/e2e/specs/acceptance-temporary-decision.spec.ts
 promises:
   audience:
     en: Internal team inputs are distinct from human messages and unrelated private results are not exposed.
@@ -25,6 +26,9 @@ promises:
   timeline:
     en: Malformed timestamps preserve task content with an explicit unknown-time presentation.
     zh: 异常时间戳保留任务内容，并明确显示时间未知。
+  temporary-answer:
+    en: I can answer a temporary collaborator's question in its task; that same collaborator continues the original work and retains its history without being installed as a digital human.
+    zh: 我能在任务中回答临时协作者的问题；同一协作者继续原工作并保留历史，不会被安装成数字人。
 scenarios:
   - id: teams.decisions.audience
     title:
@@ -227,3 +231,33 @@ scenarios:
     expected:
       - en: Activity has no duplicate answer action; the link focuses the conversation’s single answer surface.
         zh: 活动中无重复回答操作，链接聚焦对话中唯一回答入口。
+
+  - id: teams.decisions.temporary-member-answer
+    title:
+      en: Answer a temporary collaborator and continue the same work
+      zh: 回答临时协作者的问题并继续同一工作
+    verifies: [temporary-answer]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: A fresh isolated application profile uses the real engine and a local scripted model endpoint.
+        zh: 全新隔离应用资料运行真实引擎及本地脚本模型端点。
+    steps:
+      - en: From the workspace chat, create one temporary collaborator through spawn_agent; it asks one question through report_to_user.
+        zh: 在工作区聊天通过 spawn_agent 创建一名临时协作者，由其通过 report_to_user 提出一个问题。
+      - en: Open its task conversation and submit the answer through the actual question card.
+        zh: 打开其任务对话，通过真实问题卡片提交答案。
+      - en: Wait for the original collaborator to continue and send its result to the source, then restart and reopen the same task.
+        zh: 等待原协作者继续执行并把结果发回源对话，再重启并打开同一任务。
+    expected:
+      - en: The persisted question, answer and one completed continuation belong to the returned temporary handle and the same team, task and session. The continuation receives its original context and the owner's answer.
+        zh: 持久保存的问题、答案及一次已完成的续跑属于创建时返回的临时身份和同一团队、任务、会话；续跑收到原上下文及主人的答案。
+      - en: Earlier history remains intact, the answered state survives restart, and no installed automation identity is added or substituted for the temporary member.
+        zh: 较早历史保持完整，已回答状态在重启后保留，不新增已安装自动化身份，也不以其替换临时成员。
+    notes:
+      en: Application routing, question UI, SQLite and engine continuation are real; only model responses are scripted. This does not establish remote-owner routing, guest permissions, live-model quality or recovery of an answer interrupted while still queued.
+      zh: 应用路由、问题界面、SQLite 及引擎续跑均为真实，仅模型回复使用脚本。不据此证明远端主人路由、访客权限、真实模型质量或尚在排队时被中断的答案恢复。

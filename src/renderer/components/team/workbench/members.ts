@@ -1,13 +1,14 @@
 import { isRemoteMember, parseSpaceCoordinatorAppId } from '../../../../shared/apps/team-types'
-import type { TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
+import type { EpochBoard, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 
 /** Internal conversation addresses are provenance, never selectable people. */
-export function detailForTask(detail: TeamDetail, task: TeamConversation | null): TeamDetail {
+export function detailForTask(detail: TeamDetail, task: TeamConversation | null, board?: EpochBoard | null): TeamDetail {
+  const scoped = task && board && board.epoch.id === task.epochId && board.epoch.teamId === detail.team.id ? board : null
   const source = detail.team.ephemeral === true || task?.kind === 'collab'
-  const members = detail.members.filter(member =>
+  const members = (scoped?.members ?? detail.members).filter(member =>
     !parseSpaceCoordinatorAppId(member.appId) && (!source || !member.isSystemCoordinator))
   const ids = new Set(members.map(member => member.appId))
-  return { ...detail, members, roster: detail.roster.filter(member => ids.has(member.appId)) }
+  return { ...detail, members, roster: (scoped?.roster ?? detail.roster).filter(member => ids.has(member.appId)) }
 }
 
 export function ownedTaskMembers(detail: TeamDetail, apps: readonly { id: string }[]) {

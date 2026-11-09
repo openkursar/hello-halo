@@ -29,8 +29,11 @@ vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({
   buildCreationTimeServers: vi.fn(() => ({})),
   openToolset: vi.fn(() => ({ ok: true })),
 }))
-vi.mock('../../../../src/main/services/agent/toolsets/capability-index', () => ({ buildToolsetSection: vi.fn(() => '') }))
-vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({ getOpenToolsets: vi.fn(() => new Set()) }))
+vi.mock('../../../../src/main/services/agent/toolsets/capability-index', () => ({ buildToolsetSection: vi.fn((_space: string, _conversation: string, mode: string) => `Guide: ${mode}`) }))
+vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({
+  getOpenToolsets: vi.fn(() => new Set()),
+  getToolsetContextMode: vi.fn(() => 'automatic'),
+}))
 vi.mock('../../../../src/main/services/api-ref', () => ({ HALO_API_TOOLSET_ID: 'halo-api-ref' }))
 vi.mock('../../../../src/main/services/tlon', () => ({ getKBChatContext: vi.fn(() => null) }))
 vi.mock('../../../../src/main/services/agent/knowledge-context', () => ({
@@ -43,7 +46,7 @@ vi.mock('../../../../src/main/services/agent/helpers', () => ({
   getApiCredentialsForSelection: vi.fn(async () => ({ provider: 'anthropic', model: 'm' })),
   getDbMcpServers: vi.fn(() => null),
 }))
-vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/events', () => ({ emitHumanRequest: vi.fn(), emitAgentEvent: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   getSessionEngineId: () => undefined, isSessionBusy: () => false,
   acquireV2Session: m.acquireV2Session,
@@ -62,6 +65,7 @@ vi.mock('../../../../src/main/services/agent/image-attachments', () => ({
 vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
   resolveCredentialsForSdk: vi.fn(async () => ({ displayModel: 'm', capabilities: {} })),
   buildUserSessionSdkOptions: vi.fn(async () => ({})),
+  captureToolsetExecutionOptions: vi.fn(() => ({ engineId: 'halo' })),
 }))
 vi.mock('../../../../src/main/services/space.service', () => ({
   isSpaceMemoryEnabled: () => m.memoryEnabled,
@@ -80,7 +84,10 @@ vi.mock('../../../../src/main/services/agent/stream-processor', () => ({ flushTo
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({ analytics: { track: vi.fn(async () => {}), trackErrorSurface: vi.fn() } }))
 
 import { sendMessage } from '../../../../src/main/services/agent/send-message'
-import { buildUserSessionSdkOptions } from '../../../../src/main/services/agent/sdk-config'
+import { buildUserSessionSdkOptions, captureToolsetExecutionOptions } from '../../../../src/main/services/agent/sdk-config'
+import { buildCreationTimeServers, openToolset } from '../../../../src/main/services/agent/toolsets/broker'
+import { buildToolsetSection } from '../../../../src/main/services/agent/toolsets/capability-index'
+import { getToolsetContextMode } from '../../../../src/main/services/agent/toolsets/state'
 import { resolveMemoryLayout, MEMORY_FILE_FORMAT, TOPIC_FILE_FORMAT } from '../../../../src/main/platform/memory'
 import type { ContentReference } from '../../../../src/shared/types/content-reference'
 import type { CodeReviewTask } from '../../../../src/shared/types/message-task'
@@ -116,7 +123,7 @@ describe('sendMessage with references and a task', () => {
     await sendMessage({ spaceId: 's', conversationId: 'conv-1', message: 'Look', references, task })
     const recorded = m.addMessage.mock.calls[0][2]
     expect(recorded.content).toBe('Look')
-    expect(recorded.metadata).toEqual({ references, task })
+    expect(recorded.metadata).toEqual({ references, task, reasoning: { thinkingEnabled: false } })
   })
 
   it('sends memory, canvas, references, task, image fallback, then the text', async () => {
@@ -134,14 +141,25 @@ describe('sendMessage with references and a task', () => {
     expect(sent).toContain('[1] src/a.ts, lines 2-3\nNote: Why?')
     expect(sent).toContain('M src/a.ts  (+1 -0)')
     expect(sent.endsWith('Look')).toBe(true)
+    expect(getToolsetContextMode).toHaveBeenCalledWith('conv-1')
+    expect(openToolset).not.toHaveBeenCalled()
+    const buildServers = m.acquireV2Session.mock.calls[0][7]
+    expect(buildCreationTimeServers).not.toHaveBeenCalled()
+    buildServers('automatic')
+    const scope = vi.mocked(buildCreationTimeServers).mock.calls[0][0]
+    expect(scope).toMatchObject({
+      spaceId: 's', conversationId: 'conv-1', toolContextMode: 'automatic', requiredToolsets: ['ocr'],
+    })
+    expect(scope.executionOptions!()).toEqual({ engineId: 'halo' })
+    expect(captureToolsetExecutionOptions).toHaveBeenCalledWith({}, 'halo', {})
   })
 
-  it('sends a message of cards alone and stores no empty metadata otherwise', async () => {
+  it('sends cards alone and stores only reasoning metadata when no cards are present', async () => {
     await sendMessage({ spaceId: 's', conversationId: 'conv-1', message: '', references })
     expect(session.send.mock.calls[0][0]).toMatch(/<\/halo_references>\n\n$/)
 
     await sendMessage({ spaceId: 's', conversationId: 'conv-1', message: 'plain' })
-    expect(m.addMessage.mock.calls[1][2]).not.toHaveProperty('metadata')
+    expect(m.addMessage.mock.calls[1][2].metadata).toEqual({ reasoning: { thinkingEnabled: false } })
   })
 })
 
@@ -167,7 +185,14 @@ describe('space memory session context', () => {
     }
     expect(m.acquireV2Session.mock.calls.at(-1)?.[3]).toBe('saved-session')
     // A resumed conversation can always continue from its transcript if its stored session is lost.
-    expect(m.acquireV2Session.mock.calls.at(-1)?.[9]).toEqual({ creationContext: `space-memory:${memoryLayout.file}`, recoverNativeSession: expect.any(Function) })
+    const gates = m.acquireV2Session.mock.calls.at(-1)![9]
+    expect(gates).toEqual({
+      creationContext: `space-memory:${memoryLayout.file}`,
+      recoverNativeSession: expect.any(Function),
+      toolsetInstructions: expect.any(Function),
+    })
+    expect(gates.toolsetInstructions('automatic')).toBe('Guide: automatic')
+    expect(buildToolsetSection).toHaveBeenCalledWith('s', conversationId, 'automatic')
   })
 
   it('resuming another transcript uses the destination conversation author without repeating the snapshot', async () => {
@@ -188,7 +213,12 @@ describe('space memory session context', () => {
     expect(options.memoryGuard).toBeUndefined()
     expect(m.buildMemorySnapshot).not.toHaveBeenCalled()
     expect(m.ensureMemoryFile).not.toHaveBeenCalled()
-    expect(m.acquireV2Session.mock.calls[0][9]).toEqual({ creationContext: undefined })
+    const gates = m.acquireV2Session.mock.calls[0][9]
+    expect(gates).toEqual({
+      creationContext: undefined, recoverNativeSession: undefined, toolsetInstructions: expect.any(Function),
+    })
+    expect(gates.toolsetInstructions('automatic')).toBe('Guide: automatic')
+    expect(buildToolsetSection).toHaveBeenCalledWith('s', 'conv-1', 'automatic')
     expect(session.send.mock.calls[0][0]).not.toMatch(/## Memory|Your History author tag|Running right now|No other instance/)
   })
 })

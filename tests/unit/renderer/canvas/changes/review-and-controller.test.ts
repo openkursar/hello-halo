@@ -117,7 +117,8 @@ function status(files: GitChangedFile[] = [changed('src/a.ts')]): GitWorkingTree
 }
 
 const ok = <T,>(data: T) => Promise.resolve({ success: true, data })
-const repositories = { git: { available: true, version: '2.45.0' }, repositories: [status().repo] }
+const repositoryPath = { root: '/w/repo', name: 'repo', relativePath: '', remembered: true }
+const repositories = { git: { available: true, version: '2.45.0' }, repositories: [repositoryPath] }
 
 describe('git changes controller', () => {
   beforeEach(() => {
@@ -153,7 +154,7 @@ describe('git changes controller', () => {
     await noGit.load({ relist: true })
     expect(noGit.store.getState().phase).toBe('no-git')
 
-    gitApi.gitListRepositories.mockImplementationOnce(() => ok({ git: { available: true, version: '2.45.0' }, repositories: [] }))
+    gitApi.gitListRepositories.mockImplementation(() => ok({ git: { available: true, version: '2.45.0' }, repositories: [] }))
     const noRepo = createGitChangesController('space', createViewMemory(), undefined)
     await noRepo.load({ relist: true })
     expect(noRepo.store.getState().phase).toBe('no-repo')
@@ -184,8 +185,9 @@ describe('git changes controller', () => {
   })
 
   it('keeps a named revision across a repository switch, but not a commit picked in the graph', async () => {
-    const other = { ...status().repo, root: '/w/other', name: 'other' }
-    gitApi.gitListRepositories.mockImplementation(() => ok({ ...repositories, repositories: [status().repo, other] }))
+    const other = { ...repositoryPath, root: '/w/other', name: 'other' }
+    gitApi.gitListRepositories.mockImplementation(() => ok({ ...repositories, repositories: [repositoryPath, other] }))
+    gitApi.gitGetStatus.mockImplementation((_space: string, root: string) => ok({ ...status(), repo: { ...status().repo, root } }))
     const memory = { ...createViewMemory(), scope: { kind: 'revision' as const, revision: 'main', mergeBase: true } }
     const controller = createGitChangesController('space', memory, undefined)
     await controller.load({ relist: true })
@@ -198,14 +200,19 @@ describe('git changes controller', () => {
     expect(memory.scope).toEqual({ kind: 'uncommitted' })
   })
 
-  it('looks for the repositories again when the chosen one is gone', async () => {
-    const memory = { ...createViewMemory(), repoRoot: '/w/old' }
+  it('keeps a missing chosen repository selected and retries it only when requested', async () => {
+    const memory = { ...createViewMemory(), repoRoot: '/w/repo' }
     gitApi.gitGetStatus.mockImplementationOnce(() => Promise.resolve({ success: false, error: 'gone', code: 'GIT_NOT_A_REPOSITORY' }))
     const controller = createGitChangesController('space', memory, undefined)
     await controller.load()
     expect(gitApi.gitListRepositories).toHaveBeenCalledTimes(2)
-    expect(controller.store.getState().phase).toBe('ready')
+    expect(gitApi.gitGetStatus).toHaveBeenCalledTimes(1)
+    expect(controller.store.getState()).toMatchObject({ phase: 'error', repoRoot: '/w/repo', repositories: [repositoryPath], status: null, list: null })
+    expect(controller.store.getState().unavailableRoots).toEqual(new Set(['/w/repo']))
     expect(memory.repoRoot).toBe('/w/repo')
+    await controller.selectRepository('/w/repo')
+    expect(controller.store.getState()).toMatchObject({ phase: 'ready', unavailableRoots: new Set() })
+    controller.dispose()
   })
 
   it('turns file events in the repository into a "new changes" count, never a reload', async () => {

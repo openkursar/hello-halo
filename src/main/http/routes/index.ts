@@ -9,6 +9,7 @@
 import type { Express } from 'express'
 import { registerConfigRoutes } from './config.routes'
 import { registerAiSourcesRoutes } from './ai-sources.routes'
+import { registerAiGroupsRoutes } from './ai-groups.routes'
 import { registerSpaceRoutes } from './space.routes'
 import { registerAgentRoutes } from './agent.routes'
 import { registerTerminalRoutes } from './terminal.routes'
@@ -28,9 +29,10 @@ import { registerSkillsRoutes } from './skills.routes'
 /**
  * Register all API routes.
  */
-export function registerApiRoutes(app: Express): void {
+export function registerApiRoutes(app: Express, options: { assistant?: boolean } = {}): void {
   registerConfigRoutes(app)
   registerAiSourcesRoutes(app)
+  registerAiGroupsRoutes(app)
   registerSpaceRoutes(app)
   registerAgentRoutes(app)
   registerTerminalRoutes(app)
@@ -39,7 +41,7 @@ export function registerApiRoutes(app: Express): void {
   registerImRoutes(app)
   registerSystemRoutes(app)
   registerAppsRoutes(app)
-  registerTeamRoutes(app)
+  registerTeamRoutes(app, options)
   registerStoreRoutes(app)
   registerTlonRoutes(app)
   registerTaskRoutes(app)

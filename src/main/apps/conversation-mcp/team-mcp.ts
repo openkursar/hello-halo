@@ -1,375 +1,94 @@
-/**
- * Space-facing Team MCP server — the space side of the `halo-team` toolset.
- *
- * Shares its name with the member-side server (`runtime/team/team-tools.ts`):
- * one capability, two packagings, and a session only ever receives one of them
- * (member turns build their MCP record in `app-chat.ts`, which never goes
- * through the toolset broker). The tool surfaces differ — that difference
- * belongs in the tool list, not in the server name.
- *
- * The space agent is a first-class team coordinator here, with two distinct
- * modes:
- *
- * - Temporary collaboration: `collab_start` assembles an ephemeral team whose
- *   coordinator IS this space conversation. The agent then drives members
- *   directly with the same coordination tools team members use (team_send,
- *   team_post_task, the board, artifacts) — member replies and turn-end
- *   notices reach this conversation after its current tool call. `collab_save`
- *   keeps the team for later.
- *
- * - Delegation: `team_run` hands a brief to a SAVED team's own lead and
- *   returns; `team_status` reads its progress. The space agent stays the
- *   user's assistant, not that team's coordinator.
- *
- * The coordination tools resolve their team context PER CALL (the current
- * collaboration of this conversation), so `collab_start` and the first
- * `team_send` work inside one turn with no session rebuild.
- */
+import { COLLABORATION_GUIDANCE, CollaborationRefusal, type CollaborationOperations } from '@hello-halo/agent-sdk/collaboration'
+import { getTeamService, type ParticipantSource } from '../team'
+import { getAppManager } from '../manager'
+import { getActiveTeamRuntime, createCoordinationMcpServer, type TeamMcpContext } from '../runtime/team'
+import { getSpace } from '../../services/space.service'
+import type { ToolsetScope } from '../../services/agent/toolsets'
+import { nativeChatAppId } from '../../../shared/apps/im-keys'
+import { spaceCoordinatorAppId, type TeamRequestOrigin } from '../../../shared/apps/team-types'
 
-import { z } from 'zod'
-import { tool, createSdkMcpServer } from '../../services/agent/resolved-sdk'
-import { getTeamService } from '../team'
-import { getActiveTeamRuntime } from '../runtime/team'
-import { buildCoordinationTools } from '../runtime/team/team-tools'
-import type { TeamMcpContext } from '../runtime/team/team-tools'
-import type { TeamRuntime, TeamFolderPaths } from '../runtime/team'
-import {
-  AI_MEMBER_HARD_LIMIT,
-  SPACE_COORDINATOR_MEMBER_NAME,
-  SPACE_TEAM_TOOL_NAMES,
-  TEAM_MCP_SERVER_NAME,
-  spaceCoordinatorAppId,
-} from '../../../shared/apps/team-types'
-import type { TeamListItem } from '../../../shared/apps/team-types'
-import type { TeamService } from '../team'
-import type { AgentModelSelection } from '../../../shared/types/ai-sources'
+export const TEAM_TOOLSET_GUIDE = COLLABORATION_GUIDANCE
+export interface SpaceTeamMcpScope extends ToolsetScope {
+  origin?: TeamRequestOrigin
+  canSpawn?: () => boolean
+  publicationRefusal?: (absolutePath: string) => string | null
+}
 
-type TeamMcpResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
-
-const LOG_TAG = '[SpaceTeamMcp]'
-
-/** System prompt appended while this toolset is enabled (registry usageGuide). */
-export const TEAM_TOOLSET_GUIDE = [
-  '## Agent teams and standing teams',
-  '',
-  'You can work with others in two ways.',
-  '',
-  'An agent team is an ad hoc team you spin up for the job in front of you. You bring in AI teammates, each working in its own context, ' +
-    'give each a part, coordinate them and combine what they return. When the job is done, close it with `team_complete`: ' +
-    'it is not used again, and what it produced lives on in your result.',
-  '',
-  'A standing team is a lasting group of digital humans in Halo, each with a role, pursuing its own goal over time. ' +
-    'It works in its own conversations, not in this chat. Turn to one only when the person names it or asks about its work. ' +
-    'Hand a standing team a job (`team_run`), or keep an agent team as one (`collab_save`), only when asked for exactly that.',
-  '',
-  '### When to start an agent team',
-  'An agent team costs extra tokens, and each handoff loses detail. By default, do the work yourself in this chat.',
-  '',
-  'Start a team only when both are true:',
-  '- A teammate can finish a part from a written brief alone.',
-  '- Separating it pays off. It keeps bulky details out of this chat, or it can run in parallel with other parts, ' +
-    'or it needs teammates to work with each other: to divide the work, share findings, or check each other\'s results.',
-  '',
-  'Do not start one when you will keep working with the raw details afterwards, when the work needs a lot of background ' +
-    'that is hard to write down, when each step needs the one before it, or when one read or search is enough. ' +
-    'If you are not sure, do it yourself.',
-  '',
-  'People rarely ask for an agent team by name, so the decision is yours. If they do ask, do it.',
-  '',
-  '### Running an agent team',
-  '1. Call `collab_start` with the roles you need.',
-  '2. Brief each teammate with `team_send`. They cannot see this chat, so write down: the goal and what counts as done; ' +
-    'what you know and what is ruled out; the limits (read-only, or may change files); ' +
-    'and what to send back — conclusions with evidence, and what is still unconfirmed.',
-  '3. Keep working. Replies reach you after your current tool call.',
-  '4. A part is done when its teammate says so. Treat their findings as input, not as the answer: check them and form your own view ' +
-    'before you reply. When everything is done, call `team_complete` with a summary. Run one agent team at a time.',
-  'The person can follow it in the Team view; mention that once when you start one.',
-  '',
-  '### Handing a job to a standing team',
-  '`team_list` shows the standing teams of this space. `team_run` gives one a brief and returns at once; the team works on its own, ' +
-    'so do not poll — `team_status` tells you how it is going when the person asks. Create or save a standing team only when asked.',
-].join('\n')
-
-function textResult(text: string, isError = false): TeamMcpResult {
+function sourceOf(scope: SpaceTeamMcpScope): ParticipantSource {
+  const settings = scope.executionOptions?.()
+  const space = getSpace(scope.spaceId)
+  if (!settings || !scope.modelSelection || !space) {
+    throw new CollaborationRefusal('source_unavailable', 'The host could not resolve this conversation’s execution configuration.')
+  }
+  if (!settings.collaborationEnabled) throw new CollaborationRefusal('collaboration_disabled', 'Creating collaborators is disabled by the owner.')
+  const sourceAppId = nativeChatAppId(scope.conversationId) ?? undefined
+  const manager = getAppManager()
+  const app = sourceAppId ? manager?.getApp(sourceAppId) : undefined
+  if (sourceAppId && !app) throw new CollaborationRefusal('source_unavailable', 'The source digital human is unavailable.')
+  const allowed = new Set(settings.mcpServerNames)
+  const bindings = Object.fromEntries((manager?.listEffectiveMcpApps(scope.spaceId) ?? [])
+    .filter(resource => allowed.has(resource.specId)).map(resource => [resource.specId, resource.id]))
   return {
-    content: [{ type: 'text', text }],
-    ...(isError ? { isError: true } : {}),
+    ...settings, modelSelection: scope.modelSelection, sourceAppId,
+    permissions: app?.permissions ?? { granted: [], denied: [] },
+    environment: { spaceId: scope.spaceId, spacePath: space.path, workDir: scope.workDir,
+      memoryDir: space.path, mcpBindings: bindings },
   }
 }
 
-const NOT_READY = 'Team services are still starting. Please try again in a moment.'
-
-function describeMemberStatus(status: string): string {
-  return status === 'working' ? 'working' : status === 'waiting_user' ? 'waiting for the user' : status
-}
-
-export interface SpaceTeamMcpScope {
-  spaceId: string
-  conversationId: string
-  workDir: string
-  modelSelection?: AgentModelSelection
-}
-
-export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope) {
-  const { spaceId, conversationId, workDir } = scope
-  const callerAppId = spaceCoordinatorAppId(conversationId)
-  // The coordinator's folder for the current piece of work, resolved once per
-  // epoch instead of on every tool call. A failed resolution is retried.
-  let folderCache: { epochId: string; folder: TeamFolderPaths } | null = null
-  function coordinatorFolder(runtime: TeamRuntime, teamId: string, epochId: string): TeamFolderPaths | null {
-    if (folderCache?.epochId === epochId) return folderCache.folder
-    const folder = runtime.teamFolders.forMember(teamId, epochId, callerAppId)
-    folderCache = folder ? { epochId, folder } : null
-    return folder
+/** The source conversation fixes scope; neither a group nor a goal is a model argument. */
+export function createSpaceTeamMcpServer(scope: SpaceTeamMcpScope, source?: () => ParticipantSource, requestId?: () => string) {
+  const callerAppId = spaceCoordinatorAppId(scope.conversationId)
+  getTeamService()?.participants.registerSource(scope.conversationId)
+  const generation = getTeamService()?.participants.sourceGeneration(scope.conversationId) ?? 0
+  const checkEndpoint = () => {
+    const participants = getTeamService()?.participants
+    if (!participants) throw new CollaborationRefusal('runtime_unavailable', 'Collaboration services are still starting.')
+    if (participants.sourceGeneration(scope.conversationId) !== generation) {
+      throw new CollaborationRefusal('execution_stopped', 'This collaboration endpoint was stopped. Continue through the current conversation.')
+    }
   }
-
-  /**
-   * The coordination tools' team context: the ACTIVE collaboration bound to
-   * this conversation, looked up per call. Null before `collab_start` and
-   * after `team_complete`.
-   */
-  function resolveCollabContext(): TeamMcpContext | null {
+  const resolve = (): TeamMcpContext | null => {
+    checkEndpoint()
     const service = getTeamService()
     const runtime = getActiveTeamRuntime()
-    if (!service || !runtime) return null
-    const collab = service.getCollabForConversation(conversationId)
-    if (!collab || !collab.active) return null
-    const team = service.getTeam(collab.teamId)
-    if (!team) return null
+    const collab = service?.getCollaborationScope(scope.conversationId)
+    if (!service || !runtime || !collab) return null
+    const team = collab.team
+    if (!team || team.owningSpaceId !== scope.spaceId) return null
+    const origin = source ? source().origin : scope.origin
     return {
-      teamId: collab.teamId,
-      epochId: collab.epochId,
-      callerAppId,
-      collabMode: team.collabMode,
-      selfIsLead: true,
-      bus: runtime.bus,
-      blackboard: runtime.blackboard,
-      callerWorkDir: workDir,
-      callerTeamFolder: coordinatorFolder(runtime, collab.teamId, collab.epochId),
-      teamFolders: runtime.teamFolders,
-      ...(runtime.readArtifact ? { readArtifact: runtime.readArtifact } : {}),
-      ...(runtime.readMemberRecord ? { readMemberRecord: runtime.readMemberRecord } : {}),
-      digest: runtime.digest,
-      archive: runtime.archive,
-      requestComplete: (summary) => {
-        void service.completeCollab(collab.teamId, summary).catch((err) => {
-          console.error(`${LOG_TAG} completeCollab failed: team=${collab.teamId}`, err)
-        })
-      },
+      teamId: team.id, epochId: collab.epochId, callerAppId, collabMode: team.collabMode, selfIsLead: true,
+      requestId: requestId?.() ?? service.participants.sourceRequestId(scope.conversationId),
+      ...(origin ? { origin } : {}),
+      publicationRefusal: scope.publicationRefusal,
+      bus: runtime.bus, blackboard: runtime.blackboard, participants: service.participants,
+      callerWorkDir: scope.workDir, callerTeamFolder: runtime.teamFolders.forMember(team.id, collab.epochId, callerAppId),
+      teamFolders: runtime.teamFolders, readArtifact: runtime.readArtifact, readMemberRecord: runtime.readMemberRecord,
+      digest: runtime.digest, archive: runtime.archive,
     }
   }
-
-  const collab_start = tool(
-    SPACE_TEAM_TOOL_NAMES.collabStart,
-    'Start an ad hoc agent team: teammates that each work on one part of the job in their own context, ' +
-      'while you brief and coordinate them. Teammates cost extra tokens and each handoff loses detail, ' +
-      'so do the work yourself by default. Start a team only when a part can be finished from a written brief ' +
-      'and separating it pays off: it keeps bulky details out of this chat, it can run in parallel with other parts, ' +
-      'or it needs teammates to work with each other.\n\n' +
-      'Teammates are AI agents made for this job; they are not digital humans. After this succeeds, brief them with team_send. ' +
-      'One agent team per conversation: finish the current one (team_complete) before starting another.',
-    {
-      name: z.string().min(1).describe('Short human-readable name for this agent team, in the user\u2019s language.'),
-      goal: z.string().min(1).describe('The outcome this agent team must deliver.'),
-      members: z
-        .array(
-          z.object({
-            memberName: z.string().min(1).describe('Short unique handle used for addressing (e.g. "researcher").'),
-            role: z.string().min(1).describe('2-4 word role.'),
-            responsibility: z.string().min(1).describe('One concise sentence: what this member is responsible for.'),
-          })
-        )
-        .min(1)
-        .max(AI_MEMBER_HARD_LIMIT)
-        .describe(`Member roles (1-${AI_MEMBER_HARD_LIMIT}). Keep the team as small as the work allows.`),
-    },
-    async ({ name, goal, members }) => {
-      const service = getTeamService()
-      if (!service) return textResult(NOT_READY, true)
-      try {
-        if (!scope.modelSelection) {
-          throw new Error('The coordinator model is unavailable. Restart this conversation before starting a collaboration.')
-        }
-        const { team, epochId } = await service.createCollab({
-          owningSpaceId: spaceId,
-          conversationId,
-          name,
-          goal,
-          members,
-          modelSelection: scope.modelSelection,
-        })
-        const roster = members
-          .map((m) => `- ${m.memberName} (${m.role}) — ${m.responsibility}`)
-          .join('\n')
-        const runtime = getActiveTeamRuntime()
-        const folder = runtime ? coordinatorFolder(runtime, team.id, epochId) : null
-        const folderNote = folder
-          ? `\n\nScratch folder for temporary collaboration files (reviews, notes, drafts): ${folder.self}`
-          : ''
-        return textResult(
-          `Collaboration "${team.name}" is ready (team id: ${team.id}). Members:\n${roster}\n\n` +
-            `You are the coordinator ("${SPACE_COORDINATOR_MEMBER_NAME}"). Dispatch self-contained work with ` +
-            'team_send or team_post_task now. Members reply asynchronously — their messages and turn-end ' +
-            'notices arrive after your current tool call. Continue your own work until finished. Tell the user the team is working and that they can watch it in ' +
-            `the Team view.${folderNote}`
-        )
-      } catch (error) {
-        console.error(`${LOG_TAG} collab_start failed: conversation=${conversationId}`, error)
-        return textResult(`Could not start the collaboration: ${(error as Error).message}`, true)
-      }
+  const enabled = scope.collaborationEnabled ?? scope.executionOptions?.().collaborationEnabled ?? false
+  const spawn: CollaborationOperations['spawn_agent'] = enabled ? async (input, context) => {
+    checkEndpoint()
+    context.signal?.throwIfAborted()
+    if (scope.canSpawn?.() === false) throw new CollaborationRefusal('collaboration_disabled', 'Creating collaborators is not allowed for this request.')
+    const capturedSource = source ? source() : sourceOf(scope)
+    const service = getTeamService()
+    if (!service) throw new CollaborationRefusal('runtime_unavailable', 'Collaboration services are still starting.')
+    const current = service.participants.captureSource(scope.conversationId, context.signal)
+    const capturedRequest = requestId?.() ?? service.participants.sourceRequestId(scope.conversationId)
+    const check = () => {
+      current()
+      if (!service.participants.requestAllowed(capturedRequest)) throw new CollaborationRefusal('request_stopped', 'This collaboration request was stopped.')
     }
-  )
-
-  const collab_save = tool(
-    SPACE_TEAM_TOOL_NAMES.collabSave,
-    'Keep this agent team as a standing team: its roles and configuration are saved as a separate team ' +
-      'with its own lead. The current task, conversation, progress and results are not transferred, ' +
-      'and the agent team continues here. Call only when the user asks to keep the team.',
-    {
-      name: z.string().optional().describe('Optional new team name; defaults to the collaboration name.'),
-    },
-    async ({ name }) => {
-      const service = getTeamService()
-      if (!service) return textResult(NOT_READY, true)
-      const collab = service.getCollabForConversation(conversationId)
-      if (!collab) return textResult('There is no collaboration in this conversation to save.', true)
-      if (collab.saved) return textResult(`This configuration is already saved${collab.savedTeamId ? ` (team id: ${collab.savedTeamId})` : ''}.`)
-      try {
-        const team = await service.saveCollab(collab.teamId, name)
-        return textResult(
-          `Saved configuration as team "${team.name}" (id: ${team.id}). It has its own lead and no task history. ` +
-            'Continue the current work here; use the standing team for new tasks.'
-        )
-      } catch (error) {
-        console.error(`${LOG_TAG} collab_save failed: team=${collab.teamId}`, error)
-        return textResult(`Could not save the team: ${(error as Error).message}`, true)
-      }
-    }
-  )
-
-  const persistentTeams = (service: TeamService): TeamListItem[] =>
-    service.listTeamItems(spaceId).filter((team) => !team.ephemeral)
-
-  const team_list = tool(
-    SPACE_TEAM_TOOL_NAMES.list,
-    'List the standing teams of this space (id, members, status).',
-    {},
-    async () => {
-      const service = getTeamService()
-      if (!service) return textResult(NOT_READY, true)
-      try {
-        const teams = persistentTeams(service)
-        if (teams.length === 0) return textResult('No standing teams exist in this space yet.')
-        return textResult(
-          teams
-            .map((team) => `- ${team.name} (id: ${team.id}) — ${team.memberCount} members, status: ${team.status}`)
-            .join('\n')
-        )
-      } catch (error) {
-        console.error(`${LOG_TAG} team_list failed: space=${spaceId}`, error)
-        return textResult(`Could not list teams: ${(error as Error).message}`, true)
-      }
-    }
-  )
-
-  const team_run = tool(
-    SPACE_TEAM_TOOL_NAMES.run,
-    'Hand a job to a standing team: its own lead receives the brief, dispatches the members and ' +
-      'finishes autonomously. Returns as soon as the run starts — do not wait or poll; use ' +
-      'team_status when the user asks for progress. Only when the person asks to give the job to that team; ' +
-      'use team_list first when they name it.',
-    {
-      teamId: z.string().min(1).describe('The standing team id from team_list.'),
-      instruction: z
-        .string()
-        .optional()
-        .describe('This run\u2019s concrete brief: what to do, inputs, success criteria, expected output.'),
-    },
-    async ({ teamId, instruction }) => {
-      const service = getTeamService()
-      if (!service) return textResult(NOT_READY, true)
-      const team = service.getTeam(teamId)
-      if (!team || team.owningSpaceId !== spaceId) {
-        return textResult('That team is not available in the current space.', true)
-      }
-      if (team.ephemeral) {
-        return textResult(
-          'That is the current agent team — you coordinate it directly with team_send; ' +
-            'team_run is for standing teams.',
-          true
-        )
-      }
-      try {
-        await service.runTeam(teamId, { type: 'manual' }, instruction)
-        return textResult(
-          `Delegated to "${team.name}" — its lead is briefing the members now. The run continues in the ` +
-            'background; check team_status for progress. The user can watch it in the Team view.'
-        )
-      } catch (error) {
-        console.error(`${LOG_TAG} team_run failed: team=${teamId}`, error)
-        return textResult(`Could not start "${team.name}": ${(error as Error).message}`, true)
-      }
-    }
-  )
-
-  const team_status = tool(
-    SPACE_TEAM_TOOL_NAMES.status,
-    'Bounded progress snapshot of a standing team\u2019s latest run: member states, task counts, open ' +
-      'tasks, latest findings and any decision waiting on the user.',
-    {
-      teamId: z.string().min(1).describe('The team id from team_list or team_run.'),
-    },
-    async ({ teamId }) => {
-      const service = getTeamService()
-      if (!service) return textResult(NOT_READY, true)
-      const detail = service.getTeamDetail(teamId)
-      if (!detail || detail.team.owningSpaceId !== spaceId) {
-        return textResult('That team is not available in the current space.', true)
-      }
-      try {
-        const lines: string[] = [`Team "${detail.team.name}" — status: ${detail.team.status}`]
-        const members = detail.roster.filter((m) => !m.isLead)
-        if (members.length > 0) {
-          lines.push('Members:')
-          for (const m of members) {
-            const task = m.currentTaskTitle ? ` — on "${m.currentTaskTitle}"` : ''
-            lines.push(`- ${m.memberName} (${m.role}): ${describeMemberStatus(m.status)}${task}`)
-          }
-        }
-        const done = detail.tasks.filter((t) => t.status === 'done').length
-        lines.push(`Tasks: ${done}/${detail.tasks.length} done`)
-        const open = detail.tasks.filter((t) => t.status !== 'done' && t.status !== 'rejected').slice(0, 10)
-        for (const t of open) lines.push(`- [${t.status}] ${t.title}`)
-        const findings = detail.findings.slice(-3)
-        if (findings.length > 0) {
-          lines.push('Latest findings:')
-          for (const f of findings) lines.push(`- ${f.body ?? f.ref ?? ''}`.slice(0, 200))
-        }
-        if (detail.pendingEscalations && detail.pendingEscalations.length > 0) {
-          lines.push('Waiting on the user:')
-          for (const e of detail.pendingEscalations.slice(0, 5)) {
-            lines.push(`- ${e.memberName}: ${e.question}`.slice(0, 200))
-          }
-        }
-        return textResult(lines.join('\n'))
-      } catch (error) {
-        console.error(`${LOG_TAG} team_status failed: team=${teamId}`, error)
-        return textResult(`Could not read the team status: ${(error as Error).message}`, true)
-      }
-    }
-  )
-
-  return createSdkMcpServer({
-    name: TEAM_MCP_SERVER_NAME,
-    version: '1.0.0',
-    tools: [
-      collab_start,
-      ...buildCoordinationTools(resolveCollabContext),
-      collab_save,
-      team_list,
-      team_run,
-      team_status,
-    ],
-  })
+    check()
+    const work = await service.ensureCollaboration({ owningSpaceId: scope.spaceId, conversationId: scope.conversationId, title: input.prompt })
+    context.signal?.throwIfAborted()
+    check()
+    const member = await service.participants.spawn({ teamId: work.team.id, epochId: work.epochId, callerAppId,
+      requestId: capturedRequest, ...(capturedSource.origin ? { origin: capturedSource.origin } : {}) }, input, capturedSource, context.signal)
+    return { content: [{ type: 'text', text: JSON.stringify({ handle: member.appId, name: member.memberName, status: 'accepted' }) }] }
+  } : undefined
+  return createCoordinationMcpServer(resolve, { spawn, readMember: !scope.origin })
 }

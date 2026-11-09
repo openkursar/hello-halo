@@ -31,7 +31,12 @@ import { DelegatedLoginDialog } from './DelegatedLoginDialog'
 import { getBrandIcon } from '../icons/BrandIcons'
 import { ProviderIconTile } from '../icons/ProviderIconTile'
 import { OAuthRedirectLogin } from '../ai-config/OAuthRedirectLogin'
+import { GroupEditor } from '../ai-groups/GroupEditor'
+import { GroupCards } from '../ai-groups/GroupCards'
+import { GroupCreateMenu } from '../ai-groups/GroupCreateMenu'
 import { useOAuthLogin } from '../../hooks/useOAuthLogin'
+import { useGroupEditRequest } from '../../stores/ai-group-ui.store'
+import type { AIGroupChange } from '../../../shared/rpc/contracts/ai-groups.contract'
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
 import { CLI_DELEGATED_PROVIDER_ID } from '../../../shared/constants/claude-models'
 
@@ -73,10 +78,34 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
   const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(false)
 
+  // Load-balancing groups: the editor (a new group, or one being edited) and
+  // the card that is open. A group chosen for new chats takes the selection
+  // mark from the accounts.
+  const groups = aiSources.groups ?? []
+  const [groupEditor, setGroupEditor] = useState<{ groupId: string | null } | null>(null)
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null)
+  const chosenGroupId = aiSources.currentGroupId && groups.some(group => group.id === aiSources.currentGroupId)
+    ? aiSources.currentGroupId
+    : null
+
   useEffect(() => {
     mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
+
+  // The model card can ask for a group's editor from outside settings; the
+  // request is waiting here when settings opens, or arrives while it is open.
+  const groupIds = groups.map(group => group.id).join('\n')
+  useEffect(() => {
+    const pickUp = () => {
+      const requested = useGroupEditRequest.getState().groupId
+      if (!requested) return
+      useGroupEditRequest.getState().clear()
+      if (groupIds.split('\n').includes(requested)) setGroupEditor({ groupId: requested })
+    }
+    pickUp()
+    return useGroupEditRequest.subscribe(pickUp)
+  }, [groupIds])
 
   // Delegated (CLI-managed) login dialog
   const [delegatedLoginOpen, setDelegatedLoginOpen] = useState(false)
@@ -132,11 +161,17 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
       return
     }
 
-    // Switch to saved source as current, get latest data from disk
-    const switchResult = await api.aiSourcesSwitchSource(source.id)
-    if (switchResult.success && switchResult.data) {
-      setConfig({ ...config, aiSources: switchResult.data as AISourcesConfig, isFirstLaunch: false, modelConfigSkipped: false })
+    // Switch to saved source as current, get latest data from disk. Editing an
+    // account leaves a group chosen for new chats alone; only adding one moves it.
+    let latest: HaloConfig | null = null
+    if (existingIndex >= 0 && chosenGroupId !== null) {
+      const snapshot = await api.getConfig({ snapshot: true })
+      if (snapshot.success && snapshot.data) latest = snapshot.data as HaloConfig
+    } else {
+      const switchResult = await api.aiSourcesSwitchSource(source.id)
+      if (switchResult.success && switchResult.data) latest = { ...config, aiSources: switchResult.data as AISourcesConfig }
     }
+    if (latest) setConfig({ ...latest, isFirstLaunch: false, modelConfigSkipped: false })
 
     // Persist flags (no aiSources in payload, safe). Clearing modelConfigSkipped
     // ensures a user who once deferred, then configured a source, is no longer
@@ -155,6 +190,12 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
       setConfig({ ...config, aiSources: result.data as AISourcesConfig })
     }
     setDeletingSourceId(null)
+  }
+
+  const handleGroupSaved = (change: AIGroupChange) => {
+    setConfig({ ...config, aiSources: change.aiSources })
+    setGroupEditor(null)
+    setExpandedGroupId(change.groupId)
   }
 
   // Handle OAuth logout
@@ -184,7 +225,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
 
   // Render source card
   const renderSourceCard = (source: AISource) => {
-    const isCurrent = source.id === aiSources.currentId
+    const isCurrent = !chosenGroupId && source.id === aiSources.currentId
     const isExpanded = expandedSourceId === source.id
     const displayInfo = getSourceDisplayInfo(source)
     const isOAuth = source.authType === 'oauth'
@@ -368,15 +409,43 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
     )
   }
 
+  const editingGroup = groupEditor?.groupId ? groups.find(group => group.id === groupEditor.groupId) : undefined
+  if (groupEditor && (groupEditor.groupId === null || editingGroup)) {
+    return (
+      <div className="space-y-4">
+        <h3 className="font-medium text-foreground">
+          {editingGroup ? t('Edit Load-Balancing Group') : t('Create Load-Balancing Group')}
+        </h3>
+        <GroupEditor
+          key={editingGroup?.id ?? 'new'}
+          aiSources={aiSources}
+          group={editingGroup}
+          onSaved={handleGroupSaved}
+          onCancel={() => setGroupEditor(null)}
+          onAddProvider={() => {
+            setGroupEditor(null)
+            setShowAddForm(true)
+          }}
+        />
+      </div>
+    )
+  }
+
   // Show delete confirmation
   if (deletingSourceId) {
     const sourceToDelete = aiSources.sources.find(s => s.id === deletingSourceId)
+    const groupsUsing = groups.filter(group => group.members.some(member => member.sourceId === deletingSourceId))
     return (
       <div className="p-4 bg-card rounded-lg border border-border space-y-4">
         <h3 className="font-medium text-foreground">{t('Confirm Delete')}</h3>
         <p className="text-muted-foreground">
           {t('Are you sure you want to delete')} <strong>{sourceToDelete?.name}</strong>?
         </p>
+        {groupsUsing.length > 0 && (
+          <p className="text-sm text-muted-foreground">
+            {t('It is also taken out of the load-balancing groups that use it: {{names}}.', { names: groupsUsing.map(group => group.name).join(', ') })}
+          </p>
+        )}
         <div className="flex gap-3">
           <button
             onClick={() => setDeletingSourceId(null)}
@@ -454,10 +523,25 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           <p className="text-sm text-destructive break-words">{error}</p>
         </div>
       )}
-      {/* Sources List */}
-      {aiSources.sources.length > 0 ? (
+      {/* Sources List — load-balancing groups sit in it like any other provider */}
+      {aiSources.sources.length > 0 || groups.length > 0 ? (
         <div className="space-y-2">
           {aiSources.sources.map(renderSourceCard)}
+          {groups.length > 0 && (
+            <GroupCards
+              aiSources={aiSources}
+              chosenGroupId={chosenGroupId}
+              expandedGroupId={expandedGroupId}
+              onToggle={groupId => setExpandedGroupId(current => current === groupId ? null : groupId)}
+              onChoose={handleSwitchSource}
+              onEdit={groupId => setGroupEditor({ groupId })}
+              onDeleted={(next, groupId) => {
+                setConfig({ ...config, aiSources: next })
+                setExpandedGroupId(current => current === groupId ? null : current)
+              }}
+              onError={setError}
+            />
+          )}
         </div>
       ) : (
         <div className="p-6 text-center text-muted-foreground bg-card rounded-lg border border-border">
@@ -465,16 +549,19 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
         </div>
       )}
 
-      {/* Add Source Button */}
-      <button
-        onClick={() => setShowAddForm(true)}
-        className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed
-                 border-border hover:border-primary text-muted-foreground hover:text-primary
-                 rounded-lg transition-colors"
-      >
-        <Plus size={18} />
-        {t('Add AI Provider')}
-      </button>
+      {/* Add Source Button, with a quiet way on to a load-balancing group */}
+      <div className="flex items-stretch gap-2">
+        <button
+          onClick={() => setShowAddForm(true)}
+          className="flex-1 flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed
+                   border-border hover:border-primary text-muted-foreground hover:text-primary
+                   rounded-lg transition-colors"
+        >
+          <Plus size={18} />
+          {t('Add AI Provider')}
+        </button>
+        <GroupCreateMenu onCreate={() => setGroupEditor({ groupId: null })} />
+      </div>
 
       {/* Dynamic auth providers from product.json — split into two groups:
           OAuth entries (interactive login) and Preset-API entries (API key

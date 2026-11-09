@@ -23,6 +23,7 @@ import { isConversationDetailRetained, retainConversationDetail } from './conver
 import type { GoalUpdatedEvent } from '../../shared/types/goal'
 import type { ApiRetryEvent } from '../../shared/types/api-retry'
 import type { ModelCatalogChangedEvent } from '../../shared/types/ai-sources'
+import { GROUP_ROUTE_EVENT, type GroupRouteInfo } from '../../shared/types/ai-groups-runtime'
 import { isAgentInputArrivedEvent, isAgentInputStoppedEvent, type AgentInputArrivedEvent, type AgentInputStoppedEvent } from '../../shared/types/agent-input'
 
 export const eventsApi = {
@@ -85,6 +86,8 @@ export const eventsApi = {
     onEvent('credential:decrypt-failed', callback),
   onModelCatalogChanged: (callback: (data: ModelCatalogChangedEvent) => void) =>
     onEvent<ModelCatalogChangedEvent>('ai-sources:catalog-changed', callback),
+  onAIGroupRoute: (callback: (data: GroupRouteInfo) => void) =>
+    onEvent<GroupRouteInfo>(GROUP_ROUTE_EVENT, callback),
 
   // ===== Server URL Management (Capacitor) =====
   setServerUrl,

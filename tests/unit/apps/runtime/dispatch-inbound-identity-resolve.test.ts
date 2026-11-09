@@ -124,7 +124,7 @@ vi.mock('../../../../src/main/foundation/window.service', () => ({ sendToRendere
 vi.mock('../../../../src/main/http/websocket', () => ({ broadcastToAll: vi.fn() }))
 vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({ analytics: { track: vi.fn() } }))
 vi.mock('../../../../src/main/services/analytics/types', () => ({ AnalyticsEvents: {} }))
-vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: vi.fn(() => null) }))
+vi.mock('../../../../src/main/apps/team', () => ({ getTeamService: () => null, getTeamStore: vi.fn(() => null) }))
 vi.mock('../../../../src/main/apps/runtime/team', () => ({ getActiveTeamRuntime: vi.fn(() => null) }))
 
 vi.mock('../../../../src/main/foundation/config.service', () => ({

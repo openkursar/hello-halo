@@ -41,7 +41,7 @@ GET    /api/agent/engine-availability                              List which ag
 
 GET    /api/agent/engine-capabilities                              Read what the running agent engine can do
      curl -s "$HALO_API_URL/api/agent/engine-capabilities" -H "Authorization: Bearer $HALO_API_TOKEN"
-     # out: {success:true,data:{engineId,displayName,streaming:{text,reasoning,toolInput,toolOutput},tools:{native,synthetic,shellHeuristics},todo:{states,hasActiveForm},subAgent:{...}}}
+     # out: {success:true,data:{engineId,displayName,streaming:{text,reasoning,toolInput,toolOutput},tools:{native,synthetic,shellHeuristics},todo:{states,hasActiveForm}}}
      # note: Describes the conditions you run under — which streaming and tool features are native versus emulated. Always answers; falls back to the active engine defaults.
 
 POST   /api/agent/probe-mcp                                        Probe one installed MCP server for connectivity and tools

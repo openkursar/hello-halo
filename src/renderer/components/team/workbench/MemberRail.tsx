@@ -5,8 +5,9 @@ import type { RosterMember, TeamDetail } from '../../../../shared/apps/team-type
 import { useTranslation } from '../../../i18n'
 import { AutomationAvatar } from '../../apps/AutomationAvatar'
 
-export function MemberRail({ detail, selectedAppId, writableAppIds = [], onMember, onDetails, onTask }: {
+export function MemberRail({ detail, selectedAppId, writableAppIds = [], showSummary, onMember, onDetails, onTask }: {
   detail: TeamDetail; selectedAppId?: string | null; writableAppIds?: string[]
+  showSummary: boolean
   onMember: (member: RosterMember) => void; onDetails: (member: RosterMember) => void
   onTask: (id: string, memberId?: string, decisionId?: string) => void
 }) {
@@ -23,8 +24,12 @@ export function MemberRail({ detail, selectedAppId, writableAppIds = [], onMembe
     hideTimer.current = setTimeout(() => setHover(null), 140)
   }
   useEffect(() => () => cancelHide(), [])
+  useEffect(() => {
+    if (!showSummary) { cancelHide(); setHover(null) }
+  }, [showSummary])
   const show = (element: HTMLElement, member: RosterMember) => {
     cancelHide()
+    if (!showSummary) return
     const bounds = element.getBoundingClientRect()
     setHover({ member, left: Math.max(8, Math.min(window.innerWidth - 248, bounds.left - 248)), top: Math.max(8, Math.min(window.innerHeight - 280, bounds.top)) })
   }
@@ -65,9 +70,9 @@ export function MemberRail({ detail, selectedAppId, writableAppIds = [], onMembe
         </div>
       })}</div>
     </section>)}
-    {hover && createPortal(<div id={tooltipId} role="dialog" aria-label={t('{{name}} member summary', { name: hover.member.memberName })} style={{ left: hover.left, top: hover.top }} onMouseEnter={cancelHide} onMouseLeave={hideSoon} className="fixed z-[100] max-h-[calc(100vh-16px)] w-60 overflow-hidden rounded-xl border border-border bg-popover p-3 text-xs shadow-lg">
+    {showSummary && hover && createPortal(<div id={tooltipId} role="dialog" aria-label={t('{{name}} member summary', { name: hover.member.memberName })} style={{ left: hover.left, top: hover.top }} onMouseEnter={cancelHide} onMouseLeave={hideSoon} className="fixed z-[100] max-h-[calc(100vh-16px)] w-60 overflow-hidden rounded-xl border border-border bg-popover p-3 text-xs shadow-lg">
       <div className="flex items-center gap-2.5"><AutomationAvatar name={hover.member.memberName} size={34} /><div className="min-w-0"><p className="break-words font-medium">{hover.member.memberName}</p><p className="mt-1 text-[11px] text-muted-foreground">{statusLabel(hover.member)}</p></div></div>
-      <p className="mt-3 break-words text-muted-foreground">{hover.member.owner || t('My digital human')} · {detail.team.name}</p>
+      <p className="mt-3 break-words text-muted-foreground">{hover.member.owner || (detail.members.some(member => member.appId === hover.member.appId && 'isTemporary' in member && member.isTemporary) ? t('Temporary collaborator') : t('My digital human'))} · {detail.team.name}</p>
       {(hover.member.duty || hover.member.role) && <p className="mt-2 line-clamp-3 leading-5">{hover.member.duty || hover.member.role}</p>}
       {(hover.member.busy ?? []).slice(0, 2).map(busy => <p key={busy.epochId} className="mt-2 truncate text-muted-foreground">{busy.label}</p>)}
       <button onClick={() => { setHover(null); onDetails(hover.member) }} className="mt-3 flex min-h-9 w-full items-center gap-1.5 border-t border-border pt-2.5 text-left text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><Users size={13} />{t('View member details')}</button>

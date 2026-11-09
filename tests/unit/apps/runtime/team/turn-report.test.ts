@@ -33,7 +33,7 @@ interface FakeMember {
 function makeStore(members: FakeMember[], opts?: { sealed?: boolean }) {
   return {
     getTeamById: vi.fn(() => ({ id: TEAM, leadAppId: LEAD, collabMode: 'free' })),
-    getEpochById: vi.fn(() => ({ id: EPOCH, endedAt: opts?.sealed ? Date.now() : null })),
+    getEpochById: vi.fn(() => ({ id: EPOCH, teamId: TEAM, endedAt: opts?.sealed ? Date.now() : null })),
     getMember: vi.fn((_teamId: string, appId: string) => members.find((m) => m.appId === appId) ?? null),
     getTaskById: vi.fn(() => ({ title: 'draft outline' })),
   } as unknown as TeamStore
@@ -117,6 +117,22 @@ describe('turn-end report', () => {
 
   beforeEach(() => {
     ;({ bus, wakes, tripExternal } = makeBus())
+  })
+
+  it.each([false, true])('keeps pending status until an in-flight notice handoff settles (cleared=%s)', async cleared => {
+    let handoff!: () => void
+    vi.mocked(bus.deliverRuntimeWake).mockImplementation(() => new Promise(resolve => { handoff = () => resolve('dispatched') }))
+    const settled = vi.fn()
+    const report = createTurnReport({ store: makeStore(LOCAL_TEAM), bus, onPendingSettled: settled })
+    endCollaboration(report, { appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    expect(report.hasPendingEpoch(EPOCH)).toBe(true)
+    if (cleared) report.clearEpoch(EPOCH)
+    expect(report.hasPendingEpoch(EPOCH)).toBe(true)
+    expect(settled).not.toHaveBeenCalled()
+    handoff()
+    await vi.waitFor(() => expect(report.hasPendingEpoch(EPOCH)).toBe(false))
+    expect(settled).toHaveBeenCalledWith(TEAM, EPOCH)
+    expect(settled).toHaveBeenCalledTimes(1)
   })
 
   it.each(['ended', 'error', 'stopped', 'timeout'] as const)('unknown-source %s endings never wake the lead or reveal excerpts', async kind => {

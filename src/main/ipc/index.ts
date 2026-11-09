@@ -3,6 +3,7 @@
  */
 
 export { registerConfigHandlers } from './config'
+export { registerAiGroupsHandlers } from './ai-groups'
 export { registerSpaceHandlers } from './space'
 export { registerConversationHandlers } from './conversation'
 export { registerAgentHandlers } from './agent'

@@ -68,8 +68,9 @@ export interface AppChatRoundHooks {
   /**
    * The turn's answer. `ending` says it stopped short (the step limit, or cut
    * off) — then `finalContent` is what was written, possibly nothing.
+   * Return false only when this caller no longer owns delivery of the reply.
    */
-  onReply?(finalContent: string, ending?: AppChatTurnEnding): void
+  onReply?(finalContent: string, ending?: AppChatTurnEnding): boolean | void
   /**
    * The same answer, for a caller that only needs to know it. Fires for every
    * message the reply answers, including those whose `onReply` is withheld
@@ -504,20 +505,18 @@ class AppChatSink implements TurnSink {
     // One turn, one chat, one reply: whoever asked first (the round) delivers
     // it; a message that joined the turn is answered by that same reply, so its
     // own onReply fires only when nothing else delivers it.
-    let delivered = !!round?.hooks.onReply
+    let delivered = round ? this.settleReply(round, replyContent, ending, result) : false
     for (const observer of observers) {
       if (delivered && observer.hooks.onReply) {
         this.settleReply({ ...observer, hooks: { ...observer.hooks, onReply: undefined } }, replyContent, ending, result)
         observer.settled = true
         continue
       }
-      if (observer.hooks.onReply) delivered = true
-      this.settleReply(observer, replyContent, ending, result)
+      delivered = this.settleReply(observer, replyContent, ending, result) || delivered
     }
-    if (round) this.settleReply(round, replyContent, ending, result)
   }
 
-  private settleReply(round: Round, replyContent: string, ending: AppChatTurnEnding | undefined, result: StreamResult): void {
+  private settleReply(round: Round, replyContent: string, ending: AppChatTurnEnding | undefined, result: StreamResult): boolean {
     round.settled = true
 
     // Fire onReply whenever content exists — including the whitespace-only
@@ -525,41 +524,42 @@ class AppChatSink implements TurnSink {
     // terminates a streaming IM session. Whether the placeholder is shown or
     // replaced with a notice is the bridge's decision, not ours.
     if (replyContent) {
-      this.reply(round, replyContent, ending)
-      return
+      return this.reply(round, replyContent, ending)
     }
 
     // No content and the turn did not end cleanly: surface it as a failed round
     // so the caller can close out its transport. A user-initiated stop is not a
     // failure — the caller already tore its transport down. A cut-off turn says
     // so in a way its caller can tell from a model error.
-    if (!result.wasAborted && (result.hasErrorThought || result.isInterrupted)) {
+    if (result.hasErrorThought || (!result.wasAborted && result.isInterrupted)) {
       round.reject(ending?.kind === 'failed' ? new Error(ending.error) : new AppChatTurnInterrupted())
-      return
+      return false
     }
 
     // The step limit came before any text: the reply is that it stopped.
     if (ending) {
-      this.reply(round, '', ending)
-      return
+      return this.reply(round, '', ending)
     }
     round.resolve()
+    return false
   }
 
-  private reply(round: Round, content: string, ending: AppChatTurnEnding | undefined): void {
+  private reply(round: Round, content: string, ending: AppChatTurnEnding | undefined): boolean {
     try {
       if (ending) round.hooks.onResult?.(content, ending)
       else round.hooks.onResult?.(content)
     } catch (err) {
       console.error(`[AppChat][${this.appId}] onResult callback error:`, err)
     }
+    let delivered = false
     try {
-      if (ending) round.hooks.onReply?.(content, ending)
-      else round.hooks.onReply?.(content)
+      if (round.hooks.onReply) delivered = (ending ? round.hooks.onReply(content, ending) : round.hooks.onReply(content)) !== false
     } catch (err) {
       console.error(`[AppChat][${this.appId}] onReply callback error:`, err)
+      delivered = true
     }
     round.resolve()
+    return delivered
   }
 
   onConsumerStopped(partial?: StreamResult): void {

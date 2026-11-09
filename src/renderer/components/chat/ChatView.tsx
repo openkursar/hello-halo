@@ -31,6 +31,9 @@ import { MessageList } from './MessageList'
 import type { MessageListHandle, MessageListProps } from './MessageList'
 import { InputArea } from './InputArea'
 import { EngineRecoveryNotice } from '../settings/EngineRecoveryNotice'
+import { GroupSwitchNotice } from '../ai-groups/GroupSwitchNotice'
+import { TokenCostContext } from './token-cost-context'
+import { useActiveGroup } from '../../hooks/useActiveGroup'
 import { useConversationMentionCandidates } from './cross-conversation'
 import { TeamCollabPanel } from './team-collab'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
@@ -108,6 +111,8 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
   useVisibleConversation(isVisible ? activeConversationId : null)
   const isDigitalHuman = !!activeConversationId && conversationKind(activeConversationId) === 'digital-human'
   const activeConversationTitle = useActiveConversationTitle()
+  // A group has no single account whose quota the pill could show.
+  const runsOnGroup = useActiveGroup() !== null
   // String identity, so this only re-renders when the selection changes.
   const currentSourceId = useAppStore(state => {
     const src = state.config?.aiSources
@@ -534,7 +539,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
   // the digital human's own, read-only).
   const sendControls = (
     <>
-      <QuotaPill sourceId={currentSourceId} />
+      <QuotaPill sourceId={runsOnGroup ? undefined : currentSourceId} />
       <ModelSelector />
     </>
   )
@@ -542,6 +547,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
   const inputArea = (
     <>
     <EngineRecoveryNotice engineId={composerEngineId} spaceId={currentSpaceId} failure={errorType === 'engine_unavailable' ? error : null} />
+    <GroupSwitchNotice />
     <InputArea
       key={activeConversationId ?? 'none'}
       onSend={handleSend}
@@ -631,6 +637,7 @@ export function ChatView({ isCompact = false, isVisible = true }: ChatViewProps)
               <LiveTranscript
                 key={activeConversationId ?? 'empty'}
                 ref={messageListRef}
+                costShown={!runsOnGroup}
                 conversationId={activeConversationId ?? undefined}
                 thoughtsLoader={thoughtsLoader}
                 messages={displayMessages}
@@ -682,6 +689,8 @@ const NO_THOUGHTS: Thought[] = []
 type LiveTranscriptProps = Omit<MessageListProps, 'streamingContent' | 'isStreaming' | 'thoughts' | 'textBlockVersion'> & {
   /** Onboarding's simulated reply, shown in place of the live one. */
   mockStreamingContent?: string
+  /** Whether the dollar figures of a reply can be shown; passed down because this component re-renders per token. */
+  costShown?: boolean
 }
 
 /**
@@ -689,7 +698,7 @@ type LiveTranscriptProps = Omit<MessageListProps, 'streamingContent' | 'isStream
  * subscribed here so that streaming re-renders this subtree only.
  */
 const LiveTranscript = forwardRef<MessageListHandle, LiveTranscriptProps>(function LiveTranscript(
-  { mockStreamingContent, ...props },
+  { mockStreamingContent, costShown = true, ...props },
   ref,
 ) {
   const live = useChatStore(useShallow(s => {
@@ -702,15 +711,17 @@ const LiveTranscript = forwardRef<MessageListHandle, LiveTranscriptProps>(functi
     }
   }))
   return (
-    <MessageList
-      ref={ref}
-      {...props}
-      allowViewChanges
-      streamingContent={mockStreamingContent || live.streamingContent}
-      isStreaming={live.isStreaming}
-      thoughts={live.thoughts}
-      textBlockVersion={live.textBlockVersion}
-    />
+    <TokenCostContext.Provider value={costShown}>
+      <MessageList
+        ref={ref}
+        {...props}
+        allowViewChanges
+        streamingContent={mockStreamingContent || live.streamingContent}
+        isStreaming={live.isStreaming}
+        thoughts={live.thoughts}
+        textBlockVersion={live.textBlockVersion}
+      />
+    </TokenCostContext.Provider>
   )
 })
 

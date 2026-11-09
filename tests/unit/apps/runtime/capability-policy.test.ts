@@ -21,6 +21,7 @@ import {
   withGuestAccess,
   DELEGABLE_BUILTIN_TOOLS,
   allowsCapability,
+  allowsCollaboration,
   buildAllowedToolRules,
   computeDisallowedBuiltins,
   fullCapabilityPolicy,
@@ -371,7 +372,7 @@ describe('granting everything', () => {
     // Unset switches read strictly: silence is not "on".
     expect(grantsEverything({ allowedTools: full.allowedTools, bashScope: 'full' }, inventory)).toBe(false)
     // The old name of the sub-agent tool grants nothing at run time, so it does not count here either.
-    expect(grantsEverything({ ...full, allowedTools: [...full.allowedTools!.filter(t => t !== 'Agent'), 'Task'] }, inventory)).toBe(false)
+    expect(grantsEverything({ ...full, allowCollaboration: false }, inventory)).toBe(false)
   })
 
   it('the presets short of everything are read strictly', () => {
@@ -406,7 +407,8 @@ describe('what two settings both allow', () => {
     const member = { ...fullCapabilityPolicy(), allowedSkills: ['pdf', 'xlsx'], allowedUserMcp: ['a', 'b'] }
     const chat = { allowedTools: ['Read', 'Glob', 'Grep', 'Task'], allowAiBrowser: true, allowEmail: false, allowedSkills: ['pdf'], allowedUserMcp: ['b', 'c'] }
     const both = intersectPolicies(member, chat)
-    expect(both.allowedTools).toEqual(['Read', 'Glob', 'Grep', 'Agent'])
+    expect(both.allowedTools).toEqual(['Read', 'Glob', 'Grep'])
+    expect(both.allowCollaboration).toBe(true)
     expect(both.allowAiBrowser).toBe(true)
     expect(both.allowEmail).toBe(false)
     expect(both.allowOcr).toBe(false)
@@ -520,23 +522,31 @@ describe('always-available tools', () => {
   })
 })
 
-describe('the sub-agent switch', () => {
-  // The engine still answers to the tool's old name, "Task", and a rule naming
-  // it acts on the sub-agent tool. Left without a switch, "Task" stayed withheld
-  // and took the tool away whatever the owner ticked.
-  it('grants the tool under both of its names once a guest is allowed sub-agents', () => {
-    const withheld = computeDisallowedBuiltins({ allowedTools: ['Read', 'Agent'] }, 'strict')
-
-    expect(withheld).not.toContain('Agent')
-    expect(withheld).not.toContain('Task')
-    expect(allowsBuiltinAtCallTime({ allowedTools: ['Agent'] }, 'Task', 'strict')).toBe(true)
+describe('collaboration permission', () => {
+  it('preserves legacy delegation choices without granting the retired built-in tools', () => {
+    for (const legacy of ['Agent', 'Task']) {
+      expect(allowsCollaboration({ allowedTools: [legacy] }, 'strict')).toBe(true)
+      expect(allowsBuiltinAtCallTime({ allowedTools: [legacy] }, legacy, 'strict')).toBe(false)
+    }
+    expect(allowsCollaboration({ allowedTools: ['Read'] }, 'strict')).toBe(false)
+    expect(allowsCollaboration({ allowedTools: [] }, 'permissive')).toBe(false)
   })
 
-  it('withholds both names while the switch is off', () => {
-    const withheld = computeDisallowedBuiltins({ allowedTools: ['Read'] }, 'strict')
+  it('uses an explicit collaboration choice before any legacy tool list', () => {
+    expect(allowsCollaboration({ allowCollaboration: false, allowedTools: ['Agent'] }, 'strict')).toBe(false)
+    expect(allowsCollaboration({ allowCollaboration: true, allowedTools: [] }, 'strict')).toBe(true)
+    expect(allowsCollaboration(undefined, 'strict')).toBe(false)
+    expect(allowsCollaboration(undefined, 'permissive')).toBe(true)
+    expect(allowsCapability({ allowCollaboration: false }, 'allowCollaboration', 'permissive')).toBe(false)
+  })
 
-    expect(withheld).toEqual(expect.arrayContaining(['Agent', 'Task']))
-    expect(allowsBuiltinAtCallTime({ allowedTools: ['Read'] }, 'Task', 'strict')).toBe(false)
+  it('intersects delegation separately and never removes the existing communication channel', () => {
+    const denied = intersectPolicies(fullCapabilityPolicy(), { ...fullCapabilityPolicy(), allowCollaboration: false })
+    expect(denied.allowCollaboration).toBe(false)
+    expect(filterMcpServersByPolicy(ALL_MCP, DB_MCP, denied, 'strict', TEAM_CHANNEL)).toHaveProperty('halo-team')
+    expect(isRestrictivePolicy({ allowCollaboration: false }, 'permissive')).toBe(true)
+    expect(capabilityPolicyFromPreset('read_only').allowCollaboration).toBe(false)
+    expect(capabilityPolicyFromPreset('workspace').allowCollaboration).toBe(true)
   })
 })
 

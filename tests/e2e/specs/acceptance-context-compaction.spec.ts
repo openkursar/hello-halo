@@ -390,11 +390,100 @@ for (const recovery of ['thinking-reservation', 'merge-reservation', 'merge-inpu
     }
     if (recovery === 'thinking-reservation') {
       expect(summaries).toHaveLength(1)
-      expect(summaries[0].request.maxTokens).toBe(8192)
+      expect(summaries[0].request.maxTokens).toBeGreaterThan(8192)
+      expect(answers[0].request.maxTokens).toBe(8192)
       expect(summaries[0].request.thinking).toEqual(answers[0].request.thinking)
     } else expect(rejectedMerge).toBeGreaterThan(0)
     expect(result.usage.input_tokens).toBe(answerUsage.input_tokens + successful * summaryUsage.input_tokens)
     expect(result.usage.output_tokens).toBe(answerUsage.output_tokens + successful * summaryUsage.output_tokens)
+  })
+}
+
+for (const budget of ['large-ceiling', 'small-work-ceiling', 'explicit-output-range', 'unrelated-error', 'partial-content'] as const) {
+  test(`output allowance preserves safe continuation for ${budget}`, {
+    annotation: binding('chat.execution.output-allowance', { budget }),
+  }, async ({ sdk, profile }, info) => {
+    const ceiling = budget === 'small-work-ceiling' ? 300 : budget === 'large-ceiling' ? 320000 : 640000
+    const contextWindow = budget === 'large-ceiling' ? 150000 : budget === 'small-work-ceiling' ? 40000 : 1000000
+    const thinking = budget === 'large-ceiling' ? { type: 'enabled' as const, budgetTokens: 32000 } : { type: 'disabled' as const }
+    const config = sdk.resolveQueryConfig({ ...options(profile), contextWindow, maxOutputTokens: ceiling, thinking })
+    const attempts: ProviderRequest[] = []
+    let checkpoints = 0
+    const executed: string[] = []
+    const script = scriptedProvider(() => ({ content: [{ type: 'text', text: 'Original task completed.' }], usage: answerUsage }), request => {
+      expect(request.maxTokens).toBeGreaterThanOrEqual(1024)
+      expect(request.maxTokens).toBeLessThanOrEqual(budget === 'large-ceiling' ? 52000 : 10000)
+      expect(request.thinking).toEqual(thinking)
+      if (budget === 'large-ceiling') {
+        const textBudget = Number(String(request.messages.at(-1)?.content).match(/must fit within (\d+) output tokens/)?.[1])
+        expect(textBudget).toBeGreaterThan(0)
+        expect(textBudget).toBeLessThanOrEqual(20000)
+        expect(textBudget + 32000).toBeLessThanOrEqual(request.maxTokens)
+      }
+      return { content: [{ type: 'text', text: summary }], usage: summaryUsage }
+    })
+    const stream = script.provider.createMessageStream.bind(script.provider)
+    script.provider.createMessageStream = async function* (request) {
+      attempts.push(snapshot(request))
+      if (budget === 'unrelated-error') throw new sdk.ProviderError('Invalid parameter: max_tokens', { statusCode: 400 })
+      if (budget === 'partial-content') {
+        yield { type: 'content_block_start', index: 0, content_block: { type: 'text', text: 'Partial response' } }
+        throw new sdk.ProviderError('max_tokens must be between 1 and 393216', { statusCode: 400 })
+      }
+      if (budget === 'explicit-output-range' && request.maxTokens > 393216) {
+        throw new sdk.ProviderError('max_tokens must be between 1 and 393216', { statusCode: 400 })
+      }
+      const estimatedInput = new sdk.TokenBudget(contextWindow).estimateRequest(request)
+      expect(estimatedInput + request.maxTokens).toBeLessThanOrEqual(contextWindow)
+      yield* stream(request)
+    }
+    const history: Message[] = [...Array.from({ length: 24 }, (_, index): Message => ({
+      role: index % 2 ? 'assistant' : 'user', content: `Record ${index}: ${'verified evidence '.repeat(budget === 'large-ceiling' ? 900 : 300)}`,
+    })), { role: 'user', content: 'Complete the original task. Report only; do not edit files.' }]
+    if (budget === 'large-ceiling') {
+      const ordinary: Message[] = [{ role: 'user', content: 'Ordinary request. ' + 'evidence '.repeat(12000) }]
+      const first = await collect(sdk.queryLoop(config, script.provider, [], ordinary))
+      expect(resultOf(first).is_error).toBe(false)
+      expect(compactEvents(first)).toHaveLength(0)
+      expect(script.exchanges.map(exchange => exchange.kind)).toEqual(['answer'])
+      expect(attempts[0].messages.slice(-ordinary.length)).toEqual(ordinary)
+      script.exchanges.length = 0
+      attempts.length = 0
+    }
+    const source = ['large-ceiling', 'small-work-ceiling'].includes(budget) ? history : [{ role: 'user' as const, content: 'Complete the original task. Report only; do not edit files.' }]
+    const events = await collect(sdk.queryLoop(config, script.provider, [fixtureTool('No tool should run.', executed)], source, {
+      onCompact() { checkpoints++ },
+    }))
+    const result = resultOf(events)
+    const negative = budget === 'unrelated-error' || budget === 'partial-content'
+    expect(result.is_error).toBe(negative)
+    expect(config.maxTokens).toBe(ceiling)
+    expect(executed).toEqual([])
+    const summaries = script.exchanges.filter(exchange => exchange.kind === 'summary')
+    if (budget === 'large-ceiling' || budget === 'small-work-ceiling') {
+      expect(summaries).toHaveLength(1)
+      expect(checkpoints).toBe(1)
+      expect(compactEvents(events)).toHaveLength(1)
+      expect(attempts).toHaveLength(1)
+      expect(JSON.stringify(attempts[0].messages)).toContain('Report only; do not edit files.')
+      expect(summaries[0].request.thinking).toEqual(attempts[0].thinking)
+      expect(summaries[0].request.systemPrompt).toEqual(attempts[0].systemPrompt)
+      expect(summaries[0].request.tools).toEqual(attempts[0].tools)
+      if (budget === 'small-work-ceiling') expect(attempts[0].maxTokens).toBe(300)
+    } else {
+      expect(summaries).toHaveLength(0)
+      expect(checkpoints).toBe(0)
+      expect(compactEvents(events)).toHaveLength(0)
+      expect(attempts).toHaveLength(budget === 'explicit-output-range' ? 2 : 1)
+      if (budget === 'explicit-output-range') {
+        expect(attempts.map(request => request.maxTokens)).toEqual([640000, 393216])
+        expect(attempts[1].messages).toEqual(attempts[0].messages)
+        expect(result.usage.output_tokens).toBe(answerUsage.output_tokens)
+      }
+    }
+    await info.attach('output-allowance', { body: JSON.stringify({ budget, ceiling, contextWindow,
+      allowances: attempts.map(request => request.maxTokens), summaries: summaries.map(exchange => exchange.request.maxTokens),
+      checkpoints, executed, result }), contentType: 'application/json' })
   })
 }
 

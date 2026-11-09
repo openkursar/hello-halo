@@ -33,6 +33,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 6000
 const ERR_NOT_OWNED = 'stop-not-owned'
 const ERR_RELAY_FAILED = 'stop-relay-failed'
 export const STOP_ERR_OWNER_UNREACHABLE = 'stop-owner-unreachable'
+export const STOP_ERR_CONDITIONS_UNSUPPORTED = 'stop-conditions-unsupported'
 
 /**
  * Headroom subtracted from the request timeout for the relay's upstream leg, so
@@ -122,6 +123,10 @@ export function createStopTurnService(deps: StopTurnServiceDeps): StopTurnServic
     appId: string
     epochId: string
   }): Promise<boolean> {
+    if ('controller' in args || 'expectedRequestId' in args) {
+      console.warn(`${LOG_TAG} stop not sent office=${deps.officeId} app=${args.appId} reason=${STOP_ERR_CONDITIONS_UNSUPPORTED}`)
+      return Promise.reject(new Error(STOP_ERR_CONDITIONS_UNSUPPORTED))
+    }
     return new Promise<boolean>((resolve, reject) => {
       const fid = randomUUID()
       const timer = setTimeout(() => {
@@ -207,6 +212,11 @@ export function createStopTurnService(deps: StopTurnServiceDeps): StopTurnServic
   }
 
   function handleRequest(from: NodeId, frame: StopTurnRequestFrame): void {
+    if ('controller' in frame || 'expectedRequestId' in frame) {
+      console.warn(`${LOG_TAG} stop refused office=${deps.officeId} app=${frame.appId} from=${from} reason=${STOP_ERR_CONDITIONS_UNSUPPORTED}`)
+      reply(from, frame, { error: STOP_ERR_CONDITIONS_UNSUPPORTED })
+      return
+    }
     // Retransmit safety: a duplicate stop is carried out at most once. Aborting
     // twice would reach past the turn the user meant into the one after it.
     if (inboundDedup.seen(from, frame.fid)) return

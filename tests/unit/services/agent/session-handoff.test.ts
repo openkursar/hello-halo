@@ -23,7 +23,7 @@ const m = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
-  createSession: m.createSession,
+  createSession: async (options: any, prepare?: (scope: any) => Promise<any>) => m.createSession(prepare ? await prepare({ signal: options.abortController.signal, readSessionToolContextMode: async () => 'full' }) : options),
   query: vi.fn(),
   getActiveEngine: () => 'anthropic',
   getDefaultEngine: () => m.defaultEngine, getStartupEngine: () => 'anthropic',
@@ -44,7 +44,7 @@ vi.mock('../../../../src/main/openai-compat-router', async () => ({
 vi.mock('../../../../src/main/services/ai-sources', async () => {
   const { getConfig } = await import('../../../../src/main/foundation/config.service')
   const getSource = (id: string) => getConfig().aiSources?.sources.find(source => source.id === id) ?? null
-  return { getAISourceManager: () => ({
+  return { getGroup: () => null, getAISourceManager: () => ({
     ensureInitialized: async () => {},
     getCurrentSourceConfig: () => getSource(getConfig().aiSources!.currentId!),
     getSourceConfig: getSource,
@@ -112,7 +112,7 @@ vi.mock('../../../../src/main/services/agent/mcp-manager', () => ({
   onMcpServerRecovered: vi.fn(() => () => {}),
 }))
 vi.mock('../../../../src/main/services/agent/mcp-probe', () => ({ probeMcpApp: vi.fn(), probeUnhealthyServers: vi.fn() }))
-vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({
+vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({ publishToolsetContextMode: vi.fn(),
   setSessionInvalidator: vi.fn(), buildCreationTimeServers: () => ({}), openToolset: () => ({ ok: true }),
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/capability-index', () => ({ buildToolsetSection: () => '' }))
@@ -177,8 +177,8 @@ vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
   copySessionJsonl: vi.fn(), readSessionMessages: () => [], readSessionTranscript: vi.fn(), readSessionMessageThoughts: vi.fn(),
 }))
 vi.mock('../../../../src/main/apps/runtime/team', () => ({ getActiveTeamRuntime: () => null }))
-vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({ createTeamMcpServer: vi.fn() }))
-vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: () => null }))
+vi.mock('../../../../src/main/apps/runtime/team/team-tools', () => ({ createTeamMcpServer: vi.fn(), createCoordinationMcpServer: vi.fn() }))
+vi.mock('../../../../src/main/apps/team', () => ({ getTeamStore: () => null, getTeamService: () => null }))
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({ getImSessionRegistry: () => null }))
 vi.mock('../../../../src/main/apps/runtime/im-channels', () => ({ getActiveImChannelManager: () => null }))
 vi.mock('../../../../src/main/apps/runtime/im-channels/file-send-mcp', () => ({ createFileSendMcpServer: vi.fn() }))

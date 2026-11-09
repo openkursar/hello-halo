@@ -1,3 +1,6 @@
+import { parseTeamSessionKey } from '@hello-halo/agent-sdk/collaboration/protocol'
+export { buildTeamSessionKey, isTeamSessionKey, parseTeamSessionKey } from '@hello-halo/agent-sdk/collaboration/protocol'
+
 /**
  * IM session key builders — shared between main process and renderer.
  *
@@ -217,9 +220,7 @@ export function isImSessionKey(conversationId: string): boolean {
  * overwritten by the next run). The literal "team" 3rd segment disambiguates
  * from IM keys (which are also 5 segments).
  */
-export function buildTeamSessionKey(appId: string, teamId: string, epochId: string): string {
-  return `app-chat:${appId}:team:${teamId}:${epochId}`
-}
+
 
 /**
  * Check whether a conversationId belongs to a team-channel session.
@@ -227,20 +228,10 @@ export function buildTeamSessionKey(appId: string, teamId: string, epochId: stri
  * Team keys: "app-chat:{appId}:team:{teamId}:{epochId}" — exactly 5
  * colon-separated segments whose 3rd segment is the literal "team".
  */
-export function isTeamSessionKey(conversationId: string): boolean {
-  if (!conversationId.startsWith('app-chat:')) return false
-  const parts = conversationId.split(':')
-  return parts.length === 5 && parts[2] === 'team'
-}
+
 
 /** Parse a team-channel session key back into its parts (null when not a team key). */
-export function parseTeamSessionKey(
-  conversationId: string
-): { appId: string; teamId: string; epochId: string } | null {
-  if (!isTeamSessionKey(conversationId)) return null
-  const parts = conversationId.split(':')
-  return { appId: parts[1], teamId: parts[3], epochId: parts[4] }
-}
+
 
 /**
  * Build the chat scope key for a team-backed IM conversation epoch. Identifies

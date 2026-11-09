@@ -29,18 +29,23 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 
+const teamAuthority = vi.hoisted(() => ({
+  store: null as import('../../../../../src/main/apps/team/store').TeamStore | null,
+  participants: null as ReturnType<typeof import('../../../../../src/main/apps/team/participant-service').createParticipantService> | null,
+}))
+vi.mock('../../../../../src/main/apps/team', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../../../../src/main/apps/team')>()),
+  getTeamService: () => teamAuthority.participants ? { participants: teamAuthority.participants, getCollaborationScope: () => null, disposePrivateCollaborations: async () => {} } : null,
+  getTeamStore: () => teamAuthority.store,
+}))
+
 // ============================================
 // Captured turns (hoisted: the mocks below write into them)
 // ============================================
 
-interface ToolDef {
-  name: string
-  handler: (input: Record<string, unknown>) => Promise<{ content?: Array<{ text: string }>; isError?: boolean }>
-}
-
 interface CapturedServer {
   context: Record<string, any>
-  server: { tools: ToolDef[] }
+  server: import('../../../../../src/main/services/agent/mcp/types').SdkMcpServerConfig
 }
 
 /** One turn as the engine received it. */
@@ -172,9 +177,7 @@ vi.mock('../../../../../src/main/services/agent/resolved-sdk', async (importOrig
   getDefaultEngine: () => 'anthropic', getStartupEngine: () => 'anthropic',
   resolveDefaultEngine: async () => 'anthropic', ensureEngineAvailable: async () => {},
   getEngineCapabilities: () => h.engine,
-  // The team tools and the report tool keep their handlers, so a turn can call them.
-  tool: (name: string, description: string, inputSchema: unknown, handler: unknown) => ({ name, description, inputSchema, handler }),
-  createSdkMcpServer: (options: { name: string; tools?: unknown[] }) => ({ name: options.name, tools: options.tools ?? [], _isMcpServer: true }),
+  ...(await import('../../../../../src/main/services/agent/mcp/sdk-server')),
 }))
 
 vi.mock('../../../../../src/main/services/agent/session-manager', () => ({
@@ -226,7 +229,7 @@ vi.mock('../../../../../src/main/apps/runtime/team/team-tools', async (importOri
       const server = actual.createTeamMcpServer(context)
       h.teamTools.set(`app-chat:${context.callerAppId}:team:${context.teamId}:${context.epochId}`, {
         context: context as unknown as Record<string, any>,
-        server: server as unknown as { tools: ToolDef[] },
+        server,
       })
       return server
     },
@@ -241,7 +244,7 @@ vi.mock('../../../../../src/main/apps/runtime/report-tool', async (importOrigina
       const server = actual.createReportToolServer(...args)
       h.reports.set(args[1].sessionKey ?? '', {
         context: args[1] as unknown as Record<string, any>,
-        server: server as unknown as { tools: ToolDef[] },
+        server,
       })
       return server
     },
@@ -308,7 +311,7 @@ vi.mock('../../../../../src/main/services/agent/helpers', () => ({
   getHeadlessElectronPath: vi.fn(() => '/electron'),
   getDbMcpServers: vi.fn(() => ({ ...h.userMcp })),
 }))
-vi.mock('../../../../../src/main/services/agent/events', () => ({ onAgentEvent: () => ({ dispose: () => {} }), emitAgentEvent: vi.fn() }))
+vi.mock('../../../../../src/main/services/agent/events', () => ({ onAgentEvent: () => ({ dispose: () => {} }), emitAgentEvent: vi.fn(), emitHumanRequest: vi.fn() }))
 vi.mock('../../../../../src/main/services/analytics/analytics.service', () => ({
   analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
 }))
@@ -475,6 +478,7 @@ vi.mock('../../../../../src/main/apps/skill-discovery', () => ({
 import { createDatabaseManager } from '../../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../../src/main/platform/store/types'
 import { TeamStore } from '../../../../../src/main/apps/team/store'
+import { createParticipantService } from '../../../../../src/main/apps/team/participant-service'
 import { MIGRATION_NAMESPACE, migrations } from '../../../../../src/main/apps/team/migrations'
 import {
   createTeamRuntime,
@@ -609,6 +613,8 @@ function sessionOf(appId: string, epoch = epochId): string {
 /** The runtime as bootstrap builds it, over whatever the database already holds. */
 function startRuntime(): void {
   store = new TeamStore(db)
+  teamAuthority.store = store
+  teamAuthority.participants = createParticipantService({ store, getRuntime: () => runtime ?? null })
   scheduler = fakeScheduler()
   const local = createDefaultSessionDeps(store)
   session = {
@@ -744,9 +750,8 @@ function duringNextTurnOf(appId: string, run: (turn: TurnCapture) => Promise<voi
 }
 
 async function callTool(server: CapturedServer | undefined, name: string, input: Record<string, unknown>): Promise<string> {
-  const definition = server?.server.tools.find((candidate) => candidate.name === name)
-  if (!definition) throw new Error(`the turn has no ${name}`)
-  const result = await definition.handler(input)
+  const result = await server?.server.instance.callTool(name, input) as { content?: Array<{ text: string }>; isError?: boolean } | undefined
+  if (!result) throw new Error(`the turn has no ${name}`)
   const text = result.content?.map((part) => part.text).join('\n') ?? ''
   if (result.isError) throw new Error(`${name} failed: ${text}`)
   return text
@@ -920,32 +925,32 @@ const OWNER_SERVERS = [
 /** A teammate elsewhere with everything saved: the owner's servers, never operating Halo. */
 const COLLEAGUE_FULL_SERVERS = OWNER_SERVERS.filter((server) => server !== 'halo-api-ref')
 
-/** What these readings resolved to before this change, recorded from that code. They must not move. */
+/** Effective capabilities for each saved permission policy. */
 const BEFORE = {
   readOnly: {
-    withheld: ['Agent', 'AskUserQuestion', 'Bash', 'CronCreate', 'CronDelete', 'CronList', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Skill', 'Task', 'TaskOutput', 'TaskStop'],
+    withheld: ['AskUserQuestion', 'Bash', 'CronCreate', 'CronDelete', 'CronList', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Skill', 'TaskOutput', 'TaskStop'],
     autoAllowed: ['TodoWrite', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
     servers: ['halo-report', 'halo-team', 'web-search'],
   },
   workspace: {
     withheld: ['AskUserQuestion', 'Bash', 'CronCreate', 'CronDelete', 'CronList', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Skill', 'TaskOutput', 'TaskStop'],
-    autoAllowed: ['TodoWrite', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Agent', 'Write', 'Edit', 'NotebookEdit'],
+    autoAllowed: ['TodoWrite', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Write', 'Edit', 'NotebookEdit'],
     servers: ['halo-report', 'halo-team', 'ocr', 'web-search'],
   },
   nothing: {
-    withheld: ['Agent', 'AskUserQuestion', 'Bash', 'CronCreate', 'CronDelete', 'CronList', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Skill', 'Task', 'TaskOutput', 'TaskStop', 'WebFetch', 'WebSearch'],
+    withheld: ['AskUserQuestion', 'Bash', 'CronCreate', 'CronDelete', 'CronList', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Skill', 'TaskOutput', 'TaskStop', 'WebFetch', 'WebSearch'],
     autoAllowed: ['TodoWrite'],
     servers: ['halo-report', 'halo-team', 'web-search'],
   },
   /** A stranger reaching a member whose owner saved "everything". */
   strangerEverything: {
     withheld: ['AskUserQuestion', 'CronCreate', 'CronDelete', 'CronList', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Skill', 'TaskOutput', 'TaskStop'],
-    autoAllowed: ['TodoWrite', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Agent', 'Write', 'Edit', 'NotebookEdit', 'Bash'],
+    autoAllowed: ['TodoWrite', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Write', 'Edit', 'NotebookEdit', 'Bash'],
     servers: ['ai-browser', 'halo-email', 'halo-notify', 'halo-report', 'halo-team', 'ocr', 'web-search'],
   },
   /** The front desk serving the guest under the chat's guest policy. */
   desk: {
-    withheld: ['Agent', 'AskUserQuestion', 'Bash', 'CronCreate', 'CronDelete', 'CronList', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Skill', 'Task', 'TaskOutput', 'TaskStop', 'WebFetch', 'WebSearch'],
+    withheld: ['AskUserQuestion', 'Bash', 'CronCreate', 'CronDelete', 'CronList', 'EnterPlanMode', 'EnterWorktree', 'ExitPlanMode', 'ExitWorktree', 'Skill', 'TaskOutput', 'TaskStop', 'WebFetch', 'WebSearch'],
     autoAllowed: ['TodoWrite', 'Read', 'Glob', 'Grep'],
     servers: ['halo-report', 'halo-team', 'web-search'],
     identity: 'guest:1783b3cd807b74eedbf805f875caef2b4a912e924361716d865f3343c345f495',
@@ -963,6 +968,20 @@ const BEFORE = {
 // ============================================
 
 describe('a teammate on another machine asks one of the owner\u2019s digital humans directly', () => {
+  it('accepts fresh protocol-4 colleague input after a stop without reviving the cancelled request', async () => {
+    await fromAnotherMachine(DEV, 'Draft the first solution.')
+    const caller = { teamId: TEAM_ID, epochId, callerAppId: DEV }
+    const oldRequest = teamAuthority.participants!.requestId(caller)
+    teamAuthority.participants!.markStopped(caller)
+    expect(teamAuthority.participants!.requestAllowed(oldRequest)).toBe(false)
+    const before = turnsOf(DEV).length
+    await fromAnotherMachine(DEV, 'Draft a new solution after the stop.')
+    expect(turnsOf(DEV)).toHaveLength(before + 1)
+    expect(lastTurnOf(DEV).message).toContain('Draft a new solution after the stop.')
+    expect(teamAuthority.participants!.requestAllowed(oldRequest)).toBe(false)
+    expect(teamAuthority.participants!.requestId(caller)).not.toBe(oldRequest)
+  })
+
   it('with nothing ever saved, the turn has everything the owner has — on the owner\u2019s record, and apart from the owner\u2019s own turn', async () => {
     saveDelegatedPolicy(DEV, NOT_SET)
     await fromAnotherMachine(DEV, 'Draft the solution design for the import job.')
@@ -1006,7 +1025,7 @@ describe('a teammate on another machine asks one of the owner\u2019s digital hum
     expect(serversOf(turn)).toContain('user-jira')
     // Nothing withheld and no permission prompt, so background results and
     // skills run exactly as in the owner's own session.
-    for (const tool of ['TaskOutput', 'TaskStop', 'Skill', 'Agent']) expect(turn.options.disallowedTools ?? []).not.toContain(tool)
+    for (const tool of ['TaskOutput', 'TaskStop', 'Skill']) expect(turn.options.disallowedTools ?? []).not.toContain(tool)
     expect(turn.options.allowedTools).toContain('Skill')
     expect(gateAllows(turn, 'Skill', { skill: 'place-order' })).toBe(true)
   })
@@ -1023,7 +1042,7 @@ describe('a teammate on another machine asks one of the owner\u2019s digital hum
     ['the owner\u2019s own server left out', { ...EVERYTHING, allowedUserMcp: [] }],
     ['commands narrowed to a list', { ...EVERYTHING, bashScope: 'listed' as const, bashRules: ['npm test'] }],
     ['one switch off', { ...EVERYTHING, allowAiBrowser: false }],
-    ['one tool off', { ...EVERYTHING, allowedTools: EVERYTHING.allowedTools!.filter((tool) => tool !== 'Agent') }],
+    ['one tool off', { ...EVERYTHING, allowedTools: EVERYTHING.allowedTools!.filter((tool) => tool !== 'Write') }],
   ])('anything short of everything is read strictly (%s)', async (_case, policy) => {
     saveDelegatedPolicy(DEV, policy)
     await fromAnotherMachine(DEV, 'Draft the solution design for the import job.')
@@ -1245,7 +1264,7 @@ describe('a frame from another machine can narrow its own reach, never widen it'
       expect(notice.message).not.toContain('a guest in an IM chat')
     })
 
-    it('…and what a lead with nothing saved hands out from its message is the owner\u2019s own work', async () => {
+    it('preserves colleague identity when an unrestricted lead delegates the external request', async () => {
       saveDelegatedPolicy(LEAD, NOT_SET)
       saveDelegatedPolicy(DEV, NOT_SET)
       duringNextTurnOf(LEAD, async (turn) => {
@@ -1255,8 +1274,8 @@ describe('a frame from another machine can narrow its own reach, never widen it'
 
       await expectEverythingOnTheRecord(await nextTurnOf(LEAD, 0))
       const dev = await nextTurnOf(DEV, 0)
-      expect(dev.trigger).not.toHaveProperty('origin')
-      await expectTheOwnersOwn(dev)
+      expect(dev.trigger).toMatchObject({ origin: 'colleague' })
+      await expectEverythingOnTheRecord(dev)
     })
 
     it('is a stranger\u2019s in an IM chat\u2019s piece of work, which gets nothing here', async () => {
@@ -1516,30 +1535,28 @@ describe('what a held-back turn sets in motion', () => {
     expectReadOnlyAsBefore(woken)
   })
 
-  it('a check set in a stranger\u2019s chain stays a stranger\u2019s: a target with nothing saved gets nothing', async () => {
+  it('does not let a guest chain install persistent checks through a teammate', async () => {
     saveDelegatedPolicy(DEV, NOT_SET)
     duringNextTurnOf(DESK, async (turn) => {
       await callTool(turn.teamTools, 'team_send', { to: 'tester', message: 'Find out why the order is late.' })
     })
-    let check = ''
-    duringNextTurnOf(TESTER, async (turn) => { check = await setsCheck(turn, 'dev', 'Check the order queue.') })
+    duringNextTurnOf(TESTER, async (turn) => {
+      const server = turn.teamTools!.server.instance
+      expect(server.listTools().map(tool => tool.name)).not.toContain('team_schedule')
+      expect(await server.callTool('team_schedule', { to: 'dev', every: '15m', instruction: 'Check the order queue.' })).toBeUndefined()
+    })
     await fromImGuest('Where is my order?')
-    await nextTurnOf(TESTER, 0)
+    const reached = await nextTurnOf(TESTER, 0)
+    expect(reached.trigger).toMatchObject({ origin: 'guest' })
     await settle()
-
-    await scheduler.ring(check)
-    const woken = await nextTurnOf(DEV, 0)
-    expect(woken.trigger).toMatchObject({ origin: 'guest' })
-    expectNothingGranted(woken)
-    expect(woken.identity).toBe('guest')
+    expect(store.listAllChecks()).toEqual([])
+    expect(turnsOf(DEV)).toEqual([])
   })
 
-  // The owner's own digital humans asking each other is the owner's own work,
-  // whoever's request the sender serves; only a stranger's travels on a message.
   it.each([
     ['"read only"', READ_ONLY],
     ['nothing', NOT_SET],
-  ])('a message a teammate\u2019s held-back turn sends to a member here is the owner\u2019s own work, with %s saved for that member', async (_case, saved) => {
+  ])('preserves a colleague request across a local hop, with %s saved for the recipient', async (_case, saved) => {
     saveDelegatedPolicy(DEV, READ_ONLY)
     saveDelegatedPolicy(TESTER, saved)
     duringNextTurnOf(DEV, async (turn) => {
@@ -1549,8 +1566,9 @@ describe('what a held-back turn sets in motion', () => {
     expectReadOnlyAsBefore(lastTurnOf(DEV))
 
     const reached = await nextTurnOf(TESTER, 0)
-    expect(reached.trigger).not.toHaveProperty('origin')
-    await expectTheOwnersOwn(reached)
+    expect(reached.trigger).toMatchObject({ origin: 'colleague' })
+    if (saved === READ_ONLY) expectReadOnlyAsBefore(reached)
+    else await expectEverythingOnTheRecord(reached)
   })
 })
 
@@ -1629,7 +1647,7 @@ describe('the owner and the owner\u2019s own digital humans', () => {
     await expectTheOwnersOwn(reached)
   })
 
-  it('a teammate\u2019s result reaching a lead that holds the first invite\u2019s "read only": the lead\u2019s turn is held to it, the work it hands out here is the owner\u2019s own', async () => {
+  it('keeps delegated work under the recipient policy after a restricted lead receives an external result', async () => {
     // What the first invite link saves for every member of this machine, the lead included.
     for (const appId of [LEAD, DEV, TESTER, DESK]) saveDelegatedPolicy(appId, READ_ONLY)
     let check = ''
@@ -1645,8 +1663,8 @@ describe('the owner and the owner\u2019s own digital humans', () => {
     expectReadOnlyAsBefore(lead)
 
     const dev = await nextTurnOf(DEV, 0)
-    expect(dev.trigger).not.toHaveProperty('origin')
-    await expectTheOwnersOwn(dev)
+    expect(dev.trigger).toMatchObject({ origin: 'colleague' })
+    expectReadOnlyAsBefore(dev)
 
     // A standing instruction set in that turn stays the teammate's request.
     await scheduler.ring(check)
@@ -1655,16 +1673,18 @@ describe('the owner and the owner\u2019s own digital humans', () => {
     expectReadOnlyAsBefore(woken)
   })
 
-  it('a teammate with everything still adds no reach to what it hands on: the member it reaches is the owner\u2019s own', async () => {
+  it('cannot launder an unrestricted colleague request into an owner turn at the next member', async () => {
     saveDelegatedPolicy(DEV, NOT_SET)
     saveDelegatedPolicy(TESTER, READ_ONLY)
     duringNextTurnOf(DEV, async (turn) => {
-      expect(turn.teamTools?.context.origin).toBeUndefined()
+      expect(turn.teamTools?.context.origin).toBe('colleague')
       await callTool(turn.teamTools, 'team_send', { to: 'tester', message: 'Run the import suite.' })
     })
     await fromAnotherMachine(DEV, 'Keep the import suite green.')
 
-    await expectTheOwnersOwn(await nextTurnOf(TESTER, 0))
+    const reached = await nextTurnOf(TESTER, 0)
+    expect(reached.trigger).toMatchObject({ origin: 'colleague' })
+    expectReadOnlyAsBefore(reached)
   })
 })
 
@@ -1683,7 +1703,7 @@ describe('a stranger in an IM group the team answers', () => {
     expect(serversOf(desk)).toEqual(BEFORE.desk.servers)
     expect(desk.identity).toBe(BEFORE.desk.identity)
     expect(desk.teamTools?.context).toMatchObject({ origin: 'guest', servesGuest: true })
-    expect(desk.teamTools?.server.tools.map((tool) => tool.name)).not.toContain('team_schedule')
+    expect(desk.teamTools?.server.instance.listTools().map((tool) => tool.name)).not.toContain('team_schedule')
   })
 
   it('reaches a member with nothing saved, which then has nothing — two hops on, still', async () => {

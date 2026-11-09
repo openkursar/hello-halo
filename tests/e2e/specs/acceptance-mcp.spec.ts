@@ -1,27 +1,28 @@
 import { test, expect, acceptance, sendAcceptanceMessage, waitForAcceptanceIdle } from '../fixtures/acceptance-app'
 import { startAcceptanceMcp } from '../fixtures/acceptance-mcp'
-import { modelTool } from '../fixtures/acceptance-model'
+import { replyWithModelTool } from '../fixtures/acceptance-tool-discovery'
 import { navigateToApps, navigateToChat } from '../fixtures/helpers'
 
 test('an MCP connection installed through the UI executes real tools and reports operation and connection failures', acceptance('capabilities.connections.tool-call'), async ({ model, window }, testInfo) => {
   test.setTimeout(150000)
   const service = await startAcceptanceMcp()
+  const issues: string[] = []
   model.respond(request => {
     if (request.lastUserText.includes('Use the connected service successfully.')) {
       const result = request.toolResults.find(result => result.id === 'successful-service-call')
-      if (!result) return { tools: [modelTool(request, 'echo_acceptance', { value: 'original-request' }, 'successful-service-call')] }
+      if (!result) return replyWithModelTool(request, 'echo_acceptance', { value: 'original-request' }, 'successful-service-call', issues)
       expect(result.text).toContain('Service receipt: original-request')
       return { text: 'The connected service returned original-request.' }
     }
     if (request.lastUserText.includes('Use the service while its operation is failing.')) {
       const result = request.toolResults.find(result => result.id === 'failed-service-call')
-      if (!result) return { tools: [modelTool(request, 'echo_acceptance', { value: 'failing-request' }, 'failed-service-call')] }
+      if (!result) return replyWithModelTool(request, 'echo_acceptance', { value: 'failing-request' }, 'failed-service-call', issues)
       expect(result.text).toContain('The requested service operation failed. No result was produced.')
       return { text: 'The service operation failed. It did not produce the requested result.' }
     }
     if (request.lastUserText.includes('Try the recovered service.')) {
       const result = request.toolResults.find(result => result.id === 'recovered-service-call')
-      if (!result) return { tools: [modelTool(request, 'echo_acceptance', { value: 'recovered-request' }, 'recovered-service-call')] }
+      if (!result) return replyWithModelTool(request, 'echo_acceptance', { value: 'recovered-request' }, 'recovered-service-call', issues)
       expect(result.text).toContain('Service receipt: recovered-request')
       return { text: 'The recovered service returned recovered-request.' }
     }
@@ -48,6 +49,10 @@ test('an MCP connection installed through the UI executes real tools and reports
     const success = await sendAcceptanceMessage(window, 'Use the connected service successfully.')
     await expect(window.locator('.message-assistant').last()).toContainText('The connected service returned original-request.')
     await waitForAcceptanceIdle(window, success.conversationId)
+    const discoveryRequests = model.exchanges.map(exchange => exchange.request)
+    expect(discoveryRequests[0].tools).toEqual(expect.arrayContaining(['ToolSearch', 'CallTool']))
+    expect(discoveryRequests[0].tools.some(name => name.endsWith('__echo_acceptance'))).toBe(false)
+    expect(discoveryRequests.every(request => JSON.stringify(request.body.tools) === JSON.stringify(discoveryRequests[0].body.tools))).toBe(true)
     expect(service.calls).toEqual([{ value: 'original-request', failed: false }])
     service.failTools(true)
     const failure = await sendAcceptanceMessage(window, 'Use the service while its operation is failing.')
@@ -73,6 +78,7 @@ test('an MCP connection installed through the UI executes real tools and reports
     const recovered = await sendAcceptanceMessage(window, 'Try the recovered service.')
     await expect(window.locator('.message-assistant').last()).toContainText('The recovered service returned recovered-request.')
     await waitForAcceptanceIdle(window, recovered.conversationId)
+    expect(issues).toEqual([])
     expect(service.calls).toHaveLength(3)
     expect(service.calls.at(-1)).toEqual({ value: 'recovered-request', failed: false })
   } finally {

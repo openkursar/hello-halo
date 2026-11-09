@@ -7,6 +7,9 @@ import { createTestConfigDir, getAppEntryPath, launchElectronApp, cleanupTestCon
 import { startAcceptanceModel, type AcceptanceModel } from './acceptance-model'
 import { observeAcceptanceShutdown, type AcceptanceShutdownObserver } from './acceptance-shutdown-diagnostics'
 import type { HaloAPI } from '../../../src/preload'
+import type { EngineId } from '../../../src/shared/types/engine'
+import { parseNativeChatKey } from '../../../src/shared/apps/im-keys'
+import { sourceTurnCandidates, matchesSubmittedInput, selectSubmittedSource, type StoredInput, type SourceTarget } from './source-submit-target'
 
 interface TurnRecord { conversationId: string; spaceId: string; completed: boolean }
 interface AcceptanceProbe { turns: TurnRecord[]; errors: unknown[]; tools: string[]; dispose: () => void }
@@ -29,6 +32,7 @@ export interface AcceptanceSource {
 }
 
 interface Fixtures {
+  sdkEngine: EngineId
   startupObserver: string | undefined
   diagnoseShutdown: boolean
   model: AcceptanceModel
@@ -41,7 +45,7 @@ export function acceptance(caseId: string, variant: Record<string, string> = {})
   return { annotation: { type: 'acceptance', description: JSON.stringify({ caseId, evidence: 'app-e2e', mode: 'scripted', variant }) } }
 }
 
-async function attachProbe(window: Page) {
+export async function attachProbe(window: Page) {
   await window.evaluate(() => {
     const state = globalThis as unknown as AcceptanceWindow
     state.acceptanceProbe?.dispose()
@@ -161,6 +165,7 @@ async function attachEvidence(profile: string, model: AcceptanceModel, info: Tes
 }
 
 export const test = base.extend<Fixtures>({
+  sdkEngine: ['halo', { option: true }],
   startupObserver: [undefined, { option: true }],
   diagnoseShutdown: [false, { option: true }],
   model: async ({}, use) => {
@@ -170,15 +175,20 @@ export const test = base.extend<Fixtures>({
   aiSource: async ({ model }, use) => {
     await use({ provider: 'openai', apiKey: 'local-scripted-endpoint', apiUrl: model.url, model: 'gpt-4o' })
   },
-  acceptanceApp: async ({ model, aiSource, diagnoseShutdown, startupObserver }, use, testInfo) => {
+  acceptanceApp: async ({ model, aiSource, sdkEngine, diagnoseShutdown, startupObserver }, use, testInfo) => {
     const entry = getAppEntryPath()
-    const profile = createTestConfigDir(entry, [])
+    const selectedCli = sdkEngine === 'anthropic' ? process.env.HALO_ACCEPTANCE_CLAUDE_CLI : undefined
+    if (sdkEngine === 'anthropic' && (!selectedCli || !existsSync(selectedCli))) throw new Error('Blocked prerequisite: HALO_ACCEPTANCE_CLAUDE_CLI must name an installed external Claude Code')
+    const profile = createTestConfigDir(entry, [], { sdkEngine })
     const file = join(profile, '.halo/config.json')
     const config = JSON.parse(readFileSync(file, 'utf8'))
     const now = new Date().toISOString()
     config.api = { provider: aiSource.provider, apiKey: aiSource.apiKey, apiUrl: aiSource.apiUrl, model: aiSource.model }
     config.aiSources = { version: 2, currentId: 'acceptance-local', sources: [{ id: 'acceptance-local', name: 'Local acceptance model', authType: 'api-key', ...aiSource, availableModels: [{ id: aiSource.model, name: aiSource.model }], createdAt: now, updatedAt: now }] }
-    config.agent = { ...config.agent, sdkEngine: 'halo', configDirMode: 'custom', customConfigDir: join(profile, 'sdk-state'), maxTurns: 16 }
+    config.agent = { ...config.agent, sdkEngine, configDirMode: 'custom', customConfigDir: join(profile, 'sdk-state'), maxTurns: 16 }
+    if (sdkEngine === 'anthropic') {
+      config.agent.ccRuntime = { selectedPath: selectedCli, selectionOrigin: 'user' }
+    }
     config.imChannels = { instances: [] }
     config.notificationChannels = {}
     writeFileSync(file, JSON.stringify(config, null, 2))
@@ -230,7 +240,8 @@ export const test = base.extend<Fixtures>({
         },
       }
       const availability = await session.window.evaluate(() => (globalThis as unknown as AcceptanceWindow).halo.getEngineAvailability())
-      expect(availability).toMatchObject({ success: true, data: { activeEngine: 'halo', degradedFrom: null } })
+      await testInfo.attach('requested-and-active-engine', { body: JSON.stringify({ requested: sdkEngine, availability }, null, 2), contentType: 'application/json' })
+      expect(availability, 'A fallback engine cannot establish the requested engine’s behavior').toMatchObject({ success: true, data: { activeEngine: sdkEngine, degradedFrom: null } })
       await testInfo.attach('application-runtime', { body: JSON.stringify(await session.app.evaluate(({ app }) => ({ packaged: app.isPackaged, platform: process.platform, arch: process.arch, electron: process.versions.electron, node: process.versions.node }))), contentType: 'application/json' })
       await use(session)
       expect(model.errors, 'Every model request must match the declared script').toEqual([])
@@ -273,12 +284,53 @@ export const test = base.extend<Fixtures>({
   window: async ({ acceptanceApp }, use) => { await use(acceptanceApp.window) },
 })
 
-export async function sendAcceptanceMessage(window: Page, message: string) {
-  const count = await window.evaluate(() => (globalThis as unknown as AcceptanceWindow).acceptanceProbe!.turns.length)
+export async function sendAcceptanceMessage(
+  window: Page,
+  message: string,
+  options: { expectedTarget?: SourceTarget } = {},
+): Promise<TurnRecord> {
   await window.locator('textarea').first().fill(message)
+  const baseline = await window.evaluate(() => ({
+    cursor: (globalThis as unknown as AcceptanceWindow).acceptanceProbe!.turns.length,
+    armedAt: Date.now(),
+  }))
   await window.locator('[data-onboarding="send-button"]').click()
-  await expect.poll(() => window.evaluate(() => (globalThis as unknown as AcceptanceWindow).acceptanceProbe!.turns.length)).toBeGreaterThan(count)
-  return window.evaluate(() => (globalThis as unknown as AcceptanceWindow).acceptanceProbe!.turns.at(-1)!)
+  let selected: TurnRecord | undefined
+  let ambiguity: Error | undefined
+  let observedIds: string[] = []
+  let candidateIds: string[] = []
+  try {
+    await expect.poll(async () => {
+      const observed = await window.evaluate(cursor =>
+        (globalThis as unknown as AcceptanceWindow).acceptanceProbe!.turns.slice(cursor), baseline.cursor)
+      observedIds = observed.map(turn => turn.conversationId)
+      const candidates = sourceTurnCandidates(observed, options.expectedTarget)
+      candidateIds = candidates.map(turn => turn.conversationId)
+      const matches: TurnRecord[] = []
+      for (const candidate of candidates) {
+        const person = parseNativeChatKey(candidate.conversationId)
+        const rows = await window.evaluate(async ({ target, appId }) => {
+          const api = (globalThis as unknown as AcceptanceWindow).halo
+          if (appId) {
+            const result = await api.appChatTranscript({ appId, spaceId: target.spaceId, conversationId: target.conversationId, limit: 50 })
+            if (!result.success || !result.data) throw new Error(result.error ?? 'The submitted native chat could not be read')
+            return result.data.messages
+          }
+          const result = await api.getConversation(target.spaceId, target.conversationId)
+          if (!result.success || !result.data) throw new Error(result.error ?? 'The submitted space chat could not be read')
+          return (result.data as { messages: StoredInput[] }).messages
+        }, { target: candidate, appId: person?.appId })
+        if (matchesSubmittedInput(rows, message.trim(), baseline.armedAt)) matches.push(candidate)
+      }
+      try { selected = selectSubmittedSource(matches) }
+      catch (error) { ambiguity = error as Error; return true }
+      return !!selected
+    }, { message: 'The UI submission must reach its source conversation, never a collaborator or an unrelated background turn' }).toBe(true)
+  } catch (cause) {
+    throw new Error(`No verified source accepted the UI submission: ${JSON.stringify({ expected: options.expectedTarget, observed: observedIds, candidates: candidateIds })}`, { cause })
+  }
+  if (ambiguity) throw ambiguity
+  return selected!
 }
 
 export async function waitForAcceptanceIdle(window: Page, conversationId: string, options: {

@@ -68,6 +68,8 @@ export interface CapabilityPolicy {
   bashRules?: string[]
 
   // ── Halo MCP injection control ──
+  /** May create temporary collaborators; existing team communication is independent. */
+  allowCollaboration?: boolean
   allowAiBrowser?: boolean
   allowEmail?: boolean
   allowNotify?: boolean
@@ -89,6 +91,7 @@ export interface CapabilityPolicy {
 
 /** The boolean capability keys, so callers can iterate them exhaustively. */
 export type CapabilityToggleKey =
+  | 'allowCollaboration'
   | 'allowAiBrowser'
   | 'allowEmail'
   | 'allowNotify'
@@ -108,7 +111,6 @@ export type CapabilityToggleKey =
  * is the only mechanism that removes a tool from the model's pool.
  */
 export const ALL_BUILTIN_TOOLS: readonly string[] = [
-  'Agent',
   'AskUserQuestion',
   'Bash',
   'CronCreate',
@@ -124,7 +126,6 @@ export const ALL_BUILTIN_TOOLS: readonly string[] = [
   'NotebookEdit',
   'Read',
   'Skill',
-  'Task',
   'TaskOutput',
   'TaskStop',
   'TodoWrite',
@@ -133,17 +134,9 @@ export const ALL_BUILTIN_TOOLS: readonly string[] = [
   'Write',
 ]
 
-/**
- * Older names the engine still answers to. A rule naming one acts on the tool
- * it names now (the sub-agent tool was "Task"), so an alias answers to its
- * tool's switch — left to itself, it stayed withheld and took the tool it names
- * away with it, whatever the switch said.
- */
-const BUILTIN_TOOL_ALIASES: ReadonlyMap<string, string> = new Map([['Task', 'Agent']])
-
-/** A built-in tool's name as the switches know it. */
+/** Canonical names of the current built-in tool surface. */
 export function canonicalBuiltinTool(name: string): string {
-  return BUILTIN_TOOL_ALIASES.get(name) ?? name
+  return name
 }
 
 /**
@@ -162,7 +155,6 @@ export const DELEGABLE_BUILTIN_TOOLS: readonly { name: string; group: Capability
   { name: 'Grep', group: 'file' },
   { name: 'WebFetch', group: 'network' },
   { name: 'WebSearch', group: 'network' },
-  { name: 'Agent', group: 'other' },
   { name: 'Bash', group: 'advanced' },
   { name: 'Write', group: 'advanced' },
   { name: 'Edit', group: 'advanced' },
@@ -284,6 +276,7 @@ export function allowsBuiltin(
   mode: CapabilityMode
 ): boolean {
   const tool = canonicalBuiltinTool(name)
+  if (tool === 'Agent' || tool === 'Task') return false
   if (ALWAYS_AVAILABLE_BUILTIN_TOOLS.includes(tool)) return true
   if (tool === SKILL_TOOL) return grantsAnySkill(policy, mode)
   const listed = policy?.allowedTools
@@ -309,12 +302,20 @@ export function grantsAnySkill(policy: CapabilityPolicy | undefined, mode: Capab
   return listed.length > 0
 }
 
+/** Legacy delegation choices are read as data, never offered as native tools. */
+export function allowsCollaboration(policy: CapabilityPolicy | undefined, mode: CapabilityMode): boolean {
+  if (typeof policy?.allowCollaboration === 'boolean') return policy.allowCollaboration
+  if (Array.isArray(policy?.allowedTools)) return policy.allowedTools.some(name => name === 'Agent' || name === 'Task')
+  return mode === 'permissive'
+}
+
 /** Whether a gated Halo capability is granted under this policy. */
 export function allowsCapability(
   policy: CapabilityPolicy | undefined,
   key: CapabilityToggleKey,
   mode: CapabilityMode
 ): boolean {
+  if (key === 'allowCollaboration') return allowsCollaboration(policy, mode)
   // A terminal runs whatever is typed into it, so no command rule can reach it.
   // Leaving it on beside a command whitelist would publish a list of allowed
   // commands next to an unlocked door into the same room.
@@ -366,6 +367,7 @@ export interface LendableInventory {
  * screens (see {@link colleagueReach}).
  */
 export function grantsEverything(policy: CapabilityPolicy, inventory?: LendableInventory): boolean {
+  if (!allowsCollaboration(policy, 'strict')) return false
   if (!DELEGABLE_BUILTIN_TOOLS.every((tool) => allowsBuiltin(policy, tool.name, 'strict'))) return false
   if (resolveBashAccess(policy, 'strict').scope !== 'full') return false
   if (!CAPABILITY_MCP_TOGGLES.every((toggle) => allowsCapability(policy, toggle.key, 'strict'))) return false
@@ -409,9 +411,10 @@ export function colleagueReach(
 export function intersectPolicies(a: CapabilityPolicy, b: CapabilityPolicy): CapabilityPolicy {
   const both = (x: readonly string[] | undefined, y: readonly string[] | undefined): string[] =>
     [...new Set(x ?? [])].filter((name) => (y ?? []).includes(name))
-  const tools = (policy: CapabilityPolicy): string[] => (policy.allowedTools ?? []).map(canonicalBuiltinTool)
+  const tools = (policy: CapabilityPolicy): string[] => (policy.allowedTools ?? []).filter(name => name !== 'Agent' && name !== 'Task').map(canonicalBuiltinTool)
   const result: CapabilityPolicy = {
     allowedTools: both(tools(a), tools(b)),
+    allowCollaboration: allowsCollaboration(a, 'strict') && allowsCollaboration(b, 'strict'),
     allowedSkills: both(a.allowedSkills, b.allowedSkills),
     allowedUserMcp: both(a.allowedUserMcp, b.allowedUserMcp),
   }
@@ -434,6 +437,7 @@ export function fullCapabilityPolicy(): CapabilityPolicy {
   return {
     allowedTools: DELEGABLE_BUILTIN_TOOLS.map((t) => t.name),
     bashScope: 'full',
+    allowCollaboration: true,
     allowAiBrowser: true,
     allowEmail: true,
     allowNotify: true,
@@ -525,6 +529,7 @@ export function isRestrictivePolicy(
 ): boolean {
   if (mode === 'strict') return true
   if (!policy) return false
+  if (!allowsCollaboration(policy, mode)) return true
   if (computeDisallowedBuiltins(policy, mode).length > 0) return true
   if (resolveBashAccess(policy, mode).scope !== 'full') return true
   if (CAPABILITY_MCP_TOGGLES.some((toggle) => !allowsCapability(policy, toggle.key, mode))) return true
@@ -547,6 +552,7 @@ export function allowsBuiltinAtCallTime(
   mode: CapabilityMode
 ): boolean {
   const tool = canonicalBuiltinTool(name)
+  if (tool === 'Agent' || tool === 'Task') return false
   if (ALWAYS_AVAILABLE_BUILTIN_TOOLS.includes(tool)) return true
   if (!DELEGABLE_BUILTIN_TOOLS.some((delegable) => delegable.name === tool)) return false
   return allowsBuiltin(policy, tool, mode)
@@ -582,6 +588,7 @@ export function capabilityPolicyFromPreset(preset: CapabilityPresetId): Capabili
         : tool.group === 'file' || tool.group === 'network'
     ).map((tool) => tool.name),
     bashScope: 'full',
+    allowCollaboration: preset === 'workspace',
     allowAiBrowser: false,
     allowEmail: false,
     allowNotify: false,
@@ -591,4 +598,36 @@ export function capabilityPolicyFromPreset(preset: CapabilityPresetId): Capabili
     allowTerminal: false,
   }
   return base
+}
+
+
+export interface TurnFileAccess {
+  /** The session's working directory; relative paths resolve against it */
+  cwd: string
+  /** Memory content this turn may write — also readable */
+  memoryWritable: string[]
+  /** Memory content this turn may only read */
+  memoryReadable: string[]
+  /** Exact files handed to this turn */
+  attachedFiles: string[]
+  /** Folders of the skills granted to this turn, readable only */
+  skillFolders?: string[]
+  /** Where a granted file tool may reach */
+  workspaceRoots: string[]
+  /** Folders inside the workspace that stay closed except for memory */
+  closed: string[]
+  /**
+   * Closed folders the Claude engine's deny rules leave out, because a file of
+   * this turn may live there (persisted images). The hook still refuses every
+   * other file in them.
+   */
+  hookGuarded: string[]
+  /** System records inside the memory folders, closed even to recursion */
+  memorySystemPaths: string[]
+  /**
+   * An engine's own configuration folders, under whatever name they have — a
+   * configuration folder set by the owner may sit inside the workspace. Never
+   * written by a file tool, like the engine folders by name.
+   */
+  engineConfigDirs?: string[]
 }

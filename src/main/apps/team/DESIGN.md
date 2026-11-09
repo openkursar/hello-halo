@@ -14,8 +14,19 @@ membership, lead provisioning and task projections; execution is delegated to
 the injected `runtime/team` contract. The coordination kernel consumes the store
 through its exported contract.
 
+Publication ownership rules are supplied by the engine-independent
+`@hello-halo/agent-sdk/collaboration` library through the public `artifact-refs`
+facade. The team store remains authoritative; the library stores no mirror of
+published refs and imports no Halo application code.
+
 The store does not execute agents, route messages or own transport handlers.
 Business rules live in the service; live coordination belongs to `runtime/team`.
+
+The global team directory selects standing teams in storage before projecting
+membership and status. Temporary collaboration remains persisted for its source
+conversation, history and explicit saving, but is not a discoverable team. The
+assistant HTTP listener also refuses temporary team IDs across the management
+routes; source UI routes remain available to the owner's clients.
 
 Persistence depends on `platform/store`. The service receives manager and runtime
 behavior through injected contracts; provisioning and artifact services are
@@ -29,6 +40,17 @@ an upward runtime dependency). Live turn mechanics remain in
 
 ---
 
+## Work admission
+
+A standing goal is optional. Creating an AI-sourced team without a goal and without
+an explicit member proposal provisions its lead only; blank-goal proposal requests
+return no roles without calling a model. Concrete work may later add collaborators.
+
+`runTeam` accepts an explicit instruction or falls back to the standing goal. If
+both are absent, it refuses before execution. It returns `{ epochId }` so callers
+follow the work they created instead of guessing from `currentEpochId` or recency.
+Manual work can overlap; automatic triggers retain their existing overlap guard.
+
 ## 2. Table Ownership
 
 All team tables live in the shared app-level database (`halo.db`), versioned
@@ -38,6 +60,7 @@ under the isolated migration namespace `app_team`.
 |-------|-------|----------|
 | `teams` | one row per team | long-lived definition |
 | `team_members` | (team_id, app_id) | long-lived definition |
+| `team_participants` | one temporary identity in one epoch | retained with its work; separate from standing membership |
 | `team_edges` | (team_id, from, to) | long-lived definition (structured mode only) |
 | `blackboard_tasks` | one row per task | per-epoch; retained after seal for history |
 | `blackboard_findings` | append-only | per-epoch; retained after seal for history |
@@ -52,6 +75,50 @@ leaving a joined team").
 
 Epoch-scoped rows are never auto-deleted on seal — they remain as the durable,
 observable record of a run (技术 §8.2 persistence layering).
+
+### Member-private scopes
+
+An ephemeral collaboration whose coordinator conversation parses as a team session
+is internal work owned by that exact member session. It has a separate team and
+epoch, never adds participants to the parent's shared roster, and cannot be saved
+as an explicit team. Source conversation keys provide the discriminator; no schema
+migration or public participant purpose field is needed. Ordinary source-chat
+collaboration and existing standing teams keep their shared behavior.
+
+The local owner can read the private scope through its parent member session;
+remote members cannot. `disposePrivateCollaborations(teamId, epochId?)` removes
+these scopes recursively through the normal dissolution path. Parent-epoch
+closure calls it before releasing the parent, and team dissolution covers every
+epoch, including removed members. Failed closes retain rows and leases for retry;
+the shared workspace release keeps dirty checkouts and independent installed people.
+
+Deletion fences admission and cancels requests without sealing business epochs.
+Both host dissolution and joined-office cleanup await descendant disposal, then
+call `TeamRuntime.closeEpochResources` for every epoch, including closed history
+from a failed attempt. Cleanup failure preserves epoch fields, summaries, outcomes
+and task metadata unchanged for retry. Reachable remote owners are stopped before
+dissolution is published; an unreachable owner (including a disconnect during
+stop) is logged and does not block local deletion. A reachable owner's stop error
+or a local resource-close error still prevents deletion.
+
+### Temporary work participants
+
+`participants.ts` owns the indexed participant repository, initialized on first
+use. Its public record identifies the work, creator, addressing name and owning
+node. Local execution configuration is stored separately: model selection,
+engine, environment, assignment and permission floor never appear in a public
+participant projection. A remote record cannot install local execution settings.
+
+Standing membership queries remain unchanged without an epoch argument. Scoped
+queries combine the standing roster with that epoch's participants; a different
+or missing epoch never exposes them. `work-members.ts` owns this projection and
+creator-based contact inheritance. Ambiguous names are refused, while stable
+identity handles remain addressable. Delegation cannot create a new standing
+contact edge.
+
+Participants do not install Apps or enter the people directory. The runtime
+adapts a local execution profile to the existing app-chat executor. Keeping a
+participant record does not keep an engine session alive or grant personal memory.
 
 ### Member-owned columns (v10, extended in v13)
 
@@ -184,7 +251,8 @@ logged), written through on every change.
     picker filtering), and one collaboration exists per conversation
     (`getCollabTeamByConversation`).
   - Saving snapshots configuration into a separate ordinary team with a real
-    lead. It reuses member apps and copies their team duties, never epochs,
+    lead. Temporary participants become newly installed members; existing installed
+    members are reused. It copies configuration and duties, never epochs,
     messages, checks, findings or current work. The original collaboration stays
     ephemeral and keeps its original coordinator. A local `saved_team_id` link
     makes repeated saves idempotent; deleting the saved team clears the link.
@@ -207,34 +275,21 @@ logged), written through on every change.
   - Published outputs are projected from findings and task results, independently
     of the current roster. Removing a publisher cannot hide its earlier files;
     opening still requires a known local producer or the existing owner fetch.
-  - collaboration creation requires the coordinator session's captured source and
-    model, passed through the toolset scope (never read again from global selection
-    or a conversation whose picker may have changed mid-turn). Before any member
-    can be dispatched, the service persists both in its existing app overrides.
-    Missing capture refuses creation; no credentials are copied. Saving preserves
-    the pins, and the later standalone lead inherits the saved members' selection.
-    Existing, independently configured digital humans are not rewritten.
-  - a member the team BUILT is disposable: the app dies with the collaboration,
-    so what only pays off over a longer life is withheld from its turns — its
-    memory, and managing other digital humans (it would otherwise be creating
-    artifacts that outlive it). A member the person installed is never
-    disposable. The predicate and its consequences live in the runtime (see
-    `apps/runtime/team` DESIGN, `selfIsDisposable`).
-  - its one epoch is a `'conversation'` epoch keyed
-    `space:{conversationId}` (`spaceCollabChatKey`), so it never occupies
-    `current_epoch_id`, never auto-seals on quiescence, and seals through
-    `completeCollab` (team_complete) as `completed`.
-  - the disposable-member gating (`selfIsDisposable`, stripping memory and the
-    digital-human MCPs from a member's turn) applies to TEAM turns only —
-    `app-chat` is the sole entry point that carries a team context. It is
-    deliberately absent from `apps/runtime/execute.ts`: an ephemeral member's
-    spec declares no subscriptions, so the automation path is unreachable by
-    construction, and a manual out-of-band trigger (HTTP trigger by appId)
-    runs it as a plain app — the same pre-existing semantic every
-    AI-provisioned team member has had. The gating is a token-cost trim on the
-    team hot path, not a security boundary; do not mirror it into execute. That epoch projects as
-    `kind: 'collab'` (`epoch-label`), which is how a surface finds the room its
-    coordinating conversation owns instead of inferring it from the team shape.
+  - The first `spawn_agent` lazily ensures the conversation's scope, then adds
+    a participant. The host captures the source model, engine and effective
+    permissions; the model supplies only its assignment and optional name or
+    workspace isolation. No goal or team choice enters the tool contract.
+  - Temporary participants live in `team_participants`, scoped by team and
+    epoch. Private execution profiles stay on their owner node; shared records
+    carry identity, role and placement only. They are not installed apps, never
+    receive personal memory, and cannot be triggered through app management.
+    Runtime activity references execution actors so their reports and decisions
+    remain durable without an installation record.
+  - Its conversation epoch is keyed `space:{conversationId}` and does not
+    occupy `current_epoch_id`. Idle engine release preserves the participant's
+    identity and history. Stopping cancels the current request; it does not
+    complete a business task. Explicit archive/clear remains a host operation.
+    The epoch projects as `kind: 'collab'` (`epoch-label`).
   - `openConversation` refuses an ephemeral team: the collaboration works in ONE
     conversation, so a second one here would be a context nobody coordinates and
     that `getCollabForConversation` could not find again. Saving the team is what
@@ -372,3 +427,38 @@ The public store exposes a single lightweight directory-membership projection fo
 cross-team people filtering. It returns local app/team IDs, names and coordinator
 flags without loading every team's tasks, transcripts or full member specs.
 
+
+### Collaboration request ownership
+
+`collaboration-requests.ts` stores host-issued request identities, per-source
+associations, creation budgets and cancellation prefixes. Nested assignments share
+the originating human request's budget. Cancelled branches remain cancelled after
+restart; new human input receives a new identity. Request/controller bookkeeping
+is private to its host and never enters public participant records or snapshots.
+
+`participant-service.ts` admits allocation and continuation against those records.
+A controller may interrupt only its current assignment. Sending a reply does not
+transfer control, and queued model input does not seize an active human turn.
+An allocated identity survives uncertain publication or dispatch, so callers can
+retry the same handle without creating duplicate collaborators. Local execution
+profiles and workspace ownership stay separate from portable participant identity.
+
+### Private collaboration source bindings
+
+`source-bindings.ts` stores local routing and authority snapshots under immutable
+request identities. An inherited request resolves its nearest bound ancestor;
+revoked bindings cannot be replaced or revived through another branch. A host-only
+parent-request argument permits a nested team-session return binding after checking
+its request prefix, owner and scope; ordinary source bindings cannot change their
+ancestor's source authority. Nested bindings preserve the parent request and local
+recipient incarnation, and every return revalidates both. Channel
+and app authority invalidations return only affected request IDs so the host can
+cancel those exact requests without touching later human input. The table is
+not part of participant or office replication, and it contains no message body.
+
+
+`recipient-fences.ts` retains receiver incarnations independently of sender
+request ownership for local private work and internal returns. Stop and clear
+rotate them, preventing a late private result from entering a later assignment.
+Ordinary cross-node messages retain the existing protocol and durable delivery;
+they neither query nor transmit these host-local incarnations.

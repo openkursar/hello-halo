@@ -56,6 +56,7 @@ import {
   bindAppChatEngine,
 } from '../../../../src/main/apps/runtime/app-chat-sink'
 import { AppChatTurnInterrupted } from '../../../../src/main/apps/runtime/turn-ending'
+import { convertEventsToMessages, type StoredEvent } from '../../../../src/main/apps/runtime/session-transcript'
 
 // ============================================
 // Helpers
@@ -319,6 +320,18 @@ describe('app-chat sink turn ownership', () => {
     expect(pushToChat).not.toHaveBeenCalled()
   })
 
+  it.each(['internal', 'user', 'controller'] as const)('does not settle a failed empty round as successful after a %s stop', async stopReason => {
+    const sink = makeSink()
+    const onReply = vi.fn()
+    const round = sink.beginRound({ onReply })
+    const reason = 'API Error: 429 request quota exceeded'
+    sink.onTurnStart()
+    sink.onTurnComplete(makeResult({ wasAborted: true, stopReason, hasMeaningfulContent: false,
+      hasErrorThought: true, errorThought: { type: 'error', content: reason } }))
+    await expect(round.done).rejects.toThrow(reason)
+    expect(onReply).not.toHaveBeenCalled()
+  })
+
   it('resolves an aborted turn without replying — the caller stopped it on purpose', async () => {
     const sink = makeSink()
     const onReply = vi.fn()
@@ -478,6 +491,21 @@ describe('app-chat sink: a turn that stopped short', () => {
     expect(pushToChat).toHaveBeenCalledWith('room-1', 'background half\n\n⚠️ Error: API Error: 529 overloaded', 'group')
   })
 
+  it('includes a racing provider failure with the partial reply after an internal cut', async () => {
+    const sink = makeSink()
+    const onReply = vi.fn()
+    const round = sink.beginRound({ onReply })
+    sink.onTurnStart()
+    feedText(sink, 'Partial answer.')
+    sink.onRawMessage({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'API Error: 529 overloaded' })
+    sink.onTurnComplete(makeResult({ finalContent: 'Partial answer.', wasAborted: true, stopReason: 'internal', hasErrorThought: true,
+      errorThought: { type: 'error', content: 'API Error: 529 overloaded' } }))
+    await expect(round.done).resolves.toBeUndefined()
+    expect(onReply).toHaveBeenCalledWith('Partial answer.', { kind: 'failed', error: 'API Error: 529 overloaded' })
+    const history = convertEventsToMessages(writeEvent.mock.calls.map(([event], index) => ({ ...event, _ts: new Date(index).toISOString() }) as StoredEvent))
+    expect(history).toEqual([expect.objectContaining({ role: 'assistant', content: 'Partial answer.', error: 'API Error: 529 overloaded' })])
+  })
+
   it('says a failure Codex told only as reply text once, after what was written before it', () => {
     const reason = 'stream disconnected before completion'
     for (const before of [[], ['background half']]) {
@@ -533,6 +561,35 @@ describe('app-chat sink: a turn that stopped short', () => {
     await joined.done
     expect(askerReply).toHaveBeenCalledTimes(1)
     expect(joinedReply).not.toHaveBeenCalled()
+    expect(pushToChat).not.toHaveBeenCalled()
+  })
+
+  it('lets an authorized observer deliver when the primary caller explicitly declines', async () => {
+    const sink = makeSink()
+    const primary = vi.fn(() => false)
+    const stale = vi.fn(() => false)
+    const current = vi.fn()
+    const round = sink.beginRound({ onReply: primary })
+    sink.onTurnStart()
+    const a = sink.observeLiveTurn({ onReply: stale })
+    const b = sink.observeLiveTurn({ onReply: current })
+    feedText(sink, 'reviewed answer')
+    sink.onTurnComplete(makeResult())
+    await Promise.all([round.done, a.done, b.done])
+    expect(primary).toHaveBeenCalledOnce()
+    expect(stale).toHaveBeenCalledOnce()
+    expect(current).toHaveBeenCalledOnce()
+    expect(pushToChat).not.toHaveBeenCalled()
+  })
+
+  it('does not bypass declining observers with autonomous delivery', async () => {
+    const sink = makeSink()
+    sink.onTurnStart()
+    const a = sink.observeLiveTurn({ onReply: () => false })
+    const b = sink.observeLiveTurn({ onReply: () => false })
+    feedText(sink, 'no authorized recipient')
+    sink.onTurnComplete(makeResult())
+    await Promise.all([a.done, b.done])
     expect(pushToChat).not.toHaveBeenCalled()
   })
 

@@ -20,7 +20,7 @@ import {
 import { TodoCard } from '../tool/TodoCard'
 import type { TodoItem } from '../../utils/thought-activity'
 import { ToolResultViewer } from './tool-result'
-import { SubAgentTimeline } from './SubAgentTimeline'
+import { NestedToolTimeline } from './NestedToolTimeline'
 import { ArrivalCard, arrivalIcon } from './ArrivalCard'
 import { isArrivalThought, workSeconds } from './transcript'
 import { ErrorContent } from './ErrorContent'
@@ -221,8 +221,8 @@ const ThoughtStep = memo(function ThoughtStep({ thought, isLast, live, allThough
           />
         )}
 
-        {thought.type === 'tool_use' && (thought.toolName === 'Task' || thought.toolName === 'Agent') && allThoughts && (
-          <SubAgentTimeline
+        {thought.type === 'tool_use' && allThoughts && (
+          <NestedToolTimeline
             thoughts={allThoughts}
             parentToolUseId={thought.id}
             taskProgress={thought.taskProgress}
@@ -263,7 +263,7 @@ interface ThoughtStepsProps {
 export const ThoughtSteps = memo(function ThoughtSteps({ steps, childGroups, live, hasTodos, scrollRef }: ThoughtStepsProps) {
   return <>
     {steps.map((thought, index) => {
-      const isTaskThought = thought.type === 'tool_use' && (thought.toolName === 'Task' || thought.toolName === 'Agent')
+      const hasNestedWork = thought.type === 'tool_use' && (childGroups.has(thought.id) || !!thought.taskProgress)
       // The newest three render at once, where a running reply is watched; the
       // rest when scrolled near. One component type for both, so a step that
       // stops being newest is not remounted (that flickered).
@@ -275,7 +275,7 @@ export const ThoughtSteps = memo(function ThoughtSteps({ steps, childGroups, liv
           live={live}
           scrollRef={scrollRef}
           eager={index >= steps.length - 3}
-          allThoughts={isTaskThought ? childGroups.get(thought.id) ?? NO_CHILD_THOUGHTS : undefined}
+          allThoughts={hasNestedWork ? childGroups.get(thought.id) ?? NO_CHILD_THOUGHTS : undefined}
         />
       )
     })}

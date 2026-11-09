@@ -16,6 +16,7 @@ import {
 } from '../../shared/constants/canvas-budget'
 import { planCanvasBudget, type CanvasBudgetLimits } from './canvas-budget'
 import { holdArtifactSpace } from './artifact-space-holds'
+import { gitDiscovery } from './git-discovery'
 import type { ChangesViewMemory } from '../types/changes-view'
 import type { ReferenceLineRange } from '../../shared/types/content-reference'
 
@@ -605,6 +606,7 @@ class CanvasLifecycle {
    */
   destroy(): void {
     console.log('[CanvasLifecycle] Destroying...')
+    gitDiscovery.forget()
 
     if (this.browserStateUnsubscribe) {
       this.browserStateUnsubscribe()
@@ -1297,6 +1299,9 @@ class CanvasLifecycle {
     // Publish before awaiting hide so overlapping switches see the new target.
     this.activeTabId = tabId
     this.lastActivated.set(tabId, ++this.activationSeq)
+    if (this.currentSpaceId && tab.path && tab.type !== 'changes') {
+      gitDiscovery.noteFile(this.currentSpaceId, tab.path)
+    }
 
     const prevNeedsBrowserView = previousTab?.type === 'browser' || previousTab?.type === 'pdf'
     if (prevNeedsBrowserView && previousTab.browserViewId && previousTabId !== tabId) {
@@ -1916,6 +1921,7 @@ class CanvasLifecycle {
    * own terminals end, the ones the AI used stay in its tray.
    */
   async forgetSpace(spaceId: string): Promise<void> {
+    gitDiscovery.forget(spaceId)
     const released = spaceId === this.currentSpaceId ? this.parkShown(spaceId) : undefined
     const parked = this.parkedSpaces.get(spaceId)
     this.parkedSpaces.delete(spaceId)

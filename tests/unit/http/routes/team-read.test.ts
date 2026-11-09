@@ -38,24 +38,28 @@ interface MockMember {
   ownerNodeId?: string
 }
 const listMembersByTeam = vi.fn<[string], MockMember[]>()
+const getEpochById = vi.fn<[string], { id: string; teamId: string } | null>()
 const getCurrentEpochForTeam = vi.fn<[string], { id: string } | null>()
 const getOpenConversationEpoch = vi.fn<[string, string], { id: string } | null>()
 const listEpochsByTeam = vi.fn<[string], Array<{ id: string }>>()
-const getTeamById = vi.fn<[string], { leadAppId: string | null } | null>()
+const getTeamById = vi.fn<[string], { leadAppId: string | null; ephemeral?: boolean } | null>()
 const listEpochs = vi.fn<[string], unknown[]>()
 const getTeamDetail = vi.fn<[string], unknown>()
+const getEpochRoster = vi.fn<[string, string], unknown>()
 const getEpochBoard = vi.fn<[string, string], unknown>()
 const sendToMember = vi.fn<[unknown], Promise<unknown>>()
 const stopMember = vi.fn<[unknown], Promise<unknown>>()
 const listConversations = vi.fn<[string], unknown[]>()
 const listArtifacts = vi.fn<[string, string?], Promise<unknown[]>>()
 
-vi.mock('../../../../src/main/apps/team', () => ({
+vi.mock('../../../../src/main/apps/team', async () => ({
+  workMemberPrincipalId: (await vi.importActual<typeof import('../../../../src/main/apps/team/work-members')>('../../../../src/main/apps/team/work-members')).workMemberPrincipalId,
   getTeamService: () => ({
     getTeam: (teamId: string) => getTeamById(teamId),
     openTeamDetail: async (teamId: string) => getTeamDetail(teamId),
     listEpochs: (teamId: string) => listEpochs(teamId),
     getTeamDetail: (teamId: string) => getTeamDetail(teamId),
+    getEpochRoster: (teamId: string, epochId: string) => getEpochRoster(teamId, epochId),
     getEpochBoard: (teamId: string, epochId: string) => getEpochBoard(teamId, epochId),
     sendToMember: (input: unknown) => sendToMember(input),
     stopMember: (input: unknown) => stopMember(input),
@@ -64,6 +68,8 @@ vi.mock('../../../../src/main/apps/team', () => ({
   }),
   getTeamStore: () => ({
     listMembersByTeam: (teamId: string) => listMembersByTeam(teamId),
+    getMember: (teamId: string, appId: string) => listMembersByTeam(teamId).find(member => member.appId === appId) ?? null,
+    getEpochById: (id: string) => getEpochById(id),
     getCurrentEpochForTeam: (teamId: string) => getCurrentEpochForTeam(teamId),
     getOpenConversationEpoch: (teamId: string, chatKey: string) => getOpenConversationEpoch(teamId, chatKey),
     listEpochsByTeam: (teamId: string) => listEpochsByTeam(teamId),
@@ -115,7 +121,7 @@ import { registerTeamRoutes } from '../../../../src/main/http/routes/team.routes
  * defaults to a stable test identity so the scope projection can map it to a
  * member; pass an explicit value to model a different reader.
  */
-function buildApp(officeId: string | null, identity = 'id-reader'): Express {
+function buildApp(officeId: string | null, identity = 'id-reader', assistant = false): Express {
   const app = express()
   app.use(express.json())
   app.use((req, _res, next) => {
@@ -127,13 +133,13 @@ function buildApp(officeId: string | null, identity = 'id-reader'): Express {
     }
     next()
   })
-  registerTeamRoutes(app)
+  registerTeamRoutes(app, { assistant })
   return app
 }
 
 async function withServer(app: Express, fn: (base: string) => Promise<void>): Promise<void> {
   const server: Server = await new Promise((resolve) => {
-    const s = app.listen(0, () => resolve(s))
+    const s = app.listen(0, '127.0.0.1', () => resolve(s))
   })
   try {
     const { port } = server.address() as AddressInfo
@@ -143,16 +149,57 @@ async function withServer(app: Express, fn: (base: string) => Promise<void>): Pr
   }
 }
 
+it('binds the test listener to the IPv4 address used by its client', async () => {
+  const app = express()
+  app.get('/listener', (req, res) => {
+    res.json({ address: req.socket.localAddress, family: req.socket.localFamily })
+  })
+  await withServer(app, async base => {
+    const response = await fetch(`${base}/listener`)
+    expect(await response.json()).toEqual({ address: '127.0.0.1', family: 'IPv4' })
+  })
+})
+
+it('withholds temporary team resources from assistants even when they already know an ID', async () => {
+  getTeamById.mockReturnValue({ leadAppId: 'lead-id', ephemeral: true })
+  await withServer(buildApp(null, 'id-reader', true), async base => {
+    for (const route of ['', '/detail', '/conversations', '/chat-messages?appId=member&epochId=work', '/artifacts']) {
+      const response = await fetch(`${base}/api/teams/temporary${route}`)
+      expect(response.status).toBe(404)
+      expect(await response.json()).toMatchObject({ success: false, error: expect.stringContaining('Team not found') })
+    }
+    for (const route of ['/members/member/send', '/members/member/stop', '/save-collab']) {
+      expect((await fetch(`${base}/api/teams/temporary${route}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(404)
+    }
+  })
+  expect(getTeamDetail).not.toHaveBeenCalled()
+  expect(sendToMember).not.toHaveBeenCalled()
+  expect(stopMember).not.toHaveBeenCalled()
+})
+
+it('keeps standing teams available to assistants and source team records available to owner clients', async () => {
+  getTeamById.mockReturnValue({ leadAppId: 'lead-id', ephemeral: false })
+  await withServer(buildApp(null, 'id-reader', true), async base => {
+    expect((await fetch(`${base}/api/teams/saved`)).status).toBe(200)
+  })
+  getTeamById.mockReturnValue({ leadAppId: 'source-id', ephemeral: true })
+  await withServer(buildApp(null), async base => {
+    expect((await (await fetch(`${base}/api/teams/temporary`)).json()).data).toMatchObject({ ephemeral: true })
+  })
+})
+
 beforeEach(() => {
   vi.clearAllMocks()
   listEpochs.mockReturnValue([])
   listMembersByTeam.mockReturnValue([])
+  getEpochById.mockImplementation(id => ({ id, teamId: 'X' }))
   getCurrentEpochForTeam.mockReturnValue(null)
   getOpenConversationEpoch.mockReturnValue(null)
   listEpochsByTeam.mockReturnValue([])
   getTeamById.mockReturnValue({ leadAppId: null })
   getTeamDetail.mockReturnValue(null)
   getEpochBoard.mockReturnValue(null)
+  getEpochRoster.mockReturnValue(null)
   readTeamMemberMessages.mockReturnValue([])
   fetchMemberHistory.mockResolvedValue({ messages: [], stale: false })
   sendToMember.mockResolvedValue({ ok: true, finalMessage: 'done' })
@@ -222,6 +269,7 @@ describe('cross-office isolation on team read routes', () => {
       '/api/teams/Y/artifacts',
       '/api/teams/Y/epochs',
       '/api/teams/Y/epochs/e1/board',
+      '/api/teams/Y/epochs/e1/roster',
       '/api/teams/Y/epochs/e1/artifacts',
     ]
     await withServer(buildApp('X'), async (base) => {
@@ -822,5 +870,19 @@ describe('POST /api/teams/:teamId/members/:appId/stop scope gating', () => {
       expect(res.status).toBe(200)
     })
     expect(stopMember).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+describe('GET /api/teams/:teamId/epochs/:epochId/roster', () => {
+  it('reads only scoped membership without loading the board history', async () => {
+    const roster = { members: [{ appId: 'temporary' }], roster: [{ appId: 'temporary', status: 'working' }] }
+    getEpochRoster.mockReturnValue(roster)
+    await withServer(buildApp('X'), async base => {
+      const response = await fetch(`${base}/api/teams/X/epochs/work-a/roster`)
+      expect(await response.json()).toEqual({ success: true, data: roster })
+    })
+    expect(getEpochRoster).toHaveBeenCalledWith('X', 'work-a')
+    expect(getEpochBoard).not.toHaveBeenCalled()
   })
 })

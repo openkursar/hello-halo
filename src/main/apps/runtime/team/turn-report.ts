@@ -13,7 +13,7 @@ import type {
   TeamTurnEndReport,
   TeamTurnEnding,
 } from '../../../../shared/apps/team-types'
-import type { TeamStore } from '../../team'
+import { getWorkMember, isWorkEdgeAllowed, type TeamStore } from '../../team'
 import type { PostActivityInput } from './blackboard'
 import type { MessageBus } from './message-bus'
 
@@ -29,6 +29,7 @@ export interface NoteTurnEndedInput {
    * same ending (the session layer sees the turn stop, the bus sees the wake
    * fail); the first one through wins and the other is a no-op.
    */
+  requestId?: string
   correlationId?: string
   /** How the turn was framed. A person's words to their own member are not team work. */
   triggerKind?: TeamTriggerContext['kind']
@@ -52,11 +53,14 @@ export interface TurnReport {
   /** Watch an act as it is filed, so "recorded nothing" is observed and not inferred. */
   noteAct(input: PostActivityInput): void
   clearEpoch(epochId: string): void
+  hasPendingEpoch(epochId: string): boolean
 }
 
 export interface TurnReportDeps {
   store: TeamStore
   bus: MessageBus
+  requestAllowed?(requestId: string): boolean
+  onPendingSettled?(teamId: string, epochId: string): void
 }
 
 /** One act a member filed, kept only long enough to describe the turn it fell in. */
@@ -73,6 +77,7 @@ interface StopFact extends TeamTurnEnding {
   requestFromAppId?: string | null
   /** It served a guest's request — the one origin a notice carries on. */
   guest: boolean
+  requestId?: string
 }
 
 /**
@@ -125,6 +130,8 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
   const reported = new Map<string, string>()
   /** Endings waiting for a lead turn to carry them. */
   const pending = new Map<string, StopFact[]>()
+  const pendingEpochs = new Map<string, string>()
+  const inflight = new Map<string, number>()
   /** Endings dropped from `pending` by the `FACTS_PER_NOTICE` cap, kept until the next notice reports them. */
   const droppedSinceLastFlush = new Map<string, number>()
   /** Failed delivery retries only; ordinary delivery never waits on a timer. */
@@ -141,8 +148,8 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
   const memberKey = (epochId: string, appId: string): string => `${epochId}:${appId}`
   const epochKey = (teamId: string, epochId: string): string => `${teamId}:${epochId}`
 
-  function memberName(teamId: string, appId: string): string {
-    return store.getMember(teamId, appId)?.memberName ?? appId
+  function memberName(teamId: string, epochId: string, appId: string): string {
+    return getWorkMember(store, teamId, epochId, appId)?.memberName ?? appId
   }
 
   function noteTurnStarted(params: { appId: string; teamId: string; epochId: string }): void {
@@ -171,14 +178,14 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
   function describeActs(teamId: string, appId: string, epochId: string, since: number): string[] {
     const list = acts.get(memberKey(epochId, appId)) ?? []
     const inTurn = list.filter((a) => a.at >= since && a.kind !== 'reply')
-    const described = inTurn.slice(0, ACTS_DESCRIBED).map((a) => describeAct(teamId, a))
+    const described = inTurn.slice(0, ACTS_DESCRIBED).map((a) => describeAct(teamId, epochId, a))
     const hidden = inTurn.length - described.length
     if (hidden > 0) described.push(`and ${hidden} more`)
     return described
   }
 
-  function describeAct(teamId: string, act: ActNote): string {
-    const target = act.targetAppId ? memberName(teamId, act.targetAppId) : null
+  function describeAct(teamId: string, epochId: string, act: ActNote): string {
+    const target = act.targetAppId ? memberName(teamId, epochId, act.targetAppId) : null
     switch (act.kind) {
       case 'message':
         return target ? `messaged ${target}` : 'sent a message'
@@ -209,8 +216,8 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
     }
   }
 
-  function isLeadRemote(teamId: string, leadAppId: string): boolean {
-    const lead = store.getMember(teamId, leadAppId)
+  function isLeadRemote(teamId: string, epochId: string, leadAppId: string): boolean {
+    const lead = getWorkMember(store, teamId, epochId, leadAppId)
     return !!lead && isRemoteMember(lead)
   }
 
@@ -219,7 +226,7 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
     const key = epochKey(teamId, epochId)
     if (flushing.has(key) || retries.has(key) || windowTimers.has(key)) return
     const leadAppId = store.getTeamById(teamId)?.leadAppId
-    if (leadAppId && isLeadRemote(teamId, leadAppId)) {
+    if (leadAppId && isLeadRemote(teamId, epochId, leadAppId)) {
       const elapsed = Date.now() - (lastRemoteFlushAt.get(key) ?? -Infinity)
       if (elapsed < REMOTE_FLUSH_WINDOW_MS) {
         const timer = setTimeout(() => {
@@ -232,6 +239,15 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
       }
     }
     void flush(teamId, epochId)
+  }
+
+  function settlePending(teamId: string, epochId: string): void {
+    const key = epochKey(teamId, epochId)
+    if (!pendingEpochs.has(epochId) || pending.get(key)?.length || (inflight.get(epochId) ?? 0) > 0
+      || retries.has(key) || windowTimers.has(key)) return
+    pendingEpochs.delete(epochId)
+    try { deps.onPendingSettled?.(teamId, epochId) }
+    catch (error) { console.warn(`${LOG_TAG} pending settlement observer failed: team=${teamId} epoch=${epochId}`, error) }
   }
 
   function noteTurnEnded(input: NoteTurnEndedInput): void {
@@ -256,7 +272,7 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
       // twice, once by its owner and once by whoever was waiting. The two fates
       // below are the exception: no turn ran anywhere, so the waiting side is the
       // only witness there will ever be.
-      const member = store.getMember(teamId, appId)
+      const member = getWorkMember(store, teamId, epochId, appId)
       if (!member) return
       const witnessedElsewhere =
         isRemoteMember(member) && (fate.kind === 'ended' || fate.kind === 'error' || fate.kind === 'stopped')
@@ -268,7 +284,12 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
 
       if (correlationId) markReported(correlationId, epochId)
 
+      if (input.requestId && deps.requestAllowed?.(input.requestId) === false) {
+        console.warn(`${LOG_TAG} cancelled request ending ignored: team=${teamId} epoch=${epochId} app=${appId}`)
+        return
+      }
       const fact: StopFact = {
+        requestId: input.requestId,
         appId,
         requestFromAppId: input.requestFromAppId,
         memberName: member.memberName,
@@ -291,6 +312,7 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
         droppedSinceLastFlush.set(key, (droppedSinceLastFlush.get(key) ?? 0) + overflow)
         console.warn(`${LOG_TAG} pending notice summaries bounded: team=${teamId} epoch=${epochId} dropped=${overflow}`)
       }
+      pendingEpochs.set(epochId, teamId)
       pending.set(key, queue)
 
       requestFlush(teamId, epochId)
@@ -303,7 +325,7 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
   async function flush(teamId: string, epochId: string): Promise<void> {
     const key = epochKey(teamId, epochId)
     const facts = pending.get(key)
-    if (!facts || facts.length === 0) return
+    if (!facts || facts.length === 0) { settlePending(teamId, epochId); return }
 
     const epoch = store.getEpochById(epochId)
     const team = store.getTeamById(teamId)
@@ -311,22 +333,24 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
     if (!leadAppId || !epoch || epoch.endedAt !== null || epoch.workItem?.status === 'completed') {
       console.log(`${LOG_TAG} pending notices discarded: team=${teamId} epoch=${epochId} count=${facts.length} reason=${!leadAppId ? 'no lead' : 'task ended'}`)
       pending.delete(key)
+      settlePending(teamId, epochId)
       droppedSinceLastFlush.delete(key)
       return
     }
 
     const attempt = Symbol()
     flushing.set(key, attempt)
+    inflight.set(epochId, (inflight.get(epochId) ?? 0) + 1)
     const handed = new Set<StopFact>()
     let droppedReported = false
     pending.delete(key)
     const dropped = droppedSinceLastFlush.get(key) ?? 0
     droppedSinceLastFlush.delete(key)
-    if (isLeadRemote(teamId, leadAppId)) lastRemoteFlushAt.set(key, Date.now())
+    if (isLeadRemote(teamId, epochId, leadAppId)) lastRemoteFlushAt.set(key, Date.now())
     try {
       const canShareWithLead = (appId: string | null | undefined): boolean =>
         team.collabMode === 'free' || !!appId && (
-          appId === leadAppId || store.isEdgeAllowed(teamId, appId, leadAppId) || store.isEdgeAllowed(teamId, leadAppId, appId)
+          appId === leadAppId || isWorkEdgeAllowed(store, teamId, epochId, appId, leadAppId) || isWorkEdgeAllowed(store, teamId, epochId, leadAppId, appId)
         )
       // Topology may change between a failed handoff and its retry.
       const visibleFacts = facts.map((fact): StopFact => {
@@ -345,10 +369,16 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
       // One notice per permission standing, in first-arrival order: endings of
       // the owner's and colleagues' work may be read inside the lead's own
       // running turn, while what a guest's request produced never joins it.
-      const groups = new Map<boolean, number[]>()
-      facts.forEach((fact, index) => groups.set(fact.guest, [...(groups.get(fact.guest) ?? []), index]))
-      const leadRemote = isLeadRemote(teamId, leadAppId)
-      for (const [guest, indexes] of groups) {
+      const groups = new Map<string, { guest: boolean; requestId?: string; indexes: number[] }>()
+      facts.forEach((fact, index) => {
+        if (fact.requestId && deps.requestAllowed?.(fact.requestId) === false) { handed.add(fact); return }
+        const groupKey = `${fact.guest}:${fact.requestId ?? ''}`
+        const group = groups.get(groupKey) ?? { guest: fact.guest, requestId: fact.requestId, indexes: [] }
+        group.indexes.push(index)
+        groups.set(groupKey, group)
+      })
+      const leadRemote = isLeadRemote(teamId, epochId, leadAppId)
+      for (const { guest, requestId, indexes } of groups.values()) {
         if ((reportWakeCount.get(key) ?? 0) >= REPORT_WAKE_CAP) {
           console.warn(`${LOG_TAG} notice discarded: team=${teamId} epoch=${epochId} count=${facts.length - handed.size} reason=report wake cap`)
           bus.tripExternal(teamId, epochId, 'turnReportFlood')
@@ -364,10 +394,10 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
           envelope: {
             id: randomUUID(), teamId, epochId, fromAppId: leadAppId, toAppId: leadAppId,
             body: renderTurnEndReport(report),
-            correlationId, createdAt: Date.now(),
+            requestId, correlationId, createdAt: Date.now(),
           },
           trigger: {
-            teamId, epochId, correlationId, fromAppId: null, wait: false, kind: 'member_stopped',
+            teamId, epochId, requestId, correlationId, fromAppId: null, wait: false, kind: 'member_stopped',
             ...(guest ? { origin: 'guest' as const } : {}),
             // The lead's machine renders the notice from these itself.
             ...(leadRemote ? { turnEnded: report } : {}),
@@ -411,14 +441,18 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
         retries.set(key, timer)
       }
     } finally {
+      const count = (inflight.get(epochId) ?? 1) - 1
+      if (count === 0) inflight.delete(epochId); else inflight.set(epochId, count)
       if (flushing.get(key) === attempt) {
         flushing.delete(key)
         if (pending.has(key) && !retries.has(key) && !failures.has(key)) requestFlush(teamId, epochId)
       }
+      settlePending(teamId, epochId)
     }
   }
 
   function clearEpoch(epochId: string): void {
+    const teamId = pendingEpochs.get(epochId)
     for (const k of [...turnStartedAt.keys()]) {
       if (k.startsWith(`${epochId}:`)) turnStartedAt.delete(k)
     }
@@ -452,9 +486,10 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
     for (const k of Array.from(reportWakeCount.keys())) {
       if (k.endsWith(`:${epochId}`)) reportWakeCount.delete(k)
     }
+    if (teamId) settlePending(teamId, epochId)
   }
 
-  return { noteTurnStarted, noteTurnEnded, noteAct, clearEpoch }
+  return { noteTurnStarted, noteTurnEnded, noteAct, clearEpoch, hasPendingEpoch: epochId => pendingEpochs.has(epochId) }
 }
 
 /** One line, bounded — a failure message is passed through, a stack trace is not. */

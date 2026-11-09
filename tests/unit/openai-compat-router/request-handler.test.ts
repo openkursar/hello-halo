@@ -279,6 +279,14 @@ describe('handleMessagesRequest dispatch', () => {
     expect(convertAnthropicToOpenAIChat).not.toHaveBeenCalled()
   })
 
+  it('passes Kiro separate header and full-response deadlines', async () => {
+    const res = makeRes()
+    await handleMessagesRequest(anthReq(), baseConfig({ apiType: 'kiro' }), res as unknown as ExpressResponse, {
+      timeoutMs: 600_000, headersTimeoutMs: 90_000,
+    })
+    expect(handleKiroRequest.mock.calls[0][3]).toEqual({ timeoutMs: 600_000, headersTimeoutMs: 90_000 })
+  })
+
   it('routes kiro to the kiro adapter', async () => {
     const req = anthReq()
     runInterceptors.mockResolvedValue({ intercepted: false, request: req })

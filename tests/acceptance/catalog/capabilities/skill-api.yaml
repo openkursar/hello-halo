@@ -108,4 +108,4 @@ scenarios:
       - Import two personal packages through production management, disable one without removing files, invoke the other command through a new real conversation, restart and send another fresh conversation request.
     expected:
       - Actual Halo SDK requests contain the enabled catalog entry and selected command body but no disabled name or body; disabled state survives restart and all supporting package bytes remain unchanged.
-    notes: The model endpoint is scripted and never injects instructions. This is new space-conversation command/catalog evidence only, not Skill-tool refusal, subagents, people, IM, automation, team entries or old-session behavior.
+    notes: The model endpoint is scripted and never injects instructions. This is new space-conversation command/catalog evidence only, not Skill-tool refusal, collaborators, people, IM, automation, team entries or old-session behavior.

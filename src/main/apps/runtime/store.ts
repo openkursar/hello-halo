@@ -16,6 +16,7 @@ import type {
   ActivityEntryType,
   ActivityQueryOptions,
   PendingDecisionQuery,
+  ParticipantActivityActor,
   EscalationResponse,
   RunQueryOptions,
   RunStats,
@@ -486,9 +487,39 @@ export class ActivityStore {
 
   // ── Entry Operations ──────────────────────────
 
+  registerParticipantActor(actor: ParticipantActivityActor): void {
+    if (!actor.appId || !actor.teamId || !actor.epochId) throw new Error('A participant activity identity needs its exact work context.')
+    this.db.transaction(() => {
+      const current = this.db.prepare('SELECT installed_app_id, team_id, epoch_id, name FROM runtime_execution_actors WHERE id = ?')
+        .get(actor.appId) as { installed_app_id: string | null; team_id: string | null; epoch_id: string | null; name: string | null } | undefined
+      if (current && (current.installed_app_id !== null || current.team_id !== actor.teamId || current.epoch_id !== actor.epochId)) {
+        throw new Error('The execution identity already belongs to another owner or work context.')
+      }
+      if (current && current.name === (actor.name ?? null)) return
+      this.db.prepare(`INSERT INTO runtime_execution_actors(id, team_id, epoch_id, name) VALUES (?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET name = excluded.name`).run(actor.appId, actor.teamId, actor.epochId, actor.name ?? null)
+    })()
+  }
+
+  getParticipantActor(appId: string): ParticipantActivityActor | null {
+    const row = this.db.prepare(`SELECT id AS appId, team_id AS teamId, epoch_id AS epochId, name
+      FROM runtime_execution_actors WHERE id = ? AND installed_app_id IS NULL`).get(appId) as (Omit<ParticipantActivityActor, 'name'> & { name: string | null }) | undefined
+    return row ? { appId: row.appId, teamId: row.teamId, epochId: row.epochId, ...(row.name !== null ? { name: row.name } : {}) } : null
+  }
+
+  deleteParticipantActors(teamId: string, epochId?: string): number {
+    return this.db.prepare(`DELETE FROM runtime_execution_actors WHERE installed_app_id IS NULL AND team_id = ?
+      ${epochId === undefined ? '' : 'AND epoch_id = ?'}`).run(...(epochId === undefined ? [teamId] : [teamId, epochId])).changes
+  }
+
   /** Insert an activity entry */
   insertEntry(entry: ActivityEntry): void {
     const team = entry.content.teamContext
+    const actor = this.getParticipantActor(entry.appId)
+    if (actor && (team?.teamId !== actor.teamId || team.epochId !== actor.epochId)) {
+      console.warn('[Runtime] Participant activity rejected outside its work context', { appId: entry.appId, entryId: entry.id })
+      throw new Error('Participant activity must name its original team and work context.')
+    }
     const run = this.getRun(entry.runId)
     entry.content.source ??= team?.teamId && team?.epochId
       ? { kind: 'team', appId: entry.appId, teamId: team.teamId, epochId: team.epochId, taskId: team.taskId, memberId: entry.appId, sessionKey: entry.sessionKey }
@@ -640,15 +671,17 @@ export class ActivityStore {
     const limit = Math.min(500, Math.max(1, Math.floor(options?.limit ?? 100)))
     const filter = `e.type = 'escalation' AND e.user_response_json IS NULL
       AND json_extract(e.content_json, '$.resolution') IS NULL
-      AND a.status != 'uninstalled' AND a.uninstalled_at IS NULL`
+      AND (actor.installed_app_id IS NULL OR (a.status != 'uninstalled' AND a.uninstalled_at IS NULL))`
     const cursor = options?.afterTs !== undefined && options.afterId
       ? 'AND (e.ts > ? OR (e.ts = ? AND e.id > ?))' : ''
     const values: (string | number)[] = []
     if (cursor) values.push(options!.afterTs!, options!.afterTs!, options!.afterId!)
     values.push(limit)
-    const rows = this.db.prepare(`SELECT e.*, json_extract(a.spec_json, '$.name') AS app_name FROM activity_entries e JOIN installed_apps a ON a.id = e.app_id
+    const rows = this.db.prepare(`SELECT e.*, COALESCE(json_extract(a.spec_json, '$.name'), actor.name) AS app_name FROM activity_entries e
+      JOIN runtime_execution_actors actor ON actor.id = e.app_id LEFT JOIN installed_apps a ON a.id = actor.installed_app_id
       WHERE ${filter} ${cursor} ORDER BY e.ts, e.id LIMIT ?`).all(...values) as (EntryRow & { app_name: string | null })[]
-    const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM activity_entries e JOIN installed_apps a ON a.id = e.app_id
+    const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM activity_entries e JOIN runtime_execution_actors actor ON actor.id = e.app_id
+      LEFT JOIN installed_apps a ON a.id = actor.installed_app_id
       WHERE ${filter}`).get() as { count: number }).count
     const blocked = (this.db.prepare(`SELECT id, status, error_message AS message,
       json_extract(spec_json, '$.name') AS name FROM installed_apps

@@ -29,6 +29,7 @@ import type {
   TeamEpochSummary,
   EpochBoard,
   TeamConversation,
+  TeamRunResult,
 } from '../../shared/apps/team-types'
 import { isRemoteMember } from '../../shared/apps/team-types'
 
@@ -184,7 +185,7 @@ export interface TeamState {
   setEdges: (teamId: string, edges: TeamEdge[]) => Promise<boolean>
 
   // ── Run control ──────────────────────────
-  runTeam: (teamId: string) => Promise<boolean>
+  runTeam: (teamId: string) => Promise<TeamRunResult | null>
   pauseTeam: (teamId: string) => Promise<boolean>
 
   /** Keep a temporary collaboration as a persistent team. */
@@ -809,23 +810,22 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   runTeam: async (teamId) => {
     try {
       const res = await api.teamRun(teamId)
-      if (res.success) {
+      if (res.success && res.data?.epochId) {
         set(s => ({
           teams: s.teams.map(t => t.id === teamId ? { ...t, status: 'running' } : t),
           detail: s.detail && s.detail.team.id === teamId
             ? { ...s.detail, team: { ...s.detail.team, status: 'running' } }
             : s.detail,
         }))
-        // Pull fresh detail so the board reflects the lead waking up.
-        void get().loadDetail(teamId)
-        return true
+        await Promise.all([get().loadDetail(teamId), get().loadConversations(teamId)])
+        return res.data
       }
       notifyError(i18n.t('Could not start the team'), (res.error as string) || undefined)
-      return false
+      return null
     } catch (err) {
       console.error('[TeamStore] runTeam error:', err)
       notifyError(i18n.t('Could not start the team'), String((err as Error)?.message ?? err))
-      return false
+      return null
     }
   },
 

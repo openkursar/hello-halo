@@ -157,6 +157,14 @@ import type {
   EscalationQuestion, EscalationResponse,
 } from '../../../shared/apps/app-types'
 
+/** A temporary execution identity belongs to exactly one retained work context. */
+export interface ParticipantActivityActor {
+  appId: string
+  teamId: string
+  epochId: string
+  name?: string
+}
+
 /** Options for querying run history */
 export interface RunQueryOptions {
   limit?: number

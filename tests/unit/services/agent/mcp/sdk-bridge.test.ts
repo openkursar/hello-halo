@@ -57,6 +57,20 @@ async function start(servers: Record<string, SdkMcpServerInstance>): Promise<Rec
 }
 
 describe('SdkMcpBridge', () => {
+  it('supports the standalone SDK HTTP client and releases its protocol session on close', async () => {
+    const { McpClient, HttpTransport } = await import('@hello-halo/agent-sdk')
+    const urls = await start({ team: stubInstance() })
+    const transport = new HttpTransport({ url: urls.team })
+    const client = new McpClient(transport, 'team')
+    try {
+      await transport.connect()
+      await client.initialize()
+      expect(await client.callTool('echo', { text: 'from SDK' })).toMatchObject({ content: [{ text: 'from SDK' }] })
+      expect(bridges[0].diagnostics().sessions).toBe(1)
+    } finally { client.close(); await client.whenClosed() }
+    expect(bridges[0].diagnostics().sessions).toBe(0)
+  })
+
   it('serves each server on its own loopback URL', async () => {
     const urls = await start({ memory: stubInstance(), 'web-search': stubInstance() })
 
@@ -90,9 +104,41 @@ describe('SdkMcpBridge', () => {
     const client = await connect(bridges[0], urls['web-search'])
     const result = await client.callTool({ name: 'echo', arguments: { text: 'hi' } })
 
-    expect(search).toHaveBeenCalledWith('echo', { text: 'hi' })
+    expect(search).toHaveBeenCalledWith('echo', { text: 'hi' }, { signal: expect.any(AbortSignal) })
     expect(memory).not.toHaveBeenCalled()
     expect(result.content).toEqual([{ type: 'text', text: 'from search' }])
+  })
+
+  it('propagates cancellation across the HTTP bridge before a delayed tool can write', async () => {
+    let entered!: () => void
+    const started = new Promise<void>(resolve => { entered = resolve })
+    let received: AbortSignal | undefined
+    let changed = false
+    let finish!: () => void
+    const urls = await start({ team: stubInstance({
+      async callTool(_name, _input, context) {
+        received = context?.signal
+        entered()
+        await new Promise<void>(resolve => {
+          finish = resolve
+          received?.addEventListener('abort', () => resolve(), { once: true })
+        })
+        if (!received?.aborted) changed = true
+        return { content: [{ type: 'text', text: 'settled' }] }
+      },
+    }) })
+    const client = await connect(bridges[0], urls.team)
+    const controller = new AbortController()
+    const pending = client.callTool({ name: 'echo', arguments: {} }, undefined, { signal: controller.signal })
+    const rejected = expect(pending).rejects.toThrow()
+    try {
+      await started
+      expect(received).toBeInstanceOf(AbortSignal)
+      controller.abort()
+      await rejected
+      await vi.waitFor(() => expect(received?.aborted).toBe(true))
+      expect(changed).toBe(false)
+    } finally { controller.abort(); finish?.() }
   })
 
   it('wraps a bare return value in MCP content instead of dropping it', async () => {
