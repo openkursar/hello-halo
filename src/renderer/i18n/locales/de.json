@@ -3679,5 +3679,13 @@
   "Zoom in": "Vergrößern",
   "Zoom in (+)": "Vergrößern (+)",
   "Zoom out": "Verkleinern",
-  "Zoom out (-)": "Verkleinern (-)"
+  "Zoom out (-)": "Verkleinern (-)",
+  "Cancelled": "",
+  "Other...": "",
+  "Request is too large. Reduce the attachment size or shorten the text.": "",
+  "Submit": "",
+  "Submitting...": "",
+  "Type your answer...": "",
+  "Waiting for your response": "",
+  "Your answer could not be submitted. Please try again.": ""
 }

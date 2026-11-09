@@ -3809,5 +3809,13 @@
   "Zoom in": "Acercar",
   "Zoom in (+)": "Acercar (+)",
   "Zoom out": "Alejar",
-  "Zoom out (-)": "Alejar (-)"
+  "Zoom out (-)": "Alejar (-)",
+  "Cancelled": "",
+  "Other...": "",
+  "Request is too large. Reduce the attachment size or shorten the text.": "",
+  "Submit": "",
+  "Submitting...": "",
+  "Type your answer...": "",
+  "Waiting for your response": "",
+  "Your answer could not be submitted. Please try again.": ""
 }

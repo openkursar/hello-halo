@@ -48,34 +48,45 @@ function splitTaskStateRows(rows: TaskStateRow[]): {
 export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThoughts' | 'cleanupPulseReadAt' | 'keepPulseItem' | 'removePulseItem' | 'setVisibleConversation' | 'readActiveCompletion' | 'loadPersistedTaskState' | 'syncPersistedTaskState' | 'resetSession' | 'setSessionError' | 'markSessionStopped' | 'reset' | 'resetSpace' | 'forgetConversation' | 'shedBackgroundDetail'> = (set, get) => ({
   answerQuestion: async (conversationId: string, answers: Record<string, string>) => {
     const session = get().sessions.get(conversationId)
-    if (!session?.pendingQuestion) {
-      console.warn(`[ChatStore] No pending question for conversation: ${conversationId}`)
-      return
-    }
+    if (!session?.pendingQuestion || session.pendingQuestion.status !== 'active' || session.pendingQuestion.submitting) return
 
     const { id } = session.pendingQuestion
-
-    try {
-      await api.answerQuestion({ conversationId, id, answers })
-
-      // Mark as answered
-      set((state) => {
-        const newSessions = new Map(state.sessions)
-        const currentSession = newSessions.get(conversationId)
-        if (currentSession?.pendingQuestion) {
-          newSessions.set(conversationId, {
-            ...currentSession,
-            pendingQuestion: {
-              ...currentSession.pendingQuestion,
-              status: 'answered',
-              answers
-            }
-          })
-        }
-        return { sessions: newSessions }
+    set(state => {
+      const sessions = new Map(state.sessions)
+      sessions.set(conversationId, {
+        ...session, pendingQuestion: { ...session.pendingQuestion!, submitting: true, error: false }
       })
-    } catch (error) {
-      console.error('[ChatStore] Failed to answer question:', error)
+      return { sessions }
+    })
+
+    let failureStage = 'transport'
+    try {
+      const result = await api.answerQuestion({ conversationId, id, answers })
+      if (!result.success) {
+        failureStage = 'rejected'
+        throw new Error('Answer rejected')
+      }
+      set(state => {
+        const current = state.sessions.get(conversationId)
+        if (current?.pendingQuestion?.id !== id || current.pendingQuestion.status !== 'active') return state
+        const sessions = new Map(state.sessions)
+        sessions.set(conversationId, {
+          ...current,
+          pendingQuestion: { ...current.pendingQuestion, status: 'answered', submitting: false, error: false, answers }
+        })
+        return { sessions }
+      })
+    } catch {
+      console.warn(`[ChatStore] Question submission failed: conversationId=${conversationId}, questionId=${id}, stage=${failureStage}`)
+      set(state => {
+        const current = state.sessions.get(conversationId)
+        if (current?.pendingQuestion?.id !== id || current.pendingQuestion.status !== 'active') return state
+        const sessions = new Map(state.sessions)
+        sessions.set(conversationId, {
+          ...current, pendingQuestion: { ...current.pendingQuestion, submitting: false, error: true }
+        })
+        return { sessions }
+      })
     }
   },
 

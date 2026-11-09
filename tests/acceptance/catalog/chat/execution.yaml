@@ -24,6 +24,9 @@ promises:
   budget:
     en: Context and output limits are presented without inventing a successful result.
     zh: 遇到上下文或输出限制时，不会虚构已成功完成。
+  structured-answers:
+    en: My single choice, multiple choices or custom answer stays associated with the full question, even when question headings repeat. Submitting resumes work with those answers, and the next question card starts without inherited selections or custom text.
+    zh: 单选、多选或自定义回答始终对应问题全文，即使问题标题相同也不混淆。提交后工作携带这些答案继续，下一张提问卡片不继承之前的选择或自定义文本。
   context-continuity:
     en: Ordinary work appends to model history without automatically clearing old tool results or silently trimming conversation records. Near the input limit, summarization makes room before the next work request. If a proactive summary remains unusable after bounded repair, work may continue with the intact history while the estimated request remains below input capacity; a server overflow starts bounded recovery rather than silent trimming.
     zh: 日常工作只追加模型历史，不自动清空旧工具结果或悄悄裁剪对话记录。接近输入上限时先总结腾出空间；主动总结经有界修复仍不可用，但请求估算仍低于输入容量时，可保留完整历史继续工作。服务端超窗触发有界恢复，不悄悄裁剪历史。
@@ -112,6 +115,36 @@ scenarios:
     notes:
       en: A blocked Claude account (403 "OAuth authentication is currently not allowed for this organization.") left a digital human's chat blank on the Halo SDK engine, while Claude Code showed the reason. The real app runs with only the model endpoint scripted, reached through the app's own model router; the reason text is the one that account received. Claude Code, IM chats, automation runs, team members, errors that are retried and the space conversation (chat.execution.provider-error) are not covered here.
       zh: 一个被封的 Claude 账号（403 "OAuth authentication is currently not allowed for this organization."）在 Halo SDK 引擎下让数字人对话一片空白，而 Claude Code 能显示原因。真实应用运行，仅替换模型端点，并经应用自身的模型路由访问；原因文字取自该账号收到的回复。此处不覆盖 Claude Code、IM 对话、自动化运行、团队成员、会被重试的错误及空间对话（chat.execution.provider-error）。
+  - id: chat.execution.structured-answers
+    title:
+      en: Answer consecutive question cards without mixing decisions
+      zh: 连续回答提问卡片而不混淆决定
+    verifies:
+      - structured-answers
+    platforms: *a1
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A space conversation uses the real Halo SDK engine with only its model endpoint scripted. The model asks three distinct full questions with the same heading, covering single choice, multiple choices and a custom answer.
+        zh: 空间对话使用真实 Halo SDK 引擎，只替换模型端点。模型以同一标题提出三个全文不同的问题，分别覆盖单选、多选和自定义回答。
+    steps:
+      - en: Select one option, select two options for the multiple-choice question, and enter text through Other for the custom-answer question; submit the card.
+        zh: 单选题选择一个选项，多选题选择两个选项，自定义回答题通过 Other 输入文字，然后提交卡片。
+      - en: Inspect the immediately following model request, then answer a second card with new full questions but the same headings, options and question positions, using different answers.
+        zh: 检查紧接着的模型请求，再回答第二张卡片；它的问题全文不同，但标题、选项和题目位置相同，改用不同答案。
+    expected:
+      - en: No continuation request starts before each card is submitted. Each submission produces exactly one next model request whose successful tool result pairs every full question with its submitted answer, with no heading-only keys or answers from another question.
+        zh: 每张卡片提交前不发起继续请求。每次提交恰好产生一次下一步模型请求，其中成功的工具结果将每道问题全文与所提交的答案逐一配对，不使用只有标题的键，也不混入其他题的答案。
+      - en: The second card initially has no selected options or expanded custom input and cannot be submitted. Opening Other shows an empty input; the next request carries only the second card's new answers for its tool result, and work completes.
+        zh: 第二张卡片初始没有已选项或展开的自定义输入，不能提交。打开 Other 后输入框为空；下一请求中该次工具结果只携带第二张卡片的新答案，工作正常完成。
+    notes:
+      en: One desktop journey covers all three answer forms and repeated headings within and across consecutive cards. It does not establish remote clients, other engines, submission-failure retry or rejected malformed submissions.
+      zh: 一个桌面旅程覆盖三种回答方式，以及同卡片和连续卡片之间的重复标题。不代表已验证远程客户端、其他引擎、提交失败重试或畸形提交拒绝。
   - id: chat.execution.limit
     title:
       en: Reach a declared context or turn limit

@@ -12,6 +12,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { Check, MessageSquareMore, X } from 'lucide-react'
 import type { PendingQuestion } from '../../types'
+import { useTranslation } from '../../i18n'
 
 // Tailwind can't detect dynamic class names (e.g. `rounded-${x}`), so we use a helper
 const indicatorShape = (isMulti: boolean) => isMulti ? 'rounded-sm' : 'rounded-full'
@@ -22,7 +23,9 @@ interface AskUserQuestionCardProps {
 }
 
 export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuestionCardProps) {
-  const { questions, status } = pendingQuestion
+  const { t } = useTranslation()
+  const { id, questions, status, submitting, error } = pendingQuestion
+  const isDisabled = status !== 'active' || submitting
 
   // Per-question selections (before submit)
   const [selections, setSelections] = useState<Record<string, string | string[]>>({})
@@ -33,8 +36,14 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
   // Ref for auto-focus on "other" input
   const otherInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
+  useEffect(() => {
+    setSelections({})
+    setOtherExpanded({})
+    setOtherTexts({})
+  }, [id])
+
   // Check if all questions have been answered
-  const allAnswered = questions.every((_, idx) => {
+  const allAnswered = questions.length > 0 && questions.every((_, idx) => {
     const key = String(idx)
     const sel = selections[key]
     if (otherExpanded[key]) {
@@ -48,17 +57,17 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
 
   // Build final answers record
   const buildAnswers = useCallback((): Record<string, string> => {
-    const result: Record<string, string> = {}
-    questions.forEach((_, idx) => {
+    const result: Record<string, string> = Object.create(null)
+    questions.forEach((question, idx) => {
       const key = String(idx)
       if (otherExpanded[key]) {
-        result[key] = otherTexts[key]?.trim() || ''
+        result[question.question] = otherTexts[key]?.trim() || ''
       } else {
         const sel = selections[key]
         if (Array.isArray(sel)) {
-          result[key] = sel.join(', ')
+          result[question.question] = sel.join(', ')
         } else {
-          result[key] = sel as string || ''
+          result[question.question] = sel as string || ''
         }
       }
     })
@@ -67,15 +76,15 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
 
   // Handle option click for single-select
   const handleSingleSelect = useCallback((questionIdx: number, label: string) => {
-    if (status !== 'active') return
+    if (isDisabled) return
     const key = String(questionIdx)
     setOtherExpanded(prev => ({ ...prev, [key]: false }))
     setSelections(prev => ({ ...prev, [key]: label }))
-  }, [status])
+  }, [isDisabled])
 
   // Handle option click for multi-select
   const handleMultiSelect = useCallback((questionIdx: number, label: string) => {
-    if (status !== 'active') return
+    if (isDisabled) return
     const key = String(questionIdx)
     setSelections(prev => {
       const current = (prev[key] as string[]) || []
@@ -86,11 +95,11 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
     })
     // Clear "other" if selecting a normal option
     setOtherExpanded(prev => ({ ...prev, [key]: false }))
-  }, [status])
+  }, [isDisabled])
 
   // Handle "Other" click
   const handleOtherClick = useCallback((questionIdx: number) => {
-    if (status !== 'active') return
+    if (isDisabled) return
     const key = String(questionIdx)
     setOtherExpanded(prev => ({ ...prev, [key]: true }))
     setSelections(prev => ({ ...prev, [key]: '' }))
@@ -98,13 +107,13 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
     setTimeout(() => {
       otherInputRefs.current[key]?.focus()
     }, 0)
-  }, [status])
+  }, [isDisabled])
 
   // Handle submit
   const handleSubmit = useCallback(() => {
-    if (!allAnswered || status !== 'active') return
+    if (!allAnswered || isDisabled) return
     onAnswer(buildAnswers())
-  }, [allAnswered, status, onAnswer, buildAnswers])
+  }, [allAnswered, isDisabled, onAnswer, buildAnswers])
 
   // Handle Enter key on "Other" input
   const handleOtherKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -122,7 +131,7 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
     if (status === 'active') {
       cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
     }
-  }, [status])
+  }, [id, status])
 
   // Don't render after answered
   if (status === 'answered') return null
@@ -145,7 +154,7 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
           className={isCancelled ? 'text-muted-foreground' : 'text-primary'}
         />
         <span className="text-xs font-medium text-muted-foreground">
-          {isCancelled ? 'Cancelled' : 'Waiting for your response'}
+          {isCancelled ? t('Cancelled') : t('Waiting for your response')}
         </span>
         {isCancelled && (
           <X size={14} className="text-muted-foreground/50 ml-auto" />
@@ -180,7 +189,7 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
                   return (
                     <button
                       key={optIdx}
-                      disabled={isCancelled}
+                      disabled={isDisabled}
                       onClick={() => isMulti ? handleMultiSelect(qIdx, opt.label) : handleSingleSelect(qIdx, opt.label)}
                       className={`
                         w-full text-left px-3 py-2 rounded-lg border transition-all duration-150
@@ -219,6 +228,7 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
                 {!isCancelled && (
                   <div>
                     <button
+                      disabled={isDisabled}
                       onClick={() => handleOtherClick(qIdx)}
                       className={`
                         w-full text-left px-3 py-2 rounded-lg border transition-all duration-150
@@ -239,7 +249,7 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
                         `}>
                           {isOtherActive && <Check size={10} className="text-primary-foreground" strokeWidth={3} />}
                         </div>
-                        <span className="text-sm text-muted-foreground">Other...</span>
+                        <span className="text-sm text-muted-foreground">{t('Other...')}</span>
                       </div>
                     </button>
                     {isOtherActive && (
@@ -247,10 +257,11 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
                         <input
                           ref={el => { otherInputRefs.current[key] = el }}
                           type="text"
+                          disabled={isDisabled}
                           value={otherTexts[key] || ''}
                           onChange={e => setOtherTexts(prev => ({ ...prev, [key]: e.target.value }))}
                           onKeyDown={handleOtherKeyDown}
-                          placeholder="Type your answer..."
+                          placeholder={t('Type your answer...')}
                           className="w-full px-3 py-1.5 text-sm bg-background border border-border-faint rounded-md
                             focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20
                             placeholder:text-muted-foreground/40 transition-all duration-150"
@@ -267,21 +278,22 @@ export function AskUserQuestionCard({ pendingQuestion, onAnswer }: AskUserQuesti
 
       {/* Submit button */}
       {!isCancelled && (
-        <div className="px-4 py-3 border-t border-border/30 flex justify-end">
+        <div className="px-4 py-3 border-t border-border/30 flex flex-wrap items-center justify-end gap-2">
+          {error && <p role="alert" className="w-full text-sm text-destructive">{t('Your answer could not be submitted. Please try again.')}</p>}
           <button
-            disabled={!allAnswered}
+            disabled={!allAnswered || isDisabled}
             onClick={handleSubmit}
             className={`
               flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium
               transition-all duration-200
-              ${allAnswered
+              ${allAnswered && !isDisabled
                 ? 'bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98]'
                 : 'bg-muted/30 text-muted-foreground cursor-not-allowed'
               }
             `}
           >
             <Check size={14} />
-            Submit
+            {submitting ? t('Submitting...') : t('Submit')}
           </button>
         </div>
       )}

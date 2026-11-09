@@ -125,6 +125,89 @@ test('a digital human chat keeps showing why a blocked account was refused after
   await info.attach('person-provider-failure', { body: JSON.stringify({ appId: person.id, conversationId: failed.conversationId, errors: allErrors, refused, history }, null, 2), contentType: 'application/json' })
 })
 
+test('consecutive question cards deliver single, multiple and custom answers under the full question text', acceptance('chat.execution.structured-answers'), async ({ model, window }, info) => {
+  const prompt = `Help me decide how to prepare two reports ${randomUUID()}`
+  const answer = `Both reports are ready to prepare ${randomUUID()}`
+  const header = 'Decision'
+  const option = (label: string) => ({ label, description: `Use ${label.toLowerCase()}.` })
+  const batches = ['first', 'second'].map((report, index) => ({
+    id: `report-decisions-${report}`,
+    questions: [
+      { question: `Where should I prepare the ${report} report?`, header, multiSelect: false, options: [option('Local draft'), option('Shared draft')] },
+      { question: `Which sections should the ${report} report include?`, header, multiSelect: true, options: [option('Summary'), option('Chart'), option('Appendix')] },
+      { question: `When should I deliver the ${report} report?`, header, multiSelect: false, options: [option('Weekday'), option('Weekend')] },
+    ],
+    single: index === 0 ? 'Local draft' : 'Shared draft',
+    multiple: index === 0 ? ['Summary', 'Chart'] : ['Chart', 'Appendix'],
+    custom: index === 0 ? 'After the review, at 09:30' : 'Before the launch, at 16:45',
+  }))
+  model.respond(request => {
+    const batch = batches[request.sequence - 1]
+    return batch
+      ? { tools: [modelTool(request, 'AskUserQuestion', { questions: batch.questions }, batch.id)] }
+      : { text: answer }
+  })
+
+  await navigateToChat(window)
+  const turn = await sendAcceptanceMessage(window, prompt)
+  const observations: Array<{ sequence: number; toolId: string; decisions: string[][] }> = []
+  for (const [index, batch] of batches.entries()) {
+    const card = window.locator('.ask-question-card').filter({ hasText: batch.questions[0].question })
+    await expect(card).toBeVisible()
+    await expect(window.locator('.ask-question-card')).toHaveCount(1)
+    const submit = card.getByRole('button', { name: 'Submit', exact: true })
+    await expect(submit).toBeDisabled()
+    await expect(card.getByPlaceholder('Type your answer...', { exact: true })).toHaveCount(0)
+    for (const question of batch.questions) {
+      const section = card.getByText(question.question, { exact: true }).locator('../..')
+      await expect(section.getByText(header, { exact: true })).toBeVisible()
+      await expect(section.locator('button svg.lucide-check')).toHaveCount(0)
+    }
+    expect(model.exchanges).toHaveLength(index + 1)
+
+    const single = card.getByText(batch.questions[0].question, { exact: true }).locator('../..')
+    const selectedSingle = batch.questions[0].options.find(choice => choice.label === batch.single)!
+    await single.getByRole('button', { name: `${selectedSingle.label} ${selectedSingle.description}`, exact: true }).click()
+    await expect(single.locator('button svg.lucide-check')).toHaveCount(1)
+    await expect(submit).toBeDisabled()
+    const multiple = card.getByText(batch.questions[1].question, { exact: true }).locator('../..')
+    for (const label of batch.multiple) {
+      const selected = batch.questions[1].options.find(choice => choice.label === label)!
+      await multiple.getByRole('button', { name: `${selected.label} ${selected.description}`, exact: true }).click()
+    }
+    await expect(multiple.locator('button svg.lucide-check')).toHaveCount(2)
+    await expect(submit).toBeDisabled()
+    const custom = card.getByText(batch.questions[2].question, { exact: true }).locator('../..')
+    await custom.getByRole('button', { name: 'Other...', exact: true }).click()
+    const customInput = custom.getByPlaceholder('Type your answer...', { exact: true })
+    await expect(customInput).toHaveValue('')
+    await expect(submit).toBeDisabled()
+    await customInput.fill(`  ${batch.custom}  `)
+    await expect(submit).toBeEnabled()
+    expect(model.exchanges).toHaveLength(index + 1)
+    await submit.click()
+
+    await expect.poll(() => model.exchanges.length).toBe(index + 2)
+    const continuation = model.exchanges[index + 1].request
+    expect(continuation.toolResults.map(result => result.id)).toEqual(batches.slice(0, index + 1).map(value => value.id))
+    const result = continuation.toolResults.find(value => value.id === batch.id)!
+    expect(result.error).toBe(false)
+    const decisions = Array.from(result.text.matchAll(/^Question: (.+)\nAnswer: (.*)$/gm), match => [match[1], match[2]])
+    expect(decisions).toEqual([
+      [batch.questions[0].question, batch.single],
+      [batch.questions[1].question, batch.multiple.join(', ')],
+      [batch.questions[2].question, batch.custom],
+    ])
+    observations.push({ sequence: continuation.sequence, toolId: batch.id, decisions })
+  }
+  await expect(window.locator('.message-assistant [data-message-content]').last()).toHaveText(answer)
+  await waitForAcceptanceIdle(window, turn.conversationId)
+  await expect(window.locator('.ask-question-card')).toHaveCount(0)
+  expect(model.exchanges).toHaveLength(3)
+  expect(model.exchanges.every(exchange => exchange.completed && !exchange.cancelled)).toBe(true)
+  await info.attach('question-answer-decisions', { body: JSON.stringify(observations, null, 2), contentType: 'application/json' })
+})
+
 function heldCommand(profile: string, name: string) {
   const ready = join(profile, `${name}-ready`)
   const release = join(profile, `${name}-release`)

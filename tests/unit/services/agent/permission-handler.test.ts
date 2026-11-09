@@ -24,7 +24,7 @@ import {
 const noAbort = { signal: new AbortController().signal }
 
 function question(): AskUserQuestionItem {
-  return { question: 'q?', header: 'h', options: [{ label: 'a', description: 'd' }], multiSelect: false }
+  return { question: 'q?', header: 'h', options: [{ label: 'a', description: 'd' }, { label: 'b', description: 'other' }], multiSelect: false }
 }
 
 /** Drain any still-pending questions so registry state never leaks between tests. */
@@ -42,11 +42,11 @@ describe('createCanUseTool — branch table', () => {
     expect(emitAgentEvent).not.toHaveBeenCalled()
   })
 
-  it('auto-allows AskUserQuestion with empty answers when no deps supplied', async () => {
+  it('denies AskUserQuestion without an answer channel instead of inventing an empty answer', async () => {
     const fn = createCanUseTool()
     const res = await fn('AskUserQuestion', { questions: [question()] }, noAbort)
-    expect(res.behavior).toBe('allow')
-    expect(res.updatedInput.answers).toEqual({})
+    expect(res).toMatchObject({ behavior: 'deny', message: expect.stringContaining('No user answer channel') })
+    expect(emitAgentEvent).not.toHaveBeenCalled()
   })
 
   it('denies AskUserQuestion in a non-interactive session without emitting', async () => {
@@ -73,9 +73,9 @@ describe('createCanUseTool — branch table', () => {
     const active = getActivePendingQuestion('c')
     expect(active).not.toBeNull()
 
-    expect(resolveQuestion(active!.id, { h: 'a' })).toBe(true)
+    expect(resolveQuestion(active!.id, { 'q?': 'a' })).toBe(true)
     const res = await pending
-    expect(res).toEqual({ behavior: 'allow', updatedInput: { ...input, answers: { h: 'a' } } })
+    expect(res).toEqual({ behavior: 'allow', updatedInput: { ...input, answers: { 'q?': 'a' } } })
     // Registry cleared after resolve.
     expect(getActivePendingQuestion('c')).toBeNull()
   })
@@ -135,6 +135,50 @@ describe('pending-question registry', () => {
     expect((await p2).behavior).toBe('deny')
     expect(getActivePendingQuestion('c1')).toBeNull()
     expect(getActivePendingQuestion('c2')).toBeNull()
+  })
+
+  it.each<Record<string, string>>([{}, { '0': 'a' }, { 'q?': '' }, { 'q?': '   ' }, { unrelated: 'a' }, { 'q?': 'a', extra: 'b' }])('keeps an invalid submission pending for correction: %j', async answers => {
+    const pending = createCanUseTool({ spaceId: 's', conversationId: 'c' })('AskUserQuestion', { questions: [question()] }, noAbort)
+    const id = getActivePendingQuestion('c')!.id
+    expect(resolveQuestion(id, answers)).toBe(false)
+    expect(getActivePendingQuestion('c')?.id).toBe(id)
+    expect(resolveQuestion(id, { 'q?': 'a' })).toBe(true)
+    expect((await pending).behavior).toBe('allow')
+    expect(resolveQuestion(id, { 'q?': 'a' })).toBe(false)
+  })
+
+  it('requires an answer for every question and preserves custom and multi-select values', async () => {
+    const questions = [question(), { ...question(), question: 'Other question?', multiSelect: true }]
+    const pending = createCanUseTool({ spaceId: 's', conversationId: 'c' })('AskUserQuestion', { questions }, noAbort)
+    const id = getActivePendingQuestion('c')!.id
+    expect(resolveQuestion(id, { 'q?': 'Custom answer' })).toBe(false)
+    const answers = { 'q?': 'Custom answer', 'Other question?': 'a, b' }
+    expect(resolveQuestion(id, answers)).toBe(true)
+    expect(await pending).toEqual({ behavior: 'allow', updatedInput: { questions, answers } })
+  })
+
+  it.each([{ questions: [] }, { questions: [question(), question()] }, { questions: [{ ...question(), question: '' }] }, { questions: [{ ...question(), options: [] }] }])('refuses unanswerable questions before publishing a card: %j', async ({ questions }) => {
+    const result = await createCanUseTool({ spaceId: 's', conversationId: 'c' })('AskUserQuestion', { questions }, noAbort)
+    expect(result.behavior).toBe('deny')
+    expect(emitAgentEvent).not.toHaveBeenCalled()
+    expect(getActivePendingQuestion('c')).toBeNull()
+  })
+
+  it('logs correlation and counts without recording private questions or answers', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const remove = vi.spyOn(noAbort.signal, 'removeEventListener')
+    const questions = [{ ...question(), question: 'PRIVATE_QUESTION' }]
+    const pending = createCanUseTool({ spaceId: 's', conversationId: 'c' })('AskUserQuestion', { questions }, { ...noAbort, toolUseID: 'tool-correlation' })
+    resolveQuestion(getActivePendingQuestion('c')!.id, { PRIVATE_QUESTION: 'PRIVATE_ANSWER' })
+    await pending
+    const output = JSON.stringify(log.mock.calls)
+    expect(output).toContain('toolUseId=tool-correlation')
+    expect(output).toContain('questions=1, answers=1')
+    expect(output).not.toContain('PRIVATE_QUESTION')
+    expect(output).not.toContain('PRIVATE_ANSWER')
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function))
+    log.mockRestore()
+    remove.mockRestore()
   })
 
   it('getActivePendingQuestion returns null when the conversation has no in-flight ask', () => {

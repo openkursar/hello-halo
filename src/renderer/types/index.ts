@@ -813,7 +813,9 @@ export interface PendingQuestion {
   id: string;                        // Unique ID (toolUseId or timestamp)
   questions: Question[];             // 1-4 questions
   status: AskQuestionStatus;
-  answers?: Record<string, string>;  // User answers {"0": "JWT Tokens", "1": "PostgreSQL"}
+  answers?: Record<string, string>;  // Answers keyed by the complete question text.
+  submitting?: boolean;
+  error?: boolean;
 }
 
 export interface AgentCompactEvent extends AgentEventBase {

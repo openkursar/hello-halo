@@ -6,9 +6,15 @@
  * close cleanup.
  */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PassThrough } from 'stream'
 import { JsonRpcClient } from '../../../../../src/main/services/agent/codex/transport/jsonrpc-client'
+import {
+  registerServerRequestHandlers,
+  type AskQuestionPayload,
+  type ServerRequestHandlerDeps,
+} from '../../../../../src/main/services/agent/codex/transport/server-request-handler'
+import { ServerRequestMethods } from '../../../../../src/main/services/agent/codex/types/codex-protocol'
 
 function makeClient() {
   const stdin = new PassThrough()
@@ -125,5 +131,109 @@ describe('JsonRpcClient', () => {
     expect(client.isOpen()).toBe(true)
     client.close()
     expect(client.isOpen()).toBe(false)
+  })
+})
+
+async function elicit(
+  method: string,
+  params: unknown,
+  askQuestion: ServerRequestHandlerDeps['askQuestion'],
+): Promise<unknown> {
+  const { client, stdout, written } = makeClient()
+  const dispose = registerServerRequestHandlers(client, {
+    conversationId: 'elicitation-conversation',
+    askQuestion,
+  })
+  try {
+    emit(stdout, { id: 42, method, params })
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(written).toHaveLength(1)
+    const reply = JSON.parse(written[0])
+    expect(reply.id).toBe(42)
+    expect(reply.error).toBeUndefined()
+    return reply.result
+  } finally {
+    dispose()
+    client.close()
+  }
+}
+
+describe('Codex elicitation answer contract', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it.each([
+    { question: 'Which release channel should we use?\nChoose one.' },
+    { prompt: 'Which release channel should we use?\nChoose one.' },
+    {},
+  ])('maps an option using the displayed question text for %j', async (input) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const askQuestion = vi.fn(async (payload: AskQuestionPayload) => {
+      expect(payload.questions).toHaveLength(1)
+      expect(payload.questions[0].header).toBe('Tool input')
+      return {
+        '0': 'Beta',
+        'Tool input': 'Beta',
+        [payload.questions[0].question]: 'Stable',
+      }
+    })
+    const result = await elicit(ServerRequestMethods.ToolRequestUserInput, {
+      threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1',
+      ...input,
+      options: [{ value: 'stable', label: 'Stable' }, { value: 'beta', label: 'Beta' }],
+    }, askQuestion)
+
+    expect(result).toEqual({ value: 'stable' })
+    expect(askQuestion).toHaveBeenCalledOnce()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('preserves free-text answers keyed by the complete question', async () => {
+    const result = await elicit(ServerRequestMethods.ToolRequestUserInput, {
+      question: 'What should happen next?\nInclude any constraints.',
+    }, async (payload) => ({ [payload.questions[0].question]: 'Keep both versions.\nDo not overwrite.' }))
+
+    expect(result).toEqual({ value: 'Keep both versions.\nDo not overwrite.' })
+  })
+
+  it.each(['Approve', 'Deny'])('uses the MCP payload question for %s', async (answer) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = await elicit(ServerRequestMethods.McpServerElicitationRequest, {
+      message: 'May the MCP server proceed?\nConfirm the decision.',
+    }, async (payload) => ({
+      '0': answer === 'Approve' ? 'Deny' : 'Approve',
+      'MCP request': answer === 'Approve' ? 'Deny' : 'Approve',
+      [payload.questions[0].question]: answer,
+    }))
+
+    expect(result).toEqual({ action: answer === 'Approve' ? 'accept' : 'reject' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('uses the displayed MCP fallback question when no message is supplied', async () => {
+    const result = await elicit(ServerRequestMethods.McpServerElicitationRequest, undefined,
+      async (payload) => ({ [payload.questions[0].question]: 'Approve' }))
+
+    expect(result).toEqual({ action: 'accept' })
+  })
+
+  it.each([
+    { method: ServerRequestMethods.ToolRequestUserInput, params: { question: 'Private tool question' }, result: { value: '' } },
+    { method: ServerRequestMethods.McpServerElicitationRequest, params: { message: 'Private MCP question' }, result: { action: 'reject' } },
+  ])('does not read header or numeric keys for $method and logs no user content', async ({ method, params, result }) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const answer = 'Approve private answer'
+    expect(await elicit(method, params, async () => ({
+      '0': answer,
+      'Tool input': answer,
+      'MCP request': answer,
+    }))).toEqual(result)
+
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[Codex][elicitation]'), {
+      conversationId: 'elicitation-conversation',
+    })
+    const logged = JSON.stringify(warn.mock.calls)
+    expect(logged).not.toContain('Private')
+    expect(logged).not.toContain(answer)
   })
 })

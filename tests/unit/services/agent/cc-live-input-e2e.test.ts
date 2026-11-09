@@ -19,6 +19,7 @@ import { CcSession } from '../../../../src/main/services/agent/cc/session'
 import type { CcRuntimeLaunch } from '../../../../src/shared/types/cc-runtime'
 import { prepareStoredSession } from '../../../../src/main/services/agent/stored-session'
 import { createSession as createHaloSession } from '@hello-halo/agent-sdk'
+import { createCanUseTool, getActivePendingQuestion, resolveQuestion } from '../../../../src/main/services/agent/permission-handler'
 
 const enabled = process.env.CC_E2E === '1'
 const CLI = process.env.CC_TEST_CLI ?? path.resolve(__dirname, '../../../../.validation/legacy-cc/cli.js')
@@ -186,6 +187,34 @@ async function startHarness(overrides: Record<string, unknown> = {}) {
 const slowFinalAnswer: Step = { chunks: Array.from({ length: 12 }, (_, i) => `part${i} `), chunkDelayMs: 120 }
 
 describe.skipIf(!enabled)('Claude Code live input (real CLI)', () => {
+  it('delivers validated full-question answers through the real host callback to the next model request', async () => {
+    const conversationId = `ask-${Date.now()}`
+    const questions = [
+      { question: 'Which script should be deleted?', header: 'Decision', multiSelect: false, options: [{ label: 'DDL only', description: 'Delete the create script' }, { label: 'All scripts', description: 'Delete every script' }] },
+      { question: 'Which records should be kept?', header: 'Decision', multiSelect: true, options: [{ label: 'SQL', description: 'Keep SQL' }, { label: 'Audit', description: 'Keep audit records' }] },
+      { question: 'Who should receive the result?', header: 'Decision', multiSelect: false, options: [{ label: 'Owner', description: 'Send privately' }, { label: 'Team', description: 'Send to the team' }] },
+    ]
+    const answers = { 'Which script should be deleted?': 'DDL only', 'Which records should be kept?': 'SQL, Audit', 'Who should receive the result?': 'Release operator only' }
+    const h = await startHarness({ canUseTool: createCanUseTool({ spaceId: 'isolated', conversationId }) })
+    h.plan.push({ toolUse: { name: 'AskUserQuestion', input: { questions } } }, { text: 'Decisions received' })
+    await h.session.send('Ask for the three decisions.')
+    await waitFor(() => !!getActivePendingQuestion(conversationId), 'pending question')
+    const id = getActivePendingQuestion(conversationId)!.id
+    expect(resolveQuestion(id, {})).toBe(false)
+    expect(getActivePendingQuestion(conversationId)?.id).toBe(id)
+    expect(resolveQuestion(id, answers)).toBe(true)
+    await h.waitForResults(1)
+    expect(h.modelRequests).toHaveLength(2)
+    const results = h.modelRequests[1].messages.flatMap((message: any) => Array.isArray(message.content) ? message.content.filter((block: any) => block.type === 'tool_result') : [])
+    expect(results).toHaveLength(1)
+    for (const [question, answer] of Object.entries(answers)) {
+      expect(JSON.stringify(results[0].content)).toContain(question)
+      expect(JSON.stringify(results[0].content)).toContain(answer)
+    }
+    expect(results[0].is_error).not.toBe(true)
+    expect(getActivePendingQuestion(conversationId)).toBeNull()
+  }, 60000)
+
   it.each(['deepseek-v4.1-flash', 'gpt-6-astra', 'claude-sonnet-4-5'])('discovers and executes TodoWrite for %s', async model => {
     const h = await startHarness({ model })
     const todos = [{ content: 'Verify task tracking', status: 'completed', activeForm: 'Verifying task tracking' }]
