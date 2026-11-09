@@ -1,0 +1,58 @@
+import type { SkillMetadata } from './types.js';
+
+export interface BuiltinSkillDefinition extends Readonly<SkillMetadata> {
+  readonly name: string;
+  readonly instructions: string;
+}
+
+const COMMIT_INSTRUCTIONS = `# Prepare a repository commit
+
+Use the repository's own contribution and commit process when it has one. This workflow fills gaps in that process; it does not replace local instructions or grant permission to publish anything.
+
+Start with the requested scope. Check the current branch, working tree, staged changes and recent history. Distinguish the work requested for this commit from changes already present, including changes made by the user. Read the relevant code when the diff alone does not explain it. Stop to resolve ambiguity before including unrelated work.
+
+Build the smallest coherent change set that satisfies the request. Run the checks the repository requires and any focused checks needed for the affected behavior. Report a check that could not run as unverified. Inspect new files and the staged diff for accidental credentials, generated artifacts and unrelated edits. Stage identified paths or hunks deliberately; staging and committing are dependent operations and must finish in that order.
+
+Write a message describing the problem addressed and the resulting behavior, using the repository's established style. Include attribution only when required or actually known; do not invent an author, model identity or email address. For a one-line message, prefer a safely quoted -m argument. If a multiline message requires a file, use a host-permitted location and keep that file out of the staged change set. Preserve the message without shell expansion.
+
+Create a commit only within the user's authorized request, through any repository-required tooling. Keep hooks, signing and repository settings intact. If a check rejects the attempt, inspect the failure and the actual Git state before fixing and trying again. A failed attempt is not a reason to alter a previous commit. Rewriting existing history requires its own authorization.
+
+After success, verify the resulting commit and the remaining working tree. Report the commit identifier, its scope and validation. A local commit does not by itself authorize a push, a release or a pull request.
+
+Additional request details: $ARGUMENTS`;
+
+const PULL_REQUEST_INSTRUCTIONS = `# Prepare a pull request or merge request
+
+Follow the repository's contribution rules and request template. Determine the hosting service from the configured remote; use an available connector or the service's supported CLI. Apply this workflow to either a pull request or a merge request without assuming a particular provider.
+
+Establish the intended source and target branches from repository state and the user's request. Examine the entire branch difference against the target, including its commits and relevant working-tree changes. Keep unrelated edits out of the request. Check for an existing request for this branch before creating another one.
+
+Prepare a reviewer-facing title and description from the final change. Explain the concrete problem, what users or callers will observe afterward, and the evidence that the change works. Include relevant limitations and checks that remain unrun. Use the repository template when present; do not add invented test results, attribution or a chronological account of the conversation.
+
+Keep preparation, commits, branch publication and request creation in their dependency order. The request is created only after its source commits exist on the intended remote. Work within the user's authorization for those actions; ask for missing authorization only after the proposed change and description are ready to review. Do not bypass hooks, rewrite shared history or change repository configuration to make publication succeed.
+
+Send the prepared description without allowing its contents to become shell code, for example with a body-file argument. If a publish operation fails or has an uncertain result, inspect the remote branch or request state before retrying so that a timeout does not create duplicates.
+
+Verify the created or updated request's source, target, title and status. Give the user its link and an accurate validation summary. Creating a request does not authorize merging it, deleting branches or deploying the change.
+
+Additional request details: $ARGUMENTS`;
+
+export const BUILTIN_SKILLS: readonly BuiltinSkillDefinition[] = Object.freeze([
+  {
+    name: 'commit',
+    description: 'Prepare and create a repository commit when requested, including scope, checks and the commit message.',
+    argumentHint: '<commit scope or message requirements>',
+    instructions: COMMIT_INSTRUCTIONS,
+  },
+  {
+    name: 'pull-request',
+    description: 'Prepare or update a pull request or merge request, including the branch difference, review description and publication.',
+    argumentHint: '<target branch or request details>',
+    instructions: PULL_REQUEST_INSTRUCTIONS,
+  },
+].map(definition => Object.freeze(definition)));
+
+/** Bundled workflow definitions for hosts that manage their own skill inventory. */
+export function getBuiltinSkillDefinitions(): readonly BuiltinSkillDefinition[] {
+  return BUILTIN_SKILLS;
+}

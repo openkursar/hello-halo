@@ -21,6 +21,7 @@
     "product": "node scripts/select-product.mjs",
     "start": "electron-vite preview",
     "postinstall": "node scripts/postinstall.mjs",
+    "build:sdk": "node scripts/build-sdk.mjs --force",
     "bump-rc": "node scripts/bump-rc-version.mjs",
     "build:mac": "node scripts/build-mac-local.cjs",
     "install:mac": "node scripts/install-mac-local.cjs",

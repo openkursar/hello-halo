@@ -29,9 +29,11 @@ export function sdkIdentity(root) {
   let revision = null
   let changedFiles = null
   try {
-    if (fs.realpathSync(git(['rev-parse', '--show-toplevel'], real)) === real) {
+    // A separate checkout is its own repository; the in-tree SDK shares the application's history.
+    const top = fs.realpathSync(git(['rev-parse', '--show-toplevel'], real))
+    if (top === real || top === fs.realpathSync(root)) {
       revision = git(['rev-parse', 'HEAD'], real)
-      const status = git(['status', '--porcelain', '--untracked-files=normal'], real)
+      const status = git(['status', '--porcelain', '--untracked-files=normal', '--', '.'], real)
       changedFiles = status ? status.split('\n').length : 0
     }
   } catch {

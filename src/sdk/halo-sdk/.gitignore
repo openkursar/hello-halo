@@ -1,0 +1,20 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+coverage/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs and scratch
+*.log
+.temp/
+
+# Private provenance evidence, not part of the source distribution
+PROVENANCE-AUDIT.md
+PROVENANCE-DISPOSITIONS.md
+PROMPT-REVIEW.md

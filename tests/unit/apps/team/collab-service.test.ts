@@ -83,6 +83,7 @@ function makeRuntime(store: TeamStore) {
     bus: { cancelSession: vi.fn(), continueSession: vi.fn() } as never,
     stopMemberTurn: vi.fn(async () => false),
     isMemberReachable: vi.fn(() => true),
+    isMemberStopReachable: vi.fn(() => true),
     closeEpochResources: vi.fn(async (_teamId: string, _epochId: string) => {}),
     blackboard: { readBoard: vi.fn(() => ({ tasks: [], findings: [], roster: [] })) },
     checks: { viewForTeam: () => [], cancelById: vi.fn() } as never,

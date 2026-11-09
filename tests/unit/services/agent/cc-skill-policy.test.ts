@@ -143,6 +143,29 @@ describe('CC native skill policy', () => {
     expect(() => policy.checkInput('/unreadable')).toThrow('source could not be inspected')
   })
 
+  it('filters an unchanged catalog once and reuses the answer on later turns', () => {
+    const { policy, source } = fixture()
+    source('skills/inline/SKILL.md')
+    source('skills/forked/SKILL.md', true)
+    const metadata = vi.spyOn(skills, 'readSkillMetadata')
+    const commands = ['cost', 'inline', 'forked']
+    expect(policy.filterCommands(commands)).toEqual(['cost', 'inline'])
+    const reads = metadata.mock.calls.length
+    expect(reads).toBeGreaterThan(0)
+    expect(policy.filterCommands(commands)).toEqual(['cost', 'inline'])
+    expect(metadata).toHaveBeenCalledTimes(reads)
+    // A changed catalog is a new question and is re-evaluated.
+    expect(policy.filterCommands([...commands, 'unknown'])).toEqual(['cost', 'inline'])
+    expect(metadata.mock.calls.length).toBeGreaterThan(reads)
+  })
+
+  it('re-evaluates a cached catalog after session commands change', () => {
+    const { policy } = fixture()
+    expect(policy.filterCommands(['spend'])).toEqual([])
+    policy.setCommands([{ name: 'cost', aliases: ['spend'] }])
+    expect(policy.filterCommands(['spend'])).toEqual(['spend'])
+  })
+
   it('does no metadata reads for ordinary messages or unrelated protocol frames', async () => {
     const { policy, cwd } = fixture()
     const metadata = vi.spyOn(skills, 'readSkillMetadata')

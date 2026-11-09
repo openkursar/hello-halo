@@ -54,7 +54,7 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({ publishToolsetContextMode: vi.fn(), setSessionInvalidator: () => {}, buildCreationTimeServers: () => ({}), openToolset: () => ({ ok: true }) }))
 vi.mock('../../../../src/main/services/agent/toolsets/capability-index', () => ({ buildToolsetSection: () => '' }))
-vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({ dropConversationState: () => {}, getOpenToolsets: () => new Set() }))
+vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({ getExcludedToolsets: () => new Set(), dropConversationState: () => {}, getOpenToolsets: () => new Set() }))
 vi.mock('../../../../src/main/services/api-ref', () => ({ HALO_API_TOOLSET_ID: 'api' }))
 vi.mock('../../../../src/main/services/agent/mcp-auth-state', () => ({ purgeStaleMcpOAuth: async () => {} }))
 vi.mock('../../../../src/main/services/agent/mcp-manager', () => ({ onMcpServerRecovered: () => () => {}, broadcastMcpStatus: () => {} }))

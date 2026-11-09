@@ -93,14 +93,18 @@ export async function startReview(request: CodeReviewStartRequest): Promise<Code
   let conversationId: string
   try {
     const title = request.title.trim().slice(0, MAX_TITLE_CHARS) || `Review · ${task.repoName}`
-    conversationId = createConversation(spaceId, title, undefined, { keepTitle: true, engineId: await resolveDefaultEngine() }).id
+    conversationId = createConversation(spaceId, title, undefined, {
+      keepTitle: true,
+      engineId: await resolveDefaultEngine(),
+      ...(variant === 'quick' ? { excludedToolsets: [TEAM_MCP_SERVER_NAME] } : {}),
+    }).id
   } catch (error) {
     console.error(`${LOG_TAG} Review not started: creating its conversation failed (space=${spaceId}):`, error)
     return refusalFromError(error)
   }
 
-  // A quick review is one agent by definition; a team review needs the team tools.
-  // Seeded before the first message, so the session it creates already has them.
+  // A quick review is one agent by definition; the persisted exclusion keeps the
+  // team tools out of every session of this conversation, including rebuilds.
   const toolsetScope = { spaceId, conversationId, workDir }
   const toolset = variant === 'team'
     ? openToolset(toolsetScope, TEAM_MCP_SERVER_NAME, 'system')

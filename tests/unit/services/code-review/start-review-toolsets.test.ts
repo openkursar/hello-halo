@@ -57,10 +57,19 @@ vi.mock('../../../../src/main/services/agent/toolsets/meta-server', () => ({
   createBrokerMetaServer: () => ({}),
   CAPABILITIES_SERVER_NAME: 'capabilities',
 }))
-vi.mock('../../../../src/main/services/agent/toolsets/registry', () => ({
-  getAvailableToolsets: () => m.toolsets.map(id => ({ id })),
-  getToolset: (id: string) => (m.toolsets.includes(id) ? { id, createServer: () => ({ id }) } : undefined),
-}))
+vi.mock('../../../../src/main/services/agent/toolsets/registry', () => {
+  const definition = (id: string) => ({
+    id,
+    displayName: id === 'halo-team' ? 'Team Collaboration' : 'Web Control',
+    summary: `${id} summary`,
+    contextManaged: true,
+    usageGuide: `${id} guide`,
+  })
+  return {
+    getAvailableToolsets: () => m.toolsets.map(definition),
+    getToolset: (id: string) => (m.toolsets.includes(id) ? { ...definition(id), createServer: () => ({ id }) } : undefined),
+  }
+})
 
 // The engine's surface, wired to the real broker. Sending the first message is
 // where the session is created, so that is when its seed is taken.
@@ -99,6 +108,7 @@ vi.mock('../../../../src/main/services/code-review/review-store', () => ({ saveL
 
 import { startReview } from '../../../../src/main/services/code-review/start-review'
 import { getConversation } from '../../../../src/main/services/conversation.service'
+import { buildToolsetSection } from '../../../../src/main/services/agent/toolsets/capability-index'
 import type { CodeReviewStartRequest } from '../../../../src/shared/types/code-review'
 
 const SPACE = 'space-1'
@@ -130,9 +140,14 @@ describe('the toolsets a review conversation starts with', () => {
     const conversationId = await start('quick')
 
     expect(getConversation(SPACE, conversationId)?.toolsets).toEqual(['ai-browser'])
+    expect(getConversation(SPACE, conversationId)?.excludedToolsets).toEqual(['halo-team'])
     expect(m.seeded).toHaveLength(1)
     expect(m.seeded[0]).toContain('ai-browser')
     expect(m.seeded[0]).not.toContain('halo-team')
+    const section = buildToolsetSection(SPACE, conversationId, 'automatic')
+    expect(section).toContain('ai-browser guide')
+    expect(section).not.toContain('halo-team guide')
+    expect(section).toContain('Team Collaboration')
     // The user's own last-used set is not rewritten by a review.
     expect(m.saveConfig).not.toHaveBeenCalled()
   })
@@ -142,8 +157,12 @@ describe('the toolsets a review conversation starts with', () => {
     const conversationId = await start('team')
 
     expect(getConversation(SPACE, conversationId)?.toolsets).toEqual(['halo-team'])
+    expect(getConversation(SPACE, conversationId)?.excludedToolsets).toBeUndefined()
     expect(m.seeded).toHaveLength(1)
     expect(m.seeded[0]).toContain('halo-team')
+    const section = buildToolsetSection(SPACE, conversationId, 'automatic')
+    expect(section).toContain('halo-team guide')
+    expect(section).not.toContain('excluded from this conversation')
     expect(m.saveConfig).not.toHaveBeenCalled()
   })
 })

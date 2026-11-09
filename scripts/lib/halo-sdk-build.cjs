@@ -39,8 +39,9 @@ function buildHaloSdk(root, { env = process.env, execFile = execFileSync } = {})
 function describeRevision(sdk, execFile) {
   const git = args => String(execFile('git', args, { cwd: sdk, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })).trim();
   try {
-    if (fs.realpathSync(git(['rev-parse', '--show-toplevel'])) !== fs.realpathSync(sdk)) return 'revision unknown (not its own git checkout)';
-    const changed = git(['--no-optional-locks', 'status', '--porcelain']).split('\n').filter(Boolean).length;
+    const top = fs.realpathSync(git(['rev-parse', '--show-toplevel']));
+    if (top !== fs.realpathSync(sdk) && top !== fs.realpathSync(path.resolve(sdk, '..', '..', '..'))) return 'revision unknown (not a git checkout)';
+    const changed = git(['--no-optional-locks', 'status', '--porcelain', '--', '.']).split('\n').filter(Boolean).length;
     return `${git(['rev-parse', '--short', 'HEAD'])} · ${changed} uncommitted`;
   } catch {
     return 'revision unknown (git unavailable)';

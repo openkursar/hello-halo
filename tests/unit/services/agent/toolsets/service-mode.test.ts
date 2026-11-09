@@ -3,7 +3,7 @@ const state = vi.hoisted(() => ({ mode: undefined as string | undefined, convers
 const broker = vi.hoisted(() => ({ openToolset: vi.fn(() => ({ ok: true })), closeToolset: vi.fn(() => ({ ok: true })), listToolsetStatuses: vi.fn((_space, _conversation, mode) => [{ mode }]) }))
 vi.mock('../../../../../src/main/services/agent/helpers', () => ({ getWorkingDir: () => '/work' }))
 vi.mock('../../../../../src/main/services/agent/toolsets/broker', () => broker)
-vi.mock('../../../../../src/main/services/agent/toolsets/state', () => ({ getToolsetContextMode: () => state.mode }))
+vi.mock('../../../../../src/main/services/agent/toolsets/state', () => ({ getExcludedToolsets: () => new Set(), getToolsetContextMode: () => state.mode }))
 vi.mock('../../../../../src/main/services/agent/toolsets/registry', () => ({ getToolset: (id: string) => ({ id, contextManaged: true }) }))
 vi.mock('../../../../../src/main/services/conversation.service', () => ({ getConversation: () => state.conversation }))
 vi.mock('../../../../../src/main/services/agent/engine-routing', () => ({ getConversationEngineMetadata: () => state.engine }))

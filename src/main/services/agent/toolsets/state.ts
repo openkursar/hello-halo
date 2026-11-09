@@ -39,6 +39,14 @@ export function getOpenToolsets(spaceId: string, conversationId: string): Set<st
   return set
 }
 
+/**
+ * Toolsets this conversation must not mount, even context-managed ones. Read
+ * from the persisted conversation so a rebuilt session keeps the exclusion.
+ */
+export function getExcludedToolsets(spaceId: string, conversationId: string): ReadonlySet<string> {
+  return new Set(getConversation(spaceId, conversationId)?.excludedToolsets ?? [])
+}
+
 /** Mark a toolset open. Returns false if it was already open. */
 export function markOpen(spaceId: string, conversationId: string, toolsetId: string): boolean {
   const set = getOpenToolsets(spaceId, conversationId)

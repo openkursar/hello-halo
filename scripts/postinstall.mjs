@@ -9,6 +9,9 @@ if (Number(process.versions.napi) < 10) {
 // Optional engines are never installed here.
 run('patch-package')
 
+// Compile the in-tree Agent SDK that the main process loads.
+run('node scripts/build-sdk.mjs')
+
 // Prepare Electron and native dependencies. Packaging-only machines can
 //    skip the host runtime with HALO_SKIP_NATIVE_REBUILD=1.
 if (process.env.HALO_SKIP_NATIVE_REBUILD === '1') {

@@ -189,6 +189,7 @@ vi.mock('../../../../src/main/services/agent/toolsets/registry', () => ({
   ),
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({
+  getExcludedToolsets: () => new Set(),
   getOpenToolsets: vi.fn(() => new Set<string>()),
   markOpen: vi.fn(),
   markClosed: vi.fn(),

@@ -92,7 +92,11 @@ describe('startReview', () => {
   it('starts a quick review in a background conversation and records it', async () => {
     const result = await startReview(request())
 
-    expect(m.createConversation).toHaveBeenCalledWith('space-1', 'Review · Uncommitted changes · 1 file', undefined, { keepTitle: true, engineId: 'halo' })
+    expect(m.createConversation).toHaveBeenCalledWith('space-1', 'Review · Uncommitted changes · 1 file', undefined, {
+      keepTitle: true,
+      engineId: 'halo',
+      excludedToolsets: ['halo-team'],
+    })
     expect(m.closeToolset).toHaveBeenCalledWith({ spaceId: 'space-1', conversationId: 'review-1', workDir: '/space' }, 'halo-team', 'system')
     expect(m.openToolset).not.toHaveBeenCalled()
     expect(m.sendMessage).toHaveBeenCalledWith({

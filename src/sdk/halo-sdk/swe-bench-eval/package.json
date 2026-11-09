@@ -1,0 +1,22 @@
+{
+  "name": "@hello-halo/swe-bench-eval",
+  "version": "1.0.0",
+  "description": "SWE-Bench Verified evaluation harness",
+  "type": "module",
+  "bin": { "swe-eval": "./src/cli/index.ts" },
+  "scripts": {
+    "cli": "tsx src/cli/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.6.0",
+    "commander": "^12.1.0",
+    "p-limit": "^5.0.0",
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}

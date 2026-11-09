@@ -116,7 +116,7 @@ vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({ publishT
   setSessionInvalidator: vi.fn(), buildCreationTimeServers: () => ({}), openToolset: () => ({ ok: true }),
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/capability-index', () => ({ buildToolsetSection: () => '' }))
-vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({ getOpenToolsets: () => new Set(), dropConversationState: vi.fn() }))
+vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({ getExcludedToolsets: () => new Set(), getOpenToolsets: () => new Set(), dropConversationState: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/toolsets', () => ({
   listToolsets: vi.fn(), openToolsetByUser: vi.fn(), closeToolsetByUser: vi.fn(),
   openToolset: vi.fn(), closeToolset: vi.fn(), getToolset: vi.fn(),

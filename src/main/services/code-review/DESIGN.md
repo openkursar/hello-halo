@@ -30,8 +30,11 @@ conversation, keep talking there, or stop it.
    selects the conversation.
 4. Toolsets, opener `system` (never the user's last-used set): a team review
    opens `halo-team`, a quick review closes it, so a quick review stays one
-   agent at a predictable cost. Done before the first message, whose session
-   creation seeds them.
+   agent at a predictable cost. A quick review also records
+   `excludedToolsets: ['halo-team']` when it creates the conversation, because
+   `halo-team` is context-managed and a close alone cannot keep it out of a
+   rebuilt session. Done before the first message, whose session creation
+   seeds them.
 5. `buildCodeReviewInstructions(task, { workDir, changes })`, then
    `sendMessage({ message: '', task, taskInstructions })` — the instructions are
    in-process only and never persisted; the engine wraps them. The user message

@@ -189,6 +189,13 @@ function sdkCheckout(root, environment, { writable = false, built = false } = {}
   return { sdk, real, revision }
 }
 
+/** The SDK is tracked by the application repository itself rather than checked out separately. */
+function sdkInTree(root, sdk) {
+  if (!stat(sdk)?.isDirectory()) return false
+  try { return fs.realpathSync(git(['rev-parse', '--show-toplevel'], sdk)) === root }
+  catch { return false }
+}
+
 export function prepareDependencies(root, command, { environment = process.env, run = runCommand } = {}) {
   root = fs.realpathSync(root)
   if (command === 'browser') {
@@ -216,27 +223,42 @@ export function prepareDependencies(root, command, { environment = process.env, 
     ownedParents(root, link)
     if (stat(link)) throw new Error('An SDK is already installed; use a clean dependency checkout.')
     // With the SDK in place the install follows the release procedure and the lock must agree with it; without it only public packages are installed.
-    const selected = stat(sdk) ? sdkCheckout(root, environment, { built: true }) : null
+    const inTree = sdkInTree(root, sdk)
+    const selected = stat(sdk) && !inTree ? sdkCheckout(root, environment, { built: true }) : null
     if (selected) {
       const drift = sdkLockDrift(root, selected.real)
       if (drift.length) throw new Error(`The SDK at ${selected.revision} declares dependencies that differ from the application lock (${drift.slice(0, 6).join('; ')}); refresh the lock together with the SDK change.`)
+    }
+    if (inTree) {
+      const drift = sdkLockDrift(root, fs.realpathSync(sdk))
+      if (drift.length) throw new Error(`The in-tree SDK declares dependencies that differ from the application lock (${drift.slice(0, 6).join('; ')}); refresh the lock together with the SDK change.`)
     }
     const manifests = sourceManifests(root)
     lockedNpmInstall(root, ['ci', '--ignore-scripts', '--legacy-peer-deps', '--no-audit', '--no-fund'], environment, run)
     if (selected) {
       if (!stat(link)?.isSymbolicLink() || !fs.existsSync(link) || fs.realpathSync(link) !== selected.real) throw new Error('The dependency install did not link the selected SDK checkout.')
+    } else if (inTree) {
+      if (fs.realpathSync(link) !== fs.realpathSync(sdk)) throw new Error('The dependency install did not link the in-tree SDK.')
     } else removeGeneratedPlaceholder(root, sdk, link)
     run(process.execPath, ['scripts/postinstall.mjs'], root, { ...environment, PATH: `${path.join(modules, '.bin')}${path.delimiter}${environment.PATH ?? ''}` })
     verifySourceManifests(root, manifests, 'Native dependency preparation')
-    if (!selected) removeGeneratedPlaceholder(root, sdk, link)
+    if (!selected && !inTree) removeGeneratedPlaceholder(root, sdk, link)
     run(npm, ['run', 'prepare'], root, environment)
     verifySourceManifests(root, manifests, 'Host binary preparation')
     if (selected) {
       console.log(`[Acceptance CI] Dependencies are ready with the SDK at ${selected.revision}.`)
       return { command, sdk: 'linked', revision: selected.revision }
     }
+    if (inTree) {
+      console.log('[Acceptance CI] Dependencies are ready with the in-tree SDK built by postinstall.')
+      return { command, sdk: 'in-tree' }
+    }
     console.log('[Acceptance CI] Public dependencies are ready; SDK execution remains unavailable until a pinned distribution is bound.')
     return { command, sdk: 'absent' }
+  }
+  if ((command === 'sdk' || command === 'bind-sdk') && sdkInTree(root, sdk)) {
+    console.log(`[Acceptance CI] The SDK is part of this checkout; "${command}" has nothing to do.`)
+    return { command, sdk: 'in-tree' }
   }
   if (command === 'sdk') {
     const before = sdkCheckout(root, environment, { writable: true })

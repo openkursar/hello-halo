@@ -85,6 +85,12 @@ export interface Conversation extends ConversationMeta {
    */
   toolsets?: string[]
   /**
+   * Toolsets this conversation must never mount, even when they are
+   * context-managed. Host-only: a quick review excludes team collaboration so
+   * it stays one agent.
+   */
+  excludedToolsets?: string[]
+  /**
    * Knowledge bases (Tlon) loaded into THIS conversation. Their index.md is
    * injected into the system prompt for every turn (in addition to any KBs
    * bound at the space level). Optional + read with a `?? []` fallback, so
@@ -703,12 +709,19 @@ export function deleteEphemeralConversations(createdBefore: number): number {
  * @param options.keepTitle The given title stays: the first message does not
  *        replace it.
  * @param options.ephemeral See `ConversationMeta.ephemeral`.
+ * @param options.excludedToolsets Toolsets kept out of every session of this
+ *        conversation, even context-managed ones. See `Conversation.excludedToolsets`.
  */
 export function createConversation(
   spaceId: string,
   title?: string,
   reasoningEffort?: unknown,
-  options?: { keepTitle?: boolean; ephemeral?: boolean; engineId?: ConversationMeta['engineId'] }
+  options?: {
+    keepTitle?: boolean
+    ephemeral?: boolean
+    engineId?: ConversationMeta['engineId']
+    excludedToolsets?: readonly string[]
+  }
 ): Conversation {
   const id = uuidv4()
   const now = new Date().toISOString()
@@ -781,6 +794,9 @@ export function createConversation(
     // Only persist toolsets when the last-used set is non-empty, so an empty
     // seed leaves the field unset (hydrates to an empty open-set).
     ...(toolsets.length > 0 ? { toolsets: [...toolsets] } : {}),
+    ...(options?.excludedToolsets && options.excludedToolsets.length > 0
+      ? { excludedToolsets: [...options.excludedToolsets] }
+      : {}),
     // Only persist knowledge bases when the space/default seed is non-empty.
     ...(knowledgeBaseIds.length > 0 ? { knowledgeBaseIds: [...knowledgeBaseIds] } : {}),
     ...(isReasoningEffortLevel(reasoningEffort) ? { reasoningEffort } : {}),

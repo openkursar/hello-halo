@@ -38,6 +38,7 @@ vi.mock('../../../../src/main/services/agent/toolsets/broker', () => ({
 }))
 vi.mock('../../../../src/main/services/agent/toolsets/capability-index', () => ({ buildToolsetSection: vi.fn(() => '') }))
 vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({
+  getExcludedToolsets: () => new Set(),
   dropConversationState: vi.fn(),
   getOpenToolsets: vi.fn(() => []),
 }))

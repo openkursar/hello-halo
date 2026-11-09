@@ -14,6 +14,9 @@ actual access grants, tool restrictions and platform availability remain host po
 - Supported browser, terminal, OCR, collaboration and Operate Halo capabilities
   are supplied automatically in space conversations. Core capability residency
   does not depend on saved per-conversation switches or engine selection.
+- A conversation can carry host-only toolset exclusions. An exclusion wins over
+  automatic inclusion and is persisted, so every rebuilt session keeps it out;
+  a quick review uses this to stay one agent while collaboration remains core.
 - Operate Halo is core. Its reference tool, usage guide and scoped runtime
   credentials are available from the first turn without a human enablement step.
 - The engine owns detailed tool context. Halo SDK uses client discovery for
@@ -45,7 +48,7 @@ actual access grants, tool restrictions and platform availability remain host po
 | `base.ts` | `buildBaseToolset`: the servers every user-facing session starts from (web-search, halo-docs, halo-apps while digital humans are enabled). Space chat (via the broker), digital-human chat and automation start from it and exclude explicitly. Imported directly, not through the barrel (the barrel loads the registry). See §6 |
 | `broker.ts` | Builds the creation-time MCP record (`buildCreationTimeServers`); `openToolset`/`closeToolset` (user toggle → persist + schedule rebuild); `requestToolset` (AI → user, emits `toolsets:requested`); emits `toolsets:changed`. Rebuild via an injected invalidator (DI seam, avoids a cycle with session-manager) |
 | `meta-server.ts` | The resident `request_toolset` MCP server (disabled-toolset awareness lives in its tool description) |
-| `selection.ts` | Shared mode-aware selection for mounted capabilities and manual controls |
+| `selection.ts` | Shared mode-aware selection for mounted capabilities and manual controls; explicit conversation exclusions win |
 | `capability-index.ts` | `buildToolsetSection`: guides for the mode's mounted capabilities |
 | `service.ts` | User-initiated open/close/list façade for transport |
 

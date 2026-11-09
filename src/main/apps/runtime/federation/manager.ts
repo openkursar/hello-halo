@@ -538,6 +538,16 @@ export interface FederationManager {
    */
   isMemberReachable(appId: string, teamId?: string): boolean
   /**
+   * Whether a stop request for this member would be sent at all: the office is
+   * present here and the member's owner is neither offline nor suspected-dead,
+   * with a live route when this node hosts the office. Mirrors the stop path's
+   * own refusal rule, unlike {@link isMemberReachable} (a send gate that only
+   * refuses confirmed-offline owners). Dissolution uses this so a peer whose
+   * connection silently dropped is treated as unreachable during the window
+   * before presence marks it offline.
+   */
+  isMemberStopReachable(appId: string, teamId: string): boolean
+  /**
    * The RelayCapture sink: route a flushed activity batch for an owned member.
    * HOSTED here → re-broadcast to the office's other clients (the producing
    * member's events already fired locally, so do NOT apply again). JOINED →
@@ -3664,16 +3674,11 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // Logged with its entity context because the button's own error path only
     // carries a code: without this line a stop that never left the machine
     // leaves no record of WHOSE turn, in which office, went unanswered.
-    const ownerNode = deps.federationStore.getNode(params.officeId, params.ownerNodeId)
-    const host = hosted.get(params.officeId)
-    const noHostRoute =
-      host !== undefined &&
-      !host.nodeToClient.has(params.ownerNodeId) &&
-      !host.nodeToGateway.has(params.ownerNodeId)
-    if (ownerNode?.status === 'offline' || ownerNode?.status === 'suspect' || noHostRoute) {
+    const block = ownerStopBlock(params.officeId, params.ownerNodeId)
+    if (block) {
       console.warn(
         `${LOG_TAG} stop not sent office=${params.officeId} app=${params.appId} ` +
-          `owner=${params.ownerNodeId} status=${ownerNode?.status ?? 'unknown'} route=${noHostRoute ? 'none' : 'ok'}`
+          `owner=${params.ownerNodeId} status=${block.status ?? 'unknown'} route=${block.noRoute ? 'none' : 'ok'}`
       )
       return Promise.reject(new Error(STOP_ERR_OWNER_UNREACHABLE))
     }
@@ -3888,6 +3893,37 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     return false
   }
 
+  /**
+   * Why the stop path refuses this owner: offline, suspected-dead, or (when
+   * this node hosts the office) without a live route. Null when a stop can be
+   * sent. Kept in one place so dissolution's reachability answer cannot drift
+   * from the request's own precondition.
+   */
+  function ownerStopBlock(
+    officeId: string,
+    ownerNodeId: NodeId
+  ): { status: string | undefined; noRoute: boolean } | null {
+    const ownerNode = deps.federationStore.getNode(officeId, ownerNodeId)
+    const host = hosted.get(officeId)
+    const noRoute = host !== undefined && !host.nodeToClient.has(ownerNodeId) && !host.nodeToGateway.has(ownerNodeId)
+    if (ownerNode?.status !== 'offline' && ownerNode?.status !== 'suspect' && !noRoute) return null
+    return { status: ownerNode?.status, noRoute }
+  }
+
+  /**
+   * Whether a stop for this member can be sent from here. Local owners are
+   * always stoppable; a remote one also needs the office present and its owner
+   * not refused by the stop path. Scoped to the asking team because one app can
+   * be a member of several teams with a different owner in each.
+   */
+  function isMemberStopReachable(appId: string, teamId: string): boolean {
+    const member = deps.teamStore.listMembersByAppId(appId).find((m) => m.teamId === teamId)
+    if (!member) return false
+    const ownerNode = member.ownerNodeId
+    if (!ownerNode || ownerNode === SELF_NODE_ID) return true
+    return getOfficeAuthority(teamId) !== null && ownerStopBlock(teamId, ownerNode) === null
+  }
+
   function stopAll(): void {
     clearInterval(livenessTimer)
     clearInterval(healthTimer)
@@ -3922,6 +3958,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     registerTurnComplete,
     isMemberRemoteBusy: (appId) => remoteBusy.isBusy(appId),
     isMemberReachable,
+    isMemberStopReachable,
     relaySink,
     routeAuthorityWrite,
     sendMemberWrite,

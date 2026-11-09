@@ -1,7 +1,7 @@
 /** Usage guides follow the same mode-aware selection as the mounted servers. */
 
 import { getAvailableToolsets } from './registry'
-import { getOpenToolsets } from './state'
+import { getExcludedToolsets, getOpenToolsets } from './state'
 import { isToolsetIncluded } from './selection'
 import type { ToolsetContextMode } from './types'
 
@@ -12,10 +12,16 @@ Explicit tool restrictions, connection settings and caller-specific execution po
 /** Captured once at session creation. */
 export function buildToolsetSection(spaceId: string, conversationId: string, mode: ToolsetContextMode = 'manual'): string {
   const open = getOpenToolsets(spaceId, conversationId)
+  const excluded = getExcludedToolsets(spaceId, conversationId)
+  const available = getAvailableToolsets()
 
   let out = '\n\n' + AUTOMATIC_CONTEXT_GUIDANCE
-  for (const def of getAvailableToolsets()) {
-    if (isToolsetIncluded(def, open, mode) && def.usageGuide) {
+  const excludedNames = available.filter(def => excluded.has(def.id)).map(def => def.displayName)
+  if (excludedNames.length > 0) {
+    out += `\n\nThe following capabilities are excluded from this conversation and unavailable: ${excludedNames.join(', ')}. Do not offer them or ask the user to enable them.`
+  }
+  for (const def of available) {
+    if (isToolsetIncluded(def, open, mode, excluded) && def.usageGuide) {
       out += '\n\n' + def.usageGuide.trim()
     }
   }
