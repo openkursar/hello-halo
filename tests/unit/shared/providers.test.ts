@@ -141,3 +141,31 @@ describe('Standard Compute built-in provider', () => {
     ])
   })
 })
+
+describe('UberLLM built-in provider', () => {
+  it('registers an OpenAI-compatible gateway provider with dynamic model discovery', () => {
+    const provider = getBuiltinProvider('uberllm')
+
+    expect(provider).toMatchObject({
+      id: 'uberllm',
+      authType: 'api-key',
+      apiUrl: 'https://api.uberllm.dev/v1',
+      modelsUrl: 'https://api.uberllm.dev/v1/models',
+      region: 'global'
+    })
+    expect(provider?.recommended).toBeUndefined()
+    expect(getAllProviderIds()).toContain('uberllm')
+  })
+
+  it('defaults to DeepSeek V4.1 Flash, with vendor-prefixed model ids', () => {
+    expect(getDefaultModel('uberllm')).toBe('deepseek/deepseek-v4.1-flash')
+    expect(getBuiltinProvider('uberllm')?.models.map(model => model.id)).toEqual([
+      'deepseek/deepseek-v4.1-flash',
+      'anthropic/claude-sonnet-5.5',
+      'openai/gpt-5.5',
+      'google/gemini-3.5-flash',
+      'z-ai/glm-5.3',
+      'moonshotai/kimi-k3'
+    ])
+  })
+})

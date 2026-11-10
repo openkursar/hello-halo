@@ -465,6 +465,25 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     icon: 'route'
   },
   {
+    id: 'uberllm',
+    name: 'UberLLM',
+    authType: 'api-key',
+    apiUrl: 'https://api.uberllm.dev/v1',
+    modelsUrl: 'https://api.uberllm.dev/v1/models',
+    models: [
+      { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
+      { id: 'anthropic/claude-sonnet-5.5', name: 'Claude Sonnet 5.5' },
+      { id: 'openai/gpt-5.5', name: 'GPT-5.5' },
+      { id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash' },
+      { id: 'z-ai/glm-5.3', name: 'GLM 5.3' },
+      { id: 'moonshotai/kimi-k3', name: 'Kimi K3' }
+    ],
+    description: 'UberLLM OpenAI-compatible LLM gateway',
+    website: 'https://uberllm.dev/',
+    region: 'global',
+    icon: 'route'
+  },
+  {
     id: 'requesty',
     name: 'Requesty',
     authType: 'api-key',

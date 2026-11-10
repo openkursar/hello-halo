@@ -91,6 +91,7 @@ export type BuiltinProviderId =
   | 'atlascloud'
   | 'runcrate'
   | 'standardcompute'
+  | 'uberllm'
   | 'requesty'
   | 'groq'
   | 'mistral'
