@@ -58,8 +58,12 @@ let _pendingServerUrl: string | null = null
  * This is the ONLY way transport learns about the active server URL.
  */
 export function setActiveServerUrl(url: string | null): void {
-  _activeServerUrl = url
-  console.log(`[Transport] Active server URL: ${url ?? 'none'}`)
+  // Strip trailing slashes the same way setServerUrl does. A stored URL like
+  // "http://host:3456/" would otherwise build the socket path "//ws", which the
+  // server's exact `path: '/ws'` match rejects; HTTP tolerates the duplicate
+  // slash, so only the WebSocket fails.
+  _activeServerUrl = url ? url.replace(/\/+$/, '') : null
+  console.log(`[Transport] Active server URL: ${_activeServerUrl ?? 'none'}`)
 }
 
 /**

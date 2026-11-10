@@ -22,8 +22,10 @@ const config: CapacitorConfig = {
       showSpinner: false
     },
     Keyboard: {
-      // Resize content when keyboard appears
-      resize: 'body' as any,
+      // Resize the WebView itself, not document.body. globals.css pins #root
+      // with position: fixed, which ignores body height, so a 'body' resize
+      // never lifts the bottom-anchored composer above the keyboard.
+      resize: 'native' as any,
       resizeOnFullScreen: true
     },
     LocalNotifications: {
