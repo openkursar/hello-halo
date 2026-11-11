@@ -189,7 +189,7 @@ node scripts/acceptance/cli.mjs report --run tests/acceptance/output/run --outpu
 
 `plan` accepts repeated `--module` and `--case` arguments, `--platform`, and
 `--base`/`--head` commit SHAs. No base means a full selection for that profile.
-`run --timeout-ms` bounds execution; the CI helper uses 30 minutes. Live-model and
+`run --timeout-ms` bounds execution; the CI helper gives a run 55 minutes and its stage 60 minutes so an exhausted run can still record and report partial results. Live-model and
 external execution require `--allow-live` and `--allow-external` respectively at planning time plus their declared prerequisites
 and a separately agreed budget. The standard nightly template provides neither
 live credentials nor an implicit live allowance.
@@ -516,6 +516,11 @@ the packaged group receives the verified package path; source test hosts and
 cluster processes explicitly clear it. Every group shares the run's time budget
 and contributes to the same report, including cases that remain blocked or
 unimplemented. Grouping does not reduce the planned coverage.
+
+Cluster node profiles are disposable runtime state. They are excluded from the
+frozen evidence and local archive, including when an interrupted run leaves their
+platform-specific links behind; the driver log, selection and native results stay
+part of the record.
 
 The report records each batch's execution configuration and the build or package
 supplied to it. These records describe the harness input. Tests must still

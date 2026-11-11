@@ -171,6 +171,21 @@ test('source and destination links are rejected without following or modifying t
   assert.equal(fs.readFileSync(path.join(outside, 'secret'), 'utf8'), 'keep outside')
 })
 
+test('transient cluster profiles are excluded instead of being followed or archived', { skip: !posix }, t => {
+  const f = fixture(t)
+  const target = path.join(f.base, 'electron')
+  fs.writeFileSync(target, 'binary')
+  const profile = path.join(f.source, 'run/cluster/federation-none-3/profiles/node-1/Library/Application Support/Halo/headless-electron')
+  fs.mkdirSync(profile, { recursive: true })
+  fs.symlinkSync(target, path.join(profile, 'electron-node'))
+  f.write('run/cluster/federation-none-3/profiles/node-1/profile.log', 'transient runtime log')
+  const result = f.archive()
+  const checked = verifyArchive(result.directory)
+  assert.equal(checked.manifest.files.some(item => item.path.includes('/profiles/')), false)
+  assert.equal(checked.manifest.directories.some(item => item.includes('/profiles')), false)
+  assert.equal(fs.readFileSync(target, 'utf8'), 'binary')
+})
+
 test('a non-regular source entry fails before archival rather than being omitted', { skip: !posix }, async t => {
   const f = fixture(t)
   const server = net.createServer()
