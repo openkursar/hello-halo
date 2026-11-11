@@ -10,6 +10,10 @@ import { browserEnvironment } from './ci-prepare.mjs'
 const root = fs.realpathSync(process.cwd())
 const directory = path.join(root, 'tests/acceptance/output/ci')
 const cli = path.join(root, 'scripts/acceptance/cli.mjs')
+const stageTimeoutMs = 30 * 60 * 1000
+// The stage outlives its run budget so a timed-out run can record and report its partial results.
+const executionTimeoutMs = 55 * 60 * 1000
+const executionStageTimeoutMs = 60 * 60 * 1000
 const stages = []
 const environment = browserEnvironment(process.env)
 for (const name of Object.keys(process.env)) if (!Object.hasOwn(environment, name)) environment[name] = undefined
@@ -27,7 +31,7 @@ function interrupt(signal) {
 const onInterrupt = () => interrupt('SIGINT')
 const onTerminate = () => interrupt('SIGTERM')
 
-async function execute(stage, args, { env = environment, verify, program = cli, accept = [0] } = {}) {
+async function execute(stage, args, { env = environment, verify, program = cli, accept = [0], timeoutMs = stageTimeoutMs } = {}) {
   if (interruption) throw new Error('CI execution was cancelled; no additional stage was started.')
   console.log(`[Acceptance CI] Starting ${stage}.`)
   const record = { stage, startedAt: new Date().toISOString(), finishedAt: null, status: 'running', exitCode: null, signal: null }
@@ -35,7 +39,7 @@ async function execute(stage, args, { env = environment, verify, program = cli, 
   writeEvidenceJson(path.join(directory, 'stages.json'), stages, { mode: 0o640 })
   let result, value, failure
   try {
-    result = await executeProcess(root, [program, ...args], { environment: env, stdio: 'inherit', producerRole: 'ci-stage', timeoutMs: 1800000 })
+    result = await executeProcess(root, [program, ...args], { environment: env, stdio: 'inherit', producerRole: 'ci-stage', timeoutMs })
     if (!interruption && accept.includes(result.code) && !result.timedOut && !result.cleanupFailed && verify) value = verify()
   } catch (error) { failure = error.message }
   record.finishedAt = new Date().toISOString()
@@ -144,8 +148,8 @@ try {
     },
   })
   runStarted = true
-  await execute('acceptance execution', ['run', '--plan', plan, '--output', path.join(directory, 'run'), '--timeout-ms', '1800000'], {
-    env: runEnvironment, accept: [0, 1, 2], verify: () => completedRun(path.join(directory, 'run/run.json')),
+  await execute('acceptance execution', ['run', '--plan', plan, '--output', path.join(directory, 'run'), '--timeout-ms', String(executionTimeoutMs)], {
+    env: runEnvironment, accept: [0, 1, 2], timeoutMs: executionStageTimeoutMs, verify: () => completedRun(path.join(directory, 'run/run.json')),
   })
   await execute('report generation', ['report', '--run', path.join(directory, 'run'), '--output', path.join(directory, 'report')])
   outcome = 'passed'
