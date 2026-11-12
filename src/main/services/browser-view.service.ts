@@ -149,6 +149,9 @@ class BrowserPageManager {
   // Last visible bounds per view — used to restore position after policy-block hide.
   private lastBounds: Map<string, BrowserViewBounds> = new Map()
 
+  // Whether mouse-to-touch emulation is currently enabled on a view (#443).
+  private touchCursorEmulation = new Map<string, boolean>()
+
   private destroyedListeners: Set<(viewId: string, webContentsId?: number) => void> = new Set()
 
   // Debounce timers for state change events
@@ -564,6 +567,7 @@ class BrowserPageManager {
     this.views.delete(viewId)
     this.states.delete(viewId)
     this.lastBounds.delete(viewId)
+    this.touchCursorEmulation.delete(viewId)
     this.pendingCreates.delete(viewId)
     browserHostManager.destroy(viewId)
 
@@ -784,7 +788,38 @@ class BrowserPageManager {
     const contents = this.views.get(viewId)?.webContents
     // Standard webviews inherit host zoom; page zoom must remain independent of UI scale.
     if (contents && !contents.isDestroyed() && state && contents.getZoomFactor() !== state.zoomLevel) contents.setZoomFactor(state.zoomLevel)
-    return browserHostManager.present(viewId, this.resolveBounds(viewId, bounds), visible && !state?.blockedByPolicy, state?.deviceMode === 'h5' ? H5_VIEWPORT_WIDTH : undefined)
+    const shown = visible && !state?.blockedByPolicy
+    this.syncTouchCursorEmulation(viewId, shown)
+    return browserHostManager.present(viewId, this.resolveBounds(viewId, bounds), shown, state?.deviceMode === 'h5' ? H5_VIEWPORT_WIDTH : undefined)
+  }
+
+  /**
+   * Mouse-to-touch emulation paints its dot cursor over the whole window the
+   * moment it is enabled — even on a page the user cannot see — and only
+   * Disable() lifts it again (issue #443). So it runs only while an h5 page is
+   * actually visible; hidden h5 pages get direct touch events instead
+   * (needsDirectTouchInput).
+   */
+  private syncTouchCursorEmulation(viewId: string, visible: boolean): void {
+    const desired = visible && this.states.get(viewId)?.deviceMode === 'h5'
+    if ((this.touchCursorEmulation.get(viewId) ?? false) === desired) return
+    const contents = this.views.get(viewId)?.webContents
+    if (!contents || contents.isDestroyed() || !contents.debugger.isAttached()) return
+    this.touchCursorEmulation.set(viewId, desired)
+    contents.debugger.sendCommand('Emulation.setEmitTouchEventsForMouse', {
+      enabled: desired,
+      configuration: desired ? 'mobile' : 'desktop',
+    }).catch(error => {
+      // The page's real state is unknown — forget the record so the next sync retries.
+      if (this.touchCursorEmulation.get(viewId) === desired) this.touchCursorEmulation.delete(viewId)
+      if (!contents.isDestroyed()) console.warn(`[Browser] setEmitTouchEventsForMouse failed: viewId=${viewId}`, error)
+    })
+  }
+
+  /** True when synthetic mouse input on this page must be dispatched as touch events. */
+  needsDirectTouchInput(viewId: string): boolean {
+    if (!viewId || this.states.get(viewId)?.deviceMode !== 'h5') return false
+    return this.touchCursorEmulation.get(viewId) !== true
   }
 
   /**
@@ -891,6 +926,7 @@ class BrowserPageManager {
     this.views.delete(viewId)
     this.states.delete(viewId)
     this.lastBounds.delete(viewId)
+    this.touchCursorEmulation.delete(viewId)
     if (this.activeViewId === viewId) {
       this.activeViewId = null
     }
@@ -1025,14 +1061,11 @@ class BrowserPageManager {
       // Viewport + mobile rendering flag
       await wc.debugger.sendCommand('Emulation.setDeviceMetricsOverride', metrics)
 
-      // Touch events
+      // Touch capability is set unconditionally; mouse-to-touch conversion is
+      // visibility-gated (see syncTouchCursorEmulation).
       await wc.debugger.sendCommand('Emulation.setTouchEmulationEnabled', {
         enabled: isH5,
         maxTouchPoints: isH5 ? 5 : 0,
-      })
-      await wc.debugger.sendCommand('Emulation.setEmitTouchEventsForMouse', {
-        enabled: isH5,
-        configuration: isH5 ? 'mobile' : 'desktop',
       })
 
       // CSS media features — hover and pointer must be set explicitly;
@@ -1048,6 +1081,8 @@ class BrowserPageManager {
               { name: 'pointer', value: 'fine' },
             ],
       })
+
+      this.syncTouchCursorEmulation(viewId, browserHostManager.isVisible(viewId))
 
     } catch (error) {
       // CDP errors are non-fatal at creation time (debugger may not be ready yet
