@@ -4,7 +4,7 @@ Thanks for your interest in contributing to Halo! This guide will help you get s
 
 ## About This Project
 
-**Note**: This is a personal hobby project built for self-use and friends. Updates and PR merges happen whenever I find time (usually weekends, but no promises - life happens! 😄).
+**Note**: This project is 100% AI-generated under human direction. Issues are reported by users in our WeChat / WeCom groups and filed automatically after a Halo Digital Human discusses them with the user. Pull requests are reviewed by the Halo AI Team.
 
 ## Development Setup
 
@@ -161,7 +161,7 @@ Then create a PR on GitHub:
 
 ### 7. Review Process
 
-- Maintainers will review your code
+- The Halo AI Team reviews your pull request
 - Address any feedback if requested
 - Once approved, maintainers will merge and handle final testing/building
 
