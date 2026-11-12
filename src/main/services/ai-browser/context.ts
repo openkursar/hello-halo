@@ -603,11 +603,15 @@ export class BrowserContext implements BrowserContextInterface {
     const sender: BrowserInputCommandSender = (command, commandParams, childSession) =>
       this.sendCDPCommand(command, commandParams, CDP_TIMEOUT, childSession)
     const target = this.pageTarget.getStore()
+    // An h5 page without mouse-to-touch emulation (hidden or policy-blocked) must
+    // receive AI clicks as touch events (#443).
+    const viewId = target?.viewId ?? this.activeViewId
+    const emulateTouch = () => !!viewId && browserViewManager.needsDirectTouchInput(viewId)
     if (target) {
-      target.input ??= new BrowserInputOperation(webContents, sender, assertOriginalPage)
+      target.input ??= new BrowserInputOperation(webContents, sender, assertOriginalPage, emulateTouch)
       return target.input.dispatch(method, params, sessionId)
     }
-    const input = new BrowserInputOperation(webContents, sender, assertOriginalPage)
+    const input = new BrowserInputOperation(webContents, sender, assertOriginalPage, emulateTouch)
     try {
       await input.dispatch(method, params, sessionId)
     } finally {

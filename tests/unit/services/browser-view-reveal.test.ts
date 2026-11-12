@@ -82,6 +82,34 @@ describe('browser manager and persistent carrier', () => {
     expect(host.create).toHaveBeenCalledTimes(2)
   })
 
+  it('enables mouse-to-touch emulation only while an h5 page is visible', async () => {
+    await manager.create('h5page', 'https://example.com', { deviceMode: 'h5' })
+    const guest = guests.get('h5page')!
+    guest.debugger.isAttached = vi.fn(() => true)
+    guest.debugger.sendCommand.mockClear()
+
+    manager.show('h5page', BOUNDS)
+    expect(guest.debugger.sendCommand).toHaveBeenCalledWith('Emulation.setEmitTouchEventsForMouse', { enabled: true, configuration: 'mobile' })
+    expect(manager.needsDirectTouchInput('h5page')).toBe(false)
+
+    guest.debugger.sendCommand.mockClear()
+    manager.hide('h5page')
+    expect(guest.debugger.sendCommand).toHaveBeenCalledWith('Emulation.setEmitTouchEventsForMouse', { enabled: false, configuration: 'desktop' })
+    expect(manager.needsDirectTouchInput('h5page')).toBe(true)
+  })
+
+  it('never enables mouse-to-touch emulation for a pc page', async () => {
+    await manager.create('pcpage', 'https://example.com')
+    const guest = guests.get('pcpage')!
+    guest.debugger.isAttached = vi.fn(() => true)
+    guest.debugger.sendCommand.mockClear()
+
+    manager.show('pcpage', BOUNDS)
+    manager.hide('pcpage')
+    expect(guest.debugger.sendCommand).not.toHaveBeenCalledWith('Emulation.setEmitTouchEventsForMouse', expect.anything())
+    expect(manager.needsDirectTouchInput('pcpage')).toBe(false)
+  })
+
   it('uses the host creation contract for unattended pages and never transfers a guest', async () => {
     await manager.create('automation', 'https://example.com', { offscreen: true })
     expect(host.create).toHaveBeenCalledWith('automation', true)
