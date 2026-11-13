@@ -1,0 +1,79 @@
+[
+  {
+    "name": "empty",
+    "sections": [],
+    "expected": null
+  },
+  {
+    "name": "empty-sections",
+    "sections": [
+      {
+        "text": null
+      },
+      {
+        "text": ""
+      },
+      {
+        "label": "Jobs",
+        "items": []
+      }
+    ],
+    "expected": null
+  },
+  {
+    "name": "single",
+    "sections": [
+      {
+        "text": "New information."
+      }
+    ],
+    "expected": {
+      "role": "user",
+      "content": "<system-reminder>\nNew information.\n</system-reminder>",
+      "isMeta": true
+    }
+  },
+  {
+    "name": "combined",
+    "sections": [
+      {
+        "label": "Background tasks",
+        "items": [
+          "First completed",
+          "Second failed"
+        ]
+      },
+      {
+        "text": "The user updated the goal."
+      },
+      {
+        "label": "Other",
+        "items": []
+      }
+    ],
+    "expected": {
+      "role": "user",
+      "content": "<system-reminder>\nBackground tasks:\n- First completed\n- Second failed\n\nThe user updated the goal.\n</system-reminder>",
+      "isMeta": true
+    }
+  },
+  {
+    "name": "whitespace",
+    "sections": [
+      {
+        "text": " "
+      },
+      {
+        "label": "Facts",
+        "items": [
+          "line one\nline two"
+        ]
+      }
+    ],
+    "expected": {
+      "role": "user",
+      "content": "<system-reminder>\n \n\nFacts:\n- line one\nline two\n</system-reminder>",
+      "isMeta": true
+    }
+  }
+]

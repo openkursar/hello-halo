@@ -1,0 +1,40 @@
+{
+  "history.jsonl.line_limit": {
+    "text": "Transcript record exceeds the 32 MiB limit",
+    "slots": []
+  },
+  "history.page.pagination": {
+    "text": "History pagination requires a nonnegative offset and a limit from 0 to 4096",
+    "slots": []
+  },
+  "history.page.default_limit": {
+    "text": "History exceeds the default page limit. Supply limit and offset.",
+    "slots": []
+  },
+  "history.page.byte_limit": {
+    "text": "History page exceeds 64 MiB. Request a smaller limit.",
+    "slots": []
+  },
+  "history.admin.invalid_cwd": {
+    "text": "cwd.replace is not a function",
+    "slots": []
+  },
+  "history.admin.null_metadata": {
+    "text": "Cannot read properties of null (reading 'title')",
+    "slots": []
+  },
+  "history.admin.worktrees_unsupported": {
+    "text": "listSessions({ includeWorktrees: true }) is not supported. List each worktree explicitly with cwd.",
+    "slots": []
+  },
+  "history.admin.fork_anchor_missing": {
+    "text": "Requested fork message was not found in session history",
+    "slots": []
+  },
+  "history.admin.unknown_operation": {
+    "text": "Unknown history operation: {name}",
+    "slots": [
+      "name"
+    ]
+  }
+}

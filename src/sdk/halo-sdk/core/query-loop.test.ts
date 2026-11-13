@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { queryLoop } from './query-loop.js';
+import { queryLoop } from '../index.js';
 import type { SDKMessage } from './query-types.js';
 import type {
   LlmProvider,
@@ -1532,15 +1532,10 @@ describe('queryLoop — tool scheduling', () => {
 
     const msgs = await drain(queryLoop(makeConfig({ maxTurns: 2 }), provider, tools, 'go'));
 
-    const toolResultMsg = msgs.find(
-      (m) =>
-        m.type === 'user' &&
-        Array.isArray((m as never as { message: { content: unknown } }).message.content) &&
-        ((m as never as { message: { content: Array<{ type: string }> } }).message.content)[0]?.type ===
-          'tool_result',
-    ) as never as { message: { content: Array<{ tool_use_id: string }> } };
+    const toolResults = msgs.flatMap(message => message.type === 'user' && Array.isArray(message.message.content)
+      ? message.message.content.filter(block => block.type === 'tool_result') : []);
 
-    expect(toolResultMsg.message.content.map((b) => b.tool_use_id)).toEqual([
+    expect(toolResults.map(block => block.tool_use_id)).toEqual([
       'toolu_0',
       'toolu_1',
       'toolu_2',

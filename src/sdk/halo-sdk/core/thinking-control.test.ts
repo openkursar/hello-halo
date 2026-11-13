@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createSession } from './session.js';
+import { createSession } from '../index.js';
 import type { Options } from '../types/config.js';
 import type { LlmProvider, ProviderRequest } from '../types/provider.js';
 

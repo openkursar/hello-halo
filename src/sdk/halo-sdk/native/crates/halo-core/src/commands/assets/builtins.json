@@ -1,0 +1,76 @@
+{
+  "commands": [
+    {
+      "type": "local",
+      "name": "clear",
+      "description": "Start with an empty conversation while keeping the current session settings",
+      "aliases": [
+        "reset",
+        "new"
+      ],
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "compact",
+      "description": "Condense earlier messages through the session compaction handler, with optional handover requirements",
+      "argumentHint": "[instructions]",
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "context",
+      "description": "Summarize the session model, message count, and estimated context size",
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "cost",
+      "description": "Report spending, elapsed time, and token counts accumulated from completed turns",
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "help",
+      "description": "List callable session commands with their argument hints and descriptions",
+      "source": "builtin"
+    },
+    {
+      "type": "prompt",
+      "name": "init",
+      "description": "Inspect this repository and prepare or improve its AGENTS.md working guide",
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "mcp",
+      "description": "Show MCP server connection status",
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "model",
+      "description": "Set the AI model",
+      "argumentHint": "[model]",
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "status",
+      "description": "Inspect this session, its model and working directory, history size, and MCP connections",
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "usage",
+      "description": "Report token totals and completed turns for this session",
+      "source": "builtin"
+    }
+  ],
+  "initMessages": [
+    {
+      "role": "user",
+      "content": "Produce a compact repository handover in AGENTS.md for an agent making its next change here.\n\nBegin with the instructions already maintained by the project, including editor and assistant configuration. Read AGENTS.md if it exists. Keep valid requirements, resolve claims against the implementation, and identify uncertainty instead of inventing a policy.\n\nUse the README, build or package configuration, and representative entry points as evidence. The guide should answer three practical questions: Where does a change belong and which dependency boundaries must it respect? What project-specific constraints could a newcomer miss? How does the project prepare, build, and verify changes, including a focused test when one is available?\n\nWrite concrete commands and paths only after checking them. Explain the reason for an important boundary, but omit a file inventory, generic engineering advice, and material already adequately covered by existing instructions. Improve an existing guide in place; for a new file, use \"# AGENTS.md\" as its heading and explain its purpose briefly. The result should be short enough to consult before beginning a task."
+    }
+  ]
+}

@@ -16,33 +16,44 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./native": {
+      "types": "./dist/native/index.d.ts",
+      "module-sync": "./dist/native/index.js",
+      "import": "./dist/native/index.js"
+    },
     "./worker": {
       "types": "./dist/worker/index.d.ts",
+      "module-sync": "./dist/worker/index.js",
       "import": "./dist/worker/index.js"
     },
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "module-sync": "./dist/index.js",
+      "import": "./dist/index.js"
     },
     "./collaboration": {
-      "types": "./dist/collaboration/index.d.ts",
-      "import": "./dist/collaboration/index.js"
+      "types": "./dist/native/collaboration.d.ts",
+      "module-sync": "./dist/native/collaboration.js",
+      "import": "./dist/native/collaboration.js"
     },
     "./collaboration/turn-gate": {
-      "types": "./dist/collaboration/turn-gate.d.ts",
-      "import": "./dist/collaboration/turn-gate.js"
+      "types": "./dist/native/turn-gate.d.ts",
+      "module-sync": "./dist/native/turn-gate.js",
+      "import": "./dist/native/turn-gate.js"
     },
     "./collaboration/protocol": {
       "types": "./dist/collaboration/protocol.d.ts",
       "import": "./dist/collaboration/protocol.js"
     },
     "./collaboration/sdk": {
-      "types": "./dist/collaboration/sdk/index.d.ts",
-      "import": "./dist/collaboration/sdk/index.js"
+      "types": "./dist/native/collaboration-sdk.d.ts",
+      "module-sync": "./dist/native/collaboration-sdk.js",
+      "import": "./dist/native/collaboration-sdk.js"
     },
     "./collaboration/workspaces": {
-      "types": "./dist/collaboration/workspaces.d.ts",
-      "import": "./dist/collaboration/workspaces.js"
+      "types": "./dist/native/collaboration-workspaces.d.ts",
+      "module-sync": "./dist/native/collaboration-workspaces.js",
+      "import": "./dist/native/collaboration-workspaces.js"
     }
   },
   "files": [
@@ -64,18 +75,19 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "npm run clean && tsc && node scripts/build-worker.mjs",
-    "dev": "tsc --watch",
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/generate-native-text.mjs && tsc --watch",
     "prepack": "npm run build",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "typecheck": "node scripts/generate-native-text.mjs && tsc --noEmit",
+    "test": "node scripts/generate-native-text.mjs && vitest run",
+    "test:watch": "node scripts/generate-native-text.mjs && vitest",
     "test:resources": "node validation/run.mjs --profile smoke",
     "test:resource-harness": "node --test validation/*.test.mjs",
     "test:resources:live": "node validation/run.mjs --profile smoke --live",
     "test:resources:soak": "node validation/run.mjs --profile soak --live",
-    "benchmark:workers": "node scripts/benchmark-workers.mjs"
+    "benchmark:workers": "node scripts/benchmark-workers.mjs",
+    "build:native": "node scripts/build-native.mjs"
   },
   "engines": {
     "node": ">=20.0.0"

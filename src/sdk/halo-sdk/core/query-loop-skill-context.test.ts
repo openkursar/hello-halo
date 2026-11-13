@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { queryLoop } from './query-loop.js';
+import { queryLoop } from '../index.js';
 import { SkillTool } from '../tools/skill/index.js';
 import { buildSkillContextMessage } from '../prompt/skill-context.js';
 import type { SDKMessage } from './query-types.js';

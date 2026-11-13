@@ -13,6 +13,7 @@ export async function writeReport(report, directory) {
     `Provider protocol: ${report.settings.live ? cell(report.settings.providerType ?? 'anthropic') : 'openai-compat'}. Endpoint: ${report.settings.live ? cell(report.settings.baseUrl ?? 'https://api.deepseek.com/anthropic') : 'local fixture'}. Thinking: ${cell(report.settings.thinking ?? 'disabled')}. Effort: ${cell(report.settings.effort ?? 'SDK default')}. Maximum output tokens: ${report.settings.maxOutputTokens ?? 2048}.`,
     `Run: ${cell(report.startedAt)} to ${cell(report.finishedAt)}.`,
     `Source: ${cell(report.source.head)}; copied-source SHA-256: ${cell(report.source.snapshotSha256)}.`, '',
+    `Native build: ${cell(report.source.native?.buildId)}; ABI: ${cell(report.source.native?.abiVersion)}.`, '',
     `Requested load: ${report.settings.concurrency} concurrent sessions, at least ${report.settings.rounds} rounds and ${report.settings.durationSeconds} seconds; minimum batch interval ${report.settings.roundIntervalSeconds ?? 0} seconds.`, '',
     '| Scenario | Result | Completed rounds | Tool calls |',
     '|---|---|---:|---:|',
@@ -22,6 +23,7 @@ export async function writeReport(report, directory) {
     lines.push(`| ${cell(scenario.scenario)} | ${scenario.passed ? 'PASS' : 'FAIL'} | ${checks?.rounds ?? '—'} | ${checks?.toolCalls ?? '—'} |`);
   }
   for (const scenario of report.scenarios) {
+    if (scenario.runtime) lines.push('', `${cell(scenario.scenario)} observed runtime: ${cell(scenario.runtime.implementation)}, build ${cell(scenario.runtime.buildId)}.`);
     if (scenario.resources) {
       const { observed, limits, unsupported } = scenario.resources;
       lines.push('', `## ${cell(scenario.scenario)} resources`, '',

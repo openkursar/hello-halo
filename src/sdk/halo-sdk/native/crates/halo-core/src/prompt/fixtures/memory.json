@@ -1,0 +1,122 @@
+[
+  {
+    "sources": [
+      "user",
+      "project",
+      "local"
+    ],
+    "files": {
+      "home/.claude/AGENTS.md": " user rule  ",
+      "extra/AGENTS.md": " configured rule ",
+      "home/AGENTS.md": "home rule",
+      "home/work/AGENTS.md": "project rule",
+      "home/work/.agents/CLAUDE.md": " nested rule ",
+      "home/work/CLAUDE.md": "\n \n"
+    },
+    "raw": "user rule\n\nconfigured rule\n\nproject rule\n\nnested rule\n\nhome rule",
+    "annotated": "These instruction files describe the user's preferences and this project's working rules. Apply relevant requirements when planning and carrying out the task; they take precedence over the agent's usual defaults.\n\nContents of <root>/home/.claude/AGENTS.md (user settings):\n\nuser rule\n\nContents of <root>/extra/AGENTS.md (parent project instructions):\n\nconfigured rule\n\nContents of <root>/home/work/AGENTS.md (instructions in the working project):\n\nproject rule\n\nContents of <root>/home/work/.agents/CLAUDE.md (instructions in the working project):\n\nnested rule\n\nContents of <root>/home/AGENTS.md (user settings):\n\nhome rule",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "<system-reminder>\n# memory\nThese instruction files describe the user's preferences and this project's working rules. Apply relevant requirements when planning and carrying out the task; they take precedence over the agent's usual defaults.\n\nContents of <root>/home/.claude/AGENTS.md (user settings):\n\nuser rule\n\nContents of <root>/extra/AGENTS.md (parent project instructions):\n\nconfigured rule\n\nContents of <root>/home/work/AGENTS.md (instructions in the working project):\n\nproject rule\n\nContents of <root>/home/work/.agents/CLAUDE.md (instructions in the working project):\n\nnested rule\n\nContents of <root>/home/AGENTS.md (user settings):\n\nhome rule\n# currentDate\nToday's date is <date>.\n\nUse this background information when it affects the request. It does not call for a separate reply or acknowledgement.\n</system-reminder>"
+        }
+      ]
+    }
+  },
+  {
+    "sources": [
+      "user"
+    ],
+    "files": {
+      "home/.claude/AGENTS.md": " user rule  ",
+      "extra/AGENTS.md": " configured rule ",
+      "home/AGENTS.md": "home rule",
+      "home/work/AGENTS.md": "project rule",
+      "home/work/.agents/CLAUDE.md": " nested rule ",
+      "home/work/CLAUDE.md": "\n \n"
+    },
+    "raw": "user rule\n\nconfigured rule",
+    "annotated": "These instruction files describe the user's preferences and this project's working rules. Apply relevant requirements when planning and carrying out the task; they take precedence over the agent's usual defaults.\n\nContents of <root>/home/.claude/AGENTS.md (user settings):\n\nuser rule\n\nContents of <root>/extra/AGENTS.md (parent project instructions):\n\nconfigured rule",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "<system-reminder>\n# memory\nThese instruction files describe the user's preferences and this project's working rules. Apply relevant requirements when planning and carrying out the task; they take precedence over the agent's usual defaults.\n\nContents of <root>/home/.claude/AGENTS.md (user settings):\n\nuser rule\n\nContents of <root>/extra/AGENTS.md (parent project instructions):\n\nconfigured rule\n# currentDate\nToday's date is <date>.\n\nUse this background information when it affects the request. It does not call for a separate reply or acknowledgement.\n</system-reminder>"
+        }
+      ]
+    }
+  },
+  {
+    "sources": [
+      "project"
+    ],
+    "files": {
+      "home/.claude/AGENTS.md": " user rule  ",
+      "extra/AGENTS.md": " configured rule ",
+      "home/AGENTS.md": "home rule",
+      "home/work/AGENTS.md": "project rule",
+      "home/work/.agents/CLAUDE.md": " nested rule ",
+      "home/work/CLAUDE.md": "\n \n"
+    },
+    "raw": "project rule\n\nnested rule\n\nhome rule\n\nuser rule",
+    "annotated": "These instruction files describe the user's preferences and this project's working rules. Apply relevant requirements when planning and carrying out the task; they take precedence over the agent's usual defaults.\n\nContents of <root>/home/work/AGENTS.md (instructions in the working project):\n\nproject rule\n\nContents of <root>/home/work/.agents/CLAUDE.md (instructions in the working project):\n\nnested rule\n\nContents of <root>/home/AGENTS.md (user settings):\n\nhome rule\n\nContents of <root>/home/.claude/AGENTS.md (user settings):\n\nuser rule",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "<system-reminder>\n# memory\nThese instruction files describe the user's preferences and this project's working rules. Apply relevant requirements when planning and carrying out the task; they take precedence over the agent's usual defaults.\n\nContents of <root>/home/work/AGENTS.md (instructions in the working project):\n\nproject rule\n\nContents of <root>/home/work/.agents/CLAUDE.md (instructions in the working project):\n\nnested rule\n\nContents of <root>/home/AGENTS.md (user settings):\n\nhome rule\n\nContents of <root>/home/.claude/AGENTS.md (user settings):\n\nuser rule\n# currentDate\nToday's date is <date>.\n\nUse this background information when it affects the request. It does not call for a separate reply or acknowledgement.\n</system-reminder>"
+        }
+      ]
+    }
+  },
+  {
+    "sources": [],
+    "files": {
+      "home/.claude/AGENTS.md": " user rule  ",
+      "extra/AGENTS.md": " configured rule ",
+      "home/AGENTS.md": "home rule",
+      "home/work/AGENTS.md": "project rule",
+      "home/work/.agents/CLAUDE.md": " nested rule ",
+      "home/work/CLAUDE.md": "\n \n"
+    },
+    "raw": null,
+    "annotated": null,
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "<system-reminder>\n# currentDate\nToday's date is <date>.\n\nUse this background information when it affects the request. It does not call for a separate reply or acknowledgement.\n</system-reminder>"
+        }
+      ]
+    }
+  },
+  {
+    "sources": [
+      "local"
+    ],
+    "files": {
+      "home/.claude/AGENTS.md": " user rule  ",
+      "extra/AGENTS.md": " configured rule ",
+      "home/AGENTS.md": "home rule",
+      "home/work/AGENTS.md": "project rule",
+      "home/work/.agents/CLAUDE.md": " nested rule ",
+      "home/work/CLAUDE.md": "\n \n"
+    },
+    "raw": "project rule\n\nnested rule\n\nhome rule\n\nuser rule",
+    "annotated": "These instruction files describe the user's preferences and this project's working rules. Apply relevant requirements when planning and carrying out the task; they take precedence over the agent's usual defaults.\n\nContents of <root>/home/work/AGENTS.md (instructions in the working project):\n\nproject rule\n\nContents of <root>/home/work/.agents/CLAUDE.md (instructions in the working project):\n\nnested rule\n\nContents of <root>/home/AGENTS.md (user settings):\n\nhome rule\n\nContents of <root>/home/.claude/AGENTS.md (user settings):\n\nuser rule",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "<system-reminder>\n# memory\nThese instruction files describe the user's preferences and this project's working rules. Apply relevant requirements when planning and carrying out the task; they take precedence over the agent's usual defaults.\n\nContents of <root>/home/work/AGENTS.md (instructions in the working project):\n\nproject rule\n\nContents of <root>/home/work/.agents/CLAUDE.md (instructions in the working project):\n\nnested rule\n\nContents of <root>/home/AGENTS.md (user settings):\n\nhome rule\n\nContents of <root>/home/.claude/AGENTS.md (user settings):\n\nuser rule\n# currentDate\nToday's date is <date>.\n\nUse this background information when it affects the request. It does not call for a separate reply or acknowledgement.\n</system-reminder>"
+        }
+      ]
+    }
+  }
+]

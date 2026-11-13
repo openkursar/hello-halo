@@ -1,0 +1,326 @@
+[
+  {
+    "name": "spawn_agent",
+    "description": {
+      "$harness": "collaboration.tools.spawn_agent.description"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.spawn_agent.fields.prompt.description"
+          },
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.spawn_agent.fields.name.description"
+          },
+          "minLength": 1
+        },
+        "cwd": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.spawn_agent.fields.cwd.description"
+          },
+          "minLength": 1
+        },
+        "isolation": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.spawn_agent.fields.isolation.description"
+          },
+          "enum": [
+            "worktree"
+          ],
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "prompt"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  },
+  {
+    "name": "team_send",
+    "description": {
+      "$harness": "collaboration.tools.team_send.description"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_send.fields.to.description"
+          },
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_send.fields.message.description"
+          },
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "to",
+        "message"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  },
+  {
+    "name": "team_read_board",
+    "description": {
+      "$harness": "collaboration.tools.team_read_board.description"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mine": {
+          "type": "boolean",
+          "description": {
+            "$harness": "collaboration.tools.team_read_board.fields.mine.description"
+          }
+        },
+        "status": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_read_board.fields.status.description"
+          },
+          "enum": [
+            "pending",
+            "in_progress",
+            "done",
+            "rejected",
+            "blocked"
+          ],
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "team_read_member",
+    "description": {
+      "$harness": "collaboration.tools.team_read_member.description"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "member": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_read_member.fields.member.description"
+          },
+          "minLength": 1
+        },
+        "before": {
+          "type": "integer",
+          "description": {
+            "$harness": "collaboration.tools.team_read_member.fields.before.description"
+          },
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "member"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "team_post_finding",
+    "description": {
+      "$harness": "collaboration.tools.team_post_finding.description"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_post_finding.fields.content.description"
+          },
+          "minLength": 1
+        },
+        "ref": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_post_finding.fields.ref.description"
+          },
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  },
+  {
+    "name": "team_read_artifact",
+    "description": {
+      "$harness": "collaboration.tools.team_read_artifact.description"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_read_artifact.fields.ref.description"
+          },
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "ref"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "team_post_task",
+    "description": {
+      "$harness": "collaboration.tools.team_post_task.description"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_post_task.fields.title.description"
+          },
+          "minLength": 1
+        },
+        "assignee": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_post_task.fields.assignee.description"
+          },
+          "minLength": 1
+        },
+        "parentId": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_post_task.fields.parent_id.description"
+          },
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "assignee"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  },
+  {
+    "name": "team_update_task",
+    "description": {
+      "$harness": "collaboration.tools.team_update_task.description"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_update_task.fields.task_id.description"
+          },
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_update_task.fields.status.description"
+          },
+          "enum": [
+            "pending",
+            "in_progress",
+            "done",
+            "rejected",
+            "blocked"
+          ],
+          "minLength": 1
+        },
+        "resultRef": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_update_task.fields.result_ref.description"
+          },
+          "minLength": 1
+        },
+        "note": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_update_task.fields.note.description"
+          },
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "taskId",
+        "status"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  },
+  {
+    "name": "team_stop",
+    "description": {
+      "$harness": "collaboration.tools.team_stop.description"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "string",
+          "description": {
+            "$harness": "collaboration.tools.team_stop.fields.to.description"
+          },
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "to"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  }
+]

@@ -1,0 +1,222 @@
+{
+  "tools.grep.lower_bound": {
+    "text": "at least ",
+    "slots": []
+  },
+  "tools.search.missing_pattern": {
+    "text": "pattern is required",
+    "slots": []
+  },
+  "tools.glob.directory_missing": {
+    "text": "Directory not found: {path}",
+    "slots": [
+      "path"
+    ]
+  },
+  "tools.glob.not_directory": {
+    "text": "Not a directory: {path}",
+    "slots": [
+      "path"
+    ]
+  },
+  "tools.search.denied": {
+    "text": "Permission to read {path} has been denied.",
+    "slots": [
+      "path"
+    ]
+  },
+  "tools.glob.failed": {
+    "text": "Glob failed: {error}",
+    "slots": [
+      "error"
+    ]
+  },
+  "tools.glob.aborted": {
+    "text": "Operation was aborted",
+    "slots": []
+  },
+  "tools.glob.no_files": {
+    "text": "No files matched pattern \"{pattern}\" in {path}",
+    "slots": [
+      "pattern",
+      "path"
+    ]
+  },
+  "tools.glob.truncated": {
+    "text": "\n... and {omitted} more files (showing first 250 of {total}, sorted by most recent modification). Narrow the pattern or search a subdirectory to see the rest.\n",
+    "slots": [
+      "omitted",
+      "total"
+    ]
+  },
+  "tools.grep.unavailable": {
+    "text": "Content search is unavailable: ripgrep (rg) could not be started from the session PATH. Use Glob to find files and Read to inspect them, or search with a shell command.",
+    "slots": []
+  },
+  "tools.grep.failed": {
+    "text": "Grep failed: {error}",
+    "slots": [
+      "error"
+    ]
+  },
+  "tools.grep.aborted": {
+    "text": "Grep failed: Grep aborted",
+    "slots": []
+  },
+  "tools.grep.exit": {
+    "text": "Grep failed: rg exit code {code}{signal}: {error}",
+    "slots": [
+      "code",
+      "signal",
+      "error"
+    ]
+  },
+  "tools.grep.no_matches": {
+    "text": "No matches found for pattern \"{pattern}\" in {path}. Check the pattern syntax (ripgrep regex), broaden the pattern, or search a different path.",
+    "slots": [
+      "pattern",
+      "path"
+    ]
+  },
+  "tools.grep.pagination": {
+    "text": "\n\n[Showing lines {first}-{last} of {lower_bound}{total} matching lines. Use offset={last} to continue, or narrow the search with a more specific pattern, glob, type, or path.]",
+    "slots": [
+      "first",
+      "last",
+      "lower_bound",
+      "total"
+    ]
+  },
+  "tools.grep.recovery": {
+    "text": "Narrow the pattern or path, or use head_limit and offset to request a smaller page.",
+    "slots": []
+  },
+  "tools.code_search.ranked": {
+    "text": "Ranked code candidates; coverage is not exhaustive. Freshness: {freshness}.",
+    "slots": [
+      "freshness"
+    ]
+  },
+  "tools.code_search.snippet_shortened": {
+    "text": "\n[Snippet shortened; use Read for the surrounding source.]",
+    "slots": []
+  },
+  "tools.code_search.no_candidates": {
+    "text": "No candidates were returned. Try a different question or use Grep with an exact clue.",
+    "slots": []
+  },
+  "tools.unknown": {
+    "text": "Unknown tool: {name}",
+    "slots": [
+      "name"
+    ]
+  },
+  "tools.code_search.cancelled": {
+    "text": "Code search was cancelled.",
+    "slots": []
+  },
+  "tools.code_search.unsupported_backend": {
+    "text": "Unsupported code search backend.",
+    "slots": []
+  },
+  "tools.code_search.invalid_timeout": {
+    "text": "Code search timeouts must be positive milliseconds, at most 900000.",
+    "slots": []
+  },
+  "tools.code_search.invalid_query": {
+    "text": "Provide a query of 1–2000 characters and a result limit of 1–20.",
+    "slots": []
+  },
+  "tools.code_search.missing_workspace": {
+    "text": "Code search requires a workspace directory.",
+    "slots": []
+  },
+  "tools.code_search.read_denied": {
+    "text": "CodeSearch cannot index this workspace while read restrictions overlap it. Use Grep for permission-aware exact searches.",
+    "slots": []
+  },
+  "tools.code_search.cache_overlap": {
+    "text": "The code search cache must be outside the indexed workspace.",
+    "slots": []
+  },
+  "tools.code_search.busy": {
+    "text": "Code search workers are busy. Use Grep or try again after another search finishes.",
+    "slots": []
+  },
+  "tools.code_search.queue_limit": {
+    "text": "Too many code searches are waiting for this workspace.",
+    "slots": []
+  },
+  "tools.code_search.released": {
+    "text": "The code search resource has been released.",
+    "slots": []
+  },
+  "tools.code_search.timeout": {
+    "text": "Code search exceeded its time limit and was stopped.",
+    "slots": []
+  },
+  "tools.code_search.worker_exited": {
+    "text": "The code search worker exited before completing its request (unknown).",
+    "slots": []
+  },
+  "tools.code_search.unexpected_response": {
+    "text": "Unexpected code search response.",
+    "slots": []
+  },
+  "tools.code_search.launch_failed": {
+    "text": "Unable to start the configured code search executable.",
+    "slots": []
+  },
+  "tools.code_search.invalid_candidates": {
+    "text": "The search backend returned an invalid candidate list.",
+    "slots": []
+  },
+  "tools.code_search.invalid_candidate_text": {
+    "text": "The search backend returned a non-text candidate.",
+    "slots": []
+  },
+  "tools.code_search.invalid_source": {
+    "text": "The search backend returned an invalid source location.",
+    "slots": []
+  },
+  "tools.code_search.invalid_response": {
+    "text": "Invalid code search response.",
+    "slots": []
+  },
+  "tools.code_search.restrictions_changed": {
+    "text": "Read restrictions changed during code search. Use Grep instead.",
+    "slots": []
+  },
+  "tools.code_search.invalid_candidate": {
+    "text": "Invalid code search candidate.",
+    "slots": []
+  },
+  "tools.code_search.source_unavailable": {
+    "text": "A search candidate is unavailable or outside the permitted workspace. Refresh the index or use Grep.",
+    "slots": []
+  },
+  "tools.code_search.absolute_path_required": {
+    "text": "Code search {field} must be an absolute path.",
+    "slots": [
+      "field"
+    ]
+  },
+  "tools.code_search.absolute_required": {
+    "text": "Code search {field} must be absolute.",
+    "slots": [
+      "field"
+    ]
+  },
+  "tools.code_search.backend_failed": {
+    "text": "Code search failed.",
+    "slots": []
+  },
+  "tools.code_search.absolute_cache": {
+    "text": "CodeSearch cachePath must be an absolute path to a dedicated cache directory",
+    "slots": []
+  },
+  "tools.code_search.dedicated_cache": {
+    "text": "CodeSearch cachePath must be a dedicated directory outside the workspace, not a home or shared temporary directory",
+    "slots": []
+  }
+}

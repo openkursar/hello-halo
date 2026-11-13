@@ -100,10 +100,12 @@ function makeCtx(cwd?: string): ToolContext {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv('AGENT_RIPGREP_PATH', '');
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 // ===========================================================================

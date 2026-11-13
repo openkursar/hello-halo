@@ -1,0 +1,1214 @@
+[
+  {
+    "name": "clear",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [],
+      "mcpServerStatuses": [],
+      "cost": {
+        "totalCostUsd": 0,
+        "totalDurationMs": 0,
+        "totalApiDurationMs": 0,
+        "numTurns": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheCreate": 0,
+          "cacheRead": 0
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "Conversation history cleared."
+    },
+    "effects": [
+      [
+        "clear"
+      ]
+    ]
+  },
+  {
+    "name": "compact",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [],
+      "mcpServerStatuses": [],
+      "cost": {
+        "totalCostUsd": 0,
+        "totalDurationMs": 0,
+        "totalApiDurationMs": 0,
+        "numTurns": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheCreate": 0,
+          "cacheRead": 0
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "Compaction started."
+    },
+    "effects": [
+      [
+        "compact",
+        null
+      ]
+    ]
+  },
+  {
+    "name": "compact",
+    "args": " specific {context} ",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [],
+      "mcpServerStatuses": [],
+      "cost": {
+        "totalCostUsd": 0,
+        "totalDurationMs": 0,
+        "totalApiDurationMs": 0,
+        "numTurns": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheCreate": 0,
+          "cacheRead": 0
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "Compaction started with instructions: _specific {context}_"
+    },
+    "effects": [
+      [
+        "compact",
+        "specific {context}"
+      ]
+    ]
+  },
+  {
+    "name": "model",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [],
+      "mcpServerStatuses": [],
+      "cost": {
+        "totalCostUsd": 0,
+        "totalDurationMs": 0,
+        "totalApiDurationMs": 0,
+        "numTurns": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheCreate": 0,
+          "cacheRead": 0
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "**Current model:** `fixture-model`\n\nPass a model id to switch — e.g. `/model deepseek-chat`."
+    },
+    "effects": []
+  },
+  {
+    "name": "model",
+    "args": " next-model ",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [],
+      "mcpServerStatuses": [],
+      "cost": {
+        "totalCostUsd": 0,
+        "totalDurationMs": 0,
+        "totalApiDurationMs": 0,
+        "numTurns": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheCreate": 0,
+          "cacheRead": 0
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "Model switched: `fixture-model` → `next-model`"
+    },
+    "effects": [
+      [
+        "model",
+        "next-model"
+      ]
+    ]
+  },
+  {
+    "name": "init",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [],
+      "mcpServerStatuses": [],
+      "cost": {
+        "totalCostUsd": 0,
+        "totalDurationMs": 0,
+        "totalApiDurationMs": 0,
+        "numTurns": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheCreate": 0,
+          "cacheRead": 0
+        }
+      }
+    },
+    "expected": {
+      "kind": "prompt-replacement",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Produce a compact repository handover in AGENTS.md for an agent making its next change here.\n\nBegin with the instructions already maintained by the project, including editor and assistant configuration. Read AGENTS.md if it exists. Keep valid requirements, resolve claims against the implementation, and identify uncertainty instead of inventing a policy.\n\nUse the README, build or package configuration, and representative entry points as evidence. The guide should answer three practical questions: Where does a change belong and which dependency boundaries must it respect? What project-specific constraints could a newcomer miss? How does the project prepare, build, and verify changes, including a focused test when one is available?\n\nWrite concrete commands and paths only after checking them. Explain the reason for an important boundary, but omit a file inventory, generic engineering advice, and material already adequately covered by existing instructions. Improve an existing guide in place; for a new file, use \"# AGENTS.md\" as its heading and explain its purpose briefly. The result should be short enough to consult before beginning a task."
+        }
+      ]
+    },
+    "effects": []
+  },
+  {
+    "name": "help",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [],
+      "mcpServerStatuses": [],
+      "cost": {
+        "totalCostUsd": 0,
+        "totalDurationMs": 0,
+        "totalApiDurationMs": 0,
+        "numTurns": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheCreate": 0,
+          "cacheRead": 0
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "## Available commands\n\n- `/clear` — Start with an empty conversation while keeping the current session settings\n- `/compact [instructions]` — Condense earlier messages through the session compaction handler, with optional handover requirements\n- `/context` — Summarize the session model, message count, and estimated context size\n- `/cost` — Report spending, elapsed time, and token counts accumulated from completed turns\n- `/help` — List callable session commands with their argument hints and descriptions\n- `/init` — Inspect this repository and prepare or improve its AGENTS.md working guide\n- `/mcp` — Show MCP server connection status\n- `/model [model]` — Set the AI model\n- `/status` — Inspect this session, its model and working directory, history size, and MCP connections\n- `/usage` — Report token totals and completed turns for this session\n"
+    },
+    "effects": []
+  },
+  {
+    "name": "context",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [],
+      "mcpServerStatuses": [],
+      "cost": {
+        "totalCostUsd": 0,
+        "totalDurationMs": 0,
+        "totalApiDurationMs": 0,
+        "numTurns": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheCreate": 0,
+          "cacheRead": 0
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "## Context Usage\n\n**Model:** fixture-model  \n**Messages:** 0  \n**Approx. characters:** 0  \n**Approx. tokens:** 0 _(rough estimate, 4 chars/token)_\n\n_Exact token usage is unavailable in this view._\n"
+    },
+    "effects": []
+  },
+  {
+    "name": "mcp",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [],
+      "mcpServerStatuses": [],
+      "cost": {
+        "totalCostUsd": 0,
+        "totalDurationMs": 0,
+        "totalApiDurationMs": 0,
+        "numTurns": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheCreate": 0,
+          "cacheRead": 0
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "No MCP servers configured."
+    },
+    "effects": []
+  },
+  {
+    "name": "status",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [],
+      "mcpServerStatuses": [],
+      "cost": {
+        "totalCostUsd": 0,
+        "totalDurationMs": 0,
+        "totalApiDurationMs": 0,
+        "numTurns": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheCreate": 0,
+          "cacheRead": 0
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "## Status\n\n**Session:** `fixture`  \n**Model:** `fixture-model`  \n**Working directory:** `/workspace`  \n**Messages in history:** 0\n\n### MCP servers\n\n_No MCP servers configured._\n"
+    },
+    "effects": []
+  },
+  {
+    "name": "cost",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [],
+      "mcpServerStatuses": [],
+      "cost": {
+        "totalCostUsd": 0,
+        "totalDurationMs": 0,
+        "totalApiDurationMs": 0,
+        "numTurns": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheCreate": 0,
+          "cacheRead": 0
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "## Session cost\n\n**Total cost:** $0.0000  \n**Duration (wall):** 0 ms  \n**Duration (API):** 0 ms  \n**Turns counted:** 0\n\n### Tokens\n\n| Bucket | Count |\n|--------|------:|\n| Input | 0 |\n| Output | 0 |\n| Cache create | 0 |\n| Cache read | 0 |\n\n_The current in-flight turn is not yet aggregated — totals will update once it completes._\n"
+    },
+    "effects": []
+  },
+  {
+    "name": "usage",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [],
+      "mcpServerStatuses": [],
+      "cost": {
+        "totalCostUsd": 0,
+        "totalDurationMs": 0,
+        "totalApiDurationMs": 0,
+        "numTurns": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "cacheCreate": 0,
+          "cacheRead": 0
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "## Session usage\n\n**Turns:** 0  \n**Total tokens:** 0\n\n| Bucket | Count |\n|--------|------:|\n| Input | 0 |\n| Output | 0 |\n| Cache create | 0 |\n| Cache read | 0 |\n\n_Subscription-tier limits and reset windows are not surfaced by the SDK — refer to your provider dashboard for quota state._\n"
+    },
+    "effects": []
+  },
+  {
+    "name": "clear",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello 😀"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "plan"
+            },
+            {
+              "type": "tool_use",
+              "id": "id",
+              "name": "Read",
+              "input": {
+                "file_path": "x"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "id",
+              "content": "data"
+            }
+          ]
+        }
+      ],
+      "mcpServerStatuses": [
+        {
+          "name": "first",
+          "status": "connected"
+        },
+        {
+          "name": "second",
+          "status": "failed"
+        }
+      ],
+      "cost": {
+        "totalCostUsd": 0.12345,
+        "totalDurationMs": 61300,
+        "totalApiDurationMs": 1567,
+        "numTurns": 3,
+        "tokens": {
+          "input": 12345,
+          "output": 321,
+          "cacheCreate": 1000,
+          "cacheRead": 20000
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "Conversation history cleared."
+    },
+    "effects": [
+      [
+        "clear"
+      ]
+    ]
+  },
+  {
+    "name": "compact",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello 😀"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "plan"
+            },
+            {
+              "type": "tool_use",
+              "id": "id",
+              "name": "Read",
+              "input": {
+                "file_path": "x"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "id",
+              "content": "data"
+            }
+          ]
+        }
+      ],
+      "mcpServerStatuses": [
+        {
+          "name": "first",
+          "status": "connected"
+        },
+        {
+          "name": "second",
+          "status": "failed"
+        }
+      ],
+      "cost": {
+        "totalCostUsd": 0.12345,
+        "totalDurationMs": 61300,
+        "totalApiDurationMs": 1567,
+        "numTurns": 3,
+        "tokens": {
+          "input": 12345,
+          "output": 321,
+          "cacheCreate": 1000,
+          "cacheRead": 20000
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "Compaction started."
+    },
+    "effects": [
+      [
+        "compact",
+        null
+      ]
+    ]
+  },
+  {
+    "name": "compact",
+    "args": " specific {context} ",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello 😀"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "plan"
+            },
+            {
+              "type": "tool_use",
+              "id": "id",
+              "name": "Read",
+              "input": {
+                "file_path": "x"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "id",
+              "content": "data"
+            }
+          ]
+        }
+      ],
+      "mcpServerStatuses": [
+        {
+          "name": "first",
+          "status": "connected"
+        },
+        {
+          "name": "second",
+          "status": "failed"
+        }
+      ],
+      "cost": {
+        "totalCostUsd": 0.12345,
+        "totalDurationMs": 61300,
+        "totalApiDurationMs": 1567,
+        "numTurns": 3,
+        "tokens": {
+          "input": 12345,
+          "output": 321,
+          "cacheCreate": 1000,
+          "cacheRead": 20000
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "Compaction started with instructions: _specific {context}_"
+    },
+    "effects": [
+      [
+        "compact",
+        "specific {context}"
+      ]
+    ]
+  },
+  {
+    "name": "model",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello 😀"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "plan"
+            },
+            {
+              "type": "tool_use",
+              "id": "id",
+              "name": "Read",
+              "input": {
+                "file_path": "x"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "id",
+              "content": "data"
+            }
+          ]
+        }
+      ],
+      "mcpServerStatuses": [
+        {
+          "name": "first",
+          "status": "connected"
+        },
+        {
+          "name": "second",
+          "status": "failed"
+        }
+      ],
+      "cost": {
+        "totalCostUsd": 0.12345,
+        "totalDurationMs": 61300,
+        "totalApiDurationMs": 1567,
+        "numTurns": 3,
+        "tokens": {
+          "input": 12345,
+          "output": 321,
+          "cacheCreate": 1000,
+          "cacheRead": 20000
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "**Current model:** `fixture-model`\n\nPass a model id to switch — e.g. `/model deepseek-chat`."
+    },
+    "effects": []
+  },
+  {
+    "name": "model",
+    "args": " next-model ",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello 😀"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "plan"
+            },
+            {
+              "type": "tool_use",
+              "id": "id",
+              "name": "Read",
+              "input": {
+                "file_path": "x"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "id",
+              "content": "data"
+            }
+          ]
+        }
+      ],
+      "mcpServerStatuses": [
+        {
+          "name": "first",
+          "status": "connected"
+        },
+        {
+          "name": "second",
+          "status": "failed"
+        }
+      ],
+      "cost": {
+        "totalCostUsd": 0.12345,
+        "totalDurationMs": 61300,
+        "totalApiDurationMs": 1567,
+        "numTurns": 3,
+        "tokens": {
+          "input": 12345,
+          "output": 321,
+          "cacheCreate": 1000,
+          "cacheRead": 20000
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "Model switched: `fixture-model` → `next-model`"
+    },
+    "effects": [
+      [
+        "model",
+        "next-model"
+      ]
+    ]
+  },
+  {
+    "name": "init",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello 😀"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "plan"
+            },
+            {
+              "type": "tool_use",
+              "id": "id",
+              "name": "Read",
+              "input": {
+                "file_path": "x"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "id",
+              "content": "data"
+            }
+          ]
+        }
+      ],
+      "mcpServerStatuses": [
+        {
+          "name": "first",
+          "status": "connected"
+        },
+        {
+          "name": "second",
+          "status": "failed"
+        }
+      ],
+      "cost": {
+        "totalCostUsd": 0.12345,
+        "totalDurationMs": 61300,
+        "totalApiDurationMs": 1567,
+        "numTurns": 3,
+        "tokens": {
+          "input": 12345,
+          "output": 321,
+          "cacheCreate": 1000,
+          "cacheRead": 20000
+        }
+      }
+    },
+    "expected": {
+      "kind": "prompt-replacement",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Produce a compact repository handover in AGENTS.md for an agent making its next change here.\n\nBegin with the instructions already maintained by the project, including editor and assistant configuration. Read AGENTS.md if it exists. Keep valid requirements, resolve claims against the implementation, and identify uncertainty instead of inventing a policy.\n\nUse the README, build or package configuration, and representative entry points as evidence. The guide should answer three practical questions: Where does a change belong and which dependency boundaries must it respect? What project-specific constraints could a newcomer miss? How does the project prepare, build, and verify changes, including a focused test when one is available?\n\nWrite concrete commands and paths only after checking them. Explain the reason for an important boundary, but omit a file inventory, generic engineering advice, and material already adequately covered by existing instructions. Improve an existing guide in place; for a new file, use \"# AGENTS.md\" as its heading and explain its purpose briefly. The result should be short enough to consult before beginning a task."
+        }
+      ]
+    },
+    "effects": []
+  },
+  {
+    "name": "help",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello 😀"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "plan"
+            },
+            {
+              "type": "tool_use",
+              "id": "id",
+              "name": "Read",
+              "input": {
+                "file_path": "x"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "id",
+              "content": "data"
+            }
+          ]
+        }
+      ],
+      "mcpServerStatuses": [
+        {
+          "name": "first",
+          "status": "connected"
+        },
+        {
+          "name": "second",
+          "status": "failed"
+        }
+      ],
+      "cost": {
+        "totalCostUsd": 0.12345,
+        "totalDurationMs": 61300,
+        "totalApiDurationMs": 1567,
+        "numTurns": 3,
+        "tokens": {
+          "input": 12345,
+          "output": 321,
+          "cacheCreate": 1000,
+          "cacheRead": 20000
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "## Available commands\n\n- `/clear` — Start with an empty conversation while keeping the current session settings\n- `/compact [instructions]` — Condense earlier messages through the session compaction handler, with optional handover requirements\n- `/context` — Summarize the session model, message count, and estimated context size\n- `/cost` — Report spending, elapsed time, and token counts accumulated from completed turns\n- `/help` — List callable session commands with their argument hints and descriptions\n- `/init` — Inspect this repository and prepare or improve its AGENTS.md working guide\n- `/mcp` — Show MCP server connection status\n- `/model [model]` — Set the AI model\n- `/status` — Inspect this session, its model and working directory, history size, and MCP connections\n- `/usage` — Report token totals and completed turns for this session\n"
+    },
+    "effects": []
+  },
+  {
+    "name": "context",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello 😀"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "plan"
+            },
+            {
+              "type": "tool_use",
+              "id": "id",
+              "name": "Read",
+              "input": {
+                "file_path": "x"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "id",
+              "content": "data"
+            }
+          ]
+        }
+      ],
+      "mcpServerStatuses": [
+        {
+          "name": "first",
+          "status": "connected"
+        },
+        {
+          "name": "second",
+          "status": "failed"
+        }
+      ],
+      "cost": {
+        "totalCostUsd": 0.12345,
+        "totalDurationMs": 61300,
+        "totalApiDurationMs": 1567,
+        "numTurns": 3,
+        "tokens": {
+          "input": 12345,
+          "output": 321,
+          "cacheCreate": 1000,
+          "cacheRead": 20000
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "## Context Usage\n\n**Model:** fixture-model  \n**Messages:** 3  \n**Approx. characters:** 37  \n**Approx. tokens:** 9 _(rough estimate, 4 chars/token)_\n\n_Exact token usage is unavailable in this view._\n"
+    },
+    "effects": []
+  },
+  {
+    "name": "mcp",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello 😀"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "plan"
+            },
+            {
+              "type": "tool_use",
+              "id": "id",
+              "name": "Read",
+              "input": {
+                "file_path": "x"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "id",
+              "content": "data"
+            }
+          ]
+        }
+      ],
+      "mcpServerStatuses": [
+        {
+          "name": "first",
+          "status": "connected"
+        },
+        {
+          "name": "second",
+          "status": "failed"
+        }
+      ],
+      "cost": {
+        "totalCostUsd": 0.12345,
+        "totalDurationMs": 61300,
+        "totalApiDurationMs": 1567,
+        "numTurns": 3,
+        "tokens": {
+          "input": 12345,
+          "output": 321,
+          "cacheCreate": 1000,
+          "cacheRead": 20000
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "## MCP servers\n\n| Name | Status |\n|------|--------|\n| first | connected |\n| second | failed |\n"
+    },
+    "effects": []
+  },
+  {
+    "name": "status",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello 😀"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "plan"
+            },
+            {
+              "type": "tool_use",
+              "id": "id",
+              "name": "Read",
+              "input": {
+                "file_path": "x"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "id",
+              "content": "data"
+            }
+          ]
+        }
+      ],
+      "mcpServerStatuses": [
+        {
+          "name": "first",
+          "status": "connected"
+        },
+        {
+          "name": "second",
+          "status": "failed"
+        }
+      ],
+      "cost": {
+        "totalCostUsd": 0.12345,
+        "totalDurationMs": 61300,
+        "totalApiDurationMs": 1567,
+        "numTurns": 3,
+        "tokens": {
+          "input": 12345,
+          "output": 321,
+          "cacheCreate": 1000,
+          "cacheRead": 20000
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "## Status\n\n**Session:** `fixture`  \n**Model:** `fixture-model`  \n**Working directory:** `/workspace`  \n**Messages in history:** 3\n\n### MCP servers\n\n| Name | Status |\n|------|--------|\n| first | connected |\n| second | failed |\n"
+    },
+    "effects": []
+  },
+  {
+    "name": "cost",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello 😀"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "plan"
+            },
+            {
+              "type": "tool_use",
+              "id": "id",
+              "name": "Read",
+              "input": {
+                "file_path": "x"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "id",
+              "content": "data"
+            }
+          ]
+        }
+      ],
+      "mcpServerStatuses": [
+        {
+          "name": "first",
+          "status": "connected"
+        },
+        {
+          "name": "second",
+          "status": "failed"
+        }
+      ],
+      "cost": {
+        "totalCostUsd": 0.12345,
+        "totalDurationMs": 61300,
+        "totalApiDurationMs": 1567,
+        "numTurns": 3,
+        "tokens": {
+          "input": 12345,
+          "output": 321,
+          "cacheCreate": 1000,
+          "cacheRead": 20000
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "## Session cost\n\n**Total cost:** $0.1235  \n**Duration (wall):** 1m 1.3s  \n**Duration (API):** 1.57 s  \n**Turns counted:** 3\n\n### Tokens\n\n| Bucket | Count |\n|--------|------:|\n| Input | 12,345 |\n| Output | 321 |\n| Cache create | 1,000 |\n| Cache read | 20,000 |\n"
+    },
+    "effects": []
+  },
+  {
+    "name": "usage",
+    "args": "",
+    "snapshot": {
+      "sessionId": "fixture",
+      "model": "fixture-model",
+      "cwd": "/workspace",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello 😀"
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "plan"
+            },
+            {
+              "type": "tool_use",
+              "id": "id",
+              "name": "Read",
+              "input": {
+                "file_path": "x"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "id",
+              "content": "data"
+            }
+          ]
+        }
+      ],
+      "mcpServerStatuses": [
+        {
+          "name": "first",
+          "status": "connected"
+        },
+        {
+          "name": "second",
+          "status": "failed"
+        }
+      ],
+      "cost": {
+        "totalCostUsd": 0.12345,
+        "totalDurationMs": 61300,
+        "totalApiDurationMs": 1567,
+        "numTurns": 3,
+        "tokens": {
+          "input": 12345,
+          "output": 321,
+          "cacheCreate": 1000,
+          "cacheRead": 20000
+        }
+      }
+    },
+    "expected": {
+      "kind": "local-result",
+      "markdown": "## Session usage\n\n**Turns:** 3  \n**Total tokens:** 33,666\n\n| Bucket | Count |\n|--------|------:|\n| Input | 12,345 |\n| Output | 321 |\n| Cache create | 1,000 |\n| Cache read | 20,000 |\n\n_Subscription-tier limits and reset windows are not surfaced by the SDK — refer to your provider dashboard for quota state._\n"
+    },
+    "effects": []
+  }
+]

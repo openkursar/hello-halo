@@ -1,0 +1,175 @@
+[
+  {
+    "messages": [],
+    "projected": [
+      {
+        "role": "user",
+        "content": ""
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "assistant",
+        "content": "ignored"
+      }
+    ],
+    "projected": [
+      {
+        "role": "user",
+        "content": ""
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": " exact\ntext 😀 "
+      }
+    ],
+    "projected": [
+      {
+        "role": "user",
+        "content": " exact\ntext 😀 "
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "image",
+            "source": {
+              "type": "base64",
+              "data": "fixture"
+            }
+          },
+          {
+            "type": "text",
+            "text": "selected"
+          },
+          {
+            "type": "text",
+            "text": "ignored"
+          }
+        ]
+      }
+    ],
+    "projected": [
+      {
+        "role": "user",
+        "content": "selected"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "image"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "not the opening text"
+      }
+    ],
+    "projected": [
+      {
+        "role": "user",
+        "content": ""
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": 42
+          },
+          {
+            "type": "text",
+            "text": "not selected"
+          }
+        ]
+      }
+    ],
+    "projected": [
+      {
+        "role": "user",
+        "content": ""
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": ""
+          },
+          {
+            "type": "text",
+            "text": "not selected"
+          }
+        ]
+      }
+    ],
+    "projected": [
+      {
+        "role": "user",
+        "content": ""
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "system",
+        "content": "before"
+      },
+      {
+        "role": "user",
+        "content": "opening"
+      },
+      {
+        "role": "assistant",
+        "content": "after"
+      }
+    ],
+    "projected": [
+      {
+        "role": "user",
+        "content": "opening"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": {
+          "text": "not a block array"
+        }
+      }
+    ],
+    "projected": [
+      {
+        "role": "user",
+        "content": ""
+      }
+    ]
+  }
+]

@@ -8,6 +8,14 @@ it does not clean or rebuild another developer's `dist/`. Actors also run from
 the copied harness. Installed dependencies are reused read-only; CI starts from
 `npm ci` and the lockfile.
 
+The isolated build uses the same `scripts/build.mjs` entry as `npm run build`:
+Harness generation, TypeScript declarations, the Worker bundle and notices, and
+the current platform Rust library. It requires the Rust toolchain and reuses the
+source checkout's ignored Cargo target cache, or `CARGO_TARGET_DIR` when supplied.
+The build has its own ten-minute deadline; scenario deadlines and resource gates
+start after it finishes. An interrupted build stops its owned compiler process
+group. Build failure never starts a validation actor.
+
 ## Run
 
 From the SDK repository, after `npm ci`:
@@ -133,6 +141,9 @@ is not a provider invoice: separate summary calls and interrupted attempts may
 not be included in the SDK result counters. The current round and measurements are also checkpointed to `progress.json`.
 Logs are bounded to 1 MiB per scenario. Reports and fixtures contain synthetic task data. Results are
 ignored by Git; retain the report as a CI artifact or copy it into release evidence.
+The report also retains the native build manifest and each actor's observed build
+identity. Actors verify that public session creation returns the native session
+for that build; merely loading a native library does not establish execution.
 
 Raw actor and OS samples, source identity and lifecycle events are also appended
 to `events.jsonl` while the run executes. The journal has a 64 MiB ceiling; exceeding
@@ -150,6 +161,10 @@ are collected. Baseline/final/round labels include explicit GC so retained heap
 can be compared separately from RSS. Deliberately oversized input fixtures are
 excluded from the output-disk budget. This is instrumented validation; explicit
 GC affects performance and is not a production recommendation.
+JavaScript heap and preview-retention measurements describe JavaScript objects;
+they do not measure the Rust allocator. Actor/process-tree RSS and independent
+descriptor/process observations cover the native execution as well. These
+measurements retain their existing gates and are reported separately.
 
 | Gate | Initial acceptance limit |
 |---|---:|

@@ -1,0 +1,115 @@
+{
+  "context.discovery.not_saved": {
+    "text": "Tool discovery results could not be saved. No new tool access was granted. Search again after conversation storage is available.",
+    "slots": []
+  },
+  "context.history.missing_tool_result": {
+    "text": "[No recorded output for this tool call; its outcome is unknown.]",
+    "slots": []
+  },
+  "context.history.empty_assistant": {
+    "text": "[No usable assistant content remains after history repair.]",
+    "slots": []
+  },
+  "context.history.orphan_tool_result": {
+    "text": "[A saved tool response had no matching call in this history.]",
+    "slots": []
+  },
+  "context.history.empty_user": {
+    "text": "(no content)",
+    "slots": []
+  },
+  "context.history.reasoning_omitted": {
+    "text": "[Reasoning omitted]",
+    "slots": []
+  },
+  "context.history.bounded_omission": {
+    "text": "[Earlier conversation was omitted from active memory to stay within the history size limit. The original transcript remains on disk. Do not assume missing details.]",
+    "slots": []
+  },
+  "context.tools.not_found": {
+    "text": "Tool \"{tool}\" not found. Available tools: {available}",
+    "slots": [
+      "tool",
+      "available"
+    ]
+  },
+  "context.tools.execution_error": {
+    "text": "Tool execution error: {error}",
+    "slots": [
+      "error"
+    ]
+  },
+  "context.tools.processing_failed": {
+    "text": "{content}\n\nThe tool completed, but processing its result failed. Check its effects before repeating the action.",
+    "slots": [
+      "content"
+    ]
+  },
+  "context.tools.failed_before_result": {
+    "text": "Tool call failed before a result was available: {error}",
+    "slots": [
+      "error"
+    ]
+  },
+  "context.tools.interrupted_stream": {
+    "text": "The model stream was interrupted before this tool result was available. Check the current state before repeating an action; an interrupted operation may have taken effect.",
+    "slots": []
+  },
+  "context.tools.interrupted_user": {
+    "text": "Interrupted by user",
+    "slots": []
+  },
+  "context.tools.unreadable_arguments": {
+    "text": "The arguments for this tool call were not valid JSON ({reason}), so the call was not executed. This is what arrived: {echo}\nSend the call again with complete, valid JSON arguments.",
+    "slots": [
+      "reason",
+      "echo"
+    ]
+  },
+  "context.discovery.configuration_changed": {
+    "text": "The available tool configuration has changed.",
+    "slots": []
+  },
+  "context.errors.named": {
+    "text": "{name}: {message}",
+    "slots": [
+      "name",
+      "message"
+    ]
+  },
+  "context.tools.not_json_object": {
+    "text": "not a JSON object",
+    "slots": []
+  },
+  "context.tools.argument_echo": {
+    "text": "{arguments}…(truncated)",
+    "slots": [
+      "arguments"
+    ]
+  },
+  "context.stream.unknown_error": {
+    "text": "Unknown error",
+    "slots": []
+  },
+  "context.stream.replay_stopped": {
+    "text": "Model stream interrupted after tool calls were committed; automatic replay was stopped",
+    "slots": []
+  },
+  "context.stream.changed_block": {
+    "text": "Provider changed a completed content block",
+    "slots": []
+  },
+  "context.stream.restarted_message": {
+    "text": "Provider restarted a message without a retry boundary",
+    "slots": []
+  },
+  "context.stream.reordered_block": {
+    "text": "Provider repeated or reordered a content block or tool call ID",
+    "slots": []
+  },
+  "context.stream.reordered_implicit": {
+    "text": "Provider reordered an implicit content block",
+    "slots": []
+  }
+}

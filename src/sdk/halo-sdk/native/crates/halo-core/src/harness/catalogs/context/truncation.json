@@ -1,0 +1,27 @@
+{
+  "context.truncation.recovery_hint": {
+    "text": "Request a smaller range or a more specific query to obtain the omitted content.",
+    "slots": []
+  },
+  "context.truncation.full_notice": {
+    "text": "\n\n[Content truncated: {omitted} chars omitted from the middle. {hint}]\n\n",
+    "slots": [
+      "omitted",
+      "hint"
+    ]
+  },
+  "context.truncation.short_notice": {
+    "text": "\n[Content truncated: {omitted} chars omitted]\n",
+    "slots": [
+      "omitted"
+    ]
+  },
+  "context.truncation.marker": {
+    "text": "[truncated]",
+    "slots": []
+  },
+  "context.truncation.ellipsis": {
+    "text": "…",
+    "slots": []
+  }
+}

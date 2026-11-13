@@ -1,0 +1,60 @@
+{
+  "SEARCH_DEFINITION": {
+    "name": "ToolSearch",
+    "description": {
+      "$harness": "context.discovery.search_description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "server": {
+          "type": "string"
+        },
+        "max_results": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 5
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "CALL_DEFINITION": {
+    "name": "CallTool",
+    "description": {
+      "$harness": "context.discovery.call_description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "tool": {
+          "type": "string",
+          "description": {
+            "$harness": "context.discovery.target_description"
+          }
+        },
+        "arguments": {
+          "type": "object",
+          "description": {
+            "$harness": "context.discovery.arguments_description"
+          },
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "tool",
+        "arguments"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

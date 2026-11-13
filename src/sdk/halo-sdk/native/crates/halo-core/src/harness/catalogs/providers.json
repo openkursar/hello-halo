@@ -1,0 +1,398 @@
+{
+  "providers.response.unreadable_arguments": {
+    "text": "one or more tool calls with unreadable argument objects",
+    "slots": []
+  },
+  "providers.json.unsupported_data": {
+    "text": "JSON data must contain finite numbers and well-formed Unicode text without changing its values.",
+    "slots": []
+  },
+  "providers.json.data_too_deep": {
+    "text": "JSON data nesting exceeded the supported depth.",
+    "slots": []
+  },
+  "providers.stream.invalid_tool_metadata": {
+    "text": "The model stream contained incomplete or changing tool metadata or conflicting argument fragments.",
+    "slots": []
+  },
+  "providers.stream.invalid_json": {
+    "text": "The model stream contained malformed JSON data.",
+    "slots": []
+  },
+  "providers.stream.invalid_utf8": {
+    "text": "The model stream contained invalid UTF-8 data.",
+    "slots": []
+  },
+  "providers.stream.invalid_object": {
+    "text": "The model stream contained a data record that was not a JSON object.",
+    "slots": []
+  },
+  "providers.stream.event_too_large": {
+    "text": "Model stream buffered data exceeded the 32 MiB limit.",
+    "slots": []
+  },
+  "providers.xml.instructions": {
+    "text": "The following tools are available for carrying out this task.\nYou can invoke tools using XML-style tags. Each tool call is wrapped in a tool tag, and each parameter uses a `<param>` tag with `name` and `type` attributes.\n\nFormat:\n\n<tool_name>\n<param name=\"parameter1_name\" type=\"string\" required=\"true\">value1</param>\n<param name=\"parameter2_name\" type=\"integer\" required=\"false\">42</param>\n</tool_name>\n\nImportant rules:\n- Always use the exact tool and parameter names as defined below.\n- Include ONLY required parameters. Do NOT add optional parameters unless you need to set a non-default value.\n- A tool call MUST be the last content in your response. Do NOT append empty tags or any text after the closing tool tag.\n- Only call one tool at a time.\n- For boolean parameters, use \"true\" or \"false\" (lowercase strings).\n- For parameters expecting a number, provide the numeric value directly.\n- For parameters that accept objects or arrays, provide valid JSON.\n- Each parameter inside a tool call MUST use the `<param name=\"...\">` tag format.\n\nExample of a CORRECT tool call:\n\nI'll list the files in the current directory.\n\n<Bash>\n<param name=\"command\" type=\"string\" required=\"true\">ls</param>\n</Bash>\n\nINCORRECT — do NOT do this (extra parameters, wrong tag format):\n\n<Bash>\n<command>ls</command>\n<param name=\"description\" type=\"string\">List files</param>\n</Bash>\n\nHere are the available tools:\n",
+    "slots": []
+  },
+  "providers.json.instructions": {
+    "text": "IMPORTANT: Format your tool calls as a JSON array inside a markdown code block.\nYou may write explanatory text before the code block.\n\nFormat:\n\n```json\n[{\"name\": \"tool_name\", \"params\": {\"param1\": \"value1\"}}]\n```\n\nRules:\n- Always wrap tool calls in a ```json code block.\n- Output a JSON array, even for a single tool call.\n- Include ONLY required parameters from the tool's parameter list. Do NOT add optional parameters unless you need to set a non-default value.\n- Boolean parameters: use true/false (no quotes around the value).\n- Number parameters: use the numeric value directly (no quotes).\n- Write explanation/thinking in text BEFORE the code block.\n- Do NOT write anything after the closing ```.\n\nExample of a CORRECT tool call:\n\nI'll list the files in the current directory.\n\n```json\n[{\"name\": \"Bash\", \"params\": {\"command\": \"ls\"}}]\n```\n\nINCORRECT — do NOT do this (extra params, text after fence):\n\nI'll list files.\n\n```json\n[{\"name\": \"Bash\", \"params\": {\"command\": \"ls\", \"description\": \"list\"}}]\n```\nDone!  ← WRONG: nothing after the closing ```\n\nHere are the available tools:\n",
+    "slots": []
+  },
+  "providers.tool.heading": {
+    "text": "## {name}",
+    "slots": [
+      "name"
+    ]
+  },
+  "providers.tool.description": {
+    "text": "Description: {description}",
+    "slots": [
+      "description"
+    ]
+  },
+  "providers.tool.parameters": {
+    "text": "Parameters:",
+    "slots": []
+  },
+  "providers.tool.no_parameters": {
+    "text": "Parameters: none",
+    "slots": []
+  },
+  "providers.tool.parameter": {
+    "text": "- {name}: ({requirement}) {description}{suffix}",
+    "slots": [
+      "name",
+      "requirement",
+      "description",
+      "suffix"
+    ]
+  },
+  "providers.tool.required": {
+    "text": "required",
+    "slots": []
+  },
+  "providers.tool.optional": {
+    "text": "optional",
+    "slots": []
+  },
+  "providers.tool.allowed_values": {
+    "text": "Allowed values: {values}",
+    "slots": [
+      "values"
+    ]
+  },
+  "providers.tool.default_value": {
+    "text": "Default: {value}",
+    "slots": [
+      "value"
+    ]
+  },
+  "providers.tool.usage": {
+    "text": "Usage:",
+    "slots": []
+  },
+  "providers.tool.optional_notice": {
+    "text": "(Optional parameters: {names} — omit unless needed)",
+    "slots": [
+      "names"
+    ]
+  },
+  "providers.tool.example_value": {
+    "text": "value",
+    "slots": []
+  },
+  "providers.history.tool_result": {
+    "text": "[Tool Result: {name}]\n{content}",
+    "slots": [
+      "name",
+      "content"
+    ]
+  },
+  "providers.history.tool_error": {
+    "text": "[Tool Error: {name}]\n{content}",
+    "slots": [
+      "name",
+      "content"
+    ]
+  },
+  "providers.history.tool_images": {
+    "text": "Images from tool result {id}:",
+    "slots": [
+      "id"
+    ]
+  },
+  "providers.history.sequence_completion": {
+    "text": "Done.",
+    "slots": []
+  },
+  "providers.json.invalid_block": {
+    "text": "a ```json tool-call block that was not valid JSON ({reason})",
+    "slots": [
+      "reason"
+    ]
+  },
+  "providers.json.no_known_tool": {
+    "text": "a ```json tool-call block whose entries named no known tool; each entry needs a \"name\" matching an available tool and a \"params\" object",
+    "slots": []
+  },
+  "providers.images.unsupported": {
+    "text": "Provider {provider} cannot accept images from tool results; select an image-capable model",
+    "slots": [
+      "provider"
+    ]
+  },
+  "providers.images.payload_budget": {
+    "text": "Image request exceeds {limit} base64 characters across {count} images; reduce image size or history before retrying",
+    "slots": [
+      "limit",
+      "count"
+    ]
+  },
+  "providers.images.body_budget": {
+    "text": "Image request exceeds {limit} bytes after serialization; reduce image size or history before retrying",
+    "slots": [
+      "limit"
+    ]
+  },
+  "providers.http.error": {
+    "text": "{provider} API error ({status}): {reason}",
+    "slots": [
+      "provider",
+      "status",
+      "reason"
+    ]
+  },
+  "providers.http.error_without_body": {
+    "text": "{provider} API error ({status})",
+    "slots": [
+      "provider",
+      "status"
+    ]
+  },
+  "providers.http.overloaded": {
+    "text": "Anthropic API overloaded after {retries} retries",
+    "slots": [
+      "retries"
+    ]
+  },
+  "providers.stream.missing_anthropic_end": {
+    "text": "Stream ended without receiving message_stop",
+    "slots": []
+  },
+  "providers.stream.missing_openai_end": {
+    "text": "Stream ended without receiving finish_reason",
+    "slots": []
+  },
+  "providers.stream.incomplete_response": {
+    "text": "Non-streaming response is missing content or stop_reason",
+    "slots": []
+  },
+  "providers.json.syntax.unexpected_end": {
+    "text": "Unexpected end of JSON input",
+    "slots": []
+  },
+  "providers.json.syntax.expected_property_or_end": {
+    "text": "Expected property name or '}' in JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.expected_property": {
+    "text": "Expected double-quoted property name in JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.expected_colon": {
+    "text": "Expected ':' after property name in JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.expected_object_separator": {
+    "text": "Expected ',' or '}' after property value in JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.expected_array_separator": {
+    "text": "Expected ',' or ']' after array element in JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.non_whitespace": {
+    "text": "Unexpected non-whitespace character after JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.unterminated_string": {
+    "text": "Unterminated string in JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.bad_control": {
+    "text": "Bad control character in string literal in JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.bad_escape": {
+    "text": "Bad escaped character in JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.bad_unicode": {
+    "text": "Bad Unicode escape in JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.no_number": {
+    "text": "No number after minus sign in JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.leading_zero": {
+    "text": "Unexpected number in JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.unterminated_fraction": {
+    "text": "Unterminated fractional number in JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.missing_exponent": {
+    "text": "Exponent part is missing a number in JSON at position {position} (line {line} column {column})",
+    "slots": [
+      "position",
+      "line",
+      "column"
+    ]
+  },
+  "providers.json.syntax.unexpected_short": {
+    "text": "Unexpected token '{token}', \"{context}\" is not valid JSON",
+    "slots": [
+      "token",
+      "context"
+    ]
+  },
+  "providers.json.syntax.unexpected_head": {
+    "text": "Unexpected token '{token}', \"{context}\"... is not valid JSON",
+    "slots": [
+      "token",
+      "context"
+    ]
+  },
+  "providers.json.syntax.unexpected_tail": {
+    "text": "Unexpected token '{token}', ...\"{context}\" is not valid JSON",
+    "slots": [
+      "token",
+      "context"
+    ]
+  },
+  "providers.json.syntax.unexpected_middle": {
+    "text": "Unexpected token '{token}', ...\"{context}\"... is not valid JSON",
+    "slots": [
+      "token",
+      "context"
+    ]
+  },
+  "providers.json.syntax.invalid_special": {
+    "text": "\"{context}\" is not valid JSON",
+    "slots": [
+      "context"
+    ]
+  },
+  "providers.json.unsupported_encoding": {
+    "text": "JSON text contains a lone UTF-16 surrogate, which this native runtime cannot represent",
+    "slots": []
+  },
+  "providers.stream.unreadable_body": {
+    "text": "Response body is not readable",
+    "slots": []
+  },
+  "providers.stream.usage_deadline": {
+    "text": "usage deadline exceeded",
+    "slots": []
+  },
+  "providers.stream.unknown_api_error": {
+    "text": "Unknown API error",
+    "slots": []
+  },
+  "providers.stream.unknown_stream_error": {
+    "text": "Unknown stream error",
+    "slots": []
+  },
+  "providers.stream.unknown_error": {
+    "text": "Unknown error",
+    "slots": []
+  },
+  "providers.stream.event_error": {
+    "text": "[{type}] {message}",
+    "slots": [
+      "type",
+      "message"
+    ]
+  },
+  "providers.network.fetch_failed": {
+    "text": "fetch failed",
+    "slots": []
+  },
+  "providers.network.fetch_failed_code": {
+    "text": "fetch failed ({code})",
+    "slots": [
+      "code"
+    ]
+  },
+  "providers.network.socket_terminated": {
+    "text": "terminated (UND_ERR_SOCKET)",
+    "slots": []
+  },
+  "providers.error.rate_limit": {
+    "text": "Rate limit exceeded",
+    "slots": []
+  },
+  "providers.error.overloaded": {
+    "text": "API overloaded",
+    "slots": []
+  },
+  "providers.error.context_window": {
+    "text": "Context window exceeded",
+    "slots": []
+  }
+}

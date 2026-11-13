@@ -1,4 +1,4 @@
-export { getBuiltinSkillDefinitions } from '../skills/builtins.js';
+export { getBuiltinSkillDefinitions } from '../native/values.js';
 export type { BuiltinSkillDefinition } from '../skills/builtins.js';
 export { WorkerRuntime, createWorkerRuntime, getWorkerEntryUrl } from './runtime.js';
 export type { WorkerRuntimeOptions, WorkerSessionOptions, WorkerPlacement, WorkerDiagnostics } from './runtime.js';
@@ -6,9 +6,9 @@ export type { WorkerSession, WorkerSessionQuery } from './session.js';
 export type { WorkerSetup } from './options.js';
 export { tool, createSdkMcpServer } from '../tools/mcp/sdk-server.js';
 export { setLogger, getRootLogger } from '../utils/logger.js';
-export { getCodeSearchDiagnostics } from '../search/index.js';
+export { getCodeSearchDiagnostics } from '../native/search.js';
 export { RESUME_HISTORY_UNAVAILABLE, isResumeHistoryError } from '../utils/errors.js';
 export type { ResumeHistoryReason } from '../utils/errors.js';
 export type { CodeSearchOptions } from '../search/index.js';
-export { readSessionToolContextMode } from '../core/session-tool-context.js';
+export { readSessionToolContextMode } from '../native/session-tool-context.js';
 export type { ReadSessionToolContextModeOptions, SessionToolContextMode } from '../core/session-tool-context.js';

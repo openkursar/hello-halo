@@ -1,0 +1,102 @@
+{
+  "commands": [
+    {
+      "type": "local",
+      "name": "clear",
+      "description": {
+        "$harness": "commands.clear.description"
+      },
+      "aliases": [
+        "reset",
+        "new"
+      ],
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "compact",
+      "description": {
+        "$harness": "commands.compact.description"
+      },
+      "argumentHint": {
+        "$harness": "commands.compact.argument_hint"
+      },
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "context",
+      "description": {
+        "$harness": "commands.context.description"
+      },
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "cost",
+      "description": {
+        "$harness": "commands.cost.description"
+      },
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "help",
+      "description": {
+        "$harness": "commands.help.description"
+      },
+      "source": "builtin"
+    },
+    {
+      "type": "prompt",
+      "name": "init",
+      "description": {
+        "$harness": "commands.init.description"
+      },
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "mcp",
+      "description": {
+        "$harness": "commands.mcp.description"
+      },
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "model",
+      "description": {
+        "$harness": "commands.model.description"
+      },
+      "argumentHint": {
+        "$harness": "commands.model.argument_hint"
+      },
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "status",
+      "description": {
+        "$harness": "commands.status.description"
+      },
+      "source": "builtin"
+    },
+    {
+      "type": "local",
+      "name": "usage",
+      "description": {
+        "$harness": "commands.usage.description"
+      },
+      "source": "builtin"
+    }
+  ],
+  "initMessages": [
+    {
+      "role": "user",
+      "content": {
+        "$harness": "commands.init.instructions"
+      }
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+[
+  {
+    "name": "Read",
+    "result": {
+      "content": "file_path is required",
+      "isError": true
+    }
+  },
+  {
+    "name": "Write",
+    "result": {
+      "content": "file_path is required",
+      "isError": true
+    }
+  },
+  {
+    "name": "Edit",
+    "result": {
+      "content": "file_path is required",
+      "isError": true
+    }
+  },
+  {
+    "name": "Glob",
+    "result": {
+      "content": "pattern is required",
+      "isError": true
+    }
+  },
+  {
+    "name": "Grep",
+    "result": {
+      "content": "pattern is required",
+      "isError": true
+    }
+  },
+  {
+    "name": "Bash",
+    "result": {
+      "content": "Missing required parameter: command",
+      "isError": true
+    }
+  },
+  {
+    "name": "WebFetch",
+    "result": {
+      "content": "Missing required parameter: url",
+      "isError": true
+    }
+  },
+  {
+    "name": "Skill",
+    "result": {
+      "content": "Missing required parameter: skill",
+      "isError": true
+    }
+  },
+  {
+    "name": "Goal",
+    "result": {
+      "content": "action must be one of: set, update, complete, abandon.",
+      "isError": true
+    }
+  },
+  {
+    "name": "TodoWrite",
+    "result": {
+      "content": "Missing required parameter: todos (must be an array)",
+      "isError": true
+    }
+  },
+  {
+    "name": "TaskStop",
+    "result": {
+      "content": "Missing required parameter: task_id",
+      "isError": true
+    }
+  },
+  {
+    "name": "TaskOutput",
+    "result": {
+      "content": "Missing required parameter: task_id",
+      "isError": true
+    }
+  },
+  {
+    "name": "AskUserQuestion",
+    "result": {
+      "content": "Missing required parameter: questions (must be a non-empty array)",
+      "isError": true
+    }
+  }
+]

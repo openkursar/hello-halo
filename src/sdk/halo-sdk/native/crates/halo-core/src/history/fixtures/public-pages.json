@@ -1,0 +1,535 @@
+{
+  "datasets": {
+    "stream": "{\"type\":\"user\",\"uuid\":\"hidden\",\"message\":{\"role\":\"user\",\"content\":\"Private directory\",\"isMeta\":true,\"toolContext\":{\"version\":1,\"baselineAttachment\":true}}}\n{\"type\":\"system\",\"uuid\":\"system\",\"message\":{\"content\":\"system view\"}}\n{\"type\":\"user\",\"uuid\":\"user\",\"sessionId\":\"stored\",\"message\":{\"role\":\"user\",\"content\":\"Public user\",\"toolContext\":{\"version\":1}}}\n{\"type\":\"assistant\",\"uuid\":\"block-one\",\"responseUuid\":\"reply\",\"sessionId\":\"stored\",\"message\":{\"id\":\"provider\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"first\"}]}}\n{\"type\":\"assistant\",\"uuid\":\"block-two\",\"responseUuid\":\"reply\",\"sessionId\":\"stored\",\"message\":{\"id\":\"provider\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"second\"}]}}\n{\"type\":\"assistant_metadata\",\"responseUuid\":\"reply\",\"sessionId\":\"other\",\"message\":{\"usage\":{\"output_tokens\":999}}}\n{\"type\":\"compact_checkpoint\",\"uuid\":\"checkpoint\",\"checkpointVersion\":1,\"summary\":\"private\",\"messages\":[{\"role\":\"user\",\"content\":\"private summary\"}]}\n{\"type\":\"assistant_metadata\",\"responseUuid\":\"reply\",\"sessionId\":\"stored\",\"message\":{\"id\":\"provider-final\",\"model\":\"fixture\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":17,\"output_tokens\":8}}}\n{\"type\":\"user\",\"uuid\":\"next\",\"message\":{\"role\":\"user\",\"content\":\"next\"}}\n",
+    "malformed": "\nnull\n[1,2]\ninvalid\n{\"type\":\"user\",\"message\":{\"content\":\"tail\"}}",
+    "arrays": "{\"type\":\"assistant\",\"uuid\":\"array\",\"responseUuid\":\"array-reply\",\"message\":[\"one\",\"two\"]}\n{\"type\":\"assistant_metadata\",\"responseUuid\":\"array-reply\",\"message\":{\"usage\":{\"input_tokens\":3}}}"
+  },
+  "pages": [
+    {
+      "dataset": "stream",
+      "options": {},
+      "expected": [
+        {
+          "type": "user",
+          "uuid": "user",
+          "session_id": "stored",
+          "message": {
+            "role": "user",
+            "content": "Public user"
+          },
+          "parent_tool_use_id": null
+        },
+        {
+          "type": "assistant",
+          "uuid": "block-one",
+          "session_id": "stored",
+          "message": {
+            "id": "provider",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "first"
+              }
+            ]
+          },
+          "parent_tool_use_id": null
+        },
+        {
+          "type": "assistant",
+          "uuid": "block-two",
+          "session_id": "stored",
+          "message": {
+            "id": "provider-final",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "second"
+              }
+            ],
+            "model": "fixture",
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 17,
+              "output_tokens": 8
+            }
+          },
+          "parent_tool_use_id": null
+        },
+        {
+          "type": "user",
+          "uuid": "next",
+          "session_id": "fallback",
+          "message": {
+            "role": "user",
+            "content": "next"
+          },
+          "parent_tool_use_id": null
+        }
+      ]
+    },
+    {
+      "dataset": "stream",
+      "options": {
+        "includeSystemMessages": true
+      },
+      "expected": [
+        {
+          "type": "system",
+          "uuid": "system",
+          "session_id": "fallback",
+          "message": {
+            "content": "system view"
+          },
+          "parent_tool_use_id": null
+        },
+        {
+          "type": "user",
+          "uuid": "user",
+          "session_id": "stored",
+          "message": {
+            "role": "user",
+            "content": "Public user"
+          },
+          "parent_tool_use_id": null
+        },
+        {
+          "type": "assistant",
+          "uuid": "block-one",
+          "session_id": "stored",
+          "message": {
+            "id": "provider",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "first"
+              }
+            ]
+          },
+          "parent_tool_use_id": null
+        },
+        {
+          "type": "assistant",
+          "uuid": "block-two",
+          "session_id": "stored",
+          "message": {
+            "id": "provider-final",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "second"
+              }
+            ],
+            "model": "fixture",
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 17,
+              "output_tokens": 8
+            }
+          },
+          "parent_tool_use_id": null
+        },
+        {
+          "type": "user",
+          "uuid": "next",
+          "session_id": "fallback",
+          "message": {
+            "role": "user",
+            "content": "next"
+          },
+          "parent_tool_use_id": null
+        }
+      ]
+    },
+    {
+      "dataset": "stream",
+      "options": {
+        "limit": 1
+      },
+      "expected": [
+        {
+          "type": "user",
+          "uuid": "user",
+          "session_id": "stored",
+          "message": {
+            "role": "user",
+            "content": "Public user"
+          },
+          "parent_tool_use_id": null
+        }
+      ]
+    },
+    {
+      "dataset": "stream",
+      "options": {
+        "offset": 1,
+        "limit": 1
+      },
+      "expected": [
+        {
+          "type": "assistant",
+          "uuid": "block-one",
+          "session_id": "stored",
+          "message": {
+            "id": "provider",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "first"
+              }
+            ]
+          },
+          "parent_tool_use_id": null
+        }
+      ]
+    },
+    {
+      "dataset": "stream",
+      "options": {
+        "offset": 2,
+        "limit": 1
+      },
+      "expected": [
+        {
+          "type": "assistant",
+          "uuid": "block-two",
+          "session_id": "stored",
+          "message": {
+            "id": "provider-final",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "second"
+              }
+            ],
+            "model": "fixture",
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 17,
+              "output_tokens": 8
+            }
+          },
+          "parent_tool_use_id": null
+        }
+      ]
+    },
+    {
+      "dataset": "stream",
+      "options": {
+        "offset": 3,
+        "limit": 1
+      },
+      "expected": [
+        {
+          "type": "user",
+          "uuid": "next",
+          "session_id": "fallback",
+          "message": {
+            "role": "user",
+            "content": "next"
+          },
+          "parent_tool_use_id": null
+        }
+      ]
+    },
+    {
+      "dataset": "stream",
+      "options": {
+        "offset": 4,
+        "limit": 1
+      },
+      "expected": []
+    },
+    {
+      "dataset": "stream",
+      "options": {
+        "offset": 90,
+        "limit": 2
+      },
+      "expected": []
+    },
+    {
+      "dataset": "stream",
+      "options": {
+        "offset": 1.5,
+        "limit": 2
+      },
+      "error": {
+        "name": "RangeError",
+        "message": "History pagination requires a nonnegative offset and a limit from 0 to 4096"
+      }
+    },
+    {
+      "dataset": "stream",
+      "options": {
+        "limit": 4097
+      },
+      "error": {
+        "name": "RangeError",
+        "message": "History pagination requires a nonnegative offset and a limit from 0 to 4096"
+      }
+    },
+    {
+      "dataset": "stream",
+      "options": {
+        "limit": null
+      },
+      "expected": [
+        {
+          "type": "user",
+          "uuid": "user",
+          "session_id": "stored",
+          "message": {
+            "role": "user",
+            "content": "Public user"
+          },
+          "parent_tool_use_id": null
+        },
+        {
+          "type": "assistant",
+          "uuid": "block-one",
+          "session_id": "stored",
+          "message": {
+            "id": "provider",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "first"
+              }
+            ]
+          },
+          "parent_tool_use_id": null
+        },
+        {
+          "type": "assistant",
+          "uuid": "block-two",
+          "session_id": "stored",
+          "message": {
+            "id": "provider-final",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "second"
+              }
+            ],
+            "model": "fixture",
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 17,
+              "output_tokens": 8
+            }
+          },
+          "parent_tool_use_id": null
+        },
+        {
+          "type": "user",
+          "uuid": "next",
+          "session_id": "fallback",
+          "message": {
+            "role": "user",
+            "content": "next"
+          },
+          "parent_tool_use_id": null
+        }
+      ]
+    },
+    {
+      "dataset": "stream",
+      "options": {
+        "offset": -1
+      },
+      "error": {
+        "name": "RangeError",
+        "message": "History pagination requires a nonnegative offset and a limit from 0 to 4096"
+      }
+    },
+    {
+      "dataset": "stream",
+      "options": {
+        "limit": 0
+      },
+      "expected": []
+    },
+    {
+      "dataset": "malformed",
+      "options": {},
+      "expected": [
+        {
+          "type": "user",
+          "uuid": "",
+          "session_id": "fallback",
+          "message": {
+            "content": "tail"
+          },
+          "parent_tool_use_id": null
+        }
+      ]
+    },
+    {
+      "dataset": "arrays",
+      "options": {
+        "limit": 1
+      },
+      "expected": [
+        {
+          "type": "assistant",
+          "uuid": "array",
+          "session_id": "fallback",
+          "message": {
+            "0": "one",
+            "1": "two",
+            "usage": {
+              "input_tokens": 3
+            }
+          },
+          "parent_tool_use_id": null
+        }
+      ]
+    }
+  ],
+  "lines": [
+    {
+      "start": 0,
+      "expected": [
+        {
+          "line": "null",
+          "bytes": 4,
+          "start": 1,
+          "end": 6,
+          "terminated": true
+        },
+        {
+          "line": "[1,2]",
+          "bytes": 5,
+          "start": 6,
+          "end": 12,
+          "terminated": true
+        },
+        {
+          "line": "invalid",
+          "bytes": 7,
+          "start": 12,
+          "end": 20,
+          "terminated": true
+        },
+        {
+          "line": "{\"type\":\"user\",\"message\":{\"content\":\"tail\"}}",
+          "bytes": 44,
+          "value": {
+            "type": "user",
+            "message": {
+              "content": "tail"
+            }
+          },
+          "start": 20,
+          "end": 64,
+          "terminated": false
+        }
+      ]
+    },
+    {
+      "start": 1,
+      "expected": [
+        {
+          "line": "[1,2]",
+          "bytes": 5,
+          "start": 6,
+          "end": 12,
+          "terminated": true
+        },
+        {
+          "line": "invalid",
+          "bytes": 7,
+          "start": 12,
+          "end": 20,
+          "terminated": true
+        },
+        {
+          "line": "{\"type\":\"user\",\"message\":{\"content\":\"tail\"}}",
+          "bytes": 44,
+          "value": {
+            "type": "user",
+            "message": {
+              "content": "tail"
+            }
+          },
+          "start": 20,
+          "end": 64,
+          "terminated": false
+        }
+      ]
+    },
+    {
+      "start": 5,
+      "expected": [
+        {
+          "line": "[1,2]",
+          "bytes": 5,
+          "start": 6,
+          "end": 12,
+          "terminated": true
+        },
+        {
+          "line": "invalid",
+          "bytes": 7,
+          "start": 12,
+          "end": 20,
+          "terminated": true
+        },
+        {
+          "line": "{\"type\":\"user\",\"message\":{\"content\":\"tail\"}}",
+          "bytes": 44,
+          "value": {
+            "type": "user",
+            "message": {
+              "content": "tail"
+            }
+          },
+          "start": 20,
+          "end": 64,
+          "terminated": false
+        }
+      ]
+    },
+    {
+      "start": 9,
+      "expected": [
+        {
+          "line": "invalid",
+          "bytes": 7,
+          "start": 12,
+          "end": 20,
+          "terminated": true
+        },
+        {
+          "line": "{\"type\":\"user\",\"message\":{\"content\":\"tail\"}}",
+          "bytes": 44,
+          "value": {
+            "type": "user",
+            "message": {
+              "content": "tail"
+            }
+          },
+          "start": 20,
+          "end": 64,
+          "terminated": false
+        }
+      ]
+    },
+    {
+      "start": 20,
+      "expected": []
+    }
+  ]
+}

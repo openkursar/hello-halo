@@ -1,0 +1,53 @@
+{
+  "tools.web.missing_url": {
+    "text": "Missing required parameter: url",
+    "slots": []
+  },
+  "tools.web.invalid_url": {
+    "text": "Invalid URL: {url}",
+    "slots": [
+      "url"
+    ]
+  },
+  "tools.web.aborted": {
+    "text": "Request aborted",
+    "slots": []
+  },
+  "tools.web.fetch_failed": {
+    "text": "Failed to fetch {url}: {error}",
+    "slots": [
+      "url",
+      "error"
+    ]
+  },
+  "tools.web.timeout": {
+    "text": "Request timed out after 30000ms",
+    "slots": []
+  },
+  "tools.web.redirect": {
+    "text": "The response destination uses a different host: {url}\nReview that address, then request it explicitly with WebFetch if it is the intended source.",
+    "slots": [
+      "url"
+    ]
+  },
+  "tools.web.http_error": {
+    "text": "HTTP {status} when fetching {url}",
+    "slots": [
+      "status",
+      "url"
+    ]
+  },
+  "tools.web.body_error": {
+    "text": "Failed to read response body: {error}",
+    "slots": [
+      "error"
+    ]
+  },
+  "tools.web.truncated": {
+    "text": "{body}\n\n... (truncated, {length} total characters)",
+    "slots": [
+      "body",
+      "length"
+    ]
+  }
+}

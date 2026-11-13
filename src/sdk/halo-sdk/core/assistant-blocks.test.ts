@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createServer, type ServerResponse } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { queryLoop } from './query-loop.js';
-import { createSession } from './session.js';
+import { queryLoop, createSession } from '../index.js';
 import { getTranscriptPath } from './transcript.js';
 import { AnthropicProvider } from '../llm/anthropic.js';
 import { OpenAiCompatProvider } from '../llm/openai-compat.js';
@@ -11,6 +11,41 @@ import type { QueryConfig } from '../types/config.js';
 import type { SDKAssistantMessage, SDKMessage } from './query-types.js';
 import type { ContentBlock, ProviderRequest } from '../types/provider.js';
 import type { Tool } from '../types/tool.js';
+
+const servers: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  for (const close of servers.splice(0)) await close();
+});
+
+/**
+ * The loop calls its HTTP adapters from Rust, where a JavaScript `fetch` stub
+ * cannot observe or script requests, so these cases serve bytes from a loopback server.
+ */
+async function loopback(handler: (request: { body: any; call: number; response: ServerResponse }) => Promise<void> | void) {
+  let call = 0;
+  const bodies: any[] = [];
+  const server = createServer((request, response) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      bodies.push(body);
+      await handler({ body, call: call++, response });
+    })().catch(() => { if (!response.headersSent) response.writeHead(500); response.end(); });
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  servers.push(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  });
+  return { url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, bodies };
+}
+
+function sse(response: ServerResponse, events: unknown[]) {
+  response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  response.end(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+}
 
 const goal: Tool = {
   name: 'RecordAnswer', description: 'Record the answer.',
@@ -92,7 +127,7 @@ function config(includePartialMessages = true): QueryConfig {
   } as QueryConfig;
 }
 
-function replay(frames: Array<{ type: string; event?: unknown }>) {
+async function replay(frames: Array<{ type: string; event?: unknown }>) {
   const responses: unknown[][] = [];
   let events: unknown[] = [];
   for (const frame of frames) {
@@ -102,20 +137,11 @@ function replay(frames: Array<{ type: string; event?: unknown }>) {
     if (event.type === 'message_stop') { responses.push(events); events = []; }
   }
   const requests: ProviderRequest[] = [];
-  let call = 0;
-  const provider = new AnthropicProvider({ apiKey: 'fixture', baseUrl: 'https://fixture.invalid' });
-  const createStream = provider.createMessageStream.bind(provider);
-  provider.createMessageStream = request => {
-    requests.push(structuredClone(request));
-    return createStream(request);
-  };
-  vi.stubGlobal('fetch', vi.fn(async () => {
-    const response = responses[Math.min(call++, responses.length - 1)];
-    return new Response(response.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''), {
-      headers: { 'Content-Type': 'text/event-stream' },
-    });
-  }));
-  return { provider, requests };
+  const endpoint = await loopback(({ call, body, response }) => {
+    requests.push(body as ProviderRequest);
+    sse(response, responses[Math.min(call, responses.length - 1)]);
+  });
+  return { provider: new AnthropicProvider({ apiKey: 'fixture', baseUrl: endpoint.url }), requests };
 }
 
 async function collect(stream: AsyncIterable<SDKMessage>) {
@@ -137,12 +163,11 @@ function sequence(messages: Array<{ type: string; event?: unknown }>) {
   });
 }
 
-afterEach(() => vi.unstubAllGlobals());
 
 describe('assistant block delivery', () => {
   for (const expected of fixture.responses.filter(run => !run.retry)) {
     it(`emits completed blocks at their boundaries with partial=${expected.includePartialMessages}`, async () => {
-      const { provider, requests } = replay(fixture.responses[0].frames);
+      const { provider, requests } = await replay(fixture.responses[0].frames);
       const complete: SDKAssistantMessage[] = [];
       const messages = await collect(queryLoop(config(expected.includePartialMessages), provider, [goal], '1+3', {
         onAssistantMessage: message => { complete.push(message); },
@@ -164,7 +189,7 @@ describe('assistant block delivery', () => {
 
   it('preserves thinking signatures and initial usage at each block boundary', async () => {
     const expected = fixture.thinking[0];
-    const { provider } = replay(expected.frames);
+    const { provider } = await replay(expected.frames);
     const messages = await collect(queryLoop(config(), provider, [goal], '1+3'));
     expect(assistants(messages)).toEqual(assistants(expected.frames));
     expect(sequence(messages)).toEqual(sequence(expected.frames));
@@ -185,7 +210,7 @@ describe('assistant block delivery', () => {
       { type: 'stream_event', event: { type: 'content_block_delta', index: 2, delta: { type: 'text_delta', text: 'Recorded next.' } } },
       { type: 'stream_event', event: { type: 'content_block_stop', index: 2 } },
     );
-    const { provider, requests } = replay(frames);
+    const { provider, requests } = await replay(frames);
     const messages = await collect(queryLoop(config(), provider, [goal], '1+3'));
     const content = (assistants(messages) as SDKAssistantMessage['message'][]).slice(0, 3).map(message => message.content);
     expect(content.map(blocks => blocks[0].type)).toEqual(['text', 'tool_use', 'text']);
@@ -197,10 +222,10 @@ describe('assistant block delivery', () => {
     const cwd = await mkdtemp(join(tmpdir(), 'sdk-block-history-'));
     const env = { SDK_TEST_CONFIG_DIR: join(cwd, 'config') };
     const conventions = { configDirEnv: 'SDK_TEST_CONFIG_DIR' };
-    const { provider, requests } = replay(fixture.thinking[0].frames);
+    const { provider, requests } = await replay(fixture.thinking[0].frames);
     const options = {
       provider, model: config().model, cwd, env, conventions, includePartialMessages: true,
-      systemPrompt: 'Protocol test.', tools: [] as string[], maxTurns: 1,
+      systemPrompt: 'Protocol test.', tools: [] as string[], maxTurns: 1, settingSources: [],
     };
     const session = await createSession(options);
     let resumed: Awaited<ReturnType<typeof createSession>> | undefined;
@@ -247,7 +272,7 @@ describe('assistant block delivery', () => {
 });
 
 describe('completed blocks around a provider retry', () => {
-  it.each([true, false])('retains published blocks but persists only successful responses with partial=%s', async partial => {
+  it.each([true, false])('retains published blocks and failed usage without persisting failed content with partial=%s', async partial => {
     const expected = fixture.responses.find(run => run.retry && run.includePartialMessages === partial)!;
     const streamed = fixture.responses.find(run => run.retry && run.includePartialMessages)!;
     const initial = streamed.frames.filter(frame => frame.type === 'stream_event').slice(0, 4)
@@ -256,24 +281,27 @@ describe('completed blocks around a provider retry', () => {
       .filter(message => message.id === 'msg_2');
     const body = { ...recovered[0], content: recovered.flatMap(message => message.content) };
     const tail = streamed.frames.filter(frame => frame.type === 'stream_event').slice(4).map(frame => frame.event);
-    const sse = (events: unknown[]) => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''), {
-      headers: { 'Content-Type': 'text/event-stream' },
+    const endpoint = await loopback(({ call, response }) => {
+      if (call === 0) return sse(response, initial);
+      if (call === 1) {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify(body));
+        return;
+      }
+      return sse(response, tail);
     });
-    vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce(sse(initial))
-      .mockResolvedValueOnce(new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } }))
-      .mockResolvedValueOnce(sse(tail)));
     const complete: SDKAssistantMessage[] = [];
     const execute = vi.fn(goal.execute);
-    const provider = new AnthropicProvider({ apiKey: 'fixture', baseUrl: 'https://fixture.invalid' });
+    const provider = new AnthropicProvider({ apiKey: 'fixture', baseUrl: endpoint.url });
     const messages = await collect(queryLoop(config(partial), provider, [{ ...goal, execute }], '1+3', {
       onAssistantMessage: message => { complete.push(message); },
     }));
     expect(assistants(messages)).toEqual(assistants(expected.frames));
     expect(complete.map(message => message.message.id)).toEqual(['msg_2', 'msg_3']);
+    expect(complete.every(message => message.message.content.length > 0)).toBe(true);
     expect(execute).toHaveBeenCalledOnce();
     expect(messages.find(message => message.type === 'result')).toMatchObject({
-      result: 'Done', usage: { input_tokens: 22, output_tokens: 38 },
+      result: 'Done', usage: { input_tokens: 33, output_tokens: 39, cache_read_input_tokens: 9 },
     });
   });
 });
@@ -281,16 +309,17 @@ describe('completed blocks around a provider retry', () => {
 
 describe('OpenAI reasoning and text boundaries', () => {
   it.each([true, false])('completes prose before opening a tool with partial=%s', async partial => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response([
-      { id: 'openai_1', model: 'deepseek-test', choices: [{ delta: { reasoning_content: 'Add the numbers.' } }] },
-      { choices: [{ delta: { content: '1+3 = 4' } }] },
-      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'tool_1', function: { name: goal.name, arguments: '{"answer":"4"}' } }] } }] },
-      { choices: [{ finish_reason: 'tool_calls' }] },
-      { choices: [], usage: { prompt_tokens: 31, completion_tokens: 17 } },
-    ].map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n', {
-      headers: { 'Content-Type': 'text/event-stream' },
-    })));
-    const provider = new OpenAiCompatProvider({ id: 'fixture', name: 'Fixture', apiKey: 'fixture', baseUrl: 'https://fixture.invalid' });
+    const endpoint = await loopback(({ response }) => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.end([
+        { id: 'openai_1', model: 'deepseek-test', choices: [{ delta: { reasoning_content: 'Add the numbers.' } }] },
+        { choices: [{ delta: { content: '1+3 = 4' } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'tool_1', function: { name: goal.name, arguments: '{"answer":"4"}' } }] } }] },
+        { choices: [{ finish_reason: 'tool_calls' }] },
+        { choices: [], usage: { prompt_tokens: 31, completion_tokens: 17 } },
+      ].map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n');
+    });
+    const provider = new OpenAiCompatProvider({ id: 'fixture', name: 'Fixture', apiKey: 'fixture', baseUrl: `${endpoint.url}/v1` });
     const complete: SDKAssistantMessage[] = [];
     const messages = await collect(queryLoop({ ...config(partial), maxTurns: 1 }, provider, [goal], '1+3', {
       onAssistantMessage: message => { complete.push(message); },

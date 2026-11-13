@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { loadResumeHistory } from './resume-history.js';
 import { getTranscriptPath } from './transcript.js';
-import { createSession } from './session.js';
+import { createSession } from '../index.js';
 import { RESUME_HISTORY_UNAVAILABLE, isResumeHistoryError } from '../utils/errors.js';
 import type { LlmProvider } from '../llm/provider.js';
 
@@ -17,7 +17,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { await fs.rm(configDir, { recursive: true, force: true }); });
 
-const options = () => ({ env: { CLAUDE_CONFIG_DIR: configDir } });
+const options = () => ({ env: { CLAUDE_CONFIG_DIR: configDir, HOME: configDir, USERPROFILE: configDir }, settingSources: [] });
 
 async function writeHistory(sessionId: string, lines: Array<Record<string, unknown> | string>): Promise<void> {
   const path = getTranscriptPath(sessionId, cwd, options());
@@ -88,7 +88,7 @@ describe('strict resume', () => {
   it('makes session creation reject so the host can continue from its own record', async () => {
     const provider = { id: 'unused', name: 'Unused', capabilities: () => ({}) } as unknown as LlmProvider;
     const creation = createSession({
-      provider, model: 'test-model', cwd, env: { CLAUDE_CONFIG_DIR: configDir },
+      ...options(), provider, model: 'test-model', cwd,
       systemPrompt: 'test', resume: randomUUID(), strictResume: true,
     });
     await expect(creation).rejects.toMatchObject({ code: RESUME_HISTORY_UNAVAILABLE, reason: 'missing' });

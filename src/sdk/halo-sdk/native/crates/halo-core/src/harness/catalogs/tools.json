@@ -1,0 +1,330 @@
+{
+  "tools.ask_user_question.description": {
+    "text": "Ask the user one to four multiple-choice questions and wait for their answers.\n\nUse it only when you need a discrete decision from the user before you can continue, and the answer genuinely changes what you do next — for example, which of two incompatible approaches to implement, or which files a destructive action should cover.\n\nDon't use it for discussion. When the user is exploring an idea, thinking through a design, or asking for your view, answer in prose: give your opinion and reasoning, lay out the trade-offs, and let the conversation continue over as many turns as it needs. A pick-one prompt cuts that short and forces choices the user may not want to make yet.\nAlso don't use it for routine calls you can make yourself, or to ask \"should I proceed?\" — if the task is clear, proceed.\n\nWhen you do ask:\n- Offer options that are genuinely distinct, and explain the trade-off of each in its description.\n- Put your recommendation first and mark it \"(Recommended)\".\n- The user can always answer in their own words instead of picking an option.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.questions.description": {
+    "text": "One to four decisions presented together for the user to answer.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.questions.items.fields.question.description": {
+    "text": "A self-contained question that identifies the decision you need. If several selections are allowed, make that clear in the wording.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.questions.items.fields.header.description": {
+    "text": "Topic label for the question, no longer than 12 characters.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.questions.items.fields.options.description": {
+    "text": "Supply two to four meaningful alternatives. Single-select alternatives should not overlap. Leave out an Other entry because the user can already enter a free-text answer.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.questions.items.fields.options.items.fields.label.description": {
+    "text": "Short selectable name, typically one to five words, that distinguishes this choice.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.questions.items.fields.options.items.fields.description.description": {
+    "text": "Explain the practical consequence or trade-off of selecting this option.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.questions.items.fields.options.items.fields.preview.description": {
+    "text": "Optional supporting preview for a single-select choice, such as a layout sample or code excerpt. Do not use with multiSelect.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.questions.items.fields.multi_select.description": {
+    "text": "Allow several selections when the choices can apply together. Otherwise the user selects one.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.answers.description": {
+    "text": "Host-supplied answers keyed by the exact question text; the permission callback adds them through updatedInput after the user replies.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.annotations.description": {
+    "text": "Notes and preview selections accompanying an answer, indexed by the exact question text.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.annotations.additional_properties.fields.preview.description": {
+    "text": "Preview shown with the option the user selected.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.annotations.additional_properties.fields.notes.description": {
+    "text": "Additional text supplied alongside the selected answer.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.metadata.description": {
+    "text": "Optional workflow attributes for the host, separate from the questions shown to the user.",
+    "slots": []
+  },
+  "tools.ask_user_question.input_schema.fields.metadata.fields.source.description": {
+    "text": "Caller-defined tag identifying the workflow that requested these questions.",
+    "slots": []
+  },
+  "tools.bash.description": {
+    "text": "Run a shell command and receive its exit status and captured output.\n\nCommands share the session's working directory and exported environment variables. Shell functions, aliases and background jobs are not carried between calls. Quote paths and arguments for the shell you are using, and distinguish data from executable syntax.\n\nPrefer available file tools for reading, searching and editing: they track file access and constrain returned content. Use Bash for programs, builds, tests and operations those tools do not cover, or when the user specifically requests a shell command. A permission refusal is a boundary, not an invitation to try the same action through another tool.\n\nThe default foreground timeout is 120000 milliseconds. An explicit timeout sets the execution deadline in either mode, capped at 600000 milliseconds. Choose run_in_background for session-owned work whose result is not needed immediately. Without an explicit timeout, background work runs until it exits or the session closes or is interrupted. The response supplies a task ID, output path and deadline. TaskOutput waits for completion and TaskStop cancels the task; Read can inspect its output file. A TaskOutput wait timeout does not stop the command or change its execution deadline. If the final answer depends on that work, collect its completed result before finishing. Completion notices appear at the next active turn.\n\nBackground tasks are owned by this session, not persistent service deployments. Session close or interruption stops them, and nonpersistent sessions remove their output files on close. When the user requires a service to outlive this session, use an appropriate service manager or independent process lifecycle and verify that requirement separately.\n\nIndependent observations may run together. A command that depends on another command's effects must wait for it and check the outcome. Diagnose a failure before repeating it. Avoid repeatedly checking background tasks that already send completion notices; if the next step needs a result, wait through TaskOutput. Use an external service's own wait or status operation for work it owns.\n\nRepository changes still follow the user's scope and local workflow. Do not turn a request to edit code into permission to commit, publish, discard work or rewrite history. Preserve hooks, signing and repository configuration unless changing them is explicitly part of the authorized task. Use an available matching skill for a specialized commit or review-request workflow.",
+    "slots": []
+  },
+  "tools.bash.input_schema.fields.command.description": {
+    "text": "Shell program or command line to run in the session working directory.",
+    "slots": []
+  },
+  "tools.bash.input_schema.fields.description.description": {
+    "text": "A short explanation of the command and its intended effect, including any changes it makes.",
+    "slots": []
+  },
+  "tools.bash.input_schema.fields.timeout.description": {
+    "text": "Execution deadline in milliseconds, capped at 600000. Foreground commands default to 120000; background commands have no deadline unless this is supplied.",
+    "slots": []
+  },
+  "tools.bash.input_schema.fields.run_in_background.description": {
+    "text": "Return a session-owned task reference immediately. Retrieve completion with TaskOutput or inspect output with Read. Without timeout, it runs until completion, cancellation or session close.",
+    "slots": []
+  },
+  "tools.edit.description": {
+    "text": "Change an existing text file by substituting new_string for old_string.\n\nRead the target before editing so the change is grounded in its current contents. A stale read can be rejected if another writer changed the file; read again and reconsider the edit in that case. Preserve the source's whitespace in old_string and omit Read's line-number annotations.\n\nAn ordinary edit requires exactly one occurrence of a nonempty old_string. Add surrounding source text to disambiguate repeated passages. Set replace_all only when every occurrence should change. new_string may be empty to delete the matched text, but it cannot equal old_string. For a new file or a deliberate full replacement, use Write.",
+    "slots": []
+  },
+  "tools.edit.input_schema.fields.file_path.description": {
+    "text": "Absolute filesystem path of the existing text file targeted by this replacement.",
+    "slots": []
+  },
+  "tools.edit.input_schema.fields.old_string.description": {
+    "text": "Nonempty source passage to match literally, including whitespace; it must occur once unless replace_all is enabled.",
+    "slots": []
+  },
+  "tools.edit.input_schema.fields.new_string.description": {
+    "text": "Replacement passage; use an empty string for deletion. A value identical to old_string is rejected.",
+    "slots": []
+  },
+  "tools.edit.input_schema.fields.replace_all.description": {
+    "text": "Enable to change every non-overlapping match. If omitted or false, more than one match is rejected.",
+    "slots": []
+  },
+  "tools.glob.description": {
+    "text": "Locate files by matching their paths against a glob expression. The pattern is relative to path, or to the session's working directory when path is absent; for example, \"packages/**/index.ts\".\n\nThe result lists at most 250 files, newest modification first. Restrict the directory or pattern when the result is incomplete. Matching includes hidden names, but dependency, build, cache, and version-control directories are excluded. The directory walk does not follow symbolic links. Use Grep when the clue is inside a file rather than in its name.",
+    "slots": []
+  },
+  "tools.glob.input_schema.fields.pattern.description": {
+    "text": "Glob pattern relative to the search directory. Supports *, **, ?, character classes, braces (e.g. **/*.{ts,tsx}), and extglobs. Both / and \\ separators are accepted; use character classes such as [*] for literal glob characters.",
+    "slots": []
+  },
+  "tools.glob.input_schema.fields.path.description": {
+    "text": "Search root directory. Omit to use the session working directory; otherwise provide an existing directory path.",
+    "slots": []
+  },
+  "tools.goal.description": {
+    "text": "Set a goal that holds for the whole task: what the work must achieve and how to tell it's done. Unlike the conversation, the goal is never summarized away — it survives context compaction intact — and the user can see and edit it.\n\nWhen to use it\n- The user asks you to set or work toward a goal.\n- The task is clearly long and complex — likely to run for hours, span many rounds of work, or outlast a context compaction — so it would be easy to lose sight of the objective.\nFor ordinary multi-step work, TodoWrite alone is enough.\n\nActions\n- set: state the objective in the user's terms, with done-when criteria concrete enough to check.\n- update: refine the wording or criteria as your understanding improves. If the change alters what the user actually wants, confirm with them first.\n- complete: only after checking the real result against every criterion.\n- abandon: when the user cancels the goal or replaces it with a different one.\n\nWorking with a goal\n- The goal is the direction; the route can change. Revising your todos and approach as you learn is expected. If you notice you're working on something that doesn't serve the goal, step back and re-plan.\n- If the user edits or removes the goal, you'll be told; follow the latest version.\n- Before ending work on an open goal, check the result against the criteria. If some aren't met, keep going, or report which ones and why.\n\nExamples\n\n<example>\nUser: Migrate this project from JavaScript to TypeScript. It's big — take the night if you need to.\nGoal: set\n  objective: Migrate the project from JavaScript to TypeScript\n  doneWhen:\n    - No .js source files remain under src/\n    - tsc --noEmit passes with strict mode on\n    - The existing test suite passes\nThen: TodoWrite for the first batch of modules.\nWhy: hours of work across hundreds of files will outlast several compactions. The criteria can be checked by commands, not by impression.\n</example>\n\n<example>\nUser: Go through last year's 40 supplier invoices and reconcile them against the bank export. Flag anything that doesn't match.\nGoal: set\n  objective: Reconcile all 40 of last year's supplier invoices against the bank export\n  doneWhen:\n    - Every invoice is marked matched or flagged\n    - Each flagged item states the amount difference and the likely cause\n    - A summary table is saved next to the source files\nWhy: long, repetitive work where it's easy to lose count. \"Looks right\" would not be checkable; \"every invoice marked\" is.\n</example>\n\n<example>\nUser: Set a goal: get the landing page conversion copy ready for Monday's launch.\nGoal: set\n  objective: Landing page copy ready for Monday's launch\n  doneWhen:\n    - Headline, subhead, three feature blocks, and CTA written\n    - Two headline variants provided for A/B testing\nWhy: the user asked for a goal explicitly, so set one even though the task is moderate.\n</example>\n\n<example>\nUser: Add a dark mode toggle to settings and make sure the build passes.\nNo goal. Use TodoWrite.\nWhy: a few steps finished within one sitting; a checklist covers it.\n</example>\n\n<example>\nUser: What's the difference between a mutex and a semaphore?\nNo goal, no todo. Just answer.\n</example>\n\n<example>\nMid-task on the TypeScript migration, you find the user's team plans to delete half the legacy modules next week.\nDon't silently change the goal. Ask whether those modules should be excluded, then use update if they confirm.\nWhy: this changes what the user wants, not just how you get there.\n</example>",
+    "slots": []
+  },
+  "tools.goal.input_schema.fields.action.description": {
+    "text": "What to do with the goal",
+    "slots": []
+  },
+  "tools.goal.input_schema.fields.objective.description": {
+    "text": "What the work must achieve, in the user's terms. Required for set.",
+    "slots": []
+  },
+  "tools.goal.input_schema.fields.done_when.description": {
+    "text": "Checkable criteria that together mean the objective is met. For update, replaces the current list.",
+    "slots": []
+  },
+  "tools.goal.input_schema.fields.note.description": {
+    "text": "Optional context for this change, e.g. what was verified on complete or why it was abandoned.",
+    "slots": []
+  },
+  "tools.grep.description": {
+    "text": "Search local file contents with ripgrep regular expressions, subject to the session's read restrictions. Use this tool for ordinary content searches; a denied path remains denied when using another tool.\n\nStart with a specific pattern and the smallest useful path. glob selects paths and type narrows recognized file extensions. Escape regex punctuation when searching for literal source text. The default search is case-sensitive and line-oriented; -i ignores case and multiline permits matches across line breaks, including newlines matched by a dot.\n\nChoose files_with_matches to locate relevant files, content to inspect source lines, or count to see per-file totals. Context lines and line numbers are useful with content. Results are bounded: head_limit defaults to 250 entries, offset skips entries, and a separate character cap still applies. A truncation notice means some matches may be absent; narrow the query before drawing conclusions.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.pattern.description": {
+    "text": "Ripgrep-compatible expression to match against source text.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.path.description": {
+    "text": "Search root: a file or directory. Omit to use the session working directory.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.type.description": {
+    "text": "Named extension group, such as js, ts, py, go, or rust, used to restrict candidate files.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.glob.description": {
+    "text": "Restrict candidate paths with a glob, such as \"*.js\" or \"*.{ts,tsx}\"; passed to ripgrep --glob.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.output_mode.description": {
+    "text": "Choose source lines with content, matching paths with files_with_matches, or per-file totals with count. The default is files_with_matches; pagination applies to each mode.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.flag_b.description": {
+    "text": "Leading context lines for each content match. Has no effect on path lists or counts.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.flag_a.description": {
+    "text": "Trailing context lines for each content match. Has no effect on path lists or counts.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.flag_c.description": {
+    "text": "Alias for context.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.context.description": {
+    "text": "Include this many surrounding lines on each side of a match. Applies to content output.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.flag_n.description": {
+    "text": "Include source line numbers in content results. Enabled by default; other output modes ignore this option.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.flag_i.description": {
+    "text": "Match letters without distinguishing uppercase from lowercase.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.head_limit.description": {
+    "text": "Maximum entries after offset: source lines, file paths, or count rows according to output_mode. Defaults to 250. Zero removes this entry limit, but the output-size cap remains.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.offset.description": {
+    "text": "Number of result entries to skip before selecting the next window. Defaults to 0.",
+    "slots": []
+  },
+  "tools.grep.input_schema.fields.multiline.description": {
+    "text": "Allow a match to cross line boundaries and let a dot match newline characters. Disabled by default; enables ripgrep -U and --multiline-dotall.",
+    "slots": []
+  },
+  "tools.read.description": {
+    "text": "Inspect a local file within the session's permitted paths. Supply file_path; use Glob when you first need to locate a file.\n\nFor text, the initial window is at most 2,000 lines. Set offset to a one-based starting line and limit to the desired window; omitted offset or 0 starts at the beginning. Results prefix each source line with its number and a tab. These prefixes are display annotations, not file contents. Follow any continuation or truncation notice before treating the view as complete.\n\nText input is capped at 8 MiB. Larger files need a bounded streaming operation. Directory paths are rejected; missing files and denied paths produce errors. An empty file produces an explicit notice.\n\nSupported images can be attached for visual inspection, including screenshots. Notebook input is rendered as cell source and available text outputs; binary cell outputs are not rendered. PDF handling currently reports the file and validates an optional page range of at most 20 pages; it does not extract PDF text. Use another available PDF-capable tool when the contents are required.",
+    "slots": []
+  },
+  "tools.read.input_schema.fields.file_path.description": {
+    "text": "Identify the local file by its absolute filesystem path.",
+    "slots": []
+  },
+  "tools.read.input_schema.fields.offset.description": {
+    "text": "One-based starting line; omit or use 0 to start at the beginning.",
+    "slots": []
+  },
+  "tools.read.input_schema.fields.limit.description": {
+    "text": "Maximum lines in this text window; defaults to 2000.",
+    "slots": []
+  },
+  "tools.read.input_schema.fields.pages.description": {
+    "text": "PDF page selection: one page or an inclusive range, such as \"2\" or \"4-8\", spanning at most 20 pages. The current reader validates the selection without extracting text.",
+    "slots": []
+  },
+  "tools.skill.description": {
+    "text": "Load a named skill's instructions into this conversation. The tool returns text to follow; it does not run a separate agent or execute the workflow itself.\n\nChoose a skill from the available catalog when the user names it or its description fits the requested work. Load its instructions before performing the specialized work. Use skill=\"list\" to inspect the catalog; args can narrow that list by a name fragment. For other skills, args supplies request details.\n\nRepository commit and pull-request or merge-request tasks may have a matching workflow in the catalog. The selected workflow still follows the user's authorization and repository rules.\n\nA slash command may already have expanded a skill into a <skill-instructions> block. Follow that body directly instead of loading it a second time. After compaction, reload a needed skill if only its name remains. Ordinary local commands such as /help are handled by the command system, not by this tool.",
+    "slots": []
+  },
+  "tools.skill.input_schema.fields.skill.description": {
+    "text": "A catalog name, such as \"commit\", or \"list\" to inspect available skills.",
+    "slots": []
+  },
+  "tools.skill.input_schema.fields.args.description": {
+    "text": "Request details substituted into the selected skill template.",
+    "slots": []
+  },
+  "tools.task_stop.description": {
+    "text": "Stop a background Bash command in the current session, identified by the task_id returned when it was started.",
+    "slots": []
+  },
+  "tools.task_stop.input_schema.fields.task_id.description": {
+    "text": "ID of the background Bash command to stop",
+    "slots": []
+  },
+  "tools.task_output.description": {
+    "text": "Read the status and bounded output of a background Bash command in this session by task_id. By default waits for it to finish (up to the timeout); pass block=false to check without waiting. Use Read on output_file for additional output.",
+    "slots": []
+  },
+  "tools.task_output.input_schema.fields.task_id.description": {
+    "text": "Task ID to get output for",
+    "slots": []
+  },
+  "tools.task_output.input_schema.fields.block.description": {
+    "text": "Whether to wait for completion (default true)",
+    "slots": []
+  },
+  "tools.task_output.input_schema.fields.timeout.description": {
+    "text": "Max wait time in ms when block=true (0–600000, default: 30000). Returns not_ready if exceeded.",
+    "slots": []
+  },
+  "tools.todo_write.description": {
+    "text": "Keep a visible checklist for the current work. The user sees it as a live progress panel, and it keeps you organized across many steps.\n\nWhen to use it\n- The work has three or more distinct steps, or needs planning before you start.\n- The user gives you several things to do at once.\n- The task will run long enough that seeing progress helps the user.\n- New requirements arrive mid-task — add them so nothing gets dropped.\n\nWhen not to use it\n- Greetings, questions, and conversation (\"hi\", \"what does this function do?\").\n- A single step, or a few trivial ones you can simply do (\"rename this file\", \"fix this typo\").\nIn these cases just do the work; a checklist only adds noise.\n\nKeeping it accurate\n- Write each item as a concrete outcome (\"Draft the pricing section\", \"Fix the failing login test\"), not a vague activity. Give each item a content in imperative form (\"Run tests\") and an activeForm shown while it's in progress (\"Running tests\").\n- Mark an item in_progress right before you start it and completed right after it's truly done. Update as you go rather than batching updates at the end. Normally only one item is in progress at a time.\n- Completed means done — not partly done, not with its checks still failing. If you're blocked, leave the item in progress and add one for whatever is blocking it.\n- The list is a plan, not a contract. When what you learn changes the best path — a step turns out unnecessary, a new one is needed, the order should change — update the list right away, drop items that no longer apply, and briefly tell the user why.\n- If a goal is set, the items should serve it; when the two disagree, follow the goal.\n\nExamples\n- \"Compare these three vendors and write a recommendation\" → gather each vendor's pricing and terms; compare them on the user's criteria; draft the recommendation; check the figures against the sources.\n- \"Add dark mode and make sure the build passes\" → add the toggle; add theme styles; update components; run the build and tests (included because the user asked for it).\n- \"hi\" or \"what does git status do?\" → no list; just answer.",
+    "slots": []
+  },
+  "tools.todo_write.input_schema.fields.todos.items.fields.content.description": {
+    "text": "The task to complete, written in imperative form",
+    "slots": []
+  },
+  "tools.todo_write.input_schema.fields.todos.items.fields.active_form.description": {
+    "text": "The same task in present continuous form, displayed while in progress",
+    "slots": []
+  },
+  "tools.todo_write.input_schema.fields.todos.description": {
+    "text": "The updated todo list",
+    "slots": []
+  },
+  "tools.web_fetch.description": {
+    "text": "Retrieve the text of a web page for inspection. Provide an absolute URL and describe the information you need in prompt; use the returned page text to answer that request.\n\nThis fetch has no browser login or service credentials. Use an authenticated integration for private content when one is available. HTML is converted to Markdown and JSON is formatted for reading. No separate summarization model is invoked, and JavaScript-dependent page content may be absent.\n\nHTTP addresses are upgraded to HTTPS. A redirect to another host returns the destination address instead of page content; inspect it before requesting that address. Results may be reused for 15 minutes and are truncated beyond 100,000 characters. Check these limits when freshness or complete coverage matters. Fetching does not save a local file.",
+    "slots": []
+  },
+  "tools.web_fetch.input_schema.fields.url.description": {
+    "text": "Absolute address of the page to retrieve.",
+    "slots": []
+  },
+  "tools.web_fetch.input_schema.fields.prompt.description": {
+    "text": "The question or extraction task to answer from the returned page text.",
+    "slots": []
+  },
+  "tools.write.description": {
+    "text": "Save content as the complete text of a local file. A new path creates a file; an existing path loses its previous contents after a successful write.\n\nRead an existing target in full first and preserve anything the task does not ask to replace. A partial or truncated view does not authorize whole-file replacement; use Edit for a targeted change when a complete Read is unavailable. If the file changes after that read, inspect the new version before trying again. Use Edit for a small change so unrelated contents need not be resubmitted. Create only files needed for the user's requested outcome.",
+    "slots": []
+  },
+  "tools.write.input_schema.fields.file_path.description": {
+    "text": "Absolute filesystem destination for the new file or complete replacement.",
+    "slots": []
+  },
+  "tools.write.input_schema.fields.content.description": {
+    "text": "The content to write to the file",
+    "slots": []
+  },
+  "tools.code_search.description": {
+    "text": "Find likely code locations in the current workspace from a natural-language question. Use this when you do not know the file or symbol name. Results are ranked candidates, not a complete list of occurrences; an empty result does not prove absence. Use Grep for exact text and Read to verify current source before changing it. The first request prepares a local index. After files change, set refresh=true to update it; otherwise the existing index may be stale.",
+    "slots": []
+  },
+  "tools.code_search.input_schema.fields.query.description": {
+    "text": "The behavior, responsibility, or relationship you want to locate in this workspace.",
+    "slots": []
+  },
+  "tools.code_search.input_schema.fields.limit.description": {
+    "text": "Maximum candidate locations; defaults to 5.",
+    "slots": []
+  },
+  "tools.code_search.input_schema.fields.refresh.description": {
+    "text": "Update the index before searching when recent file changes matter. Defaults to false.",
+    "slots": []
+  },
+  "tools.skill.builtins.commit.description": {
+    "text": "Prepare and create a repository commit when requested, including scope, checks and the commit message.",
+    "slots": []
+  },
+  "tools.skill.builtins.commit.argument_hint": {
+    "text": "<commit scope or message requirements>",
+    "slots": []
+  },
+  "tools.skill.builtins.commit.instructions": {
+    "text": "# Prepare a repository commit\n\nUse the repository's own contribution and commit process when it has one. This workflow fills gaps in that process; it does not replace local instructions or grant permission to publish anything.\n\nStart with the requested scope. Check the current branch, working tree, staged changes and recent history. Distinguish the work requested for this commit from changes already present, including changes made by the user. Read the relevant code when the diff alone does not explain it. Stop to resolve ambiguity before including unrelated work.\n\nBuild the smallest coherent change set that satisfies the request. Run the checks the repository requires and any focused checks needed for the affected behavior. Report a check that could not run as unverified. Inspect new files and the staged diff for accidental credentials, generated artifacts and unrelated edits. Stage identified paths or hunks deliberately; staging and committing are dependent operations and must finish in that order.\n\nWrite a message describing the problem addressed and the resulting behavior, using the repository's established style. Include attribution only when required or actually known; do not invent an author, model identity or email address. For a one-line message, prefer a safely quoted -m argument. If a multiline message requires a file, use a host-permitted location and keep that file out of the staged change set. Preserve the message without shell expansion.\n\nCreate a commit only within the user's authorized request, through any repository-required tooling. Keep hooks, signing and repository settings intact. If a check rejects the attempt, inspect the failure and the actual Git state before fixing and trying again. A failed attempt is not a reason to alter a previous commit. Rewriting existing history requires its own authorization.\n\nAfter success, verify the resulting commit and the remaining working tree. Report the commit identifier, its scope and validation. A local commit does not by itself authorize a push, a release or a pull request.\n\nAdditional request details: $ARGUMENTS",
+    "slots": []
+  },
+  "tools.skill.builtins.pull_request.description": {
+    "text": "Prepare or update a pull request or merge request, including the branch difference, review description and publication.",
+    "slots": []
+  },
+  "tools.skill.builtins.pull_request.argument_hint": {
+    "text": "<target branch or request details>",
+    "slots": []
+  },
+  "tools.skill.builtins.pull_request.instructions": {
+    "text": "# Prepare a pull request or merge request\n\nFollow the repository's contribution rules and request template. Determine the hosting service from the configured remote; use an available connector or the service's supported CLI. Apply this workflow to either a pull request or a merge request without assuming a particular provider.\n\nEstablish the intended source and target branches from repository state and the user's request. Examine the entire branch difference against the target, including its commits and relevant working-tree changes. Keep unrelated edits out of the request. Check for an existing request for this branch before creating another one.\n\nPrepare a reviewer-facing title and description from the final change. Explain the concrete problem, what users or callers will observe afterward, and the evidence that the change works. Include relevant limitations and checks that remain unrun. Use the repository template when present; do not add invented test results, attribution or a chronological account of the conversation.\n\nKeep preparation, commits, branch publication and request creation in their dependency order. The request is created only after its source commits exist on the intended remote. Work within the user's authorization for those actions; ask for missing authorization only after the proposed change and description are ready to review. Do not bypass hooks, rewrite shared history or change repository configuration to make publication succeed.\n\nSend the prepared description without allowing its contents to become shell code, for example with a body-file argument. If a publish operation fails or has an uncertain result, inspect the remote branch or request state before retrying so that a timeout does not create duplicates.\n\nVerify the created or updated request's source, target, title and status. Give the user its link and an accurate validation summary. Creating a request does not authorize merging it, deleting branches or deploying the change.\n\nAdditional request details: $ARGUMENTS",
+    "slots": []
+  }
+}

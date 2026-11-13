@@ -51,6 +51,44 @@ async function eventually(check: () => boolean | Promise<boolean>, timeout = 300
 }
 
 describe('grouped worker runtime with real threads', () => {
+  it('keeps work-approach selection isolated across preset and custom sessions in one worker', async () => {
+    const pool = runtime({ maxWorkers: 1 });
+    const captured: Array<{ request: Record<string, any>; threadId: number }> = [];
+    const cases: Partial<Options>[] = [
+      { systemPrompt: { type: 'preset', preset: 'default', append: 'Caller instructions.' } },
+      { systemPrompt: { type: 'preset', preset: 'default', append: 'Caller instructions.' }, ultraEffort: true, promptProfile: 'explicit' },
+      { systemPrompt: { type: 'preset', preset: 'default', append: 'Caller instructions.' }, ultraEffort: false },
+      { systemPrompt: '  Custom instructions.  ', ultraEffort: true },
+      { systemPrompt: '', ultraEffort: true },
+    ];
+    for (const [index, selected] of cases.entries()) {
+      const captureRequestsFile = join(directory, `prompt-${index}.jsonl`);
+      const current = await session(pool, { captureRequestsFile }, {
+        ...selected, collaboration: false, effort: 'low', thinking: { type: 'disabled' }, maxOutputTokens: 512,
+      });
+      expect(result(await turn(current)).is_error).toBe(false);
+      captured.push(JSON.parse((await readFile(captureRequestsFile, 'utf8')).trim()));
+      await current[Symbol.asyncDispose]();
+    }
+    expect(new Set(captured.map(entry => entry.threadId)).size).toBe(1);
+    const text = (request: Record<string, any>) => typeof request.systemPrompt === 'string'
+      ? request.systemPrompt : request.systemPrompt.map((block: { text: string }) => block.text).join('\n');
+    expect(text(captured[0].request)).toBe(text(captured[2].request));
+    for (const [index, { request }] of captured.entries()) {
+      const prompt = text(request);
+      expect(prompt.includes("Put your fullest effort into solving the user's task")).toBe(index === 1);
+      expect(request.thinking).toEqual({ type: 'disabled' });
+      expect(request.providerOptions?.effort).toBe('low');
+      expect(request.temperature).toBe(0);
+      expect(request.maxTokens).toBe(512);
+      if (index < 3) {
+        expect(prompt).toContain('# Communicating');
+        expect(prompt.match(/Caller instructions\./g)).toHaveLength(1);
+      } else expect(request.systemPrompt).toBe(cases[index].systemPrompt);
+    }
+    expect(text(captured[1].request)).toContain('# Execution checkpoints');
+  });
+
   it('reports a refused strict resume to the host with its code and reason', async () => {
     const pool = runtime();
     const creation = session(pool, {}, { resume: '00000000-0000-4000-8000-000000000000', strictResume: true });
@@ -192,14 +230,25 @@ describe('grouped worker runtime with real threads', () => {
     expect(JSON.stringify(answerB.messages)).not.toContain('private A');
   });
 
-  it('runs a collaborator in its source worker without another thread', async () => {
+  it.each([false, true])('inherits the work approach in a collaborator without another thread (%s)', async ultraEffort => {
     const pool = runtime();
-    const current = await session(pool, { tools: [{ name: 'mcp__halo-team__spawn_agent', input: { prompt: 'Inspect the fixture' } }] },
-      { tools: ['spawn_agent'], permissionMode: 'bypassPermissions' });
+    const captureRequestsFile = join(directory, 'collaborator-prompts.jsonl');
+    const current = await session(pool, { captureRequestsFile, tools: [{ name: 'mcp__halo-team__spawn_agent', input: { prompt: 'Inspect the fixture' } }] },
+      { tools: ['spawn_agent'], permissionMode: 'bypassPermissions', systemPrompt: { type: 'preset', preset: 'default' }, ultraEffort });
     const events = await turn(current);
     expect(result(events).is_error).toBe(false);
     expect(JSON.parse(result(events).result).calls).toBeGreaterThanOrEqual(3);
     expect(pool.diagnostics().workers).toHaveLength(1);
+    const requests = (await readFile(captureRequestsFile, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(requests.some(entry => entry.collaborator)).toBe(true);
+    expect(requests.some(entry => !entry.collaborator)).toBe(true);
+    for (const entry of requests) {
+      const prompt = JSON.stringify(entry.request.systemPrompt);
+      expect(prompt.includes("Put your fullest effort into solving the user's task")).toBe(ultraEffort);
+      expect(prompt.includes("Fulfill the user's request efficiently")).toBe(!ultraEffort);
+      expect(prompt).toContain('# Communicating');
+      expect(entry.threadId).toBe(current.threadId);
+    }
   });
 
   it('removes interrupted collaborators from worker placement load', async () => {

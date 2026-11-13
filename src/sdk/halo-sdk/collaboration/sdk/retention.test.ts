@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSdkCollaboration, type SdkCollaborationBinding } from './index.js';
+import { createSdkCollaboration, type SdkCollaborationBinding } from '../../native/collaboration-sdk.js';
 import type { Options } from '../../types/config.js';
 import type { LlmProvider, ProviderRequest, StreamEvent, ToolResultBlock } from '../../types/provider.js';
 import { toolSuccess, type Tool } from '../../types/tool.js';

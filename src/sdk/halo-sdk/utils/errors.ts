@@ -5,6 +5,7 @@
  */
 
 import { describeFetchError, isRetryableStatus } from './retry.js';
+import { attachHarness, baselineText, type HarnessMessage } from '../harness/text.js';
 
 // ---------------------------------------------------------------------------
 // Base error
@@ -14,6 +15,7 @@ import { describeFetchError, isRetryableStatus } from './retry.js';
 export class SDKError extends Error {
   /** Machine-readable error code */
   readonly code: string;
+  declare readonly harness?: HarnessMessage;
 
   constructor(code: string, message: string) {
     super(message);
@@ -78,20 +80,23 @@ export class ProviderError extends SDKError {
   }
 
   /** Create a rate-limit error (HTTP 429). */
-  static rateLimit(message = 'Rate limit exceeded'): ProviderError {
-    return new ProviderError(message, { statusCode: 429, retryable: true });
+  static rateLimit(message = baselineText('providers.error.rate_limit')): ProviderError {
+    const error = new ProviderError(message, { statusCode: 429, retryable: true });
+    return arguments[0] === undefined ? attachHarness(error, 'providers.error.rate_limit') : error;
   }
 
   /** Create an overloaded error (HTTP 529). */
-  static overloaded(message = 'API overloaded'): ProviderError {
-    return new ProviderError(message, { statusCode: 529, retryable: true });
+  static overloaded(message = baselineText('providers.error.overloaded')): ProviderError {
+    const error = new ProviderError(message, { statusCode: 529, retryable: true });
+    return arguments[0] === undefined ? attachHarness(error, 'providers.error.overloaded') : error;
   }
 
   /** Create a context-window-exceeded error. */
   static contextWindowExceeded(
-    message = 'Context window exceeded',
+    message = baselineText('providers.error.context_window'),
   ): ProviderError {
-    return new ProviderError(message, { statusCode: 400, retryable: false });
+    const error = new ProviderError(message, { statusCode: 400, retryable: false });
+    return arguments[0] === undefined ? attachHarness(error, 'providers.error.context_window') : error;
   }
 
   /**
@@ -106,16 +111,16 @@ export class ProviderError extends SDKError {
     options?: { retryable?: boolean; retriesExhausted?: boolean; requestRejected?: boolean },
   ): ProviderError {
     const apiMessage = apiErrorMessage(body);
-    const message = apiMessage
-      ? `${provider} API error (${status}): ${apiMessage}`
-      : `${provider} API error (${status})`;
-    return new ProviderError(message, {
+    const template = apiMessage ? 'providers.http.error' : 'providers.http.error_without_body';
+    const values = { provider, status: String(status), ...(apiMessage ? { reason: apiMessage } : {}) };
+    const message = baselineText(template, values);
+    return attachHarness(new ProviderError(message, {
       statusCode: status,
       retryable: options?.retryable ?? isRetryableStatus(status),
       provider,
       retriesExhausted: options?.retriesExhausted,
       requestRejected: options?.requestRejected ?? true,
-    });
+    }), template, values);
   }
 
   /** Classify an API error delivered after HTTP headers have already succeeded. */
@@ -295,13 +300,15 @@ export class BudgetExceededError extends SDKError {
   readonly maxBudgetUsd: number;
 
   constructor(currentCostUsd: number, maxBudgetUsd: number) {
+    const values = { spent: currentCostUsd.toFixed(4), maximum: maxBudgetUsd.toFixed(4) };
     super(
       'BUDGET_EXCEEDED',
-      `Budget exceeded: $${currentCostUsd.toFixed(4)} spent, limit is $${maxBudgetUsd.toFixed(4)}`,
+      baselineText('context.execution.budget', values),
     );
     this.name = 'BudgetExceededError';
     this.currentCostUsd = currentCostUsd;
     this.maxBudgetUsd = maxBudgetUsd;
+    attachHarness(this, 'context.execution.budget', values);
   }
 }
 
@@ -317,13 +324,15 @@ export class MaxTurnsExceededError extends SDKError {
   readonly maxTurns: number;
 
   constructor(turns: number, maxTurns: number) {
+    const values = { completed: String(turns), maximum: String(maxTurns) };
     super(
       'MAX_TURNS_EXCEEDED',
-      `Max turns exceeded: ${turns} turns completed, limit is ${maxTurns}`,
+      baselineText('context.execution.max_turns', values),
     );
     this.name = 'MaxTurnsExceededError';
     this.turns = turns;
     this.maxTurns = maxTurns;
+    attachHarness(this, 'context.execution.max_turns', values);
   }
 }
 
@@ -333,9 +342,10 @@ export class MaxTurnsExceededError extends SDKError {
 
 /** Error thrown when an operation is cancelled via AbortSignal. */
 export class AbortError extends SDKError {
-  constructor(message = 'Operation was aborted') {
+  constructor(message = baselineText('context.execution.aborted')) {
     super('ABORTED', message);
     this.name = 'AbortError';
+    if (arguments[0] === undefined) attachHarness(this, 'context.execution.aborted');
   }
 }
 
@@ -375,9 +385,10 @@ export function isAbortError(err: unknown, signal?: AbortSignal): boolean {
 
 /** Error thrown when context compaction fails. */
 export class CompactError extends SDKError {
-  constructor(message = 'Context compaction failed') {
+  constructor(message = baselineText('context.error.compact')) {
     super('COMPACT_ERROR', message);
     this.name = 'CompactError';
+    if (arguments[0] === undefined) attachHarness(this, 'context.error.compact');
   }
 }
 
@@ -399,9 +410,10 @@ export class ResumeHistoryError extends SDKError {
   readonly reason: ResumeHistoryReason;
 
   constructor(reason: ResumeHistoryReason) {
-    super(RESUME_HISTORY_UNAVAILABLE, `Stored session history cannot be restored as recorded (${reason})`);
+    super(RESUME_HISTORY_UNAVAILABLE, baselineText('context.history.unavailable', { reason }));
     this.name = 'ResumeHistoryError';
     this.reason = reason;
+    attachHarness(this, 'context.history.unavailable', { reason });
   }
 }
 

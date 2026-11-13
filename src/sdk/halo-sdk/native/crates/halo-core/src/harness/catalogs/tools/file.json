@@ -1,0 +1,279 @@
+{
+  "tools.file.changed": {
+    "text": "The file no longer matches its recorded read. Inspect the current contents before attempting a write.",
+    "slots": []
+  },
+  "tools.file.complete_read": {
+    "text": "Write requires a complete Read of the existing file. Read its full contents before replacing it; use Edit for a targeted change based on a partial view.",
+    "slots": []
+  },
+  "tools.file.edit_read": {
+    "text": "Edit needs a recorded Read of this file. Read the target, then prepare old_string from the returned source text and retry.",
+    "slots": []
+  },
+  "tools.file.write_limit": {
+    "text": "File exceeds the {limit} byte limit. Use a streaming command to process larger files.",
+    "slots": [
+      "limit"
+    ]
+  },
+  "tools.file.not_regular": {
+    "text": "Not a regular file: {path}",
+    "slots": [
+      "path"
+    ]
+  },
+  "tools.file.regular_only": {
+    "text": "Only regular files can be read",
+    "slots": []
+  },
+  "tools.file.read_limit": {
+    "text": "File exceeds the {limit} byte read limit. Use a streaming command to select a smaller portion.",
+    "slots": [
+      "limit"
+    ]
+  },
+  "tools.file.grew": {
+    "text": "File grew while being read. Obtain a fresh, complete view before changing this file.",
+    "slots": []
+  },
+  "tools.file.missing_path": {
+    "text": "file_path is required",
+    "slots": []
+  },
+  "tools.file.cancelled": {
+    "text": "Operation cancelled",
+    "slots": []
+  },
+  "tools.file.missing_content": {
+    "text": "content is required",
+    "slots": []
+  },
+  "tools.file.missing_old": {
+    "text": "old_string is required",
+    "slots": []
+  },
+  "tools.file.missing_new": {
+    "text": "new_string is required",
+    "slots": []
+  },
+  "tools.file.identical_edit": {
+    "text": "Edit rejected identical old_string and new_string values. Supply different replacement text, or omit this edit if no change is needed.",
+    "slots": []
+  },
+  "tools.file.empty": {
+    "text": "<system-reminder>This file is empty; there are no lines to display.</system-reminder>",
+    "slots": []
+  },
+  "tools.file.changed_after_edit": {
+    "text": " Note: the file changed again after this edit. Re-read it before further changes.",
+    "slots": []
+  },
+  "tools.file.refresh_failed": {
+    "text": " The read state could not be refreshed. Read the file again before further changes.",
+    "slots": []
+  },
+  "tools.file.empty_notebook": {
+    "text": "[Empty notebook or invalid format]",
+    "slots": []
+  },
+  "tools.file.notebook_output": {
+    "text": "[Output]:",
+    "slots": []
+  },
+  "tools.file.invalid_offset": {
+    "text": "offset must be a nonnegative integer",
+    "slots": []
+  },
+  "tools.file.invalid_limit": {
+    "text": "limit must be a positive integer",
+    "slots": []
+  },
+  "tools.file.denied": {
+    "text": "Permission to read {path} has been denied.",
+    "slots": [
+      "path"
+    ]
+  },
+  "tools.file.not_found": {
+    "text": "File not found: {path}",
+    "slots": [
+      "path"
+    ]
+  },
+  "tools.file.directory": {
+    "text": "{path} is a directory, not a file. Use Bash with `ls` to list directory contents.",
+    "slots": [
+      "path"
+    ]
+  },
+  "tools.file.read_failed": {
+    "text": "Failed to read file {path}: {error}",
+    "slots": [
+      "path",
+      "error"
+    ]
+  },
+  "tools.file.write_failed": {
+    "text": "Failed to write file {path}: {error}",
+    "slots": [
+      "path",
+      "error"
+    ]
+  },
+  "tools.file.notebook_failed": {
+    "text": "Failed to parse notebook: {error}",
+    "slots": [
+      "error"
+    ]
+  },
+  "tools.file.beyond_end": {
+    "text": "<system-reminder>Requested line {offset} is beyond this file's {total} lines. Choose an offset within that range.</system-reminder>",
+    "slots": [
+      "offset",
+      "total"
+    ]
+  },
+  "tools.file.line_truncated": {
+    "text": "\n... (line {line} was truncated because it exceeds the character budget.)\n",
+    "slots": [
+      "line"
+    ]
+  },
+  "tools.file.more_lines": {
+    "text": "\n... (showing lines {start}-{end} of {total}. Use offset={offset} to continue reading.)\n",
+    "slots": [
+      "start",
+      "end",
+      "total",
+      "offset"
+    ]
+  },
+  "tools.file.wrote": {
+    "text": "Wrote",
+    "slots": []
+  },
+  "tools.file.created": {
+    "text": "Created",
+    "slots": []
+  },
+  "tools.file.written": {
+    "text": "{action} {path} ({lines} lines, {bytes} bytes)",
+    "slots": [
+      "action",
+      "path",
+      "lines",
+      "bytes"
+    ]
+  },
+  "tools.file.no_match": {
+    "text": "Edit found no literal match for old_string. Read the target again and copy the intended passage with its original spaces, tabs, and line breaks; exclude displayed line numbers. No replacement was made.\nUnmatched old_string: {old}",
+    "slots": [
+      "old"
+    ]
+  },
+  "tools.file.ambiguous_edit": {
+    "text": "The edit is ambiguous: old_string occurs {count} times. Include enough adjacent source text to select one occurrence, or set replace_all=true if every occurrence should change.\nold_string: {old}",
+    "slots": [
+      "count",
+      "old"
+    ]
+  },
+  "tools.file.edited": {
+    "text": "Successfully edited {path} ({count} replacement{plural}).",
+    "slots": [
+      "path",
+      "count",
+      "plural"
+    ]
+  },
+  "tools.file.image_invalid": {
+    "text": "Cannot attach image {path}: the file is empty, invalid, or incomplete. No image was attached. Use a valid PNG, JPEG, GIF, or WebP file.",
+    "slots": ["path"]
+  },
+  "tools.file.image_limit": {
+    "text": "Image file is too large ({megabytes} MB). Maximum supported size is 5 MB. Consider resizing or compressing the image before reading.",
+    "slots": [
+      "megabytes"
+    ]
+  },
+  "tools.file.image_unsupported": {
+    "text": "[Image file: {path}. This format cannot be delivered for visual analysis; convert it to PNG, JPEG, GIF, or WebP.]",
+    "slots": [
+      "path"
+    ]
+  },
+  "tools.file.image_captured": {
+    "text": "[Image file: {path}. The image content has been captured for visual analysis.]",
+    "slots": [
+      "path"
+    ]
+  },
+  "tools.file.pdf_guidance": {
+    "text": "No PDF text or images were extracted. Changing pages on Read will not extract contents. Use an available PDF-capable tool or a local text extractor; scanned pages need OCR.",
+    "slots": []
+  },
+  "tools.file.pdf_limit": {
+    "text": "PDF size is {size} bytes; Read accepts up to 104857600 bytes (100 MiB). {guidance}",
+    "slots": [
+      "size",
+      "guidance"
+    ]
+  },
+  "tools.file.pdf_invalid_pages": {
+    "text": "Invalid PDF page selection: pages must be a string containing a positive safe integer or an ascending inclusive range, such as \"2\" or \"2-4\". {guidance}",
+    "slots": [
+      "guidance"
+    ]
+  },
+  "tools.file.pdf_too_many_pages": {
+    "text": "Requested {count} pages; the selection limit is 20. Split the selection into ranges of at most 20 pages: start with \"{start}-{end}\", then continue from page {next}. {guidance}",
+    "slots": [
+      "count",
+      "start",
+      "end",
+      "next",
+      "guidance"
+    ]
+  },
+  "tools.file.pdf_selection": {
+    "text": "Requested pages: {selection}. The document's page count has not been checked.\n",
+    "slots": [
+      "selection"
+    ]
+  },
+  "tools.file.pdf_file": {
+    "text": "PDF file: {path} ({size} bytes).\n{selection}{guidance}",
+    "slots": [
+      "path",
+      "size",
+      "selection",
+      "guidance"
+    ]
+  },
+  "tools.file.notebook_cell": {
+    "text": "[Cell {index}] ({kind}):",
+    "slots": [
+      "index",
+      "kind"
+    ]
+  },
+  "tools.file.state_key_type": {
+    "text": "File state keys must be strings",
+    "slots": []
+  },
+  "tools.file.state_property_type": {
+    "text": "File state property must be a string",
+    "slots": []
+  },
+  "tools.file.state_unavailable": {
+    "text": "External file read state is no longer available",
+    "slots": []
+  },
+  "tools.file.unknown_state_operation": {
+    "text": "Unknown file state operation: {method}",
+    "slots": [
+      "method"
+    ]
+  }
+}

@@ -6,3 +6,5 @@ export function setSessionOwnershipCoordinator(coordinator: NonNullable<typeof a
 export async function acquireSessionOwnership(path: string, signal: AbortSignal, sessionId: string): Promise<() => void> {
   return acquire ? acquire({ path, sessionId }, signal) : () => {};
 }
+
+export function getSessionOwnershipCoordinator(): typeof acquire { return acquire; }

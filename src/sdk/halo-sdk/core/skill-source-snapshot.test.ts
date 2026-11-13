@@ -2,15 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { query } from '../index.js';
-import { createSession } from './session.js';
-import { queryLoop } from './query-loop.js';
-import { resolveQueryConfig } from './context.js';
-import { SkillTool } from '../tools/skill/index.js';
+import { query, createSession, queryLoop, resolveQueryConfig, getAllTools, findToolByName } from '../index.js';
 import type { Options } from '../types/config.js';
 import type { LlmProvider, ProviderRequest, StreamEvent } from '../types/provider.js';
 import type { Tool, ToolContext, ToolResult } from '../types/tool.js';
 
+const SkillTool = findToolByName(getAllTools(), 'Skill')!;
 let root: string;
 let skillFile: string;
 
@@ -22,7 +19,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
-function setup(beforeStep?: (step: number) => Promise<void>, invoke = true) {
+function setup(beforeStep?: (step: number) => Promise<void>, invoke = true, skillTool: Tool = SkillTool) {
   let step = 0;
   const requests: ProviderRequest[] = [];
   const loads: Array<{ context: ToolContext; result: ToolResult }> = [];
@@ -49,9 +46,9 @@ function setup(beforeStep?: (step: number) => Promise<void>, invoke = true) {
     },
   } as unknown as LlmProvider;
   const wrapped: Tool = {
-    ...SkillTool,
+    ...skillTool,
     async execute(input, context) {
-      const result = await SkillTool.execute(input, context);
+      const result = await skillTool.execute(input, context);
       loads.push({ context, result });
       return result;
     },
@@ -180,7 +177,7 @@ describe('advertised skill source snapshots', () => {
     expect(fixture.loads[0].context.skillCatalog?.find(entry => entry.name === 'commit')?.source.kind).toBe('file');
   });
 
-  it('shares the same source snapshot across turns without replacing a host Skill wrapper', async () => {
+  it('keeps the same catalog across turns and host Skill wrappers', async () => {
     const fixture = setup();
     const session = await createSession(fixture.options);
     try {
@@ -193,6 +190,11 @@ describe('advertised skill source snapshots', () => {
       expect(fixture.loads[0].result.content).toBe('PROJECT_COMMIT_BODY');
       expect(fixture.loads[1].result.isError).toBe(true);
       expect(fixture.loads[1].context.skillCatalog).toBe(fixture.loads[0].context.skillCatalog);
+      expect(fixture.loads[1].context.skillCatalog?.[0]).toBe(fixture.loads[0].context.skillCatalog?.[0]);
+      expect(fixture.loads[1].context.skillCatalog?.[0].source).toBe(fixture.loads[0].context.skillCatalog?.[0].source);
+      expect(Object.isFrozen(fixture.loads[0].context.skillCatalog)).toBe(true);
+      expect(Object.isFrozen(fixture.loads[0].context.skillCatalog?.[0])).toBe(true);
+      expect(Object.isFrozen(fixture.loads[0].context.skillCatalog?.[0].source)).toBe(true);
     } finally { session.close(); await session.flush(); }
   });
 
@@ -201,6 +203,33 @@ describe('advertised skill source snapshots', () => {
     await drain(query({ prompt: 'Load the project workflow.', options: fixture.options }));
     expect(fixture.loads[0].result.content).toBe('UPDATED_PROJECT_COMMIT_BODY');
     expect(JSON.stringify(fixture.loads[0].context.skillCatalog)).not.toContain('UPDATED_PROJECT_COMMIT_BODY');
+  });
+
+  it.each([false, true])('keeps catalog views aligned with model overrides (explicit: %s)', async explicit => {
+    await rm(skillFile);
+    const fixture = setup();
+    const catalog = [{ name: 'commit', description: 'Explicit workflow', source: { kind: 'builtin' as const, name: 'commit' } }];
+    const session = await createSession({ ...fixture.options,
+      ...(explicit ? { skillCatalog: catalog } : {}),
+      harnessText: { models: { other: { 'tools.skill.builtins.commit.description': 'MODEL_WORKFLOW' } } },
+    });
+    try {
+      await session.send('Load the workflow.');
+      await drain(session.stream());
+      await session.setModel('other');
+      await session.send('Load the workflow again.');
+      await drain(session.stream());
+      const first = fixture.loads[0].context.skillCatalog;
+      const second = fixture.loads[1].context.skillCatalog;
+      if (explicit) {
+        expect(second).toBe(first);
+        expect(second?.find(entry => entry.name === 'commit')?.description).toBe('Explicit workflow');
+      } else {
+        expect(second).not.toBe(first);
+        expect(first?.find(entry => entry.name === 'commit')?.description).not.toBe('MODEL_WORKFLOW');
+        expect(second?.find(entry => entry.name === 'commit')?.description).toBe('MODEL_WORKFLOW');
+      }
+    } finally { session.close(); await session.flush(); }
   });
 
   it('also pins the catalog for a direct queryLoop caller', async () => {

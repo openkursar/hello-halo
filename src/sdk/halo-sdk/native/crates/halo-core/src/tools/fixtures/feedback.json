@@ -1,0 +1,915 @@
+[
+  {
+    "name": "file-basic",
+    "files": {
+      "file.txt": "first\nsecond\nthird\n",
+      "empty.txt": "",
+      "note.ipynb": "{\"cells\":[{\"cell_type\":\"code\",\"source\":[\"print(1)\"],\"outputs\":[{\"text\":[\"1\\n\"]}]}]}",
+      "doc.pdf": "pdf",
+      "image.svg": "<svg/>"
+    },
+    "steps": [
+      {
+        "tool": "Read",
+        "input": {},
+        "expected": {
+          "content": "file_path is required",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "file.txt",
+          "offset": -1
+        },
+        "expected": {
+          "content": "offset must be a nonnegative integer",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "file.txt",
+          "limit": 0
+        },
+        "expected": {
+          "content": "limit must be a positive integer",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "absent"
+        },
+        "expected": {
+          "content": "File not found: <root>/absent",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "."
+        },
+        "expected": {
+          "content": "<root> is a directory, not a file. Use Bash with `ls` to list directory contents.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "empty.txt"
+        },
+        "expected": {
+          "content": "<system-reminder>This file is empty; there are no lines to display.</system-reminder>",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "file.txt",
+          "offset": 20
+        },
+        "expected": {
+          "content": "<system-reminder>Requested line 20 is beyond this file's 4 lines. Choose an offset within that range.</system-reminder>",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "file.txt",
+          "offset": 2,
+          "limit": 1
+        },
+        "expected": {
+          "content": "2\tsecond\n\n... (showing lines 2-2 of 4. Use offset=3 to continue reading.)\n",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "note.ipynb"
+        },
+        "expected": {
+          "content": "[Cell 0] (code):\nprint(1)\n[Output]:\n1\n\n",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "doc.pdf"
+        },
+        "expected": {
+          "content": "PDF file: <root>/doc.pdf (3 bytes).\nNo PDF text or images were extracted. Changing pages on Read will not extract contents. Use an available PDF-capable tool or a local text extractor; scanned pages need OCR.",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "doc.pdf",
+          "pages": "0"
+        },
+        "expected": {
+          "content": "Invalid PDF page selection: pages must be a string containing a positive safe integer or an ascending inclusive range, such as \"2\" or \"2-4\". No PDF text or images were extracted. Changing pages on Read will not extract contents. Use an available PDF-capable tool or a local text extractor; scanned pages need OCR.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "doc.pdf",
+          "pages": "2-30"
+        },
+        "expected": {
+          "content": "Requested 29 pages; the selection limit is 20. Split the selection into ranges of at most 20 pages: start with \"2-21\", then continue from page 22. No PDF text or images were extracted. Changing pages on Read will not extract contents. Use an available PDF-capable tool or a local text extractor; scanned pages need OCR.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "doc.pdf",
+          "pages": "2-4"
+        },
+        "expected": {
+          "content": "PDF file: <root>/doc.pdf (3 bytes).\nRequested pages: 2-4. The document's page count has not been checked.\nNo PDF text or images were extracted. Changing pages on Read will not extract contents. Use an available PDF-capable tool or a local text extractor; scanned pages need OCR.",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "image.svg"
+        },
+        "expected": {
+          "content": "[Image file: <root>/image.svg. This format cannot be delivered for visual analysis; convert it to PNG, JPEG, GIF, or WebP.]",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Write",
+        "input": {
+          "file_path": "file.txt",
+          "content": "new"
+        },
+        "expected": {
+          "content": "Write requires a complete Read of the existing file. Read its full contents before replacing it; use Edit for a targeted change based on a partial view.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "file.txt"
+        },
+        "expected": {
+          "content": "1\tfirst\n2\tsecond\n3\tthird\n4\t\n",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Edit",
+        "input": {
+          "file_path": "file.txt",
+          "old_string": "absent",
+          "new_string": "new"
+        },
+        "expected": {
+          "content": "Edit found no literal match for old_string. Read the target again and copy the intended passage with its original spaces, tabs, and line breaks; exclude displayed line numbers. No replacement was made.\nUnmatched old_string: absent",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Edit",
+        "input": {
+          "file_path": "file.txt",
+          "old_string": "first",
+          "new_string": "first"
+        },
+        "expected": {
+          "content": "Edit rejected identical old_string and new_string values. Supply different replacement text, or omit this edit if no change is needed.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Edit",
+        "input": {
+          "file_path": "file.txt",
+          "old_string": "first",
+          "new_string": "new"
+        },
+        "expected": {
+          "content": "Successfully edited <root>/file.txt (1 replacement).",
+          "isError": false,
+          "metadata": {
+            "file_path": "<root>/file.txt",
+            "replacements": 1
+          }
+        }
+      },
+      {
+        "tool": "Write",
+        "input": {
+          "file_path": "new.txt",
+          "content": "created\n"
+        },
+        "expected": {
+          "content": "Created <root>/new.txt (2 lines, 8 bytes)",
+          "isError": false,
+          "metadata": {
+            "file_path": "<root>/new.txt",
+            "is_new": true,
+            "lines": 2,
+            "bytes": 8
+          }
+        }
+      },
+      {
+        "tool": "Write",
+        "input": {
+          "file_path": "new.txt",
+          "content": "changed"
+        },
+        "expected": {
+          "content": "Wrote <root>/new.txt (1 lines, 7 bytes)",
+          "isError": false,
+          "metadata": {
+            "file_path": "<root>/new.txt",
+            "is_new": false,
+            "lines": 1,
+            "bytes": 7
+          }
+        }
+      },
+      {
+        "tool": "Write",
+        "input": {
+          "file_path": "new.txt"
+        },
+        "expected": {
+          "content": "content is required",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Edit",
+        "input": {
+          "file_path": "file.txt",
+          "old_string": ""
+        },
+        "expected": {
+          "content": "old_string is required",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Edit",
+        "input": {
+          "file_path": "file.txt",
+          "old_string": "new"
+        },
+        "expected": {
+          "content": "new_string is required",
+          "isError": true
+        }
+      }
+    ],
+    "finalFiles": {
+      "doc.pdf": "pdf",
+      "empty.txt": "",
+      "file.txt": "new\nsecond\nthird\n",
+      "image.svg": "<svg/>",
+      "new.txt": "changed",
+      "note.ipynb": "{\"cells\":[{\"cell_type\":\"code\",\"source\":[\"print(1)\"],\"outputs\":[{\"text\":[\"1\\n\"]}]}]}"
+    }
+  },
+  {
+    "name": "edit-preconditions",
+    "files": {
+      "file.txt": "one one"
+    },
+    "steps": [
+      {
+        "tool": "Edit",
+        "input": {
+          "file_path": "file.txt",
+          "old_string": "one",
+          "new_string": "two"
+        },
+        "expected": {
+          "content": "Edit needs a recorded Read of this file. Read the target, then prepare old_string from the returned source text and retry.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Read",
+        "input": {
+          "file_path": "file.txt"
+        },
+        "expected": {
+          "content": "1\tone one\n",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Edit",
+        "input": {
+          "file_path": "file.txt",
+          "old_string": "one",
+          "new_string": "two"
+        },
+        "expected": {
+          "content": "The edit is ambiguous: old_string occurs 2 times. Include enough adjacent source text to select one occurrence, or set replace_all=true if every occurrence should change.\nold_string: one",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Edit",
+        "input": {
+          "file_path": "file.txt",
+          "old_string": "one",
+          "new_string": "two",
+          "replace_all": true
+        },
+        "expected": {
+          "content": "Successfully edited <root>/file.txt (2 replacements).",
+          "isError": false,
+          "metadata": {
+            "file_path": "<root>/file.txt",
+            "replacements": 2
+          }
+        }
+      }
+    ],
+    "finalFiles": {
+      "file.txt": "two two"
+    }
+  },
+  {
+    "name": "goal-and-todos",
+    "files": {},
+    "steps": [
+      {
+        "tool": "Goal",
+        "input": {
+          "action": "update"
+        },
+        "expected": {
+          "content": "There is no active goal to update. Use set to create one.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Goal",
+        "input": {
+          "action": "complete"
+        },
+        "expected": {
+          "content": "There is no active goal to complete.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Goal",
+        "input": {
+          "action": "abandon"
+        },
+        "expected": {
+          "content": "There is no active goal to abandon.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Goal",
+        "input": {
+          "action": "invalid"
+        },
+        "expected": {
+          "content": "action must be one of: set, update, complete, abandon.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Goal",
+        "input": {
+          "action": "set",
+          "objective": " "
+        },
+        "expected": {
+          "content": "set requires a non-empty objective.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Goal",
+        "input": {
+          "action": "set",
+          "objective": " First ",
+          "doneWhen": [
+            " A ",
+            "",
+            " B"
+          ]
+        },
+        "expected": {
+          "content": "Goal set.\nObjective: First\nDone when:\n- A\n- B\nStatus: active",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Goal",
+        "input": {
+          "action": "set",
+          "objective": "Second"
+        },
+        "expected": {
+          "content": "Goal set.\nObjective: Second\nStatus: active\nReplaced the previous goal: First",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Goal",
+        "input": {
+          "action": "update",
+          "objective": "Third",
+          "doneWhen": [
+            " C "
+          ],
+          "note": "work"
+        },
+        "expected": {
+          "content": "Goal updated.\nObjective: Third\nDone when:\n- C\nStatus: active",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Goal",
+        "input": {
+          "action": "complete",
+          "note": "done"
+        },
+        "expected": {
+          "content": "Goal marked complete.\nObjective: Third\nDone when:\n- C\nStatus: complete",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Goal",
+        "input": {
+          "action": "set",
+          "objective": "Other"
+        },
+        "expected": {
+          "content": "Goal set.\nObjective: Other\nStatus: active",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Goal",
+        "input": {
+          "action": "abandon"
+        },
+        "expected": {
+          "content": "Goal abandoned.\nObjective: Other\nStatus: abandoned",
+          "isError": false
+        }
+      },
+      {
+        "tool": "TodoWrite",
+        "input": {},
+        "expected": {
+          "content": "Missing required parameter: todos (must be an array)",
+          "isError": true
+        }
+      },
+      {
+        "tool": "TodoWrite",
+        "input": {
+          "todos": [
+            {}
+          ]
+        },
+        "expected": {
+          "content": "Each todo must have content and status fields.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "TodoWrite",
+        "input": {
+          "todos": [
+            {
+              "content": "thing",
+              "status": "invalid"
+            }
+          ]
+        },
+        "expected": {
+          "content": "Invalid status \"invalid\": must be one of \"pending\", \"in_progress\", or \"completed\".",
+          "isError": true
+        }
+      },
+      {
+        "tool": "TodoWrite",
+        "input": {
+          "todos": [
+            {
+              "content": "one",
+              "status": "pending"
+            },
+            {
+              "content": 3,
+              "status": "in_progress"
+            },
+            {
+              "content": [
+                "x",
+                "y"
+              ],
+              "status": "completed"
+            }
+          ]
+        },
+        "expected": {
+          "content": "Todo list updated:\n[ ] one\n[~] 3\n[x] x,y\n\nContinue to keep this list current as work progresses.",
+          "isError": false
+        }
+      },
+      {
+        "tool": "TodoWrite",
+        "input": {
+          "todos": [
+            {
+              "content": "one",
+              "status": "completed"
+            }
+          ]
+        },
+        "expected": {
+          "content": "All todos completed — list cleared.",
+          "isError": false
+        }
+      }
+    ],
+    "finalFiles": {}
+  },
+  {
+    "name": "ask-feedback",
+    "files": {},
+    "steps": [
+      {
+        "tool": "AskUserQuestion",
+        "input": {},
+        "expected": {
+          "content": "Missing required parameter: questions (must be a non-empty array)",
+          "isError": true
+        }
+      },
+      {
+        "tool": "AskUserQuestion",
+        "input": {
+          "questions": [
+            {}
+          ]
+        },
+        "expected": {
+          "content": "Each question must have a \"question\" string field",
+          "isError": true
+        }
+      },
+      {
+        "tool": "AskUserQuestion",
+        "input": {
+          "questions": [
+            {
+              "question": "Choose?"
+            }
+          ]
+        },
+        "expected": {
+          "content": "Question \"Choose?\" must have at least 2 options",
+          "isError": true
+        }
+      },
+      {
+        "tool": "AskUserQuestion",
+        "input": {
+          "questions": [
+            {
+              "question": "Choose?",
+              "options": [
+                {
+                  "label": "A"
+                },
+                {
+                  "label": "B"
+                }
+              ]
+            },
+            {
+              "question": "Choose?",
+              "options": [
+                {
+                  "label": "A"
+                },
+                {
+                  "label": "B"
+                }
+              ]
+            }
+          ]
+        },
+        "expected": {
+          "content": "Use distinct question text for each answer-map key and distinct option labels within each question.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "AskUserQuestion",
+        "input": {
+          "questions": [
+            {
+              "question": "Same?",
+              "options": [
+                {
+                  "label": "A"
+                },
+                {
+                  "label": "A"
+                }
+              ]
+            }
+          ]
+        },
+        "expected": {
+          "content": "Use distinct question text for each answer-map key and distinct option labels within each question.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "AskUserQuestion",
+        "input": {
+          "questions": [
+            {
+              "question": "Choose?",
+              "options": [
+                {
+                  "label": "A"
+                },
+                {
+                  "label": "B"
+                }
+              ]
+            }
+          ]
+        },
+        "expected": {
+          "content": "Waiting for user response to: Choose?",
+          "isError": false,
+          "metadata": {
+            "questions": [
+              {
+                "question": "Choose?",
+                "options": [
+                  {
+                    "label": "A"
+                  },
+                  {
+                    "label": "B"
+                  }
+                ]
+              }
+            ],
+            "type": "ask_user"
+          }
+        }
+      },
+      {
+        "tool": "AskUserQuestion",
+        "input": {
+          "questions": [
+            {
+              "question": "Choose?",
+              "options": [
+                {
+                  "label": "A"
+                },
+                {
+                  "label": "B"
+                }
+              ]
+            }
+          ],
+          "answers": {
+            "2": [
+              "A",
+              "B"
+            ],
+            "10": "ten",
+            "Choose?": "A"
+          },
+          "annotations": {
+            "Choose?": {
+              "notes": "check {path}",
+              "preview": "view\nnext"
+            }
+          }
+        },
+        "expected": {
+          "content": "The user supplied these decisions:\n\nQuestion: 2\nAnswer: A,B\n\nQuestion: 10\nAnswer: ten\n\nQuestion: Choose?\nAnswer: A\nAdditional feedback: check {path}\nChosen preview:\nview\nnext",
+          "isError": false,
+          "metadata": {
+            "questions": [
+              {
+                "question": "Choose?",
+                "options": [
+                  {
+                    "label": "A"
+                  },
+                  {
+                    "label": "B"
+                  }
+                ]
+              }
+            ],
+            "answers": {
+              "2": [
+                "A",
+                "B"
+              ],
+              "10": "ten",
+              "Choose?": "A"
+            },
+            "annotations": {
+              "Choose?": {
+                "notes": "check {path}",
+                "preview": "view\nnext"
+              }
+            },
+            "type": "ask_user"
+          }
+        }
+      }
+    ],
+    "finalFiles": {}
+  },
+  {
+    "name": "skill-feedback",
+    "files": {},
+    "steps": [
+      {
+        "tool": "Skill",
+        "input": {},
+        "expected": {
+          "content": "Missing required parameter: skill",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Skill",
+        "input": {
+          "skill": "unknown"
+        },
+        "expected": {
+          "content": "Skill 'unknown' not found. Use skill=\"list\" to see available skills.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Skill",
+        "input": {
+          "skill": "list"
+        },
+        "expected": {
+          "content": "Available skills (0):",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Skill",
+        "input": {
+          "skill": "bad/path"
+        },
+        "expected": {
+          "content": "Use an exact skill name from the catalog, without a file path.",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Skill",
+        "input": {
+          "skill": "one",
+          "args": 4
+        },
+        "expected": {
+          "content": "Skill arguments must be a string.",
+          "isError": true
+        }
+      }
+    ],
+    "finalFiles": {}
+  },
+  {
+    "name": "search-feedback",
+    "files": {
+      "a.txt": "needle\nother\nneedle\n"
+    },
+    "steps": [
+      {
+        "tool": "Glob",
+        "input": {},
+        "expected": {
+          "content": "pattern is required",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Glob",
+        "input": {
+          "pattern": "*.none"
+        },
+        "expected": {
+          "content": "No files matched pattern \"*.none\" in <root>",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Glob",
+        "input": {
+          "pattern": "*",
+          "path": "absent"
+        },
+        "expected": {
+          "content": "Directory not found: <root>/absent",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Glob",
+        "input": {
+          "pattern": "*",
+          "path": "a.txt"
+        },
+        "expected": {
+          "content": "Not a directory: <root>/a.txt",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Grep",
+        "input": {},
+        "expected": {
+          "content": "pattern is required",
+          "isError": true
+        }
+      },
+      {
+        "tool": "Grep",
+        "input": {
+          "pattern": "missing"
+        },
+        "expected": {
+          "content": "No matches found for pattern \"missing\" in <root>. Check the pattern syntax (ripgrep regex), broaden the pattern, or search a different path.",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Grep",
+        "input": {
+          "pattern": "needle",
+          "output_mode": "content",
+          "head_limit": 1
+        },
+        "expected": {
+          "content": "<root>/a.txt:1:needle\n\n[Showing lines 1-1 of 2 matching lines. Use offset=1 to continue, or narrow the search with a more specific pattern, glob, type, or path.]",
+          "isError": false
+        }
+      },
+      {
+        "tool": "Grep",
+        "input": {
+          "pattern": "needle",
+          "output_mode": "content",
+          "offset": 1,
+          "head_limit": 1
+        },
+        "expected": {
+          "content": "<root>/a.txt:3:needle\n\n[Showing lines 2-2 of 2 matching lines. Use offset=2 to continue, or narrow the search with a more specific pattern, glob, type, or path.]",
+          "isError": false
+        }
+      }
+    ],
+    "finalFiles": {
+      "a.txt": "needle\nother\nneedle\n"
+    }
+  }
+]

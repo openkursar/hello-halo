@@ -2,19 +2,14 @@
  * Provider-failure handling in the query loop: retry, model fallback, and the
  * boundary between an error the loop can absorb and one it must surface.
  *
- * Backoff delays are stubbed to zero so the retry-exhaustion path runs at
- * full length without the test sleeping for minutes.
+ * Exhaustion cases include the real Rust backoff; JavaScript timer mocks
+ * cannot advance that runtime's clock.
  */
 
 import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 
-vi.mock('../utils/retry.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../utils/retry.js')>();
-  return { ...actual, delayForAttempt: () => 0 };
-});
-
-import { queryLoop } from './query-loop.js';
+import { queryLoop } from '../index.js';
 import type { SDKMessage } from './query-types.js';
 import type {
   LlmProvider,
@@ -197,7 +192,7 @@ describe('queryLoop — model fallback', () => {
     expect(modelsTried[modelsTried.length - 1]).toBe('backup-model');
     expect(subtypes(msgs).filter((s) => s === 'api_retry')).toHaveLength(DEFAULT_RETRY.maxRetries);
     expect(subtypes(msgs)).toContain('model_fallback');
-  });
+  }, 600_000);
 });
 
 describe('queryLoop — provider retry', () => {
@@ -375,7 +370,7 @@ describe('queryLoop — a request that cannot succeed', () => {
     expect(kinds.filter((kind) => kind === 'assistant')).toHaveLength(1);
     expect(kinds.indexOf('assistant')).toBeGreaterThan(kinds.lastIndexOf('api_retry'));
     expect(msgs.find((m) => m.type === 'assistant')).toMatchObject({ error: 'server_error' });
-  });
+  }, 600_000);
 
   it('does not tell a stop as a failure', async () => {
     const controller = new AbortController();

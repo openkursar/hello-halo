@@ -10,6 +10,7 @@ import readline from 'node:readline';
 import { writeReport } from './report.mjs';
 import { once } from 'node:events';
 import { processTree, processTable, processIdentity, descriptorCount, diskUsage, evaluate } from './metrics.mjs';
+import { buildSdk, executionEnvironment } from './build.mjs';
 
 const exec = promisify(execFile);
 const directory = dirname(fileURLToPath(import.meta.url));
@@ -83,8 +84,7 @@ if (parsedArguments.values.background) {
       ? [] : setting === true ? [`--${name}`] : [`--${name}`, setting]);
   forwarded.push('--output', reportDirectory);
   if (live) forwarded.push('--key-stdin');
-  const env = { ...process.env };
-  for (const name of Object.keys(env)) if (/API_KEY|TOKEN|SECRET|PASSWORD/i.test(name)) delete env[name];
+  const env = executionEnvironment();
   const consoleFile = await fs.open(join(reportDirectory, 'console.log'), 'ax', 0o600);
   let child;
   try {
@@ -114,6 +114,7 @@ const report = { startedAt: new Date().toISOString(), profile, settings, platfor
   arch: process.arch, node: process.version, source: {}, scenarios: [], passed: false };
 const scrub = text => key ? text.replaceAll(key, '[REDACTED]') : text;
 let interrupted = false;
+const buildCancellation = new AbortController();
 let activeChild;
 const journalPath = join(reportDirectory, 'events.jsonl');
 writeFileSync(journalPath, '', { flag: 'wx', mode: 0o600 });
@@ -135,6 +136,7 @@ record('supervisor-start', runState);
 checkpointState({ status: 'building' });
 process.once('uncaughtExceptionMonitor', error => {
   try { record('supervisor-error', { error: scrub(error.stack ?? String(error)) }); } catch { /* The uncaught error still reaches console.log. */ }
+  buildCancellation.abort(new Error('Validation supervisor failed during SDK build'));
   activeChild?.kill('SIGTERM');
 });
 process.once('exit', code => {
@@ -146,6 +148,7 @@ process.once('exit', code => {
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => {
   record('supervisor-signal', { signal });
   interrupted = true;
+  buildCancellation.abort(new Error('Validation interrupted during SDK build'));
   activeChild?.kill('SIGTERM');
 });
 
@@ -153,7 +156,8 @@ async function buildSnapshot() {
   const { stdout } = await exec('git', ['ls-files', '-c', '-o', '--exclude-standard', '-z'], { cwd: source, maxBuffer: 4 * 1024 * 1024 });
   const files = [...new Set(stdout.split('\0').filter(Boolean))].filter(file =>
     !file.startsWith('validation/results/') && !file.startsWith('node_modules/') && !file.startsWith('dist/') &&
-    !file.startsWith('swe-bench-eval/') && !file.split('/').some(part => part.startsWith('.env')));
+    !file.startsWith('swe-bench-eval/') && !file.startsWith('native/target/') &&
+    !file.split('/').some(part => part.startsWith('.env')));
   const hash = createHash('sha256');
   let copiedFiles = 0;
   for (const file of files.sort()) {
@@ -171,18 +175,16 @@ async function buildSnapshot() {
   }
   report.source = { head: (await exec('git', ['rev-parse', 'HEAD'], { cwd: source })).stdout.trim(),
     snapshotSha256: hash.digest('hex'), files: copiedFiles,
-    dirtyPaths: (await exec('git', ['status', '--short'], { cwd: source })).stdout.trim().split('\n') };
+    dirtyPaths: (await exec('git', ['status', '--short', '--', '.'], { cwd: source })).stdout.trim().split('\n') };
   record('source', report.source);
   checkpointState({ source: report.source });
   await fs.symlink(join(source, 'node_modules'), join(snapshot, 'node_modules'), 'dir');
-  try {
-    const build = await exec(process.execPath, [join(source, 'node_modules/typescript/bin/tsc'), '-p', join(snapshot, 'tsconfig.json')],
-      { cwd: snapshot, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
-    await fs.writeFile(join(reportDirectory, 'build.log'), scrub(build.stdout + build.stderr));
-  } catch (error) {
-    await fs.writeFile(join(reportDirectory, 'build.log'), scrub((error.stdout ?? '') + (error.stderr ?? '')));
-    throw error;
-  }
+  report.source.native = await buildSdk(snapshot, source, join(reportDirectory, 'build.log'), {
+    signal: buildCancellation.signal, scrub,
+    onStart: pid => { record('build-start', { pid }); checkpointState({ buildPid: pid }); },
+  });
+  record('build-complete', { native: report.source.native });
+  checkpointState({ source: report.source, buildPid: null });
   console.log(`Built isolated SDK snapshot ${report.source.snapshotSha256.slice(0, 12)}`);
 }
 
@@ -191,8 +193,7 @@ async function runScenario(scenario, extra = {}) {
   const entry = { scenario, startedAt: new Date().toISOString(), samples: [], osSamples: [], checks: [], errors: [], ownedChildren: [] };
   report.scenarios.push(entry);
   await fs.mkdir(sandbox, { recursive: true });
-  const env = { ...process.env, AGENT_SDK_LOG_LEVEL: 'warn' };
-  for (const name of Object.keys(env)) if (/API_KEY|TOKEN|SECRET|PASSWORD/i.test(name)) delete env[name];
+  const env = { ...executionEnvironment(), AGENT_SDK_LOG_LEVEL: 'warn' };
   const child = fork(join(snapshot, 'validation/actor.mjs'), [], { execArgv: ['--expose-gc'], env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   await once(child, 'spawn');
   activeChild = child;
@@ -238,6 +239,7 @@ async function runScenario(scenario, extra = {}) {
   };
   child.on('message', message => {
     record('actor-event', { scenario, message });
+    if (message.type === 'runtime') entry.runtime = message.info;
     if (message.type === 'sample') {
       entry.samples.push(message);
       if (message.label) void collect(message.label).finally(() => {
@@ -277,7 +279,7 @@ async function runScenario(scenario, extra = {}) {
   const watchdog = setTimeout(() => { entry.errors.push('Scenario exceeded external deadline'); child.kill('SIGKILL'); }, timeoutMs);
   const sampler = setInterval(() => { void collect(); }, 2000);
   const exit = once(child, 'close');
-  child.send({ ...settings, key, sdk: snapshot, sandbox, scenario, ...extra }, error => {
+  child.send({ ...settings, key, sdk: snapshot, nativeBuild: report.source.native, sandbox, scenario, ...extra }, error => {
     if (error) { entry.errors.push(`Scenario startup failed: ${error.message}`); child.kill('SIGTERM'); }
   });
   const [code, signal] = await exit;
@@ -289,6 +291,9 @@ async function runScenario(scenario, extra = {}) {
   activeChild = undefined;
   entry.exit = { code, signal };
   if (interrupted) entry.errors.push('Validation interrupted');
+  if (entry.runtime?.implementation !== 'rust' || entry.runtime?.buildId !== report.source.native.buildId) {
+    entry.errors.push('Scenario did not confirm the expected native runtime');
+  }
   await Promise.all(ownershipChecks);
   const remaining = new Map((await processTable()).processes.map(process => [process.pid, process.identity]));
   for (const [pid, identity] of tracked) {

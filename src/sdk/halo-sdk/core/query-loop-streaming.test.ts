@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { queryLoop } from './query-loop.js';
-import { resolveQueryConfig } from './context.js';
+import { queryLoop, resolveQueryConfig } from '../index.js';
 import type { QueryLoopOptions, SDKAssistantMessage, SDKMessage } from './query-types.js';
 import type { LlmProvider, ProviderRequest, StreamEvent, ToolResultBlock } from '../types/provider.js';
 import type { Tool } from '../types/tool.js';
@@ -377,14 +376,11 @@ describe('streaming tool execution', () => {
     expect(results(retained)[0].is_error).not.toBe(true);
   }, 2000);
 
-  it('does not count the final tool tail as model API time', async () => {
-    let now = 100;
-    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  it('excludes the tool tail from model API time', async () => {
     const providerFinished = deferred();
     const releaseTool = deferred();
     const { provider } = scriptedProvider(async function* () {
       yield* toolCall('Read');
-      now = 200;
       providerFinished.resolve();
     });
     const cfg = config();
@@ -395,17 +391,17 @@ describe('streaming tool execution', () => {
         return { content: 'Read complete.', isError: false };
       })], 'Read the file.'));
       await providerFinished.promise;
-      await flush();
-      now = 2000;
+      await new Promise<void>(resolve => setTimeout(resolve, 250));
       releaseTool.resolve();
       const messages = await pending;
-      const result = messages.find(message => message.type === 'result');
-      expect(result).toMatchObject({ duration_api_ms: 100, duration_ms: 1900 });
+      const result = messages.find(message => message.type === 'result') as
+        { duration_api_ms: number; duration_ms: number } | undefined;
+      expect(result).toBeDefined();
+      expect(result!.duration_ms - result!.duration_api_ms).toBeGreaterThanOrEqual(150);
     } finally {
       releaseTool.resolve();
-      clock.mockRestore();
     }
-  }, 2000);
+  }, 5000);
 
   it('aborts in-flight tools when the stream consumer closes', async () => {
     const controller = new AbortController();

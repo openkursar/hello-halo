@@ -9,11 +9,10 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { getTranscriptPath } from './transcript.js';
-import { BackgroundTaskRegistry } from '../tools/bash/index.js';
 import { query } from '../index.js';
 import type {
   LlmProvider,
@@ -22,6 +21,7 @@ import type {
   StreamEvent,
   ProviderCapabilities,
   UsageInfo,
+  ToolResultBlock,
 } from '../types/provider.js';
 
 // ---------------------------------------------------------------------------
@@ -83,59 +83,170 @@ function makeQuery(model = 'deepseek-chat') {
   });
 }
 
+function processExists(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    throw error;
+  }
+}
+
+async function backgroundQuery(count: number) {
+  const directory = await mkdtemp(join(tmpdir(), 'sdk-query-background-'));
+  const script = join(directory, 'background.cjs');
+  await writeFile(script, "require('node:fs').writeFileSync(process.argv[2], String(process.pid)); process.stdout.write('OUTPUT_READY\\n'); setInterval(() => {}, 1000);\n");
+  const pidFiles = Array.from({ length: count }, (_, index) => join(directory, `${index}.pid`));
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let observed!: (request: ProviderRequest) => void;
+  let unavailable!: (error: unknown) => void;
+  const request = new Promise<ProviderRequest>((resolve, reject) => { observed = resolve; unavailable = reject; });
+  void request.catch(() => {});
+  let calls = 0;
+  let received = false;
+  let finished = false;
+  const provider: LlmProvider = {
+    ...makeMockProvider(),
+    async *createMessageStream(input): AsyncGenerator<StreamEvent, void, undefined> {
+      if (calls++ === 0) {
+        yield { type: 'message_start', id: 'launch', model: 'test-model', usage: makeUsage() };
+        for (const [index, pidFile] of pidFiles.entries()) {
+          const command = `exec "${process.execPath.replaceAll('\\', '/')}" "${script.replaceAll('\\', '/')}" "${pidFile.replaceAll('\\', '/')}"`;
+          yield { type: 'content_block_start', index, content_block: { type: 'tool_use', id: `background-${index}`, name: 'Bash', input: { command, run_in_background: true } } };
+          yield { type: 'content_block_stop', index };
+        }
+        yield { type: 'message_delta', stopReason: 'tool_use', usage: makeUsage() };
+        yield { type: 'message_stop' };
+      } else {
+        received = true;
+        observed(input);
+        const signal = input.providerOptions?.signal as AbortSignal | undefined;
+        const aborted = new Promise<void>(resolve => {
+          const stop = () => resolve();
+          if (signal?.aborted) stop(); else signal?.addEventListener('abort', stop, { once: true });
+          void gate.then(() => signal?.removeEventListener('abort', stop));
+        });
+        await Promise.race([gate, aborted]);
+        yield* makeMockProvider().createMessageStream(input);
+      }
+    },
+  };
+  const q = query({ prompt: 'Start the owned background commands.', options: { model: 'test-model', provider, cwd: directory,
+    env: { HOME: directory, CLAUDE_CONFIG_DIR: join(directory, 'config') }, persistSession: false, settingSources: [], tools: ['Bash'],
+    permissionMode: 'bypassPermissions', maxTurns: 2, collaboration: false, thinking: { type: 'disabled' },
+    turnEndChecks: { openWork: false, completion: false } } });
+  const completion = (async () => {
+    try { for await (const _message of q) {} }
+    finally {
+      finished = true;
+      if (!received) unavailable(new Error('The query ended before receiving its background task results.'));
+    }
+  })();
+  void completion.catch(() => {});
+  return {
+    q, completion, release,
+    get finished() { return finished; },
+    async tasks() {
+      const input = await request;
+      const results = input.messages.flatMap(message => Array.isArray(message.content) ? message.content : [])
+        .filter((block): block is ToolResultBlock => block.type === 'tool_result');
+      expect(results).toHaveLength(count);
+      const tasks = results.map((result, index) => {
+        expect(result.is_error).not.toBe(true);
+        const text = String(result.content);
+        const id = /ID: ([\w-]+)/.exec(text)?.[1];
+        const outputFile = /Output file: (.+)/.exec(text)?.[1];
+        expect(id).toBeTruthy();
+        expect(outputFile).toBeTruthy();
+        return { id: id!, outputFile: outputFile!, pidFile: pidFiles[index], pid: 0 };
+      });
+      await vi.waitFor(async () => {
+        for (const task of tasks) {
+          task.pid = Number(await readFile(task.pidFile, 'utf8'));
+          expect(task.pid).toBeGreaterThan(0);
+          expect(processExists(task.pid)).toBe(true);
+        }
+      }, { timeout: 5000, interval: 10 });
+      return tasks;
+    },
+    async close() {
+      release();
+      q.close();
+      await q.return(undefined).catch(() => {});
+      await completion.catch(() => {});
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
 describe('Query background lifecycle', () => {
   it('routes task controls to the session-owned shell registry', async () => {
-    const bashStop = vi.spyOn(BackgroundTaskRegistry.prototype, 'stop').mockReturnValue(false);
-    const bashStopAll = vi.spyOn(BackgroundTaskRegistry.prototype, 'stopAll');
-    const q = makeQuery();
+    const owner = await backgroundQuery(2);
+    const neighbour = await backgroundQuery(1);
     try {
-      await q.stopTask('unknown-task');
-      expect(bashStop).toHaveBeenCalledWith('unknown-task');
-      await q.interrupt();
-      expect(bashStopAll).toHaveBeenCalledOnce();
+      const tasks = await owner.tasks();
+      const [other] = await neighbour.tasks();
+      await expect(owner.q.stopTask('unknown-task')).resolves.toBeUndefined();
+      expect(tasks.every(task => processExists(task.pid))).toBe(true);
+      expect(processExists(other.pid)).toBe(true);
+      await expect(owner.q.stopTask(tasks[0].id)).resolves.toBeUndefined();
+      await vi.waitFor(() => expect(processExists(tasks[0].pid)).toBe(false));
+      expect(processExists(tasks[1].pid)).toBe(true);
+      expect(processExists(other.pid)).toBe(true);
+      await expect(owner.q.interrupt()).resolves.toBeUndefined();
+      await owner.completion.catch(error => { expect((error as Error).name).toMatch(/Abort/i); });
+      expect(tasks.every(task => !processExists(task.pid))).toBe(true);
+      expect(processExists(other.pid)).toBe(true);
+      await neighbour.q.return(undefined);
+      await neighbour.completion.catch(error => { expect((error as Error).name).toMatch(/Abort/i); });
+      expect(processExists(other.pid)).toBe(false);
     } finally {
-      q.close();
-      vi.restoreAllMocks();
+      await Promise.all([owner.close(), neighbour.close()]);
     }
-  });
+  }, 15_000);
 
   it('waits for background cleanup before the query generator finishes', async () => {
-    let release!: () => void;
-    const cleanup = new Promise<void>(resolve => { release = resolve; });
-    const flush = vi.spyOn(BackgroundTaskRegistry.prototype, 'flush').mockReturnValue(cleanup);
-    const q = query({ prompt: '/help', options: { model: 'test-model', provider: makeMockProvider() } });
-    let finished = false;
-    const drained = (async () => {
-      for await (const _message of q) { /* Drain local command events. */ }
-      finished = true;
-    })();
+    const current = await backgroundQuery(1);
     try {
-      await vi.waitFor(() => expect(flush).toHaveBeenCalledOnce());
-      expect(finished).toBe(false);
-      release();
-      await drained;
-      expect(finished).toBe(true);
+      const [task] = await current.tasks();
+      expect(current.finished).toBe(false);
+      expect(processExists(task.pid)).toBe(true);
+      await expect(access(task.outputFile)).resolves.toBeUndefined();
+      current.release();
+      await current.completion;
+      expect(current.finished).toBe(true);
+      expect(processExists(task.pid)).toBe(false);
+      await expect(access(task.outputFile)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
-      release();
-      q.close();
-      vi.restoreAllMocks();
+      await current.close();
     }
-  });
+  }, 15_000);
 });
 
 describe('Query input and transcript options', () => {
-  it('reports manual compaction as an error rather than a successful no-op', async () => {
-    const q = query({ prompt: '/compact', options: { model: 'test-model', provider: makeMockProvider() } });
+  it('keeps empty history unchanged during manual compaction without a model request', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'sdk-query-empty-compact-'));
+    const provider = makeMockProvider();
+    const complete = vi.spyOn(provider, 'createMessage');
+    const stream = vi.spyOn(provider, 'createMessageStream');
+    const q = query({ prompt: '/compact', options: { model: 'test-model', provider,
+      cwd: directory, env: { HOME: directory, CLAUDE_CONFIG_DIR: join(directory, 'state') },
+      tools: [], skillCatalog: [], settingSources: [], collaboration: false, persistSession: false } });
     try {
       const messages = [];
       for await (const message of q) messages.push(message);
       expect(messages.find(message => message.type === 'result')).toMatchObject({
-        is_error: true,
-        subtype: 'error_during_execution',
-        result: expect.stringContaining('not supported'),
+        is_error: false,
+        subtype: 'success',
+        result: expect.stringContaining('kept unchanged'),
+        usage: { input_tokens: 0, output_tokens: 0 },
       });
+      expect(complete).not.toHaveBeenCalled();
+      expect(stream).not.toHaveBeenCalled();
+      expect(messages.some(message => message.type === 'system' && message.subtype === 'compact_boundary')).toBe(false);
     } finally {
       q.close();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 

@@ -1,0 +1,40 @@
+[workspace]
+members = ["crates/halo-core", "crates/halo-node"]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT"
+
+[workspace.dependencies]
+async-trait = "0.1"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "fs", "process", "io-util", "net", "macros"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+uuid = { version = "1", features = ["v4"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-native-roots", "gzip", "brotli", "deflate"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
+sha2 = "0.10"
+regex = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+base64 = "0.22"
+hex = "0.4"
+globset = "0.4"
+serde_yaml = "0.9"
+libc = "0.2"
+futures-util = "0.3"
+ryu-js = "1"
+fs2 = "0.4"
+tracing = "0.1"
+unicode-normalization = "0.1"
+unsafe-libyaml = "0.2.11"
+regress = { version = "0.12.0", features = ["utf16"] }
+indexmap = "2"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

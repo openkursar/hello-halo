@@ -1,0 +1,176 @@
+[
+  {
+    "name": "plain",
+    "content": "# Title\n\nDirect description.\n",
+    "expected": {
+      "description": "Direct description.",
+      "whenToUse": {
+        "__haloSdkNativeUndefined": true
+      },
+      "argumentHint": {
+        "__haloSdkNativeUndefined": true
+      }
+    }
+  },
+  {
+    "name": "normal",
+    "content": "---\ndescription: Normal description\nwhenToUse: Selected changes\nargumentHint: path\n---\nBody.",
+    "expected": {
+      "description": "Normal description",
+      "whenToUse": "Selected changes",
+      "argumentHint": "path"
+    }
+  },
+  {
+    "name": "boolean",
+    "content": "---\ndescription: true\nwhenToUse: false\nargument-hint: 0030\n---\nBody.",
+    "expected": {
+      "description": "true",
+      "whenToUse": "false",
+      "argumentHint": "0030"
+    }
+  },
+  {
+    "name": "null",
+    "content": "---\ndescription: null\nwhenToUse: ~\n---\nBody.",
+    "expected": {
+      "description": "null",
+      "whenToUse": "~",
+      "argumentHint": {
+        "__haloSdkNativeUndefined": true
+      }
+    }
+  },
+  {
+    "name": "hex",
+    "content": "---\ndescription: 0xF\nwhenToUse: 1e3\n---\nBody.",
+    "expected": {
+      "description": "0xF",
+      "whenToUse": "1e3",
+      "argumentHint": {
+        "__haloSdkNativeUndefined": true
+      }
+    }
+  },
+  {
+    "name": "nested",
+    "content": "---\ndescription: { nested: value }\nwhenToUse: preserved\n---\nBody fallback.",
+    "expected": {
+      "description": "Body fallback.",
+      "whenToUse": "preserved",
+      "argumentHint": {
+        "__haloSdkNativeUndefined": true
+      }
+    }
+  },
+  {
+    "name": "sequence",
+    "content": "---\n- one\n- two\n---\nFallback description.",
+    "expected": {
+      "description": "Fallback description.",
+      "whenToUse": {
+        "__haloSdkNativeUndefined": true
+      },
+      "argumentHint": {
+        "__haloSdkNativeUndefined": true
+      }
+    }
+  },
+  {
+    "name": "duplicate",
+    "content": "---\ndescription: first\ndescription: second\n---\nFallback duplicate.",
+    "expected": {
+      "description": "Fallback duplicate.",
+      "whenToUse": {
+        "__haloSdkNativeUndefined": true
+      },
+      "argumentHint": {
+        "__haloSdkNativeUndefined": true
+      }
+    }
+  },
+  {
+    "name": "unicode-whitespace",
+    "content": "﻿--- \r\ndescription: \"﻿trimmed﻿\"\r\n--- \r\nBody.",
+    "expected": {
+      "description": "trimmed",
+      "whenToUse": {
+        "__haloSdkNativeUndefined": true
+      },
+      "argumentHint": {
+        "__haloSdkNativeUndefined": true
+      }
+    }
+  },
+  {
+    "name": "empty-header",
+    "content": "---\n---\nBody.",
+    "expected": {
+      "description": ""
+    }
+  },
+  {
+    "name": "empty-frontmatter",
+    "content": "---\n\n---\nBody.",
+    "expected": {
+      "description": "Body.",
+      "whenToUse": {
+        "__haloSdkNativeUndefined": true
+      },
+      "argumentHint": {
+        "__haloSdkNativeUndefined": true
+      }
+    }
+  },
+  {
+    "name": "incomplete",
+    "content": "---\ndescription: incomplete",
+    "expected": {
+      "description": ""
+    }
+  },
+  {
+    "name": "incomplete-header",
+    "content": "---\ndescription: incomplete\nBody",
+    "expected": {
+      "description": ""
+    }
+  },
+  {
+    "name": "literal-block",
+    "content": "---\ndescription: |\n  first line\n  second line\nargument-hint: fallback\n---\nBody.",
+    "expected": {
+      "description": "first line\nsecond line",
+      "whenToUse": {
+        "__haloSdkNativeUndefined": true
+      },
+      "argumentHint": "fallback"
+    }
+  },
+  {
+    "name": "anchor",
+    "content": "---\nother: &description 0004\ndescription: *description\n---\nBody.",
+    "expected": {
+      "description": "Body.",
+      "whenToUse": {
+        "__haloSdkNativeUndefined": true
+      },
+      "argumentHint": {
+        "__haloSdkNativeUndefined": true
+      }
+    }
+  },
+  {
+    "name": "ignored-unicode-space",
+    "content": "# heading\nkeep\n",
+    "expected": {
+      "description": "keep",
+      "whenToUse": {
+        "__haloSdkNativeUndefined": true
+      },
+      "argumentHint": {
+        "__haloSdkNativeUndefined": true
+      }
+    }
+  }
+]

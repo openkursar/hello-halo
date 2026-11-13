@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { queryLoop } from './query-loop.js';
-import { resolveQueryConfig } from './context.js';
+import { queryLoop, resolveQueryConfig } from '../index.js';
 import type { LlmProvider, Message, ProviderRequest, StreamEvent } from '../types/provider.js';
 import type { Tool } from '../types/tool.js';
 

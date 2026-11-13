@@ -1,0 +1,2049 @@
+{
+  "sourceSha256": "0a5266f6279b1112f0c7ff0d02785dd2d9730f65656ebfb987ffe4f008facccb",
+  "requests": [
+    {
+      "name": "plain/false",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {}
+      },
+      "stream": false,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": false,
+        "max_tokens": 37
+      }
+    },
+    {
+      "name": "plain/true",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {}
+      },
+      "stream": true,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "max_tokens": 37
+      }
+    },
+    {
+      "name": "o-series/false",
+      "request": {
+        "model": "openai/o3-mini",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "temperature": 0.5,
+        "providerOptions": {
+          "reasoning_effort": "high"
+        }
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {
+          "defaultTemperature": 0.2,
+          "includeUsageInStream": true
+        }
+      },
+      "stream": false,
+      "expected": {
+        "model": "openai/o3-mini",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": false,
+        "max_completion_tokens": 37,
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "name": "o-series/true",
+      "request": {
+        "model": "openai/o3-mini",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "temperature": 0.5,
+        "providerOptions": {
+          "reasoning_effort": "high"
+        }
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {
+          "defaultTemperature": 0.2,
+          "includeUsageInStream": true
+        }
+      },
+      "stream": true,
+      "expected": {
+        "model": "openai/o3-mini",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "max_completion_tokens": 37,
+        "stream_options": {
+          "include_usage": true
+        },
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "name": "temperature-null/false",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "temperature": null,
+        "topP": null
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {
+          "defaultTemperature": 0.25
+        }
+      },
+      "stream": false,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": false,
+        "max_tokens": 37,
+        "temperature": 0.25,
+        "top_p": null
+      }
+    },
+    {
+      "name": "temperature-null/true",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "temperature": null,
+        "topP": null
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {
+          "defaultTemperature": 0.25
+        }
+      },
+      "stream": true,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "max_tokens": 37,
+        "temperature": 0.25,
+        "top_p": null
+      }
+    },
+    {
+      "name": "native-functions/false",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "tools": [
+          {
+            "name": "run",
+            "description": "Exact.\n Text",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "2": {
+                  "description": "two"
+                },
+                "10": {
+                  "description": "ten"
+                },
+                "a": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "a"
+              ]
+            }
+          }
+        ],
+        "toolChoice": {
+          "type": "any"
+        },
+        "stopSequences": [
+          "stop"
+        ],
+        "topK": 4,
+        "topP": 0.9
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {
+          "includeUsageInStream": true,
+          "reasoningEffort": true
+        }
+      },
+      "stream": false,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": false,
+        "max_tokens": 37,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "run",
+              "description": "Exact.\n Text",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "2": {
+                    "description": "two"
+                  },
+                  "10": {
+                    "description": "ten"
+                  },
+                  "a": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "a"
+                ]
+              }
+            }
+          }
+        ],
+        "top_p": 0.9,
+        "stop": [
+          "stop"
+        ]
+      }
+    },
+    {
+      "name": "native-functions/true",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "tools": [
+          {
+            "name": "run",
+            "description": "Exact.\n Text",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "2": {
+                  "description": "two"
+                },
+                "10": {
+                  "description": "ten"
+                },
+                "a": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "a"
+              ]
+            }
+          }
+        ],
+        "toolChoice": {
+          "type": "any"
+        },
+        "stopSequences": [
+          "stop"
+        ],
+        "topK": 4,
+        "topP": 0.9
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {
+          "includeUsageInStream": true,
+          "reasoningEffort": true
+        }
+      },
+      "stream": true,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "max_tokens": 37,
+        "stream_options": {
+          "include_usage": true
+        },
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "run",
+              "description": "Exact.\n Text",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "2": {
+                    "description": "two"
+                  },
+                  "10": {
+                    "description": "ten"
+                  },
+                  "a": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "a"
+                ]
+              }
+            }
+          }
+        ],
+        "top_p": 0.9,
+        "stop": [
+          "stop"
+        ]
+      }
+    },
+    {
+      "name": "blocks/false",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "hidden",
+                "signature": "sig"
+              },
+              {
+                "type": "text",
+                "text": "hello"
+              },
+              {
+                "type": "text",
+                "text": " world"
+              },
+              {
+                "type": "tool_use",
+                "id": "call--123",
+                "name": "Read",
+                "input": {
+                  "file_path": "fixture.txt"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call--123",
+                "content": "done"
+              },
+              {
+                "type": "text",
+                "text": "Next"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "systemPrompt": [
+          {
+            "type": "text",
+            "text": "first"
+          },
+          {
+            "type": "text",
+            "text": "second"
+          }
+        ]
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {
+          "toolIdAlphanumericOnly": true,
+          "toolIdMaxLen": 10,
+          "fixToolUserSequence": true
+        }
+      },
+      "stream": false,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "first\n\nsecond"
+          },
+          {
+            "role": "assistant",
+            "content": "hello world",
+            "tool_calls": [
+              {
+                "id": "call123000",
+                "type": "function",
+                "function": {
+                  "name": "Read",
+                  "arguments": "{\"file_path\":\"fixture.txt\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call123000",
+            "content": "done"
+          },
+          {
+            "role": "assistant",
+            "content": "Done."
+          },
+          {
+            "role": "user",
+            "content": "Next"
+          }
+        ],
+        "stream": false,
+        "max_tokens": 37
+      }
+    },
+    {
+      "name": "blocks/true",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "hidden",
+                "signature": "sig"
+              },
+              {
+                "type": "text",
+                "text": "hello"
+              },
+              {
+                "type": "text",
+                "text": " world"
+              },
+              {
+                "type": "tool_use",
+                "id": "call--123",
+                "name": "Read",
+                "input": {
+                  "file_path": "fixture.txt"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call--123",
+                "content": "done"
+              },
+              {
+                "type": "text",
+                "text": "Next"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "systemPrompt": [
+          {
+            "type": "text",
+            "text": "first"
+          },
+          {
+            "type": "text",
+            "text": "second"
+          }
+        ]
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {
+          "toolIdAlphanumericOnly": true,
+          "toolIdMaxLen": 10,
+          "fixToolUserSequence": true
+        }
+      },
+      "stream": true,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "first\n\nsecond"
+          },
+          {
+            "role": "assistant",
+            "content": "hello world",
+            "tool_calls": [
+              {
+                "id": "call123000",
+                "type": "function",
+                "function": {
+                  "name": "Read",
+                  "arguments": "{\"file_path\":\"fixture.txt\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call123000",
+            "content": "done"
+          },
+          {
+            "role": "assistant",
+            "content": "Done."
+          },
+          {
+            "role": "user",
+            "content": "Next"
+          }
+        ],
+        "stream": true,
+        "max_tokens": 37
+      }
+    },
+    {
+      "name": "images/false",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "img-1",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "first"
+                  },
+                  {
+                    "type": "image",
+                    "source": {
+                      "type": "base64",
+                      "media_type": "image/png",
+                      "data": "YWJj"
+                    }
+                  },
+                  {
+                    "type": "text",
+                    "text": "second"
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "text": "next"
+              },
+              {
+                "type": "document",
+                "source": {
+                  "type": "text",
+                  "data": "ignored"
+                }
+              }
+            ]
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {}
+      },
+      "stream": false,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "tool",
+            "tool_call_id": "img-1",
+            "content": "first\nsecond"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Images from tool result img-1:"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,YWJj"
+                }
+              },
+              {
+                "type": "text",
+                "text": "next"
+              },
+              {
+                "type": "text",
+                "text": ""
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "max_tokens": 37
+      }
+    },
+    {
+      "name": "images/true",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "img-1",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "first"
+                  },
+                  {
+                    "type": "image",
+                    "source": {
+                      "type": "base64",
+                      "media_type": "image/png",
+                      "data": "YWJj"
+                    }
+                  },
+                  {
+                    "type": "text",
+                    "text": "second"
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "text": "next"
+              },
+              {
+                "type": "document",
+                "source": {
+                  "type": "text",
+                  "data": "ignored"
+                }
+              }
+            ]
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {}
+      },
+      "stream": true,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "tool",
+            "tool_call_id": "img-1",
+            "content": "first\nsecond"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Images from tool result img-1:"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,YWJj"
+                }
+              },
+              {
+                "type": "text",
+                "text": "next"
+              },
+              {
+                "type": "text",
+                "text": ""
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "max_tokens": 37
+      }
+    },
+    {
+      "name": "empty-system-array/false",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": []
+          },
+          {
+            "role": "user",
+            "content": []
+          }
+        ],
+        "stream": true,
+        "systemPrompt": []
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {}
+      },
+      "stream": false,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": ""
+          },
+          {
+            "role": "assistant",
+            "content": ""
+          },
+          {
+            "role": "user",
+            "content": ""
+          }
+        ],
+        "stream": false,
+        "max_tokens": 37
+      }
+    },
+    {
+      "name": "empty-system-array/true",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": []
+          },
+          {
+            "role": "user",
+            "content": []
+          }
+        ],
+        "stream": true,
+        "systemPrompt": []
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {}
+      },
+      "stream": true,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": ""
+          },
+          {
+            "role": "assistant",
+            "content": ""
+          },
+          {
+            "role": "user",
+            "content": ""
+          }
+        ],
+        "stream": true,
+        "max_tokens": 37
+      }
+    },
+    {
+      "name": "default-model/false",
+      "request": {
+        "model": "",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "defaultModel": "fallback",
+        "quirks": {}
+      },
+      "stream": false,
+      "expected": {
+        "model": "fallback",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": false,
+        "max_tokens": 37
+      }
+    },
+    {
+      "name": "default-model/true",
+      "request": {
+        "model": "",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "defaultModel": "fallback",
+        "quirks": {}
+      },
+      "stream": true,
+      "expected": {
+        "model": "fallback",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "max_tokens": 37
+      }
+    },
+    {
+      "name": "id-negative/false",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "abcdef",
+                "name": "x",
+                "input": {}
+              }
+            ]
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {
+          "toolIdMaxLen": -2
+        }
+      },
+      "stream": false,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "id": "abcd",
+                "type": "function",
+                "function": {
+                  "name": "x",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "max_tokens": 37
+      }
+    },
+    {
+      "name": "id-negative/true",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "abcdef",
+                "name": "x",
+                "input": {}
+              }
+            ]
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only",
+        "quirks": {
+          "toolIdMaxLen": -2
+        }
+      },
+      "stream": true,
+      "expected": {
+        "model": "fixture-model",
+        "messages": [
+          {
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "id": "abcd",
+                "type": "function",
+                "function": {
+                  "name": "x",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "max_tokens": 37
+      }
+    }
+  ],
+  "responses": [
+    {
+      "name": "empty",
+      "response": {
+        "id": "zero",
+        "choices": [
+          {
+            "message": {},
+            "finish_reason": "stop"
+          }
+        ]
+      },
+      "model": "fixture-model",
+      "expected": {
+        "id": "zero",
+        "content": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ],
+        "stopReason": "end_turn",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "model": "fixture-model"
+      }
+    },
+    {
+      "name": "reasoning",
+      "response": {
+        "id": "one",
+        "model": "reported",
+        "choices": [
+          {
+            "message": {
+              "thinking": {
+                "content": "think",
+                "signature": "signature"
+              },
+              "reasoning_content": "ignored",
+              "content": "answer"
+            },
+            "finish_reason": "length"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 10,
+          "completion_tokens": 2,
+          "prompt_tokens_details": {
+            "cached_tokens": 4
+          }
+        }
+      },
+      "model": "fixture-model",
+      "expected": {
+        "id": "one",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "think",
+            "signature": "signature"
+          },
+          {
+            "type": "text",
+            "text": "answer"
+          }
+        ],
+        "stopReason": "max_tokens",
+        "usage": {
+          "input_tokens": 6,
+          "output_tokens": 2,
+          "cache_read_input_tokens": 4
+        },
+        "model": "reported"
+      }
+    },
+    {
+      "name": "flat",
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "thinking_content": "thinking",
+              "reasoning": "ignored",
+              "tool_calls": [
+                {
+                  "id": "id",
+                  "function": {
+                    "name": "run",
+                    "arguments": "{\"x\":true}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 20,
+          "completion_tokens": 3,
+          "prompt_cache_hit_tokens": 99
+        }
+      },
+      "model": "deepseek-chat",
+      "expected": {
+        "id": "unknown",
+        "content": [
+          {
+            "type": "text",
+            "text": ""
+          },
+          {
+            "type": "thinking",
+            "thinking": "thinking"
+          },
+          {
+            "type": "tool_use",
+            "id": "id",
+            "name": "run",
+            "input": {
+              "x": true
+            }
+          }
+        ],
+        "stopReason": "tool_use",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 3,
+          "cache_read_input_tokens": 20
+        },
+        "model": "deepseek-chat"
+      }
+    },
+    {
+      "name": "xml",
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "before <think> hi </think> after <think>two</think>"
+            },
+            "finish_reason": "stop"
+          }
+        ]
+      },
+      "model": "qwen-model",
+      "expected": {
+        "id": "unknown",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "hi"
+          },
+          {
+            "type": "thinking",
+            "thinking": "two"
+          },
+          {
+            "type": "text",
+            "text": "before  after"
+          }
+        ],
+        "stopReason": "end_turn",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "model": "qwen-model"
+      }
+    },
+    {
+      "name": "raw-tools",
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "tool_calls": [
+                {
+                  "id": "id",
+                  "function": {
+                    "name": "run",
+                    "arguments": "null"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "custom"
+          }
+        ]
+      },
+      "model": "fixture-model",
+      "expected": {
+        "id": "unknown",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "id",
+            "name": "run",
+            "input": null
+          }
+        ],
+        "stopReason": "custom",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "model": "fixture-model"
+      }
+    }
+  ],
+  "streams": [
+    {
+      "name": "text",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only"
+      },
+      "chunks": [
+        {
+          "id": "s",
+          "model": "m",
+          "choices": [
+            {
+              "delta": {
+                "content": "a"
+              }
+            }
+          ]
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "b"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 2
+          }
+        }
+      ],
+      "expected": [
+        {
+          "type": "message_start",
+          "id": "s",
+          "model": "m",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "text_delta",
+          "index": 0,
+          "text": "a"
+        },
+        {
+          "type": "text_delta",
+          "index": 0,
+          "text": "b"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "stopReason": "end_turn",
+          "usage": {
+            "input_tokens": 10,
+            "output_tokens": 2
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    },
+    {
+      "name": "reasoning",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only"
+      },
+      "chunks": [
+        {
+          "choices": [
+            {
+              "delta": {
+                "reasoning_content": "think"
+              }
+            }
+          ]
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "answer"
+              }
+            }
+          ]
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "reasoning": "more"
+              }
+            }
+          ]
+        },
+        {
+          "choices": [
+            {
+              "finish_reason": "stop"
+            }
+          ]
+        },
+        {
+          "usage": {
+            "prompt_tokens": 20,
+            "completion_tokens": 4,
+            "prompt_tokens_details": {
+              "cached_tokens": 5
+            }
+          },
+          "choices": []
+        }
+      ],
+      "expected": [
+        {
+          "type": "message_start",
+          "id": "unknown",
+          "model": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "thinking",
+            "thinking": ""
+          }
+        },
+        {
+          "type": "reasoning_delta",
+          "index": 0,
+          "reasoning": "think"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "text_delta",
+          "index": 1,
+          "text": "answer"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 1
+        },
+        {
+          "type": "content_block_start",
+          "index": 2,
+          "content_block": {
+            "type": "thinking",
+            "thinking": ""
+          }
+        },
+        {
+          "type": "reasoning_delta",
+          "index": 2,
+          "reasoning": "more"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 2
+        },
+        {
+          "type": "message_delta",
+          "stopReason": "end_turn"
+        },
+        {
+          "type": "message_delta",
+          "usage": {
+            "input_tokens": 15,
+            "output_tokens": 4,
+            "cache_read_input_tokens": 5
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    },
+    {
+      "name": "structured",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only"
+      },
+      "chunks": [
+        {
+          "choices": [
+            {
+              "delta": {
+                "thinking": {
+                  "content": "idea",
+                  "signature": "sig"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "choices": [
+            {
+              "delta": {},
+              "finish_reason": "length"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "type": "message_start",
+          "id": "unknown",
+          "model": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "thinking",
+            "thinking": ""
+          }
+        },
+        {
+          "type": "reasoning_delta",
+          "index": 0,
+          "reasoning": "idea"
+        },
+        {
+          "type": "signature_delta",
+          "index": 0,
+          "signature": "sig"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "stopReason": "max_tokens"
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    },
+    {
+      "name": "tools",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only"
+      },
+      "chunks": [
+        {
+          "choices": [
+            {
+              "delta": {
+                "tool_calls": [
+                  {
+                    "index": 1,
+                    "id": "two",
+                    "function": {
+                      "name": "b",
+                      "arguments": "{"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "tool_calls": [
+                  {
+                    "index": 0,
+                    "id": "one",
+                    "function": {
+                      "name": "a",
+                      "arguments": "{}"
+                    }
+                  },
+                  {
+                    "index": 1,
+                    "function": {
+                      "arguments": "\"x\":1}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "choices": [
+            {
+              "finish_reason": "tool_calls"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "type": "message_start",
+          "id": "unknown",
+          "model": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "tool_use",
+            "id": "two",
+            "name": "b",
+            "input": {}
+          }
+        },
+        {
+          "type": "input_json_delta",
+          "index": 0,
+          "partialJson": "{"
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "tool_use",
+            "id": "one",
+            "name": "a",
+            "input": {}
+          }
+        },
+        {
+          "type": "input_json_delta",
+          "index": 1,
+          "partialJson": "{}"
+        },
+        {
+          "type": "input_json_delta",
+          "index": 0,
+          "partialJson": "\"x\":1}"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "content_block_stop",
+          "index": 1
+        },
+        {
+          "type": "message_delta",
+          "stopReason": "tool_use"
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    },
+    {
+      "name": "xml",
+      "request": {
+        "model": "qwen-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only"
+      },
+      "chunks": [
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "a<th"
+              }
+            }
+          ]
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "ink>idea</thi"
+              }
+            }
+          ]
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "nk>\nanswer"
+              }
+            }
+          ]
+        },
+        {
+          "choices": [
+            {
+              "finish_reason": "stop"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "type": "message_start",
+          "id": "unknown",
+          "model": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "text_delta",
+          "index": 0,
+          "text": "a"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "thinking",
+            "thinking": ""
+          }
+        },
+        {
+          "type": "reasoning_delta",
+          "index": 1,
+          "reasoning": "idea"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 1
+        },
+        {
+          "type": "content_block_start",
+          "index": 2,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "text_delta",
+          "index": 2,
+          "text": "answer"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 2
+        },
+        {
+          "type": "message_delta",
+          "stopReason": "end_turn"
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    },
+    {
+      "name": "incomplete-tag",
+      "request": {
+        "model": "glm-test",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only"
+      },
+      "chunks": [
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "text<thi"
+              }
+            }
+          ]
+        },
+        {
+          "choices": [
+            {
+              "finish_reason": "stop"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "type": "message_start",
+          "id": "unknown",
+          "model": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "text_delta",
+          "index": 0,
+          "text": "text"
+        },
+        {
+          "type": "text_delta",
+          "index": 0,
+          "text": "<thi"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "stopReason": "end_turn"
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    },
+    {
+      "name": "usage-only",
+      "request": {
+        "model": "fixture-model",
+        "maxTokens": 37,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "id": "fixture",
+        "name": "Fixture",
+        "baseUrl": "http://localhost:9/v1",
+        "apiKey": "fixture-only"
+      },
+      "chunks": [
+        {
+          "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 0
+          },
+          "choices": []
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "a"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 1
+          }
+        }
+      ],
+      "expected": [
+        {
+          "type": "message_start",
+          "id": "unknown",
+          "model": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        },
+        {
+          "type": "message_delta",
+          "usage": {
+            "input_tokens": 5,
+            "output_tokens": 0
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "text_delta",
+          "index": 0,
+          "text": "a"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "stopReason": "end_turn",
+          "usage": {
+            "input_tokens": 7,
+            "output_tokens": 1
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    }
+  ]
+}

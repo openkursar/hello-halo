@@ -1,0 +1,4 @@
+{
+  "cancelled_reason": "Caller cancelled the tool request",
+  "method_not_found_prefix": "Method not found: "
+}

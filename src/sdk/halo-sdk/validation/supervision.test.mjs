@@ -10,6 +10,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { processIdentity } from './metrics.mjs';
+import { BUILD_TIMEOUT_MS } from './build.mjs';
 
 const execute = promisify(execFile);
 const runner = fileURLToPath(new URL('./run.mjs', import.meta.url));
@@ -42,7 +43,7 @@ async function setup(t) {
   return directory;
 }
 
-test('background validation outlives its launcher and persists complete measurements', { skip: process.platform === 'win32', timeout: 120000 }, async t => {
+test('background validation outlives its launcher and persists complete measurements', { skip: process.platform === 'win32', timeout: BUILD_TIMEOUT_MS + 120000 }, async t => {
   const directory = await setup(t);
   const launching = execute(process.execPath, [runner, '--background', '--rounds', '1', '--concurrency', '1',
     '--duration-seconds', '2', '--cancel-cycles', '1', '--keep-sandbox', '--output', directory], { timeout: 10000 });
@@ -56,11 +57,14 @@ test('background validation outlives its launcher and persists complete measurem
   const state = await until(async () => {
     const value = await readJson(join(directory, 'run-state.json'));
     return value?.status === 'exited' && value;
-  });
+  }, BUILD_TIMEOUT_MS + 90000);
   assert.equal(state.exitCode, 0);
   assert.equal(state.passed, true);
   const report = await readJson(join(directory, 'report.json'));
   assert.equal(report.passed, true);
+  assert.equal(report.source.native.implementation, 'rust');
+  assert.match(report.source.native.buildId, /^[0-9a-f]{64}$/);
+  assert.ok(report.scenarios.every(scenario => scenario.runtime?.buildId === report.source.native.buildId));
   const events = (await fs.readFile(join(directory, 'events.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   assert.ok(events.some(event => event.type === 'source' && event.snapshotSha256 === report.source.snapshotSha256));
   assert.ok(events.some(event => event.type === 'actor-event' && event.message.label === 'final'));
@@ -69,13 +73,13 @@ test('background validation outlives its launcher and persists complete measurem
   assert.equal(events.at(-1).type, 'supervisor-exit');
 });
 
-test('losing the supervisor leaves recorded evidence and releases its actor', { skip: process.platform === 'win32', timeout: 60000 }, async t => {
+test('losing the supervisor leaves recorded evidence and releases its actor', { skip: process.platform === 'win32', timeout: BUILD_TIMEOUT_MS + 60000 }, async t => {
   const directory = await setup(t);
   const child = spawn(process.execPath, [runner, '--duration-seconds', '60', '--rounds', '1', '--concurrency', '1',
     '--keep-sandbox', '--output', directory], { stdio: 'ignore' });
   const exit = once(child, 'exit');
   t.after(() => { if (child.exitCode === null && !child.signalCode) child.kill('SIGKILL'); });
-  const progress = await until(() => readJson(join(directory, 'progress.json')));
+  const progress = await until(() => readJson(join(directory, 'progress.json')), BUILD_TIMEOUT_MS + 30000);
   const state = await readJson(join(directory, 'run-state.json'));
   assert.ok(progress.rounds >= 1);
   assert.ok(alive(state.actorPid));
@@ -89,7 +93,7 @@ test('losing the supervisor leaves recorded evidence and releases its actor', { 
   assert.match(journal, /"type":"progress"/);
 });
 
-test('background credentials reach only the configured endpoint and stay out of evidence', { skip: process.platform === 'win32', timeout: 60000 }, async t => {
+test('background credentials reach only the configured endpoint and stay out of evidence', { skip: process.platform === 'win32', timeout: BUILD_TIMEOUT_MS + 60000 }, async t => {
   const directory = await setup(t);
   const key = 'fixture-' + randomUUID();
   let requests = 0;
@@ -105,7 +109,7 @@ test('background credentials reach only the configured endpoint and stay out of 
   const exit = once(child, 'exit');
   child.stdin.end(key + '\n');
   assert.equal((await exit)[0], 0);
-  const state = await until(async () => { const value = await readJson(join(directory, 'run-state.json')); return value?.status === 'exited' && value; });
+  const state = await until(async () => { const value = await readJson(join(directory, 'run-state.json')); return value?.status === 'exited' && value; }, BUILD_TIMEOUT_MS + 45000);
   assert.equal(state.exitCode, 1);
   assert.equal(state.passed, false);
   assert.ok(requests > 0);

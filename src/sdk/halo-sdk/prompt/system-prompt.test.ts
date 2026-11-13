@@ -8,7 +8,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { assembleSystemPrompt, createSystemPromptBuilder, splitAtBoundary } from './system-prompt.js';
+import { readFileSync } from 'node:fs';
+import { assembleSystemPrompt, splitAtBoundary } from '../index.js';
+import { createSystemPromptBuilder } from './system-prompt.js';
 import { PROMPT_CACHE_BOUNDARY } from './constants.js';
 import type { Tool } from '../types/tool.js';
 
@@ -202,6 +204,53 @@ describe('assembleSystemPrompt', () => {
     ]) {
       expect(cacheable).toContain(heading);
     }
+  });
+
+  const sectionAssets = JSON.parse(readFileSync(new URL('../native/crates/halo-core/src/prompt/assets/sections.json', import.meta.url), 'utf8')) as Record<string, string>;
+  const communication = "Be a thoughtful partner who absorbs the complexity for the user, understands what matters to them right now, and offers a clear judgment that leaves them informed and at ease—not burdened with everything you know.";
+  const task = "- Take the task seriously. Fulfill the user's request efficiently, making good use of the token budget. Stay within the requested scope and invest additional effort only when the user's needs call for it.";
+  const ultraTask = "- Take the task seriously. Put your fullest effort into solving the user's task: check that your result actually works, cover the cases the user would care about, and carry the work through to a usable result rather than stopping at a first pass. If doing it properly takes more steps than the user spelled out, take them. When collaboration is available and useful, delegate independent work to advance in parallel; keep no more than four agents active in total, including yourself.";
+  const failure = "- A failed attempt supplies evidence for the next decision. Identify which expectation the result contradicted, then choose a correction or a different approach on that basis. Avoid repetitive attempts or scope expansion, and invest additional effort only when the user's needs call for it. If progress remains blocked, report the key obstacle and your recommended next step.";
+  const ultraFailure = "- A failed attempt supplies evidence for the next decision. Identify which expectation the result contradicted, then choose a correction or a different approach on that basis. An unchanged retry needs a reason; one failure alone does not establish that the approach is wrong. Before giving up, try materially different approaches or combinations of methods, using each result to guide the next attempt. Report a genuine blocker rather than repeat work without progress.";
+
+  it.each([false, true])('matches the section assets except the task, failure and communication guidance (%s)', ultraEffort => {
+    const work = sectionAssets.howYouWorkSection.split('\n');
+    work[2] = ultraEffort ? ultraTask : task;
+    work[5] = ultraEffort ? ultraFailure : failure;
+    const communicating = sectionAssets.communicatingSection.replace('# Communicating\n', `# Communicating\n${communication}\n\n`);
+    const expected = [sectionAssets.identitySection, work.join('\n'), sectionAssets.computerSafetySection,
+      sectionAssets.runtimeSection, sectionAssets.toolUse3, communicating].join('\n\n');
+    const options = { ...baseConfig, tools: toolsNamed('Goal', 'TodoWrite', 'Skill'), ultraEffort };
+    const [stable, dynamic] = splitAtBoundary(assembleSystemPrompt(options));
+    expect(stable).toBe(expected);
+    expect(splitAtBoundary(createSystemPromptBuilder(options)(baseConfig.model))[0]).toBe(expected);
+    expect(dynamic).toContain(sectionAssets.sessionGuidance);
+    expect(stable).not.toContain('# Work approach');
+    expect(stable).not.toContain('# Talking with people');
+    expect((stable.match(/token budget/g) ?? []).length).toBe(ultraEffort ? 0 : 1);
+  });
+
+  it.each(['gpt-fixture', 'claude-fixture', 'deployment-alias'])('never enables UltraEffort from the model name (%s)', model => {
+    const options = { ...baseConfig, model };
+    const prompt = assembleSystemPrompt(options);
+    expect(assembleSystemPrompt({ ...options, ultraEffort: false })).toBe(prompt);
+    expect(prompt).toContain(task);
+    expect(prompt).not.toContain(ultraTask);
+    expect(prompt).toContain(communication);
+  });
+
+  it('changes exactly two work lines when UltraEffort is enabled', () => {
+    const plain = assembleSystemPrompt(baseConfig).split('\n');
+    const enabled = assembleSystemPrompt({ ...baseConfig, ultraEffort: true }).split('\n');
+    expect(enabled).toHaveLength(plain.length);
+    const differences = enabled.flatMap((line, index) => line === plain[index] ? [] : [[plain[index], line]]);
+    expect(differences).toEqual([[task, ultraTask], [failure, ultraFailure]]);
+  });
+
+  it.each(['', '  Caller instructions.\nKeep spacing.  '])('does not inject UltraEffort into a custom replacement (%s)', customReplace => {
+    const options = { ...baseConfig, ultraEffort: true, promptProfile: 'explicit' as const, customReplace };
+    expect(assembleSystemPrompt(options)).toBe(`${customReplace}\n\n${PROMPT_CACHE_BOUNDARY}`);
+    expect(createSystemPromptBuilder(options)(baseConfig.model)).toBe(assembleSystemPrompt(options));
   });
 
   it('keeps execution authority and recovery requirements in the static context', () => {

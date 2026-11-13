@@ -1,0 +1,48 @@
+{
+  "context.memory.wrapper": {
+    "text": "<system-reminder>\n{sections}\n</system-reminder>",
+    "slots": ["sections"]
+  },
+  "context.memory.instructions": {
+    "text": "These instruction files describe the user's preferences and this project's working rules. Apply relevant requirements when planning and carrying out the task; they take precedence over the agent's usual defaults.",
+    "slots": []
+  },
+  "context.memory.source.user": {
+    "text": "user settings",
+    "slots": []
+  },
+  "context.memory.source.project": {
+    "text": "instructions in the working project",
+    "slots": []
+  },
+  "context.memory.source.parent": {
+    "text": "parent project instructions",
+    "slots": []
+  },
+  "context.memory.file": {
+    "text": "Contents of {path} ({source}):\n\n{content}",
+    "slots": [
+      "path",
+      "source",
+      "content"
+    ]
+  },
+  "context.memory.section": {
+    "text": "# memory\n{memory}",
+    "slots": [
+      "memory"
+    ]
+  },
+  "context.memory.current_date": {
+    "text": "Today's date is {date}.",
+    "slots": [
+      "date"
+    ]
+  },
+  "context.memory.date_section": {
+    "text": "# currentDate\n{current_date}\n\nUse this background information when it affects the request. It does not call for a separate reply or acknowledgement.",
+    "slots": [
+      "current_date"
+    ]
+  }
+}

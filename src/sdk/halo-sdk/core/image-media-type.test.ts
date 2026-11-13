@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { correctImageMediaTypes, sniffImageMediaType } from './image-media-type.js';
-import { queryLoop } from './query-loop.js';
+import { queryLoop } from '../index.js';
 import type { LlmProvider, Message, ProviderRequest, StreamEvent } from '../types/provider.js';
 import type { QueryConfig } from '../types/config.js';
 

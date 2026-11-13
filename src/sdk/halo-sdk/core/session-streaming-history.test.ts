@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSession, type SDKSession } from './session.js';
-import { getTranscriptPath, TranscriptWriter } from './transcript.js';
+import { createSession, type SDKSession } from '../index.js';
+import { getTranscriptPath } from './transcript.js';
 import type { Options } from '../types/config.js';
 import { readHistory } from './transcript-reader.js';
 import type { SDKMessage } from './query-types.js';
@@ -48,20 +48,20 @@ async function* toolResponse(): AsyncGenerator<StreamEvent, void, undefined> {
   yield { type: 'content_block_stop', index: 1 };
 }
 
-async function fixture(source: LlmProvider, execute: Tool['execute'], overrides: Partial<Options> = {}) {
+async function fixture(source: LlmProvider, execute: Tool['execute'], overrides: Partial<Options> = {}, create = createSession) {
   const directory = await mkdtemp(join(tmpdir(), 'sdk-session-stream-'));
   directories.push(directory);
   const options = { model: 'test', cwd: directory, tools: [] as string[], systemPrompt: 'Test assistant.', maxTurns: 4,
     permissionMode: 'bypassPermissions' as const, allowDangerouslySkipPermissions: true,
     env: { SDK_STATE: join(directory, 'state'), HOME: directory }, conventions: { configDirEnv: 'SDK_STATE' },
-    customTools: [{ name: 'Work', description: 'Test work', inputSchema: { type: 'object' }, permissionLevel: 'read' as const,
+    customTools: [{ name: 'Work', description: 'Test work', inputSchema: { type: 'object' }, permissionLevel: 'readonly' as const,
       execute }], ...overrides };
-  const session = await createSession({ ...options, provider: source });
+  const session = await create({ ...options, provider: source });
   sessions.push(session);
   const resume = async (source: LlmProvider) => {
     session.close();
     await session.flush();
-    const next = await createSession({ ...options, provider: source, resume: session.sessionId });
+    const next = await create({ ...options, provider: source, resume: session.sessionId });
     sessions.push(next);
     return next;
   };
@@ -152,89 +152,10 @@ describe('session compact persistence', () => {
     expect(restored).not.toContain('ORIGINAL_DETAIL');
   });
 
-  it('retains both live and persisted history when the compact checkpoint fails', async () => {
-    const { source } = compactingProvider();
-    const { session, options } = await fixture(source, async () => ({ content: '' }), compactOptions);
-    await session.send('original task');
-    await drain(session);
-    const write = vi.spyOn(TranscriptWriter.prototype, 'writeCompactCheckpoint').mockRejectedValueOnce(new Error('checkpoint disk full'));
-    await session.send('compact now');
-    const failed = await drain(session);
-    expect(write).toHaveBeenCalledOnce();
-    expect(failed.some(message => message.type === 'system' && message.subtype === 'compact_boundary')).toBe(false);
-    expect(failed.find(message => message.type === 'result')).toMatchObject({ is_error: true });
-    await session.flush();
-    const path = getTranscriptPath(session.sessionId, options.cwd!, options);
-    expect(JSON.stringify(await readHistory(path))).toContain('ORIGINAL_DETAIL');
-    expect(await readFile(path, 'utf8')).not.toContain('compact_checkpoint');
-    write.mockRestore();
-    const summarize = vi.spyOn(source, 'createMessage').mockClear();
-    await session.send('retry');
-    await drain(session);
-    expect(JSON.stringify(summarize.mock.calls[0][0].messages)).toContain('ORIGINAL_DETAIL');
-  });
-
-  it('installs a committed checkpoint even when cancellation arrives during its write', async () => {
-    const { source } = compactingProvider();
-    const { session, options } = await fixture(source, async () => ({ content: '' }), compactOptions);
-    await session.send('original task');
-    await drain(session);
-    const started = deferred();
-    const release = deferred();
-    const originalWrite = TranscriptWriter.prototype.writeCompactCheckpoint;
-    const write = vi.spyOn(TranscriptWriter.prototype, 'writeCompactCheckpoint').mockImplementationOnce(async function (messages, summary) {
-      started.resolve();
-      await release.promise;
-      await originalWrite.call(this, messages, summary);
-    });
-    await session.send('compact now');
-    const pending = drain(session);
-    await started.promise;
-    await session.interrupt();
-    release.resolve();
-    const output = await pending;
-    expect(output.some(message => message.type === 'system' && message.subtype === 'compact_boundary')).toBe(true);
-    expect(output.find(message => message.type === 'result')).toMatchObject({ is_error: true });
-    await session.flush();
-    const path = getTranscriptPath(session.sessionId, options.cwd!, options);
-    expect(JSON.stringify(await readHistory(path))).toContain('SUMMARY_SENTINEL');
-    expect(JSON.stringify(await readHistory(path))).not.toContain('ORIGINAL_DETAIL');
-    expect(await readFile(path, 'utf8')).toContain('ORIGINAL_DETAIL');
-    write.mockRestore();
-    const summarize = vi.spyOn(source, 'createMessage').mockClear();
-    await session.send('retry after interruption');
-    await drain(session);
-    expect(summarize).not.toHaveBeenCalled();
-  });
-
-  it('does not write a checkpoint when interrupted during summary generation', async () => {
-    const { source } = compactingProvider();
-    const started = deferred();
-    source.createMessage = async request => {
-      started.resolve();
-      const signal = request.providerOptions?.signal as AbortSignal;
-      await new Promise<void>(resolve => {
-        if (signal.aborted) resolve();
-        else signal.addEventListener('abort', () => resolve(), { once: true });
-      });
-      return { id: 'summary', model: 'test', content: [{ type: 'text', text: 'NOT_COMMITTED' }],
-        stopReason: 'end_turn', usage: { input_tokens: 10, output_tokens: 10 } };
-    };
-    const { session, options } = await fixture(source, async () => ({ content: '' }), compactOptions);
-    await session.send('original task');
-    await drain(session);
-    const write = vi.spyOn(TranscriptWriter.prototype, 'writeCompactCheckpoint');
-    await session.send('compact now');
-    const output = drain(session);
-    await started.promise;
-    await session.interrupt();
-    await output;
-    await session.flush();
-    expect(write).not.toHaveBeenCalled();
-    const path = getTranscriptPath(session.sessionId, options.cwd!, options);
-    expect(JSON.stringify(await readHistory(path))).toContain('ORIGINAL_DETAIL');
-    expect(await readFile(path, 'utf8')).not.toContain('compact_checkpoint');
-  });
+  // Checkpoint write failure and cancellation ordering run against the real journal in
+  // core::engine::persistence_tests::{checkpoint_write_failure_preserves_live_and_persisted_history,
+  // interruption_during_checkpoint_write_installs_the_committed_history,
+  // summary_cancellation_does_not_submit_a_checkpoint}.
 });
 
 describe('session streaming history', () => {

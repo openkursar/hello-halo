@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { build } from 'esbuild';
-import { copyFile, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildWorker } from './build-worker.mjs';
 import { bundledLicenseNotice } from './bundled-licenses.mjs';
 
@@ -46,6 +46,21 @@ afterEach(async () => {
 });
 
 describe('bundled dependency notices', () => {
+  it('imports and constructs the worker runtime before a native library is available', async () => {
+    const directory = await temporaryDirectory();
+    const entry = join(directory, 'worker.mjs');
+    await build({
+      absWorkingDir: projectDirectory, entryPoints: ['worker/index.ts'], outfile: entry,
+      bundle: true, platform: 'node', format: 'esm',
+    });
+    await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
+      const { createWorkerRuntime } = await import(process.argv[1]);
+      const runtime = createWorkerRuntime();
+      if (runtime.diagnostics().workers.length !== 0) throw new Error('Runtime constructed a worker before initialization');
+      await runtime.close();
+    `, pathToFileURL(entry).href]);
+  });
+
   it('runs the CLI build through a directory alias instead of silently skipping it', async () => {
     const directory = await temporaryDirectory();
     const project = join(directory, 'project');
@@ -72,14 +87,19 @@ describe('bundled dependency notices', () => {
     const sourceMap = JSON.parse(await readFile(join(directory, 'worker/entry.mjs.map'), 'utf8'));
     expect(worker).toContain('./THIRD-PARTY-NOTICES.txt');
     expect(sourceMap.sourcesContent.length).toBeGreaterThan(0);
-    for (const [name, filename] of [
-      ['yaml', 'LICENSE'], ['minimatch', 'LICENSE'], ['balanced-match', 'LICENSE.md'], ['brace-expansion', 'LICENSE'],
-    ]) {
-      const dependency = join(projectDirectory, 'node_modules', name);
+    const dependencies = new Set<string>();
+    for (const input of Object.keys(result.metafile.inputs)) {
+      const path = resolve(projectDirectory, input).replaceAll('\\', '/');
+      const match = [...path.matchAll(/\/node_modules\/(?:@[^/]+\/)?[^/]+/g)].at(-1);
+      if (match) dependencies.add(path.slice(0, match.index! + match[0].length));
+    }
+    for (const dependency of dependencies) {
       const manifest = JSON.parse(await readFile(join(dependency, 'package.json'), 'utf8'));
-      expect(Object.keys(result.metafile.inputs).some(path => path.includes(`/node_modules/${name}/`) || path.startsWith(`node_modules/${name}/`))).toBe(true);
-      expect(notice).toContain(`${name}@${manifest.version}\nLicense: ${manifest.license}`);
-      expect(notice).toContain(await readFile(join(dependency, filename), 'utf8'));
+      expect(notice).toContain(`${manifest.name}@${manifest.version}\nLicense: ${manifest.license}`);
+      const documents = (await readdir(dependency, { withFileTypes: true }))
+        .filter(entry => entry.isFile() && /^(license|licence|copying|notice)([._-]|$)/i.test(entry.name));
+      expect(documents.length).toBeGreaterThan(0);
+      for (const document of documents) expect(notice).toContain(await readFile(join(dependency, document.name), 'utf8'));
     }
     expect(notice).not.toContain(projectDirectory);
     expect(notice).not.toContain(directory);

@@ -4,13 +4,13 @@
  * config.
  */
 
-import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { createServer, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { query, createSession, createProvider } from '../index.js';
-import { queryLoop } from './query-loop.js';
+import { query, createSession, createProvider, queryLoop, resolveQueryConfig } from '../index.js';
 import type { SDKMessage } from './query-types.js';
 import type {
   LlmProvider,
@@ -21,7 +21,6 @@ import type {
   UsageInfo,
 } from '../types/provider.js';
 import type { QueryConfig } from '../types/config.js';
-import { resolveQueryConfig } from './context.js';
 import type { Options } from '../types/config.js';
 
 const TEST_CAPS: ProviderCapabilities = {
@@ -109,20 +108,38 @@ describe('queryLoop — task budget', () => {
 
 describe('public task-budget requests', () => {
   let directory: string;
-  let fetchMock: ReturnType<typeof vi.fn>;
+  let server: Server;
+  let endpoint: string;
+  let responseType: 'anthropic' | 'openai-compat';
+  let requests: Array<{ url: string; body: Record<string, any>; headers: Headers }>;
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'sdk-task-budget-'));
-    fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
+    requests = [];
+    server = createServer((request, reply) => {
+      let body = '';
+      request.on('data', chunk => { body += chunk; });
+      request.on('end', () => {
+        const headers = new Headers();
+        for (const [name, value] of Object.entries(request.headers)) {
+          if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value);
+        }
+        requests.push({ url: `${endpoint}${request.url}`, body: JSON.parse(body), headers });
+        reply.writeHead(200, { 'content-type': 'text/event-stream' });
+        reply.end(response(responseType));
+      });
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   });
 
   afterEach(async () => {
-    vi.unstubAllGlobals();
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(directory, { recursive: true, force: true });
   });
 
-  function response(type: 'anthropic' | 'openai-compat'): Response {
+  function response(type: 'anthropic' | 'openai-compat'): string {
     const events = type === 'anthropic' ? [
       { type: 'message_start', message: { id: 'budget-message', model: 'test-model', content: [], usage: { input_tokens: 10, output_tokens: 0 } } },
       { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
@@ -136,14 +153,14 @@ describe('public task-budget requests', () => {
     ];
     const body = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')
       + (type === 'openai-compat' ? 'data: [DONE]\n\n' : '');
-    return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+    return body;
   }
 
   async function run(mode: 'query' | 'session', type: 'anthropic' | 'openai-compat', taskBudget?: Options['taskBudget']) {
-    fetchMock.mockImplementation(async () => response(type));
+    responseType = type;
     const options: Options = {
       model: 'test-model',
-      provider: createProvider({ type, apiKey: 'fixture-key', baseUrl: 'https://budget.example.test' }),
+      provider: createProvider({ type, apiKey: 'fixture-key', baseUrl: endpoint }),
       cwd: directory, env: { HOME: directory, CLAUDE_CONFIG_DIR: directory },
       persistSession: false, settingSources: [], skillCatalog: [], collaboration: false,
       tools: [], systemPrompt: 'Answer the request.', thinking: { type: 'disabled' },
@@ -162,18 +179,17 @@ describe('public task-budget requests', () => {
       } finally { session.close(); await session.flush(); }
     }
     expect(messages.find(message => message.type === 'result')).toMatchObject({ subtype: 'success' });
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(init.body as string);
+    expect(requests).toHaveLength(1);
+    const { url, body, headers } = requests[0];
     expect(body.max_tokens).toBe(1024);
-    return { url, body, headers: new Headers(init.headers) };
+    return { url, body, headers };
   }
 
   for (const mode of ['query', 'session'] as const) {
     it(`${mode} encodes the public total-only option at the Anthropic boundary`, async () => {
       const budget = Object.freeze({ total: 50000 });
       const { url, body, headers } = await run(mode, 'anthropic', budget);
-      expect(url).toBe('https://budget.example.test/v1/messages');
+      expect(url).toBe(`${endpoint}/v1/messages`);
       expect(body.output_config.task_budget).toEqual({ type: 'tokens', total: 50000 });
       expect(headers.get('anthropic-beta')).toBe('task-budgets-2026-03-13');
       expect(budget).toEqual({ total: 50000 });
@@ -187,7 +203,7 @@ describe('public task-budget requests', () => {
 
     it(`${mode} does not send Anthropic task-budget fields to OpenAI-compatible endpoints`, async () => {
       const { url, body, headers } = await run(mode, 'openai-compat', { total: 50000 });
-      expect(url).toBe('https://budget.example.test/chat/completions');
+      expect(url).toBe(`${endpoint}/chat/completions`);
       expect(body.output_config).toBeUndefined();
       expect(body.task_budget).toBeUndefined();
       expect(headers.has('anthropic-beta')).toBe(false);

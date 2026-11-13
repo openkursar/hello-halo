@@ -1,0 +1,249 @@
+{
+  "tools.shell.windows_unavailable": {
+    "text": "No Git Bash executable is available for this Windows session. Point AGENT_GIT_BASH_PATH to an installed bash.exe, or install Git for Windows from https://git-scm.com/downloads/win.",
+    "slots": []
+  },
+  "tools.shell.unavailable": {
+    "text": "No suitable shell found. The Bash tool requires bash or zsh. Set AGENT_SHELL=/path/to/bash if your shell is in an unusual location.",
+    "slots": []
+  },
+  "tools.shell.cwd_fallback": {
+    "text": "Previous shell working directory is unavailable ({reason}). Running in session directory {cwd}.",
+    "slots": [
+      "reason",
+      "cwd"
+    ]
+  },
+  "tools.shell.cwd_unavailable": {
+    "text": "Command not started: shell working directory is unavailable ({reason}). Restore the session working directory before retrying.",
+    "slots": [
+      "reason"
+    ]
+  },
+  "tools.shell.capture_truncated": {
+    "text": "\n... [command output truncated: {omitted} characters omitted; head and tail retained. Re-run with filters or redirect to your own file.] ...\n",
+    "slots": [
+      "omitted"
+    ]
+  },
+  "tools.shell.output_truncated": {
+    "text": "\n[Output truncated at 8 MiB. Re-run with filters or redirect to your own file.]\n",
+    "slots": []
+  },
+  "tools.shell.cancelled_launch": {
+    "text": "Command cancelled before launch",
+    "slots": []
+  },
+  "tools.shell.stdout_failed": {
+    "text": "Command stdout capture failed: {error}",
+    "slots": [
+      "error"
+    ]
+  },
+  "tools.shell.stderr_failed": {
+    "text": "Command stderr capture failed: {error}",
+    "slots": [
+      "error"
+    ]
+  },
+  "tools.shell.stopped": {
+    "text": "Stopped by request",
+    "slots": []
+  },
+  "tools.shell.interrupted": {
+    "text": "Session interrupted",
+    "slots": []
+  },
+  "tools.shell.closed": {
+    "text": "Session closed",
+    "slots": []
+  },
+  "tools.shell.output_expired": {
+    "text": "[Command output is no longer available. It may have expired under the retention policy or been removed. Task status is unchanged.]",
+    "slots": []
+  },
+  "tools.shell.invalid_command": {
+    "text": "Background command must be a string",
+    "slots": []
+  },
+  "tools.shell.unknown_operation": {
+    "text": "Unknown background task operation: {method}",
+    "slots": [
+      "method"
+    ]
+  },
+  "tools.shell.start_unknown": {
+    "text": "Background command could not start",
+    "slots": []
+  },
+  "tools.shell.missing_command": {
+    "text": "Missing required parameter: command",
+    "slots": []
+  },
+  "tools.shell.no_output": {
+    "text": "(No output)",
+    "slots": []
+  },
+  "tools.shell.timed_out": {
+    "text": "Command timed out after {timeout}ms and was terminated.\n{output}\n\nThe command may have completed some work before termination. Inspect its output and saved files before repeating it.",
+    "slots": [
+      "timeout",
+      "output"
+    ]
+  },
+  "tools.shell.recovery": {
+    "text": "Inspect any saved command output. If repeating the command is safe, filter its output or redirect it to a file.",
+    "slots": []
+  },
+  "tools.shell.exited": {
+    "text": "Command exited with code {code}\n{output}",
+    "slots": [
+      "code",
+      "output"
+    ]
+  },
+  "tools.shell.launch_failed": {
+    "text": "Command exited with code 127\n{error}",
+    "slots": [
+      "error"
+    ]
+  },
+  "tools.shell.registry_closed": {
+    "text": "Failed to start background command: Background task registry is closed",
+    "slots": []
+  },
+  "tools.shell.capacity": {
+    "text": "Failed to start background command: At most 32 background commands may run in one session",
+    "slots": []
+  },
+  "tools.shell.background_start_failed": {
+    "text": "Failed to start background command: {error}",
+    "slots": [
+      "error"
+    ]
+  },
+  "tools.shell.background_cancelled_launch": {
+    "text": "Failed to start background command: Command cancelled before launch",
+    "slots": []
+  },
+  "tools.shell.task_timed_out": {
+    "text": "Timed out after {timeout}ms",
+    "slots": [
+      "timeout"
+    ]
+  },
+  "tools.shell.output_persistence_failed": {
+    "text": "Output persistence failed",
+    "slots": []
+  },
+  "tools.shell.output_finalization_failed": {
+    "text": "Output finalization failed",
+    "slots": []
+  },
+  "tools.shell.notice_error": {
+    "text": ": {error}",
+    "slots": [
+      "error"
+    ]
+  },
+  "tools.shell.notice_truncated": {
+    "text": "Output was truncated at 8 MiB. ",
+    "slots": []
+  },
+  "tools.shell.notice": {
+    "text": "Background Bash task {id} {status}{error}. {truncated}Output file: {path}. Use Read for output or TaskOutput with task_id \"{id}\" for status.",
+    "slots": [
+      "id",
+      "status",
+      "error",
+      "truncated",
+      "path"
+    ]
+  },
+  "tools.shell.launch_preparation_failed": {
+    "text": "Command launch preparation failed",
+    "slots": []
+  },
+  "tools.shell.background_launch_failed": {
+    "text": "Failed to start background task {id}: {error}",
+    "slots": [
+      "id",
+      "error"
+    ]
+  },
+  "tools.shell.deadline": {
+    "text": "Execution deadline: {timeout}ms from launch.\n",
+    "slots": [
+      "timeout"
+    ]
+  },
+  "tools.shell.no_deadline": {
+    "text": "No execution deadline was set.\n",
+    "slots": []
+  },
+  "tools.shell.background_started": {
+    "text": "{warning}Command running in background with ID: {id}.\nOutput file: {path}\n{deadline}Completion is reported at the next active turn. Use Read for output, TaskOutput for status, or TaskStop to stop it. Background tasks stop when the session is closed or interrupted.",
+    "slots": [
+      "warning",
+      "id",
+      "path",
+      "deadline"
+    ]
+  },
+  "tools.shell.missing_task_id": {
+    "text": "Missing required parameter: task_id",
+    "slots": []
+  },
+  "tools.shell.task_not_found": {
+    "text": "Task '{id}' not found",
+    "slots": [
+      "id"
+    ]
+  },
+  "tools.shell.task_not_running": {
+    "text": "Task '{id}' is not running (status: {status})",
+    "slots": [
+      "id",
+      "status"
+    ]
+  },
+  "tools.shell.stop_requested": {
+    "text": "Task stop requested",
+    "slots": []
+  },
+  "tools.shell.wait_cancelled": {
+    "text": "Stopped waiting for task '{id}': request cancelled",
+    "slots": [
+      "id"
+    ]
+  },
+  "tools.shell.retrieval_failed": {
+    "text": "Cannot retrieve task '{id}': {error}",
+    "slots": [
+      "id",
+      "error"
+    ]
+  },
+  "tools.shell.wrapper_cwd_missing": {
+    "text": "agent-sdk: working directory is unavailable; command not started",
+    "slots": []
+  },
+  "tools.shell.wrapper_cwd_retained": {
+    "text": "agent-sdk: current directory is unavailable; retaining previous directory state",
+    "slots": []
+  },
+  "tools.shell.services_required": {
+    "text": "Background execution requires session-owned task services",
+    "slots": []
+  },
+  "tools.shell.stop_failed": {
+    "text": "Failed to stop task '{id}'",
+    "slots": [
+      "id"
+    ]
+  },
+  "tools.shell.invalid_time": {
+    "text": "Invalid time value",
+    "slots": []
+  }
+}

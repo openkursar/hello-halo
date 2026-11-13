@@ -12,7 +12,7 @@ The script imports the compiled public entry point. It uses a local scripted
 provider and custom tools: no network, model tokens or credentials. Every sample
 gets a fresh temporary working directory, uses the query loop without session
 persistence, and removes its directory in `finally`. The output includes the
-Node/platform details, a fingerprint of the relevant compiled modules, every
+Node/platform details, a fingerprint of the native manifest, library and public JavaScript boundary, every
 sample, timing events and median wall time. An existing output file is never
 overwritten.
 

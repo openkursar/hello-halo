@@ -112,6 +112,11 @@ async function registerChild(pid) {
 async function main(config) {
   expectNoThinking = config.live && (config.thinking ?? 'disabled') === 'disabled';
   const sdk = await import(pathToFileURL(join(config.sdk, 'dist/index.js')));
+  const native = await import(pathToFileURL(join(config.sdk, 'dist/native/index.js')));
+  const info = native.runtimeInfo();
+  assert.equal(info.implementation, 'rust');
+  assert.equal(info.buildId, config.nativeBuild.buildId, 'The actor must execute its freshly built native SDK');
+  send({ type: 'runtime', info });
   wire = config.live ? undefined : await startWireServer();
   const provider = sdk.createProvider(config.live ? {
     type: config.providerType ?? 'anthropic', baseUrl: config.baseUrl ?? 'https://api.deepseek.com/anthropic',
@@ -130,6 +135,7 @@ async function main(config) {
   });
   const open = async (cwd, resume, overrides = {}) => {
     const session = await sdk.createSession({ ...options(cwd), ...overrides, ...(resume ? { resume } : {}) });
+    assert.ok(session instanceof native.NativeSdkSession, 'The default SDK entry must execute the native session');
     sessions.add(session);
     return session;
   };

@@ -116,7 +116,7 @@ export function readToolContextSnapshot(messages: readonly Message[]): ToolConte
             throw new Error('Tool call origin does not match its discovered definition');
           }
           let input: unknown;
-          try { input = JSON.parse(origin.input.arguments); }
+          try { input = JSON.parse(origin.input.arguments as string); }
           catch { throw new Error('Tool call origin contains invalid JSON arguments'); }
           if (!object(input)) throw new Error('Tool call origin arguments are not an object');
           if (stableJson(input) !== stableJson(call.input)) throw new Error('Tool call origin arguments do not match the recorded canonical input');

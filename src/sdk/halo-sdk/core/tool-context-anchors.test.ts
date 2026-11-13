@@ -7,8 +7,7 @@ import type { LlmProvider, ContentBlock, ProviderRequest, StreamEvent } from '..
 import type { Options } from '../types/config.js';
 import type { SDKMessage } from './query-types.js';
 import { getTranscriptPath } from './transcript.js';
-import { readHistoryReport } from './transcript-reader.js';
-import { readToolContextSnapshot } from './tool-context/index.js';
+import { readJournalAnchor } from './tool-context-journal.fixture.js';
 
 const sessions: SDKSession[] = [];
 const directories: string[] = [];
@@ -77,11 +76,12 @@ describe('live discovery-result history anchors', () => {
     expect(entries.find(entry => entry.uuid === result.uuid)).toMatchObject({ type: 'user', message: {
       toolContext: { discoveries: [{ callId: 'initial-search' }] },
     } });
-    const before = await readHistoryReport(path, call.uuid);
-    const after = await readHistoryReport(path, result.uuid);
+    const before = readJournalAnchor(original, call.uuid);
+    const after = readJournalAnchor(original, result.uuid);
     expect(before.anchorFound).toBe(true); expect(after.anchorFound).toBe(true);
-    expect(readToolContextSnapshot(before.messages)?.definitions).toEqual([]);
-    expect(readToolContextSnapshot(after.messages)?.definitions.map(item => item.definition.name)).toEqual([target]);
+    expect(before.context.discoveries).toEqual([]);
+    expect(after.context.definitions.map(item => item.name)).toEqual([target]);
+    expect(after.context.discoveries).toEqual(['initial-search']);
 
     const known = scripted([[invoke('known-call')], [done]]);
     const afterFork = await session({ ...options, provider: known.provider, resume: parent.sessionId,

@@ -1,0 +1,59 @@
+{
+  "context.arguments.root": {
+    "text": "the arguments",
+    "slots": []
+  },
+  "context.arguments.path": {
+    "text": "\"{path}\"",
+    "slots": [
+      "path"
+    ]
+  },
+  "context.arguments.types_separator": {
+    "text": " or ",
+    "slots": []
+  },
+  "context.arguments.values_separator": {
+    "text": ", ",
+    "slots": []
+  },
+  "context.arguments.problems_separator": {
+    "text": "; ",
+    "slots": []
+  },
+  "context.arguments.type_mismatch": {
+    "text": "{label} must be {types}, but received {actual}",
+    "slots": [
+      "label",
+      "types",
+      "actual"
+    ]
+  },
+  "context.arguments.enum_mismatch": {
+    "text": "\"{path}\" must be one of {values}, but received {actual}",
+    "slots": [
+      "path",
+      "values",
+      "actual"
+    ]
+  },
+  "context.arguments.required": {
+    "text": "\"{path}\" is required but was not provided",
+    "slots": [
+      "path"
+    ]
+  },
+  "context.arguments.invalid": {
+    "text": "Invalid arguments for {tool}: {problems}. Correct the arguments and call {tool} again.",
+    "slots": [
+      "tool",
+      "problems"
+    ]
+  },
+  "context.arguments.enum_invalid": {
+    "text": "\"{path}\" must match one of the allowed values in arguments_schema.",
+    "slots": [
+      "path"
+    ]
+  }
+}

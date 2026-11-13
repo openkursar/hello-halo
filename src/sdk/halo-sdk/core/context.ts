@@ -112,6 +112,7 @@ export function resolveQueryConfig(options: Options): QueryConfig {
     env: options.env ?? {},
     systemPrompt: options.systemPrompt ?? { type: 'preset', preset: 'default' },
     promptProfile: options.promptProfile,
+    ultraEffort: options.ultraEffort === true,
     thinking: resolveThinking(options),
     thinkingExplicit: options.thinking !== undefined || options.maxThinkingTokens !== undefined,
     adaptiveThinking: options.adaptiveThinking ?? false,

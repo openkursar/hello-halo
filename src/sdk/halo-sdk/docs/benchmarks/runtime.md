@@ -2,6 +2,10 @@
 
 English | [简体中文](runtime.zh-CN.md) | [SDK overview](../../README.md)
 
+These historical measurements apply to the source and artifacts identified below,
+not to the SDK's current Rust implementation. A new runtime needs its own measured
+comparison; the figures here remain unchanged.
+
 Measured on **2026-11-02 (Asia/Shanghai)**. The tested Halo Worker implementation
 had lower cold preparation time and multi-session resource costs than Claude Code
 2.1.233 on this machine. Warm-session performance varied by workload.

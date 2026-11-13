@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { resolveQueryConfig } from './context.js';
+import { resolveQueryConfig as resolveNativeQueryConfig } from '../index.js';
 import type { Options } from '../types/config.js';
 import { DEFAULT_CONTEXT_WINDOW } from '../prompt/constants.js';
 
@@ -43,6 +44,22 @@ describe('resolveQueryConfig — defaults', () => {
     expect(cfg.promptProfile).toEqual(promptProfile);
     expect(cfg.toolCallingMode).toBe('json');
     expect(resolve().promptProfile).toBeUndefined();
+  });
+
+  it.each([resolveQueryConfig, resolveNativeQueryConfig])('keeps maximal-effort guidance opt-in and independent of runtime controls', resolveConfig => {
+    const options: Options = { model: 'fixture', cwd: '/tmp', effort: 'low', thinking: { type: 'disabled' }, maxTurns: 4, maxBudgetUsd: 0.5 };
+    const standard = resolveConfig(options);
+    const disabled = resolveConfig({ ...options, ultraEffort: false });
+    const enabled = resolveConfig({ ...options, ultraEffort: true });
+    expect(standard.ultraEffort).toBe(false);
+    expect(disabled.ultraEffort).toBe(false);
+    expect(enabled.ultraEffort).toBe(true);
+    const { ultraEffort: standardFlag, abortSignal: standardSignal, ...standardSettings } = standard;
+    const { ultraEffort: enabledFlag, abortSignal: enabledSignal, ...enabledSettings } = enabled;
+    expect(standardFlag).not.toBe(enabledFlag);
+    expect(standardSignal).toBeInstanceOf(AbortSignal);
+    expect(enabledSignal).toBeInstanceOf(AbortSignal);
+    expect(enabledSettings).toEqual(standardSettings);
   });
 
   it('sets maxTokens to 16384', () => {

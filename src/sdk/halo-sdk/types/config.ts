@@ -394,7 +394,20 @@ export interface ToolDiscoveryOptions {
   }>;
 }
 
+export interface HarnessTextConfiguration {
+  templates?: Record<string, string>;
+  models?: Record<string, Record<string, string>>;
+}
+
+export interface HarnessTextTemplate {
+  id: string;
+  text: string;
+  slots: string[];
+}
+
 export interface Options {
+  /** SDK-authored wording overrides; exact-model entries override common templates. */
+  harnessText?: HarnessTextConfiguration;
   /** Local collaboration is lazy. Application hosts supply their own scoped tools. */
   collaboration?: false | { mode: 'hosted' } | ({ mode: 'local' } & import('../collaboration/sdk/index.js').LocalCollaborationOptions);
   /** Optional client-side MCP discovery. Omitted options retain full tool declarations. */
@@ -523,6 +536,8 @@ export interface Options {
   systemPrompt?: string | { type: 'preset'; preset: 'default'; append?: string };
   /** Preset wording only. A complete systemPrompt string is never rewritten. */
   promptProfile?: PromptProfileSelection;
+  /** Opt-in fullest-effort and persistence guidance. Defaults to false; changes preset wording only, not reasoning, budgets or permissions. */
+  ultraEffort?: boolean;
 
   /** Additional settings (path to JSON or inline object). */
   settings?: string | Record<string, unknown>;
@@ -607,6 +622,7 @@ export interface Options {
 
 /** Internal resolved configuration derived from Options. */
 export interface QueryConfig {
+  harnessText?: HarnessTextConfiguration;
   toolDiscovery?: ToolDiscoveryOptions;
   skillCatalog?: import('../skills/index.js').SkillCatalog;
   model: string;
@@ -620,6 +636,7 @@ export interface QueryConfig {
   env: Record<string, string | undefined>;
   systemPrompt: string | { type: 'preset'; preset: 'default'; append?: string };
   promptProfile?: PromptProfileSelection;
+  ultraEffort?: boolean;
   thinking: ThinkingConfig;
   /** False only when the mode was unspecified and effort may choose it. */
   thinkingExplicit?: boolean;

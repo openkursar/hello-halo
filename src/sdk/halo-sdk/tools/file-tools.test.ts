@@ -1,20 +1,35 @@
 /**
  * @module tools/file-tools.test
- * Unit tests for ReadTool, WriteTool, EditTool, and GlobTool.
+ * Tests for the public Read, Write, Edit, and Glob tools.
  * Uses real temp-directory I/O to validate behaviour end-to-end.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { FileReadState, ToolContext } from '../types/tool.js';
-import { ReadTool } from './read/index.js';
-import { WriteTool } from './write/index.js';
-import { EditTool } from './edit/index.js';
-import { GlobTool } from './glob/index.js';
+import { randomUUID } from 'node:crypto';
+import type { FileReadState, Tool, ToolContext } from '../types/tool.js';
+import { getAllTools, findToolByName } from '../index.js';
+import { releaseNativeToolOwner } from '../native/tools.js';
 import { CostTracker } from '../core/cost.js';
 import * as fileAccess from './file-access.js';
+import { WriteTool as ReferenceWriteTool } from './write/index.js';
+
+const sessionIds = new Set<string>();
+
+function getTool(name: string): Tool {
+  const tool = findToolByName(getAllTools(), name);
+  if (!tool) throw new Error(`Missing public tool: ${name}`);
+  return tool;
+}
+
+function sessionId(): string {
+  const id = randomUUID();
+  sessionIds.add(id);
+  return id;
+}
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -22,7 +37,7 @@ import * as fileAccess from './file-access.js';
 
 function makeCtx(cwd: string): ToolContext {
   return {
-    sessionId: 'test-session',
+    sessionId: sessionId(),
     cwd,
     abortSignal: new AbortController().signal,
     costTracker: new CostTracker('test-model'),
@@ -38,7 +53,12 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await fs.rm(tmpDir, { recursive: true, force: true });
+  try {
+    await Promise.all([...sessionIds].map(releaseNativeToolOwner));
+  } finally {
+    sessionIds.clear();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 });
 
 // ===========================================================================
@@ -46,7 +66,7 @@ afterEach(async () => {
 // ===========================================================================
 
 describe('ReadTool — input validation', () => {
-  const tool = new ReadTool();
+  const tool = getTool('Read');
 
   it('returns error when file_path is missing', async () => {
     const result = await tool.execute({}, makeCtx(tmpDir));
@@ -71,7 +91,7 @@ describe('ReadTool — input validation', () => {
 });
 
 describe('ReadTool — text files', () => {
-  const tool = new ReadTool();
+  const tool = getTool('Read');
 
   it('reads a simple text file with line numbers', async () => {
     const filePath = path.join(tmpDir, 'hello.txt');
@@ -154,7 +174,7 @@ describe('ReadTool — text files', () => {
 });
 
 describe('ReadTool — metadata', () => {
-  const tool = new ReadTool();
+  const tool = getTool('Read');
 
   it('has permissionLevel readonly', () => {
     expect(tool.permissionLevel).toBe('readonly');
@@ -175,7 +195,7 @@ describe('ReadTool — metadata', () => {
 // ===========================================================================
 
 describe('WriteTool — input validation', () => {
-  const tool = new WriteTool();
+  const tool = getTool('Write');
 
   it('returns error when file_path is missing', async () => {
     const result = await tool.execute({ content: 'x' }, makeCtx(tmpDir));
@@ -194,7 +214,7 @@ describe('WriteTool — input validation', () => {
 });
 
 describe('WriteTool — file creation', () => {
-  const tool = new WriteTool();
+  const tool = getTool('Write');
 
   it('creates a new file and reports Created', async () => {
     const filePath = path.join(tmpDir, 'new.txt');
@@ -300,7 +320,7 @@ describe('WriteTool — file creation', () => {
 });
 
 describe('WriteTool — metadata', () => {
-  const tool = new WriteTool();
+  const tool = getTool('Write');
 
   it('has permissionLevel write', () => {
     expect(tool.permissionLevel).toBe('write');
@@ -312,7 +332,7 @@ describe('WriteTool — metadata', () => {
 // ===========================================================================
 
 describe('EditTool — input validation', () => {
-  const tool = new EditTool();
+  const tool = getTool('Edit');
 
   it('returns error when file_path is missing', async () => {
     const result = await tool.execute(
@@ -372,7 +392,7 @@ describe('EditTool — input validation', () => {
 });
 
 describe('EditTool — replacement logic', () => {
-  const tool = new EditTool();
+  const tool = getTool('Edit');
 
   it('replaces a unique occurrence', async () => {
     const filePath = path.join(tmpDir, 'edit.txt');
@@ -505,7 +525,7 @@ describe('EditTool — replacement logic', () => {
 });
 
 describe('EditTool — metadata', () => {
-  const tool = new EditTool();
+  const tool = getTool('Edit');
 
   it('has permissionLevel write', () => {
     expect(tool.permissionLevel).toBe('write');
@@ -517,7 +537,7 @@ describe('EditTool — metadata', () => {
 // ===========================================================================
 
 describe('GlobTool — input validation', () => {
-  const tool = new GlobTool();
+  const tool = getTool('Glob');
 
   it('returns error when pattern is missing', async () => {
     const result = await tool.execute({}, makeCtx(tmpDir));
@@ -548,7 +568,7 @@ describe('GlobTool — input validation', () => {
 });
 
 describe('GlobTool — pattern matching', () => {
-  const tool = new GlobTool();
+  const tool = getTool('Glob');
 
   it('returns "No files matched" when pattern finds nothing', async () => {
     const result = await tool.execute(
@@ -800,7 +820,7 @@ describe('GlobTool — pattern matching', () => {
 });
 
 describe('GlobTool — metadata', () => {
-  const tool = new GlobTool();
+  const tool = getTool('Glob');
 
   it('has permissionLevel readonly', () => {
     expect(tool.permissionLevel).toBe('readonly');
@@ -820,7 +840,7 @@ describe('GlobTool — metadata', () => {
 function makeStrictCtx(cwd: string): ToolContext & { readFileState: Map<string, FileReadState> } {
   const readFileState = new Map<string, FileReadState>();
   return {
-    sessionId: 'test-strict',
+    sessionId: sessionId(),
     cwd,
     abortSignal: new AbortController().signal,
     costTracker: new CostTracker('test-model'),
@@ -831,8 +851,8 @@ function makeStrictCtx(cwd: string): ToolContext & { readFileState: Map<string, 
 }
 
 describe('Read-before-write — WriteTool', () => {
-  const read = new ReadTool();
-  const write = new WriteTool();
+  const read = getTool('Read');
+  const write = getTool('Write');
 
   it('rejects overwrite of an existing file that has not been read', async () => {
     const filePath = path.join(tmpDir, 'existing.txt');
@@ -945,8 +965,8 @@ describe('Read-before-write — WriteTool', () => {
 });
 
 describe('Read-before-write — EditTool', () => {
-  const read = new ReadTool();
-  const edit = new EditTool();
+  const read = getTool('Read');
+  const edit = getTool('Edit');
 
   it('rejects edit of a file that has not been read', async () => {
     const filePath = path.join(tmpDir, 'noread.txt');
@@ -1072,7 +1092,7 @@ describe('Read-before-write — EditTool', () => {
 });
 
 describe('Read-before-write — ReadTool populates readFileState', () => {
-  const read = new ReadTool();
+  const read = getTool('Read');
 
   it('records a non-partial entry for a small full read', async () => {
     const filePath = path.join(tmpDir, 'small.txt');
@@ -1130,7 +1150,7 @@ describe('Read-before-write — ReadTool populates readFileState', () => {
 });
 
 describe('ReadTool — output line budget', () => {
-  const tool = new ReadTool();
+  const tool = getTool('Read');
 
   it('narrows output on whole lines when the 40k char budget is exceeded', async () => {
     const filePath = path.join(tmpDir, 'wide.txt');
@@ -1180,11 +1200,12 @@ describe('ReadTool — output line budget', () => {
 });
 
 describe('File tools — freshness and concurrency', () => {
-  const read = new ReadTool();
-  const write = new WriteTool();
-  const edit = new EditTool();
+  const read = getTool('Read');
+  const write = getTool('Write');
+  const edit = getTool('Edit');
 
-  it.each([false, true])('rejects unauthorized Write before reading file bytes (partial=%s)', async partial => {
+  it.each([false, true])('WriteTool rejects unauthorized access before reading file bytes (partial=%s)', async partial => {
+    const write = new ReferenceWriteTool();
     const filePath = path.join(tmpDir, 'unauthorized.txt');
     await fs.writeFile(filePath, 'visible\nhidden');
     const ctx = makeStrictCtx(tmpDir);
@@ -1204,22 +1225,13 @@ describe('File tools — freshness and concurrency', () => {
     await fs.writeFile(filePath, 'original');
     const ctx = makeStrictCtx(tmpDir);
     await read.execute({ file_path: filePath }, ctx);
-    const originalWrite = fileAccess.writeFileSnapshot;
-    const writeSpy = vi.spyOn(fileAccess, 'writeFileSnapshot').mockImplementationOnce(async (...args) => {
-      const stat = await originalWrite(...args);
-      await fs.writeFile(filePath, 'external value');
-      return stat;
-    });
-    try {
-      const result = await edit.execute({ file_path: filePath, old_string: 'original', new_string: 'updated' }, ctx);
-      expect(result.isError).toBe(false);
-      expect(result.content).toContain('changed again after this edit');
-      expect(ctx.readFileState.has(filePath)).toBe(false);
-      expect((await edit.execute({ file_path: filePath, old_string: 'external', new_string: 'lost' }, ctx)).isError).toBe(true);
-      expect(await fs.readFile(filePath, 'utf8')).toBe('external value');
-    } finally {
-      writeSpy.mockRestore();
-    }
+    ctx.recordFileChange = () => { writeFileSync(filePath, 'external value'); };
+    const result = await edit.execute({ file_path: filePath, old_string: 'original', new_string: 'updated' }, ctx);
+    expect(result.isError).toBe(false);
+    expect(result.content).toContain('changed again after this edit');
+    expect(ctx.readFileState.has(filePath)).toBe(false);
+    expect((await edit.execute({ file_path: filePath, old_string: 'external', new_string: 'lost' }, ctx)).isError).toBe(true);
+    expect(await fs.readFile(filePath, 'utf8')).toBe('external value');
   });
 
   it.each(['write', 'edit'])('rejects %s after a same-size, same-mtime external change', async (operation) => {
@@ -1349,9 +1361,9 @@ describe('File tools — freshness and concurrency', () => {
 });
 
 describe('File tools — bounded read state', () => {
-  const read = new ReadTool();
-  const write = new WriteTool();
-  const edit = new EditTool();
+  const read = getTool('Read');
+  const write = getTool('Write');
+  const edit = getTool('Edit');
 
   it('does not upgrade a partial Read through Edit to whole-file Write authority', async () => {
     const filePath = path.join(tmpDir, 'partial-chain.txt');
@@ -1441,11 +1453,11 @@ describe('File tools — bounded read state', () => {
 });
 
 describe('ReadTool — image files', () => {
-  const tool = new ReadTool();
+  const tool = getTool('Read');
 
   it('returns base64 image data for a PNG', async () => {
     const filePath = path.join(tmpDir, 'pic.png');
-    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aBYkAAAAASUVORK5CYII=', 'base64');
     await fs.writeFile(filePath, bytes);
 
     const result = await tool.execute({ file_path: filePath }, makeCtx(tmpDir));

@@ -1,0 +1,10 @@
+{
+  "diagnostics.redaction.marker": {
+    "text": "[REDACTED]",
+    "slots": []
+  },
+  "diagnostics.redaction.truncated": {
+    "text": "…(truncated, total {length} chars)",
+    "slots": ["length"]
+  }
+}

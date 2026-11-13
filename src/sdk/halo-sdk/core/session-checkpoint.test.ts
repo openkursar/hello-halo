@@ -111,7 +111,8 @@ describe('retained SDK session state', () => {
 
   it('cleans an unstarted query without making a model request', async () => {
     const { config, requests } = options(true);
-    const operation = query({ prompt: 'Never started.', options: config });
+    const { query: publicQuery } = await import('../index.js');
+    const operation = publicQuery({ prompt: 'Never started.', options: config });
     operation.setGoal({ objective: 'Disposable goal.' });
     await operation.return(undefined);
     expect(requests).toHaveLength(0);

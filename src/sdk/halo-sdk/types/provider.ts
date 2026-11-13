@@ -197,6 +197,8 @@ export interface ProviderResponse {
   usage: UsageInfo;
   /** The model that produced this response (as reported by the provider) */
   model: string;
+  /** Recognized calls were unreadable; no tool calls from this response are executable. */
+  unreadableToolCall?: string;
 }
 
 // ---------------------------------------------------------------------------

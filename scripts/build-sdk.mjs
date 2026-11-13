@@ -16,7 +16,7 @@ function run(args) {
 
 if (!fs.existsSync(path.join(sdk, 'package.json'))) {
   console.log('  - SDK build skipped (src/sdk/halo-sdk is absent)')
-} else if (fs.existsSync(path.join(sdk, 'dist/worker/entry.js')) && !process.argv.includes('--force')) {
+} else if (fs.existsSync(path.join(sdk, `dist/native/halo-sdk.${process.platform}-${process.arch}.node`)) && !process.argv.includes('--force')) {
   console.log('  - SDK build reused (run `npm run build:sdk` to rebuild)')
 } else {
   if (!fs.existsSync(path.join(sdk, 'node_modules/typescript'))) run(['ci', '--ignore-scripts', '--no-audit', '--no-fund'])

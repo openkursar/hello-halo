@@ -1,0 +1,45 @@
+{
+  "commands.runtime.already_prepared": {
+    "text": "Session commands are already prepared",
+    "slots": []
+  },
+  "commands.runtime.clear_context_failed": {
+    "text": "Could not prepare cleared tool context",
+    "slots": []
+  },
+  "commands.runtime.context_cleared": {
+    "text": "Conversation context cleared.",
+    "slots": []
+  },
+  "commands.runtime.manual_compact_unsupported": {
+    "text": "Manual /compact is not supported. Automatic context compaction remains enabled.",
+    "slots": []
+  },
+  "commands.runtime.operation_unavailable": {
+    "text": "Native session operation is not available in this build: {name}",
+    "slots": [
+      "name"
+    ]
+  },
+  "commands.runtime.unavailable": {
+    "text": "Command /{name} is not available in this context",
+    "slots": [
+      "name"
+    ]
+  },
+  "commands.runtime.failed": {
+    "text": "Error running /{name}: {error}",
+    "slots": [
+      "name",
+      "error"
+    ]
+  },
+  "commands.runtime.compacted": {
+    "text": "Conversation context compacted.",
+    "slots": []
+  },
+  "commands.runtime.compact_unchanged": {
+    "text": "Conversation context was kept unchanged; there was no safe reduction to install.",
+    "slots": []
+  }
+}

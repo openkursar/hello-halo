@@ -1,0 +1,36 @@
+{
+  "name": "CodeSearch",
+  "description": {
+    "$harness": "tools.code_search.description"
+  },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000,
+        "description": {
+          "$harness": "tools.code_search.input_schema.fields.query.description"
+        }
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20,
+        "description": {
+          "$harness": "tools.code_search.input_schema.fields.limit.description"
+        }
+      },
+      "refresh": {
+        "type": "boolean",
+        "description": {
+          "$harness": "tools.code_search.input_schema.fields.refresh.description"
+        }
+      }
+    },
+    "required": [
+      "query"
+    ]
+  }
+}

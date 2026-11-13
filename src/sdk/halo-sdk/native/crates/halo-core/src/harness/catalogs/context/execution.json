@@ -1,0 +1,91 @@
+{
+  "context.execution.unreadable_exhausted": {
+    "text": "The model repeatedly returned an unreadable tool call; no tool from that response was executed.",
+    "slots": []
+  },
+  "context.execution.results_not_saved": {
+    "text": "{error}. Tool results remain available in this session, but could not be saved to conversation history. Check completed actions before repeating them after reopening the session.",
+    "slots": ["error"]
+  },
+  "context.execution.stopped_without_answer": {
+    "text": "The model ended its response with {reason} without an answer or tool call.",
+    "slots": ["reason"]
+  },
+  "context.execution.empty_response": {
+    "text": "The model repeatedly returned no answer or tool call. Please try again or check the model server.",
+    "slots": []
+  },
+  "context.execution.budget": {
+    "text": "Budget exceeded: ${spent} spent, limit is ${maximum}",
+    "slots": [
+      "spent",
+      "maximum"
+    ]
+  },
+  "context.execution.max_turns": {
+    "text": "Max turns exceeded: {completed} turns completed, limit is {maximum}",
+    "slots": [
+      "completed",
+      "maximum"
+    ]
+  },
+  "context.execution.retry_exhausted": {
+    "text": "Exhausted the retry budget on {model}",
+    "slots": [
+      "model"
+    ]
+  },
+  "context.execution.results_preserved": {
+    "text": "{error}. Completed tool results were preserved; the request was not replayed.",
+    "slots": [
+      "error"
+    ]
+  },
+  "context.execution.unreadable_retry": {
+    "text": "Your response contained {detail}, so no tool ran. Emit the tool call again in the required format, or answer directly if you no longer need the tool.",
+    "slots": [
+      "detail"
+    ]
+  },
+  "context.execution.context_recovery_failed": {
+    "text": "Context recovery failed: {error}. Conversation records were retained.",
+    "slots": [
+      "error"
+    ]
+  },
+  "context.execution.capacity_after_recovery": {
+    "text": "Context still exceeds the input capacity after recovery; original records were retained",
+    "slots": []
+  },
+  "context.execution.thinking_capacity": {
+    "text": "The output allowance cannot preserve the effective thinking budget; original history was retained",
+    "slots": []
+  },
+  "context.execution.thinking_provider_limit": {
+    "text": "The provider output limit cannot preserve the effective thinking budget",
+    "slots": []
+  },
+  "context.execution.interrupted_user": {
+    "text": "[Interrupted by user]",
+    "slots": []
+  },
+  "context.execution.interrupted_tool": {
+    "text": "[Interrupted by tool use]",
+    "slots": []
+  },
+  "context.execution.interrupted_execution": {
+    "text": "Execution was interrupted. Check the current state before repeating this action.",
+    "slots": []
+  },
+  "context.execution.aborted": {
+    "text": "Operation was aborted",
+    "slots": []
+  },
+  "context.execution.stagnation_envelope": {
+    "text": "{content}\n\n<system-reminder>{notice}</system-reminder>",
+    "slots": [
+      "content",
+      "notice"
+    ]
+  }
+}
