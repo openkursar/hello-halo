@@ -44,7 +44,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 //
 // vi.mock factories are hoisted above top-level statements; use vi.hoisted
 // so the maps and spies are available to the factories.
-const { consumers, v2Sessions, closeV2Session, stopGeneration, destroyChatBrowserContext } = vi.hoisted(() => {
+const { consumers, v2Sessions, closeV2Session, stopGeneration, destroyChatBrowserContext, listSessionEnvironments, reloadChatInstructions } = vi.hoisted(() => {
   const _consumers = new Map<string, unknown>()
   const _v2Sessions = new Map<string, unknown>()
   return {
@@ -57,6 +57,8 @@ const { consumers, v2Sessions, closeV2Session, stopGeneration, destroyChatBrowse
       _consumers.delete(id)
     }),
     destroyChatBrowserContext: vi.fn(),
+    listSessionEnvironments: vi.fn(() => [] as Array<{ environment: { spacePath: string } }>),
+    reloadChatInstructions: vi.fn(() => 0),
   }
 })
 
@@ -115,6 +117,7 @@ vi.mock('../../../../src/main/services/agent/message-utils', () => ({
 
 // AI Browser and other MCP servers — referenced at module load.
 vi.mock('../../../../src/main/services/ai-browser', () => ({
+  AI_BROWSER_DESCRIPTION: 'Browse websites',
   AI_BROWSER_SYSTEM_PROMPT: '',
   createAIBrowserMcpServer: vi.fn(),
   createScopedBrowserContext: vi.fn(),
@@ -155,6 +158,10 @@ vi.mock('../../../../src/main/apps/conversation-mcp', () => ({
 }))
 vi.mock('../../../../src/main/apps/runtime/index', () => ({
   getAppMemoryService: vi.fn().mockReturnValue(null),
+  getActivityStore: () => ({ listSessionEnvironments }),
+}))
+vi.mock('../../../../src/main/apps/runtime/session-store', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()), reloadChatInstructions,
 }))
 
 // dispatch-inbound pulls in analytics → electron-CJS at module load.
@@ -203,6 +210,8 @@ describe('restartAppChat', () => {
     closeV2Session.mockClear()
     destroyChatBrowserContext.mockClear()
     stopGeneration.mockClear()
+    listSessionEnvironments.mockReset().mockReturnValue([])
+    reloadChatInstructions.mockReset().mockReturnValue(0)
   })
 
   it('returns 0 when no sessions match the app', async () => {
@@ -214,6 +223,41 @@ describe('restartAppChat', () => {
     expect(result.sessionsClosed).toBe(0)
     expect(closeV2Session).not.toHaveBeenCalled()
     expect(stopGeneration).not.toHaveBeenCalled()
+  })
+
+  it('persists explicit reload intent for cold chats once per pinned history location', async () => {
+    listSessionEnvironments.mockReturnValue([
+      { environment: { spacePath: '/history-a' } },
+      { environment: { spacePath: '/history-a' } },
+      { environment: { spacePath: '/history-b' } },
+    ])
+    expect(await restartAppChat('target-app', { interruptActive: true })).toEqual({ sessionsClosed: 0 })
+    expect(reloadChatInstructions.mock.calls).toEqual([['/history-a', 'target-app'], ['/history-b', 'target-app']])
+    expect(closeV2Session).not.toHaveBeenCalled()
+  })
+
+  it('does no retained-history work on an automatic restart', async () => {
+    await restartAppChat('target-app')
+    expect(listSessionEnvironments).not.toHaveBeenCalled()
+    expect(reloadChatInstructions).not.toHaveBeenCalled()
+  })
+
+  it('records reload intent before stopping a running turn', async () => {
+    const nativeKey = getAppChatConversationId('target-app')
+    listSessionEnvironments.mockReturnValue([{ environment: { spacePath: '/history' } }])
+    seedSession(nativeKey)
+    markGenerating(nativeKey)
+    await restartAppChat('target-app', { interruptActive: true })
+    expect(reloadChatInstructions.mock.invocationCallOrder[0]).toBeLessThan(stopGeneration.mock.invocationCallOrder[0])
+  })
+
+  it('tries other history locations but reports an incomplete reload rather than success', async () => {
+    listSessionEnvironments.mockReturnValue([
+      { environment: { spacePath: '/locked' } }, { environment: { spacePath: '/available' } },
+    ])
+    reloadChatInstructions.mockImplementationOnce(() => { throw new Error('unavailable') })
+    await expect(restartAppChat('target-app', { interruptActive: true })).rejects.toThrow('Some saved conversations')
+    expect(reloadChatInstructions).toHaveBeenCalledTimes(2)
   })
 
   it('closes the native app-chat session', async () => {

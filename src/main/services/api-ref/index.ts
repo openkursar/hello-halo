@@ -32,21 +32,7 @@ const GROUPS = API_REF_GROUP_IDS
  */
 const INDEX_PLACEHOLDER = '{{API_REF_INDEX_PATH}}'
 
-// Every sentence here closes one specific failure: the opening line is a "when
-// to use this" rather than a "what this returns", because a weak model routes
-// off the first sentence it reads and never reaches the env-var line; the last
-// line is what stands between a wrong guess and the model telling the user
-// "Halo can't do this". What each group covers belongs to the `group`
-// parameter rather than here — it is read while filling that field in.
-const TOOL_DESCRIPTION = `Call this before doing anything to Halo itself. Returns the executable HTTP
-contract for one capability group of this build: exact paths, ready-to-run
-curl, response shapes, and what is closed to you.
-
-Auth and base URL are already in your environment ($HALO_API_URL,
-$HALO_API_TOKEN, $HALO_SPACE_ID) — copy the curl as-is and substitute ids.
-
-Not finding something here does NOT mean Halo can't do it. Grep the full
-index (path is printed on every page) before telling the user it is impossible.`
+const TOOL_DESCRIPTION = `Read this build's executable HTTP contract before using Halo's local API. Choose the capability group for the task; the result provides exact paths, curl commands, response shapes, access limits and execution rules. Follow its redirects and full index before concluding an operation is unavailable.`
 
 /**
  * The group enum's own documentation, built from the same descriptions the
@@ -58,44 +44,24 @@ const GROUP_PARAM_DESCRIPTION = API_REF_GROUP_IDS.map(
   (id) => `${API_REF_GROUPS[id].title}. Covers: ${API_REF_GROUPS[id].covers}`,
 ).join('\n')
 
-/**
- * Appended to the system prompt wherever this core capability is supplied
- * (`toolsets/capability-index.ts`). It is the counterpart of the tool
- * description: that one is read when the model is choosing a tool, this one
- * when it is deciding whether the task is reachable at all.
- */
+export const HALO_API_DESCRIPTION = 'Operate Halo itself: spaces, conversations, digital humans, teams, knowledge bases, channels, settings and the app store.'
+
 export const HALO_API_USAGE_GUIDE = `
 ## Operate Halo
 
-Halo itself is operable over its local HTTP API — spaces, conversations,
-digital humans, teams, knowledge bases, IM channels, settings and the app store.
-This is a raw interface, with close to the reach the user has in the app.
+You can operate Halo itself — spaces, conversations, digital humans, teams, knowledge bases, IM channels, settings and the app store. Prefer a matching purpose-built tool; otherwise consult halo_api_ref before calling the local API. Runtime credentials are already supplied; no enablement step is needed. Product docs explain usage, not your current access. Follow the current contract, never guess paths or bypass a permission denial. If access is unavailable, explain the limit and use read_halo_doc for the user's UI steps.
+`.trim()
 
-Prefer a purpose-built tool when you hold one. Purpose-built tools validate
-input, sequence multi-step operations and roll back on failure; the raw API
-does none of that. Use the API when no tool covers the task.
+const API_EXECUTION_RULES = `
+## Execution rules
 
-### How to use it
-1. Call \`mcp__halo-api-ref__halo_api_ref\` with the capability group you need.
-   It returns this build's real contract: exact paths, ready-to-run curl,
-   response shapes, and what is closed to you.
-2. Run the curl it returns with the Bash tool. \`$HALO_API_URL\`,
-   \`$HALO_API_TOKEN\` and \`$HALO_SPACE_ID\` are already set. NEVER print or
-   expand them.
-
-### Rules
-- IMPORTANT: Only call paths that this prompt or the manual gives you; never write one from memory. Paths differ between builds.
-- HTTP 200 does not mean success. Check \`"success"\` in the body.
-- 403 means the endpoint exists and is closed to you — never that Halo cannot
-  do it. Check your own tools for the same operation first.
-- Before concluding it cannot be done: follow the group page's redirects, then
-  grep the full index (its path is printed on every page).
-- Once you have confirmed this API cannot do it: tell the user so plainly,
-  call \`read_halo_doc\` for the exact screen and steps, and walk them through
-  doing it by hand.
-- Most credentials cannot be written through this API. Find the write route
-  before asking the user for a secret.
-`
+- Follow this build's documented methods, paths, inputs and response shapes; do not invent endpoints. Prefer a matching purpose-built tool: raw API calls do not orchestrate multiple steps or roll them back.
+- Run the supplied curl with your command-execution tool. $HALO_API_URL, $HALO_API_TOKEN and $HALO_SPACE_ID are already in its environment. Keep variable references in commands; never print their values, store credentials in files or expose them in replies.
+- HTTP 200 alone is not success: check the body's success value and operation result. A started job is not completion; use its documented status operation when needed.
+- HTTP 403 means this route is closed to you, not that Halo lacks the feature. Use another tool only when the reference or current permissions authorize the operation; never bypass a denial.
+- If the operation is missing, follow group redirects and search the full index named below before declaring it unavailable. When no authorized route or tool covers it, explain the limit and use read_halo_doc for the user's exact UI steps.
+- Verify a supported credential-write route before asking for a secret. Otherwise guide the user to enter it in Halo, not in chat.
+`.trim()
 
 /**
  * Fills the index path the generator could not know: it differs between a dev
@@ -130,7 +96,7 @@ async function renderPage(group: string): Promise<string> {
         'Report this to the user rather than acting on the page.',
     )
   }
-  return rendered
+  return `${API_EXECUTION_RULES}\n\n${rendered}`
 }
 
 function buildTools() {
@@ -159,6 +125,7 @@ export function createApiRefMcpServer() {
   return createSdkMcpServer({
     name: HALO_API_TOOLSET_ID,
     version: '1.0.0',
+    description: HALO_API_DESCRIPTION,
     tools: buildTools(),
   })
 }

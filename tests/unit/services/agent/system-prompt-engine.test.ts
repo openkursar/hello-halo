@@ -1,15 +1,7 @@
-/**
- * On the halo engine the host must not send the Claude Code-derived template:
- * the engine keeps its own default prompt and receives only Halo's product
- * context as an append. Other engines keep the full template unchanged.
- */
+import { describe, expect, it, vi } from 'vitest'
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-const engine = vi.hoisted(() => ({ id: 'anthropic' as string | null }))
-
-vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
-  getDefaultEngine: () => engine.id, resolveDefaultEngine: async () => engine.id,
+vi.mock('../../../../src/main/services/agent/user-agent-settings', () => ({
+  readUserAgentSettings: () => ({ digitalHumansEnabled: true }),
 }))
 
 import {
@@ -18,171 +10,95 @@ import {
   hostSystemPromptText,
   toEngineSystemPrompt,
 } from '../../../../src/main/services/agent/system-prompt'
-
 import { generatePromptInstructions } from '../../../../src/main/platform/memory'
 
-const ctx = { workDir: '/tmp/w', modelInfo: 'test-model', today: '2026-01-02' }
+const engines = ['anthropic', 'halo', 'codex', 'dsh'] as const
+const ctx = { workDir: '/tmp/w' }
+const runsOnHalo = 'You run in Halo. Your identity and duties come from App Instructions.'
 
-describe('system prompt per engine', () => {
-  it('honors the session engine when the default points elsewhere', () => {
-    engine.id = 'anthropic'
-    const halo = buildSystemPrompt({ ...ctx, engineId: 'halo' })
-    expect(toEngineSystemPrompt(halo, 'halo')).toMatchObject({ type: 'preset', preset: 'default' })
-    engine.id = 'halo'
-    const cc = buildSystemPrompt({ ...ctx, engineId: 'anthropic' })
-    expect(cc).toContain('Claude Code')
-    expect(toEngineSystemPrompt(cc, 'anthropic')).toBe(cc)
-  })
-  beforeEach(() => {
-    engine.id = 'anthropic'
-  })
-
-  it('keeps the full Halo template as a plain string on other engines', () => {
-    for (const id of ['anthropic', 'codex']) {
-      engine.id = id
-      const prompt = buildSystemPrompt(ctx)
-      expect(prompt.startsWith('You are Halo, an AI assistant built with Claude Code.')).toBe(true)
-      expect(prompt).toContain('# Task Management')
-      expect(prompt).toContain('Working directory: /tmp/w')
-      expect(toEngineSystemPrompt(prompt)).toBe(prompt)
-    }
-  })
-
-  it('says an assistant with its own instructions runs on Halo instead of being Halo, and changes nothing else', () => {
-    const runsOnHalo = 'You run on Halo, which gives you remote access, file management, and built-in AI browser capabilities. ' +
-      'Your identity and role are defined by the App Instructions below.'
-    for (const id of ['anthropic', 'halo']) {
-      engine.id = id
-      for (const promptProfile of ['halo', 'official'] as const) {
-        const own = buildSystemPrompt({ ...ctx, promptProfile, ownIdentity: true })
-        const plain = buildSystemPrompt({ ...ctx, promptProfile })
-
-        expect(own).not.toMatch(/^You are Halo, /m)
-        expect(own).toContain(runsOnHalo)
-        expect(own).toBe(plain.replace(/^You are Halo, .*$/m, runsOnHalo))
-      }
-    }
-  })
-
-  it('sends only Halo context, appended to the engine default, on the halo engine', () => {
-    engine.id = 'halo'
-    const prompt = buildSystemPrompt({ ...ctx, toolsetIndex: '## AI Terminal\nguide' })
-
+describe('engine system prompt contract', () => {
+  it.each(engines)('appends host context to the native default on %s', engineId => {
+    const prompt = buildSystemPrompt({ ...ctx, engineId })
     expect(prompt.startsWith('# Halo\nYou are Halo,')).toBe(true)
-    expect(prompt).toContain('Remote Access: Enable in Settings > Remote Access')
-    expect(prompt).toContain('mcp__web-search__web_search')
-    expect(prompt).toContain('# Halo directories')
-    expect(prompt).toContain('Halo Digital Humans')
-    expect(prompt).toContain('## AI Terminal')
-
-    expect(prompt).not.toContain('Claude Code')
-    expect(prompt).not.toContain('TodoWrite')
-    expect(prompt).not.toContain('<env>')
-    expect(prompt).not.toContain('2026-01-02')
-    expect(prompt).not.toContain('test-model')
-    expect(prompt).not.toMatch(/\{\{[A-Z_]+\}\}/)
-
-    expect(toEngineSystemPrompt(prompt)).toEqual({ type: 'preset', preset: 'default', append: prompt })
+    expect(toEngineSystemPrompt(prompt, engineId)).toEqual({ type: 'preset', preset: 'default', append: prompt })
+    expect(toEngineSystemPrompt(prompt)).toEqual(toEngineSystemPrompt(prompt, engineId))
   })
 
-  it.each(['anthropic', 'halo', 'codex', 'dsh'] as const)(
-    'distinguishes personal, compatibility and managed skill locations on %s', engineId => {
-      for (const promptProfile of ['halo', 'official'] as const) {
-        const prompt = buildSystemPrompt({
-          ...ctx,
-          engineId,
-          promptProfile,
-          claudeConfigDir: '/custom/agent-config',
-        })
-
-        expect(prompt).toContain('Personal global skills: ~/.agents/skills/<skill-name>/SKILL.md')
-        expect(prompt).toContain('Personal project skills: <space-path>/.agents/skills/<skill-name>/SKILL.md')
-        expect(prompt).toContain('Existing ~/.claude/skills and <space-path>/.claude/skills remain readable for compatibility')
-        expect(prompt).toContain('create new personal skills in .agents/skills')
-        expect(prompt).toContain('Store-installed and built-in skills live in the same folders')
-        expect(prompt).toContain('Manage them with the capability library or skill_manage')
-        if (engineId === 'halo') expect(prompt).toContain('If ToolSearch is offered instead, discover the skill-management tool before calling it.')
-        expect(prompt).not.toContain('private runtime skill directories')
-        expect(prompt).not.toContain('/custom/agent-config/skills')
-        expect(prompt).toMatch(/(?:Claude SDK|Agent|Agent runtime) config: \/custom\/agent-config/)
-        expect(prompt).toContain('Halo config: ')
-        expect(prompt).not.toMatch(/\{\{[A-Z_]+\}\}/)
-      }
-    },
-  )
-
-  it('ignores promptProfile on the halo engine', () => {
-    engine.id = 'halo'
-    expect(buildSystemPrompt({ ...ctx, promptProfile: 'official' })).toBe(buildSystemPrompt(ctx))
+  it.each(engines)('changes only the identity line when App Instructions own identity on %s', engineId => {
+    const plain = buildSystemPrompt({ ...ctx, engineId })
+    const own = buildSystemPrompt({ ...ctx, engineId, ownIdentity: 'app-instructions' })
+    expect(own).not.toMatch(/^You are Halo, /m)
+    expect(own).toBe(plain.replace(/^You are Halo, .*$/m, runsOnHalo))
   })
 
-  it.each(['anthropic', 'halo', 'codex'])('preserves standing memory context on %s without repeating it', id => {
-    engine.id = id
+  it.each(engines)('defers to runtime identity without referencing absent App Instructions on %s', engineId => {
+    const plain = buildSystemPrompt({ ...ctx, engineId })
+    const own = buildSystemPrompt({ ...ctx, engineId, ownIdentity: 'runtime' })
+    expect(own).toBe(plain.replace(/^You are Halo, .*$/m, runsOnHalo.split(' Your identity and duties')[0]))
+    expect(own).not.toMatch(/^You are Halo, /m)
+    expect(own).not.toContain('App Instructions')
+  })
+
+  it.each(engines)('preserves managed and personal skill paths on %s', engineId => {
+    const prompt = buildSystemPrompt({ ...ctx, engineId, claudeConfigDir: '/custom/agent-config' })
+    expect(prompt).toContain('Personal global skills: ~/.agents/skills/<skill-name>/SKILL.md')
+    expect(prompt).toContain('Personal project skills: <space-path>/.agents/skills/<skill-name>/SKILL.md')
+    expect(prompt).not.toContain('.claude/skills')
+    expect(prompt).toContain('Store-installed and built-in skills live in the same folders')
+    expect(prompt).toContain('If ToolSearch is offered instead, discover the skill-management tool before calling it.')
+    expect(prompt).toContain('Agent config: /custom/agent-config')
+    expect(prompt).not.toContain('/custom/agent-config/skills')
+  })
+
+  it.each(engines)('preserves standing memory exactly once on %s', engineId => {
     const memory = generatePromptInstructions('session', { owner: 'space', authorTag: 'chat#ab12' })
-    const options = toEngineSystemPrompt(buildSystemPrompt(ctx))
-    const prompt = appendToSystemPrompt(options, `\n\n${memory}`)
+    const prompt = appendToSystemPrompt(toEngineSystemPrompt(buildSystemPrompt(ctx), engineId), `\n\n${memory}`)
     expect(hostSystemPromptText(prompt)).toContain(memory)
     expect(hostSystemPromptText(prompt).split('Your History author tag')).toHaveLength(2)
-    if (id === 'halo') expect(prompt).toMatchObject({ type: 'preset', preset: 'default' })
-    else expect(typeof prompt).toBe('string')
-  })
-
-  it('omits the digital humans line when disabled', () => {
-    engine.id = 'halo'
-    expect(buildSystemPrompt({ ...ctx, digitalHumansEnabled: false })).not.toContain('Digital Humans')
+    expect(prompt).toMatchObject({ type: 'preset', preset: 'default' })
   })
 })
 
 describe('prompt shape helpers', () => {
   const preset = { type: 'preset' as const, preset: 'default' as const, append: 'ctx' }
 
-  it('appends to either shape without mutating the input', () => {
-    expect(appendToSystemPrompt('base', '\n\nkb')).toBe('base\n\nkb')
-    expect(appendToSystemPrompt(preset, '\n\nkb')).toEqual({ ...preset, append: 'ctx\n\nkb' })
-    expect(preset.append).toBe('ctx')
-    expect(appendToSystemPrompt(undefined, 'kb')).toBeUndefined()
+  it('preserves explicit replacement strings for internal tasks', () => {
+    expect(appendToSystemPrompt('complete task instructions', '\n\nkb')).toBe('complete task instructions\n\nkb')
+    expect(hostSystemPromptText('complete task instructions')).toBe('complete task instructions')
   })
 
-  it('reads the host-authored text from either shape', () => {
-    expect(hostSystemPromptText('base')).toBe('base')
+  it('appends without mutating the native-preset wrapper', () => {
+    expect(appendToSystemPrompt(preset, '\n\nkb')).toEqual({ ...preset, append: 'ctx\n\nkb' })
+    expect(preset.append).toBe('ctx')
     expect(hostSystemPromptText(preset)).toBe('ctx')
+    expect(appendToSystemPrompt(undefined, 'kb')).toBeUndefined()
     expect(hostSystemPromptText(undefined)).toBe('')
   })
 })
 
-describe('engine system prompt wiring', () => {
-  // A raw host string assigned on the halo engine would replace the engine's
-  // whole default prompt with the Halo append, and nothing else would notice.
-  it('routes every session system prompt through the engine-shape helpers', async () => {
-    const { readdirSync, readFileSync, statSync } = await import('node:fs')
-    const { join, relative } = await import('node:path')
-    const root = join(__dirname, '../../../../src/main')
-    // Task-specific prompts that must stay complete strings on every engine.
-    const fullStringPrompts = new Set([
-      'services/memory-consolidation/runner.ts',
-      'services/api-validator.service.ts',
-    ])
-    const assignment = /^\s*systemPrompt\??:|\.systemPrompt\s*=[^=]/
-    const wrapped = /toEngineSystemPrompt\(|appendToSystemPrompt\(/
-
-    const offenders: string[] = []
-    const walk = (dir: string): void => {
-      for (const name of readdirSync(dir)) {
-        const path = join(dir, name)
-        if (statSync(path).isDirectory()) {
-          if (name !== 'openai-compat-router') walk(path)
-          continue
-        }
-        if (!name.endsWith('.ts')) continue
-        const file = relative(root, path)
-        if (fullStringPrompts.has(file)) continue
-        readFileSync(path, 'utf-8').split('\n').forEach((line, i) => {
-          if (assignment.test(line) && !wrapped.test(line)) offenders.push(`${file}:${i + 1}`)
-        })
+it('routes user-facing session prompts through the shared shape helpers', async () => {
+  const { readdirSync, readFileSync, statSync } = await import('node:fs')
+  const { join, relative } = await import('node:path')
+  const root = join(__dirname, '../../../../src/main')
+  const fullStringPrompts = new Set(['services/memory-consolidation/runner.ts', 'services/api-validator.service.ts'])
+  const assignment = /^\s*systemPrompt\??:|\.systemPrompt\s*=[^=]/
+  const wrapped = /toEngineSystemPrompt\(|appendToSystemPrompt\(/
+  const offenders: string[] = []
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name)
+      if (statSync(path).isDirectory()) {
+        if (name !== 'openai-compat-router') walk(path)
+        continue
       }
+      if (!name.endsWith('.ts')) continue
+      const file = relative(root, path)
+      if (fullStringPrompts.has(file)) continue
+      readFileSync(path, 'utf-8').split('\n').forEach((line, i) => {
+        if (assignment.test(line) && !wrapped.test(line)) offenders.push(`${file}:${i + 1}`)
+      })
     }
-    walk(root)
-
-    expect(offenders).toEqual([])
-  })
+  }
+  walk(root)
+  expect(offenders).toEqual([])
 })

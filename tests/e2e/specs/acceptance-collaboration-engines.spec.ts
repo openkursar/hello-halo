@@ -4,6 +4,7 @@ import { buildTeamSessionKey } from '../../../src/shared/apps/im-keys'
 import { test, expect, acceptance, sendAcceptanceMessage, waitForAcceptanceIdle } from '../fixtures/acceptance-app'
 import { createEngineCollaborationScript, engineSourceQuestion, engineSourceAnswer, engineMemberResult, engineMemberAssignment, engineFollowup, engineRestartReady, engineResumeQuestion } from '../fixtures/acceptance-engine-collaboration'
 import { navigateToChat } from '../fixtures/helpers'
+import { promptOf } from '../fixtures/acceptance-team-awareness'
 import { openManagedConversation } from '../fixtures/acceptance-management'
 
 for (const sdkEngine of ['halo', 'anthropic', 'codex', 'dsh'] as const) {
@@ -54,6 +55,33 @@ for (const sdkEngine of ['halo', 'anthropic', 'codex', 'dsh'] as const) {
       expect(script.errors).toEqual([])
       expect(script.created?.handle).toBeTruthy()
       expect(script.followedUp).toBe(true)
+      const nativeGuidance = {
+        halo: 'You are an exceptional autonomous agent',
+        anthropic: 'You are Claude Code',
+        codex: 'You are Codex',
+        dsh: 'Use the read tool — not shell commands like cat — to inspect text files.',
+      }[sdkEngine]
+      for (const [actor, requests] of [['source', script.sourceRequests], ['member', script.memberRequests]] as const) {
+        expect(requests.length, `${actor} must reach the actual model endpoint`).toBeGreaterThan(0)
+        for (const request of requests) {
+          const prompt = promptOf(request)
+          expect(prompt, `${sdkEngine} ${actor} retains native guidance`).toContain(nativeGuidance)
+          expect(prompt.match(/^# Halo$/gm), `${sdkEngine} ${actor} receives one host context`).toHaveLength(1)
+          const hostIdentity = actor === 'source'
+            ? 'You are Halo, the AI assistant in Halo\'s chat.'
+            : 'You run in Halo. Your identity and duties come from App Instructions.'
+          expect(prompt).toContain(`# Halo\n${hostIdentity}`)
+          expect(prompt).toContain('read_halo_doc')
+          expect(prompt).not.toContain('Settings > Remote Access')
+          expect(prompt).toContain('~/.agents/skills/<skill-name>/SKILL.md')
+          expect(prompt).toContain('# Halo directories')
+          if (sdkEngine === 'dsh') {
+            expect(prompt.indexOf(nativeGuidance)).toBeGreaterThan(prompt.indexOf('# Halo\n'))
+          } else {
+            expect(prompt.indexOf(nativeGuidance)).toBeLessThan(prompt.indexOf('# Halo\n'))
+          }
+        }
+      }
       const source = await page.evaluate(input => (globalThis as unknown as { halo: HaloAPI }).halo.getConversation(input.spaceId, input.conversationId), turn)
       expect(source.success).toBe(true)
       expect((source.data as { engineBinding?: EngineSessionBinding }).engineBinding).toMatchObject({ engineId: sdkEngine })

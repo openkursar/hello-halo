@@ -13,6 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { createHash } = require('node:crypto');
 const { RUNTIME_DIR, RUNTIME_ENTRY } = require('../runtimes/dsh/manifest.cjs');
 
 const ENGINE_RUNTIMES = {
@@ -20,8 +21,9 @@ const ENGINE_RUNTIMES = {
     name: 'Halo SDK engine',
     required: true,
     packageId: '@hello-halo/agent-sdk',
-    requiredFiles: ['dist/worker/index.js', 'dist/worker/entry.js'],
-    fingerprintFile: 'dist/worker/entry.js',
+    requiredFiles: ['dist/worker/index.js', 'dist/native/index.js', 'dist/native/binding.js', 'dist/native/build-info.json'],
+    fingerprintFile: 'dist/native/build-info.json',
+    native: true,
     fix: 'npm install (builds src/sdk/halo-sdk) or npm run build:sdk',
   },
   codex: {
@@ -101,8 +103,29 @@ function engineArtifactPaths(engine) {
   return { pkgDir, manifestPath: path.join(pkgDir, 'package.json'), label: engine.packageId };
 }
 
+function nativeRuntimeFile(platform = process.platform, arch = process.arch) {
+  return `dist/native/halo-sdk.${platform}-${arch}.node`;
+}
+
+function validateNativeRuntime(engine, read, platform = process.platform, arch = process.arch) {
+  if (!engine.native) return;
+  const identity = JSON.parse(read('dist/native/build-info.json').toString('utf8'));
+  if (identity.implementation !== 'rust' || identity.abiVersion !== 1 || typeof identity.buildId !== 'string') {
+    throw new Error('Native SDK build identity is invalid');
+  }
+  const artifact = identity.artifacts?.find(item => item.platform === `${platform}-${arch}`);
+  const filename = nativeRuntimeFile(platform, arch);
+  if (!artifact || artifact.filename !== path.basename(filename)) throw new Error(`Native SDK build lacks ${platform}-${arch}`);
+  const bytes = read(filename);
+  if (createHash('sha256').update(bytes).digest('hex') !== artifact.sha256) {
+    throw new Error(`Native SDK binary differs from its build identity: ${platform}-${arch}`);
+  }
+}
+
 module.exports = {
   ENGINE_RUNTIMES,
+  nativeRuntimeFile,
+  validateNativeRuntime,
   VALID_ENGINES,
   entryCandidates,
   resolveEngineEntry,

@@ -11,16 +11,17 @@
 import {
   createAIBrowserMcpServer,
   getInteractiveBrowserContext,
+  AI_BROWSER_DESCRIPTION,
   AI_BROWSER_SYSTEM_PROMPT,
 } from '../../ai-browser'
 import {
   createTerminalMcpServer,
   getGlobalTerminalContext,
   isTerminalAvailable,
-  AI_TERMINAL_SYSTEM_PROMPT
+  AI_TERMINAL_DESCRIPTION,
 } from '../../ai-terminal'
 import { createOcrMcpServer } from '../../ocr'
-import { createApiRefMcpServer, HALO_API_TOOLSET_ID, HALO_API_USAGE_GUIDE } from '../../api-ref'
+import { createApiRefMcpServer, HALO_API_TOOLSET_ID, HALO_API_DESCRIPTION, HALO_API_USAGE_GUIDE } from '../../api-ref'
 import type { ToolsetDefinition, ToolsetScope } from './types'
 
 const definitions: ToolsetDefinition[] = []
@@ -53,7 +54,7 @@ registerToolset({
   id: 'ai-browser',
   contextManaged: true,
   displayName: 'Web Control',
-  summary: 'Control an embedded real browser: navigate pages, click/fill/snapshot, run scripts, inspect network.',
+  summary: AI_BROWSER_DESCRIPTION,
   usageGuide: AI_BROWSER_SYSTEM_PROMPT,
   isAvailable: () => true,
   // Per conversation, not one shared context: "which tab am I on" is this
@@ -69,8 +70,8 @@ registerToolset({
   id: 'ai-terminal',
   contextManaged: true,
   displayName: 'Terminal',
-  summary: 'Interactive terminals: run commands, SSH into remote hosts, drive REPLs, and background long-running tasks.',
-  usageGuide: AI_TERMINAL_SYSTEM_PROMPT,
+  summary: AI_TERMINAL_DESCRIPTION,
+  usageGuide: '',
   isAvailable: isTerminalAvailable,
   createServer: (scope: ToolsetScope) =>
     createTerminalMcpServer(getGlobalTerminalContext(scope.workDir), {
@@ -100,8 +101,7 @@ registerToolset({
   id: HALO_API_TOOLSET_ID,
   contextManaged: true,
   displayName: 'Operate Halo',
-  summary:
-    "Operate Halo itself over its local HTTP API: spaces, conversations, digital humans, knowledge bases, channels, settings and the app store.",
+  summary: HALO_API_DESCRIPTION,
   usageGuide: HALO_API_USAGE_GUIDE,
   isAvailable: () => true,
   createServer: () => createApiRefMcpServer()

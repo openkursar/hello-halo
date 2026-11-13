@@ -47,12 +47,9 @@ export interface ToolsetDefinition {
   id: string
   /** English display name (renderer translates via t()) */
   displayName: string
-  /** One-line capability summary — the only resident context cost */
+  /** One-line capability summary shared with its owning service metadata. */
   summary: string
-  /**
-   * Full usage guide for the toolset. Appended to the system prompt only while
-   * the toolset is enabled (buildToolsetSection); a rich system-prompt fragment.
-   */
+  /** Short host guidance for a mounted capability; detailed instructions belong to MCP metadata. */
   usageGuide: string
   /** The host supplies this capability without manual enablement; the engine manages its tool context. */
   contextManaged?: boolean

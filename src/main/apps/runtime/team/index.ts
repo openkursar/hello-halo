@@ -123,12 +123,16 @@ async function resolveImRoute(
 
   // Display name for the bridge framing: prefer the registered IM session name.
   let displayName = target.chatId
+  let senderIdentity: ImSessionContext['senderIdentity']
   try {
     const { getImSessionRegistry } = await import('../im-session-registry')
     const sess = getImSessionRegistry()?.findSession(appId, instance.providerType, target.chatId)
-    displayName = sess?.customName || sess?.displayName || target.chatId
+    displayName = sess?.customName || sess?.resolvedName || sess?.displayName || target.chatId
+    if (target.chatType === 'direct' && sess?.contactId) {
+      senderIdentity = { id: sess.contactId, name: sess.resolvedName ?? sess.lastSender ?? sess.contactId }
+    }
   } catch {
-    /* registry optional — fall back to chatId */
+    console.warn(`[TeamRuntime] IM route identity unavailable: conversation=${conversationId}, stage=registry-context, fallback=chat-id`)
   }
 
   return {
@@ -140,6 +144,7 @@ async function resolveImRoute(
       chatType: target.chatType,
       displayName,
       sessionId: `${target.instanceId}:${target.chatId}`,
+      senderIdentity,
     },
     imFileSend: resolveImFileSend({
       instanceId: target.instanceId,

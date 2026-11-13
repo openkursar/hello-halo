@@ -1,11 +1,4 @@
-/**
- * Unit tests for runtime/team/team-prompt — the IM front-desk bridge fragment.
- *
- * buildTeamImBridge is the Entry overlay used when a team member serves an IM
- * channel (a team-backed IM instance). It must override the base team Entry's
- * "delivered by the runtime, not a human" framing: the message is from a real
- * person and that member replies straight back to them in-chat.
- */
+/** Stable team context and IM responsibilities across human and teammate wakes. */
 
 import { describe, it, expect } from 'vitest'
 import {
@@ -56,59 +49,49 @@ const remoteMate: TeamPromptRosterEntry = {
 describe('buildTeamImBridge', () => {
   const im = { channel: 'wecom-bot', displayName: 'Acme Sales Group', chatType: 'group' as const }
 
-  it('frames the lead as the team front desk for the person', () => {
+  it('frames the lead as the stable team front desk', () => {
     const out = buildTeamImBridge(im, true)
-    expect(out).toContain('Front Desk')
-    expect(out).toContain('wecom-bot')
-    expect(out).toContain('Acme Sales Group')
-    expect(out).toContain('group')
-    // Explicitly corrects the base team Entry framing.
-    expect(out).toContain('NOT by the team runtime')
+    expect(out).toContain('### Team replies')
+    expect(out).toContain('team’s front desk')
+    expect(out).toContain('single point of contact')
   })
 
-  it('frames a bound teammate as reached directly, not as the team counter', () => {
+  it('lets a directly addressed member handle its own remit', () => {
     const out = buildTeamImBridge(im, false)
-    // The person addressed THIS member; it must not present itself as the team's
-    // single point of contact, nor bounce everything to the lead.
-    expect(out).not.toContain('Front Desk')
+    expect(out).not.toContain('front desk')
     expect(out).not.toContain('single point of contact')
-    expect(out).toContain('messaging YOU')
-    expect(out).toContain('NOT by the team runtime')
-    expect(out).toContain('wecom-bot')
-    expect(out).toContain('Acme Sales Group')
+    expect(out).toContain('People can address you directly')
+    expect(out).toContain('do not route everything through the lead')
   })
 
-  it.each([true, false])('tells the serving member its final message is the reply TO THE PERSON (isLead=%s)', (isLead) => {
+  it.each([true, false])('keeps channel delivery distinct from teammate replies (isLead=%s)', (isLead) => {
     const out = buildTeamImBridge(im, isLead)
-    expect(out).toContain('final message')
-    expect(out.toLowerCase()).toContain('do not call any tool to')
-    // The exemption is scoped to this chat; it must not read as "your output
-    // reaches teammates too".
-    expect(out).toContain('reach no')
-  })
-
-  it.each([true, false])('says only the text after the last tool call is sent, so finishing work comes first (isLead=%s)', (isLead) => {
-    // An answer followed by bookkeeping reached the chat as the bookkeeping's
-    // closing line, the same way it does in a digital human's own IM chat.
-    const out = buildTeamImBridge(im, isLead)
-    expect(out).toContain('Only the text you write after your last tool call is sent')
-    expect(out).toContain('before you write the reply')
+    const communication = buildTeamEntry(makeCtx({ selfIsLead: isLead }))
+    expect(communication).toContain('final reply is not a team message')
+    expect(communication).toContain('actual requester with `team_send(to, message)`')
+    expect(out).not.toContain('team_send')
+    expect(out).not.toContain('This turn was started')
+    expect(out).not.toContain('Only the text you write after your last tool call')
+    expect(out).not.toContain('Acme Sales Group')
   })
 
   it.each([true, false])('distinguishes live replies from different-permission continuations (isLead=%s)', (isLead) => {
     const out = buildTeamImBridge(im, isLead)
-    expect(out).toContain('team_send')
-    expect(out).toContain('permissions can arrive between tool calls')
-    expect(out).toContain('processed in a separate turn')
+    const communication = buildTeamEntry(makeCtx({ selfIsLead: isLead }))
+    expect(communication).toContain('Permission-compatible\n  messages reach you after your current tool call')
+    expect(communication).toContain('different permissions run in a separate turn')
+    expect(out).toContain('pending when you end')
+    expect(out).toContain('answer when the result arrives')
+    expect(out).toContain('Never invent or promise an unheard result')
+    expect(out).toContain('Keep internal team chatter out')
     expect(out).not.toContain('wait=true')
     expect(out).not.toContain('wait=false')
     expect(out).not.toContain('Two short messages')
   })
 
-  it('reflects a direct chat type', () => {
-    const out = buildTeamImBridge({ channel: 'weixin-ilink-bot', displayName: 'Jane', chatType: 'direct' }, true)
-    expect(out).toContain('direct')
-    expect(out).toContain('Jane')
+  it('leaves session metadata to the channel fragment', () => {
+    expect(buildTeamImBridge({ channel: 'weixin-ilink-bot', displayName: 'Jane', chatType: 'direct' }, true))
+      .toBe(buildTeamImBridge(im, true))
   })
 })
 
@@ -181,6 +164,32 @@ describe('buildTeamEntry roster — cross-machine awareness', () => {
 })
 
 describe('buildTeamConstraints — dispatch + side-effect discipline', () => {
+  it.each(['lead', 'user'] as const)('names the actual escalation tool and message payload (%s routing)', (escalationRouting) => {
+    const context = makeCtx({ escalationRouting })
+    const prompt = [buildTeamEntry(context), ...buildTeamConstraints(context)].join('\n')
+    expect(prompt).toContain('report_to_user({type:"escalation", message:"Your question"')
+    expect(prompt).not.toContain('`report(')
+    expect(prompt).not.toContain('content, choices')
+  })
+
+  it('distinguishes compatible live input from separately authorized turns', () => {
+    const prompt = buildTeamEntry(makeCtx())
+    expect(prompt).toContain('Permission-compatible\n  messages reach you after your current tool call')
+    expect(prompt).toContain('Messages with different permissions run in a separate turn after this one.')
+  })
+
+  it('keeps delivery, delegation, board and ending contracts in a bounded generated entry', () => {
+    const out = buildTeamEntry(makeCtx())
+    expect(out.length).toBeLessThan(4400)
+    for (const rule of [
+      'actual requester', 'Human conversations with your owner are private',
+      'at most 500 characters', 'independent notification', 'Do not poll',
+      'Posting a task does not dispatch it', 'separate history', 'self-contained context',
+      'permitted actions and required evidence', 'Findings are reusable knowledge',
+      'Publishing does not notify', 'silence proves nothing',
+    ]) expect(out).toContain(rule)
+  })
+
   it('always includes side-effect safety guidance', () => {
     const out = buildTeamConstraints(makeCtx({ selfIsLead: false })).join('\n')
     expect(out).toContain('Side-effect safety')
@@ -199,6 +208,39 @@ describe('buildTeamConstraints — dispatch + side-effect discipline', () => {
 })
 
 describe('team duty in the prompt', () => {
+  it.each([undefined, '', '   ', 'Different self responsibility.'])('preserves roster duty when self duty is %s', (selfDuty) => {
+    const entry = buildTeamEntry(makeCtx({
+      selfIsLead: false, selfMemberName: 'researcher', selfDuty,
+      roster: [{ ...localMate, duty: 'Full roster responsibility.' }],
+    }))
+    expect(entry).toContain('Full roster responsibility.')
+    if (selfDuty?.trim()) expect(entry).toContain(selfDuty)
+  })
+
+  it('deduplicates only matching trimmed self duty', () => {
+    const entry = buildTeamEntry(makeCtx({
+      selfIsLead: false, selfMemberName: 'researcher', selfDuty: '  Same responsibility.\n',
+      roster: [{ ...localMate, duty: '\nSame responsibility.  ' }],
+    }))
+    expect(entry.split('Same responsibility.')).toHaveLength(2)
+  })
+
+  it.each([true, false])('quotes full owner Markdown and states self duty only once (lead=%s)', (selfIsLead) => {
+    const duty = '# Review\n\n- Keep every detail\n' + 'Long responsibility. '.repeat(100)
+    const goal = '## Goal\n\nKeep the full goal.'
+    const entry = buildTeamEntry(makeCtx({
+      selfIsLead, selfMemberName: 'reviewer', selfDuty: duty, goal,
+      roster: [{ ...localMate, memberName: 'reviewer', isLead: selfIsLead, duty }],
+    }))
+    expect(entry).toContain('> # Review\n> \n> - Keep every detail')
+    expect(entry).toContain('> ## Goal\n> \n> Keep the full goal.')
+    expect(entry.split('Long responsibility.').length - 1).toBe(100)
+    expect(entry).toContain('## Team work')
+    expect(entry).toContain('## Team communication')
+    expect(entry).not.toContain('## Team Session Context')
+    expect(buildTeamConstraints(makeCtx())[0]).toMatch(/^### Team\n/)
+  })
+
   it('tells a member what it is responsible for in this team', () => {
     const entry = buildTeamEntry(makeCtx({ selfDuty: 'You do the coding.\nTell Code Review when done.' }))
 
@@ -271,15 +313,21 @@ describe('buildTeamEntry — where files go', () => {
     expect(out).not.toContain(`${folder.shared}\n`)
   })
 
-  it('keeps the unique-name rule word for word', () => {
+  it('preserves unique ownership and validated publishing without repeating the rationale', () => {
     const out = buildTeamEntry(makeCtx({ teamFolder: folder }))
-    expect(out).toContain('- A published name belongs to one member only. Your working directory is')
+    expect(out).toContain('A published name belongs to one member only')
+    expect(out).toContain('producer-unique name')
+    expect(out).toContain('rename and republish')
+    expect(out).toContain('Publishing validates the file and access')
+    expect(out).toContain('fix a failed publish before sharing')
   })
 
   it('renders exactly the working-directory wording when no scratch folder could be prepared', () => {
     const out = buildTeamEntry(makeCtx({ teamFolder: null }))
     expect(out).not.toContain('scratch folder')
-    expect(out).toContain('"docs/design.md"); a file outside it cannot be shared this way. Publishing')
+    expect(out).toContain('inside your working directory, relative to it')
+    expect(out).toContain('"docs/design.md"); files elsewhere cannot be shared')
+    expect(out).toContain('team_read_artifact(ref)')
   })
 })
 

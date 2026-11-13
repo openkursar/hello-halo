@@ -14,12 +14,13 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi, type MockInstance } from 'vitest'
+import type { ChatEngineState } from '../../../../src/main/apps/runtime/session-store'
 
 // ============================================
 // Mocks (must be declared before importing app-chat)
 // ============================================
 
-const MEMORY_INSTRUCTIONS = '## State | one-line summary'
+const MEMORY_INSTRUCTIONS = '## State | one-line shared-state summary'
 
 const { getPromptInstructions, createHaloAppsMcpServer } = vi.hoisted(() => ({
   getPromptInstructions: vi.fn(),
@@ -194,12 +195,14 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 vi.mock('../../../../src/main/services/ai-browser', () => ({
   createAIBrowserMcpServer: vi.fn(),
   createScopedBrowserContext: vi.fn(() => ({ destroy: vi.fn(), closePages: vi.fn(), ownedViewCount: 0, hasRevealedView: () => false })),
+  AI_BROWSER_DESCRIPTION: 'Browse websites',
   AI_BROWSER_SYSTEM_PROMPT: 'AI browser instructions',
 }))
 vi.mock('../../../../src/main/services/ai-terminal', () => ({
   createTerminalMcpServer: vi.fn(),
   getGlobalTerminalContext: vi.fn(),
   isTerminalAvailable: () => false,
+  AI_TERMINAL_DESCRIPTION: 'Run interactive terminals',
   AI_TERMINAL_SYSTEM_PROMPT: 'AI terminal instructions',
 }))
 vi.mock('../../../../src/main/services/web-search', () => ({
@@ -210,6 +213,7 @@ vi.mock('../../../../src/main/services/ocr', () => ({
 }))
 vi.mock('../../../../src/main/services/api-ref', () => ({
   createApiRefMcpServer: () => ({ _isMcpServer: true, name: 'halo-api-ref' }),
+  HALO_API_DESCRIPTION: 'Operate Halo',
   HALO_API_USAGE_GUIDE: 'Halo API usage',
   HALO_API_TOOLSET_ID: 'halo-api-ref',
 }))
@@ -243,12 +247,15 @@ const sessionRegistry = vi.hoisted(() => ({
     getPushableSessions: () => []
   },
 }))
-const { loadChatSessionId } = vi.hoisted(() => ({ loadChatSessionId: vi.fn<[], string | undefined>() }))
+const { loadChatSessionId, loadChatEngineState } = vi.hoisted(() => {
+  const loadChatSessionId = vi.fn<[], string | undefined>()
+  return { loadChatSessionId, loadChatEngineState: vi.fn<[], ChatEngineState>(() => ({ sessionId: loadChatSessionId() })) }
+})
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
   getImSessionRegistry: () => sessionRegistry.current,
 }))
 const { prepareAppEngineSession } = vi.hoisted(() => ({
-  prepareAppEngineSession: vi.fn((options: { state: { sessionId?: string }; legacySessionId?: string }) => ({ resumeSessionId: options.state.sessionId ?? options.legacySessionId })),
+  prepareAppEngineSession: vi.fn((options: { state: { sessionId?: string }; legacySessionId?: string }): { resumeSessionId?: string; engineHandoffContent?: string } => ({ resumeSessionId: options.state.sessionId ?? options.legacySessionId })),
 }))
 vi.mock('../../../../src/main/apps/runtime/engine-selection', () => ({
   resolveAppSessionEngine: async (selection: { engineId?: string }) => selection.engineId ?? 'halo',
@@ -257,7 +264,7 @@ vi.mock('../../../../src/main/apps/runtime/engine-selection', () => ({
 
 vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
   saveChatEngineRouting: (_space: string, _app: string, _run: string, engineId: string, state: any = {}) => state.sessionId || state.binding || state.routingEngine ? state : { routingEngine: engineId },
-  loadChatEngineState: () => ({ sessionId: loadChatSessionId() }),
+  loadChatEngineState,
   saveChatEngineBinding: vi.fn(() => true),
   loadChatSessionId,
   saveChatSessionId: vi.fn(),
@@ -380,6 +387,8 @@ beforeEach(() => {
   getPromptInstructions.mockImplementation(generatePromptInstructions)
   send.mockClear()
   loadChatSessionId.mockReset()
+  loadChatEngineState.mockReset().mockImplementation(() => ({ sessionId: loadChatSessionId() }))
+  prepareAppEngineSession.mockReset().mockImplementation(options => ({ resumeSessionId: options.state.sessionId ?? options.legacySessionId }))
   environment.mcpBindings = {}
   listEffectiveMcpApps.mockReset().mockReturnValue([])
   vi.mocked(getDbMcpServers).mockReset().mockReturnValue(null)
@@ -584,7 +593,7 @@ describe('a temporary collaboration member mounts no memory and no digital-human
     const servers = mountedSurfaces().mcpServers
     expect(Object.keys(servers)).toContain('halo-team')
     expect(Object.keys(servers)).toContain('web-search')
-    expect(mountedSurfaces().systemPrompt).toContain('Team Session Context')
+    expect(mountedSurfaces().systemPrompt).toContain('## Team work')
   })
 })
 
@@ -702,6 +711,38 @@ describe('memory context across session lifecycles', () => {
     expect(send.mock.calls.at(-1)![0]).toBe('continue')
   })
 
+  it.each([
+    { engineId: 'anthropic' as const, reload: true },
+    { engineId: 'anthropic' as const, reload: false },
+    { engineId: 'halo' as const, reload: true },
+  ])('passes only the inherited CC reload override on a first fork with $engineId and reload=$reload', async ({ engineId, reload }) => {
+    app.userOverrides = { engineId }
+    const conversationId = buildLocalSessionKey(app.id, 'fork-instructions')
+    sessionRegistry.current = { register: vi.fn(), getPendingResume: () => 'source-native', getPushableSessions: () => [] }
+    loadChatEngineState.mockReturnValue(reload ? { sessionId: 'source-native', useCurrentInstructions: true } : {})
+    await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId, message: 'continue' })
+    const call = vi.mocked(acquireV2Session).mock.calls.at(-1)!
+    expect(call[3]).toBe('source-native')
+    expect(call[2]).toHaveProperty('forkSession', true)
+    if (engineId === 'anthropic' && reload) expect(call[2]).toHaveProperty('systemPromptSnapshot', false)
+    else expect(call[2]).not.toHaveProperty('systemPromptSnapshot')
+    expect(loadChatEngineState.mock.results.at(-1)?.value).not.toHaveProperty('binding')
+  })
+
+  it('does not fork a source native ID when continuation requires neutral history', async () => {
+    app.userOverrides = { engineId: 'halo' }
+    const conversationId = buildLocalSessionKey(app.id, 'handoff-instructions')
+    sessionRegistry.current = { register: vi.fn(), getPendingResume: () => 'source-native', getPushableSessions: () => [] }
+    loadChatEngineState.mockReturnValue({ sessionId: 'source-native', useCurrentInstructions: true })
+    prepareAppEngineSession.mockReturnValueOnce({ engineHandoffContent: 'Retained source history' })
+    await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId, message: 'continue' })
+    const call = vi.mocked(acquireV2Session).mock.calls.at(-1)!
+    expect(call[3]).toBeUndefined()
+    expect(call[2]).not.toHaveProperty('forkSession')
+    expect(call[2]).not.toHaveProperty('systemPromptSnapshot')
+    expect(call[2]).toHaveProperty('engineHandoffContent', 'Retained source history')
+  })
+
   it('refreshes owner and guest attribution for the same IM session without a repeated roster', async () => {
     const conversationId = `app-chat:${app.id}:wecom-bot:group:group-7`
     const turn = {
@@ -713,7 +754,7 @@ describe('memory context across session lifecycles', () => {
       setImPermissionContext(conversationId, { senderId: 'guest', senderName: 'Guest', isOwner: false, guestPolicy: {} })
       await sendAppChatMessage(turn)
       expect(mountedSurfaces().systemPrompt).toMatch(/Your History author tag is `im-guest#[a-f0-9]{4}`/)
-      expect(mountedSurfaces().systemPrompt).toContain('Do not reveal sensitive')
+      expect(mountedSurfaces().systemPrompt).toContain('or reveal sensitive memory content to guests')
       setImPermissionContext(conversationId, { senderId: 'owner', senderName: 'Owner', isOwner: true, ownerIds: ['owner'] })
       await sendAppChatMessage(turn)
       expect(mountedSurfaces().systemPrompt).toMatch(/Your History author tag is `im#[a-f0-9]{4}`/)
@@ -1144,14 +1185,14 @@ describe('a person asking about team work is told which standing teams it serves
   })
 
   function promptHasTeams(): boolean {
-    return mountedSurfaces().systemPrompt.includes('Your standing teams')
+    return mountedSurfaces().systemPrompt.includes('## Teams\n')
   }
 
   it('in its own chat: the teams, how to look into them, and that this chat is none of them', async () => {
     await sendAppChatMessage({ appId: app.id, spaceId: 'space-1', conversationId: `app-chat:${app.id}:local:direct:ask-team`, message: 'How is the release going?' })
     const prompt = mountedSurfaces().systemPrompt
-    expect(prompt).toContain('- Release crew (teamId team-release) — your role: Tester')
-    expect(prompt).toContain('This conversation has its own work context. These memberships do not change it.')
+    expect(prompt).toContain('- Release crew (teamId team-release) — role: Tester')
+    expect(prompt).toContain('This chat is outside the conversations of your standing teams.')
     expect(prompt).toContain('$HALO_API_URL/api/teams/<teamId>/conversations')
     expect(listStandingTeams).toHaveBeenCalledWith(app.id)
   })
@@ -1159,7 +1200,8 @@ describe('a person asking about team work is told which standing teams it serves
   it('the owner inside one team conversation is told which one it is, and to keep its team tools for it', async () => {
     const turn = memberTurn()
     await sendAppChatMessage({ ...turn, teamContext: { ...turn.teamContext!, kind: undefined, fromAppId: null } })
-    expect(mountedSurfaces().systemPrompt).toContain(`This chat is one conversation of Standing team (epochId ${turn.teamContext!.epochId}): your team tools act on it`)
+    expect(mountedSurfaces().systemPrompt).toContain(`This conversation is one of the conversations of the standing team "Standing team" (epochId ${turn.teamContext!.epochId}).`)
+    expect(mountedSurfaces().systemPrompt).toContain('The team tools reach teammates in this conversation.')
   })
 
   it('a teammate waking it in that conversation gets the very same words, so the session is never rebuilt between them', async () => {
@@ -1216,7 +1258,8 @@ describe('a person asking about team work is told which standing teams it serves
     expect(mountedSurfaces().mcpServers).toHaveProperty('halo-team')
     const own = mountedSurfaces().systemPrompt
     expect(own).toContain(guide)
-    expect(own.indexOf(guide)).toBeLessThan(own.indexOf('### Your standing teams'))
+    expect(own.indexOf('## Teams\n')).toBeLessThan(own.indexOf(guide))
+    expect(own.split(guide)).toHaveLength(2)
 
     const conversationId = `app-chat:${app.id}:wecom-bot:direct:owner-asks`
     setImPermissionContext(conversationId, { senderId: 'owner', senderName: 'Owner', isOwner: true, ownerIds: ['owner'] })

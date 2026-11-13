@@ -27,6 +27,8 @@ import { tmpdir } from 'os'
 import { deflateSync } from 'zlib'
 import path from 'path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
+import { createSdkMcpServer, tool } from '../../../../../src/main/services/agent/mcp/sdk-server'
 import type { AddressInfo } from 'net'
 import { DshSession } from '../../../../../src/main/services/agent/dsh/session-adapter'
 import { createDshRuntimeClient } from '../../../../../src/main/services/agent/dsh/transport'
@@ -180,7 +182,7 @@ describe.skipIf(!enabled)('dsh adapter against a real runtime', () => {
       args: [runtime!.entryPath, config.path],
       env: {
         PATH: process.env.PATH ?? '',
-        HOME: process.env.HOME ?? '',
+        HOME: dataDir,
         ...interpreter!.env,
         DEEPSEEK_API_KEY: 'e2e-local-stub-not-a-real-key',
         DEEPSEEK_BASE_URL: stub.baseUrl,
@@ -216,6 +218,22 @@ describe.skipIf(!enabled)('dsh adapter against a real runtime', () => {
     for await (const frame of session.stream()) frames.push(frame as Record<string, any>)
     return frames
   }
+
+  it('delivers host context once alongside native runtime guidance', async () => {
+    const origin = useScript(() => textReply('Host context received.'))
+    const session = await createSession(materializeCordisConfig(dataDir, { workDir }), undefined, { DSH_SYSTEM_PROMPT: 'Halo host-context-marker-42' })
+    try {
+      const frames = await runTurn(session, 'Reply briefly.')
+      expect(frames.at(-1)).toMatchObject({ type: 'result', is_error: false })
+      const system = JSON.stringify(stub.requests[origin]?.system ?? '')
+      expect(system.split('host-context-marker-42')).toHaveLength(2)
+      expect(system.length).toBeGreaterThan(1000)
+      const text = typeof stub.requests[origin]?.system === 'string' ? stub.requests[origin].system : (stub.requests[origin]?.system ?? []).map((block: any) => block.text ?? '').join('\n')
+      const nativeGuidance = 'Use the read tool — not shell commands like cat — to inspect text files.'
+      expect(text.split(nativeGuidance)).toHaveLength(2)
+      expect(text.indexOf(nativeGuidance)).toBeGreaterThan(text.indexOf('host-context-marker-42'))
+    } finally { await session.close() }
+  }, 120_000)
 
   it('receives its persisted assignment after replacement with a new native session', async () => {
     useScript(() => textReply('The assignment is retained.'))
@@ -472,6 +490,41 @@ describe.skipIf(!enabled)('dsh adapter against a real runtime', () => {
       expect(JSON.stringify(stub.requests[origin + 1].messages)).toContain('host-collaboration-receipt')
     } finally {
       await session.close()
+      await bridge.close()
+    }
+  }, 120_000)
+
+  it('delivers MCP service instructions before executing a shared-factory echo tool', async () => {
+    const calls: string[] = []
+    const service = createSdkMcpServer({
+      name: 'guide',
+      description: 'Synthetic echo service for engine delivery verification.',
+      instructions: 'SERVICE_GUIDE_SENTINEL_DSH: use echo only for synthetic fixture text.',
+      tools: [tool('echo', 'Echo synthetic fixture text', { text: z.string() }, async ({ text }) => {
+        calls.push(text)
+        return { content: [{ type: 'text', text: `echo-receipt:${text}` }] }
+      })],
+    })
+    const bridge = new SdkMcpBridge({ guide: service.instance })
+    const urls = await bridge.start()
+    const origin = useScript(index => index === 0 ? {
+      blocks: [{ type: 'tool_use', id: 'guide-echo', name: 'mcp__guide__echo', input: { text: 'synthetic-echo-dsh' } }],
+      stopReason: 'tool_use',
+    } : textReply('Echo received.'))
+    let session: DshSession | undefined
+    try {
+      session = await createSession(materializeCordisConfig(dataDir, {
+        workDir,
+        mcpServers: { guide: { transport: 'http', url: urls.guide, headers: {} } },
+      }), undefined, { DSH_SYSTEM_PROMPT: 'Foreign assistant. Reply briefly.' }, bridge)
+      const frames = await runTurn(session, 'Echo the synthetic fixture text through the mounted service.')
+      expect(frames.at(-1)).toMatchObject({ type: 'result', is_error: false })
+      const first = stub.requests[origin]
+      expect(JSON.stringify({ system: first.system, messages: first.messages })).toContain('SERVICE_GUIDE_SENTINEL_DSH')
+      expect(calls).toEqual(['synthetic-echo-dsh'])
+      expect(JSON.stringify(stub.requests[origin + 1].messages)).toContain('echo-receipt:synthetic-echo-dsh')
+    } finally {
+      await session?.close()
       await bridge.close()
     }
   }, 120_000)

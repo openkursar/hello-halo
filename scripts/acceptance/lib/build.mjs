@@ -143,7 +143,7 @@ async function sdkSnapshot(root) {
   } else {
     sourceFiles = await walk(directory, (file, entry) => {
       const relative = posix(path.relative(directory, file))
-      return relative === '.git' || relative === 'dist' || relative === 'node_modules' || relative === '.build-identity.json' || (entry.isDirectory() && ['docs', 'validation', 'swe-bench-eval'].includes(entry.name))
+      return relative === '.git' || relative === 'dist' || relative === 'node_modules' || relative === 'native/target' || relative === '.build-identity.json' || (entry.isDirectory() && ['docs', 'validation', 'swe-bench-eval'].includes(entry.name))
     })
   }
   const source = await manifest(directory, sourceFiles, 'sdk-source')

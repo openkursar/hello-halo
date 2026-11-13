@@ -14,7 +14,14 @@ references:
   - src/main/apps/manager/service.ts
   - tests/e2e/specs/acceptance-people.spec.ts
   - src/main/apps/team/service.ts
+  - tests/e2e/specs/acceptance-people-settings-reload.spec.ts
 promises:
+  reload:
+    en: Explicitly restarting a chat after saving a digital human's instructions applies those instructions to the original conversation without losing its history or the engine's native guidance; new chats and later application restarts retain the saved instructions.
+    zh: 保存数字人指令后明确重启聊天，原对话采用保存指令且保留历史及引擎原生指导；新对话和后续应用重启继续使用保存指令。
+  unchanged:
+    en: A stored conversation with no settings change or explicit configuration reload can continue after application restart with its saved instructions and history, without requiring migration to new product instructions.
+    zh: 未改设置且未明确重载配置的存储对话，在应用重启后可按已保存指令和历史继续，无需迁移到新产品指令。
   save:
     en: Unsaved settings remain identifiable until saved or cancelled.
     zh: 未保存设置有明确标识，可保存或取消。
@@ -34,6 +41,75 @@ promises:
     en: Web search can be switched off for one digital human; while off it does not search the web in its chats, IM chats, team work or scheduled runs, and nobody it works for can turn it back on. Opening a page it is given and the AI Browser are separate and stay as they are. Memory stays on.
     zh: 可以为某位数字人关闭网页搜索；关闭后它在自己的对话、IM 对话、团队协作和定时运行中都不再搜索网页，它服务的任何人都无法重新打开。打开给定的网页链接和 AI 浏览器是独立能力，不受影响。记忆始终开启。
 scenarios:
+  - id: people.settings.im-continue-instructions
+    title:
+      en: Continue an old Claude Code IM conversation in the client
+      zh: 在客户端继续旧 Claude Code IM 对话
+    verifies: [reload, unchanged]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      binding: [legacy-reload, modern-reload, legacy-unchanged]
+    preconditions:
+      - An isolated app explicitly selects installed Claude Code through HALO_ACCEPTANCE_CLAUDE_CLI, with a local scripted model and local synthetic WeCom protocol server.
+      - A real native Claude Code IM turn creates stored history. While the app is stopped, only its synthetic app-owned session binding row is converted to a legacy string for legacy variants; engine-owned snapshots are not edited.
+    steps:
+      - Restart the app. For reload variants save changed digital-human instructions and use Quick restart without sending another message in the source IM conversation.
+      - Open that actual IM history and choose Continue in client, then send the first message in the new local conversation.
+      - Restart the app and continue the same destination conversation again.
+    expected:
+      - Reload variants deliver the latest instructions in the destination's first and subsequent model requests; the unchanged legacy control keeps the original instructions.
+      - Requests retain native Claude Code guidance, exactly one Halo host context and prior source history. The destination retains its own new turns across application restart.
+      - The destination has a distinct local conversation and native session ID. Its sends never add turns or replies to the source IM conversation and leave its binding and history unchanged.
+    notes: The legacy fixture tests the historical app binding representation using history genuinely created by the installed native CLI, not an older CLI snapshot format. Scripted observations prove instruction delivery and application persistence, not live-model answer quality, remote IM delivery or Codex behavior.
+  - id: people.settings.reload-instructions
+    title:
+      en: Reload saved instructions in the original chat
+      zh: 在原聊天重载已保存指令
+    verifies: [reload]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      engine: [halo, anthropic]
+    preconditions:
+      - An isolated application explicitly selects the tested engine without fallback. Claude Code requires a separately installed executable selected through HALO_ACCEPTANCE_CLAUDE_CLI.
+      - A digital human has synthetic instructions and an existing chat with known history.
+    steps:
+      - Save changed instructions through Identity & Instructions, use Quick restart and continue the exact original conversation.
+      - Open a distinct new chat, then restart the isolated application and continue the original conversation again.
+    expected:
+      - Provider requests use the updated system instructions without the obsolete instructions, retain native engine guidance and contain exactly one Halo host context.
+      - The original conversation keeps its identity and all user and assistant turns across both restarts; the new conversation starts separately with updated instructions.
+    notes: Scripted provider observations establish instruction delivery, not live-model answer quality or permission enforcement. Permissions retain their separate acceptance coverage.
+  - id: people.settings.resume-unchanged
+    title:
+      en: Continue an unchanged stored chat after application restart
+      zh: 应用重启后继续未修改的存储聊天
+    verifies: [unchanged]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    variants:
+      engine: [halo, anthropic]
+    preconditions:
+      - An isolated application explicitly selects the tested engine without fallback. Claude Code requires a separately installed executable selected through HALO_ACCEPTANCE_CLAUDE_CLI.
+      - A digital human has saved synthetic instructions and an existing chat with known history.
+    steps:
+      - Without editing settings or using Quick restart, restart the isolated application and continue the exact original conversation.
+    expected:
+      - The chat retains its identity, saved instructions and all user and assistant turns; the provider receives its prior context and native guidance with one Halo host context.
+    notes: This does not require unchanged historical sessions to acquire newer product instructions or migrate their native session binding.
   - id: people.settings.team-name
     title:
       en: Rename a person who belongs to teams

@@ -10,6 +10,7 @@ import {
   sendAcceptanceMessage, waitForAcceptanceIdle,
 } from './acceptance-app'
 import type { AcceptanceModel, ModelRequest } from './acceptance-model'
+import { replyWithModelTool } from './acceptance-tool-discovery'
 import { assertBrowserFrame, guestIdentity } from './browser-site'
 
 const PAGE_SCRIPT = `
@@ -128,12 +129,10 @@ export async function runBrowserChat(window: Page, model: AcceptanceModel, instr
     for (const [index, step] of steps.entries()) {
       const result = request.toolResults.find(result => result.id === ids[index])
       if (result) { results[index] = result.text; continue }
-      const names = request.tools.filter(name => name === step.name || name.endsWith(`__${step.name}`))
-      if (names.length !== 1) { issues.push(`Expected one advertised ${step.name}, received ${names.length}`); return { text: answer } }
       try {
         const input = typeof step.input === 'function' ? step.input(results) : step.input
         inputs[index] = input
-        return { tools: [{ id: ids[index], name: names[0], input }] }
+        return replyWithModelTool(request, step.name, input, ids[index], issues)
       } catch (error) {
         issues.push(error instanceof Error ? error.message : String(error))
         return { text: answer }
@@ -146,7 +145,13 @@ export async function runBrowserChat(window: Page, model: AcceptanceModel, instr
   await waitForAcceptanceIdle(window, turn.conversationId, { timeout: 30000 })
   expect(issues, 'Script problems must remain failures without manufacturing provider transport errors').toEqual([])
   expect(results).toHaveLength(steps.length)
-  expect(requests).toHaveLength(steps.length + 1)
+  const exchanges = model.exchanges.filter(exchange => requests.includes(exchange.request))
+  const calls = exchanges.flatMap(exchange => exchange.reply?.tools ?? [])
+  const discoveries = calls.filter(call => call.name === 'ToolSearch')
+  const operations = calls.filter(call => ids.includes(call.id))
+  expect(operations.map(call => call.id)).toEqual(ids)
+  expect(discoveries.length).toBeLessThanOrEqual(new Set(steps.map(step => step.name)).size)
+  expect(requests).toHaveLength(steps.length + discoveries.length + 1)
   const saved = await readAcceptanceConversation(window, turn.spaceId, turn.conversationId)
   expect(saved.messages.filter(message => message.role === 'user').at(-1)?.content).toBe(question)
   const assistant = saved.messages.filter(message => message.role === 'assistant').at(-1)!

@@ -6,6 +6,7 @@ import { createRequire } from 'node:module'
 import { fingerprintFile, manifestFromFiles, atomicJson } from '../../../tests/perf/build-identity/index.mjs'
 import { verifyBuild } from './build.mjs'
 import { execute } from './process.mjs'
+import { verifyLocalNativeSignature } from './native-signature.mjs'
 
 const stampName = 'out/.acceptance-package.json'
 const sdkPrefix = 'node_modules/@hello-halo/agent-sdk/'
@@ -331,13 +332,18 @@ async function packagedIdentity(root, build, application) {
     if (!runtime.length || distribution.some(file => file.role.endsWith(':link'))) throw new Error('The controlled SDK has no complete regular-file runtime distribution')
     const packagedPaths = sdkFiles.filter(file => file.startsWith(sdkPrefix + 'dist/')).map(file => file.slice(sdkPrefix.length)).sort()
     if (runtime.some(file => !packagedPaths.includes(file.path)) || packagedPaths.some(file => !distribution.some(source => source.path === file))) throw new Error('The packaged SDK runtime file set differs from the controlled dependency')
-    const packagedRuntime = []
+    const packagedRuntime = [], codeSigning = []
     for (const file of distribution.filter(file => packagedPaths.includes(file.path))) {
       const bytes = await reader.read(sdkPrefix + file.path)
-      if (bytes.length !== file.bytes || hash(bytes) !== file.sha256) throw new Error(`The packaged SDK runtime differs from the controlled dependency: ${file.path}`)
+      if (bytes.length !== file.bytes || hash(bytes) !== file.sha256) {
+        const signature = await verifyLocalNativeSignature(path.join(directory, file.path), bytes, path.join(root, 'resources/entitlements.mac.plist'))
+        if (!signature) throw new Error(`The packaged SDK runtime differs from the controlled dependency: ${file.path}`)
+        codeSigning.push({ path: file.path, ...signature })
+      }
       packagedRuntime.push({ path: file.path, role: 'packaged-sdk-runtime', bytes: bytes.length, sha256: hash(bytes) })
     }
-    sdk = { state: 'present', version: packaged.version, sourceRevision: build.sdk.revision, sourceDirty: build.sdk.dirty, sourceDist: build.sdk.dist, packagedRuntime: compactManifest(packagedRuntime) }
+    sdk = { state: 'present', version: packaged.version, sourceRevision: build.sdk.revision, sourceDirty: build.sdk.dirty, sourceDist: build.sdk.dist,
+      packagedRuntime: compactManifest(packagedRuntime), ...(codeSigning.length ? { codeSigning } : {}) }
   } else if (sdkFiles.length) throw new Error('The package contains an SDK absent from the controlled build')
   return { name: packagedDescriptor.name, version: packagedDescriptor.version, main: packagedDescriptor.main, sdk }
 }

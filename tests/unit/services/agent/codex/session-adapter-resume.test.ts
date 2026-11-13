@@ -45,7 +45,7 @@ vi.mock('../../../../../src/main/services/agent/codex/transport/server-request-h
   registerServerRequestHandlers: () => () => {},
 }))
 vi.mock('../../../../../src/main/services/agent/codex/options', () => ({
-  resolveCodexOptions: async () => ({ env: {}, cwd: '/tmp', model: 'm', displayModel: 'm', threadParams: {}, mcpServers: {} }),
+  resolveCodexOptions: async () => ({ env: {}, cwd: '/tmp', model: 'm', displayModel: 'm', threadParams: { developerInstructions: 'Host context' }, mcpServers: {} }),
 }))
 
 import { NativeSessionResumeError, isNativeSessionResumeError } from '../../../../../src/shared/types/engine-session'
@@ -59,6 +59,10 @@ describe('Codex thread resume', () => {
     try {
       const session = await CodexAppServerSession.create({ resume: 'gone-thread' })
       expect(rpc.requests.map(request => request.method)).toEqual(['initialize', 'thread/resume', 'thread/start'])
+      expect(rpc.requests.filter(request => request.method.startsWith('thread/')).map(request => request.params)).toEqual([
+        { threadId: 'gone-thread', developerInstructions: 'Host context' },
+        { developerInstructions: 'Host context' },
+      ])
       expect(session.sessionId).toBe('fresh-thread')
     } finally { warn.mockRestore() }
   })
@@ -91,6 +95,7 @@ describe('Codex thread resume', () => {
     rpc.failResume = false
     const session = await CodexAppServerSession.create({ resume: 'live-thread' })
     expect(rpc.requests.map(request => request.method)).toEqual(['initialize', 'thread/resume'])
+    expect(rpc.requests[1].params).toEqual({ threadId: 'live-thread', developerInstructions: 'Host context' })
     expect(session.sessionId).toBe('resumed-thread')
   })
 })

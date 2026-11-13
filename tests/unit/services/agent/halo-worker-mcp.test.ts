@@ -23,8 +23,10 @@ function respond(res: http.ServerResponse, content: Record<string, unknown>[], s
 }
 
 describe('common MCP server inside the real Halo worker', () => {
-  it('executes its host handler across worker RPC with arguments and cancellation signal', async () => {
+  it.each(['eager', 'deferred'] as const)('preserves metadata and executes its host handler across worker RPC with %s loading', async loading => {
     const requests: any[] = []
+    const guide = 'Check the selected record before invoking the shared echo tool.'
+    const description = 'Shared fixture service for echoing a checked record.'
     const handler = vi.fn(async ({ text }: { text: string }, extra?: unknown) => {
       const signal = (extra as { signal?: AbortSignal })?.signal
       expect(signal).toBeInstanceOf(AbortSignal)
@@ -36,10 +38,14 @@ describe('common MCP server inside the real Halo worker', () => {
       for await (const chunk of req) body += chunk
       const message = JSON.parse(body)
       requests.push(message)
-      const hasResult = message.messages.some((entry: any) => Array.isArray(entry.content) && entry.content.some((block: any) => block.type === 'tool_result'))
-      respond(res, hasResult
-        ? [{ type: 'text', text: 'Tool received.' }]
-        : [{ type: 'tool_use', id: 'toolu_worker', name: 'mcp__shared__echo', input: { text: 'hello' } }], hasResult ? 'end_turn' : 'tool_use')
+      const results = message.messages.flatMap((entry: any) => Array.isArray(entry.content) ? entry.content.filter((block: any) => block.type === 'tool_result') : [])
+      const hasResult = results.some((block: any) => block.tool_use_id === 'toolu_worker')
+      const discovered = results.some((block: any) => block.tool_use_id === 'toolu_search')
+      const next = loading === 'deferred' && !discovered
+        ? { type: 'tool_use', id: 'toolu_search', name: 'ToolSearch', input: { query: 'select:mcp__shared__echo' } }
+        : { type: 'tool_use', id: 'toolu_worker', name: loading === 'deferred' ? 'CallTool' : 'mcp__shared__echo',
+            input: loading === 'deferred' ? { tool: 'mcp__shared__echo', arguments: JSON.stringify({ text: 'hello' }) } : { text: 'hello' } }
+      respond(res, hasResult ? [{ type: 'text', text: 'Tool received.' }] : [next], hasResult ? 'end_turn' : 'tool_use')
     })
     await new Promise<void>(done => server.listen(0, '127.0.0.1', done))
     const cwd = await mkdtemp(join(tmpdir(), 'halo-worker-mcp-'))
@@ -49,16 +55,34 @@ describe('common MCP server inside the real Halo worker', () => {
     try {
       const events: any[] = []
       for await (const event of runtime.query({ prompt: 'Echo hello with the shared tool.', options: {
-        cwd, model: 'test-model', persistSession: false, settingSources: [], tools: [], maxTurns: 3,
+        cwd, model: 'test-model', persistSession: false, settingSources: [], tools: [], maxTurns: 4,
+        env: { HOME: cwd, USERPROFILE: cwd, CLAUDE_CONFIG_DIR: join(cwd, 'config') },
+        collaboration: { mode: 'hosted' },
+        turnEndChecks: { openWork: false, completion: false },
+        toolDiscovery: { services: { shared: { identity: 'fixture:shared', loading } } },
         abortController: controller,
         providerConfig: { type: 'anthropic', apiKey: 'sk-local-test', baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}` },
-        mcpServers: { shared: createSdkMcpServer({ name: 'shared', tools: [tool('echo', 'Echo', { text: z.string() }, handler)] }) as any },
+        mcpServers: { shared: createSdkMcpServer({ name: 'shared', description, instructions: guide,
+          tools: [tool('echo', 'Echo', { text: z.string() }, handler)] }) as any },
         permissionMode: 'bypassPermissions', canUseTool: async (_name, input) => ({ behavior: 'allow', updatedInput: input }),
       } })) events.push(event)
       expect(handler).toHaveBeenCalledOnce()
       expect(handler.mock.calls[0][0]).toEqual({ text: 'hello' })
       expect(requests.some(request => JSON.stringify(request.messages).includes('host:hello'))).toBe(true)
       expect(events.some(event => event.type === 'result' && !event.is_error)).toBe(true)
+      if (loading === 'deferred') {
+        expect(JSON.stringify(requests[0])).toContain(description)
+        expect(JSON.stringify(requests[0])).not.toContain(guide)
+        expect(requests[0].tools.map((entry: any) => entry.name)).toEqual(['ToolSearch', 'CallTool'])
+        expect(JSON.stringify(requests.at(-1).messages).split(guide)).toHaveLength(2)
+      } else {
+        expect(JSON.stringify(requests[0].system).split(guide)).toHaveLength(2)
+        expect(requests[0].tools.map((entry: any) => entry.name)).toContain('mcp__shared__echo')
+      }
+      for (const request of requests) {
+        expect(request.system).toEqual(requests[0].system)
+        expect(request.tools).toEqual(requests[0].tools)
+      }
     } finally {
       clearTimeout(deadline)
       controller.abort()

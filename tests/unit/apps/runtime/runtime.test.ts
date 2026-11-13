@@ -130,6 +130,7 @@ vi.mock('../../../../src/main/services/ai-browser', () => ({
   createAIBrowserMcpServer: vi.fn().mockReturnValue({ name: 'mock-ai-browser', _isMcpServer: true }),
   createScopedBrowserContext: vi.fn(),
   getAIBrowserSdkToolNames: vi.fn().mockReturnValue([]),
+  AI_BROWSER_DESCRIPTION: 'Browse websites',
   AI_BROWSER_SYSTEM_PROMPT: 'mock ai-browser system prompt',
 }))
 
@@ -1278,7 +1279,7 @@ describe('Semaphore', () => {
 
 describe('Prompt Builder', () => {
   describe('buildAppSystemPrompt', () => {
-    it('should include base context with platform and date', () => {
+    it('keeps native environment out of the shared host context', () => {
       const prompt = buildAppSystemPrompt({
         appId: 'test-app-id',
         appSpec: createTestSpec(),
@@ -1289,8 +1290,11 @@ describe('Prompt Builder', () => {
 
       expect(prompt).toContain('automation App')
       expect(prompt).toContain('headless background execution')
-      expect(prompt).toContain('Platform:')
-      expect(prompt).toContain("Today's date:")
+      expect(prompt).toContain('# Halo')
+      expect(prompt).toContain('# Halo directories')
+      expect(prompt).not.toContain('<env>')
+      expect(prompt).not.toContain('Platform:')
+      expect(prompt).not.toContain("Today's date:")
     })
 
     it('should include App-specific system_prompt', () => {
@@ -1316,11 +1320,14 @@ describe('Prompt Builder', () => {
       })
 
       expect(prompt).not.toMatch(/^You are Halo, /m)
-      expect(prompt).toContain('You run on Halo, which gives you remote access, file management, and built-in AI browser capabilities.')
+      expect(prompt).toContain('You run in Halo.')
       expect(prompt).toContain('You are Mia, the after-sales assistant of Acme.')
-      // Tools, environment and safety still come from Halo.
-      expect(prompt).toContain('Platform:')
-      expect(prompt).toContain('IMPORTANT: You must NEVER generate or guess URLs')
+      expect(prompt).toContain('Your identity and duties come from App Instructions.')
+      expect(prompt).toContain('read_halo_doc')
+      expect(prompt).not.toContain('# Web research')
+      expect(prompt).toContain('# Halo directories')
+      expect(prompt).not.toContain('Platform:')
+      expect(prompt).not.toContain('IMPORTANT: You must NEVER generate or guess URLs')
     })
 
     it('gives a digital human chat the same opening', () => {
@@ -1332,7 +1339,7 @@ describe('Prompt Builder', () => {
       })
 
       expect(base).not.toMatch(/^You are Halo, /m)
-      expect(base).toContain('You run on Halo, which gives you remote access, file management, and built-in AI browser capabilities.')
+      expect(base).toContain('You run in Halo.')
     })
 
     it('should include memory instructions when provided', () => {

@@ -15,9 +15,8 @@ const kbs: KBReference[] = [
   { id: 'kb-1', name: 'PCB Survey', indexContent: '## docs\n- survey.md — main survey' },
 ]
 
-const baseCtx = { workDir: '/tmp/w', modelInfo: 'test-model' }
-
-describe('buildSystemPrompt knowledge injection', () => {
+describe.each(['anthropic', 'halo', 'codex', 'dsh'] as const)('buildSystemPrompt knowledge injection on %s', engineId => {
+  const baseCtx = { workDir: '/tmp/w', engineId }
   it('appends Knowledge for toolset-broker sessions (toolsetIndex set)', () => {
     const prompt = buildSystemPrompt({
       ...baseCtx,

@@ -259,12 +259,14 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 vi.mock('../../../../src/main/services/ai-browser', () => ({
   createAIBrowserMcpServer: vi.fn(() => ({ _isMcpServer: true, name: 'ai-browser' })),
   createScopedBrowserContext: vi.fn(() => ({ destroy: vi.fn(), closePages: vi.fn(), ownedViewCount: 0, hasRevealedView: () => false })),
+  AI_BROWSER_DESCRIPTION: 'Browse websites',
   AI_BROWSER_SYSTEM_PROMPT: 'AI browser instructions',
 }))
 vi.mock('../../../../src/main/services/ai-terminal', () => ({
   createTerminalMcpServer: vi.fn(),
   getGlobalTerminalContext: vi.fn(),
   isTerminalAvailable: () => false,
+  AI_TERMINAL_DESCRIPTION: 'Run interactive terminals',
   AI_TERMINAL_SYSTEM_PROMPT: 'AI terminal instructions',
 }))
 vi.mock('../../../../src/main/services/web-search', () => ({
@@ -275,6 +277,7 @@ vi.mock('../../../../src/main/services/ocr', () => ({
 }))
 vi.mock('../../../../src/main/services/api-ref', () => ({
   createApiRefMcpServer: () => ({ _isMcpServer: true, name: 'halo-api-ref' }),
+  HALO_API_DESCRIPTION: 'Operate Halo',
   HALO_API_USAGE_GUIDE: 'Halo API usage',
   HALO_API_TOOLSET_ID: 'halo-api-ref',
 }))
@@ -308,6 +311,7 @@ vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
   saveChatEngineRouting: (_space: string, _app: string, _run: string, engineId: string, state: any = {}) => state.sessionId || state.binding || state.routingEngine ? state : { routingEngine: engineId },
   loadChatEngineState: () => ({}),
   saveChatEngineBinding: vi.fn(() => true),
+  reloadChatInstructions: vi.fn(() => 0),
   loadChatSessionId: vi.fn(() => undefined),
   saveChatSessionId: vi.fn(),
   deleteChatSessionId: vi.fn(),
@@ -351,7 +355,7 @@ const { app, environment, activityStore } = vi.hoisted(() => ({
     workDir: '/tmp/halo-test/space',
     memoryDir: '/tmp/halo-test/memory',
   },
-  activityStore: { getSessionEnvironment: vi.fn(), deleteSessionEnvironment: vi.fn(), pinSessionEnvironment: vi.fn() },
+  activityStore: { getSessionEnvironment: vi.fn(), deleteSessionEnvironment: vi.fn(), pinSessionEnvironment: vi.fn(), listSessionEnvironments: () => [] },
 }))
 vi.mock('../../../../src/main/apps/manager', () => ({
   getAppManager: () => ({ getApp: () => app }),
@@ -510,6 +514,19 @@ describe('a chat reset while a message is on its way to the engine', () => {
     expect(engine.leases).toHaveLength(1)
     expect(engine.leases[0].close).toHaveBeenCalledTimes(1)
     expect(engine.v2Sessions.has(IM_KEY)).toBe(false)
+  })
+
+  it('a manual reload cancels preparation even when no resident session exists yet', async () => {
+    const { turn } = await startHeldInAcquire(imTurn())
+    expect(engine.v2Sessions.has(IM_KEY)).toBe(false)
+    expect(await restartAppChat(app.id, { interruptActive: true })).toEqual({ sessionsClosed: 0 })
+    engine.open()
+    await turn
+    expect(engine.send).not.toHaveBeenCalled()
+    expect(engine.leases[0].close).toHaveBeenCalledTimes(1)
+    expect(engine.v2Sessions.has(IM_KEY)).toBe(false)
+    await sendAppChatMessage(imTurn())
+    expect(engine.send).toHaveBeenCalledTimes(1)
   })
 
   it('a person’s stop resets nothing: the session the stopped message acquired stays warm for the next one', async () => {

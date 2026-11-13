@@ -47,6 +47,7 @@ import { generatePromptInstructions, resolveMemoryLayout } from '../../../../src
 import { modelCapabilitiesService } from '../../../../src/main/services/model-capabilities.service'
 import { DEFAULT_MAX_TURNS } from '../../../../src/shared/constants/agent-limits'
 import { isCollaborationEnabled, readUserAgentSettings } from '../../../../src/main/services/agent/user-agent-settings'
+import { hostSystemPromptText } from '../../../../src/main/services/agent/system-prompt'
 import { DEFAULT_DISABLED_TOOLS, TEAM_TOOLS } from '../../../../src/shared/constants/disabled-tools'
 
 const credentials: ResolvedSdkCredentials = {
@@ -90,7 +91,8 @@ describe('buildUserSessionSdkOptions', () => {
     state.engine = 'anthropic'
     const halo = await buildUserSessionSdkOptions({ ...params(), engineId: 'halo' })
     expect(cc.engineId).toBe('anthropic')
-    expect(typeof cc.systemPrompt).toBe('string')
+    expect(cc.systemPrompt).toMatchObject({ type: 'preset', preset: 'default' })
+    expect(hostSystemPromptText(cc.systemPrompt)).toBe(hostSystemPromptText(halo.systemPrompt))
     expect(cc.workerGroup).toBe('space-1')
     expect(cc).not.toHaveProperty('haloRequestIdentity')
     expect(halo.engineId).toBe('halo')
@@ -120,7 +122,7 @@ describe('buildUserSessionSdkOptions', () => {
     }
     await buildUserSessionSdkOptions(params())
 
-    expect(reads).toEqual({ promptProfile: 1, enableDigitalHumans: 1 })
+    expect(reads).toEqual({ promptProfile: 0, enableDigitalHumans: 1 })
   })
 
   it('carries the source and credential snapshot version through both entries', async () => {
@@ -146,7 +148,7 @@ describe('buildUserSessionSdkOptions', () => {
     expect(options.maxTurns).toBe(12)
     expect(options.disallowedTools).toContain('Foo')
     expect(options.disallowedTools).not.toContain(DEFAULT_DISABLED_TOOLS[0])
-    expect(options.systemPrompt).not.toContain(DIGITAL_HUMANS_LINE)
+    expect(hostSystemPromptText(options.systemPrompt)).not.toContain(DIGITAL_HUMANS_LINE)
   })
 
   it('uses the defaults for a user who never configured anything', async () => {
@@ -154,7 +156,7 @@ describe('buildUserSessionSdkOptions', () => {
 
     expect(options.maxTurns).toBe(DEFAULT_MAX_TURNS)
     for (const tool of DEFAULT_DISABLED_TOOLS) expect(options.disallowedTools).toContain(tool)
-    expect(options.systemPrompt).toContain(DIGITAL_HUMANS_LINE)
+    expect(hostSystemPromptText(options.systemPrompt)).not.toContain(DIGITAL_HUMANS_LINE)
   })
 
   it('carries the memory instructions and native write guards without a memory MCP server', async () => {
@@ -185,20 +187,22 @@ describe('buildInternalTaskSdkOptions', () => {
     state.config.agent = { maxTurns: 12, disabledTools: ['Foo'], promptProfile: 'official', enableDigitalHumans: true }
   })
 
-  it('ignores the user\'s turn cap, disabled tools and prompt style', async () => {
+  it('ignores user restrictions and keeps internal capability defaults despite legacy profile config', async () => {
     const options = await buildInternalTaskSdkOptions(params())
     const asUser = await buildUserSessionSdkOptions(params())
 
     expect(options.maxTurns).toBe(DEFAULT_MAX_TURNS)
     expect(options.disallowedTools).not.toContain('Foo')
     for (const tool of DEFAULT_DISABLED_TOOLS) expect(options.disallowedTools).toContain(tool)
-    // The 'official' template the user picked is not the one an internal task gets.
-    expect(options.systemPrompt).not.toBe(asUser.systemPrompt)
+    expect(hostSystemPromptText(options.systemPrompt)).not.toContain(DIGITAL_HUMANS_LINE)
+    expect(hostSystemPromptText(asUser.systemPrompt)).not.toContain(DIGITAL_HUMANS_LINE)
+    expect(hostSystemPromptText(options.systemPrompt)).toBe(hostSystemPromptText(asUser.systemPrompt))
+    expect(options.systemPrompt).toMatchObject({ type: 'preset', preset: 'default' })
   })
 
   it('does not tell the model it can manage digital humans', async () => {
     const options = await buildInternalTaskSdkOptions(params())
-    expect(options.systemPrompt).not.toContain(DIGITAL_HUMANS_LINE)
+    expect(hostSystemPromptText(options.systemPrompt)).not.toContain(DIGITAL_HUMANS_LINE)
   })
 
   it('still withholds the native team tools', async () => {

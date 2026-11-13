@@ -51,6 +51,26 @@ beforeEach(() => {
   state.prepareMcp.mockReset().mockResolvedValue({ mcpServers: {}, injectedServerNames: [] })
 })
 
+describe('Codex system instructions', () => {
+  it('appends host context without replacing native instructions', async () => {
+    const resolved = await resolveCodexOptions({ apiCredentials: credentials(), systemPrompt: { type: 'preset', preset: 'default', append: 'Host context' } })
+    expect(resolved.threadParams.developerInstructions).toBe('Host context')
+    expect(resolved.threadParams).not.toHaveProperty('baseInstructions')
+  })
+
+  it.each(['Internal task instructions', ''])('preserves explicit replacement %j', async systemPrompt => {
+    const resolved = await resolveCodexOptions({ apiCredentials: credentials(), systemPrompt })
+    expect(resolved.threadParams.baseInstructions).toBe(systemPrompt)
+    expect(resolved.threadParams).not.toHaveProperty('developerInstructions')
+  })
+
+  it('leaves native instructions alone when no host prompt is supplied', async () => {
+    const resolved = await resolveCodexOptions({ apiCredentials: credentials() })
+    expect(resolved.threadParams).not.toHaveProperty('baseInstructions')
+    expect(resolved.threadParams).not.toHaveProperty('developerInstructions')
+  })
+})
+
 describe('Codex captured-account egress', () => {
   it('always disables native collaboration while retaining the host MCP bridge', async () => {
     const resolved = await resolveCodexOptions({ cwd: '/work', apiCredentials: credentials() })

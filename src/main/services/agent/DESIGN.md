@@ -11,10 +11,10 @@
 | Session lifecycle (create / reuse / destroy / batch-invalidate on config change) | `session-manager.ts` | Largest file. V2 Session model. Registers callback on `config.service.ts` to auto-clean when API config changes. |
 | SDK stream → Thought[] translation | `stream-processor.ts`, `delta-coalescer.ts` | Second largest. Incremental push, partial tool calls, interruption recovery. Token deltas are published through the coalescer (see §3). |
 | SDK invocation & configuration | `sdk-config.ts`, `resolved-sdk.ts`, `cc/`, `codex/`, `dsh/`, `halo/` | Provider selection, model resolution, SDK option assembly through two named entries (`buildUserSessionSdkOptions`, `buildInternalTaskSdkOptions`; see §11). Alternate SDK engines are loaded only through `resolved-sdk.ts`; engine-specific translation is isolated under `cc/`, `codex/`, `dsh/` and `halo/`. |
-| User AI settings | `user-agent-settings.ts` | The one reader of the user's global AI settings for a session (`maxTurns`, `disabledTools`, `promptProfile`, digital-humans switch). Entries never pass them. See §11. |
+| User AI settings | `user-agent-settings.ts` | The one reader of the user's global AI settings for a session (`maxTurns`, `disabledTools`, digital-humans switch). Entries never pass them. See §11. |
 | Thinking depth → engine options | `reasoning-effort.ts` | Combines a picked level (conversation / digital human / API send), the per-request thinking flag and the per-model effort level into `effort` / `maxThinkingTokens` / Codex `model_reasoning_effort` / the router's picked level. Every SDK call site goes through `applyReasoningEffort`. See §9. |
 | Engine availability probe | `engine-availability.ts` | Detects runnable engines (Halo manifest + entry file, a selected external CC installation, platform binary for Codex, interpreter version for dsh) so `resolved-sdk.ts` can fall back instead of crashing at startup. Probed per engine on demand; bundled packages are cached per process and external CC uses a file-stamped cache: startup stops probing as soon as an engine loads, Settings asks for all of them (`agent:get-engine-availability`). |
-| System prompt composition | `system-prompt.ts` | Space context, conversation context, tool availability injection. `buildKnowledgeSection` is exported separately for creation-time append. On the `halo` engine the Claude Code-derived template is not used: `buildSystemPrompt` yields only Halo's product context, and every site that sets `sdkOptions.systemPrompt` wraps it with `toEngineSystemPrompt` into the engine's `{ preset: 'default', append }`. Code that later extends or reads the prompt goes through `appendToSystemPrompt` / `hostSystemPromptText`, never assumes a string. A digital human with its own instructions passes `ownIdentity`: the one identity line ("You are Halo, …") becomes "You run on Halo, …", so asked who it is it answers as its instructions say; everything else stays Halo's. |
+| System prompt composition | `system-prompt.ts` | Space context, conversation context, tool availability injection. `buildKnowledgeSection` is exported separately for creation-time append. Every engine retains its own native guidance: `buildSystemPrompt` yields the same Halo product context, and user-facing session prompts wrap it with `toEngineSystemPrompt` into `{ type: 'preset', preset: 'default', append }`. Explicit raw strings remain complete replacements for internal tasks. Code that later extends or reads the prompt goes through `appendToSystemPrompt` / `hostSystemPromptText`, never assumes a string. A digital human with its own instructions passes `ownIdentity`: the one identity line ("You are Halo, …") becomes "You run in Halo.", so asked who it is it answers as its instructions say; everything else stays Halo's. |
 | Knowledge context resolution | `knowledge-context.ts` | Conversation `knowledgeBaseIds` → injectable `KBReference[]` (agent→tlon dependency collector). Cheap id-only variant feeds the session knowledge fingerprint. |
 | Space memory | `space-memory.ts` | Space chat's shared memory (platform/memory, scope `space`, per-space settings): the shared compact format, recording policy, file paths and conversation author tag appended to the Halo system prompt, plus the write guard at session setup, the bounded memory block on a new conversation's first message. Whether memory was on is passed as `SessionGates.creationContext`, so a session warmed before the setting flipped is rebuilt. Every concern that watches tool calls adds its hooks with `addSdkHooks` (sdk-config) — never by assigning `hooks`. Consolidation is not here — `services/memory-consolidation` listens for turn ends. |
 | Tool-owned messages | `tool-message-handler.ts` | Nested tool records and external background-command progress. |
@@ -45,6 +45,10 @@ SDK's JSON Schema converter, including nested array items and object fields.
 Calls are validated against that same schema before reaching a handler; parsed
 defaults and transforms are retained. Invalid input returns an MCP tool error
 with its field paths, so the model can correct the request before domain writes.
+Service descriptions and instructions are declared by the capability module and
+retained on both the shared descriptor and instance. Worker serialization keeps
+them; external engines receive standard `serverInfo.description` and `instructions`
+in MCP initialization. Optional metadata never grants access or changes handlers.
 
 Codex tool identities also have to survive the model protocol boundary.
 `openai-compat-router/server/codex-responses-handler.ts` flattens a tool's
@@ -155,6 +159,8 @@ starting an empty session or changing the previous binding.
 
 - **CC is an optional external runtime.** `services/cc-runtime` owns discovery, compatibility checks, selection and managed installation; `agent/cc` consumes only its public launch descriptor. No Claude Agent SDK or CC CLI is bundled. Native CC executes directly; legacy JavaScript entries use the supplied interpreter. Halo options never resolve a CC file. Historical automatic CC choices route to Halo; a missing explicitly selected CC fails without erasing the user’s preference or substituting another engine. The CC adapter owns stream-json control requests, hooks, permissions and per-turn streams, and reuses `mcp/sdk-server` plus `mcp/sdk-bridge` for in-process tools. A selected local CC is never updated or patched by Halo; its child disables automatic updating.
 
+- **Explicit CC prompt reload stays in the existing initialization exchange.** The adapter forwards an explicitly supplied `systemPromptSnapshot: false` without a CLI flag or compatibility probe. Its caller owns when a saved context must be reloaded; ordinary session creation and resume omit the field. Disabling the native snapshot uses the prompt and tool definitions CC already renders, rather than replacing native guidance or replaying history through a new session. The override is part of the session-input fingerprint; no extra model request, startup process, filesystem watcher or per-turn query is introduced.
+
 - **CC task tracking keeps Halo's TodoWrite contract.** The CC adapter sets `CLAUDE_CODE_ENABLE_TODO_TOOLS=true` and `CLAUDE_CODE_ENABLE_TASKS=false` in its child environment. Newer external CC versions otherwise omit task tools for unrecognized models or substitute the incompatible Task CRUD tools. Explicit tool restrictions still apply; no user settings or other engine environments are changed. Real-runtime regressions cover discovery, execution and explicit denial with non-Claude model IDs.
 
 - **Windows process visibility.** Halo-owned launches set `windowsHide: true`. CC is external and never patched; visibility of programs that it launches internally belongs to that CC version. Compatibility validation must not assume a host spawn flag propagates into nested launches.
@@ -164,7 +170,7 @@ starting an empty session or changing the previous binding.
   | Engine (`config.agent.sdkEngine`) | Runtime | Adapter |
   |---|---|---|
   | `anthropic` | selected native or JavaScript CC, stream-json child process | `cc/` |
-  | `halo` (default) | `@hello-halo/agent-sdk/worker`, bounded grouped Node workers | `halo/` (host lifecycle, grouping and identity) |
+  | `halo` (default) | `@hello-halo/agent-sdk/native`, same-process Rust execution | `halo/` (host lifecycle and identity) |
   | `codex` | `codex app-server` child process (binary from `@openai/codex`) | `codex/` |
   | `dsh` | prebuilt single-file runtime, child process, stdio JSON-RPC | `dsh/` |
 
@@ -178,7 +184,7 @@ starting an empty session or changing the previous binding.
   3. *Optional build.* Its build is not on the path of `npm run dev`, and the app build runs it with `--optional`: a failure removes its output and the artifact ships without it (Settings shows it unavailable). `afterPack.cjs` and `tests/check/binaries.mjs` treat its absence as normal.
   4. *Removable.* Its footprint outside its own directories is listed below and kept current, so removing it is a checklist, not an investigation.
 
-  dsh footprint. Owned (delete wholesale): `services/agent/dsh/`, `runtimes/dsh/`, `tests/unit/services/agent/dsh/`, `resources/dsh-runtime/` (build output). Registrations (remove the dsh entry): `EngineId` and `defaultCapabilitiesFor` in `capabilities.ts`; `ENGINE_LABELS`, `normalizeEngineId`, `loadEngine` in `resolved-sdk.ts`; `ALL_ENGINE_IDS` and `probeDsh` in `engine-availability.ts`; the `sdkEngine` / `engineId` unions in `foundation/config.service.ts`, `services/conversation.service.ts`, `renderer/types/index.ts`; `AdvancedSection.tsx` (`ENGINE_IDS`, `ENGINE_COPY`) ; build glue in `package.json` (`runtime:dsh`, `prebuild`), `electron-builder.cjs` (asarUnpack), `scripts/afterPack.cjs` (dsh private externals, node-pty prune, bundle check), `scripts/engine-runtimes.cjs`, `scripts/typecheck-changed.mjs` + `tsconfig.node.json` (`runtimes/*/plugins`, drop only if no runtime has plugins left), `.gitignore`, `runtimes/README.md`. Keep on removal — shared with other engines: `mcp/` (Codex uses it), `skills.ts`, `clampModelRuntimeLimits`; `prompt.nativeAgentGuidance` + `buildEngineNeutralTemplate` in `system-prompt.ts` have no other user and may go too.
+  dsh footprint. Owned (delete wholesale): `services/agent/dsh/`, `runtimes/dsh/`, `tests/unit/services/agent/dsh/`, `resources/dsh-runtime/` (build output). Registrations (remove the dsh entry): `EngineId` and `defaultCapabilitiesFor` in `capabilities.ts`; `ENGINE_LABELS`, `normalizeEngineId`, `loadEngine` in `resolved-sdk.ts`; `ALL_ENGINE_IDS` and `probeDsh` in `engine-availability.ts`; the `sdkEngine` / `engineId` unions in `foundation/config.service.ts`, `services/conversation.service.ts`, `renderer/types/index.ts`; `AdvancedSection.tsx` (`ENGINE_IDS`, `ENGINE_COPY`) ; build glue in `package.json` (`runtime:dsh`, `prebuild`), `electron-builder.cjs` (asarUnpack), `scripts/afterPack.cjs` (dsh private externals, node-pty prune, bundle check), `scripts/engine-runtimes.cjs`, `scripts/typecheck-changed.mjs` + `tsconfig.node.json` (`runtimes/*/plugins`, drop only if no runtime has plugins left), `.gitignore`, `runtimes/README.md`. Keep on removal — shared with other engines: `mcp/` (Codex uses it), `skills.ts`, `clampModelRuntimeLimits`.
 
   Codex predates these rules and is shipped, so it is a known exception rather than a model: `ipc/agent.ts` imports `./codex` statically (pending-question routing), `openai-compat-router/` carries its Responses handler and model table, and `shared/constants/codex-models.ts` holds engine constants. Bring it under the same rules as a separate change; do not copy its pattern.
 
@@ -199,12 +205,12 @@ starting an empty session or changing the previous binding.
 
   Adding a new engine = implement an adapter under `services/agent/<engine>/` that produces this exact frame sequence. Do NOT add engine-specific branches in consumers; if a consumer needs engine awareness, the adapter contract is wrong.
 
-- **An engine whose runtime writes its own tool guidance gets Halo's layers only.** `system-prompt.ts` keeps the Claude Code templates for the `anthropic` and `codex` engines and the product-context append for the `halo` engine unchanged. An engine that declares `prompt.nativeAgentGuidance` (today only dsh, which builds one prompt section per mounted cordis plugin) gets the engine-neutral template instead — identity, behavior and environment, nothing that names a tool or a harness — because CC's layer would name tools its runtime does not register (dsh has `todo_write`, not `TodoWrite`). Session bindings no runtime can discover — knowledge bases, optional toolsets, a digital human's instructions — are appended either way. The choice is data on the capability descriptor, resolved from the active engine.
+- **Native guidance belongs to each engine; Halo product context is identical across engines.** `system-prompt.ts` owns one compact product context, without a copied Claude Code template, engine-specific tool policy or environment clone. `toEngineSystemPrompt` always expresses host context as a default-preset append. Adapters preserve native guidance and append that text; explicit raw strings remain replacement prompts for internal tasks. Knowledge bases, optional toolset guides and a digital human's instructions remain host-owned session bindings. `ownIdentity: 'app-instructions'` retains the exact runs-on-Halo identity line referencing App Instructions. `ownIdentity: 'runtime'` omits that reference when the caller supplies a runtime identity without an instruction section. Omission retains Halo's identity. Prompt composition adds no startup work, resident state or discovery.
 - **How big the model is, is Halo's answer.** Output cap and context window come from the resolved capabilities on the credential (preset merged with the user's per-model override in Settings), bounded by the hard limits in `shared/constants/model-runtime-limits.ts` — CC through `sdk-config.ts`, dsh through `clampModelRuntimeLimits` there, named as the `initialize` output cap plus `DSH_CONTEXT_WINDOW` (`dsh/options.ts`). An engine SDK's own model defaults must be suppressed rather than inherited: dsh shipped for a while on its SDK's DeepSeek numbers (256K output, 1M window), which only DeepSeek's endpoint accepts.
 - **No engine addresses a provider itself.** An AI source is not a URL and a key — it is also custom headers, a provider adapter, a wire format and a proxy policy, and `openai-compat-router` is the only code that turns that descriptor into an HTTP request. Every engine is therefore pointed at the loopback router and handed `encodeBackendConfig(credentialsToBackendConfig(...))` as its credential: CC and Codex as `ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY` (`sdk-config.ts`), dsh as `DEEPSEEK_BASE_URL` + `DEEPSEEK_API_KEY` (`dsh/options.ts`), each reaching the route that matches the dialect its runtime speaks (`/v1/messages` for CC and dsh, `/v1/responses` for Codex). dsh's own transport identity (the harness `User-Agent` and `x-deepseek-harness-*` ids) is removed inside its runtime before a request reaches the router, so the router needs no dsh-specific rule. An engine given the provider's own URL loses every part of the descriptor it cannot express: dsh shipped that way and sent the DeepSeek harness's hardcoded `User-Agent` to a provider gateway that checks it, which answered `HTTP 500 request illegal` — with the source's OAuth headers, its adapter and its error body all missing from the request and from the logs. A runtime whose transport cannot be configured is exactly the case that makes this mandatory, not the exception to it.
 - **BrowserWindow safety.** Always check `!mainWindow.isDestroyed()` before sending events in async callbacks. Stream processing is full of async callbacks; violations will crash on window close.
 
-- **Resident session limit.** Resident sessions retain engine resources (a child process for CC/Codex/dsh, a share of a grouped worker for Halo SDK), so their count is bounded by a number the budget policy owner pushes down: `setResidentSessionLimit(limit | null)` (set by `apps/runtime/session-budget.ts`; null = unlimited). Before a NEW session is created — never on reuse — the manager evicts least-recently-used idle sessions through `cleanupSession` until one more fits; busy, awaiting-init and in-creation sessions are never evicted, and if all are busy the new session is created over the limit (one warn per crossing, never refused). An evicted conversation resumes from its stored session id on its next turn, the same path as the 30-minute idle sweep. `listResidentSessions()` / `evictIdleSession(id, reason)` expose the same stats and safety check to callers that manage transient sessions (automation runs). The engine holds no memory logic; the limit is policy from above.
+- **Resident session limit.** Resident sessions retain engine resources (a child process for CC/Codex/dsh, shared Rust execution resources for Halo SDK), so their count is bounded by a number the budget policy owner pushes down: `setResidentSessionLimit(limit | null)` (set by `apps/runtime/session-budget.ts`; null = unlimited). Before a NEW session is created — never on reuse — the manager evicts least-recently-used idle sessions through `cleanupSession` until one more fits; busy, awaiting-init and in-creation sessions are never evicted, and if all are busy the new session is created over the limit (one warn per crossing, never refused). An evicted conversation resumes from its stored session id on its next turn, the same path as the 30-minute idle sweep. `listResidentSessions()` / `evictIdleSession(id, reason)` expose the same stats and safety check to callers that manage transient sessions (automation runs). The engine holds no memory logic; the limit is policy from above.
 
 History lookup uses the session's `env.CLAUDE_CONFIG_DIR` for Claude Code and
 Halo SDK. If missing there, legacy history in Halo's isolated directory or
@@ -213,10 +219,15 @@ existing transcript. Codex and dsh keep their own resumption behavior.
 
 ### Halo SDK adapter
 
-`halo/index.ts` consumes the independent SDK's public `/worker` entry and exposes
-the common engine interface. It maps spaces to opaque affinity keys and bridges
-host permissions, hooks and tools. Pooling, scheduling and their defaults belong
-to the SDK contract, not Halo's chat services.
+`halo/index.ts` consumes the independent SDK's public `/native` entry and exposes
+the common engine interface. The SDK loads a platform-qualified Node-API library;
+its host-independent Rust core owns model execution and history on one shared
+asynchronous runtime. Halo supplies permissions, hooks, tools and captured routing
+configuration through the public callback bridge. Native load failures are explicit,
+with no fallback runtime. Runtime scheduling belongs to the SDK.
+The space-chat input path keeps a leading slash command ahead of automatic canvas
+context for the Halo engine. The SDK owns local command dispatch and manual
+compaction; ordinary messages and the other engine inputs retain canvas context.
 
 `tool-discovery.ts` owns Halo's MCP context-loading policy. The installed-app
 conversion tags each server object with its stable installation identity and
@@ -224,8 +235,14 @@ effective context preference in a WeakMap; transport records, process environmen
 and external-engine inputs carry none of that policy. The Halo adapter prepares
 the public SDK `toolDiscovery` option from the final mounted server set, after
 entry permissions and lazy server creation. Installed MCP defaults to deferred;
-the in-process `halo-apps` and `halo-email` servers are deferred; other servers
-retain the SDK's eager default. Explicit XML/JSON calling does not get this option.
+the in-process `ai-browser`, `ai-terminal`, `halo-apps` and `halo-email` servers are
+deferred; core documentation, Halo API, collaboration and other services retain
+the SDK's eager default. Browser/terminal summaries and cross-tool instructions
+come from the owning modules through MCP metadata, not duplicated policy strings.
+The SDK returns complete definitions and necessary instructions on first search;
+ordinary discoveries do not change fixed declarations or reconnect services.
+Explicit XML/JSON calling does not get this option. Full-mode SDK sessions retain
+eager instructions, while external engines consume standard MCP initialization.
 The SDK owns discovery, request representation and retained tool definitions.
 
 Effective preferences participate in Halo's eager session-input fingerprint.
@@ -234,7 +251,7 @@ native Halo sessions that mounted the exact changed installation rebuild at the
 existing safe boundary. Installed dependency IDs come from the final server
 objects' provenance, after permission filtering and space overrides, not from
 normalized server names. Eager in-flight preparation knows that set immediately;
-lazy preparation publishes it synchronously before starting the Worker session.
+lazy preparation publishes it synchronously before starting the native session.
 Only a not-yet-materialized lazy native creation may conservatively defer a
 rebuild. Explicit XML/JSON, unrelated installations and external engines are
 unaffected. These changes do not retry MCP connections. Context preferences never
@@ -251,14 +268,14 @@ execution policies remain with their existing owners.
 `resolved-sdk.createSession` accepts an optional host preparation callback with
 only an abort signal and the captured adapter's context-inspection operation.
 The same engine borrow covers inspection, tool preparation and session creation;
-an inactive non-default engine cannot close its pool between those steps. The
-callback itself never crosses the Worker boundary, and its inspection capability
+an inactive non-default engine cannot close its runtime between those steps. The
+callback remains host-owned, and its inspection capability
 expires when it returns. Cancellation and preparation failure release the borrow
-without creating a session. Native transcript parsing runs in an existing Worker,
+without creating a session. Native transcript parsing runs on the shared Rust runtime,
 not on Electron's main thread.
 
 Bootstrap initializes the runtime after the first screen and awaits its shutdown
-before releasing host tools. A worker-backed session must never register the main
+before releasing host tools. An in-process native session never registers the main
 process PID as a killable engine process.
 
 Grep in the halo engine runs the ripgrep Halo ships for it (the per-platform
@@ -267,10 +284,11 @@ Grep in the halo engine runs the ripgrep Halo ships for it (the per-platform
 Most machines have no `rg` of their own. It is the engine's own copy, separate
 from the ones Codex and dsh carry.
 
-Request identity uses a pure Node setup module so history stays on the execution
-side. The setup consumes the router's public identity surface and is bundled by
-Halo. Packaging unpacks the bundled SDK Worker entry and this setup module for
-Node loading; the host-side SDK modules remain in asar.
+Request identity uses a pure Node setup module consuming the router's public
+identity surface. Its callback receives only the first user text needed by that
+identity contract; full model history stays in Rust. Packaging unpacks the native
+library and this setup module for Node loading; JavaScript facades remain in asar.
+The build manifest and loaded library identify the same SDK source build.
 
 ## 3) Stream Processing Model
 
@@ -500,7 +518,7 @@ that may be safely rebuilt.
 | Add an engine, or change engine selection / fallback | `capabilities.ts` (`EngineId`), `resolved-sdk.ts` (loader, `ENGINE_LABELS`, `FALLBACK_ORDER`), `engine-availability.ts`, `scripts/engine-runtimes.cjs` |
 | Change what an engine claims it can do | `<engine>/capabilities.ts` — never by sniffing tool names or engine ids in consumers |
 | Tell an out-of-process engine how large the active model is | `shared/constants/model-runtime-limits.ts` (`clampModelRuntimeLimits`), then name the result in that engine's options module — never an engine-local default |
-| Change which prompt template an engine with its own tool guidance gets | `system-prompt.ts` (`buildEngineNeutralTemplate`) + `prompt.nativeAgentGuidance` on the engine's `capabilities.ts` |
+| Change shared Halo product context | `system-prompt.ts`; native guidance stays in each engine |
 | Change how SDK events become thoughts | `stream-processor.ts` |
 | Change session lifecycle or invalidation rules | `session-manager.ts` |
 | Add a new field to the system prompt | `system-prompt.ts` |
@@ -674,7 +692,8 @@ credential change — the toggle does not, since it is not config.
 
 When the active engine is `halo`, the SDK option builders (`sdk-config.ts`) attach
 serializable `haloRequestIdentity` parameters. `halo/worker-setup.ts` builds the
-`requestIdentity` inside the Worker, so per-request callbacks stay beside history.
+`requestIdentity` through the SDK setup contract. The first-user-text projection
+keeps complete histories off the host callback path.
 The SDK is identity-agnostic — it has a
 `RequestIdentity` seam and forwards whatever it is handed; every
 provider-specific constant and algorithm lives host-side in
@@ -714,7 +733,7 @@ the payload — as it did while the parameter went unpassed.
 
 **Failure handling follows the execution boundary.** If the host cannot read its
 device identity, it logs the missing identity and omits the setup parameters.
-Once parameters reach the Worker, a setup failure rejects session creation and
+Once parameters reach the runtime, a setup failure rejects session creation and
 follows the normal session error path.
 
 **This is deliberate product behavior**, chosen so hallucination-prone gateway
@@ -738,13 +757,11 @@ Now the layers that assemble a session read the settings themselves, through
 |---|---|---|
 | `maxTurns`, `disabledTools` | `sdk-config.ts` | Engine-independent. Unset `disabledTools` means the built-in default list; the native team tools are always withheld. |
 | Tools turned off on an MCP server's card (`userOverrides.disabledTools` of the MCP app) | `sdk-config.ts` via `helpers.ts getDisabledMcpTools` | Every user session of the space, whoever it runs for: appended to `disallowedTools` as `mcp__<server>__<tool>` (`mcp/tool-name.ts`, the naming Claude Code and the halo engine share) and handed per server as `disabledMcpTools` to engines that filter there — Codex renders it as `disabled_tools`. dsh's MCP client has no such filter, so dsh still offers them (logged). |
-| `promptProfile`, `enableDigitalHumans` (prompt line) | `system-prompt.ts` `buildSystemPrompt` | An explicit value in the context wins over the setting. `promptProfile` only picks a template on engines that take Halo's prompt; the halo engine appends product context to its own default and ignores it. So every prompt built on `buildSystemPrompt` — digital humans' too — follows both. |
 | `enableDigitalHumans` (tool) | `toolsets/base.ts` | Gates `halo-apps` in the base toolset. |
 | `configDirMode`, `customConfigDir` | `sdk-config.ts` `buildSdkEnv` via `resolveClaudeConfigDir()` | Not per-entry: `CLAUDE_CONFIG_DIR` also holds the CLI credential slot, so internal tasks follow it too. |
 
 **Two entries, not a flag.** `buildUserSessionSdkOptions` reads the settings.
-`buildInternalTaskSdkOptions` deliberately does not (built-in defaults, `halo`
-profile, no digital-human line): a background task the user never asked for by
+`buildInternalTaskSdkOptions` deliberately does not (built-in defaults): a background task the user never asked for by
 name — memory consolidation, team member proposals — must not inherit the tool
 restrictions or turn cap the user set for their own sessions. Which call site
 uses which:
@@ -763,16 +780,19 @@ uses which:
 out of an IM guest's or a borrowed teammate's turn even where the policy would
 have granted it.
 
-**Prompt follows the mounts.** An entry that never mounts `halo-apps`
-(automation, a disposable team member) states `digitalHumansEnabled: false` in
-its prompt context, so the prompt does not offer what the run cannot do; others
-inherit the setting.
+**Capability context follows the mounts.** The platform introduction does not
+advertise optional digital-human management. Its availability follows the actual
+`halo-apps` mount, with the global switch and caller restrictions unchanged.
+App Instructions remain the owner's exact text. Browser uses a short host hint;
+terminal instructions travel through service metadata rather than a host chapter.
+Operate Halo retains a capability entry; its reference result supplies execution
+rules before endpoint details.
 
 **Rationale check for digital humans.** The config directory and skills already
 reached digital humans before this change (`buildSdkEnv` fell back to the
 persisted `configDirMode` for every entry, and project/user setting sources were
-always on). What actually changed for them: the user's `disabledTools`, prompt
-profile and the digital-humans switch now apply. Release notes must not claim
+always on). What actually changed for them: the user's `disabledTools`
+and the digital-humans switch now apply. Release notes must not claim
 digital humans newly gain the CC config directory's skills or CLAUDE.md.
 
 A new call site decides the same question: is this the user's session, or work

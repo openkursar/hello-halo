@@ -1,16 +1,4 @@
-/**
- * apps/runtime -- App System Prompt Builder
- *
- * Assembles the complete system prompt for automation App sessions.
- *
- * Strategy: start with the FULL main Agent system prompt (identity, tools,
- * coding guidelines, tool usage policy, environment info), then append
- * automation-specific context and App instructions.
- *
- * This ensures automation Apps have 100% of the main Agent's capabilities.
- * The only difference is operating mode: headless background execution
- * instead of interactive conversation.
- */
+/** Automation context layered onto Halo's engine-independent host guidance. */
 
 import type { AutomationSpec } from '../spec'
 import { renderMemorySection, MEMORY_SECTION_LIMITS, type MemorySnapshot, type TopicsTree } from '../../platform/memory'
@@ -19,9 +7,8 @@ import { formatEscalationAnswer } from '../../../shared/apps/app-types'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../services/agent'
-import type { EngineId } from '../../../shared/types/engine'
+import { buildSelfIdentityPrompt } from './prompt/self-identity'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../../services/ai-browser'
-import { AI_TERMINAL_SYSTEM_PROMPT } from '../../services/ai-terminal'
 import { HALO_API_USAGE_GUIDE } from '../../services/api-ref'
 import { getKBReferencesForApp } from '../../services/tlon'
 
@@ -29,10 +16,6 @@ import { getKBReferencesForApp } from '../../services/tlon'
 // Automation Context Overlay
 // ============================================
 
-/**
- * Appended after the main Agent system prompt to establish automation mode.
- * Provides context-specific overrides without removing any base capabilities.
- */
 const AUTOMATION_CONTEXT = `
 ## Automation Mode
 
@@ -98,27 +81,6 @@ Use \`mcp__halo-report__report_to_user\` to communicate results to the user.
 
 Do not put raw JSON or code blocks in either field
 — unless the user explicitly requires otherwise.
-`.trim()
-
-// ============================================
-// Sub-Agent Instructions (when App uses AI Browser)
-// ============================================
-
-const SUB_AGENT_INSTRUCTIONS = `
-## Browser Task Delegation
-
-When you need to interact with web pages, use the Task tool to delegate
-to a sub-agent. The sub-agent inherits your MCP tools including browser tools.
-
-Pattern:
-1. Review your memory state (loaded in trigger message above)
-2. Use Task tool with clear instructions for the browser sub-agent
-3. The sub-agent navigates, extracts data, returns structured JSON
-4. You process the data, make decisions, update memory, and report
-
-Example Task tool prompt:
-"Navigate to https://example.com, use browser_snapshot to get the page structure,
-extract the price from the product listing, and return it as JSON: { price: number, currency: string }"
 `.trim()
 
 // ============================================
@@ -201,7 +163,6 @@ audience-facing artifact of this run.
 // ============================================
 
 export interface AppPromptOptions {
-  engineId?: EngineId
   /** ID of the installed App (used to look up bound knowledge bases) */
   appId: string
   /** The App's specification (must be automation type) */
@@ -212,10 +173,8 @@ export interface AppPromptOptions {
   triggerContext: string
   /** User configuration values */
   userConfig?: Record<string, unknown>
-  /** Whether the App uses AI Browser (includes sub-agent instructions) */
+  /** Include guidance only when the browser tools are mounted. */
   usesAIBrowser?: boolean
-  /** Whether the App uses AI Terminal (appends the terminal usage guide) */
-  usesTerminal?: boolean
   /** Whether the App may operate Halo itself (appends the Halo-API usage guide) */
   usesHaloApi?: boolean
   /** Working directory for the agent (passed to base system prompt) */
@@ -250,41 +209,20 @@ export interface AppPromptOptions {
   autoSyncSessions?: ImSessionRecord[]
 }
 
-/**
- * Build the complete system prompt for an automation App session.
- *
- * Structure:
- * 1. Host system prompt: the full main-Agent prompt, or on the halo engine only
- *    the Halo context appended to the engine's own default prompt
- * 2. Automation context overlay (headless mode, report_to_user, escalation)
- * 3. App-specific system_prompt (from spec)
- * 4. Memory instructions (from memory service)
- * 5. Reporting rules (report_to_user usage)
- * 6. Sub-agent instructions (if App uses AI Browser)
- */
+/** Scheduled runs retain their reporting context without standing-team awareness. */
 export function buildAppSystemPrompt(options: AppPromptOptions): string {
   const sections: string[] = []
 
-  // 1. Full main Agent system prompt — gives the automation agent
-  //    100% of the same capabilities as the interactive agent
-  //    When AI Browser is enabled, append full browser tool workflow guide
   const promptCtx = {
-    engineId: options.engineId,
     workDir: options.workDir,
     modelInfo: options.modelInfo,
     knowledgeBases: getKBReferencesForApp(options.appId),
-    // A run mounts no digital-human management tools, so it must not be told it can.
-    digitalHumansEnabled: false,
     // Who it is comes from its App Instructions, not Halo's introduction.
-    ownIdentity: !!options.appSpec.system_prompt,
+    ownIdentity: options.appSpec.system_prompt ? 'app-instructions' as const : 'runtime' as const,
   }
   let basePrompt = options.usesAIBrowser
     ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)
     : buildSystemPrompt(promptCtx)
-  // Append the terminal usage guide when the App has the ai-terminal permission.
-  if (options.usesTerminal) {
-    basePrompt += '\n\n' + AI_TERMINAL_SYSTEM_PROMPT.trim()
-  }
   // Same rule for operating Halo itself: the guide is appended only when the
   // permission actually loaded the tool, so the prompt can never describe a
   // capability this run does not have.
@@ -293,57 +231,41 @@ export function buildAppSystemPrompt(options: AppPromptOptions): string {
   }
   sections.push(basePrompt)
 
-  // 1b. Capability awareness — name the capabilities the user turned off and
-  //     where to re-enable them, so a disabled tool is reported rather than
-  //     silently missing. Rendered by the caller (has the full InstalledApp).
+  // Callers resolve capability state from the installed app and mounted tools.
   if (options.disabledCapabilities) {
     sections.push(options.disabledCapabilities)
   }
 
-  // 1c. Capability awareness (setup gap) — capabilities toggled ON but tool-less
-  //     until a channel/contact is configured. Without this a scheduled run can
-  //     "believe" it notified when no channel exists and falsely report success.
+  // Enabled capabilities can still lack a configured channel or contact.
   if (options.unconfiguredCapabilities) {
     sections.push(options.unconfiguredCapabilities)
   }
 
-  // 2. Automation context overlay — establishes headless mode,
-  //    overrides interaction patterns (escalation vs AskUserQuestion)
-  sections.push(AUTOMATION_CONTEXT)
-
-  // 3. App-specific instructions (from App spec)
+  // App Instructions remain the persona; runtime context describes the task.
   if (options.appSpec.system_prompt) {
     sections.push(`## App Instructions\n\n${options.appSpec.system_prompt}`)
   }
 
-  // 4. Memory instructions (from memory service)
   if (options.memoryInstructions) {
     sections.push(options.memoryInstructions)
   }
 
-  // 5. Reporting rules
+  sections.push(buildSelfIdentityPrompt(options.appId, options.appSpec.name, {
+    ownInstructions: !!options.appSpec.system_prompt,
+    automation: true,
+  }))
+  sections.push(AUTOMATION_CONTEXT)
+
   sections.push(REPORTING_RULES)
 
-  // 6. Notification instructions — only when a notify tool is actually loaded.
-  //    When none is, the block is omitted and unconfiguredCapabilities (1c)
-  //    explains the setup gap instead.
+  // Do not advertise notification tools that were not mounted.
   if (options.notifyToolsAvailable) {
     sections.push(NOTIFICATION_INSTRUCTIONS)
   }
 
-  // 6b. Auto-sync awareness (only when subscribed IM contacts exist for
-  //     this app — keeps the prompt minimal otherwise)
   if (options.autoSyncSessions && options.autoSyncSessions.length > 0) {
     sections.push(buildAutoSyncAwareness(options.autoSyncSessions))
   }
-
-  // 7. Sub-agent instructions (only if App uses AI Browser)
-  // TODO: Temporarily disabled — testing whether skipping sub-agent delegation
-  // improves quality by preserving full context in the main agent.
-  // Re-enable and compare results before making permanent.
-  // if (options.usesAIBrowser) {
-  //   sections.push(SUB_AGENT_INSTRUCTIONS)
-  // }
 
   return sections.join('\n\n---\n\n')
 }

@@ -34,6 +34,9 @@ promises:
   history:
     en: Keeping copies no task history. The original task and each member's own conversation stay readable and continue in the collaboration, and the saved team starts with no tasks.
     zh: 保留不复制任务历史。原任务及各成员各自的对话仍可在原协作中阅读并继续，保存的团队没有任何任务。
+  host-context:
+    en: Each supported engine retains its native guidance and receives the same Halo capabilities and configuration guidance in the source conversation and its digital-human collaborators, without duplicate host instructions.
+    zh: 各受支持引擎保留原生指导，源对话及数字人协作者均收到相同的 Halo 能力与配置指导，不重复注入宿主指令。
   delegation:
     en: Collaborators can independently read their assigned workspace files and return evidence for a combined answer in the source conversation.
     zh: 协作者能分别读取所分配的工作区文件，并把证据回报到源聊天，形成汇总回答。
@@ -48,7 +51,7 @@ scenarios:
     title:
       en: Use the same collaboration flow with each application engine
       zh: 在各应用引擎中使用同一协作流程
-    verifies: [delegation, room]
+    verifies: [delegation, room, host-context]
     platforms: [darwin, win32, linux]
     profiles: [regression]
     evidence: app-e2e
@@ -64,6 +67,8 @@ scenarios:
       - en: Create one collaborator through the real tool, wait for its initial reply, address follow-up work to the returned handle and receive the answer in the source conversation. For Dsh, restart the application before the follow-up and continue in the original conversation.
         zh: 通过真实工具创建一位协作者，等待首条回复，按返回句柄派发后续工作，并在源对话接收结果。Dsh 在后续派工前重启应用，并在原对话继续。
     expected:
+      - en: Actual provider requests for both the source and digital-human collaborator retain the selected engine's native guidance and exactly one Halo product context, including the read_halo_doc product-guidance entry point and skill configuration guidance, without the old Remote Access advertisement. Dsh places its native tool guidance after the host persona; the other engines keep their native guidance before the host context.
+        zh: 源与数字人协作者的实际模型请求均保留指定引擎原生指导及唯一一份 Halo 产品上下文，并包含 read_halo_doc 产品指引入口与技能配置指导，不含旧的远程访问广告。Dsh 将原生工具指导放在宿主人设之后，其他引擎将原生指导保留在宿主上下文之前。
       - en: The source and collaborator have distinct persisted session bindings for the requested engine. The collaborator retains its assignment context, the source receives its answer, and no native or retired delegation tool is advertised. After the Dsh restart the logical member and collaboration stay unchanged, native session IDs change, and provider requests contain the original source task, accepted member handle and the member’s private assignment.
         zh: 源与协作者保留不同的原生会话绑定且都属于指定引擎。协作者保留任务上下文，源收到回答，模型目录没有原生或已退役的委派工具。Dsh 重启后成员与协作身份保持不变，原生会话 ID 更新，实际模型请求包含原源任务、已接受的成员句柄及成员私有任务上下文。
     notes:

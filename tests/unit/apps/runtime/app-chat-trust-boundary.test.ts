@@ -16,7 +16,14 @@
  * CC subprocesses or touching disk.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { readFileSync, renameSync } from 'fs'
+import { join } from 'path'
+
+vi.mock('fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('fs')>()
+  return { ...actual, renameSync: vi.fn(actual.renameSync) }
+})
 
 // ============================================
 // Mocks (must be declared before importing app-chat)
@@ -47,7 +54,7 @@ const { consumers, v2Sessions, closeV2Session, stopGeneration } = vi.hoisted(() 
 // Registry stub — forkNativeChatSession requires a non-null registry, and
 // createLocalSession returns the new session record on the happy path.
 const { registry, createLocalSession } = vi.hoisted(() => {
-  const _createLocalSession = vi.fn((appId: string, uuid: string) => ({
+  const _createLocalSession = vi.fn((appId: string, uuid: string, _options?: { forkOrigin?: string; pendingResumeSessionId?: string }) => ({
     appId,
     channel: 'local',
     source: 'local',
@@ -110,10 +117,13 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 }))
 
 vi.mock('../../../../src/main/services/agent/events', () => ({ emitAgentEvent: vi.fn() }))
+vi.mock('../../../../src/main/foundation/window.service', () => ({ sendToRenderer: vi.fn() }))
+vi.mock('../../../../src/main/http/websocket', () => ({ broadcastToAll: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/stream-processor', () => ({ processStream: vi.fn() }))
 vi.mock('../../../../src/main/services/agent/message-utils', () => ({ buildMessageContent: vi.fn(), formatCanvasContext: () => '' }))
 
 vi.mock('../../../../src/main/services/ai-browser', () => ({
+  AI_BROWSER_DESCRIPTION: 'Browse websites',
   AI_BROWSER_SYSTEM_PROMPT: '',
   createAIBrowserMcpServer: vi.fn(),
   createScopedBrowserContext: vi.fn(),
@@ -146,7 +156,7 @@ const { environment, activityStore, resolveChatEnvironment, copySessionJsonl } =
     environment,
     activityStore: { getSessionEnvironment: vi.fn(), deleteSessionEnvironment: vi.fn(), pinSessionEnvironment: vi.fn() },
     resolveChatEnvironment: vi.fn(() => environment),
-    copySessionJsonl: vi.fn(() => true),
+    copySessionJsonl: vi.fn((_spacePath: string, _appId: string, _fromRunId: string, _toRunId: string) => true),
   }
 })
 vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
@@ -159,14 +169,26 @@ vi.mock('../../../../src/main/apps/runtime/engine-selection', () => ({
   prepareAppEngineSession: (options: { state: { sessionId?: string }; legacySessionId?: string }) => ({ resumeSessionId: options.state.sessionId ?? options.legacySessionId }),
 }))
 
-vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
-  saveChatEngineRouting: (_space: string, _app: string, _run: string, engineId: string, state: any = {}) => state.sessionId || state.binding || state.routingEngine ? state : { routingEngine: engineId },
-  loadChatEngineState: vi.fn(() => ({ sessionId: 'original-sdk-session' })),
-  saveChatEngineBinding: vi.fn(() => true),
-  copySessionJsonl,
-  loadChatSessionId: vi.fn(() => 'original-sdk-session'),
-  deleteChatSessionId: vi.fn(),
-}))
+const persistence = vi.hoisted(() => ({ real: false }))
+vi.mock('../../../../src/main/apps/runtime/session-store', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../src/main/apps/runtime/session-store')>()
+  return {
+    ...actual,
+    saveChatEngineRouting: vi.fn((...args: Parameters<typeof actual.saveChatEngineRouting>) => persistence.real
+      ? actual.saveChatEngineRouting(...args) : args[4] ?? { routingEngine: args[3] }),
+    loadChatEngineState: vi.fn((...args: Parameters<typeof actual.loadChatEngineState>) => persistence.real
+      ? actual.loadChatEngineState(...args) : { sessionId: 'original-sdk-session' }),
+    saveChatEngineBinding: vi.fn((...args: Parameters<typeof actual.saveChatEngineBinding>) => persistence.real
+      ? actual.saveChatEngineBinding(...args) : true),
+    copySessionJsonl: (...args: Parameters<typeof actual.copySessionJsonl>) => persistence.real
+      ? actual.copySessionJsonl(...args) : copySessionJsonl(...args),
+    loadChatSessionId: vi.fn((...args: Parameters<typeof actual.loadChatSessionId>) => persistence.real
+      ? actual.loadChatSessionId(...args) : 'original-sdk-session'),
+    deleteChatSessionId: vi.fn((...args: Parameters<typeof actual.deleteChatSessionId>) => {
+      if (persistence.real) actual.deleteChatSessionId(...args)
+    }),
+  }
+})
 vi.mock('../../../../src/main/apps/conversation-mcp', () => ({
   createHaloAppsMcpServer: vi.fn(),
 }))
@@ -192,7 +214,11 @@ import {
 } from '../../../../src/main/apps/runtime/app-chat'
 import { getConfig } from '../../../../src/main/foundation/config.service'
 import { getAppManager } from '../../../../src/main/apps/manager'
-import { loadChatEngineState } from '../../../../src/main/apps/runtime/session-store'
+import { loadChatEngineState, saveChatEngineBinding, saveChatSessionId, reloadChatInstructions, openSessionWriter, readSessionMessages } from '../../../../src/main/apps/runtime/session-store'
+import { appChatRunId } from '../../../../src/main/apps/runtime/execution-environment'
+import type { EngineId } from '../../../../src/shared/types/engine'
+import { sendToRenderer } from '../../../../src/main/foundation/window.service'
+import { broadcastToAll } from '../../../../src/main/http/websocket'
 import { getSessionEngineId } from '../../../../src/main/services/agent/session-manager'
 import { filterMcpServersByPolicy } from '../../../../src/main/apps/runtime/capability-policy'
 import type { GuestPolicy } from '../../../../src/shared/types/im-channel'
@@ -337,6 +363,94 @@ describe('forkNativeChatSession trust boundary', () => {
     expect(activityStore.pinSessionEnvironment).toHaveBeenCalledWith(result.conversationId, APP, environment)
     expect(copySessionJsonl).toHaveBeenCalledWith('/original-space', APP, expect.any(String), expect.any(String))
     expect(createLocalSession).toHaveBeenCalledWith(APP, expect.any(String), expect.objectContaining({ pendingResumeSessionId: 'original-sdk-session' }))
+  })
+})
+
+describe('forked conversation instruction state', () => {
+  beforeEach(() => {
+    persistence.real = true
+    environment.spacePath = globalThis.__HALO_TEST_DIR__
+    createLocalSession.mockClear()
+    vi.mocked(getConfig).mockReturnValue({ agent: { legacySdkEngine: 'anthropic', sdkEngine: 'anthropic', ccRuntime: {
+      selectedPath: '/synthetic/claude', selectionOrigin: 'user',
+    } } } as ReturnType<typeof getConfig>)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    persistence.real = false
+    environment.spacePath = '/original-space'
+    vi.mocked(getConfig).mockReturnValue({} as ReturnType<typeof getConfig>)
+    vi.mocked(console.log).mockRestore()
+  })
+
+  for (const source of ['default', 'im'] as const) {
+    it.each(['legacy-reload', 'modern-reload', 'legacy-unchanged'] as const)(`preserves %s instructions from the ${source} conversation`, format => {
+      const sourceConversationId = source === 'im'
+        ? `${getAppChatConversationId(APP)}:wecom-bot:direct:owner`
+        : getAppChatConversationId(APP)
+      const sourceRunId = appChatRunId(sourceConversationId, APP)
+      const sourceBinding = { version: 1 as const, engineId: 'anthropic' as const, sessionId: 'source-native' }
+      if (format === 'modern-reload') saveChatEngineBinding(environment.spacePath, APP, sourceRunId, sourceBinding)
+      else saveChatSessionId(environment.spacePath, APP, sourceRunId, sourceBinding.sessionId)
+      const writer = openSessionWriter(environment.spacePath, APP, sourceRunId)
+      writer.writeTrigger('Keep the source history')
+      writer.writeEvent({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Source answer' }] } })
+      if (format !== 'legacy-unchanged') expect(reloadChatInstructions(environment.spacePath, APP)).toBe(1)
+      const before = loadChatEngineState(environment.spacePath, APP, sourceRunId)
+      const sourceFile = join(environment.spacePath, '.halo/apps', APP, 'runs', `${sourceRunId}.jsonl`)
+      const sourceBytes = readFileSync(sourceFile, 'utf8')
+
+      const result = forkNativeChatSession(APP, 'space-1', sourceConversationId)
+      expect(result.conversationId).not.toBe(sourceConversationId)
+      const targetRunId = appChatRunId(result.conversationId, APP)
+      const copied = loadChatEngineState(environment.spacePath, APP, targetRunId)
+      expect(copied).toEqual(format === 'legacy-unchanged' ? {} : before)
+      if (format === 'legacy-reload') {
+        expect(copied).toEqual({ sessionId: 'source-native', useCurrentInstructions: true })
+        expect(copied.binding).toBeUndefined()
+        expect(copied.routingEngine).toBeUndefined()
+      }
+      expect(loadChatEngineState(environment.spacePath, APP, sourceRunId)).toEqual(before)
+      expect(createLocalSession).toHaveBeenLastCalledWith(APP, expect.any(String), {
+        forkOrigin: sourceConversationId, pendingResumeSessionId: sourceBinding.sessionId,
+      })
+      expect(readFileSync(sourceFile, 'utf8')).toBe(sourceBytes)
+      expect(readFileSync(join(environment.spacePath, '.halo/apps', APP, 'runs', `${targetRunId}.jsonl`), 'utf8')).toBe(sourceBytes)
+      expect(readSessionMessages(environment.spacePath, APP, targetRunId).map(message => message.content)).toEqual([
+        'Keep the source history', 'Source answer',
+      ])
+    })
+  }
+
+  it('preserves another supported engine without adding CC reload state', () => {
+    const source = getAppChatConversationId(APP)
+    const binding = { version: 1 as const, engineId: 'halo' as const, sessionId: 'halo-native' }
+    saveChatEngineBinding(environment.spacePath, APP, 'chat', binding)
+    const result = forkNativeChatSession(APP, 'space-1', source)
+    expect(loadChatEngineState(environment.spacePath, APP, appChatRunId(result.conversationId, APP))).toEqual({ sessionId: 'halo-native', binding })
+  })
+
+  it('does not create a visible conversation when reload state could not be copied', () => {
+    saveChatSessionId(environment.spacePath, APP, 'chat', 'source-native')
+    reloadChatInstructions(environment.spacePath, APP)
+    const file = join(environment.spacePath, '.halo/apps', APP, 'runs/_session-ids.json')
+    const before = readFileSync(file, 'utf8')
+    vi.mocked(renameSync).mockImplementationOnce(() => { throw Object.assign(new Error('unavailable'), { code: 'EBUSY' }) })
+    vi.mocked(sendToRenderer).mockClear()
+    vi.mocked(broadcastToAll).mockClear()
+    expect(() => forkNativeChatSession(APP, 'space-1', getAppChatConversationId(APP))).toThrow('Could not preserve')
+    expect(createLocalSession).not.toHaveBeenCalled()
+    expect(sendToRenderer).not.toHaveBeenCalled()
+    expect(broadcastToAll).not.toHaveBeenCalled()
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+
+  it.each(['codex', 'dsh'] as EngineId[])('refuses an unsupported %s source before creating a destination', engineId => {
+    saveChatEngineBinding(environment.spacePath, APP, 'chat', { version: 1, engineId, sessionId: 'unsupported-native' })
+    expect(() => forkNativeChatSession(APP, 'space-1', getAppChatConversationId(APP))).toThrow('does not support branching')
+    expect(createLocalSession).not.toHaveBeenCalled()
+    expect(Object.keys(JSON.parse(readFileSync(join(environment.spacePath, '.halo/apps', APP, 'runs/_session-ids.json'), 'utf8')))).toEqual(['chat'])
   })
 })
 

@@ -1,16 +1,4 @@
-/**
- * apps/runtime/prompt -- System Prompt Assembler
- *
- * Channel-agnostic three-layer assembler:
- *   Identity layer  — who am I, what do I do
- *   Entry layer     — where am I, how do I reply
- *   Constraint layer — what I must not do
- *
- * This module only joins pre-rendered string fragments. It does not
- * know about IM, native UI, App spec, or any other channel concept.
- * To add a new entry channel, build its fragment elsewhere and pass
- * the string in. The assembler should never grow channel branches.
- */
+/** Joins pre-rendered context and rule subsections without channel-specific decisions. */
 
 export interface AppChatPromptFragments {
   /** Identity layer fragments, in render order. */
@@ -31,7 +19,9 @@ export function assembleAppChatPrompt(fragments: AppChatPromptFragments): string
   return [
     ...fragments.identity,
     fragments.entry,
-    ...fragments.constraints,
+    ...(fragments.constraints.some(section => section.length > 0)
+      ? [`## Rules\n\n${fragments.constraints.filter(Boolean).join('\n\n')}`]
+      : []),
   ]
     .filter((section) => section && section.length > 0)
     .join(SECTION_SEPARATOR)

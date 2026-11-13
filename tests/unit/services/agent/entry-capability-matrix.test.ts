@@ -215,6 +215,7 @@ vi.mock('../../../../src/main/services/ocr', () => ({
 }))
 vi.mock('../../../../src/main/services/api-ref', () => ({
   createApiRefMcpServer: () => ({ _isMcpServer: true, name: 'halo-api-ref' }),
+  HALO_API_DESCRIPTION: 'Operate Halo',
   HALO_API_USAGE_GUIDE: 'Halo API usage',
   HALO_API_TOOLSET_ID: 'halo-api-ref',
 }))
@@ -229,12 +230,14 @@ vi.mock('../../../../src/main/services/email-mcp', () => ({
 vi.mock('../../../../src/main/services/ai-browser', () => ({
   createAIBrowserMcpServer: () => ({ _isMcpServer: true, name: 'ai-browser' }),
   createScopedBrowserContext: () => ({ destroy: vi.fn(), ownedViewCount: 0 }),
+  AI_BROWSER_DESCRIPTION: 'Browse websites',
   AI_BROWSER_SYSTEM_PROMPT: 'AI browser instructions',
 }))
 vi.mock('../../../../src/main/services/ai-terminal', () => ({
   createTerminalMcpServer: vi.fn(),
   getGlobalTerminalContext: vi.fn(),
   isTerminalAvailable: () => false,
+  AI_TERMINAL_DESCRIPTION: 'Run interactive terminals',
   AI_TERMINAL_SYSTEM_PROMPT: 'AI terminal instructions',
 }))
 vi.mock('../../../../src/main/services/tlon', () => ({
@@ -586,8 +589,13 @@ const EXPECTED_SERVERS: Record<Row, readonly string[]> = {
   ],
 }
 
-/** Entries that never mount halo-apps, so their prompt must not offer it. */
-const NO_HALO_APPS_BY_DESIGN: ReadonlySet<Row> = new Set<Row>(['automation run', 'team member (disposable)'])
+/** Entries that never mount halo-apps, even when digital humans are enabled. */
+const NO_HALO_APPS_BY_DESIGN: ReadonlySet<Row> = new Set<Row>([
+  'automation run',
+  'team member (disposable)',
+  'digital human chat (IM guest)',
+  'team-fronted IM chat (guest)',
+])
 const DIGITAL_HUMANS_LINE = 'Halo Digital Humans: Create and manage'
 
 // ============================================
@@ -713,12 +721,12 @@ describe('entry x global setting: every entry follows the user\'s AI settings', 
       for (const tool of DEFAULT_DISABLED_TOOLS) expect(disallowedTools).toContain(tool)
     })
 
-    it('promptProfile picks the prompt template', async () => {
+    it('legacy promptProfile cannot replace the shared Halo context', async () => {
       state.config.agent = { promptProfile: 'halo' }
       const halo = (await ROW_DRIVERS[row]()).systemPrompt
       state.config.agent = { promptProfile: 'official' }
       const official = (await ROW_DRIVERS[row]()).systemPrompt
-      expect(official).not.toBe(halo)
+      expect(official.split('\n\n---\n\n')[0]).toBe(halo.split('\n\n---\n\n')[0])
     })
 
     it('enableDigitalHumans: false removes halo-apps', async () => {
@@ -726,13 +734,15 @@ describe('entry x global setting: every entry follows the user\'s AI settings', 
       expect((await ROW_DRIVERS[row]()).servers).not.toContain('halo-apps')
     })
 
-    it('the prompt offers digital-human management only where it is on and halo-apps is mounted', async () => {
+    it('gates digital-human management by mounted servers without advertising it in the shared prompt', async () => {
       state.config.agent = { enableDigitalHumans: true }
-      const on = (await ROW_DRIVERS[row]()).systemPrompt
+      const on = await ROW_DRIVERS[row]()
       state.config.agent = { enableDigitalHumans: false }
-      const off = (await ROW_DRIVERS[row]()).systemPrompt
-      expect(on.includes(DIGITAL_HUMANS_LINE)).toBe(!NO_HALO_APPS_BY_DESIGN.has(row))
-      expect(off).not.toContain(DIGITAL_HUMANS_LINE)
+      const off = await ROW_DRIVERS[row]()
+      expect(on.servers.includes('halo-apps')).toBe(!NO_HALO_APPS_BY_DESIGN.has(row))
+      expect(on.systemPrompt).not.toContain(DIGITAL_HUMANS_LINE)
+      expect(off.servers).not.toContain('halo-apps')
+      expect(off.systemPrompt).not.toContain(DIGITAL_HUMANS_LINE)
     })
 
     it('configDirMode decides the engine config directory', async () => {

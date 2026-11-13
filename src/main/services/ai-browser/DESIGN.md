@@ -321,7 +321,8 @@ trusted native paste event. The browser-host design records this distinction.
 
 | File | Responsibility |
 |------|---------------|
-| `index.ts` | Public API: re-exports, system prompt, cleanup, event-bus subscribers |
+| `index.ts` | Public API: re-exports, short capability hint, cleanup, event-bus subscribers |
+| `guidance.ts` | Resource-independent service description, short host hint and cross-tool instructions; reused by the registry and MCP factory |
 | `sdk-mcp-server.ts` | MCP server factory (primary entry point) |
 | `events.ts` | Process-global view-lifecycle bus (active-view / gone); transport subscribes here. Payload types: `shared/types/ai-browser.ts` |
 | `context.ts` | BrowserContext class (state, CDP, element ops, downloads); emits view lifecycle |

@@ -8,6 +8,7 @@
  * control responses carry the shape the SDK skips without parsing.
  */
 import http from 'node:http'
+import { execFileSync } from 'node:child_process'
 import type { AddressInfo } from 'node:net'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -20,6 +21,10 @@ import type { CcRuntimeLaunch } from '../../../../src/shared/types/cc-runtime'
 import { prepareStoredSession } from '../../../../src/main/services/agent/stored-session'
 import { createSession as createHaloSession } from '@hello-halo/agent-sdk'
 import { createCanUseTool, getActivePendingQuestion, resolveQuestion } from '../../../../src/main/services/agent/permission-handler'
+
+const runtimeLaunch = vi.hoisted(() => ({ current: undefined as CcRuntimeLaunch | undefined }))
+vi.mock('../../../../src/main/services/cc-runtime', () => ({ resolveCcRuntimeLaunch: async () => runtimeLaunch.current }))
+import { createCcSdkModule } from '../../../../src/main/services/agent/cc'
 
 const enabled = process.env.CC_E2E === '1'
 const CLI = process.env.CC_TEST_CLI ?? path.resolve(__dirname, '../../../../.validation/legacy-cc/cli.js')
@@ -191,6 +196,145 @@ async function startHarness(overrides: Record<string, unknown> = {}) {
 const slowFinalAnswer: Step = { chunks: Array.from({ length: 12 }, (_, i) => `part${i} `), chunkDelayMs: 120 }
 
 describe.skipIf(!enabled)('Claude Code live input (real CLI)', () => {
+  it('preserves native guidance while appending host context and replaces it only explicitly', async () => {
+    const appended = await startHarness({ systemPrompt: { type: 'preset', preset: 'default', append: 'host-prompt-marker-42' } })
+    await appended.session.send('Reply briefly.')
+    await appended.waitForResults(1)
+    const systemText = (request: any) => typeof request.system === 'string' ? request.system : request.system.map((block: any) => block.text ?? '').join('\n')
+    const nativeText = systemText(appended.modelRequests[0])
+    expect(nativeText.split('host-prompt-marker-42')).toHaveLength(2)
+    expect(nativeText.length).toBeGreaterThan(1000)
+    const replaced = await startHarness({ systemPrompt: 'internal-replacement-marker-44' })
+    await replaced.session.send('Reply briefly.')
+    await replaced.waitForResults(1)
+    const replacementText = systemText(replaced.modelRequests[0])
+    expect(replacementText.split('internal-replacement-marker-44')).toHaveLength(2)
+    expect(replacementText.length).toBeLessThan(nativeText.length)
+    runtimeLaunch.current = appended.launch
+    const queryFrames = []
+    for await (const frame of createCcSdkModule().query({ prompt: 'Reply briefly.', options: { ...appended.sessionOptions, systemPrompt: 'one-shot-replacement-marker-45' } })) queryFrames.push(frame)
+    expect(queryFrames.at(-1)).toMatchObject({ type: 'result', is_error: false })
+    const oneShotText = systemText(appended.modelRequests.at(-1))
+    expect(oneShotText.split('one-shot-replacement-marker-45')).toHaveLength(2)
+    expect(oneShotText).not.toContain('host-prompt-marker-42')
+    expect(oneShotText.length).toBeLessThan(nativeText.length)
+  }, 90_000)
+
+  it.each([
+    ['native guidance', { type: 'preset', preset: 'default', append: 'foreign-host-context' }],
+    ['explicit short replacement', 'Foreign assistant. Reply briefly.'],
+  ])('delivers MCP service instructions before execution with %s', async (_label, systemPrompt) => {
+    const calls: string[] = []
+    const service = createSdkMcpServer({
+      name: 'guide',
+      description: 'Synthetic echo service for engine delivery verification.',
+      instructions: 'SERVICE_GUIDE_SENTINEL_CC: use echo only for synthetic fixture text.',
+      tools: [tool('echo', 'Echo synthetic fixture text', { text: z.string() }, async ({ text }) => {
+        calls.push(text)
+        return { content: [{ type: 'text', text: `echo-receipt:${text}` }] }
+      })],
+    })
+    const h = await startHarness({ systemPrompt, mcpServers: { guide: service } })
+    let beforeExecution = ''
+    const echo: Step = { toolUse: { name: 'mcp__guide__echo', input: { text: 'synthetic-echo-cc' } } }
+    h.plan.push(request => {
+      beforeExecution = JSON.stringify({ system: request.system, messages: request.messages })
+      if (request.tools.some((definition: any) => definition.name === 'mcp__guide__echo' && definition.defer_loading !== true)) return echo
+      h.plan.unshift(echo)
+      return { toolUse: { name: 'ToolSearch', input: { query: 'select:mcp__guide__echo', max_results: 1 } } }
+    }, { text: 'Echo received.' })
+    await h.session.send('Echo the synthetic fixture text through the mounted service.')
+    await h.waitForResults(1)
+    expect(h.results()[0]).toMatchObject({ type: 'result', is_error: false })
+    expect(beforeExecution).toContain('SERVICE_GUIDE_SENTINEL_CC')
+    expect(calls).toEqual(['synthetic-echo-cc'])
+    expect(JSON.stringify(h.modelRequests.at(-1).messages)).toContain('echo-receipt:synthetic-echo-cc')
+  }, 60_000)
+
+  it('preserves configured native guidance and history on an unchanged resume', async () => {
+    const h = await startHarness({ systemPrompt: { type: 'preset', preset: 'default', append: 'unchanged-host-marker-46' } })
+    h.plan.push({ text: 'unchanged-assistant-history-46' })
+    await h.session.send('unchanged-user-history-46')
+    await h.waitForResults(1)
+    const nativeId = h.frames.find(frame => frame.type === 'system' && frame.subtype === 'init')?.session_id
+    expect(nativeId).toEqual(expect.any(String))
+    h.session.close()
+    await h.session.flush()
+    const resumed = new CcSession({ ...h.sessionOptions, resume: nativeId }, h.launch)
+    try {
+      await resumed.send('Continue unchanged.')
+      for await (const _frame of resumed.stream()) {}
+      const request = h.modelRequests.at(-1)
+      const text = typeof request.system === 'string' ? request.system : request.system.map((block: any) => block.text ?? '').join('\n')
+      expect(text.split('unchanged-host-marker-46')).toHaveLength(2)
+      expect(text.length).toBeGreaterThan(1000)
+      expect(JSON.stringify(request.messages)).toContain('unchanged-user-history-46')
+      expect(JSON.stringify(request.messages)).toContain('unchanged-assistant-history-46')
+    } finally { resumed.close(); await resumed.flush() }
+  }, 90_000)
+
+  it('refreshes intentional host context through initialize across repeated native resumes', async () => {
+    const h = await startHarness({ systemPrompt: { type: 'preset', preset: 'default', append: 'original-host-marker-47' } })
+    h.plan.push({ text: 'reload-assistant-history-47' })
+    await h.session.send('reload-user-history-47')
+    await h.waitForResults(1)
+    const nativeId = h.frames.find(frame => frame.type === 'system' && frame.subtype === 'init')?.session_id
+    expect(nativeId).toEqual(expect.any(String))
+    h.session.close()
+    await h.session.flush()
+    for (let index = 0; index < 2; index++) {
+      const resumed = new CcSession({ ...h.sessionOptions, resume: nativeId, systemPromptSnapshot: false, systemPrompt: { type: 'preset', preset: 'default', append: 'latest-host-marker-48' } }, h.launch)
+      try {
+        await resumed.send(`Continue intentional reload ${index}.`)
+        const frames = []
+        for await (const frame of resumed.stream()) frames.push(frame)
+        expect(frames.at(-1)).toMatchObject({ type: 'result', is_error: false })
+        const request = h.modelRequests.at(-1)
+        const text = typeof request.system === 'string' ? request.system : request.system.map((block: any) => block.text ?? '').join('\n')
+        expect(text.split('latest-host-marker-48')).toHaveLength(2)
+        expect(text).not.toContain('original-host-marker-47')
+        expect(text.length).toBeGreaterThan(1000)
+        expect(JSON.stringify(request.messages)).toContain('reload-user-history-47')
+        expect(JSON.stringify(request.messages)).toContain('reload-assistant-history-47')
+      } finally { resumed.close(); await resumed.flush() }
+    }
+  }, 90_000)
+
+  it('experiment: disabling supported native snapshots refreshes resumed host context, not the production default', async context => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'halo-cc-help-'))
+    let help: string
+    try {
+      help = execFileSync(CLI.endsWith('.js') ? process.execPath : CLI, [...(CLI.endsWith('.js') ? [CLI] : []), '--help'], {
+        timeout: 15_000, maxBuffer: 1024 * 1024, encoding: 'utf8', cwd: directory,
+        env: { PATH: process.env.PATH, HOME: directory, USERPROFILE: directory, CLAUDE_CONFIG_DIR: directory, XDG_CONFIG_HOME: directory, XDG_CACHE_HOME: directory, XDG_DATA_HOME: directory, APPDATA: directory, LOCALAPPDATA: directory, ELECTRON_RUN_AS_NODE: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9' },
+      })
+    } finally { rmSync(directory, { recursive: true, force: true }) }
+    if (!help.includes('--system-prompt-snapshot')) {
+      console.log('CC snapshot experiment skipped: native flag unsupported; resumed context refresh remains unverified')
+      context.skip()
+      return
+    }
+    const appended = await startHarness({ systemPrompt: { type: 'preset', preset: 'default', append: 'host-prompt-marker-42' }, extraArgs: { 'dangerously-skip-permissions': null, 'system-prompt-snapshot': 'off' } })
+    await appended.session.send('Reply briefly.')
+    await appended.waitForResults(1)
+    const systemText = (request: any) => typeof request.system === 'string' ? request.system : request.system.map((block: any) => block.text ?? '').join('\n')
+    expect(systemText(appended.modelRequests[0]).split('host-prompt-marker-42')).toHaveLength(2)
+    const nativeId = appended.frames.find(frame => frame.type === 'system' && frame.subtype === 'init')?.session_id
+    expect(nativeId).toEqual(expect.any(String))
+    appended.session.close()
+    await appended.session.flush()
+    const resumed = new CcSession({ ...appended.sessionOptions, resume: nativeId, systemPrompt: { type: 'preset', preset: 'default', append: 'resumed-host-marker-43' } }, appended.launch)
+    try {
+      await resumed.send('Continue briefly.')
+      for await (const _frame of resumed.stream()) {}
+      expect(appended.modelRequests.length).toBeGreaterThan(1)
+      const resumedText = systemText(appended.modelRequests.at(-1))
+      expect(resumedText.split('resumed-host-marker-43')).toHaveLength(2)
+      expect(resumedText).not.toContain('host-prompt-marker-42')
+      expect(resumedText.length).toBeGreaterThan(1000)
+    } finally { resumed.close(); await resumed.flush() }
+  }, 90_000)
+
   it('delivers validated full-question answers through the real host callback to the next model request', async () => {
     const conversationId = `ask-${Date.now()}`
     const questions = [
@@ -240,6 +384,30 @@ describe.skipIf(!enabled)('Claude Code live input (real CLI)', () => {
     expect(JSON.stringify(h.modelRequests)).not.toContain('OBSOLETE_PROFILE_SENTINEL')
     expect(JSON.stringify(h.modelRequests)).not.toContain('obsolete-profile')
   })
+
+  it('executes host MCP collaboration with snapshot refresh while retaining native tool restrictions', async () => {
+    const h = await startHarness({ systemPromptSnapshot: false, systemPrompt: { type: 'preset', preset: 'default', append: 'mcp-refresh-host-marker-49' }, disallowedTools: ['NotebookEdit'] })
+    const delegate: Step = { toolUse: { name: 'mcp__h__spawn_agent', input: { prompt: 'Inspect the refreshed fixture.' } } }
+    h.plan.push(request => {
+      if (request.tools.some((tool: any) => tool.name === 'mcp__h__spawn_agent' && tool.defer_loading !== true)) return delegate
+      h.plan.unshift(delegate)
+      return { toolUse: { name: 'ToolSearch', input: { query: 'select:mcp__h__spawn_agent', max_results: 1 } } }
+    }, { text: 'done' })
+    await h.session.send('Use the mounted host collaboration tool after refreshing context.')
+    await h.waitForResults(1)
+    expect(h.results()[0]).toMatchObject({ type: 'result', is_error: false })
+    expect(h.toolCalls).toEqual(['collaborator'])
+    expect(JSON.stringify(h.modelRequests)).toContain('host-collaboration-receipt')
+    const names = h.modelRequests.flatMap(request => request.tools.map((tool: any) => tool.name))
+    for (const name of ['Agent', 'Task', 'TeamCreate', 'TeamDelete', 'SendMessage', 'NotebookEdit']) expect(names).not.toContain(name)
+    expect(names).toContain('Bash')
+    expect(names).toContain('mcp__h__spawn_agent')
+    for (const request of h.modelRequests) {
+      const text = typeof request.system === 'string' ? request.system : request.system.map((block: any) => block.text ?? '').join('\n')
+      expect(text.split('mcp-refresh-host-marker-49')).toHaveLength(2)
+      expect(text.length).toBeGreaterThan(1000)
+    }
+  }, 60_000)
 
   it('keeps inspectable inline skills executable with native delegation disabled', async () => {
     const h = await startHarness({ settingSources: ['project'] })

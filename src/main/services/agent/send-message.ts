@@ -256,7 +256,7 @@ export async function sendMessage(
     // The conversation's pinned account, or the global selection when it has
     // no pin or the pinned account was removed.
     const credentials = await getApiCredentialsForSelection(conversation)
-    console.log(`[Agent] sendMessage using: ${credentials.provider}, model: ${credentials.model}, prompt: ${config.agent?.promptProfile ?? 'halo'}`)
+    console.log(`[Agent] sendMessage using: ${credentials.provider}, model: ${credentials.model}`)
     console.log(`[Agent] turn_start conv=${conversationId} model=${credentials.model} ts=${Date.now()}`)
 
     // The conversation's own level wins over one the send carries (API callers).
@@ -407,7 +407,7 @@ export async function sendMessage(
     // Prepare message content (canvas context prefix + multi-modal images).
     // With the non-vision fallback active, image blocks are replaced by the
     // injected attachment-paths block.
-    const canvasPrefix = formatCanvasContext(canvasContext)
+    const canvasPrefix = engineId === 'halo' && opensWithSlashCommand(message) ? '' : formatCanvasContext(canvasContext)
     // The space's memory opens a new conversation only: a resumed one carries
     // it forward in its own transcript.
     const attachments = formatTurnAttachments({ references, task, taskInstructions: request.taskInstructions, workDir })

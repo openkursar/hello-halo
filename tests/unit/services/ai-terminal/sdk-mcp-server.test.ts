@@ -17,6 +17,7 @@ vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
 }))
 
 import { createTerminalMcpServer, type TerminalToolScope } from '../../../../src/main/services/ai-terminal/sdk-mcp-server'
+import { AI_TERMINAL_DESCRIPTION, AI_TERMINAL_INSTRUCTIONS } from '../../../../src/main/services/ai-terminal/guidance'
 
 type Tool = { name: string; handler: (args: any) => Promise<{ content: { text: string }[]; isError?: boolean }> }
 
@@ -48,7 +49,18 @@ function build(session?: ReturnType<typeof fakeSession>) {
   return { ctx, tools, session }
 }
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => { vi.clearAllMocks() })
+
+it('supplies discovery metadata without starting a terminal or a resident tutorial', () => {
+  const { ctx } = build()
+  const server = createTerminalMcpServer(ctx as any, SCOPE)
+  expect(server).toMatchObject({ description: AI_TERMINAL_DESCRIPTION, instructions: AI_TERMINAL_INSTRUCTIONS })
+  expect(ctx.create).not.toHaveBeenCalled()
+  expect(AI_TERMINAL_INSTRUCTIONS).toContain('Do not read the screen during credential entry')
+  expect(AI_TERMINAL_INSTRUCTIONS).toContain('After user input, read mode="screen"')
+  expect(AI_TERMINAL_INSTRUCTIONS).toContain('awaiting continuation')
+  expect(AI_TERMINAL_INSTRUCTIONS).not.toContain('## AI Terminal')
+})
 
 describe('scope guard — foreign-space session is invisible', () => {
   // Session exists in the context but belongs to space-B; getScoped must reject it.

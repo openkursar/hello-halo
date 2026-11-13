@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import { join } from 'path'
-import { deleteChatSessionId, deleteRunTranscript, loadChatEngineState, loadChatSessionId, openSessionWriter, readChatHandoffHistory, saveChatEngineBinding, saveChatEngineRouting, saveChatSessionId } from '../../../../src/main/apps/runtime/session-store'
+import { deleteChatSessionId, deleteRunTranscript, loadChatEngineState, loadChatSessionId, openSessionWriter, readChatHandoffHistory, saveChatEngineBinding, saveChatEngineRouting, saveChatSessionId, reloadChatInstructions, copyChatEngineState } from '../../../../src/main/apps/runtime/session-store'
 import type { EngineSessionBinding } from '../../../../src/shared/types/engine-session'
 
 vi.mock('fs', async importOriginal => {
@@ -38,6 +38,78 @@ describe('app engine session bindings', () => {
     saveChatEngineRouting(root, 'app', 'run', 'halo', {})
     expect(saveChatEngineRouting(root, 'app', 'other', 'halo', { sessionId: 'legacy-native' })).toEqual({ sessionId: 'legacy-native' })
     expect(JSON.parse(fs.readFileSync(map, 'utf8')).other).toBe('legacy-native')
+  })
+
+  it('reloads only existing CC and legacy chat bindings, preserving native history and other entries', () => {
+    const { root, map } = paths()
+    saveChatEngineBinding(root, 'app', 'chat', binding('anthropic', 'cc-native'))
+    saveChatSessionId(root, 'app', 'chat-local-direct-old', 'legacy-native')
+    saveChatEngineBinding(root, 'app', 'chat-halo', binding('halo', 'halo-native'))
+    saveChatEngineBinding(root, 'app', 'scheduled-run', binding('anthropic', 'run-native'))
+    saveChatEngineRouting(root, 'app', 'chat-pending', 'anthropic', {})
+    const writer = openSessionWriter(root, 'app', 'chat')
+    writer.writeTrigger('Keep the original conversation')
+    const transcript = join(root, '.halo/apps/app/runs/chat.jsonl')
+    const beforeTranscript = fs.readFileSync(transcript, 'utf8')
+    const before = loadChatEngineState(root, 'app', 'chat')
+    const rename = vi.spyOn(fs, 'renameSync')
+    rename.mockClear()
+    expect(reloadChatInstructions(root, 'app')).toBe(2)
+    expect(rename).toHaveBeenCalledTimes(1)
+    const current = loadChatEngineState(root, 'app', 'chat')
+    expect(current).toEqual({ sessionId: 'cc-native', binding: { ...binding('anthropic', 'cc-native'), useCurrentInstructions: true }, useCurrentInstructions: true })
+    expect(loadChatEngineState(root, 'app', 'chat-local-direct-old')).toEqual({ sessionId: 'legacy-native', useCurrentInstructions: true })
+    expect(JSON.parse(fs.readFileSync(map, 'utf8'))).toMatchObject({
+      'chat-halo': binding('halo', 'halo-native'), 'scheduled-run': binding('anthropic', 'run-native'),
+      'chat-pending': { version: 1, engineId: 'anthropic' },
+    })
+    expect(fs.readFileSync(transcript, 'utf8')).toBe(beforeTranscript)
+    expect(saveChatEngineBinding(root, 'app', 'chat', binding('anthropic', 'cc-native'), before)).toBe(false)
+    expect(() => saveChatEngineRouting(root, 'app', 'chat', 'anthropic', before)).toThrow('changed while')
+    rename.mockClear()
+    expect(reloadChatInstructions(root, 'app')).toBe(0)
+    expect(rename).not.toHaveBeenCalled()
+    saveChatSessionId(root, 'app', 'chat-local-direct-old', 'legacy-native')
+    expect(rename).not.toHaveBeenCalled()
+    expect(loadChatEngineState(root, 'app', 'chat-local-direct-old').useCurrentInstructions).toBe(true)
+    expect(saveChatEngineBinding(root, 'app', 'chat', binding('halo', 'new-halo'), current)).toBe(true)
+    expect(loadChatEngineState(root, 'app', 'chat')).toEqual({ sessionId: 'new-halo', binding: binding('halo', 'new-halo') })
+  })
+
+  it('keeps reload intent on a legacy row until its acknowledged binding replaces it', () => {
+    const { root } = paths()
+    saveChatSessionId(root, 'app', 'chat', 'legacy')
+    reloadChatInstructions(root, 'app')
+    const expected = loadChatEngineState(root, 'app', 'chat')
+    expect(saveChatEngineRouting(root, 'app', 'chat', 'halo', expected)).toEqual(expected)
+    expect(saveChatEngineBinding(root, 'app', 'chat', { ...binding('anthropic', 'legacy'), useCurrentInstructions: true }, expected)).toBe(true)
+    expect(loadChatEngineState(root, 'app', 'chat')).toMatchObject({ useCurrentInstructions: true, binding: { engineId: 'anthropic', sessionId: 'legacy', useCurrentInstructions: true } })
+    deleteChatSessionId(root, 'app', 'chat')
+    expect(loadChatEngineState(root, 'app', 'chat')).toEqual({})
+  })
+
+  it.each([
+    { version: 1, engineId: 'anthropic', useCurrentInstructions: false },
+    { version: 1, engineId: 'anthropic', useCurrentInstructions: 'invalid' },
+    { version: 1, engineId: 'anthropic', legacySessionId: 'legacy', useCurrentInstructions: true },
+  ])('refuses malformed reload metadata instead of treating it as an ordinary route', value => {
+    const { root, map } = paths()
+    fs.mkdirSync(join(map, '..'), { recursive: true })
+    const raw = JSON.stringify({ chat: value })
+    fs.writeFileSync(map, raw)
+    expect(() => loadChatEngineState(root, 'app', 'chat')).toThrow('reload state is invalid')
+    expect(() => reloadChatInstructions(root, 'app')).toThrow('Could not reload')
+    expect(fs.readFileSync(map, 'utf8')).toBe(raw)
+  })
+
+  it('preserves binding bytes and reports a failed reload write', () => {
+    const { root, map } = paths()
+    saveChatEngineBinding(root, 'app', 'chat', binding('anthropic', 'native'))
+    const before = fs.readFileSync(map, 'utf8')
+    vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => { throw new Error('unavailable') })
+    expect(() => reloadChatInstructions(root, 'app')).toThrow('Could not reload')
+    expect(fs.readFileSync(map, 'utf8')).toBe(before)
+    expect(fs.readdirSync(join(map, '..')).some(name => name.endsWith('.tmp'))).toBe(false)
   })
 
   it('removes routing and native bindings when their run transcripts are retained no longer', () => {
@@ -123,6 +195,104 @@ describe('app engine session bindings', () => {
     expect(() => loadChatEngineState(root, 'app', 'run')).toThrow('unavailable')
     expect(JSON.parse(fs.readFileSync(map, 'utf8'))).toEqual({ run: 'old' })
     expect(loadChatEngineState(root, 'app', 'run')).toEqual({ sessionId: 'old' })
+  })
+})
+
+describe('copying engine state into a new client conversation', () => {
+  it.each(['legacy-reload', 'modern-reload', 'modern-unchanged'] as const)('copies %s without changing the source or inferring its engine', format => {
+    const { root, map } = paths()
+    if (format === 'legacy-reload') saveChatSessionId(root, 'app', 'chat', 'native')
+    else saveChatEngineBinding(root, 'app', 'chat', binding('anthropic', 'native'))
+    saveChatEngineBinding(root, 'app', 'other', binding('halo', 'other-native'))
+    if (format !== 'modern-unchanged') reloadChatInstructions(root, 'app')
+    const before = JSON.parse(fs.readFileSync(map, 'utf8'))
+    const read = vi.mocked(fs.readFileSync)
+    read.mockClear()
+    const rename = vi.mocked(fs.renameSync)
+    rename.mockClear()
+    copyChatEngineState(root, 'app', 'chat', 'chat-local-direct-fork')
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(rename).toHaveBeenCalledTimes(1)
+    const state = loadChatEngineState(root, 'app', 'chat-local-direct-fork')
+    expect(state).toEqual(loadChatEngineState(root, 'app', 'chat'))
+    const after = JSON.parse(fs.readFileSync(map, 'utf8'))
+    expect(after).toEqual({ ...before, 'chat-local-direct-fork': before.chat })
+    if (format === 'legacy-reload') {
+      expect(state).toEqual({ sessionId: 'native', useCurrentInstructions: true })
+      expect(after['chat-local-direct-fork']).toEqual({ version: 1, legacySessionId: 'native', useCurrentInstructions: true })
+    }
+    const recreated = loadChatEngineState(root, 'app', 'chat-local-direct-fork')
+    expect(recreated).toEqual(state)
+  })
+
+  it.each(['missing', 'legacy', 'routing'] as const)('leaves a %s source on its original pending-resume path without writing', kind => {
+    const { root, map } = paths()
+    saveChatSessionId(root, 'app', 'other', 'untouched')
+    if (kind === 'legacy') saveChatSessionId(root, 'app', 'chat', 'unbound-native')
+    if (kind === 'routing') saveChatEngineRouting(root, 'app', 'chat', 'anthropic')
+    const before = fs.readFileSync(map, 'utf8')
+    const rename = vi.mocked(fs.renameSync)
+    rename.mockClear()
+    copyChatEngineState(root, 'app', 'chat', 'chat-local-direct-fork')
+    expect(rename).not.toHaveBeenCalled()
+    expect(fs.readFileSync(map, 'utf8')).toBe(before)
+    expect(loadChatEngineState(root, 'app', 'chat-local-direct-fork')).toEqual({})
+  })
+
+  it.each(['anthropic', 'halo', 'codex', 'dsh'] as const)('keeps %s ownership unchanged when copying an existing binding', engineId => {
+    const { root } = paths()
+    const source = binding(engineId, 'source-native')
+    saveChatEngineBinding(root, 'app', 'chat', source)
+    copyChatEngineState(root, 'app', 'chat', 'chat-local-direct-fork')
+    expect(loadChatEngineState(root, 'app', 'chat-local-direct-fork')).toEqual({ sessionId: 'source-native', binding: source })
+  })
+
+  it.each(['same-source', 'legacy-target', 'bound-target', 'routing-target', 'malformed-target'] as const)('refuses %s without replacing any existing state', conflict => {
+    const { root, map } = paths()
+    saveChatSessionId(root, 'app', 'chat', 'source-native')
+    reloadChatInstructions(root, 'app')
+    const target = conflict === 'same-source' ? 'chat' : 'chat-local-direct-fork'
+    if (conflict === 'legacy-target') saveChatSessionId(root, 'app', target, 'target-native')
+    if (conflict === 'bound-target') saveChatEngineBinding(root, 'app', target, binding('halo', 'target-native'))
+    if (conflict === 'routing-target') saveChatEngineRouting(root, 'app', target, 'halo')
+    if (conflict === 'malformed-target') {
+      const current = JSON.parse(fs.readFileSync(map, 'utf8'))
+      current[target] = null
+      fs.writeFileSync(map, JSON.stringify(current))
+    }
+    const before = fs.readFileSync(map, 'utf8')
+    const rename = vi.mocked(fs.renameSync)
+    rename.mockClear()
+    expect(() => copyChatEngineState(root, 'app', 'chat', target)).toThrow('Could not preserve')
+    expect(rename).not.toHaveBeenCalled()
+    expect(fs.readFileSync(map, 'utf8')).toBe(before)
+  })
+
+  it.each([
+    { version: 1, engineId: 'anthropic', useCurrentInstructions: true },
+    { version: 1, legacySessionId: 'source-native', useCurrentInstructions: false },
+  ])('refuses malformed source metadata without creating destination state', source => {
+    const { root, map } = paths()
+    fs.mkdirSync(join(map, '..'), { recursive: true })
+    const before = JSON.stringify({ chat: source })
+    fs.writeFileSync(map, before)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(() => copyChatEngineState(root, 'app', 'chat', 'chat-local-direct-fork')).toThrow('Could not preserve')
+    expect(error).toHaveBeenLastCalledWith(expect.stringContaining('Could not copy fork engine state'), expect.any(Error))
+    expect(fs.readFileSync(map, 'utf8')).toBe(before)
+  })
+
+  it.each(['read', 'write'] as const)('preserves the map when its %s fails', operation => {
+    const { root, map } = paths()
+    saveChatSessionId(root, 'app', 'chat', 'source-native')
+    reloadChatInstructions(root, 'app')
+    const before = fs.readFileSync(map, 'utf8')
+    const unavailable = Object.assign(new Error('resource unavailable'), { code: 'EBUSY' })
+    if (operation === 'read') vi.mocked(fs.readFileSync).mockImplementationOnce(() => { throw unavailable })
+    else vi.mocked(fs.renameSync).mockImplementationOnce(() => { throw unavailable })
+    expect(() => copyChatEngineState(root, 'app', 'chat', 'chat-local-direct-fork')).toThrow('Could not preserve')
+    expect(fs.readFileSync(map, 'utf8')).toBe(before)
+    expect(fs.readdirSync(join(map, '..')).some(name => name.endsWith('.tmp'))).toBe(false)
   })
 })
 

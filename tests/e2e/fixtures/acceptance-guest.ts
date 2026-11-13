@@ -64,6 +64,7 @@ async function switchByText(card: Locator, label: string, value: boolean) {
 }
 
 export async function waitForGuestChannel(page: Page, context: GuestApp, wecom: AcceptanceWecom) {
+  await waitForGuestAppReady(page)
   await expect.poll(async () => {
     const configuration = await guestConfiguration(page, context.instanceId)
     expect(configuration.config.wsUrl).toBe(wecom.url)
@@ -134,6 +135,15 @@ export async function showImConversation(page: Page, context: GuestApp, chatId: 
   await expect(shown).toContainText(reply)
 }
 
+async function waitForGuestAppReady(page: Page) {
+  await expect.poll(async () => {
+    const status = await page.evaluate(() => (window as unknown as { halo: HaloAPI }).halo.getBootstrapStatus())
+    expect(status.success).toBe(true)
+    return status.data?.extendedReady
+  }, { timeout: 30000 }).toBe(true)
+  await expect.poll(() => page.evaluate(() => (window as unknown as { halo: HaloAPI }).halo.appList({ type: 'automation' }).then(result => result.success)), { timeout: 30000 }).toBe(true)
+}
+
 export const test = base.extend<GuestFixtures>({
   wecom: [async ({}, use, testInfo) => {
     const wecom = await startAcceptanceWecom()
@@ -146,7 +156,7 @@ export const test = base.extend<GuestFixtures>({
   }, { auto: true }],
   guestApp: async ({ acceptanceApp, wecom }, use) => {
     let window = acceptanceApp.window
-    await expect.poll(() => window.evaluate(() => (window as unknown as { halo: HaloAPI }).halo.appList({ type: 'automation' }).then(result => result.success)), { timeout: 30000 }).toBe(true)
+    await waitForGuestAppReady(window)
     const space = await seedManagedSpace(window, 'Guest permission workspace')
     const appName = 'Acceptance permission assistant'
     const installed = await window.evaluate(({ appName, spaceId }) => (window as unknown as { halo: HaloAPI }).halo.appInstall({
@@ -168,7 +178,7 @@ export const test = base.extend<GuestFixtures>({
     const added = await window.evaluate(instance => (window as unknown as { halo: HaloAPI }).halo.imChannelsCreateInstance(instance), instance)
     expect(added.success).toBe(true)
     window = await acceptanceApp.restart()
-    await expect.poll(() => window.evaluate(() => (window as unknown as { halo: HaloAPI }).halo.appList({ type: 'automation' }).then(result => result.success)), { timeout: 30000 }).toBe(true)
+    await waitForGuestAppReady(window)
     const card = await guestChannelCard(window, context)
     await switchByText(card, 'Permission Control', true)
     const owners = card.locator('label').filter({ hasText: /^Owner User IDs$/ }).locator('..').locator('textarea')

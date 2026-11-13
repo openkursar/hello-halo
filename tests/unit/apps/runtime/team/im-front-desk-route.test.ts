@@ -24,6 +24,9 @@ const { channel, appChatCalls, turn } = vi.hoisted(() => ({
   channel: {
     config: undefined as Record<string, unknown> | undefined,
     instance: undefined as Record<string, unknown> | undefined,
+    session: undefined as Record<string, unknown> | undefined,
+    registryAvailable: true,
+    registryFailure: undefined as Error | undefined,
   },
   appChatCalls: [] as Record<string, unknown>[],
   /**
@@ -55,7 +58,12 @@ vi.mock('../../../../../src/main/apps/runtime/im-channels', () => ({
 }))
 
 vi.mock('../../../../../src/main/apps/runtime/im-session-registry', () => ({
-  getImSessionRegistry: () => null,
+  getImSessionRegistry: () => channel.registryAvailable ? {
+    findSession: () => {
+      if (channel.registryFailure) throw channel.registryFailure
+      return channel.session
+    },
+  } : null,
 }))
 
 // What a chat is told of a refused local connection is im-error-reply.test's.
@@ -75,6 +83,7 @@ vi.mock('../../../../../src/main/apps/runtime/app-chat', () => ({
 
 import { createDefaultSessionDeps } from '../../../../../src/main/apps/runtime/team'
 import type { TeamStore } from '../../../../../src/main/apps/team'
+import { buildImEntry, type ImSessionContext } from '../../../../../src/main/apps/runtime/im-channels/im-prompt'
 import { AppChatTurnInterrupted, withTurnEndingNote, type AppChatTurnEnding } from '../../../../../src/main/apps/runtime/turn-ending'
 
 const TEAM_ID = 'team-1'
@@ -115,6 +124,9 @@ beforeEach(() => {
   turn.ending = undefined
   turn.failure = undefined
   turn.joined = false
+  channel.session = undefined
+  channel.registryAvailable = true
+  channel.registryFailure = undefined
   channel.config = { id: INSTANCE_ID, teamId: TEAM_ID, appId: MEMBER_APP_ID }
   channel.instance = {
     providerType: 'wecom-bot',
@@ -132,6 +144,65 @@ describe('woken front-desk turn — the IM route is resolved in full', () => {
     // The half that was missing. Its ABSENCE is what changed the tool set
     // between the two routes and destroyed the turn.
     expect(typeof request.imFileSend).toBe('function')
+  })
+
+  it.each([
+    { resolvedName: 'Resolved contact', customName: 'My custom label', lastSender: 'Platform contact' },
+    { resolvedName: undefined, customName: 'My custom label', lastSender: 'Platform contact' },
+    { resolvedName: undefined, customName: undefined, lastSender: undefined },
+  ])('keeps direct contact framing identical to human dispatch with $resolvedName', async (names) => {
+    const contactId = 'contact-42'
+    channel.session = { contactId, displayName: CHAT_ID, ...names }
+    await wake(storeWithEpoch())
+
+    const humanSession: ImSessionContext = {
+      channel: 'wecom-bot', chatType: 'direct', sessionId: `${INSTANCE_ID}:${CHAT_ID}`,
+      displayName: names.customName || names.resolvedName || CHAT_ID,
+      senderIdentity: { id: contactId, name: names.resolvedName ?? names.lastSender ?? contactId },
+    }
+    const wokenSession = appChatCalls[0].imSession as ImSessionContext
+    expect(wokenSession).toEqual(humanSession)
+    expect(buildImEntry(wokenSession, [contactId])).toBe(buildImEntry(humanSession, [contactId]))
+    expect(wokenSession.senderIdentity?.id).not.toBe('lead-app')
+  })
+
+  it('never promotes a group’s last sender to a fixed contact', async () => {
+    channel.session = { contactId: 'group-contact', resolvedName: 'Resolved group', lastSender: 'Latest person' }
+    await wake(storeWithEpoch(`${INSTANCE_ID}:group:${CHAT_ID}`))
+    expect(appChatCalls[0].imSession).toMatchObject({ displayName: 'Resolved group', senderIdentity: undefined })
+  })
+
+  it('does not guess a missing direct contact from a display label or wake sender', async () => {
+    channel.session = { customName: 'Custom label', lastSender: 'Latest person' }
+    await wake(storeWithEpoch())
+    expect((appChatCalls[0].imSession as ImSessionContext).senderIdentity).toBeUndefined()
+  })
+
+  it('logs a registry exception once without leaking its content and keeps the route fallback', async () => {
+    channel.registryFailure = new Error('private-contact-and-path-marker')
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await wake(storeWithEpoch())
+      expect(warnings.mock.calls).toEqual([[
+        `[TeamRuntime] IM route identity unavailable: conversation=${SESSION_KEY}, stage=registry-context, fallback=chat-id`,
+      ]])
+      expect(appChatCalls[0].imSession).toMatchObject({ displayName: CHAT_ID, senderIdentity: undefined })
+      expect(typeof appChatCalls[0].imFileSend).toBe('function')
+    } finally {
+      warnings.mockRestore()
+    }
+  })
+
+  it('keeps an optional absent registry quiet', async () => {
+    channel.registryAvailable = false
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await wake(storeWithEpoch())
+      expect(warnings).not.toHaveBeenCalled()
+      expect(appChatCalls[0].imSession).toMatchObject({ displayName: CHAT_ID, senderIdentity: undefined })
+    } finally {
+      warnings.mockRestore()
+    }
   })
 
   it('pushes the reply back to that chat', async () => {

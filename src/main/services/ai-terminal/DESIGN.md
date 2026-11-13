@@ -220,7 +220,8 @@ Main (`src/main/services/ai-terminal/`):
 | `events.ts` | Process-global event bus the context forwards to; transport subscribes here |
 | `sdk-mcp-server.ts` | `createTerminalMcpServer(ctx, scope)` — the 7 MCP tools |
 | `service.ts` | User/transport-facing ops (list/input/resize/kill/create/replay/viewer attach-detach-ack) |
-| `index.ts` | Public API + `AI_TERMINAL_SYSTEM_PROMPT` |
+| `index.ts` | Public API and service metadata exports |
+| `guidance.ts` | Resource-independent description and service instructions; no resident terminal tutorial |
 
 Worker (`src/worker/pty-host/`):
 

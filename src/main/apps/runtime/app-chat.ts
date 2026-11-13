@@ -80,6 +80,7 @@ import type { AppChatTurnEnding } from './turn-ending'
 import {
   beginAppChatTurnStart,
   cancelAppChatTurnStarts,
+  getStartingAppChatConversations,
   isAppChatConversationGenerating,
   isAppChatTurnDispatched,
   onAppChatConversationChange,
@@ -92,12 +93,10 @@ import {
 // synchronously and cannot import this module (app-chat imports the team
 // runtime accessor, so the edge back would close a cycle).
 export { isAppChatConversationGenerating, onAppChatConversationChange }
-import { assembleAppChatPrompt } from './prompt/assembler'
-import { buildIdentityFragments } from './prompt/identity'
+import { buildDigitalHumanChatPrompt } from './prompt/chat'
 import { buildDisabledCapabilitiesGuidance, buildUnconfiguredCapabilitiesGuidance } from './prompt/capabilities'
-import { NATIVE_CHAT_ENTRY } from './prompt/entry-native'
-import { buildImEntry, buildImConstraints, type ImSessionContext } from './im-channels/im-prompt'
-import { buildRestrictionNotice, buildTeamEntry, buildTeamConstraints, buildTeamImBridge } from './team/team-prompt'
+import type { ImSessionContext } from './im-channels/im-prompt'
+import { buildRestrictionNotice } from './team/team-prompt'
 import { getActiveTeamRuntime } from './team'
 import { consumeIntentionalStop } from './intentional-stop'
 import { bindSourceToolSession, bindTeamToolSession } from './team/tool-session'
@@ -148,7 +147,7 @@ import { createEmailMcpServer } from '../../services/email-mcp'
 import { createConversationCollabMcpServer, resolveConversationCollab } from './conversation-collab'
 import { withheldWebSearch, withholdWebSearchBuiltins } from './web-search-switch'
 import { getSpace, getSpaceDir, isSpaceMemoryEnabled } from '../../services/space.service'
-import { readSessionMessages, readSessionTranscript, readSessionMessageThoughts, loadChatEngineState, saveChatEngineBinding, saveChatEngineRouting, deleteChatSessionId, copySessionJsonl } from './session-store'
+import { readSessionMessages, readSessionTranscript, readSessionMessageThoughts, loadChatEngineState, copyChatEngineState, saveChatEngineRouting, reloadChatInstructions, deleteChatSessionId, copySessionJsonl } from './session-store'
 import { prepareAppEngineSession, resolveAppSessionEngine } from './engine-selection'
 import type { Thought, TranscriptMessage, TranscriptPageRequest, TranscriptProvenance } from '../../../shared/types/transcript'
 import { getAppMemoryService, getActivityStore } from './index'
@@ -156,8 +155,6 @@ import { resolveExecutionEnvironment, validateExecutionEnvironment, legacySessio
 import { getTeamStore, getTeamService } from '../team'
 import { resolveParticipantExecution } from './team/participant-execution'
 import { listStandingTeams } from './standing-teams'
-import { buildSelfIdentityPrompt } from './prompt/self-identity'
-import { buildTeamGuidance } from './prompt/team-guidance'
 import {
   prepareMemoryForTurn,
   requestAppMemoryConsolidation,
@@ -843,30 +840,6 @@ async function runAppChatTurn(
     team: !!teamContext,
   })
 
-  // Three-layer prompt assembly. The assembler is channel-agnostic;
-  // this call site is the only place that knows whether the entry is
-  // IM (group/direct) or native UI. See src/main/apps/runtime/prompt/
-  // and src/main/apps/runtime/im-channels/im-prompt.ts.
-  const identity = buildIdentityFragments({
-    engineId,
-    appId: app.id,
-    appSpec: app.spec,
-    memoryInstructions,
-    userConfig: mergedConfig,
-    usesAIBrowser,
-    usesTerminal,
-    usesHaloApi,
-    workDir,
-    modelInfo: resolvedCreds.displayModel,
-    withholdDigitalHumans: disposableMember,
-    disabledCapabilities: buildDisabledCapabilitiesGuidance(app) ?? undefined,
-    unconfiguredCapabilities: buildUnconfiguredCapabilitiesGuidance(app, {
-      emailChannelConfigured: notifyAvail.emailChannelConfigured,
-      imContactsAvailable: notifyAvail.imContactsAvailable,
-    }) ?? undefined,
-  })
-  if (permCtx?.isOwner !== false) identity.push(buildSelfIdentityPrompt(app.id, app.spec.name))
-
   if (teamContext) {
     // Every team turn (user/IM/teammate) stamps the epoch's activity, and wakes
     // it when hibernated so coordination resumes and member replies route back.
@@ -877,48 +850,11 @@ async function runAppChatTurn(
     // envelope, never the user's words.
     getActiveTeamRuntime()?.maybeAutoNameConversation(teamContext.teamId, teamContext.epochId, fromHuman, message)
   }
-  let entry: string
-  let constraints: string[]
-  if (teamPromptCtx) {
-    // Team turns take precedence over IM. When a team turn ALSO arrives over an
-    // IM channel (a team-backed IM instance), the bound member keeps its team
-    // identity + tools and gains a front-desk bridge so it replies to the
-    // person in-chat — and the chat's owner/guest rules, as any IM chat has.
-    entry = imSession
-      ? `${buildTeamEntry(teamPromptCtx)}\n\n${buildTeamImBridge(imSession, teamPromptCtx.selfIsLead)}`
-      : buildTeamEntry(teamPromptCtx)
-    constraints = imSession
-      ? [...buildTeamConstraints(teamPromptCtx), ...buildImConstraints(imSession, permCtx?.ownerIds)]
-      : buildTeamConstraints(teamPromptCtx)
-  } else if (imSession) {
-    const notificationsAllowed = permCtx?.isOwner !== false || allowsCapability(permCtx.guestPolicy, 'allowNotify', 'strict')
-    entry = buildImEntry(imSession, permCtx?.ownerIds, {
-      channelsConfigured: notificationsAllowed && notifyAvail.channelsConfigured,
-      notifyBotAvailable: notificationsAllowed && notifyAvail.notifyBotAvailable,
-    })
-    constraints = buildImConstraints(imSession, permCtx?.ownerIds)
-  } else {
-    entry = NATIVE_CHAT_ENTRY
-    constraints = []
-  }
   // Source chats share one tool contract; a guest needs an explicit collaboration grant.
   const teamToolset = !teamContext && !origin && (imSession || parseNativeChatKey(conversationId)?.appId === appId)
     && (permCtx?.isOwner !== false || allowsCollaboration(permCtx.guestPolicy, 'strict')) && getActiveTeamRuntime()
     ? getToolset(TEAM_MCP_SERVER_NAME)
     : undefined
-  // Whoever started the turn, a person or a teammate: a fragment that came and
-  // went with the trigger would rebuild the warm session and drop its prompt
-  // cache every time the two alternate in one conversation.
-  const teamGuidance = buildTeamGuidance({
-    ...(teamToolset ? { agentTeamGuide: teamToolset.usageGuide } : {}),
-    teams: usesHaloApi ? listStandingTeams(appId) : [],
-    ...(teamPromptCtx && teamContext
-      ? { current: { teamName: teamPromptCtx.teamName, epochId: teamContext.epochId, viaIm: !!imSession } }
-      : {}),
-  })
-  if (teamGuidance) entry = `${entry}\n\n${teamGuidance}`
-  const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
-
   // ── 4. Build MCP servers ─────────────────────────────
   validateEnvironmentConnections(environment, app, manager, 'chat')
   const disabledMcpIds = new Set(
@@ -1228,8 +1164,6 @@ async function runAppChatTurn(
     sdkOptions.disallowedTools = [...new Set([...(sdkOptions.disallowedTools ?? []), ...(inherited.disallowedTools ?? [])])]
   }
 
-  // Override for app chat context
-  sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt, engineId)
   withholdWebSearchBuiltins(sdkOptions, webSearch)
 
   // Non-native sessions (IM channels, etc.) are non-interactive — the user
@@ -1336,6 +1270,42 @@ async function runAppChatTurn(
     addSdkHooks(sdkOptions, createDelegationAuditHooks(conversationId))
     console.log(`[AppChat][${appId}] Borrowed turn (teammate=${teamContext?.fromAppId ?? 'person'}, origin=${origin}): full reach, recorded`)
   }
+  const mounted = sdkOptions.mcpServers ?? mcpServers
+  const haloApiAvailable = usesHaloApi && !!mounted['halo-api-ref']
+  const notificationsAvailable = !!mounted['halo-notify']
+  const systemPrompt = buildDigitalHumanChatPrompt({
+    appId: app.id,
+    appName: app.spec.name,
+    appSpec: app.spec,
+    includeAppId: permCtx?.isOwner !== false,
+    memoryInstructions,
+    userConfig: mergedConfig,
+    usesAIBrowser: usesAIBrowser && !!mounted['ai-browser'],
+    usesHaloApi: haloApiAvailable,
+    workDir,
+    modelInfo: resolvedCreds.displayModel,
+    disabledCapabilities: buildDisabledCapabilitiesGuidance(app) ?? undefined,
+    unconfiguredCapabilities: buildUnconfiguredCapabilitiesGuidance(app, {
+      emailChannelConfigured: notifyAvail.emailChannelConfigured,
+      imContactsAvailable: notifyAvail.imContactsAvailable,
+    }) ?? undefined,
+    standingTeams: haloApiAvailable ? listStandingTeams(appId) : undefined,
+    imSession,
+    ownerIds: permCtx?.ownerIds,
+    notifications: {
+      channelsConfigured: notificationsAvailable && notifyAvail.channelsConfigured,
+      notifyBotAvailable: notificationsAvailable && notifyAvail.notifyBotAvailable,
+      fileSendAvailable: !!mounted['im-file-send'],
+    },
+    ...(teamPromptCtx && teamContext ? { team: {
+      context: teamPromptCtx,
+      conversation: { teamId: teamContext.teamId, teamName: teamPromptCtx.teamName,
+        epochId: teamContext.epochId, viaIm: !!imSession, temporary: teamPromptCtx.temporaryCollaboration },
+    } } : {}),
+    collaborationGuide: teamToolset && mounted[TEAM_MCP_SERVER_NAME] ? teamToolset.usageGuide : undefined,
+  })
+  sdkOptions.systemPrompt = toEngineSystemPrompt(systemPrompt, engineId)
+
   // Recorded calls come from the session's hooks, fixed when it was built.
   const recordsCalls = !!applied?.enforced || colleagueFullReach
 
@@ -1549,6 +1519,9 @@ async function runAppChatTurn(
       ],
     })
     const savedSessionId = sessionPlan.resumeSessionId
+    if (engineId === 'anthropic' && savedSessionId && engineState.useCurrentInstructions) {
+      sdkOptions.systemPromptSnapshot = false
+    }
     if (sessionPlan.engineHandoffContent) sdkOptions.engineHandoffContent = sessionPlan.engineHandoffContent
     if (sessionPlan.engineHandoffRecovered) sdkOptions.engineHandoffRecovered = true
     if (sessionPlan.strictNativeResume) sdkOptions.strictNativeResume = true
@@ -2310,13 +2283,29 @@ export async function restartAppChat(
 ): Promise<{ sessionsClosed: number }> {
   const { interruptActive = false } = options
   const prefix = getAppChatConversationId(appId)
+  let reloadFailures = 0
+  if (interruptActive) {
+    const paths = new Set(getActivityStore()?.listSessionEnvironments(appId).map(entry => entry.environment.spacePath) ?? [])
+    const person = getAppManager()?.getApp(appId)
+    const defaultPath = person?.spaceId ? getSpace(person.spaceId)?.path : undefined
+    if (defaultPath) paths.add(defaultPath)
+    for (const spacePath of paths) {
+      try { reloadChatInstructions(spacePath, appId) }
+      catch { reloadFailures++ }
+    }
+  }
 
   // Every cached CC subprocess of this app — including idle ones, which are the
   // whole point (they still hold the stale prompt). Generating sessions are a
   // subset: a turn cannot run without its session.
-  const sessionIds: string[] = []
+  const sessionIds = new Set<string>()
   for (const k of v2Sessions.keys()) {
-    if (k === prefix || k.startsWith(prefix + ':')) sessionIds.push(k)
+    if (k === prefix || k.startsWith(prefix + ':')) sessionIds.add(k)
+  }
+  if (interruptActive) {
+    for (const conversationId of getStartingAppChatConversations()) {
+      if (conversationId === prefix || conversationId.startsWith(prefix + ':')) sessionIds.add(conversationId)
+    }
   }
 
   let closed = 0
@@ -2337,6 +2326,7 @@ export async function restartAppChat(
         await abortAppChatTurn(convId, 'internal')
       }
 
+      const hadSession = v2Sessions.has(convId)
       // 2. Close the V2 session — next message will create a fresh CC process
       //    with the up-to-date system prompt; saved sessionId resumes history.
       closeV2Session(convId)
@@ -2347,7 +2337,7 @@ export async function restartAppChat(
       //    the user may be watching one.
       if (interruptActive) destroyChatBrowserContext(convId, 'manual-restart')
 
-      closed++
+      if (hadSession) closed++
     } catch (err) {
       // Per-session failures are logged but do not abort the loop: a stuck
       // IM session must not prevent the native chat from being restarted.
@@ -2355,6 +2345,9 @@ export async function restartAppChat(
     }
   }
 
+  if (reloadFailures) {
+    throw new Error('Some saved conversations could not reload their instructions. Please try restarting again.')
+  }
   console.log(
     `[AppChat][${appId}] Restart complete: ${closed} session(s) closed` +
     `${deferred > 0 ? `, ${deferred} deferred to next message` : ''} (history preserved)`
@@ -2542,7 +2535,7 @@ export function forkNativeChatSession(
   if (spacePath) {
     copied = copySessionJsonl(spacePath, appId, sourceRunId, newRunId)
     sourceSdkSessionId = sourceState.sessionId
-    if (sourceState.binding) saveChatEngineBinding(spacePath, appId, newRunId, sourceState.binding, {})
+    if (sourceState.binding || sourceState.useCurrentInstructions) copyChatEngineState(spacePath, appId, sourceRunId, newRunId)
   }
 
   const record = registry.createLocalSession(appId, sessionUuid, {

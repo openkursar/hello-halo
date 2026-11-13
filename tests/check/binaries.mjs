@@ -36,7 +36,7 @@ import { CLOUDFLARED_MINIMUM_MACOS } from '../../scripts/lib/cloudflared.mjs'
 import deployment from '../../scripts/lib/macho-deployment-target.cjs'
 import ripgrep from '../../scripts/lib/ripgrep.cjs'
 
-const { ENGINE_RUNTIMES, VALID_ENGINES, resolveEngineEntry, engineArtifactPaths } = engineRuntimes
+const { ENGINE_RUNTIMES, VALID_ENGINES, resolveEngineEntry, engineArtifactPaths, validateNativeRuntime } = engineRuntimes
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '../..')
@@ -292,7 +292,7 @@ const BINARY_DEPENDENCIES = [
  * entry file: `@hello-halo/agent-sdk` carries a static version across rebuilds,
  * so the fingerprint is the only way to tell two SDK builds apart in a log.
  */
-function checkEngine(engineId) {
+function checkEngine(engineId, platform) {
   const engine = ENGINE_RUNTIMES[engineId]
   const { pkgDir, manifestPath, entryPaths, label } = engineArtifactPaths(engine)
   const absoluteManifest = path.join(PROJECT_ROOT, manifestPath)
@@ -333,6 +333,14 @@ function checkEngine(engineId) {
   if (missingRuntimeFile) {
     return { engineId, name: engine.name, status: 'invalid', path: label,
       info: `missing execution runtime: ${missingRuntimeFile}`, fix: engine.fix }
+  }
+
+  try {
+    const targets = { 'mac-arm64': ['darwin', 'arm64'], 'mac-x64': ['darwin', 'x64'], win: ['win32', 'x64'], linux: ['linux', 'x64'] };
+    const selected = platform === 'all' ? Object.values(targets) : [targets[platform]];
+    for (const [os, arch] of selected) validateNativeRuntime(engine, file => fs.readFileSync(path.join(PROJECT_ROOT, pkgDir, file)), os, arch);
+  } catch (error) {
+    return { engineId, name: engine.name, status: 'invalid', path: label, info: error.message, fix: engine.fix };
   }
 
   const fingerprintEntry = engine.fingerprintFile ? path.join(PROJECT_ROOT, pkgDir, engine.fingerprintFile) : entry
@@ -422,13 +430,13 @@ function checkBinary(dep) {
  *
  * Returns true when a required engine is missing or unusable.
  */
-function runEngineChecks(requiredEngines) {
+function runEngineChecks(requiredEngines, platform) {
   log.info('Checking agent SDK engine runtimes...\n')
 
   let hasErrors = false
 
   for (const engineId of VALID_ENGINES) {
-    const result = checkEngine(engineId)
+    const result = checkEngine(engineId, platform)
     const required = requiredEngines.includes(engineId)
 
     if (result.status === 'ok') {
@@ -488,7 +496,7 @@ function runChecks(targetPlatform = 'all', requiredEngines = []) {
 
   console.log('')
 
-  if (runEngineChecks(requiredEngines)) {
+  if (runEngineChecks(requiredEngines, platform)) {
     hasErrors = true
   }
 

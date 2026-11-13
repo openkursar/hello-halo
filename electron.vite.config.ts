@@ -121,8 +121,10 @@ export default defineConfig({
     build: {
       sourcemap: true,
       rollupOptions: {
-        // SDK engines load dynamically; synchronous collaboration imports are bundled for CommonJS.
-        external: ['@hello-halo/agent-sdk', '@hello-halo/agent-sdk/worker', '@openai/codex-sdk'],
+        // Native entries retain their package location so the binding can resolve its adjacent library.
+        external: ['@hello-halo/agent-sdk', '@hello-halo/agent-sdk/native', '@hello-halo/agent-sdk/worker',
+          '@hello-halo/agent-sdk/collaboration', '@hello-halo/agent-sdk/collaboration/turn-gate',
+          '@hello-halo/agent-sdk/collaboration/sdk', '@hello-halo/agent-sdk/collaboration/workspaces', '@openai/codex-sdk'],
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
           // File watcher worker — runs in a separate child process

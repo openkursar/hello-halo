@@ -15,6 +15,7 @@
 import { z } from 'zod'
 import { tool, createSdkMcpServer } from '../agent/resolved-sdk'
 import type { TerminalContext } from './context'
+import { AI_TERMINAL_DESCRIPTION, AI_TERMINAL_INSTRUCTIONS } from './guidance'
 
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
 const errorText = (value: string) => ({ content: [{ type: 'text' as const, text: value }], isError: true })
@@ -253,6 +254,8 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
   return createSdkMcpServer({
     name: 'ai-terminal',
     version: '1.0.0',
+    description: AI_TERMINAL_DESCRIPTION,
+    instructions: AI_TERMINAL_INSTRUCTIONS,
     tools: [createTool, listTool, writeTool, readTool, searchTool, waitForTool, killTool]
   })
 }

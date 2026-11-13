@@ -54,6 +54,8 @@ export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electro
 
 echo "[build:mac-signed] 架构=$ARCH  签名源=$HALO_MAC_SIGN_SRC  TeamID=$APPLE_TEAM_ID"
 
+export HALO_SDK_NATIVE_TARGETS="darwin-$ARCH"
+
 echo "[build:mac-signed] 重建 Halo SDK (src/sdk/halo-sdk)..."
 node scripts/lib/halo-sdk-build.cjs
 

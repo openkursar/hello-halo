@@ -162,7 +162,6 @@ export interface SystemConfig {
 // Agent behavior configuration
 export interface AgentConfig {
   maxTurns: number;         // Maximum tool call turns per message
-  promptProfile?: 'official' | 'halo';  // System prompt profile
   sdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh';  // Agent SDK engine (requires restart)
   ccRuntime?: CcRuntimeConfig;
   configDirMode?: 'halo' | 'cc' | 'custom';  // Claude CLI config directory mode

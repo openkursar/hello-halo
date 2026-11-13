@@ -24,7 +24,7 @@ Does NOT:
 - Install/configure Apps (that's apps/manager)
 - Implement scheduling algorithms (that's platform/scheduler)
 - Filter events (that's platform/event-bus)
-- Directly operate AI Browser DOM (AI does that via MCP tools + Task tool)
+- Directly operate AI Browser DOM (the agent uses the browser MCP tools)
 
 ---
 
@@ -72,11 +72,12 @@ digital-human chat in `app-chat.ts`) rather than routing through the space chat'
   `userOverrides` — its own account, or the global one when it has none or its
   account was removed — then `resolveCredentialsForSdk`.
 - Options: `buildUserSessionSdkOptions` (sdk-config). It reads the user's global AI
-  settings (`maxTurns`, `disabledTools`, `promptProfile`, digital-humans switch) and
+  settings (`maxTurns`, `disabledTools`, digital-humans switch) and
   the config directory itself, so a run or a chat turn follows them without passing
   anything. Never pass these from here, and never build options by hand.
-- Prompt: `buildSystemPrompt` (system-prompt), which the digital-human prompt layers
-  (`prompt.ts`, `prompt/identity.ts`) start from, so it inherits the same settings.
+- Prompt: `buildSystemPrompt` (system-prompt) supplies one engine-independent Halo
+  product context. Digital-human builders add their own context; adapters retain
+  each engine's native guidance.
 - Tools: `buildBaseToolset` (`toolsets/base.ts`) — web search, Halo documentation and,
   while digital humans are enabled, `halo-apps`. Each entry starts from it and states
   its exclusions where it builds (automation: no `halo-apps`; a disposable team
@@ -477,16 +478,35 @@ incomplete run with no recovery path.
 
 ### 2.12 App Chat Prompt Layering (Three-Layer Assembler)
 
-**Decision**: The App chat system prompt is assembled from three ordered
-layers — **Identity**, **Entry**, **Constraint** — by a channel-agnostic
-assembler. Channel-specific content (IM session metadata, sender identity
-rules, security rules) lives in the channel's module, not in the assembler.
+**Decision**: `prompt/chat.ts` composes the digital-human chat context from
+already authorized, stable facts. It does not select an engine, read runtime
+state or change permission policy. Every engine receives the same Halo-owned
+text: product context, App Instructions, memory and configuration, Digital human
+and place, Teams, Team work, Team communication, Channel, Rules. Engine adapters
+only map that text to their native instruction channel and retain native agent
+guidance. Channel-specific text stays with the IM or team module; the final
+assembler only joins pre-rendered fragments.
+
+Standing membership is either available (including a verified empty list) or
+not supplied. Withheld or unavailable membership never becomes a claim that the
+digital human has no teams. A verified empty list adds no team-specific paragraph
+to an ordinary chat; omission is not evidence of empty membership. System-generated
+memory and team/IM guidance use compact structural contracts, not illustrative
+facts or duplicate delivery rules. Owner-authored persona, goals and duties remain
+intact. Team-specific IM responsibilities precede Channel; reply transport and
+sender identity stay in Channel, with permission constraints in Rules.
+Temporary collaborators have their own work identity,
+not a lasting digital-human identity or memory. Scheduled runs retain their
+separate reporting context and do not acquire standing-team awareness.
 
 ```
 src/main/apps/runtime/
 ├── prompt/
+│   ├── chat.ts             — buildDigitalHumanChatPrompt() — engine-independent scene composition
 │   ├── assembler.ts        — assembleAppChatPrompt(fragments) — joins layers
 │   ├── identity.ts         — buildIdentityFragments() — base + spec + memory + config + capability awareness
+│   ├── self-identity.ts    — digital-human instance and place; temporary work identity
+│   ├── team-guidance.ts    — authorized standing memberships and reads of other conversations
 │   ├── capabilities.ts     — disabled + awaiting-setup capability guidance (Identity layer)
 │   └── entry-native.ts     — NATIVE_CHAT_ENTRY — native UI entry (reply orientation only)
 └── im-channels/
@@ -497,9 +517,9 @@ src/main/apps/runtime/
 
 | Layer | Answers | Examples |
 |---|---|---|
-| Identity | Who am I, what do I do | Base Agent prompt, App spec, memory access, user config, capability awareness (disabled + awaiting-setup). The base prompt opens with "You run on Halo" rather than "You are Halo" (`ownIdentity`), so the App Instructions decide who it is — in chat and in runs alike |
-| Entry | Where am I, how do I reply | IM group/direct session context, native UI reply orientation |
-| Constraint | What I must not do | IM anti-impersonation rules when owners are configured |
+| Identity | Who am I, where am I, which teams do I serve | Halo product context, App Instructions, memory, configuration and capability awareness; one instance-and-place paragraph followed by authorized standing membership. App Instructions remain the persona, not a second runtime identity. |
+| Entry | What work is this conversation for, how do replies arrive | Current team work and communication, then the native or IM channel. The shared SDK collaboration guide appears once where collaboration tools are mounted. |
+| Constraint | What boundaries apply | One Rules section containing applicable team and IM constraints; executable permission enforcement remains separate. |
 
 **Rationale**:
 - The previous flat builder kept growing channel-specific text every time a
@@ -514,8 +534,9 @@ src/main/apps/runtime/
   IM concerns (provider impls, session registry, file-send MCP). Matches the
   hard rule "IM specifics live in im-channels".
 
-**Single call site**: `app-chat.ts` is the only place that decides which
-entry/constraint builder to invoke based on whether `imSession` is present.
+**Single call site**: `app-chat.ts` resolves authorized scene facts and actual
+capability availability, then calls `buildDigitalHumanChatPrompt`. The composer
+selects existing entry and constraint renderers without reading application state.
 IM identity rules do not impose a separate blanket guest policy. They direct
 the model to the current turn's actual capability grants. Notification guidance
 also requires the guest notification grant as well as the app's configured
@@ -794,9 +815,12 @@ context with `sdkOptions.forkSession = true`, so the SDK branches to a **new**
 sessionId — the two windows evolve independently and the source is never
 polluted. The pending marker is peeked (not consumed) at send start and cleared
 only after the new forked sessionId is captured, so a failed first attempt can
-retry. Fork requires the engine's `sessionFork` capability (CC / Halo SDK:
-true; Codex `thread/resume` cannot branch: false); the UI gates the affordance
-on it.
+retry. A new destination also copies any existing engine binding or explicit
+instruction-reload intent. A reloaded legacy ID stays unbound, so continuing it
+in the client cannot restore old CC instructions or pin a different engine.
+State-copy failure refuses the fork before its registry record is exposed.
+Fork requires the engine's `sessionFork` capability (CC / Halo SDK: true; Codex
+`thread/resume` cannot branch: false); the UI gates the affordance on it.
 
 **Layer split in the renderer**: the default and local sessions render in the
 main chat page — the same `ChatView` as space conversations, with the chat
@@ -2090,23 +2114,23 @@ Team turn edges republish the state through `onMemberWorkChanged` →
 
 ### Team guidance
 
-One section, `prompt/team-guidance.ts`, tells a digital human what a team is.
-Two kinds, named the way people say them: an *agent team* is an ad hoc team it
-spins up for one job (the `halo-team` coordinator tools; the guide lives with
-them in `conversation-mcp/team-mcp.ts` and is shared with space conversations),
-and a *standing team* is a lasting group of digital humans it belongs to, whose
-work happens in its own conversations. The team tools always act on the team of
-the conversation they are in, so no sentence has to explain them away.
+`prompt/team-guidance.ts` describes authorized standing membership and reads of
+other team conversations. A standing team is a lasting group of digital humans;
+the same person may serve in several. Collaboration tools act only in this
+conversation. Their shared guide is owned by the SDK collaboration entry and
+consumed unchanged through `conversation-mcp/team-mcp.ts`, not copied into Halo's
+standing-team text. A message to a teammate here uses `team_send`; operations on
+another standing-team conversation use Operate Halo and name that conversation.
 
 A digital human that holds Operate Halo and serves on standing teams also gets
 the teams by name, id and role (ten at most), which conversation this chat is,
 and three read-only Operate Halo calls (list a team's conversations, read one's
 board, read a member's messages) as ready-to-run commands to pick from, not a
-procedure. Messaging a member is left to the Operate Halo manual, whose route
-notes carry its rules (name the conversation, ask before reopening a completed
-one); the guidance neither waits for a member nor teaches the call. Who it is (name and id) is one line of
-`prompt/self-identity.ts`; there is no tool for reading one's own identity or
-memberships. Only stable facts are in the section, so every turn of a session
+procedure. Messaging a member in another conversation is left to the Operate
+Halo manual, whose route notes carry its rules (name the conversation, ask before
+reopening a completed one). Current teammates use `team_send`. Instance and place
+come from `prompt/self-identity.ts`; there is no tool for reading one's own
+identity or memberships. Only stable facts are in the section, so every turn of a session
 carries the same words whether a person or a teammate started it — a fragment
 that followed the trigger would rebuild the warm session and drop its prompt
 cache each time the two alternate. Joining, leaving or renaming a team changes
@@ -2338,7 +2362,11 @@ itself has no switch: it exists for a caller exactly when some skill does.
 
 ### Engine bindings and handoff reads
 
-`session-store` keeps legacy `_session-ids.json` string rows unchanged. A fresh run first records `{ version: 1, engineId }` before SDK creation, without claiming native context exists. Native acknowledgement replaces it with a versioned `{ engineId, sessionId }` binding in that same row; replacing it uses an expected-state comparison and atomic rename after session preparation. There is no per-engine native-ID cache. Legacy session-ID callbacks cannot overwrite routing records or a different bound session. Run retention removes the corresponding row with its transcript.
+`session-store` keeps legacy `_session-ids.json` string rows unchanged during ordinary use. A fresh run first records `{ version: 1, engineId }` before SDK creation, without claiming native context exists. Native acknowledgement replaces it with a versioned `{ engineId, sessionId }` binding in that same row; replacing it uses an expected-state comparison and atomic rename after session preparation. There is no per-engine native-ID cache. Legacy session-ID callbacks cannot overwrite routing records or a different bound session. Run retention removes the corresponding row with its transcript.
+
+A manual digital-human restart also reloads saved instructions without discarding history. Before stopping resident sessions it visits only that person's recorded history locations, deduplicated from existing pinned environments, and atomically marks existing CC chat bindings with `useCurrentInstructions: true`. Legacy string IDs gain an app-private `{ version: 1, legacySessionId, useCurrentInstructions: true }` wrapper without selecting an engine. These app-owned extensions do not change the shared engine identity contract. Routing-only entries, automation runs, other engines and new conversations remain unchanged. Ordinary resumes, startup and automatic rebuilds do not add this marker or scan retained conversations.
+
+A marked CC resume sends `systemPromptSnapshot: false` in the existing initialize request, preserving native guidance, tool permissions and recorded messages while using the currently rendered prompt and tool definitions. No help process or capability query is added. The marker survives subsequent resumes because CC does not replace a stored snapshot when bypassing it. App-level expected-state comparisons include the marker, so a retiring consumer cannot clear a newly saved reload request. A successful binding remains marked only on the same CC continuation; changing engine or clearing history removes it. The session-input fingerprint includes the explicit override, preventing a process created before a reload from being reused afterwards. Snapshot handling belongs to the CC adapter; reload intent remains in the digital-human runtime.
 
 A map that is not a JSON object can only be a torn write from an older release, which truncated before writing. It is renamed to `_session-ids.json.corrupt-<time>` (never deleted) and read as empty, so one bad file cannot stop every chat, IM reply and run of a digital human; each chat then continues from its own transcript (`prepareAppEngineSession` flags an answered chat with no recorded session as a lost record, and the chat shows the continuity notice). A read that fails for another reason (locked, permission) fails that turn and leaves the file alone. A single malformed row is still refused.
 

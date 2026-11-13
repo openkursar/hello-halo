@@ -44,10 +44,6 @@ export const CODEX_CAPABILITIES: EngineCapabilities = {
     shellHeuristics: false,
   },
   todo: { states: ['pending', 'completed'], hasActiveForm: false },
-  // The adapter never hands the app-server a system prompt (`codex/options.ts`
-  // reads none), so this flag changes nothing Codex sees; it stays false so
-  // Codex sessions build the same host prompt as before.
-  prompt: { nativeAgentGuidance: false },
   features: {
     skills: true,
     mcp: true,

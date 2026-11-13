@@ -19,6 +19,7 @@ try {
   const env = {
     ...signingEnvironment(), CSC_IDENTITY_AUTO_DISCOVERY: 'false', HALO_MAC_SIGN_MODE: 'adhoc',
     HALO_REQUIRE_ENGINES: 'halo,codex,dsh',
+    HALO_SDK_NATIVE_TARGETS: `darwin-${arch}`,
   }
   for (const key of ['CSC_LINK', 'CSC_KEY_PASSWORD', 'CSC_NAME', 'CSC_IDENTITY',
     'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID', 'APPLE_API_KEY', 'APPLE_API_KEY_ID', 'APPLE_API_ISSUER']) delete env[key]

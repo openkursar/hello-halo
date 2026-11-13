@@ -16,6 +16,18 @@ vi.mock('../../../../../src/main/services/proxy-fetch', () => ({
   proxyFetch: (url: string, init: RequestInit) => fetch(url, init),
 }))
 
+const runtimeState = vi.hoisted(() => ({ haloDir: '', routerUrl: '' }))
+vi.mock('../../../../../src/main/foundation/config.service', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../../src/main/foundation/config.service')>()
+  return { ...actual, getHaloDir: () => runtimeState.haloDir }
+})
+vi.mock('../../../../../src/main/openai-compat-router', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../../../src/main/openai-compat-router')>()
+  return { ...actual, ensureOpenAICompatRouter: async () => ({ baseUrl: runtimeState.routerUrl }) }
+})
+
+import { resolveCodexOptions } from '../../../../../src/main/services/agent/codex/options'
+
 const enabled = process.env.CODEX_E2E === '1'
 
 async function listen(app: express.Express): Promise<Server> {
@@ -98,26 +110,29 @@ describe.skipIf(!enabled)('Codex native MCP routing', () => {
     })
     const router = await listen(routerApp)
     const Session = CodexAppServerSession as unknown as new (...args: any[]) => CodexAppServerSession
-    const session = new Session({
-      env: { ...process.env, CODEX_HOME: codexHome, HALO_NATIVE_TEST_KEY: 'local-test' },
-      cwd: directory, model: 'gpt-5.1-codex-max', displayModel: 'gpt-5.1-codex-max',
-      includePartialMessages: true, mcpServers: { 'halo-team': {} }, mcpBridge: prepared.bridge,
-      threadParams: {
-        model: 'gpt-5.1-codex-max', cwd: directory, approvalPolicy: 'never', sandbox: 'danger-full-access',
-        config: {
-          features: { multi_agent: false, multi_agent_v2: false },
-          model_provider: 'local-test',
-          model_providers: { 'local-test': { name: 'Local deterministic model', base_url: `${baseUrl(router)}/v1`, wire_api: 'responses', requires_openai_auth: false, env_key: 'HALO_NATIVE_TEST_KEY' } },
-          mcp_servers: prepared.mcpServers,
-        },
-      },
-    }, 'native-session', {})
+    runtimeState.haloDir = directory
+    runtimeState.routerUrl = baseUrl(router)
+    const resolved = await resolveCodexOptions({
+      cwd: directory,
+      env: { ...process.env, HOME: directory },
+      apiCredentials: { provider: 'openai', baseUrl: `${baseUrl(upstream)}${endpoint}`, apiKey: 'local-test', model: 'gpt-5.1-codex-max', apiType },
+      systemPrompt: { type: 'preset', preset: 'default', append: 'Halo host-context-marker-42' },
+      permissionMode: 'bypassPermissions',
+    })
+    resolved.env.CODEX_HOME = codexHome
+    resolved.threadParams.config = { ...resolved.threadParams.config, mcp_servers: prepared.mcpServers }
+    const session = new Session({ ...resolved, mcpServers: { 'halo-team': {} }, mcpBridge: prepared.bridge }, 'native-session', {})
     try {
       await (session as any).start()
       session.send('Call spawn_agent with value marker, then finish.')
       const frames: any[] = []
       for await (const frame of session.stream()) frames.push(frame)
       expect(frames.at(-1)).toMatchObject({ type: 'result', is_error: false })
+      expect(nativeRequests[0].instructions).toEqual(expect.any(String))
+      expect(nativeRequests[0].instructions.length).toBeGreaterThan(100)
+      expect(JSON.stringify(nativeRequests[0])).toContain('host-context-marker-42')
+      expect(JSON.stringify(modelRequests[0])).toContain('host-context-marker-42')
+      expect(resolved.threadParams).not.toHaveProperty('baseInstructions')
       expect(nativeRequests[0].tools.some((tool: any) => tool.type === 'namespace' && tool.tools.some((inner: any) => inner.name === 'spawn_agent'))).toBe(true)
       const nativeTools = nativeRequests[0].tools.flatMap((tool: any) => tool.type !== 'namespace'
         ? [tool.name] : tool.name?.startsWith('mcp__') ? [] : tool.tools.map((entry: any) => entry.name))

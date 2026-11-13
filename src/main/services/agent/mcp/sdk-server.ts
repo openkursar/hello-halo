@@ -51,9 +51,11 @@ export function tool<Schema extends Record<string, z.ZodTypeAny>>(
 export function createSdkMcpServer(options: {
   name: string
   version?: string
+  description?: string
+  instructions?: string
   tools?: SdkMcpToolDefinition[]
 }): SdkMcpServerConfig {
-  const { name, version = '1.0.0', tools = [] } = options
+  const { name, version = '1.0.0', description, instructions, tools = [] } = options
   const registered = tools.map((definition) => {
     const schema = objectFromShape(definition.inputSchema)
     return { definition, schema, jsonSchema: undefined as Record<string, unknown> | undefined }
@@ -62,6 +64,8 @@ export function createSdkMcpServer(options: {
   const instance: SdkMcpServerInstance = {
     name,
     version,
+    description,
+    instructions,
     async callTool(toolName: string, args: Record<string, unknown>, extra?: { signal?: AbortSignal }) {
       const registeredTool = registered.find((candidate) => candidate.definition.name === toolName)
       if (!registeredTool) return undefined
@@ -87,5 +91,5 @@ export function createSdkMcpServer(options: {
     },
   }
 
-  return { type: 'sdk', name, instance }
+  return { type: 'sdk', name, description, instructions, instance }
 }

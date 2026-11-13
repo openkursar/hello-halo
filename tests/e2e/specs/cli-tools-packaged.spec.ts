@@ -255,6 +255,15 @@ for (const [sdkEngine, caseId] of [
         expect.soft([...model.nativeDelegation], 'Only Halo collaboration may delegate work').toEqual([])
         expect.soft(model.legacyProfileAdvertised, 'An obsolete project profile is not a usable agent catalog').toBe(false)
         expect.soft(model.sawCommand, 'project command offered to the model').toBe(true)
+        if (sdkEngine === 'halo') {
+          const report = await window.evaluate(() => (window as unknown as { halo: HaloAPI }).halo.generateHealthReport())
+          expect(report.success, 'The application must expose the runtime that executed its tools').toBe(true)
+          const sdk = (report.data as { sdk?: { runtime?: { implementation?: string; native?: { implementation?: string; abiVersion?: number; buildId?: string } } } } | undefined)?.sdk
+          await testInfo.attach('packaged-sdk-runtime', { body: JSON.stringify(sdk ?? null, null, 2), contentType: 'application/json' })
+          expect(sdk?.runtime).toMatchObject({ implementation: 'rust', native: { implementation: 'rust', abiVersion: 1 } })
+          expect(sdk?.runtime?.native?.buildId).toMatch(/^[a-f0-9]{64}$/)
+          expect(sdk?.runtime?.native?.buildId?.slice(0, 12)).toBe(state?.engines?.find(entry => entry.engineId === 'halo')?.fingerprint)
+        }
       } finally {
         try {
           try {

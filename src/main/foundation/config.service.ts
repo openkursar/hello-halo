@@ -806,7 +806,6 @@ interface HaloConfig {
     maxTurns: number
     /** Set once `maxTurns` has been checked for the legacy default (`upgradeLegacyMaxTurnsOnDisk`). */
     maxTurnsDefaultUpgraded?: boolean
-    promptProfile?: 'official' | 'halo'
     configDirMode?: 'halo' | 'cc' | 'custom'
     customConfigDir?: string
     /** Engine changes apply after restart; an absent legacy choice uses Halo. */
@@ -1105,8 +1104,7 @@ const DEFAULT_CONFIG: HaloConfig = {
   },
   agent: {
     maxTurns: DEFAULT_MAX_TURNS,
-    sdkEngine: 'halo',
-    promptProfile: 'halo'
+    sdkEngine: 'halo'
   },
   remoteAccess: {
     enabled: false,

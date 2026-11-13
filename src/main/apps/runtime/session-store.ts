@@ -544,8 +544,24 @@ export function copySessionJsonl(
 // Chat Session ID Persistence
 // ============================================
 
+export interface ChatEngineBinding extends EngineSessionBinding {
+  /** An explicit reload bypasses CC's saved prompt and tool-definition snapshot. */
+  useCurrentInstructions?: true
+}
+
+export interface ChatEngineState extends EngineSessionState {
+  binding?: ChatEngineBinding
+  useCurrentInstructions?: true
+}
+
+interface ReloadedLegacySession {
+  version: 1
+  legacySessionId: string
+  useCurrentInstructions: true
+}
+
 /** Legacy strings, first-start routing, and acknowledged native bindings share one atomic record. */
-type SessionIdMap = Record<string, string | EngineSessionBinding | EngineSessionRouting>
+type SessionIdMap = Record<string, string | ChatEngineBinding | EngineSessionRouting | ReloadedLegacySession>
 
 function getSessionIdMapPath(spacePath: string, appId: string): string {
   if (appId.includes('..')) throw new Error('Invalid path parameter')
@@ -605,15 +621,34 @@ function writeSessionIdMap(spacePath: string, appId: string, map: SessionIdMap):
   }
 }
 
-function engineStateOf(value: string | EngineSessionBinding | EngineSessionRouting | undefined): EngineSessionState {
+function engineStateOf(value: SessionIdMap[string] | undefined): ChatEngineState {
   if (value === undefined) return {}
   if (typeof value === 'string') return { sessionId: value }
-  if (isEngineSessionBinding(value)) return { sessionId: value.sessionId, binding: { ...value } }
+  if (isEngineSessionBinding(value)) {
+    const binding = value as ChatEngineBinding
+    if (binding.useCurrentInstructions !== undefined && (binding.useCurrentInstructions !== true || binding.engineId !== 'anthropic')) {
+      throw new Error('Stored instruction reload state is invalid')
+    }
+    return { sessionId: binding.sessionId, binding: { ...binding },
+      ...(binding.useCurrentInstructions ? { useCurrentInstructions: true } : {}) }
+  }
+  if (value && typeof value === 'object' && value.version === 1 && 'legacySessionId' in value &&
+      typeof value.legacySessionId === 'string' && value.legacySessionId.length > 0 && value.legacySessionId.length <= 512 &&
+      value.useCurrentInstructions === true && !('engineId' in value) && !('sessionId' in value)) {
+    return { sessionId: value.legacySessionId, useCurrentInstructions: true }
+  }
+  if (value && typeof value === 'object' && ('useCurrentInstructions' in value || 'legacySessionId' in value)) {
+    throw new Error('Stored instruction reload state is invalid')
+  }
   if (isEngineSessionRouting(value)) return { routingEngine: value.engineId }
   throw new Error('Stored engine binding is invalid')
 }
 
-export function loadChatEngineState(spacePath: string, appId: string, runId: string): EngineSessionState {
+function sameChatEngineState(left: ChatEngineState, right: ChatEngineState): boolean {
+  return sameEngineSessionState(left, right) && left.useCurrentInstructions === right.useCurrentInstructions
+}
+
+export function loadChatEngineState(spacePath: string, appId: string, runId: string): ChatEngineState {
   const map = readSessionIdMap(spacePath, appId, true)
   try {
     return engineStateOf(map[runId])
@@ -623,18 +658,36 @@ export function loadChatEngineState(spacePath: string, appId: string, runId: str
   }
 }
 
-export function loadChatEngineBinding(spacePath: string, appId: string, runId: string): EngineSessionBinding | undefined {
+export function loadChatEngineBinding(spacePath: string, appId: string, runId: string): ChatEngineBinding | undefined {
   return loadChatEngineState(spacePath, appId, runId).binding
+}
+
+/** Copy native ownership or explicit legacy reload intent into a fresh fork without inferring an engine. */
+export function copyChatEngineState(spacePath: string, appId: string, fromRunId: string, toRunId: string): void {
+  try {
+    if (fromRunId === toRunId) throw new Error('Source and destination conversations must differ')
+    const map = readSessionIdMap(spacePath, appId, true)
+    const source = engineStateOf(map[fromRunId])
+    if (!source.sessionId || !source.binding && !source.useCurrentInstructions) return
+    if (map[toRunId] !== undefined) throw new Error('The destination conversation already has engine state')
+    map[toRunId] = source.binding
+      ? { ...source.binding }
+      : { version: 1, legacySessionId: source.sessionId, useCurrentInstructions: true }
+    writeSessionIdMap(spacePath, appId, map)
+  } catch (error) {
+    console.error(`[SessionStore] Could not copy fork engine state: app=${appId}, from=${fromRunId}, to=${toRunId}, code=${(error as NodeJS.ErrnoException).code ?? 'unknown'}`, error)
+    throw new Error('Could not preserve the conversation instructions while continuing in the client', { cause: error })
+  }
 }
 
 /** Only a fresh slot is pinned; an acknowledged owner or an earlier first-start choice stays intact. */
 export function saveChatEngineRouting(
-  spacePath: string, appId: string, runId: string, engineId: EngineId, expected?: EngineSessionState,
-): EngineSessionState {
+  spacePath: string, appId: string, runId: string, engineId: EngineId, expected?: ChatEngineState,
+): ChatEngineState {
   if (!isEngineId(engineId)) throw new Error('Invalid engine routing choice')
   const map = readSessionIdMap(spacePath, appId, true)
   const current = engineStateOf(map[runId])
-  if (expected && !sameEngineSessionState(current, expected)) {
+  if (expected && !sameChatEngineState(current, expected)) {
     if (current.routingEngine === engineId && !current.sessionId && !current.binding) return current
     console.warn(`[SessionStore] Rejected stale first-start routing: app=${appId}, run=${runId}`)
     throw new Error('The conversation engine changed while it was being prepared. Please try again.')
@@ -650,18 +703,41 @@ export function saveChatEngineRouting(
   }
 }
 
+/** Persist an explicit reload without touching transcripts, routing or other engines. */
+export function reloadChatInstructions(spacePath: string, appId: string): number {
+  try {
+    const map = readSessionIdMap(spacePath, appId, true)
+    let changed = 0
+    for (const [runId, value] of Object.entries(map)) {
+      if (runId !== 'chat' && !runId.startsWith('chat-')) continue
+      const current = engineStateOf(value)
+      if (!current.sessionId || current.useCurrentInstructions || current.binding?.engineId && current.binding.engineId !== 'anthropic') continue
+      map[runId] = current.binding
+        ? { ...current.binding, useCurrentInstructions: true }
+        : { version: 1, legacySessionId: current.sessionId, useCurrentInstructions: true }
+      changed++
+    }
+    if (changed) writeSessionIdMap(spacePath, appId, map)
+    return changed
+  } catch (error) {
+    console.error(`[SessionStore] Could not persist instruction reload: app=${appId}, code=${(error as NodeJS.ErrnoException).code ?? 'unknown'}`)
+    throw new Error('Could not reload the saved conversation instructions')
+  }
+}
+
 /** Commit only after preparation succeeds, using the state captured before preparation. */
 export function saveChatEngineBinding(
   spacePath: string, appId: string, runId: string,
-  binding: EngineSessionBinding, expected?: EngineSessionState,
+  binding: ChatEngineBinding, expected?: ChatEngineState,
 ): boolean {
   if (!isEngineSessionBinding(binding)) throw new Error('Invalid engine session binding')
+  const next = engineStateOf(binding)
   const map = readSessionIdMap(spacePath, appId, true)
-  if (expected && !sameEngineSessionState(engineStateOf(map[runId]), expected)) {
+  if (expected && !sameChatEngineState(engineStateOf(map[runId]), expected)) {
     console.warn(`[SessionStore] Rejected stale engine binding: app=${appId}, run=${runId}`)
     return false
   }
-  if (sameEngineSessionState(engineStateOf(map[runId]), { sessionId: binding.sessionId, binding })) return true
+  if (sameChatEngineState(engineStateOf(map[runId]), next)) return true
   map[runId] = { ...binding }
   try {
     writeSessionIdMap(spacePath, appId, map)
@@ -676,7 +752,7 @@ export function saveChatSessionId(spacePath: string, appId: string, runId: strin
   try {
     const map = readSessionIdMap(spacePath, appId, true)
     const current = engineStateOf(map[runId])
-    if (current.binding || current.routingEngine) {
+    if (current.binding || current.routingEngine || current.useCurrentInstructions) {
       if (current.sessionId !== sessionId) console.warn(`[SessionStore] Ignored unbound session update: app=${appId}, run=${runId}`)
       return
     }

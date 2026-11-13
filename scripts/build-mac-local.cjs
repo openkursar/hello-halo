@@ -15,6 +15,7 @@ try {
   const root = path.resolve(__dirname, '..');
   const env = {
     ...signingEnvironment(), CSC_IDENTITY_AUTO_DISCOVERY: 'false', HALO_MAC_SIGN_MODE: 'adhoc',
+    HALO_SDK_NATIVE_TARGETS: architectures.map(arch => `darwin-${arch}`).join(','),
   };
   // Explicit credentials must not turn a local build into a distribution build.
   for (const key of ['CSC_LINK', 'CSC_KEY_PASSWORD', 'CSC_NAME', 'CSC_IDENTITY',

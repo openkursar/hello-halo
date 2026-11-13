@@ -27,8 +27,13 @@ actual access grants, tool restrictions and platform availability remain host po
   false` hides a core loading control while preserving availability for actions
   such as opening a terminal. Platform restrictions and explicit caller/tool
   policies still determine what an execution may do.
-- The broker assembles servers and guidance together at session creation. It
-  never parses native history to decide whether a person must enable a capability.
+- The broker assembles servers and short capability hints at session creation.
+  Browser and terminal service metadata come from their capability modules. Native
+  Halo defers their full definitions and service instructions through the existing
+  discovery catalog; full-mode SDK sessions and external engines receive service
+  instructions with their normal MCP context. Terminal has no resident tutorial.
+  This changes model presentation, not mounting, connections or authorization.
+  The broker never parses native history to decide whether a person must enable a capability.
   Each build receives fresh server instances. Configuration changes apply at safe
   boundaries; ordinary SDK discovery does not recreate sessions or connections.
 - An optional registered capability may be activated by the AI through

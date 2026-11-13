@@ -329,12 +329,14 @@ vi.mock('../../../../../src/main/foundation/window.service', async (importOrigin
 vi.mock('../../../../../src/main/services/ai-browser', () => ({
   createAIBrowserMcpServer: vi.fn(() => ({ _isMcpServer: true, name: 'ai-browser' })),
   createScopedBrowserContext: vi.fn(() => ({ destroy: vi.fn(), ownedViewCount: 0, hasRevealedView: () => false })),
+  AI_BROWSER_DESCRIPTION: 'Browse websites',
   AI_BROWSER_SYSTEM_PROMPT: 'AI browser instructions',
 }))
 vi.mock('../../../../../src/main/services/ai-terminal', () => ({
   createTerminalMcpServer: vi.fn(),
   getGlobalTerminalContext: vi.fn(),
   isTerminalAvailable: () => false,
+  AI_TERMINAL_DESCRIPTION: 'Run interactive terminals',
   AI_TERMINAL_SYSTEM_PROMPT: 'AI terminal instructions',
 }))
 vi.mock('../../../../../src/main/services/web-search', () => ({
@@ -345,6 +347,7 @@ vi.mock('../../../../../src/main/services/ocr', () => ({
 }))
 vi.mock('../../../../../src/main/services/api-ref', () => ({
   createApiRefMcpServer: () => ({ _isMcpServer: true, name: 'halo-api-ref' }),
+  HALO_API_DESCRIPTION: 'Operate Halo',
   HALO_API_USAGE_GUIDE: 'Halo API usage',
   HALO_API_TOOLSET_ID: 'halo-api-ref',
 }))
@@ -1267,15 +1270,19 @@ describe('a frame from another machine can narrow its own reach, never widen it'
     it('preserves colleague identity when an unrestricted lead delegates the external request', async () => {
       saveDelegatedPolicy(LEAD, NOT_SET)
       saveDelegatedPolicy(DEV, NOT_SET)
+      const recorded: string[] = []
       duringNextTurnOf(LEAD, async (turn) => {
+        await expectEverythingOnTheRecord(turn)
+        recorded.push(LEAD)
         await callTool(turn.teamTools, 'team_send', { to: 'dev', message: 'Analysis is in; implement the import job now.' })
       })
+      duringNextTurnOf(DEV, async (turn) => {
+        expect(turn.trigger).toMatchObject({ origin: 'colleague' })
+        await expectEverythingOnTheRecord(turn)
+        recorded.push(DEV)
+      })
       await fromAnotherMachine(LEAD, 'My analysis is done; the result is in analysis.md.', { external: true })
-
-      await expectEverythingOnTheRecord(await nextTurnOf(LEAD, 0))
-      const dev = await nextTurnOf(DEV, 0)
-      expect(dev.trigger).toMatchObject({ origin: 'colleague' })
-      await expectEverythingOnTheRecord(dev)
+      await vi.waitFor(() => expect(recorded).toEqual([LEAD, DEV]))
     })
 
     it('is a stranger\u2019s in an IM chat\u2019s piece of work, which gets nothing here', async () => {
