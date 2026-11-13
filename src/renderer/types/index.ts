@@ -162,7 +162,6 @@ export interface SystemConfig {
 // Agent behavior configuration
 export interface AgentConfig {
   maxTurns: number;         // Maximum tool call turns per message
-  promptProfile?: 'official' | 'halo';  // System prompt profile
   sdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh';  // Agent SDK engine (requires restart)
   ccRuntime?: CcRuntimeConfig;
   configDirMode?: 'halo' | 'cc' | 'custom';  // Claude CLI config directory mode
@@ -822,7 +821,9 @@ export interface PendingQuestion {
   id: string;                        // Unique ID (toolUseId or timestamp)
   questions: Question[];             // 1-4 questions
   status: AskQuestionStatus;
-  answers?: Record<string, string>;  // User answers {"0": "JWT Tokens", "1": "PostgreSQL"}
+  answers?: Record<string, string>;  // Answers keyed by the complete question text.
+  submitting?: boolean;
+  error?: boolean;
 }
 
 export interface AgentCompactEvent extends AgentEventBase {

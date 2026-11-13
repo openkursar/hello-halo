@@ -17,7 +17,6 @@ import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 import { getAppManager, type InstalledApp } from '../manager'
 import { missingConnections, resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
-import { buildSelfIdentityPrompt } from './prompt/self-identity'
 import { addRunTokenUsage, resolvePermission, type RunTokenUsage } from '../../../shared/apps/app-types'
 import { resolveMemoryLayout, type MemoryService, type MemoryCallerScope } from '../../platform/memory'
 import type { ActivityStore } from './store'
@@ -405,14 +404,12 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const notifyAvail = resolveNotifyAvailability(app, config.notificationChannels, imSessions)
 
     const systemPrompt = buildAppSystemPrompt({
-      engineId,
       appId: app.id,
       appSpec,
       memoryInstructions,
       triggerContext: trigger.description,
       userConfig: mergedConfig,
       usesAIBrowser,
-      usesTerminal,
       usesHaloApi,
       workDir,
       modelInfo: resolvedCreds.displayModel,
@@ -423,7 +420,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         imContactsAvailable: notifyAvail.imContactsAvailable,
       }) ?? undefined,
       notifyToolsAvailable: notifyAvail.anyNotifyToolAvailable,
-    }) + '\n\n' + buildSelfIdentityPrompt(app.id, app.spec.name)
+    })
 
     console.log(
       `[Runtime][${runTag}] ── SYSTEM PROMPT ──────────────────────────\n` +

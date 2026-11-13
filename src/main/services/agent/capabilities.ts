@@ -93,17 +93,6 @@ export interface EngineCapabilities {
     /** Whether todos carry an `activeForm` (present continuous label) field. */
     hasActiveForm: boolean
   }
-  prompt: {
-    /**
-     * The runtime writes its own agent guidance from the tools it actually
-     * registered — dsh assembles one section per mounted plugin, Codex ships
-     * built-in instructions. Halo then contributes identity and product
-     * context only: a second tool policy written against CC's tool names
-     * would both contradict the runtime's own and name tools the model does
-     * not have. False means Halo owns that layer (see `system-prompt.ts`).
-     */
-    nativeAgentGuidance: boolean
-  }
   features: {
     skills: boolean
     mcp: boolean
@@ -168,7 +157,6 @@ export const ANTHROPIC_CAPABILITIES: EngineCapabilities = {
     shellHeuristics: true,
   },
   todo: { states: ['pending', 'in_progress', 'completed'], hasActiveForm: true },
-  prompt: { nativeAgentGuidance: false },
   features: {
     skills: true,
     mcp: true,

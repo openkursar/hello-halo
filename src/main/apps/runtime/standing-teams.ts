@@ -19,7 +19,7 @@ export function collectStandingTeams(
   })
 }
 
-export function listStandingTeams(appId: string): StandingTeam[] {
+export function listStandingTeams(appId: string): StandingTeam[] | undefined {
   const teams = getTeamStore()
-  return teams ? collectStandingTeams(appId, teams) : []
+  return teams ? collectStandingTeams(appId, teams) : undefined
 }

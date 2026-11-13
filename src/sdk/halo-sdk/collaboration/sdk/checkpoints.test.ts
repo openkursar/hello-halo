@@ -3,7 +3,7 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createSdkCollaboration, type SdkCollaborationBinding } from './index.js';
+import { createSdkCollaboration, type SdkCollaborationBinding } from '../../native/collaboration-sdk.js';
 import { getTranscriptPath } from '../../core/transcript.js';
 import { readHistory, readTranscriptPage } from '../../core/transcript-reader.js';
 import type { Options } from '../../types/config.js';

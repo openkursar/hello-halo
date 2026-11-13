@@ -1,0 +1,15 @@
+{
+  "reminder": {
+    "open": "<system-reminder>",
+    "close": "</system-reminder>"
+  },
+  "active": {
+    "open": "<active-skills>",
+    "close": "</active-skills>"
+  },
+  "invocation": {
+    "name_prefix": "<skill-instructions name=\"",
+    "body_prefix": "\">\n",
+    "close": "</skill-instructions>"
+  }
+}

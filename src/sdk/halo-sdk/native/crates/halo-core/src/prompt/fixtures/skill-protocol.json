@@ -1,0 +1,304 @@
+{
+  "marked": [
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "<skill-instructions name=\"sample\">\nInstructions\n</skill-instructions>"
+        }
+      ],
+      "previous": [
+        {
+          "name": "earlier"
+        }
+      ],
+      "expected": [
+        {
+          "name": "earlier"
+        },
+        {
+          "name": "sample"
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": " <skill-instructions name=\"sample\">\nInstructions\n</skill-instructions>"
+        }
+      ],
+      "previous": [
+        {
+          "name": "earlier"
+        }
+      ],
+      "expected": [
+        {
+          "name": "earlier"
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "<skill-instructions name=\"sample\">Instructions\n</skill-instructions>"
+        }
+      ],
+      "previous": [
+        {
+          "name": "earlier"
+        }
+      ],
+      "expected": [
+        {
+          "name": "earlier"
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "<skill-instructions name=\"sample\nnext\">\nInstructions"
+        }
+      ],
+      "previous": [
+        {
+          "name": "earlier"
+        }
+      ],
+      "expected": [
+        {
+          "name": "earlier"
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "<skill-instructions name=\"list\">\nInstructions"
+        }
+      ],
+      "previous": [
+        {
+          "name": "earlier"
+        }
+      ],
+      "expected": [
+        {
+          "name": "earlier"
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "<system-reminder>\n<active-skills>[{\"name\":\"sample\"}]</active-skills>\nOriginal guidance\n</system-reminder>"
+        }
+      ],
+      "previous": [
+        {
+          "name": "earlier"
+        }
+      ],
+      "expected": [
+        {
+          "name": "earlier"
+        },
+        {
+          "name": "sample"
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "<system-reminder>﻿ \t<active-skills>[{\"name\":\"first\"},{\"name\":\"second\"},{\"name\":\"FIRST\"}]</active-skills>"
+        }
+      ],
+      "previous": [
+        {
+          "name": "earlier"
+        }
+      ],
+      "expected": [
+        {
+          "name": "earlier"
+        },
+        {
+          "name": "second"
+        },
+        {
+          "name": "FIRST"
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "<system-reminder><active-skills>[{\"name\":\"first\"},\n{\"name\":\"second\"}]</active-skills>"
+        }
+      ],
+      "previous": [
+        {
+          "name": "earlier"
+        }
+      ],
+      "expected": [
+        {
+          "name": "earlier"
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "<system-reminder><active-skills>{\"name\":\"sample\"}</active-skills>"
+        }
+      ],
+      "previous": [
+        {
+          "name": "earlier"
+        }
+      ],
+      "expected": [
+        {
+          "name": "earlier"
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "<system-reminder><active-skills>[broken]</active-skills>"
+        }
+      ],
+      "previous": [
+        {
+          "name": "earlier"
+        }
+      ],
+      "expected": [
+        {
+          "name": "earlier"
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "<system-reminder><active-skills>[{\"name\":\"sample\"}]</active-skills-extra>"
+        }
+      ],
+      "previous": [
+        {
+          "name": "earlier"
+        }
+      ],
+      "expected": [
+        {
+          "name": "earlier"
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "<system-reminder><active-skills>[{\"name\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}]</active-skills>"
+        }
+      ],
+      "previous": [
+        {
+          "name": "earlier"
+        }
+      ],
+      "expected": [
+        {
+          "name": "earlier"
+        }
+      ]
+    }
+  ],
+  "active": [
+    {
+      "references": [],
+      "expected": null
+    },
+    {
+      "references": [
+        {
+          "name": "sample"
+        }
+      ],
+      "expected": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "<system-reminder>\n<active-skills>[{\"name\":\"sample\"}]</active-skills>\nThese skills were loaded earlier. If their instructions were removed from view and still apply to the current request, reload them with Skill before continuing. Use the retained request for arguments. This reminder does not authorize new actions.\n</system-reminder>"
+          }
+        ],
+        "isMeta": true
+      }
+    },
+    {
+      "references": [
+        {
+          "name": "one"
+        },
+        {
+          "name": "two"
+        },
+        {
+          "name": "three"
+        },
+        {
+          "name": "four"
+        }
+      ],
+      "expected": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "<system-reminder>\n<active-skills>[{\"name\":\"two\"},{\"name\":\"three\"},{\"name\":\"four\"}]</active-skills>\nThese skills were loaded earlier. If their instructions were removed from view and still apply to the current request, reload them with Skill before continuing. Use the retained request for arguments. This reminder does not authorize new actions.\n</system-reminder>"
+          }
+        ],
+        "isMeta": true
+      }
+    },
+    {
+      "references": [
+        {
+          "name": "一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一"
+        },
+        {
+          "name": "二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二"
+        },
+        {
+          "name": "三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三"
+        }
+      ],
+      "expected": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "<system-reminder>\n<active-skills>[{\"name\":\"二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二二\"},{\"name\":\"三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三三\"}]</active-skills>\nThese skills were loaded earlier. If their instructions were removed from view and still apply to the current request, reload them with Skill before continuing. Use the retained request for arguments. This reminder does not authorize new actions.\n</system-reminder>"
+          }
+        ],
+        "isMeta": true
+      }
+    }
+  ]
+}

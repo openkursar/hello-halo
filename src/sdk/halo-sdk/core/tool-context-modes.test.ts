@@ -7,8 +7,7 @@ import type { Options } from '../types/config.js';
 import type { LlmProvider, ProviderRequest, ContentBlock, StreamEvent } from '../types/provider.js';
 import type { SDKMessage } from './query-types.js';
 import { getTranscriptPath } from './transcript.js';
-import { readHistoryReport } from './transcript-reader.js';
-import { readToolContextSnapshot } from './tool-context/index.js';
+import { journalContext } from './tool-context-journal.fixture.js';
 
 const sessions: SDKSession[] = [];
 const directories: string[] = [];
@@ -131,9 +130,12 @@ describe('persisted native and prompt-tool mode transitions', () => {
       expect(alternate.summaries.length).toBeGreaterThan(0);
       expect(middle.events.some(event => event.type === 'system' && event.subtype === 'compact_boundary')).toBe(true);
     }
-    const middleHistory = await readHistoryReport(path);
-    expect(middleHistory.toolContextDamaged).toBeUndefined();
-    expect(readToolContextSnapshot(middleHistory.messages)).toMatchObject({ definitions: [], discoveryEntries: false });
+    // The resumed prompt-tool session owns the same journal; read it under that owner.
+    const middleHistory = await journalContext(middle.session.sessionId, path, { cwd, env: base.env ?? {} });
+    expect(middleHistory.readable).toBe(true);
+    expect(middleHistory.mode).toBe('deferred');
+    expect(middleHistory.baselines.at(-1)).toMatchObject({ definitions: [], discoveryEntries: false });
+    expect(middleHistory.definitions).toEqual([]);
     expect((await readFile(path, 'utf8')).startsWith(original)).toBe(true);
     const returning = scripted([[invoke('stale-native', 'not-discovered')], [search('return-search')],
       [invoke('native-return', 'native-return')], [invoke('denied-native', 'denied')], [done]]);
@@ -150,7 +152,7 @@ describe('persisted native and prompt-tool mode transitions', () => {
     }
     if (!compact) expect(blocks(returning.requests[0])).toContainEqual(invoke('native-first', 'native-first', initialArguments));
     expect(permission.mock.calls.some(call => call[0] === 'CallTool')).toBe(false);
-    expect((await readHistoryReport(path)).toolContextDamaged).toBeUndefined();
+    expect((await journalContext(final.session.sessionId, path, { cwd, env: base.env ?? {} })).readable).toBe(true);
     expect(JSON.stringify([...first.events, ...middle.events, ...final.events])).not.toContain('toolContext');
   });
 });

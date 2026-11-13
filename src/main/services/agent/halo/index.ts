@@ -1,8 +1,8 @@
 import { app } from 'electron'
 import { existsSync } from 'node:fs'
 import { delimiter, dirname, join } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import type * as WorkerSdk from '@hello-halo/agent-sdk/worker'
+import { pathToFileURL } from 'node:url'
+import type * as NativeSdk from '@hello-halo/agent-sdk/native'
 import type { Options } from '@hello-halo/agent-sdk'
 import { prepareSessionSkills, withSkillNotice } from '../skill-availability'
 import { buildToolDiscoveryOptions } from '../tool-discovery'
@@ -10,11 +10,10 @@ import { getBundledRipgrepPath } from './ripgrep'
 import { updateEnvPath } from '../../child-env'
 import { NativeSessionResumeError } from '../../../../shared/types/engine-session'
 
-/** Host lifecycle and opaque grouping; thread management belongs entirely to the SDK. */
-export function createHaloSdkModule(sdk: typeof WorkerSdk) {
+/** Host lifecycle and opaque grouping; execution resources belong entirely to the SDK. */
+export function createHaloSdkModule(sdk: typeof NativeSdk) {
   const unpack = (path: string) => app.isPackaged ? path.replace(/\.asar([/\\])/, '.asar.unpacked$1') : path
-  const runtime = sdk.createWorkerRuntime({
-    workerUrl: pathToFileURL(unpack(fileURLToPath(sdk.getWorkerEntryUrl()))),
+  const runtime = sdk.createNativeRuntime({
     // Leave room for the remaining services within the application's five-second quit budget.
     shutdownTimeoutMs: 3000,
   })
@@ -60,7 +59,7 @@ export function createHaloSdkModule(sdk: typeof WorkerSdk) {
     initialize: () => runtime.initialize(),
     close: () => runtime.close(),
     diagnostics: () => runtime.diagnostics(),
-    async readSessionToolContextMode(sessionId: string, options: WorkerSdk.ReadSessionToolContextModeOptions,
+    async readSessionToolContextMode(sessionId: string, options: NativeSdk.ReadSessionToolContextModeOptions,
       controls: { signal: AbortSignal; group?: string }) {
       try {
         return await runtime.readSessionToolContextMode(sessionId, options, controls)

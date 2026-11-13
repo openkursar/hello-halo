@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { queryLoop } from './query-loop.js';
+import { queryLoop } from '../index.js';
 import type { SDKMessage } from './query-types.js';
 import type {
   LlmProvider,

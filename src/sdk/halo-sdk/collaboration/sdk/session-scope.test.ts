@@ -3,9 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createSdkCollaboration, type SdkCollaborationBinding } from './index.js';
+import { createSdkCollaboration, type SdkCollaborationBinding } from '../../native/collaboration-sdk.js';
 import { setup } from '../../worker/fixtures/setup.mjs';
-import { shellStateManager } from '../../tools/bash/shell-state.js';
 import type { Options } from '../../types/config.js';
 import type { Tool } from '../../types/tool.js';
 
@@ -17,12 +16,13 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
-async function fixture(label: string, extra: Partial<Options> = {}, data = {}) {
+async function fixture(label: string, extra: Partial<Options> = {}, data = {},
+  create: typeof createSdkCollaboration = createSdkCollaboration) {
   const base = await setup({ model: label, cwd: directory, persistSession: false, settingSources: [],
     env: { HOME: directory, CLAUDE_CONFIG_DIR: directory }, permissionMode: 'bypassPermissions',
     turnEndChecks: { openWork: false, completion: false }, ...extra }, data);
   const notices: string[] = [];
-  const binding = createSdkCollaboration({ sessionId: randomUUID(), getOptions: () => base,
+  const binding = create({ sessionId: randomUUID(), getOptions: () => base,
     settings: { maxIdleSessions: 0 }, deliverToSource: async envelope => { notices.push(envelope.body); return 'buffered'; } });
   bindings.push(binding);
   return { binding, notices };
@@ -69,13 +69,11 @@ describe('collaboration owner isolation', () => {
     expect(a.binding.activeCount).toBe(0);
   });
 
-  it('inherits host hooks and reclaims each collaborator shell state at retirement', async () => {
-    const baseline = shellStateManager.size;
+  // Removal of the agent-shell-*.state files is covered by
+  // validation/native-collaboration-lifecycle.test.mjs and the Rust adapter tests.
+  it('inherits host hooks and keeps each collaborator shell state isolated at retirement', async () => {
     const contexts = new Set<string>();
     const execute = vi.fn(async (_input, context) => {
-      const state = shellStateManager.get(context.sessionId, context.cwd);
-      expect(state.envVars.has('OTHER_MEMBER')).toBe(false);
-      state.envVars.set('OTHER_MEMBER', context.sessionId);
       contexts.add(context.sessionId);
       return { content: 'done' };
     });
@@ -88,7 +86,6 @@ describe('collaboration owner isolation', () => {
         { collaboratorTools: [{ name: 'Probe', input: {} }] });
       await next.binding.server.instance.callTool('spawn_agent', { prompt: 'Check isolation.' });
       await settled(next.binding);
-      expect(shellStateManager.size).toBe(baseline);
     }
     await binding.server.instance.callTool('spawn_agent', { prompt: 'Check the original scope.' });
     await settled(binding);
@@ -96,6 +93,5 @@ describe('collaboration owner isolation', () => {
     expect(execute).toHaveBeenCalledTimes(5);
     expect(hook).toHaveBeenCalledTimes(5);
     await Promise.all(bindings.map(host => host.close()));
-    expect(shellStateManager.size).toBe(baseline);
   });
 });

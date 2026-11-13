@@ -158,8 +158,12 @@ const median = values => {
   return sorted.length % 2 ? sorted[midpoint] : (sorted[midpoint - 1] + sorted[midpoint]) / 2;
 };
 const fingerprint = createHash('sha256');
-const fingerprintFiles = ['index.js', 'core/query-loop.js', 'core/streaming-turn.js',
-  'core/tool-scheduler.js', 'core/tool-execution.js'];
+const nativeBuild = JSON.parse(await readFile(new URL('../dist/native/build-info.json', import.meta.url), 'utf8'));
+const artifact = nativeBuild.artifacts.find(item => item.platform === `${process.platform}-${process.arch}`);
+assert.equal(nativeBuild.implementation, 'rust');
+assert(artifact, 'The native manifest must include the current platform');
+const fingerprintFiles = ['index.js', 'native/index.js', 'native/query-loop.js',
+  'native/tools.js', 'native/build-info.json', `native/${artifact.filename}`];
 for (const file of fingerprintFiles) fingerprint.update(file).update(await readFile(new URL(`../dist/${file}`, import.meta.url)));
 const samples = { streaming: [], buffered: [] };
 for (let repetition = -warmup; repetition < repetitions; repetition++) {
@@ -173,6 +177,7 @@ const bufferedMs = median(samples.buffered.map(sample => sample.wallMs));
 const report = {
   checkedAt: new Date().toISOString(), node: process.version, platform: process.platform, arch: process.arch,
   buildFingerprint: fingerprint.digest('hex'), fingerprintFiles, repetitions, warmup,
+  nativeBuild,
   workload: { tools: 4, toolMs: 220, staggerMs: 40, streamTailMs: 160, permissionCallback: true },
   comparison: 'Same compiled SDK and scripted events; buffered control withholds events until the response ends.',
   medianWallMs: { streaming: streamingMs, buffered: bufferedMs },

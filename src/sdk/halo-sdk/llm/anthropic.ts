@@ -35,7 +35,7 @@ import {
   type RetryStrategy,
 } from './retry-strategy.js';
 import { buildBetas } from './anthropic-betas.js';
-import { addCacheBreakpoints, addSystemPromptCacheBreakpoint } from './cache-breakpoints.js';
+import { addCacheBreakpoints, addSystemPromptCacheBreakpoint, limitCacheBreakpoints } from './cache-breakpoints.js';
 import {
   generateRequestId,
   type RequestIdentity,
@@ -838,6 +838,7 @@ export class AnthropicProvider implements LlmProvider {
       body.output_config = outputConfig;
     }
 
+    limitCacheBreakpoints(body);
     assertImageBodyBudget(body);
     return body;
   }

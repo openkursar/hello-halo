@@ -31,7 +31,6 @@ import type { StreamResult } from '../../services/agent/stream-processor'
 import type { TurnSink } from '../../services/agent/turn-sink'
 import type { ImageAttachment } from '../../services/agent/types'
 import type { EngineId } from '../../../shared/types/engine'
-import type { EngineSessionState } from '../../../shared/types/engine-session'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { TranscriptMessage, TranscriptProvenance } from '../../../shared/types/transcript'
 import { CONTINUITY_NOTICE_TEXT, roleForTranscriptSource } from '../../../shared/transcript'
@@ -45,7 +44,7 @@ import { getActiveImChannelManager } from './im-channels'
 import { ReplyTextAccumulator } from './reply-accumulator'
 import { ProgressEventParser } from './progress-formatter'
 import { TurnCutPoint } from './escalation-cut'
-import { openSessionWriter, saveChatSessionId, saveChatEngineBinding, type RecordedPush, type SessionWriter } from './session-store'
+import { openSessionWriter, saveChatSessionId, saveChatEngineBinding, type ChatEngineBinding, type ChatEngineState, type RecordedPush, type SessionWriter } from './session-store'
 import { AppChatTurnInterrupted, turnEndingOf, type AppChatTurnEnding } from './turn-ending'
 import { imTurnReply } from './im-error-reply'
 import { stopGeneration } from '../../services/agent/control'
@@ -824,7 +823,7 @@ export function bindAppChatEngine(sink: TurnSink, options: {
   appId: string
   runId: string
   engineId: EngineId
-  expected: EngineSessionState
+  expected: ChatEngineState
 }): TurnSink {
   let expected = options.expected
   const persist = (result: StreamResult): StreamResult => {
@@ -835,11 +834,13 @@ export function bindAppChatEngine(sink: TurnSink, options: {
       return { ...owned, capturedSessionId: undefined }
     }
     if (expected.binding?.engineId === owned.engineId && expected.binding.sessionId === owned.capturedSessionId) return owned
-    const binding = { version: 1 as const, engineId: owned.engineId, sessionId: owned.capturedSessionId }
+    const useCurrentInstructions = owned.engineId === 'anthropic' && !!expected.sessionId && expected.useCurrentInstructions
+    const binding: ChatEngineBinding = { version: 1, engineId: owned.engineId, sessionId: owned.capturedSessionId,
+      ...(useCurrentInstructions ? { useCurrentInstructions: true } : {}) }
     if (!saveChatEngineBinding(options.spacePath, options.appId, options.runId, binding, expected)) {
       return { ...owned, capturedSessionId: undefined }
     }
-    expected = { sessionId: binding.sessionId, binding }
+    expected = { sessionId: binding.sessionId, binding, ...(useCurrentInstructions ? { useCurrentInstructions: true } : {}) }
     return owned
   }
   return {

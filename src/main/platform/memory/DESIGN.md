@@ -137,7 +137,7 @@ start   ensureMemoryFile(layout, owner) — the skeleton, when memory.md is miss
           generated topic index (6KB budget, shared with any read-only topics)
         instructions: generatePromptInstructions(mode, { owner, tracks, inTeam, layout, authorTag })
 work    agent Reads/Edits memory.md and topics with native file tools
-          shared format, mature example and topic front matter already in the system prompt
+          compact format and topic front matter already in the system prompt
 end     run record (automation only) · requestConsolidation (services)
 ```
 
@@ -147,11 +147,10 @@ end     run record (automation only) · requestConsolidation (services)
 | Digital-human chat / IM / team (`apps/runtime/app-chat.ts`) | same format + digital-human policies, `session`; trusted author tag in session configuration | first message of the session, same limits; no live-instance roster |
 | Space chat (`services/agent/space-memory.ts`) | same format + selective-recording policy; trusted author tag in session configuration | first message of a new conversation; `# now` ≤8KB, 3 History titles |
 
-All enabled memories receive the same annotated structural template, three-way
-classification rule and mature-memory example, including empty memories. The template
-explains `State`, optional entity/`Patterns`/`Errors` sections, signed History entries
-and topic front matter. Examples teach short summaries with detail below, without
-per-entry character limits. Run instructions demonstrate filling the pre-inserted
+All enabled memories receive the same compact structural template and three-way
+classification rule, including empty memories. The template explains `State`, optional
+entity/`Patterns`/`Errors` sections, signed History entries and topic front matter,
+without illustrative facts or per-entry character limits. Runs fill their pre-inserted
 heading; sessions obtain the local time only when writing an entry, never guess it.
 Owner policies differ in what deserves recording, not in the file format. Stable instructions
 stay in the system prompt; actual memory is read with Read/Grep/Glob and updated with

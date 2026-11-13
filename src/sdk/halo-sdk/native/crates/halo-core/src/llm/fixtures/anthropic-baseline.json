@@ -1,0 +1,1404 @@
+{
+  "sourceSha256": "e8d742ce2d85a2ee2098fac7cd0d9e232d1bab42bfbc62ab50f01426f8d87c35",
+  "requests": [
+    {
+      "name": "plain",
+      "request": {
+        "model": "fixture",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9"
+      },
+      "expected": {
+        "model": "fixture",
+        "max_tokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello 😀",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "temperature": 1
+      }
+    },
+    {
+      "name": "suffix",
+      "request": {
+        "model": "fixture[1m][2M]",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9"
+      },
+      "expected": {
+        "model": "fixture",
+        "max_tokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello 😀",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "temperature": 1
+      }
+    },
+    {
+      "name": "thinking-adaptive",
+      "request": {
+        "model": "fixture",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "thinking": {
+          "type": "adaptive"
+        },
+        "temperature": 0.2,
+        "providerOptions": {
+          "effort": "high",
+          "taskBudget": {
+            "type": "tokens",
+            "tokens": 1000
+          }
+        }
+      },
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9"
+      },
+      "expected": {
+        "model": "fixture",
+        "max_tokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello 😀",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "adaptive"
+        },
+        "output_config": {
+          "effort": "high",
+          "task_budget": {
+            "type": "tokens",
+            "tokens": 1000
+          }
+        }
+      }
+    },
+    {
+      "name": "thinking-enabled",
+      "request": {
+        "model": "fixture",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "thinking": {
+          "type": "enabled",
+          "budgetTokens": 100
+        },
+        "temperature": 0.2,
+        "providerOptions": {
+          "effort": "high",
+          "taskBudget": {
+            "type": "tokens",
+            "tokens": 1000
+          }
+        }
+      },
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9"
+      },
+      "expected": {
+        "model": "fixture",
+        "max_tokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello 😀",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 49
+        },
+        "output_config": {
+          "effort": "high",
+          "task_budget": {
+            "type": "tokens",
+            "tokens": 1000
+          }
+        }
+      }
+    },
+    {
+      "name": "thinking-disabled",
+      "request": {
+        "model": "fixture",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "thinking": {
+          "type": "disabled"
+        },
+        "temperature": 0.2,
+        "providerOptions": {
+          "effort": "high",
+          "taskBudget": {
+            "type": "tokens",
+            "tokens": 1000
+          }
+        }
+      },
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9"
+      },
+      "expected": {
+        "model": "fixture",
+        "max_tokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello 😀",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "temperature": 0.2,
+        "thinking": {
+          "type": "disabled"
+        },
+        "output_config": {
+          "effort": "high",
+          "task_budget": {
+            "type": "tokens",
+            "tokens": 1000
+          }
+        }
+      }
+    },
+    {
+      "name": "max-0",
+      "request": {
+        "model": "fixture",
+        "maxTokens": 0,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9"
+      },
+      "expected": {
+        "model": "fixture",
+        "max_tokens": 16384,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello 😀",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "temperature": 1
+      }
+    },
+    {
+      "name": "max--1",
+      "request": {
+        "model": "fixture",
+        "maxTokens": -1,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9"
+      },
+      "expected": {
+        "model": "fixture",
+        "max_tokens": 16384,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello 😀",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "temperature": 1
+      }
+    },
+    {
+      "name": "max-0.5",
+      "request": {
+        "model": "fixture",
+        "maxTokens": 0.5,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9"
+      },
+      "expected": {
+        "model": "fixture",
+        "max_tokens": 0.5,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello 😀",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "temperature": 1
+      }
+    },
+    {
+      "name": "explicit-null",
+      "request": {
+        "model": "fixture",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "topP": null,
+        "topK": null,
+        "temperature": null,
+        "systemPrompt": []
+      },
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9"
+      },
+      "expected": {
+        "model": "fixture",
+        "max_tokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello 😀",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "system": [],
+        "temperature": 1,
+        "top_p": null,
+        "top_k": null
+      }
+    },
+    {
+      "name": "tool-schemas",
+      "request": {
+        "model": "fixture",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "tools": [
+          {
+            "name": "first",
+            "description": "Exact.\n Text",
+            "input_schema": {
+              "properties": {
+                "value": {
+                  "description": "body",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "name": "second",
+            "description": "Second",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "toolChoice": {
+          "type": "any"
+        },
+        "systemPrompt": "System",
+        "stopSequences": [
+          "STOP"
+        ],
+        "providerOptions": {
+          "extendedTtl": true
+        }
+      },
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9"
+      },
+      "expected": {
+        "model": "fixture",
+        "max_tokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello 😀",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "System",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "tools": [
+          {
+            "name": "first",
+            "description": "Exact.\n Text",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "description": "body",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          {
+            "name": "second",
+            "description": "Second",
+            "input_schema": {
+              "type": "object"
+            },
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "temperature": 1,
+        "tool_choice": {
+          "type": "any"
+        },
+        "stop_sequences": [
+          "STOP"
+        ]
+      }
+    },
+    {
+      "name": "history",
+      "request": {
+        "model": "fixture",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "question"
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "hidden",
+                "signature": "sig",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              },
+              {
+                "type": "tool_use",
+                "id": "call",
+                "name": "run",
+                "input": {
+                  "a": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call",
+                "content": "done",
+                "is_error": true
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "systemPrompt": [
+          {
+            "type": "text",
+            "text": "first"
+          },
+          {
+            "type": "text",
+            "text": "second",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ]
+      },
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9"
+      },
+      "expected": {
+        "model": "fixture",
+        "max_tokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "question"
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "hidden",
+                "signature": "sig"
+              },
+              {
+                "type": "tool_use",
+                "id": "call",
+                "name": "run",
+                "input": {
+                  "a": 1
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call",
+                "content": "done",
+                "is_error": true,
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "first",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          },
+          {
+            "type": "text",
+            "text": "second",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "temperature": 1
+      }
+    },
+    {
+      "name": "no-cache",
+      "request": {
+        "model": "fixture",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "x",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "systemPrompt": "System",
+        "providerOptions": {
+          "enableCaching": false
+        }
+      },
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9"
+      },
+      "expected": {
+        "model": "fixture",
+        "max_tokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "x",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "system": "System",
+        "temperature": 1
+      }
+    },
+    {
+      "name": "identity-static",
+      "request": {
+        "model": "fixture",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true,
+        "systemPrompt": "System",
+        "providerOptions": {
+          "effort": "max",
+          "taskBudget": {
+            "type": "custom",
+            "tokens": 5
+          }
+        }
+      },
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9",
+        "requestIdentity": {
+          "metadata": {
+            "user_id": "fixture"
+          },
+          "contextManagement": {
+            "edits": [
+              {
+                "type": "keep"
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "model": "fixture",
+        "max_tokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello 😀",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "System",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "temperature": 1,
+        "metadata": {
+          "user_id": "fixture"
+        },
+        "context_management": {
+          "edits": [
+            {
+              "type": "keep"
+            }
+          ]
+        },
+        "output_config": {
+          "effort": "max",
+          "task_budget": {
+            "type": "custom",
+            "tokens": 5
+          }
+        }
+      }
+    }
+  ],
+  "headerCases": [
+    {
+      "name": "plain",
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9"
+      },
+      "options": {},
+      "thinking": false,
+      "attempt": 0,
+      "expected": {
+        "content-type": "application/json",
+        "x-api-key": "fixture-only",
+        "anthropic-version": "2023-06-01"
+      }
+    },
+    {
+      "name": "betas",
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9",
+        "betas": [
+          "custom",
+          "custom",
+          ""
+        ]
+      },
+      "options": {
+        "enable1mContext": true,
+        "taskBudget": {
+          "tokens": 10
+        }
+      },
+      "thinking": true,
+      "attempt": 2,
+      "expected": {
+        "content-type": "application/json",
+        "x-api-key": "fixture-only",
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "interleaved-thinking-2025-05-14,context-1m-2025-08-07,task-budgets-2026-03-13,custom"
+      }
+    },
+    {
+      "name": "override",
+      "config": {
+        "apiKey": "fixture-only",
+        "baseUrl": "http://localhost:9",
+        "headers": {
+          "x-api-key": "override",
+          "anthropic-beta": "mine"
+        },
+        "requestIdentity": {
+          "headers": {
+            "x-extra": "yes"
+          },
+          "contextManagement": {
+            "edits": []
+          }
+        }
+      },
+      "options": {},
+      "thinking": false,
+      "attempt": 1,
+      "expected": {
+        "content-type": "application/json",
+        "x-api-key": "override",
+        "anthropic-version": "2023-06-01",
+        "x-extra": "yes",
+        "anthropic-beta": "mine"
+      }
+    }
+  ],
+  "events": [
+    {
+      "input": {
+        "type": "message_start",
+        "message": {
+          "id": "id",
+          "model": "m",
+          "usage": {
+            "input_tokens": 3,
+            "output_tokens": 0
+          }
+        }
+      },
+      "expected": {
+        "type": "message_start",
+        "id": "id",
+        "model": "m",
+        "usage": {
+          "input_tokens": 3,
+          "output_tokens": 0
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+          "type": "thinking",
+          "thinking": "",
+          "signature": "sig"
+        }
+      },
+      "expected": {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+          "type": "thinking",
+          "thinking": "",
+          "signature": "sig"
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "content_block_start",
+        "index": 1,
+        "content_block": {
+          "type": "server_tool_use",
+          "id": "server",
+          "name": "search",
+          "input": {
+            "x": 1
+          }
+        }
+      },
+      "expected": {
+        "type": "content_block_start",
+        "index": 1,
+        "content_block": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "signature_delta",
+          "signature": "new"
+        }
+      },
+      "expected": {
+        "type": "signature_delta",
+        "index": 0,
+        "signature": "new"
+      }
+    },
+    {
+      "input": {
+        "type": "message_delta",
+        "delta": {
+          "stop_reason": "end_turn"
+        },
+        "usage": {
+          "input_tokens": 3,
+          "output_tokens": 4,
+          "cache_read_input_tokens": 0
+        }
+      },
+      "expected": {
+        "type": "message_delta",
+        "stopReason": "end_turn",
+        "usage": {
+          "input_tokens": 3,
+          "output_tokens": 4,
+          "cache_read_input_tokens": 0
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "ping"
+      },
+      "expected": null
+    },
+    {
+      "input": {
+        "type": "error",
+        "error": {
+          "type": "overloaded_error",
+          "message": "retry"
+        }
+      },
+      "expected": {
+        "type": "error",
+        "errorType": "overloaded_error",
+        "message": "retry"
+      }
+    }
+  ],
+  "fallbacks": [
+    {
+      "name": "normal",
+      "response": {
+        "id": "id",
+        "model": "m",
+        "stop_reason": "tool_use",
+        "usage": {
+          "input_tokens": 3,
+          "output_tokens": 2
+        },
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "why",
+            "signature": "sig"
+          },
+          {
+            "type": "text",
+            "text": "answer"
+          },
+          {
+            "type": "tool_use",
+            "id": "tool",
+            "name": "go",
+            "input": {
+              "x": 2
+            }
+          }
+        ]
+      },
+      "request": {
+        "model": "fixture",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "expected": [
+        {
+          "type": "message_start",
+          "id": "id",
+          "model": "m",
+          "usage": {
+            "input_tokens": 3,
+            "output_tokens": 2
+          },
+          "stopReason": "tool_use"
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "thinking",
+            "thinking": ""
+          }
+        },
+        {
+          "type": "thinking_delta",
+          "index": 0,
+          "thinking": "why"
+        },
+        {
+          "type": "signature_delta",
+          "index": 0,
+          "signature": "sig"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "text_delta",
+          "index": 1,
+          "text": "answer"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 1
+        },
+        {
+          "type": "content_block_start",
+          "index": 2,
+          "content_block": {
+            "type": "tool_use",
+            "id": "tool",
+            "name": "go",
+            "input": {
+              "x": 2
+            }
+          }
+        },
+        {
+          "type": "input_json_delta",
+          "index": 2,
+          "partialJson": "{\"x\":2}"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 2
+        },
+        {
+          "type": "message_delta",
+          "stopReason": "tool_use",
+          "usage": {
+            "input_tokens": 3,
+            "output_tokens": 2
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    },
+    {
+      "name": "null-fields",
+      "response": {
+        "id": "id",
+        "model": null,
+        "stop_reason": "end_turn",
+        "delta": {
+          "stop_reason": null
+        },
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool",
+            "name": "empty",
+            "input": null
+          },
+          {
+            "type": "image",
+            "source": {
+              "data": "fixture"
+            }
+          }
+        ]
+      },
+      "request": {
+        "model": "fixture",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "expected": [
+        {
+          "type": "message_start",
+          "id": "id",
+          "model": "fixture",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0
+          },
+          "stopReason": "end_turn"
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "tool_use",
+            "id": "tool",
+            "name": "empty",
+            "input": {}
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "text_delta",
+          "index": 1,
+          "text": "{\"type\":\"image\",\"source\":{\"data\":\"fixture\"}}"
+        },
+        {
+          "type": "content_block_stop",
+          "index": 1
+        },
+        {
+          "type": "message_delta",
+          "stopReason": "end_turn",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    }
+  ],
+  "collected": [
+    {
+      "name": "mixed",
+      "request": {
+        "model": "fixture",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "events": [
+        {
+          "type": "message_start",
+          "id": "id",
+          "model": "reported",
+          "usage": {
+            "input_tokens": 3,
+            "output_tokens": 4
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 2,
+          "content_block": {
+            "type": "text",
+            "text": "ignore"
+          }
+        },
+        {
+          "type": "text_delta",
+          "index": 2,
+          "text": "answer"
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "thinking",
+            "thinking": ""
+          }
+        },
+        {
+          "type": "thinking_delta",
+          "index": 0,
+          "thinking": "why"
+        },
+        {
+          "type": "signature_delta",
+          "index": 0,
+          "signature": "old"
+        },
+        {
+          "type": "signature_delta",
+          "index": 0,
+          "signature": "new"
+        },
+        {
+          "type": "message_delta",
+          "stopReason": "end_turn",
+          "usage": {
+            "output_tokens": 4
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expected": {
+        "id": "id",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "why",
+            "signature": "new"
+          },
+          {
+            "type": "text",
+            "text": "answer"
+          }
+        ],
+        "stopReason": "end_turn",
+        "usage": {
+          "input_tokens": 3,
+          "output_tokens": 4
+        },
+        "model": "reported"
+      }
+    },
+    {
+      "name": "retry-reset",
+      "request": {
+        "model": "fixture",
+        "maxTokens": 50,
+        "messages": [
+          {
+            "role": "user",
+            "content": "hello 😀"
+          }
+        ],
+        "stream": true
+      },
+      "events": [
+        {
+          "type": "message_start",
+          "id": "id",
+          "model": "reported",
+          "usage": {
+            "input_tokens": 3,
+            "output_tokens": 4
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 2,
+          "content_block": {
+            "type": "text",
+            "text": "ignore"
+          }
+        },
+        {
+          "type": "text_delta",
+          "index": 2,
+          "text": "answer"
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "thinking",
+            "thinking": ""
+          }
+        },
+        {
+          "type": "retry"
+        },
+        {
+          "type": "message_start",
+          "id": "id",
+          "model": "reported",
+          "usage": {
+            "input_tokens": 3,
+            "output_tokens": 4
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 2,
+          "content_block": {
+            "type": "text",
+            "text": "ignore"
+          }
+        },
+        {
+          "type": "text_delta",
+          "index": 2,
+          "text": "answer"
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "thinking",
+            "thinking": ""
+          }
+        },
+        {
+          "type": "thinking_delta",
+          "index": 0,
+          "thinking": "why"
+        },
+        {
+          "type": "signature_delta",
+          "index": 0,
+          "signature": "old"
+        },
+        {
+          "type": "signature_delta",
+          "index": 0,
+          "signature": "new"
+        },
+        {
+          "type": "message_delta",
+          "stopReason": "end_turn",
+          "usage": {
+            "output_tokens": 4
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ],
+      "expected": {
+        "id": "id",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "why",
+            "signature": "new"
+          },
+          {
+            "type": "text",
+            "text": "answer"
+          }
+        ],
+        "stopReason": "end_turn",
+        "usage": {
+          "input_tokens": 3,
+          "output_tokens": 4
+        },
+        "model": "reported"
+      }
+    }
+  ]
+}

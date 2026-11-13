@@ -40,6 +40,7 @@ import { createSdkMcpServer } from '../agent/resolved-sdk'
 import { browserContext, type BrowserContext } from './context'
 import { buildAllTools } from './tools'
 import { installDownloadHandler } from './download-handler'
+import { AI_BROWSER_DESCRIPTION, AI_BROWSER_INSTRUCTIONS } from './guidance'
 
 /**
  * Create AI Browser SDK MCP Server.
@@ -72,6 +73,8 @@ export function createAIBrowserMcpServer(scopedContext?: BrowserContext, workDir
   return createSdkMcpServer({
     name: 'ai-browser',
     version: '1.0.0',
+    description: AI_BROWSER_DESCRIPTION,
+    instructions: AI_BROWSER_INSTRUCTIONS,
     tools
   })
 }

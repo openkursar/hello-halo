@@ -152,6 +152,10 @@ which application binary was actually exercised.
 `package` creates a directory application for the current host without publishing.
 Its provenance records packaging inputs, the controlled build, byte comparisons
 for the application outputs and SDK runtime, and the complete emitted bundle hash.
+For a macOS native SDK library changed by local ad-hoc signing, verification signs
+an isolated copy of the captured SDK file with the current entitlements and
+requires exact equality with the packaged bytes. The record includes both file
+hashes and the entitlements hash; other changes still fail verification.
 That identity is distinct from a passing packaged-app test. Platform-specific
 dependency pruning, installer behavior and release signing are not inferred from
 the provenance record.

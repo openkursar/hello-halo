@@ -14,6 +14,7 @@ test('a selected executable packaged journey builds a fresh package and passes o
   const run = calls.find(call => call.command === 'run')
   assert.equal(run.packaged, path.join(selected.root, 'tests/acceptance/output/packaged/application/application'))
   assert(run.args.includes('--plan'))
+  assert(Number(run.args[run.args.indexOf('--timeout-ms') + 1]) > 30 * 60 * 1000)
   assert.equal(calls.find(call => call.command === 'package').args.at(-1), '1800000')
   assert.equal(stages.find(stage => stage.stage === 'package preparation').exitCode, 0)
   assert.equal(baseline, true)

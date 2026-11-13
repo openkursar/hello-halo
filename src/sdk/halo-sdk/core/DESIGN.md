@@ -5,9 +5,33 @@ Session owners supply persistence callbacks; core does
 not import their state. These modules are internal collaborators, not separate
 public entry points.
 
+The default execution implementation is in `native/crates/halo-core/src/core`.
+`engine.rs` composes a session owner with the shared `loop_runtime.rs`;
+`public_loop.rs` supplies the low-level generator's external owner through
+`loop_owner.rs`. JavaScript capability ownership and public types remain at the
+Node boundary. The TypeScript loop files in this directory are not executed.
+The implementation names below describe their corresponding
+Rust modules unless a `.ts` file is named explicitly.
+
+## Preset instructions
+
+`Options.ultraEffort` defaults to false. It selects only the task-effort and
+failure-response guidance within `How you work`; identity and all other guidance
+remain the same. The normal mode emphasizes efficient use of the token budget.
+UltraEffort encourages fuller investment, varied approaches and useful parallel
+collaboration with at most four active agents including the source agent. This is
+prompt guidance, not a new runtime concurrency limit.
+
+The option is independent of provider reasoning `effort`, prompt profiles,
+permissions, budgets and completion checks. It stays in the stable system prefix
+across model switches and is inherited by child sessions. Complete custom
+system-prompt strings are not rewritten. The native Harness catalog is the text
+source for work and communication guidance; the TypeScript prompt helpers use its
+generated baseline. Communication is shared by both modes.
+
 ## Streaming and scheduling
 
-`query-loop.ts` assembles provider events into immutable completed blocks. Only
+`streaming.rs` assembles provider events into immutable completed blocks. Only
 complete JSON objects are eligible for execution. Malformed arguments produce
 an error result. Duplicate tool IDs, restarted messages and mutations of closed
 blocks terminate the attempt. Interleaved blocks wait for earlier blocks to
@@ -18,24 +42,71 @@ iterator finishes successfully.
 The owner records each completed block before its tool can start. Public frame
 UUIDs remain the transcript checkpoint UUIDs. A separate local response UUID
 groups one attempt, independently of provider IDs, which providers may reuse.
-Text-only failed attempts are discarded. Successful text-only responses use the
+Text-only failed content is discarded while reported usage is retained.
+Successful text-only responses use the
 same journal at completion.
 
-`tool-execution.ts` separates preparation from execution. Preparation applies
+`tool_execution.rs` separates preparation from execution. Preparation applies
 hooks, permission decisions and schema validation to a copy of model arguments.
-`tool-scheduler.ts` prepares the queue head, checks concurrency against the
+`tool_scheduler.rs` prepares the queue head, checks concurrency against the
 effective input, then starts eligible work. Safe calls overlap up to the per-turn
 limit. An unsafe call waits for earlier work and blocks later work. No scheduler
 state is shared across sessions. Arbitrary tool hooks require conservative
 serialization; an ordinary host permission callback does not disable parallel
 safe execution.
 
-`streaming-turn.ts` drains model frames, tool progress and tool-owned messages
+`loop_runtime.rs` drains model frames, tool progress and tool-owned messages
 through one backpressured channel. Tool execution must not wait for the provider
 to finish before its messages can be consumed. The API duration stops when the
 model iterator finishes, before the remaining tool execution tail is drained.
 
+JavaScript-facing Read, Write and Edit calls enter the canonical-path queue
+before asynchronous dispatch. Write and Edit retain the caller's read record
+at admission, so an earlier operation cannot grant a queued call a newer read.
+Independent paths can overlap; model-loop scheduling remains a separate boundary.
+
 ## Failure and cancellation
+
+Completed end-turn responses containing only whitespace or thinking retry the
+retained request at most twice, without adding instructions or empty assistant
+messages to model history. Each response's reported usage and elapsed turn still
+count toward the ordinary budgets. Exhaustion reports an error instead of empty
+success. An empty completion-check response retains the preceding usable answer.
+Usage already reported by an interrupted attempt is accounted and finalized once
+before retry reset, even when no tool was admitted. Transport retries check the
+execution budget before another request; missing usage is never estimated as billing.
+Discarded responses retain private accounting metadata without invoking the public
+completed-assistant callback or adding failed content to model history.
+The same bounded recovery applies when a tool-use finish contains no actual call.
+An empty refusal, stop-sequence or other terminal response reports its stop reason
+without resubmission. Empty output after the existing truncation or unreadable-call
+recovery budget is exhausted is an error, never empty success. Explicit refusal
+text remains an ordinary visible response.
+
+Complete provider responses also retain reported usage when tool arguments are
+unreadable. They expose an optional diagnostic and withhold executable calls from
+that batch; summary validation can therefore repair the response without losing
+its accounting. Prompt-based tool modes use the same bounded unreadable-call
+recovery and report an error after exhaustion. Valid JSON data without a tool-call
+envelope remains an ordinary answer. Supplied scalar or array arguments and XML
+values outside the message JSON domain are never replaced with empty objects or
+internal transport markers for execution. Missing or null argument envelopes
+retain compatibility with parameterless calls. Existing public parser helpers
+retain their separate compatibility contracts.
+
+Both HTTP model adapters share a bounded UTF-8 SSE decoder. It accepts fragmented
+bytes, CR/LF/CRLF, an initial BOM and multiline JSON data. Complete single-line
+JSON records retain compatibility with servers omitting blank separators. Invalid
+JSON, invalid UTF-8 and non-object data fail the attempt rather than silently
+dropping content. Undecoded data is limited to 32 MiB. Existing retry admission
+rules still prevent replay after a tool checkpoint; a damaged usage tail cannot
+invalidate or replay an already finished OpenAI response.
+OpenAI tool names are assembled before announcing their argument stream, so a
+fragment cannot select another tool sharing its prefix. Earlier tool identities
+retain announcement order. Late IDs keep buffered arguments; structured argument
+values are serialized without dropping fields. Identity changes, name changes
+after announcement and conflicting structured/string argument fragments fail the
+attempt before admission rather than changing the selected action.
 
 Provider retry/fallback remains available before a tool checkpoint. After
 admission, the attempt is never automatically replayed: tools may already have
@@ -53,6 +124,12 @@ Completed results are retained before output hooks. A failing or interrupted
 output hook cannot erase a completed write. Compaction runs after tools settle
 and their result message has been recorded, never across an active exchange.
 
+Public result events contain one tool result each, in admission order. Model
+history and the owner's durable result callback retain the complete batch once.
+The individual events share that batch's UUID, which identifies the existing
+journal record for resume and fork; event consumers correlate individual outcomes
+by `tool_use_id`. A later provider retry cannot discard completed outcomes.
+
 Foreground Bash commands have a default execution deadline. Background commands
 have a deadline only when explicitly requested; otherwise the session owns their
 lifetime. Waiting through TaskOutput does not change that deadline. Both forms
@@ -61,8 +138,8 @@ session cancellation, explicit interruption and session close must stop managed
 background processes, including between model turns. Services expected to outlive
 the session need an independently managed lifecycle.
 
-Shell launch preparation is shared by the two process owners through
-`tools/bash/provider.ts`: bounded executable-path discovery, one command's wrapper
+Shell launch preparation is shared by foreground and background execution through
+`tools/shell.rs` and `tools/shell_platform.rs`: bounded executable-path discovery, one command's wrapper
 and spawn arguments, and a fresh spawn-time environment. Cached entries contain
 no session environment or command state. Foreground and background execution keep
 their distinct deadlines, output handling and cleanup; preparation does not own
@@ -85,6 +162,19 @@ The shared history recorder and transcript reader merge explicit local response
 groups. Final usage is recorded once in a compact metadata record; see [the journal format](TRANSCRIPT.md). Legacy records remain readable. Resume at a public block UUID stops at
 that checkpoint. Strict writes establish successful append ordering; they do
 not imply filesystem fsync or transactional atomicity with external tool effects.
+
+## Manual compaction
+
+A standalone `/compact [instructions]` is intercepted before user input enters
+model history. A single text-only input envelope is equivalent to a string;
+multimodal, batched and in-flight additions retain their ordinary input semantics.
+The session command owner invokes the same summary, usage, discovery reconciliation
+and strict checkpoint path as automatic compaction. It uses `manual` hook and
+boundary triggers and reports maintenance usage without starting a work-model
+turn. A failed summary or checkpoint retains live history; a committed checkpoint
+is installed even when cancellation arrived during its write. Cancellation keeps
+the session available for the next input. No safe reduction is reported as an
+unchanged context, without a successful compact boundary.
 
 ## Context capacity and caching
 
@@ -162,8 +252,19 @@ collaborator sessions create independent instances. Host policy enters through
 `Options.toolDiscovery`, after the ordinary tool pool and deny filters. The
 module knows no application accounts, workspaces or installation database.
 
-The execution pool remains separate from the fixed provider declarations. A
-local ToolSearch returns whole definitions as ordinary results. Only successful,
+The execution pool remains separate from the fixed provider declarations. Native
+model steps retain typed tool selections: a declaration and its MCP connection
+owner, configuration revision and definition fingerprint are captured together.
+Only the declaration reaches the provider.
+The fixed `CallTool` declaration takes an argument object. A bounded decoder at
+the completed-call admission boundary also accepts legacy encoded objects and
+unambiguous formatting repairs. It preserves the original envelope and repair
+receipt in private history; target selection, discovery, permissions and execution
+remain in their existing modules. Search results present `invoke_via`, `targets`
+and `arguments_schema`, independently of private definition fingerprints.
+Plain assistant text is never an execution request in native tool mode. Replacing a service with an identically
+named and shaped service cannot redirect a call already admitted for the old owner.
+A local ToolSearch returns whole definitions as ordinary results. Only successful,
 unchanged results acquire SDK-authored journal metadata, and discovery becomes
 usable after strict result persistence. Completed CallTool blocks normalize to
 real calls before checkpoints, hooks, permission checks and scheduling. Their
@@ -186,6 +287,14 @@ The journal reader validates metadata independently of visible prose and refuses
 damaged new-format state. See [the journal contract](TRANSCRIPT.md).
 
 An omitted option preserves full declarations; explicit XML/JSON modes do too.
+Preset prompts include service instructions once per service represented by the
+current filtered eager pool, including full-declaration modes. Labels and guides
+are JSON-encoded untrusted usage reference, not permission or action authorization;
+existing instructions and safeguards retain precedence. Deferred guides
+remain in verified search results rather than the initial system prompt. Catalog
+refresh invalidates eager instructions along with definitions; ordinary discovery
+does not change the system prefix. An explicit system-prompt string remains a
+complete replacement and receives no automatic service instructions.
 Previously recorded histories without a new-format baseline remain full, even
 when the host now supplies discovery policy. A configured new native session
 with no deferred tools records only private format metadata on its first input,
@@ -205,7 +314,7 @@ Terminal-Bench score measurement.
 
 ## Idle execution retirement
 
-`session-checkpoint.ts` transfers settled conversation and tool working state
+`collaboration_adapter.rs` and the session owner transfer settled conversation and tool working state
 between local execution objects. It is internal ownership plumbing, not a model
 tool. Identity and workspace must match. A healthy persisted transcript owns
 history; an in-memory session or a failed append retains messages in its

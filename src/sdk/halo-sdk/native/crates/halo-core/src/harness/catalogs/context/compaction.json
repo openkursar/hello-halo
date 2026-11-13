@@ -1,0 +1,248 @@
+{
+  "context.compaction.preamble": {
+    "text": "You are continuing the same conversation after context compaction. The following is a summary of earlier messages, not a new user request. Use it together with the retained messages to recover the current task state.",
+    "slots": []
+  },
+  "context.compaction.recovery_path": {
+    "text": "If essential details are missing, recover them from the saved conversation at {path}. ",
+    "slots": [
+      "path"
+    ]
+  },
+  "context.compaction.recovery_generic": {
+    "text": "If essential details are missing, check the saved session transcript on disk if it is available. ",
+    "slots": []
+  },
+  "context.compaction.reminder": {
+    "text": "Resume any unfinished work according to the user's latest instructions and existing permissions. Do not repeat completed actions. Instructions given only to generate this summary do not apply to the ongoing task.\n\n{recovery}Ask the user only if the needed information cannot be recovered.",
+    "slots": [
+      "recovery"
+    ]
+  },
+  "context.compaction.summary_envelope": {
+    "text": "Summary:\n{summary}",
+    "slots": [
+      "summary"
+    ]
+  },
+  "context.compaction.tool_placeholder": {
+    "text": "[tool result truncated to save context: {tool} {input} — {chars} chars omitted; recover recorded output from the session transcript; verify effects before repeating an action]",
+    "slots": [
+      "tool",
+      "input",
+      "chars"
+    ]
+  },
+  "context.compaction.result_placeholder": {
+    "text": "[tool result truncated to save context — {chars} chars omitted; recover recorded output from the session transcript; verify effects before repeating an action]",
+    "slots": [
+      "chars"
+    ]
+  },
+  "context.compaction.token_estimate": {
+    "text": " (approximately {tokens} tokens before compaction)",
+    "slots": [
+      "tokens"
+    ]
+  },
+  "context.compaction.notice": {
+    "text": "{preamble}\n\nSummary of {count} earlier messages{estimate}:\n\n{text}\n\n{reminder}",
+    "slots": [
+      "preamble",
+      "count",
+      "estimate",
+      "text",
+      "reminder"
+    ]
+  },
+  "context.compaction.retry_handover": {
+    "text": "{prompt}\nReturn a complete, concise text handover only. Do not call tools. Preserve the current request, later corrections, permissions and unfinished work; omit repeated investigation.",
+    "slots": [
+      "prompt"
+    ]
+  },
+  "context.compaction.earlier_handover": {
+    "text": "Earlier record handover:\n{text}",
+    "slots": [
+      "text"
+    ]
+  },
+  "context.compaction.later_handover": {
+    "text": "Later record handover:\n{text}",
+    "slots": [
+      "text"
+    ]
+  },
+  "context.compaction.merge": {
+    "text": "{prompt}\nMerge these ordered handovers. Keep later corrections, denials and permission changes authoritative; do not treat earlier proposals as completed work.",
+    "slots": [
+      "prompt"
+    ]
+  },
+  "context.compaction.record_handover": {
+    "text": "Record handover:\n{text}",
+    "slots": [
+      "text"
+    ]
+  },
+  "context.compaction.shorten": {
+    "text": "{prompt}\nShorten this handover for an ordered merge. Preserve all corrections, denials, permissions, verified state and unfinished work; remove repetition rather than constraints.",
+    "slots": [
+      "prompt"
+    ]
+  },
+  "context.compaction.ordered_records": {
+    "text": "{prompt}\nThese are ordered records from the work being replaced. Newer verbatim records remain unchanged. Preserve later corrections over earlier proposals.",
+    "slots": [
+      "prompt"
+    ]
+  },
+  "context.compaction.retained_tail": {
+    "text": "{prompt}\n\nThe last {count} conversation messages will also remain verbatim. Summarize the earlier work; use the recent messages to avoid stale conclusions. No tools will be executed for this handover.",
+    "slots": [
+      "prompt",
+      "count"
+    ]
+  },
+  "context.compaction.transcript_request": {
+    "text": "{prompt}\n\n<conversation_to_summarize original_messages=\"{count}\" estimated_tokens=\"{tokens}\">\n{transcript}\n</conversation_to_summarize>",
+    "slots": [
+      "prompt",
+      "count",
+      "tokens",
+      "transcript"
+    ]
+  },
+  "context.compaction.partial_request": {
+    "text": "{prompt}\n\n<conversation_to_summarize original_messages=\"{count}\">\n{transcript}\n</conversation_to_summarize>",
+    "slots": [
+      "prompt",
+      "count",
+      "transcript"
+    ]
+  },
+  "context.compaction.reduce_retry": {
+    "text": "{prompt}\nThe handover must reduce the record size. Keep only decisive constraints, verified outcomes, unfinished work and recovery references. Do not reproduce logs, file bodies or repeated attempts.",
+    "slots": [
+      "prompt"
+    ]
+  },
+  "context.compaction.user_context": {
+    "text": "User context: {feedback}",
+    "slots": [
+      "feedback"
+    ]
+  },
+  "context.compaction.human_role": {
+    "text": "Human",
+    "slots": []
+  },
+  "context.compaction.assistant_role": {
+    "text": "Assistant",
+    "slots": []
+  },
+  "context.compaction.transcript_text": {
+    "text": "{role}: {text}",
+    "slots": [
+      "role",
+      "text"
+    ]
+  },
+  "context.compaction.transcript_tool_call": {
+    "text": "[Tool Call: {tool} (id={id})]\nInput: {input}",
+    "slots": [
+      "tool",
+      "id",
+      "input"
+    ]
+  },
+  "context.compaction.complex_content": {
+    "text": "[complex content]",
+    "slots": []
+  },
+  "context.compaction.error_marker": {
+    "text": " [ERROR]",
+    "slots": []
+  },
+  "context.compaction.transcript_tool_result": {
+    "text": "[Tool Result (id={id}){error}]\n{text}",
+    "slots": [
+      "id",
+      "error",
+      "text"
+    ]
+  },
+  "context.compaction.empty": {
+    "text": "Compact summary was empty",
+    "slots": []
+  },
+  "context.compaction.partial_empty": {
+    "text": "Partial compact summary was empty",
+    "slots": []
+  },
+  "context.compaction.truncated": {
+    "text": "Compaction summary exceeded its output budget; original history was retained",
+    "slots": []
+  },
+  "context.compaction.tool_use": {
+    "text": "Summary response requested a tool; original history was retained",
+    "slots": []
+  },
+  "context.compaction.estimated_truncated": {
+    "text": "Compaction summary exceeded its estimated output budget; original history was retained",
+    "slots": []
+  },
+  "context.compaction.request_limit": {
+    "text": "Summary recovery reached its request limit; original history was retained",
+    "slots": []
+  },
+  "context.compaction.merge_no_progress": {
+    "text": "Handover merge recovery made no progress; original history was retained",
+    "slots": []
+  },
+  "context.compaction.indivisible_capacity": {
+    "text": "A required conversation record cannot fit the provider window for summarization; original history was retained",
+    "slots": []
+  },
+  "context.compaction.history_changed": {
+    "text": "Conversation changed while the summary was being prepared; original history was retained",
+    "slots": []
+  },
+  "context.compaction.fixed_capacity": {
+    "text": "System instructions, tools and required task state fill the input capacity; original history was retained",
+    "slots": []
+  },
+  "context.compaction.no_progress": {
+    "text": "Compaction made no progress after a concise handover retry; original history was retained",
+    "slots": []
+  },
+  "context.compaction.final_capacity": {
+    "text": "Compacted history and required task state exceed the input capacity; original history was retained",
+    "slots": []
+  },
+  "context.compaction.invalid_boundary": {
+    "text": "Compaction boundary must be an integer within the conversation",
+    "slots": []
+  },
+  "context.compaction.empty_slice": {
+    "text": "Selected conversation slice contains no messages ({direction}, boundary {boundary}).",
+    "slots": [
+      "direction",
+      "boundary"
+    ]
+  },
+  "context.compaction.invalid_budget": {
+    "text": "Summary output budget must be a positive integer",
+    "slots": []
+  },
+  "context.compaction.unsafe_reduction": {
+    "text": "Context cannot be reduced safely; original history was retained",
+    "slots": []
+  },
+  "context.compaction.checkpoint_failed": {
+    "text": "Compaction checkpoint could not be saved: {error}",
+    "slots": [
+      "error"
+    ]
+  }
+}

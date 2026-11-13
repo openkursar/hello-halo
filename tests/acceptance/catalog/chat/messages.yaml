@@ -240,3 +240,35 @@ scenarios:
     notes:
       en: Exercises a built-in command answered locally by the engine. Choosing the command from the menu with Enter, commands that expand into a prompt (skills, /compact) and commands the app handles itself are not covered.
       zh: 验证由引擎本地应答的内置命令；用回车从菜单选择命令、展开为提示词的命令（技能、/compact）及应用自行处理的命令未覆盖。
+
+  - id: chat.messages.manual-compact
+    title:
+      en: Compact an existing Halo SDK conversation with a canvas open
+      zh: 在画布打开时手动压缩已有 Halo SDK 对话
+    verifies:
+      - slash-command
+    platforms: *a1
+    profiles:
+      - fast
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: planned
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: An isolated Halo SDK conversation has enough completed history to reduce, a latest user constraint, and an open canvas tab.
+        zh: 隔离的 Halo SDK 对话有足够可压缩的已完成历史、最新用户约束，且画布中打开了一个标签页。
+    steps:
+      - en: Send "/compact retain the verified facts" from the composer, then continue the conversation and reopen it.
+        zh: 在输入框发送“/compact retain the verified facts”，随后继续对话并重开会话。
+    expected:
+      - en: The SDK performs a maintenance summary rather than sending the slash command to the ordinary work model. The command reports completion and a manual compact boundary only after the checkpoint commits.
+        zh: SDK 执行维护摘要，不把斜杠命令发送为普通模型任务；检查点提交后才报告完成及手动压缩边界。
+      - en: Summary usage is accounted once, the latest constraint and discovered tool access survive resume, and completed actions are not replayed.
+        zh: 摘要用量仅计入一次，最新约束和已发现工具权限在恢复后保留，已完成操作不被重放。
+      - en: Summary failure, cancellation or checkpoint failure preserves the prior history and the session can accept another message.
+        zh: 摘要失败、取消或检查点失败均保留原历史，会话仍可接收下一条消息。
+    notes:
+      en: Native SDK command and host input unit checks exist; the complete application journey remains unexecuted until this planned binding runs.
+      zh: 已有原生 SDK 命令与宿主输入单元检查；完整应用流程仍需执行此计划中的绑定，不能由单元结果替代。

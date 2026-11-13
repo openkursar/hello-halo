@@ -278,8 +278,8 @@ describe('tool context through native provider HTTP encoding', () => {
     expect(JSON.stringify(first)).not.toContain(lookupDescription);
     expect(JSON.stringify(first)).not.toContain(notesDescription);
     expect(JSON.stringify(first)).not.toContain(guide);
-    expect(result(wire.requests[1], 'search-lookup')).toMatchObject({ tools: [{ name: target, description: lookupDescription, input_schema: schema, usage_guide: guide }] });
-    expect(result(wire.requests[2], 'search-notes')).toMatchObject({ tools: [{ name: 'mcp__crm__notes', description: notesDescription, input_schema: schema }] });
+    expect(result(wire.requests[1], 'search-lookup')).toMatchObject({ invoke_via: 'CallTool', targets: [{ tool: target, description: lookupDescription, arguments_schema: schema, usage_guide: guide }] });
+    expect(result(wire.requests[2], 'search-notes')).toMatchObject({ invoke_via: 'CallTool', targets: [{ tool: 'mcp__crm__notes', description: notesDescription, arguments_schema: schema }] });
     expect(JSON.stringify(wire.requests[3].messages).split(guide)).toHaveLength(2);
     for (let i = 1; i < wire.requests.length; i++) {
       // Anthropic wraps a string in a text block when placing its cache marker.

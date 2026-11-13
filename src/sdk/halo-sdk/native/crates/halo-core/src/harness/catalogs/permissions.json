@@ -1,0 +1,73 @@
+{
+  "permissions.pre_hook_denied": {
+    "text": "Tool use denied by PreToolUse hook: {reason}. Do not retry the identical call. {guidance}",
+    "slots": [
+      "reason",
+      "guidance"
+    ]
+  },
+  "permissions.no_reason": {
+    "text": "no reason given",
+    "slots": []
+  },
+  "permissions.adjust_approach": {
+    "text": "Adjust your approach based on the reason above, or ask the user if the reason is unclear.",
+    "slots": []
+  },
+  "permissions.conditional_checker_required": {
+    "text": "This conditional permission rule requires a host canUseTool callback. The tool did not run.",
+    "slots": []
+  },
+  "permissions.denied": {
+    "text": "Permission denied",
+    "slots": []
+  },
+  "permissions.denied_reason": {
+    "text": "Permission denied: {reason}",
+    "slots": [
+      "reason"
+    ]
+  },
+  "permissions.check_error": {
+    "text": "Permission check error: {error}",
+    "slots": [
+      "error"
+    ]
+  },
+  "permissions.adjusted_input": {
+    "text": "Note: {source} adjusted this call's input before execution. Effective input: {input}",
+    "slots": [
+      "source",
+      "input"
+    ]
+  },
+  "permissions.source_hook_and_callback": {
+    "text": "a PreToolUse hook and permission callback",
+    "slots": []
+  },
+  "permissions.source_hook": {
+    "text": "a PreToolUse hook",
+    "slots": []
+  },
+  "permissions.source_callback": {
+    "text": "a permission callback",
+    "slots": []
+  },
+  "permissions.hook_aborted": {
+    "text": "Hook \"{label}\" aborted",
+    "slots": [
+      "label"
+    ]
+  },
+  "permissions.hook_timeout": {
+    "text": "Hook \"{label}\" timed out after {timeout}ms",
+    "slots": [
+      "label",
+      "timeout"
+    ]
+  },
+  "permissions.stop_blocked": {
+    "text": "Stop hook blocked continuation.",
+    "slots": []
+  }
+}

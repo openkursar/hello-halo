@@ -10,6 +10,14 @@ function tool(name: string, description = ''): Tool {
 const policy = { services: { crm: { identity: 'crm', loading: 'deferred' as const, summary: 'Customer records' } } };
 
 describe('local tool search', () => {
+  it('invalidates eager presentation when only service instructions change', () => {
+    const original = tool('lookup');
+    original.mcpSource!.instructions = 'Original service guide.';
+    const updated = { ...original, mcpSource: { ...original.mcpSource!, instructions: 'Updated service guide.' } };
+    expect(createToolCatalog([original], { services: {} }).generation)
+      .not.toBe(createToolCatalog([updated], { services: {} }).generation);
+  });
+
   it('indexes identifier words and camel-case parameter names', () => {
     const catalog = createToolCatalog([tool('get_orders'), tool('getHTTPStatus')], policy);
     expect(catalog.search('order').map(item => item.originalName)).toEqual(['get_orders']);

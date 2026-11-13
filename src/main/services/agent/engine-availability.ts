@@ -19,7 +19,7 @@ export interface EngineAvailability {
   available: boolean
   /** Runtime version; empty string when the engine is absent. */
   version: string
-  /** Short content hash of the entry file; empty when unavailable or not hashable. */
+  /** Short runtime build fingerprint; empty when unavailable or not hashable. */
   fingerprint: string
   /** Why the engine is unavailable, for logs and Settings. Not localized. */
   reason?: string
@@ -92,13 +92,38 @@ function probePackageEngine(engineId: Exclude<EngineId, 'codex' | 'dsh' | 'anthr
   // caller degrades instead of failing at import time.
   const entry = resolveEntryFile(pkgDir, manifest)
   if (!entry) return absent
-  if (engineId === 'halo' && !['dist/worker/index.js', 'dist/worker/entry.js'].every(file => existsSync(path.join(pkgDir, file)))) return absent
+  const native = probeHaloNative(pkgDir, manifest)
+  if (!native) return { ...absent, reason: `The Halo SDK native runtime is missing or incompatible for ${process.platform}-${process.arch}` }
 
   return {
     engineId,
     available: true,
     version: typeof manifest.version === 'string' ? manifest.version : '',
-    fingerprint: fingerprintFile(engineId === 'halo' ? path.join(pkgDir, 'dist/worker/entry.js') : entry),
+    fingerprint: native,
+  }
+}
+
+function probeHaloNative(pkgDir: string, manifest: Record<string, unknown>): string | null {
+  const exported = (manifest.exports as Record<string, unknown> | undefined)?.['./native']
+  const entry = typeof exported === 'string' ? exported
+    : exported && typeof exported === 'object' ? (exported as Record<string, unknown>).import : undefined
+  if (typeof entry !== 'string' || !existsSync(path.join(pkgDir, entry))) return null
+  if (!existsSync(path.join(pkgDir, 'dist/native/binding.js'))) return null
+  try {
+    const build = JSON.parse(readFileSync(path.join(pkgDir, 'dist/native/build-info.json'), 'utf8')) as {
+      implementation?: unknown; abiVersion?: unknown; buildId?: unknown
+      artifacts?: Array<{ platform?: string; filename?: string }>
+    }
+    const platform = `${process.platform}-${process.arch}`
+    const filename = `halo-sdk.${platform}.node`
+    if (build.implementation !== 'rust' || build.abiVersion !== 1 ||
+        typeof build.buildId !== 'string' || !/^[a-f0-9]{64}$/.test(build.buildId) ||
+        !Array.isArray(build.artifacts) || !build.artifacts.some(item => item.platform === platform && item.filename === filename)) return null
+    const binary = path.join(pkgDir, 'dist/native', filename).replace(/\.asar([/\\])/, '.asar.unpacked$1')
+    return existsSync(binary) ? build.buildId.slice(0, 12) : null
+  } catch (error) {
+    console.warn('[SDK] Halo native build metadata could not be read:', (error as Error).message)
+    return null
   }
 }
 

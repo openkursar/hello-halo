@@ -69,7 +69,7 @@ export const test = base.extend<Fixtures>({
     try {
       const project = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
       const app = await launchElectronApp(entry, profile, { bootstrapDirectory: project })
-      owned = trackManagementApp(app)
+      owned = trackManagementApp(app, true)
       window = await app.firstWindow()
       await window.waitForLoadState('domcontentloaded')
       await window.setViewportSize({ width: 1600, height: 1000 })
@@ -119,6 +119,7 @@ export const test = base.extend<Fixtures>({
       const known = [...sessionIds].every(id => identifiedSessions.has(id))
       try {
         await info.attach('terminal-process-lifecycle', { body: JSON.stringify({ events, beforeCleanup, observations, allExited, known }, null, 2), contentType: 'application/json' })
+        await info.attach('terminal-shutdown-diagnostics', { body: JSON.stringify(owned?.diagnostics ?? null, null, 2), contentType: 'application/json' })
         await info.attach('scripted-model-exchanges', { body: JSON.stringify({ exchanges: model.exchanges, errors: model.errors }, null, 2), contentType: 'application/json' })
         const log = join(profile, '.halo', 'logs', 'main.log')
         if (existsSync(log)) await info.attach('application-main-log', { body: readFileSync(log).subarray(-1000000), contentType: 'text/plain' })

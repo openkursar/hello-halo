@@ -3940,5 +3940,12 @@
   "Zoom in": "拡大",
   "Zoom in (+)": "拡大 (+)",
   "Zoom out": "縮小",
-  "Zoom out (-)": "縮小 (-)"
+  "Zoom out (-)": "縮小 (-)",
+  "Cancelled": "",
+  "Other...": "",
+  "Submit": "",
+  "Submitting...": "",
+  "Type your answer...": "",
+  "Waiting for your response": "",
+  "Your answer could not be submitted. Please try again.": ""
 }

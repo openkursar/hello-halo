@@ -3,10 +3,6 @@
  * scripted LlmProvider. Each scenario exercises the Read/Write/Edit
  * read-state contract, the image pathway, and the Read truncation
  * contract across one or more `send()` turns.
- *
- * Scenarios 1-5 assert the currently-known defective behaviour (red
- * until the fixes land). Scenario 6 is a guard: the mtime freshness
- * check must survive the read-state sessionization fix.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -14,8 +10,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync, utimesSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createSession } from './session.js';
-import type { SDKSession } from './session.js';
+import { createSession, type SDKSession } from '../index.js';
 import type { SDKMessage } from './query-types.js';
 import type {
   LlmProvider,
@@ -125,6 +120,8 @@ async function makeSession(
   return createSession({
     provider,
     cwd,
+    env: { HOME: cwd, USERPROFILE: cwd, CLAUDE_CONFIG_DIR: join(cwd, 'state') },
+    settingSources: [],
     model: 'test-model',
     permissionMode: 'bypassPermissions',
     persistSession: false,
@@ -206,8 +203,10 @@ describe('session scenarios — read-state across sends', () => {
       const editResult = turn2.toolResults[0];
       expect(editResult, 'Edit tool_result must be present').toBeDefined();
       expect(resultText(editResult)).not.toContain('File has not been read yet');
+      expect(readFileSync(filePath, 'utf-8')).toBe('goodbye world\n');
     } finally {
       session.close();
+      await session.flush();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -232,8 +231,10 @@ describe('session scenarios — read-state across sends', () => {
       const editResult = turn2.toolResults[0];
       expect(editResult, 'Edit tool_result must be present').toBeDefined();
       expect(resultText(editResult)).not.toContain('File has not been read yet');
+      expect(readFileSync(filePath, 'utf-8')).toBe('goodbye world\n');
     } finally {
       session.close();
+      await session.flush();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -255,8 +256,10 @@ describe('session scenarios — read-state across sends', () => {
       const editResult = turn.toolResults[1];
       expect(editResult, 'Edit tool_result must be present').toBeDefined();
       expect(resultText(editResult)).not.toContain('File has not been read yet');
+      expect(readFileSync(filePath, 'utf-8')).toBe('line one\nLINE TWO\nline three\n');
     } finally {
       session.close();
+      await session.flush();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -281,6 +284,7 @@ describe('session scenarios — read-state across sends', () => {
       expect(readFileSync(filePath, 'utf-8')).toBe('after\n');
     } finally {
       session.close();
+      await session.flush();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -318,6 +322,7 @@ describe('session scenarios — read-state across sends', () => {
       expect(readFileSync(filePath, 'utf-8')).toBe('authorized write\n');
     } finally {
       session.close();
+      await session.flush();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -349,6 +354,7 @@ describe('session scenarios — read-state across sends', () => {
       expect(readFileSync(filePath, 'utf-8')).toBe('SEEN\nunseen important text\n');
     } finally {
       session.close();
+      await session.flush();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -381,8 +387,10 @@ describe('session scenarios — read-state across sends', () => {
       const editResult = turn2.toolResults[0];
       expect(editResult, 'Edit tool_result must be present').toBeDefined();
       expect(resultText(editResult)).toContain('The file no longer matches its recorded read');
+      expect(readFileSync(filePath, 'utf-8')).toBe('tampered content\n');
     } finally {
       session.close();
+      await session.flush();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -414,6 +422,7 @@ describe('session scenarios — Read truncation contract', () => {
       expect(text).toMatch(/showing lines 1-\d+ of \d+\. Use offset=\d+ to continue reading/);
     } finally {
       session.close();
+      await session.flush();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -459,8 +468,12 @@ describe('session scenarios — image pathway', () => {
       expect(Array.isArray(block)).toBe(true);
       const blocks = block as Array<Record<string, unknown>>;
       expect(blocks.some((b) => b.type === 'image')).toBe(true);
+      expect(blocks).toEqual(expect.arrayContaining([expect.objectContaining({
+        type: 'image', source: expect.objectContaining({ media_type: 'image/png', data: pngBytes.toString('base64') }),
+      })]));
     } finally {
       session.close();
+      await session.flush();
       rmSync(dir, { recursive: true, force: true });
     }
   });

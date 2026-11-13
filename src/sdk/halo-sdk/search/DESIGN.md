@@ -44,9 +44,18 @@ index. `refresh: true` updates it again; other searches reuse it and report
 
 ## Ownership and bounds
 
-Services in one SDK process share a worker for the same configuration and root.
+Services in one host scope share a worker for the same configuration and root.
+The native runtime exposes `CodeSearchPool` through `HostBridge`; Node owns one
+pool per environment, shared by that environment's sessions and isolated from
+other Workers. A Rust host can supply its own pool or use the default process
+scope. Creating a pool or reading its diagnostics starts no backend.
+
+The pool owns backend resource activity independently of a session's activity.
+Closing one session releases its ownership without stopping another session's
+shared worker. Closing the host scope cancels its admitted work and releases
+both current and retiring processes. The pool refuses new work after closure.
 There is at most one workspace worker and at most 32 outstanding requests per
-worker. Admission reserves a queue slot before yielding, so concurrent workspace
+worker in each scope. Admission reserves a queue slot before yielding, so concurrent workspace
 changes cannot evict newly admitted work. Cancelled queued jobs are removed
 immediately. Each backend serializes requests to avoid competing index writers.
 Workers idle for 30 seconds expire; disposing the final owning service closes

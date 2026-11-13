@@ -5,12 +5,45 @@ Detailed configuration and lifecycle contracts for Halo Agent SDK. Start with th
 For measured resource limits, live-model soak tests and release acceptance, see
 [Resource and lifecycle validation](../validation/README.md).
 
+## Native Runtime and Build
+
+Both the direct and Worker entries execute the in-process Rust core. The core
+owns model execution, tool scheduling, history and context management. The Node
+binding owns JavaScript callbacks and public object references. Native loading
+has no fallback runtime.
+
+Source builds need Node.js 20 or later, the rustup-managed Rust 1.90.0 toolchain
+pinned in `native/rust-toolchain.toml`, and the target platform's C compiler and
+linker. `npm run build` generates the JavaScript facade, bundles the Worker,
+compiles the native library, and removes executable output outside the runtime
+dependency closure. `npm run dev` watches TypeScript only; rebuild native inputs
+after Rust changes.
+
+By default the native build targets the current OS and CPU. A package must retain
+its platform-qualified library, `dist/native/build-info.json`, and license
+notices. Build target names are `darwin-arm64`, `darwin-x64`, `win32-arm64`,
+`win32-x64`, `linux-arm64` and `linux-x64`; Windows targets use MSVC. Selecting
+another target with `HALO_SDK_NATIVE_TARGETS` requires its Rust target and C
+toolchain. Target configuration is not evidence of execution on that platform.
+
+The native entry exposes the loaded implementation and source identity:
+
+```js
+import { runtimeInfo } from '@hello-halo/agent-sdk/native';
+
+console.log(runtimeInfo());
+```
+
+`@hello-halo/agent-sdk/collaboration/protocol` remains a pure JavaScript entry for
+browser-safe protocol helpers. The runtime and stateful collaboration entries
+require Node and the native library.
+
 ## Grouped Worker Execution
 
-The optional Node-only worker entry keeps the SDK's agent loop, history, built-in
-tools and collaborators off the host JavaScript thread. It has no Electron or
-application-specific dependencies. The original entry below remains available for
-in-process execution.
+The optional Node-only Worker entry places the JavaScript facade and worker-side
+callbacks on shared Workers. Both public entries execute the same native core
+outside the host's JavaScript thread. The SDK has no Electron or
+application-specific dependencies.
 
 ```ts
 import { createWorkerRuntime } from '@hello-halo/agent-sdk/worker';
@@ -143,9 +176,10 @@ provider and tool instances are refused rather than silently moved back onto the
 host thread. In-process SDK MCP tools are the supported host-tool bridge. A setup
 module owns any resources it creates outside the SDK's tool lifecycle.
 
-Build with `npm run build`; the shipped worker is bundled with its JavaScript
-dependencies. Hosts that archive application files must place the SDK package and
-their setup modules outside the archive, and can supply `workerUrl` using
+Build with `npm run build`; the shipped worker includes its JavaScript dependencies
+and loads the package's matching native library. Hosts that archive application
+files must place the SDK package and their setup modules outside the archive,
+and can supply `workerUrl` using
 `getWorkerEntryUrl()` to resolve the relocated execution entry.
 
 Run `npm test -- worker` for real-thread failure and lifecycle regressions.
@@ -216,7 +250,11 @@ by the size bounds are not treated as losses.
 
 ### 1. Direct execution
 
-The direct entry runs the agent loop in the host process without a separate agent executable. The optional Worker entry moves execution to shared threads and uses message passing. Shell commands, MCP transports and optional search backends may still create subprocesses.
+The direct entry runs the Rust loop in the host process on shared native execution
+threads. The optional Worker entry additionally moves its JavaScript ownership
+and callbacks to shared Workers and uses message passing. Neither entry starts a
+separate agent executable. Shell commands, MCP transports and optional search
+backends may still create subprocesses.
 
 ```ts
 import { query, createWellKnownProvider } from '@hello-halo/agent-sdk';
@@ -284,26 +322,32 @@ The harness exposes model and endpoint adaptations that hosts can evaluate for t
 
 ## Architecture
 
-The SDK implements a single ReAct loop (`core/query-loop.ts`) with cache-stable context management:
+The Rust session owner and low-level generator share one ReAct loop in
+`native/crates/halo-core/src/core/loop_runtime.rs`. JavaScript public signatures
+remain in the SDK's TypeScript facade and declarations; the TypeScript loop files
+are not executed. Rust paths below are relative to `native/crates/halo-core/src/` in the source checkout:
 
 | Layer | File | Purpose |
 |-------|------|---------|
-| Input budget | `core/token-budget.ts` | Complete-request estimates, optional usage calibration and output reservation |
-| Tool ingress | `core/tool-execution.ts` | Bound each new result before it enters history; never repeatedly rewrite old results |
-| Summary | `core/compact.ts` (fullCompact) | Structured handover using the effective request's cacheable prefix |
-| Recitation | `tools/todo-write/`, `tools/goal/` | Working memory persisted outside message history, re-injected on change and after compaction |
-| Reminders | `core/goal-reminders.ts` | Goal recitation, user-edit notices and end-of-turn check wording |
-| Stagnation | `core/stagnation.ts` | Fact-based loop detection appended to tool results |
-| Hooks | `core/hooks.ts` | Pre/post tool-use lifecycle with deterministic input threading |
-| Caching | `llm/cache-breakpoints.ts` | Prefix-cache-safe message ordering (stable content first, volatile last) |
-| Scheduling | `core/tool-scheduler.ts` | Incremental, bounded execution with ordered exclusive barriers |
-| Tool lifecycle | `core/tool-execution.ts` | Permissions and hooks prepare effective arguments before scheduling |
-| Streaming | `core/streaming-turn.ts` | Bounded multiplexing of model output and tool messages |
-| History | `core/assistant-history.ts` | Completed-block checkpoints and response finalization |
+| Input budget | `core/token_budget.rs` | Complete-request estimates, optional usage calibration and output reservation |
+| Tool ingress | `core/tool_execution.rs` | Bound each new result before it enters history; never repeatedly rewrite old results |
+| Summary | `core/compact/` | Structured handover using the effective request's cacheable prefix |
+| Recitation | `tools/working_state.rs` | Working memory persisted outside message history, re-injected on change and after compaction |
+| Reminders | `core/goal_reminders.rs` | Goal recitation, user-edit notices and end-of-turn checks |
+| Stagnation | `core/stagnation.rs` | Fact-based loop detection appended to tool results |
+| Hooks | `core/hooks.rs` | Pre/post tool-use lifecycle with deterministic input threading |
+| Caching | `llm/cache.rs` | Prefix-cache-safe message ordering (stable content first, volatile last) |
+| Scheduling | `core/tool_scheduler.rs` | Incremental, bounded execution with ordered exclusive barriers |
+| Tool lifecycle | `core/tool_execution.rs` | Permissions and hooks prepare effective arguments before scheduling |
+| Streaming | `core/streaming.rs`, `core/event_flow.rs` | Bounded multiplexing of model output and tool messages |
+| History | `history/`, `core/messages.rs` | Completed-block checkpoints and response finalization |
+| Harness text | `harness/catalogs/`, `harness/resources/` | Model wording templates and fixed protocol resources |
 
 Normal turns append history without clearing old tool results or silently trimming
-messages. Before a request, context at 90% of `contextWindow - maxOutputTokens`
-triggers a summary targeting 55% of that input capacity. The request includes
+messages. Before a request, the loop reserves a bounded working-response allowance
+and triggers a summary at 90% of the remaining input capacity, targeting 55%.
+The user's `maxOutputTokens` is an output ceiling, not an unconditional reservation
+of that entire size. Explicit thinking also needs headroom. The request includes
 system instructions, tool definitions, injected context and history. Missing or
 zero provider usage uses local estimates; estimates never become billed usage.
 Valid calibration survives user turns within one session; changing model, thinking
@@ -381,6 +425,29 @@ the extra check is worth the cost.
 
 ## Workflows and Prompt Profiles
 
+`ultraEffort` changes two preset instructions: task investment and response to
+failed attempts. The normal mode uses the token budget efficiently within the
+requested scope. UltraEffort encourages fullest effort, different approaches and
+method combinations, and useful parallel collaboration with no more than four
+active agents in total, including the source agent. The agent-count wording is
+guidance, not a runtime admission limit. Identity and all other instructions,
+including communication, are shared by both modes.
+
+```ts
+const session = await createSession({
+  model: 'your-model',
+  ultraEffort: true,
+});
+```
+
+This advanced option defaults to false and is never inferred from a model name.
+It does not change provider reasoning `effort`, token or cost limits, permissions,
+tool protocols or end-of-turn checks. Child sessions inherit it, and Worker
+sessions accept the same option. Complete string `systemPrompt` replacements,
+including an empty string, are untouched; preset append text is preserved.
+The selection stays in the stable prefix across model switches. Task quality and
+usage differences need a real-model comparison, not an assumption.
+
 Skills advertise a short name and description; their instructions are loaded
 only when selected. The bundled `commit` and `pull-request` workflows cover
 repository commits and pull/merge requests. Project and user skills override
@@ -413,6 +480,28 @@ instructions and may use the selected profile's summary guidance.
 After context reduction, a bounded reminder can identify recently used skills
 so the model can reload relevant instructions. It neither repeats every skill's
 body nor authorizes new actions.
+
+### SDK-authored Harness text
+
+`getHarnessTextCatalog()` exposes configurable text identifiers, baseline wording
+and required placeholders. `Options.harnessText.templates` supplies common
+overrides; `Options.harnessText.models[modelId]` overrides them for an exact model
+ID. Omitted entries retain the baseline. Templates are resolved once into
+immutable, model-scoped configuration rather than changing global text.
+
+```ts
+import { getHarnessTextCatalog } from '@hello-halo/agent-sdk';
+
+const templates = getHarnessTextCatalog();
+console.log(templates.find(template => template.id === 'permissions.denied_reason'));
+```
+
+Keep every placeholder listed in `slots`, such as `{reason}`. Unknown text IDs,
+non-string replacements and missing required placeholders reject configuration
+before execution. Overrides affect SDK-authored wording, not host instructions,
+user data, permissions or the tool protocol. Parsed envelopes and protocol grammar
+remain fixed resources outside this override catalog. Evaluate changed wording
+on the intended model and tasks; the baseline is used unless the host opts in.
 
 ## Writing Tools
 
@@ -734,3 +823,28 @@ persisting its own display record.
 ## License
 
 [MIT](../LICENSE)
+
+## Dynamic MCP invocation
+
+Deferred MCP tools use fixed `ToolSearch` and native `CallTool` declarations.
+Search returns `invoke_via: "CallTool"` and `targets` containing `tool`,
+`description` and the complete `arguments_schema`. Pass target inputs directly
+as the `arguments` object; discovered targets are not added to the provider's
+formal tools.
+
+The Rust admission decoder also accepts legacy JSON-object strings, up to two
+string-decoding layers, complete JSON fences and one bounded trailing-comma
+repair pass. It rejects conflicting duplicate keys, incomplete values, missing
+targets and inputs beyond 1 MiB or 64 nesting levels. It never infers a target,
+fills business values or recursively parses strings inside business arguments.
+Ordinary assistant JSON/XML text does not execute tools.
+
+Unrecoverable input receives natural-language feedback and a compact input
+example. Format correction uses the existing turn budget, permits at most two
+correction requests, and stops earlier when the same invalid input repeats.
+Permission denials and uncertain execution outcomes do not enter this recovery
+path. Discovery, current-definition, hook, permission and scheduling checks still
+apply after local recovery. The existing lightweight schema validator checks
+basic types, required fields, scalar enums and array items; it is not a complete
+JSON Schema validator and does not resolve composition or `$ref` constraints.
+Target implementations remain responsible for their own validation.

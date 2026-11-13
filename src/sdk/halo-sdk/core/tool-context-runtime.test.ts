@@ -1,14 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createSession, type SDKSession } from './session.js';
-import { query } from '../index.js';
-import { createSdkMcpServer, tool } from '../tools/mcp/sdk-server.js';
-import type { ContentBlock, LlmProvider, Message, ProviderRequest, StreamEvent } from '../types/provider.js';
+import { createSession, query, createSdkMcpServer, tool, type SDKSession } from '../index.js';
+import type { ContentBlock, LlmProvider, ProviderRequest, StreamEvent } from '../types/provider.js';
 import type { Options } from '../types/config.js';
 import type { SDKMessage } from './query-types.js';
-import { TranscriptWriter } from './transcript.js';
+import { getTranscriptPath } from './transcript.js';
 
 const sessions: SDKSession[] = [];
 const directories: string[] = [];
@@ -140,7 +138,7 @@ describe('tool discovery execution boundary', () => {
     expect(events.at(-1)).toMatchObject({ is_error: false });
     expect(handler).toHaveBeenCalledOnce();
     expect(JSON.stringify(requests[1])).toContain('not been discovered');
-    expect(JSON.stringify(requests[2])).toContain('not declared for direct');
+    expect(JSON.stringify(requests[2])).toContain('not a declared native tool');
   });
 
   it('does not treat a replaced search result as discovery', async () => {
@@ -176,19 +174,13 @@ describe('tool discovery execution boundary', () => {
       const results = requests[1].messages.flatMap(message => Array.isArray(message.content) ? message.content : [])
         .filter(block => block.type === 'tool_result' && block.tool_use_id === 'search');
       expect(results).toHaveLength(1);
-      expect(JSON.stringify(results)).toContain('input_schema');
+      expect(JSON.stringify(results)).toContain('arguments_schema');
       expect(JSON.stringify(results)).toContain(source.endsWith('context') ? 'Host context' : 'adjusted this call');
       expect(requests[1].messages.some(message => message.role !== 'user' && message.role !== 'assistant')).toBe(false);
       expect(requests[1].systemPrompt).toEqual(requests[0].systemPrompt);
     });
 
   it('preserves surrounding hook text and updated payload spans through parallel guide dedup and reopen', async () => {
-    const recorded: Message[] = [];
-    const append = TranscriptWriter.prototype.writeUserMessage;
-    vi.spyOn(TranscriptWriter.prototype, 'writeUserMessage').mockImplementation(function (this: TranscriptWriter, message, writeOptions) {
-      if (message.toolContext?.presentations) recorded.push(structuredClone(message));
-      return append.call(this, message, writeOptions);
-    });
     const { options, requests, handler } = await fixture([[search('one'), search('two', 'notes')], [invoke()], [done]], {
       canUseTool: async name => ({ behavior: 'allow', updatedInput: name === 'ToolSearch' ? { max_results: 1 } : {} }),
       hooks: {
@@ -200,22 +192,25 @@ describe('tool discovery execution boundary', () => {
     await session.send('Find both tools, then use the lookup.');
     expect((await collect(session.stream())).at(-1)).toMatchObject({ is_error: false });
     expect(handler).toHaveBeenCalledOnce();
-    const message = recorded.find(message => message.toolContext?.presentations?.length === 2)!;
-    expect(message).toBeDefined();
-    for (const presentation of message.toolContext!.presentations!) {
+    expect(requests[1].messages.flatMap(message => Array.isArray(message.content) ? message.content : [])
+      .filter(block => block.type === 'text').some(block => block.text.includes('Host prefix'))).toBe(false);
+    await session.close();
+    const journalPath = getTranscriptPath(session.sessionId, options.cwd!, { env: options.env });
+    const entries = (await readFile(journalPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const message = entries.map(entry => entry.message)
+      .find(message => message?.toolContext?.presentations?.length === 2);
+    if (!message) throw new Error('Missing recorded parallel presentations');
+    for (const presentation of message.toolContext.presentations) {
       const block = (message.content as ContentBlock[]).find(block => block.type === 'tool_result' && block.tool_use_id === presentation.callId);
       if (!block || block.type !== 'tool_result' || typeof block.content !== 'string') throw new Error('Missing controlled search result');
       expect(block.content).toContain('adjusted this call');
       expect(block.content).toContain('Host prefix 中文.\n\n');
       expect(block.content.endsWith('\n\nHost suffix.')).toBe(true);
       const payload = JSON.parse(block.content.slice(presentation.payloadOffset!, presentation.payloadOffset! + presentation.payloadLength!));
-      expect(payload.tools[0].input_schema).toBeDefined();
-      expect(presentation.guides.length).toBe(payload.tools[0].usage_guide ? 1 : 0);
+      expect(payload.targets[0].arguments_schema).toBeDefined();
+      expect(presentation.guides.length).toBe(payload.targets[0].usage_guide ? 1 : 0);
     }
-    expect(message.toolContext!.presentations!.flatMap(item => item.guides)).toHaveLength(1);
-    expect(requests[1].messages.flatMap(message => Array.isArray(message.content) ? message.content : [])
-      .filter(block => block.type === 'text').some(block => block.text.includes('Host prefix'))).toBe(false);
-    await session.close();
+    expect(message.toolContext.presentations.flatMap((item: { guides: string[] }) => item.guides)).toHaveLength(1);
     const next = provider([[invoke('after-reopen')], [done]]);
     const resumed = await sessionFor({ ...options, provider: next.llm, resume: session.sessionId, strictResume: true });
     await resumed.send('Use the previously discovered tool again.');
@@ -267,18 +262,32 @@ describe('tool discovery execution boundary', () => {
   });
 
   it('does not advance discovery when the result cannot be appended', async () => {
-    const { options, handler, requests } = await fixture([[search()], [invoke()], [done]]);
-    const write = TranscriptWriter.prototype.writeUserMessage;
-    const injected = vi.spyOn(TranscriptWriter.prototype, 'writeUserMessage').mockImplementation(function (message, settings) {
-      if (message.toolContext?.discoveries?.length) return Promise.reject(new Error('Fixture append failure'));
-      return write.call(this, message, settings);
+    let entered!: () => void;
+    let release!: () => void;
+    const hooked = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const { options, handler, requests } = await fixture([[search()], [invoke()], [done]], {
+      hooks: { PostToolUse: [{ matcher: 'ToolSearch', hooks: [async () => {
+        entered();
+        await held;
+        return {};
+      }] }] },
     });
     const session = await sessionFor(options);
     await session.send('Find the tool.');
-    await expect(collect(session.stream())).rejects.toThrow('Fixture append failure');
+    const stream = collect(session.stream());
+    await hooked;
+    const journalPath = getTranscriptPath(session.sessionId, options.cwd!, { env: options.env });
+    const backup = await readFile(journalPath);
+    await rm(journalPath, { force: true });
+    await mkdir(journalPath);
+    release();
+    const events = await stream;
+    expect(events.at(-1)).toMatchObject({ is_error: true, subtype: 'error_during_execution' });
+    await rm(journalPath, { recursive: true, force: true });
+    await writeFile(journalPath, backup);
     expect(requests).toHaveLength(1);
     expect(handler).not.toHaveBeenCalled();
-    injected.mockRestore();
     await session.close();
     const next = provider([[invoke('uncommitted')], [done]]);
     const resumed = await sessionFor({ ...options, provider: next.llm, resume: session.sessionId, strictResume: true });
@@ -423,9 +432,9 @@ describe('tool discovery execution boundary', () => {
       const second = results.find(block => block.type === 'tool_result' && block.tool_use_id === 'two');
       expect(second?.type).toBe('tool_result');
       if (second?.type !== 'tool_result') throw new Error('Missing second search result');
-      const item = JSON.parse(String(second.content)).tools[0];
-      if (explicit || rejectFirst) expect(item.input_schema).toBeDefined();
-      else expect(item).toMatchObject({ name: 'mcp__crm__lookup', already_loaded: true });
+      const item = JSON.parse(String(second.content)).targets[0];
+      if (explicit || rejectFirst) expect(item.arguments_schema).toBeDefined();
+      else expect(item).toMatchObject({ tool: 'mcp__crm__lookup', already_loaded: true });
       await session.close();
       const configDir = options.env!.CLAUDE_CONFIG_DIR!;
       const files = await readdir(configDir, { recursive: true });

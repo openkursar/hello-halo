@@ -1,0 +1,216 @@
+[
+  {
+    "input": {
+      "content": [
+        {
+          "type": "text",
+          "text": "raw {image} text"
+        }
+      ]
+    },
+    "expected": {
+      "content": "raw {image} text",
+      "isError": false
+    }
+  },
+  {
+    "input": {
+      "content": [
+        {
+          "type": "image",
+          "mimeType": "image/png",
+          "data": "aGk="
+        }
+      ]
+    },
+    "expected": {
+      "content": "[Image: image/png]",
+      "isError": false,
+      "images": [
+        {
+          "mimeType": "image/png",
+          "data": "aGk="
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "content": [
+        {
+          "type": "image",
+          "mimeType": "image/png"
+        }
+      ]
+    },
+    "expected": {
+      "content": "[Image dropped: invalid or missing image data (\"image/png\")]",
+      "isError": false
+    }
+  },
+  {
+    "input": {
+      "content": [
+        {
+          "type": "image",
+          "data": "aGk="
+        }
+      ]
+    },
+    "expected": {
+      "content": "[Image dropped: unsupported or missing MIME type null]",
+      "isError": false
+    }
+  },
+  {
+    "input": {
+      "content": [
+        {
+          "type": "image",
+          "mimeType": "image/svg+xml",
+          "data": "aGk="
+        }
+      ]
+    },
+    "expected": {
+      "content": "[Image dropped: unsupported or missing MIME type \"image/svg+xml\"]",
+      "isError": false
+    }
+  },
+  {
+    "input": {
+      "content": [
+        {
+          "type": "image",
+          "mimeType": 42,
+          "data": "aGk="
+        }
+      ]
+    },
+    "expected": {
+      "content": "[Image dropped: unsupported or missing MIME type 42]",
+      "isError": false
+    }
+  },
+  {
+    "input": {
+      "content": [
+        {
+          "type": "image",
+          "mimeType": "image/png",
+          "data": "not-base64!"
+        }
+      ]
+    },
+    "expected": {
+      "content": "[Image dropped: invalid base64 image data (image/png)]",
+      "isError": false
+    }
+  },
+  {
+    "input": {
+      "content": [
+        {
+          "type": "image",
+          "mimeType": "image/png",
+          "data": "ab=="
+        }
+      ]
+    },
+    "expected": {
+      "content": "[Image: image/png]",
+      "isError": false,
+      "images": [
+        {
+          "mimeType": "image/png",
+          "data": "ab=="
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "content": [
+        {
+          "type": "image",
+          "mimeType": "image/jpeg",
+          "data": "aGk="
+        },
+        {
+          "type": "image",
+          "mimeType": "image/jpeg",
+          "data": "aGk="
+        },
+        {
+          "type": "image",
+          "mimeType": "image/jpeg",
+          "data": "aGk="
+        },
+        {
+          "type": "image",
+          "mimeType": "image/jpeg",
+          "data": "aGk="
+        },
+        {
+          "type": "image",
+          "mimeType": "image/jpeg",
+          "data": "aGk="
+        },
+        {
+          "type": "image",
+          "mimeType": "image/jpeg",
+          "data": "aGk="
+        },
+        {
+          "type": "image",
+          "mimeType": "image/jpeg",
+          "data": "aGk="
+        }
+      ]
+    },
+    "expected": {
+      "content": "[Image: image/jpeg]\n[Image: image/jpeg]\n[Image: image/jpeg]\n[Image: image/jpeg]\n[Image: image/jpeg]\n[Image dropped: more than 5 images in one result]\n[Image dropped: more than 5 images in one result]",
+      "isError": false,
+      "images": [
+        {
+          "mimeType": "image/jpeg",
+          "data": "aGk="
+        },
+        {
+          "mimeType": "image/jpeg",
+          "data": "aGk="
+        },
+        {
+          "mimeType": "image/jpeg",
+          "data": "aGk="
+        },
+        {
+          "mimeType": "image/jpeg",
+          "data": "aGk="
+        },
+        {
+          "mimeType": "image/jpeg",
+          "data": "aGk="
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "content": [
+        {
+          "type": "resource",
+          "resource": {
+            "uri": "file:///test",
+            "text": "raw {text}"
+          }
+        }
+      ],
+      "isError": true
+    },
+    "expected": {
+      "content": "{\"type\":\"resource\",\"resource\":{\"uri\":\"file:///test\",\"text\":\"raw {text}\"}}",
+      "isError": true
+    }
+  }
+]

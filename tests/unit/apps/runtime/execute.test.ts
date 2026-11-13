@@ -436,7 +436,7 @@ describe('executeRun — per-person engines', () => {
     const result = await executeRun({ app: makeApp({ userOverrides: { engineId } }), trigger: baseTrigger, store: makeStore(), memory: makeMemory() })
     expect(result.outcome).toBe('useful')
     expect(resolveCredentialsForSdk).toHaveBeenCalledWith(expect.anything(), undefined, engineId)
-    expect(buildAppSystemPrompt).toHaveBeenLastCalledWith(expect.objectContaining({ engineId }))
+    expect(vi.mocked(buildAppSystemPrompt).mock.calls.at(-1)?.[0]).not.toHaveProperty('engineId')
     expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ engineId }))
     expect(saveChatEngineBinding).toHaveBeenCalledWith('/tmp/space-1', 'app-1', result.runId, { version: 1, engineId, sessionId: 'engine-session' }, { routingEngine: engineId })
     expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ engineId, explicitEngine: true }))

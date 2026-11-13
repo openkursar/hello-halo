@@ -21,14 +21,14 @@ vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => '/appli
 function fixture() {
   const runtime = { readSessionToolContextMode: vi.fn(async () => 'deferred' as const), initialize: vi.fn(async () => {}), close: vi.fn(async () => {}), diagnostics: vi.fn(() => ({ workers: [] })),
     createSession: vi.fn(async (_options: Record<string, unknown>, _placement?: unknown) => ({ sessionId: 'real' })), query: vi.fn(() => (async function* () {})()) }
-  const sdk = { createWorkerRuntime: vi.fn(() => runtime), getWorkerEntryUrl: () => new URL('file:///sdk/dist/worker/entry.js'),
+  const sdk = { createNativeRuntime: vi.fn(() => runtime),
     tool: vi.fn(), createSdkMcpServer: vi.fn(), setLogger: vi.fn(),
     isResumeHistoryError: (error: unknown) => error instanceof Error && (error as { code?: unknown }).code === 'RESUME_HISTORY_UNAVAILABLE' }
   return { runtime, sdk, module: createHaloSdkModule(sdk as never) }
 }
 
-describe('Halo host worker adapter', () => {
-  it('inspects context on the same owned Worker runtime and maps strict history errors', async () => {
+describe('Halo host native adapter', () => {
+  it('inspects context on the same owned native runtime and maps strict history errors', async () => {
     const { module, runtime } = fixture()
     const signal = new AbortController().signal
     const options = { cwd: '/work', env: { CLAUDE_CONFIG_DIR: '/isolated' } }
@@ -75,7 +75,7 @@ describe('Halo host worker adapter', () => {
     } finally { appPath.mockRestore(); fs.rmSync(root, { recursive: true, force: true }) }
   })
 
-  it('loads without starting a worker and exposes explicit startup and shutdown', async () => {
+  it('loads without starting native execution and exposes explicit startup and shutdown', async () => {
     const { runtime, module } = fixture()
     expect(runtime.initialize).not.toHaveBeenCalled()
     await module.initialize()
@@ -182,7 +182,7 @@ describe('Halo host worker adapter', () => {
     const failure = await module.createSession({ resume: 'stored', strictResume: true }).catch(error => error)
     expect(isNativeSessionResumeError(failure)).toBe(true)
     expect(failure).toMatchObject({ engineId: 'halo', sessionId: 'stored' })
-    runtime.createSession.mockRejectedValueOnce(new Error('worker crashed'))
-    await expect(module.createSession({ resume: 'stored' })).rejects.toThrow('worker crashed')
+    runtime.createSession.mockRejectedValueOnce(new Error('native execution failed'))
+    await expect(module.createSession({ resume: 'stored' })).rejects.toThrow('native execution failed')
   })
 })

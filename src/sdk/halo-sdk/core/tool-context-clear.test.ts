@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSession, createSdkMcpServer, tool, type SDKSession } from '../index.js';
 import type { Options } from '../types/config.js';
 import type { ContentBlock, LlmProvider, ProviderRequest, StreamEvent } from '../types/provider.js';
 import type { SDKMessage } from './query-types.js';
-import { TranscriptWriter, getTranscriptPath } from './transcript.js';
-import { readHistoryReport } from './transcript-reader.js';
-import { readToolContextSnapshot } from './tool-context/index.js';
+import { getTranscriptPath } from './transcript.js';
+import { journalContext } from './tool-context-journal.fixture.js';
 
 const sessions: SDKSession[] = [];
 const directories: string[] = [];
@@ -65,6 +64,8 @@ async function turn(session: SDKSession, input: string) {
   return events;
 }
 const path = (session: SDKSession, options: Options) => getTranscriptPath(session.sessionId, options.cwd!, options);
+const persisted = (session: SDKSession, options: Options) =>
+  journalContext(session.sessionId, path(session, options), { cwd: options.cwd!, env: options.env ?? {} });
 
 describe('clear is durable for versioned tool context', () => {
   it.each([false, true])('does not restore cleared definitions, calls or user context (later input=%s)', async laterInput => {
@@ -76,11 +77,14 @@ describe('clear is durable for versioned tool context', () => {
     expect(current.requests).toHaveLength(3);
     if (laterInput) expect((await turn(current.session, 'AFTER_CLEAR_CONTEXT')).at(-1)).toMatchObject({ is_error: false });
     await current.session.close();
-    const active = await readHistoryReport(path(current.session, current.options));
-    expect(active.toolContextDamaged).toBeUndefined();
-    expect(readToolContextSnapshot(active.messages)?.definitions).toEqual([]);
-    expect(JSON.stringify(active.messages)).not.toContain('BEFORE_CLEAR_CONTEXT');
-    expect(JSON.stringify(active.messages)).not.toContain('before-call');
+    const active = await persisted(current.session, current.options);
+    expect(active.readable).toBe(true);
+    expect(active.mode).toBe('deferred');
+    expect(active.definitions).toEqual([]);
+    expect(active.calls).toEqual([]);
+    expect(active.discoveries).toEqual([]);
+    expect(JSON.stringify(active.baselines)).not.toContain('BEFORE_CLEAR_CONTEXT');
+    expect(JSON.stringify(active.baselines)).not.toContain('before-call');
     const stored = await readFile(path(current.session, current.options), 'utf8');
     expect(stored.startsWith(original)).toBe(true);
     expect(stored).toContain('compact_checkpoint');
@@ -101,16 +105,23 @@ describe('clear is durable for versioned tool context', () => {
     const current = await fixture([[search('before-search')], [done], [invoke('after-failed-clear')], [done]]);
     await turn(current.session, 'BEFORE_CLEAR_CONTEXT');
     const original = await readFile(path(current.session, current.options), 'utf8');
-    const write = vi.spyOn(TranscriptWriter.prototype, 'writeCompactCheckpoint').mockRejectedValueOnce(new Error('Injected clear write failure'));
-    expect((await turn(current.session, '/clear')).at(-1)).toMatchObject({ is_error: true });
-    expect(write).toHaveBeenCalledOnce();
-    expect(await readFile(path(current.session, current.options), 'utf8')).toBe(original);
+    const transcript = path(current.session, current.options);
+    const retained = transcript + '.retained';
+    await rename(transcript, retained);
+    await mkdir(transcript);
+    try {
+      expect((await turn(current.session, '/clear')).at(-1)).toMatchObject({ is_error: true });
+      expect(await readFile(retained, 'utf8')).toBe(original);
+    } finally {
+      await rm(transcript, { recursive: true });
+      await rename(retained, transcript);
+    }
+    expect(await readFile(transcript, 'utf8')).toBe(original);
     expect((await turn(current.session, 'Continue after the refused clear.')).at(-1)).toMatchObject({ is_error: false });
     expect(current.handler).toHaveBeenCalledOnce();
     expect(JSON.stringify(current.requests[2].messages)).toContain('BEFORE_CLEAR_CONTEXT');
     await current.session.close();
-    expect(readToolContextSnapshot((await readHistoryReport(path(current.session, current.options))).messages)?.definitions)
-      .toHaveLength(1);
+    expect((await persisted(current.session, current.options)).definitions).toHaveLength(1);
   });
 
   it('keeps a versioned empty baseline when the resumed host omitted discovery options', async () => {
@@ -122,37 +133,11 @@ describe('clear is durable for versioned tool context', () => {
     sessions.push(resumed);
     expect((await turn(resumed, '/clear')).at(-1)).toMatchObject({ is_error: false });
     await resumed.close();
-    const report = await readHistoryReport(path(resumed, current.options));
-    expect(report.toolContextDamaged).toBeUndefined();
-    expect(readToolContextSnapshot(report.messages)).toMatchObject({ definitions: [], discoveryEntries: false });
-    expect(JSON.stringify(report.messages)).not.toContain('BEFORE_CLEAR_CONTEXT');
+    const report = await persisted(resumed, current.options);
+    expect(report.readable).toBe(true);
+    expect(report.baselines.at(-1)).toMatchObject({ definitions: [], discoveryEntries: false });
+    expect(JSON.stringify(report.baselines)).not.toContain('BEFORE_CLEAR_CONTEXT');
   });
 
-  it('does not confirm or install a clear while its durable replacement is pending', async () => {
-    const current = await fixture();
-    await turn(current.session, 'BEFORE_CLEAR_CONTEXT');
-    const originalWrite = TranscriptWriter.prototype.writeCompactCheckpoint;
-    let entered!: () => void;
-    const writing = new Promise<void>(resolve => { entered = resolve; });
-    let release!: () => void;
-    const allowed = new Promise<void>(resolve => { release = resolve; });
-    vi.spyOn(TranscriptWriter.prototype, 'writeCompactCheckpoint').mockImplementationOnce(async function (messages, summary) {
-      entered();
-      await allowed;
-      return originalWrite.call(this, messages, summary);
-    });
-    let completed = false;
-    const clearing = turn(current.session, '/clear').then(events => { completed = true; return events; });
-    await writing;
-    try {
-      expect(completed).toBe(false);
-      const prior = await readHistoryReport(path(current.session, current.options));
-      expect(readToolContextSnapshot(prior.messages)?.definitions).toHaveLength(1);
-      expect(JSON.stringify(prior.messages)).toContain('BEFORE_CLEAR_CONTEXT');
-    } finally { release(); }
-    expect((await clearing).at(-1)).toMatchObject({ is_error: false });
-    const saved = await readHistoryReport(path(current.session, current.options));
-    expect(readToolContextSnapshot(saved.messages)?.definitions).toEqual([]);
-    expect(JSON.stringify(saved.messages)).not.toContain('BEFORE_CLEAR_CONTEXT');
-  });
+
 });

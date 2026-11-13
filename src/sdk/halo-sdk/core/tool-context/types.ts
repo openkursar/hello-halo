@@ -21,7 +21,9 @@ export interface ToolContextSnapshot {
 export interface ToolCallOrigin {
   id: string;
   definitionVersion: string;
-  input: { tool: string; arguments: string };
+  input: { tool: string; arguments: string | Record<string, unknown> };
+  rawInput?: string;
+  normalization?: string[];
 }
 
 /** Host-added text around the unchanged, internally generated search payload. */
@@ -41,7 +43,7 @@ export interface ToolPresentation {
 
 /** Private journal data; provider requests and public events must omit it. */
 export interface ToolContextRecord {
-  version: 1;
+  version: 1 | 2;
   baseline?: ToolContextSnapshot;
   /** True only for a disposable directory/recovery attachment, not a summary carrying its metadata. */
   baselineAttachment?: boolean;

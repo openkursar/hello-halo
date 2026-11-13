@@ -69,7 +69,6 @@ export const DSH_CAPABILITIES: EngineCapabilities = {
   // `todo/write` is a whole-list snapshot of three-state entries with no
   // stable id and no activeForm label.
   todo: { states: ['pending', 'in_progress', 'completed'], hasActiveForm: false },
-  prompt: { nativeAgentGuidance: true },
   features: {
     // The composition mounts the runtime's filesystem skill provider pointed
     // at Halo's own skill roots. The runtime's frontmatter contract is

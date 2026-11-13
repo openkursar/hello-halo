@@ -130,7 +130,9 @@ export function createToolCatalog(tools: readonly Tool[], options: ToolDiscovery
   }));
   return {
     eager, deferred, directory,
-    generation: fingerprint({ directory, definitions: entries.map(entry => entry.version), eager: eager.map(toToolDefinition) }),
+    generation: fingerprint({ directory, definitions: entries.map(entry => entry.version),
+      eager: eager.map(tool => ({ definition: toToolDefinition(tool),
+        server: tool.mcpSource?.server, instructions: tool.mcpSource?.instructions })) }),
     search(query, server) {
       const selected = query.startsWith('select:')
         ? new Set(query.slice(7).split(/[\s,]+/u).filter(Boolean)) : undefined;

@@ -1,0 +1,613 @@
+[
+  {
+    "name": "AskUserQuestion",
+    "description": {
+      "$harness": "tools.ask_user_question.description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "questions": {
+          "type": "array",
+          "description": {
+            "$harness": "tools.ask_user_question.input_schema.fields.questions.description"
+          },
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "properties": {
+              "question": {
+                "type": "string",
+                "description": {
+                  "$harness": "tools.ask_user_question.input_schema.fields.questions.items.fields.question.description"
+                }
+              },
+              "header": {
+                "type": "string",
+                "description": {
+                  "$harness": "tools.ask_user_question.input_schema.fields.questions.items.fields.header.description"
+                }
+              },
+              "options": {
+                "type": "array",
+                "description": {
+                  "$harness": "tools.ask_user_question.input_schema.fields.questions.items.fields.options.description"
+                },
+                "minItems": 2,
+                "maxItems": 4,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "description": {
+                        "$harness": "tools.ask_user_question.input_schema.fields.questions.items.fields.options.items.fields.label.description"
+                      }
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": {
+                        "$harness": "tools.ask_user_question.input_schema.fields.questions.items.fields.options.items.fields.description.description"
+                      }
+                    },
+                    "preview": {
+                      "type": "string",
+                      "description": {
+                        "$harness": "tools.ask_user_question.input_schema.fields.questions.items.fields.options.items.fields.preview.description"
+                      }
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "description"
+                  ]
+                }
+              },
+              "multiSelect": {
+                "type": "boolean",
+                "default": false,
+                "description": {
+                  "$harness": "tools.ask_user_question.input_schema.fields.questions.items.fields.multi_select.description"
+                }
+              }
+            },
+            "required": [
+              "question",
+              "header",
+              "options"
+            ]
+          }
+        },
+        "answers": {
+          "type": "object",
+          "description": {
+            "$harness": "tools.ask_user_question.input_schema.fields.answers.description"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "annotations": {
+          "type": "object",
+          "description": {
+            "$harness": "tools.ask_user_question.input_schema.fields.annotations.description"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "preview": {
+                "type": "string",
+                "description": {
+                  "$harness": "tools.ask_user_question.input_schema.fields.annotations.additional_properties.fields.preview.description"
+                }
+              },
+              "notes": {
+                "type": "string",
+                "description": {
+                  "$harness": "tools.ask_user_question.input_schema.fields.annotations.additional_properties.fields.notes.description"
+                }
+              }
+            }
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "description": {
+            "$harness": "tools.ask_user_question.input_schema.fields.metadata.description"
+          },
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": {
+                "$harness": "tools.ask_user_question.input_schema.fields.metadata.fields.source.description"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "questions"
+      ]
+    }
+  },
+  {
+    "name": "Bash",
+    "description": {
+      "$harness": "tools.bash.description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.bash.input_schema.fields.command.description"
+          }
+        },
+        "description": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.bash.input_schema.fields.description.description"
+          }
+        },
+        "timeout": {
+          "type": "number",
+          "description": {
+            "$harness": "tools.bash.input_schema.fields.timeout.description"
+          }
+        },
+        "run_in_background": {
+          "type": "boolean",
+          "description": {
+            "$harness": "tools.bash.input_schema.fields.run_in_background.description"
+          }
+        }
+      },
+      "required": [
+        "command"
+      ]
+    }
+  },
+  {
+    "name": "Edit",
+    "description": {
+      "$harness": "tools.edit.description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.edit.input_schema.fields.file_path.description"
+          }
+        },
+        "old_string": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.edit.input_schema.fields.old_string.description"
+          }
+        },
+        "new_string": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.edit.input_schema.fields.new_string.description"
+          }
+        },
+        "replace_all": {
+          "type": "boolean",
+          "description": {
+            "$harness": "tools.edit.input_schema.fields.replace_all.description"
+          }
+        }
+      },
+      "required": [
+        "file_path",
+        "old_string",
+        "new_string"
+      ]
+    }
+  },
+  {
+    "name": "Glob",
+    "description": {
+      "$harness": "tools.glob.description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.glob.input_schema.fields.pattern.description"
+          }
+        },
+        "path": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.glob.input_schema.fields.path.description"
+          }
+        }
+      },
+      "required": [
+        "pattern"
+      ]
+    }
+  },
+  {
+    "name": "Goal",
+    "description": {
+      "$harness": "tools.goal.description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "set",
+            "update",
+            "complete",
+            "abandon"
+          ],
+          "description": {
+            "$harness": "tools.goal.input_schema.fields.action.description"
+          }
+        },
+        "objective": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.goal.input_schema.fields.objective.description"
+          }
+        },
+        "doneWhen": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": {
+            "$harness": "tools.goal.input_schema.fields.done_when.description"
+          }
+        },
+        "note": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.goal.input_schema.fields.note.description"
+          }
+        }
+      },
+      "required": [
+        "action"
+      ]
+    }
+  },
+  {
+    "name": "Grep",
+    "description": {
+      "$harness": "tools.grep.description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.pattern.description"
+          }
+        },
+        "path": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.path.description"
+          }
+        },
+        "type": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.type.description"
+          }
+        },
+        "glob": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.glob.description"
+          }
+        },
+        "output_mode": {
+          "type": "string",
+          "enum": [
+            "content",
+            "files_with_matches",
+            "count"
+          ],
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.output_mode.description"
+          }
+        },
+        "-B": {
+          "type": "number",
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.flag_b.description"
+          }
+        },
+        "-A": {
+          "type": "number",
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.flag_a.description"
+          }
+        },
+        "-C": {
+          "type": "number",
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.flag_c.description"
+          }
+        },
+        "context": {
+          "type": "number",
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.context.description"
+          }
+        },
+        "-n": {
+          "type": "boolean",
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.flag_n.description"
+          }
+        },
+        "-i": {
+          "type": "boolean",
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.flag_i.description"
+          }
+        },
+        "head_limit": {
+          "type": "number",
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.head_limit.description"
+          }
+        },
+        "offset": {
+          "type": "number",
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.offset.description"
+          }
+        },
+        "multiline": {
+          "type": "boolean",
+          "description": {
+            "$harness": "tools.grep.input_schema.fields.multiline.description"
+          }
+        }
+      },
+      "required": [
+        "pattern"
+      ]
+    }
+  },
+  {
+    "name": "Read",
+    "description": {
+      "$harness": "tools.read.description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.read.input_schema.fields.file_path.description"
+          }
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": {
+            "$harness": "tools.read.input_schema.fields.offset.description"
+          }
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "description": {
+            "$harness": "tools.read.input_schema.fields.limit.description"
+          }
+        },
+        "pages": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.read.input_schema.fields.pages.description"
+          }
+        }
+      },
+      "required": [
+        "file_path"
+      ]
+    }
+  },
+  {
+    "name": "Skill",
+    "description": {
+      "$harness": "tools.skill.description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "skill": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.skill.input_schema.fields.skill.description"
+          }
+        },
+        "args": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.skill.input_schema.fields.args.description"
+          }
+        }
+      },
+      "required": [
+        "skill"
+      ]
+    }
+  },
+  {
+    "name": "TaskStop",
+    "description": {
+      "$harness": "tools.task_stop.description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.task_stop.input_schema.fields.task_id.description"
+          }
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
+    "name": "TaskOutput",
+    "description": {
+      "$harness": "tools.task_output.description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.task_output.input_schema.fields.task_id.description"
+          }
+        },
+        "block": {
+          "type": "boolean",
+          "description": {
+            "$harness": "tools.task_output.input_schema.fields.block.description"
+          }
+        },
+        "timeout": {
+          "type": "number",
+          "description": {
+            "$harness": "tools.task_output.input_schema.fields.timeout.description"
+          },
+          "minimum": 0,
+          "maximum": 600000
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
+    "name": "TodoWrite",
+    "description": {
+      "$harness": "tools.todo_write.description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "todos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string",
+                "description": {
+                  "$harness": "tools.todo_write.input_schema.fields.todos.items.fields.content.description"
+                }
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed"
+                ]
+              },
+              "activeForm": {
+                "type": "string",
+                "description": {
+                  "$harness": "tools.todo_write.input_schema.fields.todos.items.fields.active_form.description"
+                }
+              }
+            },
+            "required": [
+              "content",
+              "status",
+              "activeForm"
+            ]
+          },
+          "description": {
+            "$harness": "tools.todo_write.input_schema.fields.todos.description"
+          }
+        }
+      },
+      "required": [
+        "todos"
+      ]
+    }
+  },
+  {
+    "name": "WebFetch",
+    "description": {
+      "$harness": "tools.web_fetch.description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.web_fetch.input_schema.fields.url.description"
+          },
+          "format": "uri"
+        },
+        "prompt": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.web_fetch.input_schema.fields.prompt.description"
+          }
+        }
+      },
+      "required": [
+        "url",
+        "prompt"
+      ]
+    }
+  },
+  {
+    "name": "Write",
+    "description": {
+      "$harness": "tools.write.description"
+    },
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "file_path": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.write.input_schema.fields.file_path.description"
+          }
+        },
+        "content": {
+          "type": "string",
+          "description": {
+            "$harness": "tools.write.input_schema.fields.content.description"
+          }
+        }
+      },
+      "required": [
+        "file_path",
+        "content"
+      ]
+    }
+  }
+]

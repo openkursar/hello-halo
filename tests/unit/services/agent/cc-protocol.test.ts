@@ -26,7 +26,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     const request = frame.request;
     if (request.subtype === 'initialize') {
       hooks = request.hooks;
-      write({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: { commands: [{ name: 'cost' }], models: [], prompt: request.systemPrompt, append: request.appendSystemPrompt, argv: process.argv.slice(2), autoUpdate: process.env.DISABLE_AUTOUPDATER, todoTools: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS, tasks: process.env.CLAUDE_CODE_ENABLE_TASKS } } });
+      write({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: { commands: [{ name: 'cost' }], models: [], prompt: request.systemPrompt, append: request.appendSystemPrompt, snapshot: request.systemPromptSnapshot, argv: process.argv.slice(2), autoUpdate: process.env.DISABLE_AUTOUPDATER, todoTools: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS, tasks: process.env.CLAUDE_CODE_ENABLE_TASKS } } });
     } else write({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: { mcpServers: [{ name: 'bridge', status: 'connected' }] } } });
     return;
   }
@@ -101,6 +101,18 @@ describe('external Claude Code protocol', () => {
     const initialized = await session.query.initializationResult()
     expect(initialized).not.toHaveProperty('prompt')
     expect(initialized.append).toBe('additional context')
+  })
+
+  it('sends a snapshot override only through explicit initialization, never through CLI arguments', async () => {
+    const resumed = createSession({ resume: 'original', systemPromptSnapshot: false,
+      systemPrompt: { type: 'preset', preset: 'default', append: 'saved instructions' } })
+    const initialized = await resumed.query.initializationResult()
+    expect(initialized.snapshot).toBe(false)
+    expect(initialized.append).toBe('saved instructions')
+    expect(initialized).not.toHaveProperty('prompt')
+    expect(initialized.argv).not.toContain('--system-prompt-snapshot')
+    const unchanged = createSession({ resume: 'unchanged' })
+    expect(await unchanged.query.initializationResult()).not.toHaveProperty('snapshot')
   })
 
   it('reports denied permissions and callback errors without approving the tool', async () => {

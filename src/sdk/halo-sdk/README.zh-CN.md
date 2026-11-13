@@ -6,6 +6,8 @@
 
 Halo Agent SDK 是一个可嵌入服务端、桌面应用和自动化系统的 Agent 运行时。它提供工具执行、流式响应、持久会话、上下文管理和团队协作，并围绕模型持续执行能力与宿主资源成本进行优化。
 
+JavaScript／TypeScript API 通过 Node-API 加载同进程 Rust 内核。模型循环、工具、历史和上下文管理由 Rust 负责，JavaScript 保留宿主回调和公开对象。直接调用与 Worker 入口使用同一内核，并共享原生执行资源。
+
 ## 为什么需要更轻的 Agent 运行时
 
 应用对 Agent 的需求，可能从单个助手扩展到数十乃至数百个独立会话。
@@ -14,7 +16,7 @@ Halo Agent SDK 是一个可嵌入服务端、桌面应用和自动化系统的 A
 
 **降低多 Agent 的本地资源成本，是 Halo Agent SDK 的核心设计目标。**
 
-Agent 循环可以直接在进程内运行，也可以通过共享 Worker 承载多个会话。各会话维护独立历史，执行环境则尽可能复用，减少重复启动与加载，并让 Agent 执行离开宿主的 JavaScript 主线程。当前公开性能验证覆盖至 64 个并发会话。
+原生循环在宿主的 JavaScript 线程之外执行。可选的共享 Worker 进一步隔离 JavaScript 门面及 Worker 内的回调。各会话维护独立历史，同时复用执行资源。下文的历史测量覆盖至 64 个并发会话。
 
 ## 核心能力
 
@@ -32,6 +34,8 @@ Agent 循环可以直接在进程内运行，也可以通过共享 Worker 承载
 停滞检测由本地代码完成，无需额外调用评审模型。它反馈已经观察到的事实，由模型判断如何继续。收尾检查可能增加模型请求，可以配置。稳定指引与动态任务状态分开组织，以便在服务商支持时复用请求前缀。
 
 ## 性能与评测
+
+下列结果对应各报告标明的早期 SDK 快照，不代表当前 Rust 内核的性能或任务完成率。更换执行实现后的测量需要单独记录。
 
 ### 运行时开销
 
@@ -86,12 +90,15 @@ Grep 提供关键词、正则、过滤、计数和分页搜索。可选的 CodeS
 
 ## 快速开始
 
-需要 Node.js 20 或更新版本。从源码安装并构建：
+需要 Node.js 20 或更新版本。源码构建还需要通过 rustup 管理的 Rust 1.90.0 工具链，以及目标平台的 C 编译器和链接器；工具链版本固定在 `native/rust-toolchain.toml` 中。请在 SDK 目录内运行以下命令（Halo 仓库中为 `src/sdk/halo-sdk`）：
 
 ```sh
+rustup toolchain install 1.90.0 --profile minimal
 npm ci
 npm run build
 ```
+
+构建会生成 JavaScript 门面、Worker 包和当前操作系统／CPU 对应的原生库。已构建的分发包需要包含匹配的 `.node` 文件和 `dist/native/build-info.json`；产物齐备时，使用者无需安装 Rust。原生库加载失败会明确报错，没有备用运行时。详见[原生运行时与构建要求](docs/guide.md#native-runtime-and-build)。
 
 为你的 OpenAI-compatible 端点设置 `MODEL_ID`、`MODEL_BASE_URL` 和 `MODEL_API_KEY`。将下面的代码保存为源码目录中的 `example.mjs`，执行 `node example.mjs`：
 
@@ -183,4 +190,4 @@ Halo 吸收了 Claude Code 公开的工具与会话接口协议，以及开源 C
 
 ## 许可证
 
-[MIT](LICENSE)。编译后的 Worker 随包提供第三方依赖的许可与版权通知，位于 `dist/worker/THIRD-PARTY-NOTICES.txt`。
+[MIT](LICENSE)。第三方依赖的许可与版权通知随包提供，分别位于 `dist/worker/THIRD-PARTY-NOTICES.txt` 和 `dist/native/THIRD-PARTY-NOTICES.txt`。

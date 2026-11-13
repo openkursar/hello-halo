@@ -1,0 +1,36 @@
+{
+  "context.notices.item": {
+    "text": "- {item}",
+    "slots": [
+      "item"
+    ]
+  },
+  "context.notices.labeled_items": {
+    "text": "{label}:\n{items}",
+    "slots": [
+      "label",
+      "items"
+    ]
+  },
+  "context.notices.background_updates": {
+    "text": "Background task updates",
+    "slots": []
+  },
+  "context.todo.attachment": {
+    "text": "# Current todo list (working memory — survives context compaction)\n{todos}",
+    "slots": [
+      "todos"
+    ]
+  },
+  "context.todo.item": {
+    "text": "{marker} {content}",
+    "slots": [
+      "marker",
+      "content"
+    ]
+  },
+  "context.recovery.max_tokens": {
+    "text": "The previous response exhausted its generation budget. Continue the unfinished task from the recorded state without repeating completed work. Use shorter responses or smaller tool operations so each next step can finish within the limit.",
+    "slots": []
+  }
+}

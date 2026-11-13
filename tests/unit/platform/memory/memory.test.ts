@@ -367,11 +367,59 @@ describe('generatePromptInstructions', () => {
       expect(text).toContain(`Your History author tag is \`${scenario.authorTag}\``)
       expect(text).toContain(layout.file)
       expect(text).toContain(layout.topicsDir)
-      expect(text).toContain('### Example: Mature Memory')
+      expect(text).not.toMatch(/Mature Memory|AirPods|MacBook|¥|2026-01-15|schedule#a1b2/)
+      const originalBytes = {
+        'space session': 6114,
+        'digital-human session': 6951,
+        'digital-human team session': 7591,
+        'digital-human run': 7620,
+      }
+      expect(Buffer.byteLength(text)).toBeLessThan(originalBytes[scenario.name] * 0.7)
       expect(text).not.toMatch(/memory_status|halo-memory|{{/)
       expect(Buffer.byteLength(text)).toBeLessThanOrEqual(10 * 1024)
     })
   }
+
+  it('preserves executable structure, topic ownership and recording boundaries', () => {
+    const template = MEMORY_FILE_FORMAT.match(/```markdown\n([\s\S]*?)\n```/)![1]
+    expect(template.match(/^# .+$/gm)).toEqual(['# now', '# History'])
+    expect(template).toMatch(/^# now\n## State \|[^\n]+\n- key: value/)
+    expect(template).toContain('## YYYY-MM-DD-HHmm | brief event summary  [topic: <path>]  [by: <author tag>]')
+    for (const { mode, owner } of scenarios) {
+      const text = generatePromptInstructions(mode, { owner }).replace(/\s+/g, ' ')
+      for (const rule of [
+        'Keep State first and current', 'omit empty sections', 'Current facts → `# now`',
+        'events → `# History`', 'lasting explanations → topics', 'History is newest first',
+        'Read the current file before editing', 're-read and merge', 'or grant permission',
+        'sources, verification dates, uncertainty, language', 'correct outdated facts',
+        'not silent deletion', 'supplied owner paths and read-only scope',
+        'link read-only space topics', 'Search before creating', 'one subject per file',
+        'Never copy the generated topic index', 'retrieval trigger, not a summary',
+        'holds only this front matter',
+      ]) expect(text).toContain(rule)
+      expect(text).toContain('name: <short name>')
+      expect(text).toContain('description: <WHEN to read it')
+      if (owner === 'digital-human') {
+        for (const rule of [
+          'not a recording whitelist', 'not transient progress or next steps',
+          'unknown authorship', 'never take over without an explicit hand-off',
+          'reveal sensitive memory content to guests',
+        ]) expect(text).toContain(rule)
+      } else {
+        expect(text).toContain('Most conversations record nothing')
+        expect(text).toContain('State describes the space, not task progress')
+      }
+    }
+    const team = generatePromptInstructions('session', { inTeam: true }).replace(/\s+/g, ' ')
+    expect(team).toContain('Tasks, assignments, roles and completion status')
+    expect(team).toContain('not `# now` or topics')
+    expect(team).toContain('board silence does not prove work never happened')
+    expect(team).toContain('not memory, to communicate with teammates')
+    const session = generatePromptInstructions('session').replace(/\s+/g, ' ')
+    expect(session).toContain('never guess it')
+    expect(session).toContain('do not fabricate a dated entry')
+    expect(session).toContain('still update verified current facts')
+  })
 
   it('uses the same structure for spaces regardless of turn mode', () => {
     expect(generatePromptInstructions('run', { owner: 'space', layout }))
@@ -382,8 +430,8 @@ describe('generatePromptInstructions', () => {
     const run = generatePromptInstructions('run')
     const session = generatePromptInstructions('session')
     expect(run).toContain("pre-inserted this run's signed heading")
-    expect(run).toContain('Before:\n```markdown\n## 2026-01-15-1430  [by: schedule#a1b2]')
-    expect(run).toContain('After:\n```markdown\n## 2026-01-15-1430 | Routine check, no change  [by: schedule#a1b2]')
+    expect(run.replace(/\s+/g, ' ')).toContain('preserving its actual timestamp and author tag')
+    expect(run.replace(/\s+/g, ' ')).toContain('do not add a second heading for the same run')
     expect(run).not.toContain('date +%Y-%m-%d-%H%M')
     expect(session).not.toContain('Before:\n```markdown')
     expect(session).toContain('date +%Y-%m-%d-%H%M')

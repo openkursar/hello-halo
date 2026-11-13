@@ -33,7 +33,7 @@ type PermissionResult = {
 type CanUseToolFn = (
   toolName: string,
   input: Record<string, unknown>,
-  options: { signal: AbortSignal }
+  options: { signal: AbortSignal; toolUseID?: string }
 ) => Promise<PermissionResult>
 
 /**
@@ -128,8 +128,18 @@ export function resolveQuestion(id: string, answers: Record<string, string>): bo
     console.warn(`[PermissionHandler] No pending question found for id: ${id}`)
     return false
   }
-  entry.resolve(answers)
+  const answerCount = answers && typeof answers === 'object' && !Array.isArray(answers) ? Object.keys(answers).length : 0
+  const reason = !answerCount ? 'empty-answers'
+    : answerCount !== entry.questions.length ? 'answer-count-mismatch'
+    : entry.questions.some(question => !Object.hasOwn(answers, question.question)) ? 'question-key-mismatch'
+    : entry.questions.some(question => typeof answers[question.question] !== 'string' || !answers[question.question].trim()) ? 'blank-answer'
+    : null
+  if (reason) {
+    console.warn(`[PermissionHandler] AskUserQuestion submission rejected: id=${id}, conversationId=${entry.conversationId}, reason=${reason}, expected=${entry.questions.length}, received=${answerCount}`)
+    return false
+  }
   pendingQuestions.delete(id)
+  entry.resolve(answers)
   return true
 }
 
@@ -171,13 +181,13 @@ export function rejectAllQuestions(): void {
  * renderer via IPC, waits for user answers, then returns the answers as updatedInput.
  *
  * @param deps - Optional dependencies for AskUserQuestion support.
- *               When not provided, AskUserQuestion calls are auto-allowed without answers.
+ *               When absent, interactive questions are denied.
  */
 export function createCanUseTool(deps?: CanUseToolDeps): CanUseToolFn {
   return async (
     toolName: string,
     input: Record<string, unknown>,
-    options: { signal: AbortSignal }
+    options: { signal: AbortSignal; toolUseID?: string }
   ): Promise<PermissionResult> => {
     // Anything but AskUserQuestion is a call the engine left undecided: put it
     // to the gate when there is one, and otherwise keep the owner's fast path.
@@ -192,10 +202,9 @@ export function createCanUseTool(deps?: CanUseToolDeps): CanUseToolFn {
       return { behavior: 'allow' as const, updatedInput: input }
     }
 
-    // AskUserQuestion: if no deps provided (e.g., warmup), allow with empty answers
     if (!deps) {
-      console.warn('[PermissionHandler] AskUserQuestion called without deps, auto-allowing')
-      return { behavior: 'allow' as const, updatedInput: { ...input, answers: {} } }
+      console.warn('[PermissionHandler] AskUserQuestion rejected: reason=no-answer-channel')
+      return { behavior: 'deny', message: 'No user answer channel is available. Ask the user in your reply instead.' }
     }
 
     // Non-interactive sessions cannot respond to interactive tools — deny immediately
@@ -209,11 +218,17 @@ export function createCanUseTool(deps?: CanUseToolDeps): CanUseToolFn {
 
     const { spaceId, conversationId } = deps
     const id = `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const questions = (input.questions as AskUserQuestionItem[]) ?? []
+    const questions = input.questions as AskUserQuestionItem[] | undefined
+    if (!Array.isArray(questions) || questions.length < 1 || questions.length > 4
+      || questions.some(question => !question || typeof question.question !== 'string' || !question.question.trim()
+        || !Array.isArray(question.options) || question.options.length < 2)
+      || new Set(questions.map(question => question.question)).size !== questions.length) {
+      console.warn(`[PermissionHandler] AskUserQuestion rejected: conversationId=${conversationId}, toolUseId=${options.toolUseID ?? 'unknown'}, reason=invalid-questions`)
+      return { behavior: 'deny', message: 'Provide one to four distinct questions, each with at least two options.' }
+    }
 
-    console.log(`[PermissionHandler] AskUserQuestion: id=${id}, questions=${questions?.length || 0}`)
-
-    // Create promise that will be resolved by IPC handler
+    const startedAt = Date.now()
+    let removeAbortListener: (() => void) | undefined
     const answersPromise = new Promise<Record<string, string>>((resolve, reject) => {
       pendingQuestions.set(id, { resolve, reject, conversationId, questions })
 
@@ -229,11 +244,12 @@ export function createCanUseTool(deps?: CanUseToolDeps): CanUseToolFn {
           onAbort()
         } else {
           options.signal.addEventListener('abort', onAbort, { once: true })
+          removeAbortListener = () => options.signal.removeEventListener('abort', onAbort)
         }
       }
     })
 
-    // Send questions to renderer via event emitter
+    console.log(`[PermissionHandler] AskUserQuestion opened: id=${id}, conversationId=${conversationId}, toolUseId=${options.toolUseID ?? 'unknown'}, questions=${questions.length}`)
     emitAgentEvent('agent:ask-question', spaceId, conversationId, {
       id,
       questions: questions || []
@@ -242,18 +258,20 @@ export function createCanUseTool(deps?: CanUseToolDeps): CanUseToolFn {
     try {
       // Wait for user answer
       const answers = await answersPromise
-      console.log(`[PermissionHandler] AskUserQuestion answered: id=${id}`, answers)
+      console.log(`[PermissionHandler] AskUserQuestion settled: id=${id}, conversationId=${conversationId}, toolUseId=${options.toolUseID ?? 'unknown'}, status=answered, questions=${questions.length}, answers=${Object.keys(answers).length}, elapsedMs=${Date.now() - startedAt}`)
       return {
         behavior: 'allow' as const,
         updatedInput: { ...input, answers }
       }
-    } catch (error) {
+    } catch {
       // Question was cancelled or aborted
-      console.log(`[PermissionHandler] AskUserQuestion cancelled: id=${id}`, (error as Error).message)
+      console.warn(`[PermissionHandler] AskUserQuestion settled: id=${id}, conversationId=${conversationId}, toolUseId=${options.toolUseID ?? 'unknown'}, status=cancelled, questions=${questions.length}, elapsedMs=${Date.now() - startedAt}`)
       return {
         behavior: 'deny' as const,
         message: 'Question cancelled: the user stopped generation before answering.'
       }
+    } finally {
+      removeAbortListener?.()
     }
   }
 }

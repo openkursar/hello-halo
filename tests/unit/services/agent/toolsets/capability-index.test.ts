@@ -3,15 +3,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({ open: new Set<string>(), terminalAvailable: true }))
 vi.mock('../../../../../src/main/services/agent/toolsets/state', () => ({ getExcludedToolsets: () => new Set(), getOpenToolsets: () => state.open }))
 vi.mock('../../../../../src/main/services/ai-browser', () => ({
-  AI_BROWSER_SYSTEM_PROMPT: 'Browser service guide.', createAIBrowserMcpServer: vi.fn(), getInteractiveBrowserContext: vi.fn(),
+  AI_BROWSER_DESCRIPTION: 'Browser service summary.', AI_BROWSER_SYSTEM_PROMPT: 'Browser service guide.', createAIBrowserMcpServer: vi.fn(), getInteractiveBrowserContext: vi.fn(),
 }))
 vi.mock('../../../../../src/main/services/ai-terminal', () => ({
-  AI_TERMINAL_SYSTEM_PROMPT: 'Terminal service guide.', createTerminalMcpServer: vi.fn(), getGlobalTerminalContext: vi.fn(),
+  AI_TERMINAL_DESCRIPTION: 'Terminal service summary.', createTerminalMcpServer: vi.fn(), getGlobalTerminalContext: vi.fn(),
   isTerminalAvailable: () => state.terminalAvailable,
 }))
 vi.mock('../../../../../src/main/services/ocr', () => ({ createOcrMcpServer: vi.fn() }))
 vi.mock('../../../../../src/main/services/api-ref', () => ({
-  HALO_API_TOOLSET_ID: 'halo-api-ref', HALO_API_USAGE_GUIDE: 'Core Halo API guide.', createApiRefMcpServer: vi.fn(),
+  HALO_API_TOOLSET_ID: 'halo-api-ref', HALO_API_DESCRIPTION: 'Operate Halo summary.', HALO_API_USAGE_GUIDE: 'Core Halo API guide.', createApiRefMcpServer: vi.fn(),
 }))
 
 import { buildToolsetSection } from '../../../../../src/main/services/agent/toolsets/capability-index'
@@ -34,7 +34,9 @@ describe('captured toolset guide mode', () => {
     expect(guide).toContain('Explicit tool restrictions, connection settings and caller-specific execution policies')
     expect(guide).toContain('Operate Halo is a core capability')
     expect(guide).toContain('Browser service guide.')
-    expect(guide).toContain('Terminal service guide.')
+    expect(guide).not.toContain('Terminal service guide.')
+    expect(getToolset('ai-terminal')?.summary).toBe('Terminal service summary.')
+    expect(getToolset('ai-browser')?.summary).toBe('Browser service summary.')
     expect(guide).toContain('ocr_image')
     expect(guide).toContain('Team service guide.')
     expect(guide).toContain('Core Halo API guide.')

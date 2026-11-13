@@ -40,6 +40,8 @@ export interface RequestIdentity {
    */
   systemPrefix?: (messages: Array<{ role: string; content: unknown }>, options?: { signal?: AbortSignal }) =>
     { type: 'text'; text: string } | Promise<{ type: 'text'; text: string }>;
+  /** Limit the prefix callback's input when it only derives identity from the opening user text. */
+  systemPrefixMessages?: 'first-user-text';
 
   /**
    * Body-level `metadata` object passed through to the API.

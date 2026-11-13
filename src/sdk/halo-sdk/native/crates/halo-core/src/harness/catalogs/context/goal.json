@@ -1,0 +1,97 @@
+{
+  "context.goal.objective": {
+    "text": "Objective: {objective}",
+    "slots": [
+      "objective"
+    ]
+  },
+  "context.goal.criteria_heading": {
+    "text": "Done when:",
+    "slots": []
+  },
+  "context.goal.criterion": {
+    "text": "- {criterion}",
+    "slots": [
+      "criterion"
+    ]
+  },
+  "context.goal.status": {
+    "text": "Status: {status}",
+    "slots": [
+      "status"
+    ]
+  },
+  "context.goal.recitation": {
+    "text": "Current goal:\n{goal}",
+    "slots": [
+      "goal"
+    ]
+  },
+  "context.goal.todo_progress": {
+    "text": "Todo: {done} of {total} completed.",
+    "slots": [
+      "done",
+      "total"
+    ]
+  },
+  "context.goal.todo_progress_current": {
+    "text": "Todo: {done} of {total} completed; in progress: \"{current}\".",
+    "slots": [
+      "done",
+      "total",
+      "current"
+    ]
+  },
+  "context.goal.removed_named": {
+    "text": "The user removed the goal \"{objective}\". It no longer applies.",
+    "slots": [
+      "objective"
+    ]
+  },
+  "context.goal.removed": {
+    "text": "The user removed the goal. It no longer applies.",
+    "slots": []
+  },
+  "context.goal.set": {
+    "text": "The user set a goal for this work.",
+    "slots": []
+  },
+  "context.goal.updated": {
+    "text": "The user updated the goal.",
+    "slots": []
+  },
+  "context.goal.previous_objective": {
+    "text": "Previous objective: {objective}",
+    "slots": [
+      "objective"
+    ]
+  },
+  "context.goal.open_goal": {
+    "text": "the goal \"{objective}\" is not marked complete",
+    "slots": [
+      "objective"
+    ]
+  },
+  "context.goal.open_todos": {
+    "text": "{open} of {total} todo items are unfinished (next: \"{next}\")",
+    "slots": [
+      "open",
+      "total",
+      "next"
+    ]
+  },
+  "context.goal.open_join": {
+    "text": ", and ",
+    "slots": []
+  },
+  "context.goal.open_check": {
+    "text": "You ended your turn with work still open: {parts}.\nThis is a check, not an instruction to continue. If you stopped on purpose — the user asked you to stop here, you're waiting for their input, you're blocked, or the remaining items no longer apply — say so in a sentence and update the goal or todo if they are out of date. If you stopped unintentionally, pick up where you left off.",
+    "slots": [
+      "parts"
+    ]
+  },
+  "context.goal.completion_check": {
+    "text": "Before you finish, look back at what was asked in this turn. If something is still missing or unverified, continue. If everything is done, end without adding anything.",
+    "slots": []
+  }
+}

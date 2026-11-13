@@ -17,6 +17,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SdkMcpBridge } from '../../../../../src/main/services/agent/mcp/sdk-bridge'
+import { createSdkMcpServer } from '../../../../../src/main/services/agent/mcp/sdk-server'
 import type { SdkMcpServerInstance } from '../../../../../src/main/services/agent/mcp/types'
 
 const bridges: SdkMcpBridge[] = []
@@ -57,6 +58,36 @@ async function start(servers: Record<string, SdkMcpServerInstance>): Promise<Rec
 }
 
 describe('SdkMcpBridge', () => {
+  it('publishes factory service metadata in the MCP initialization handshake', async () => {
+    const server = createSdkMcpServer({
+      name: 'internal-memory',
+      version: '2.0.0',
+      description: 'Read and update session memory',
+      instructions: 'Read existing facts before storing a new fact.\nKeep facts concise.',
+    })
+    const urls = await start({ memory: server.instance })
+    const client = await connect(bridges[0], urls.memory)
+
+    expect(client.getServerVersion()).toEqual({
+      name: 'memory',
+      version: '2.0.0',
+      description: server.description,
+    })
+    expect(client.getInstructions()).toBe(server.instructions)
+    expect(await client.listTools()).toEqual({ tools: [] })
+  })
+
+  it('initializes legacy instances without metadata using the existing version fallback', async () => {
+    const urls = await start({ memory: stubInstance({ version: undefined }) })
+    const client = await connect(bridges[0], urls.memory)
+
+    expect(client.getServerVersion()).toEqual({ name: 'memory', version: '1.0.0' })
+    expect(client.getInstructions()).toBeUndefined()
+    expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(['echo'])
+    expect((await client.callTool({ name: 'echo', arguments: { text: 'legacy' } })).content)
+      .toEqual([{ type: 'text', text: 'legacy' }])
+  })
+
   it('supports the standalone SDK HTTP client and releases its protocol session on close', async () => {
     const { McpClient, HttpTransport } = await import('@hello-halo/agent-sdk')
     const urls = await start({ team: stubInstance() })

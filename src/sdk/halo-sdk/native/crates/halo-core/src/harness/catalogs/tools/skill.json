@@ -1,0 +1,103 @@
+{
+  "tools.skill.missing": {
+    "text": "Missing required parameter: skill",
+    "slots": []
+  },
+  "tools.skill.invalid_arguments": {
+    "text": "Skill arguments must be a string.",
+    "slots": []
+  },
+  "tools.skill.invalid_name": {
+    "text": "Use an exact skill name from the catalog, without a file path.",
+    "slots": []
+  },
+  "tools.skill.no_description": {
+    "text": "(no description)",
+    "slots": []
+  },
+  "tools.skill.list_header": {
+    "text": "Available skills ({count}):",
+    "slots": [
+      "count"
+    ]
+  },
+  "tools.skill.list_omitted": {
+    "text": "{count} entries omitted. Repeat skill=\"list\" with args set to a name fragment to narrow the list.",
+    "slots": [
+      "count"
+    ]
+  },
+  "tools.skill.not_found": {
+    "text": "Skill '{name}' not found. Use skill=\"list\" to see available skills.",
+    "slots": [
+      "name"
+    ]
+  },
+  "tools.skill.invalid_catalog": {
+    "text": "Invalid skillCatalog entry {index}: {reason}",
+    "slots": [
+      "index",
+      "reason"
+    ]
+  },
+  "tools.skill.catalog.expected_array": {
+    "text": "expected an array",
+    "slots": []
+  },
+  "tools.skill.catalog.name_type": {
+    "text": "name must be a string",
+    "slots": []
+  },
+  "tools.skill.catalog.reserved_name": {
+    "text": "invalid or reserved name",
+    "slots": []
+  },
+  "tools.skill.catalog.duplicate_name": {
+    "text": "duplicate name",
+    "slots": []
+  },
+  "tools.skill.catalog.description_type": {
+    "text": "description must be a string",
+    "slots": []
+  },
+  "tools.skill.catalog.file_source_path": {
+    "text": "file source must be an absolute path",
+    "slots": []
+  },
+  "tools.skill.catalog.unknown_builtin_source": {
+    "text": "unknown builtin source",
+    "slots": []
+  },
+  "tools.skill.catalog.invalid_source": {
+    "text": "invalid source",
+    "slots": []
+  },
+  "tools.skill.catalog.optional_field_type": {
+    "text": "{field} must be a string",
+    "slots": [
+      "field"
+    ]
+  },
+  "tools.skill.unavailable": {
+    "text": "Built-in skill '{name}' is unavailable",
+    "slots": [
+      "name"
+    ]
+  },
+  "tools.skill.source_invalid": {
+    "text": "Invalid skill source",
+    "slots": []
+  },
+  "tools.skill.empty": {
+    "text": "Skill '{name}' expanded to empty content.",
+    "slots": [
+      "name"
+    ]
+  },
+  "tools.skill.limit": {
+    "text": "Skill '{name}' exceeds the 1048576 byte instruction limit.",
+    "slots": [
+      "name"
+    ]
+  }
+}

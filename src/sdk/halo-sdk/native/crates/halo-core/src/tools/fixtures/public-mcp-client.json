@@ -1,0 +1,832 @@
+[
+  {
+    "name": "supported",
+    "elicitation": true,
+    "responses": [
+      {
+        "result": {
+          "serverInfo": {
+            "name": "actual",
+            "version": "2",
+            "description": "external"
+          },
+          "instructions": "use this",
+          "capabilities": {
+            "tools": {}
+          }
+        }
+      },
+      {
+        "result": {
+          "tools": [
+            {
+              "name": "tool",
+              "description": "body",
+              "inputSchema": {
+                "type": "object"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "value"
+            }
+          ]
+        }
+      },
+      {
+        "error": {
+          "code": 1,
+          "message": "remote message"
+        }
+      },
+      {
+        "result": null
+      }
+    ],
+    "steps": [
+      {
+        "method": "initialize"
+      },
+      {
+        "method": "callTool",
+        "name": "tool",
+        "arguments": {
+          "x": 1
+        }
+      },
+      {
+        "method": "callTool",
+        "name": "tool"
+      },
+      {
+        "method": "callTool",
+        "name": "tool",
+        "arguments": {}
+      }
+    ],
+    "expected": [
+      {
+        "state": {
+          "initialized": true,
+          "tools": [
+            {
+              "name": "tool",
+              "description": "body",
+              "inputSchema": {
+                "type": "object"
+              }
+            }
+          ],
+          "server": {
+            "name": "actual",
+            "version": "2",
+            "description": "external"
+          },
+          "instructions": "use this"
+        },
+        "requests": [
+          {
+            "method": "setRequestHandler",
+            "args": [
+              "elicitation/create",
+              {
+                "nativeHandler": "elicitation"
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                  "protocolVersion": "2024-11-05",
+                  "capabilities": {
+                    "roots": {
+                      "listChanged": false
+                    },
+                    "elicitation": {}
+                  },
+                  "clientInfo": {
+                    "name": "agent-sdk",
+                    "version": "1.0.0"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "method": "notify",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "value"
+            }
+          ]
+        },
+        "state": {
+          "initialized": true,
+          "tools": [
+            {
+              "name": "tool",
+              "description": "body",
+              "inputSchema": {
+                "type": "object"
+              }
+            }
+          ],
+          "server": {
+            "name": "actual",
+            "version": "2",
+            "description": "external"
+          },
+          "instructions": "use this"
+        },
+        "requests": [
+          {
+            "method": "setRequestHandler",
+            "args": [
+              "elicitation/create",
+              {
+                "nativeHandler": "elicitation"
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                  "protocolVersion": "2024-11-05",
+                  "capabilities": {
+                    "roots": {
+                      "listChanged": false
+                    },
+                    "elicitation": {}
+                  },
+                  "clientInfo": {
+                    "name": "agent-sdk",
+                    "version": "1.0.0"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "method": "notify",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list"
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                  "name": "tool",
+                  "arguments": {
+                    "x": 1
+                  }
+                }
+              },
+              {
+                "nativeSignal": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "MCP tool error (configured/tool): remote message"
+            }
+          ],
+          "isError": true
+        },
+        "state": {
+          "initialized": true,
+          "tools": [
+            {
+              "name": "tool",
+              "description": "body",
+              "inputSchema": {
+                "type": "object"
+              }
+            }
+          ],
+          "server": {
+            "name": "actual",
+            "version": "2",
+            "description": "external"
+          },
+          "instructions": "use this"
+        },
+        "requests": [
+          {
+            "method": "setRequestHandler",
+            "args": [
+              "elicitation/create",
+              {
+                "nativeHandler": "elicitation"
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                  "protocolVersion": "2024-11-05",
+                  "capabilities": {
+                    "roots": {
+                      "listChanged": false
+                    },
+                    "elicitation": {}
+                  },
+                  "clientInfo": {
+                    "name": "agent-sdk",
+                    "version": "1.0.0"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "method": "notify",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list"
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                  "name": "tool",
+                  "arguments": {
+                    "x": 1
+                  }
+                }
+              },
+              {
+                "nativeSignal": true
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                  "name": "tool"
+                }
+              },
+              {
+                "nativeSignal": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": ""
+            }
+          ],
+          "isError": false
+        },
+        "state": {
+          "initialized": true,
+          "tools": [
+            {
+              "name": "tool",
+              "description": "body",
+              "inputSchema": {
+                "type": "object"
+              }
+            }
+          ],
+          "server": {
+            "name": "actual",
+            "version": "2",
+            "description": "external"
+          },
+          "instructions": "use this"
+        },
+        "requests": [
+          {
+            "method": "setRequestHandler",
+            "args": [
+              "elicitation/create",
+              {
+                "nativeHandler": "elicitation"
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                  "protocolVersion": "2024-11-05",
+                  "capabilities": {
+                    "roots": {
+                      "listChanged": false
+                    },
+                    "elicitation": {}
+                  },
+                  "clientInfo": {
+                    "name": "agent-sdk",
+                    "version": "1.0.0"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "method": "notify",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list"
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                  "name": "tool",
+                  "arguments": {
+                    "x": 1
+                  }
+                }
+              },
+              {
+                "nativeSignal": true
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                  "name": "tool"
+                }
+              },
+              {
+                "nativeSignal": true
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                  "name": "tool",
+                  "arguments": {}
+                }
+              },
+              {
+                "nativeSignal": true
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "initialize-failure",
+    "responses": [
+      {
+        "error": {
+          "message": "initial no"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "method": "initialize"
+      },
+      {
+        "method": "callTool",
+        "name": "tool"
+      }
+    ],
+    "expected": [
+      {
+        "error": "MCP initialize failed for \"configured\": initial no",
+        "state": {
+          "initialized": false,
+          "tools": [],
+          "server": null
+        },
+        "requests": [
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                  "protocolVersion": "2024-11-05",
+                  "capabilities": {
+                    "roots": {
+                      "listChanged": false
+                    }
+                  },
+                  "clientInfo": {
+                    "name": "agent-sdk",
+                    "version": "1.0.0"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "MCP server \"configured\" not initialized"
+            }
+          ],
+          "isError": true
+        },
+        "state": {
+          "initialized": false,
+          "tools": [],
+          "server": null
+        },
+        "requests": [
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                  "protocolVersion": "2024-11-05",
+                  "capabilities": {
+                    "roots": {
+                      "listChanged": false
+                    }
+                  },
+                  "clientInfo": {
+                    "name": "agent-sdk",
+                    "version": "1.0.0"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "list-error",
+    "responses": [
+      {
+        "result": {
+          "capabilities": {
+            "tools": {}
+          }
+        }
+      },
+      {
+        "error": {
+          "message": "no listing"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "method": "initialize"
+      }
+    ],
+    "expected": [
+      {
+        "state": {
+          "initialized": true,
+          "tools": [],
+          "server": {
+            "name": "configured",
+            "version": "unknown"
+          }
+        },
+        "requests": [
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                  "protocolVersion": "2024-11-05",
+                  "capabilities": {
+                    "roots": {
+                      "listChanged": false
+                    }
+                  },
+                  "clientInfo": {
+                    "name": "agent-sdk",
+                    "version": "1.0.0"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "method": "notify",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "empty-server",
+    "responses": [
+      {
+        "result": {
+          "serverInfo": {
+            "name": 12,
+            "version": null,
+            "description": 3
+          },
+          "instructions": 8,
+          "capabilities": {
+            "tools": false
+          }
+        }
+      },
+      {
+        "result": {
+          "content": [],
+          "isError": false
+        }
+      }
+    ],
+    "steps": [
+      {
+        "method": "callTool",
+        "name": "tool"
+      },
+      {
+        "method": "initialize"
+      },
+      {
+        "method": "callTool",
+        "name": "tool"
+      }
+    ],
+    "expected": [
+      {
+        "result": {
+          "content": [
+            {
+              "type": "text",
+              "text": "MCP server \"configured\" not initialized"
+            }
+          ],
+          "isError": true
+        },
+        "state": {
+          "initialized": false,
+          "tools": [],
+          "server": null
+        },
+        "requests": []
+      },
+      {
+        "state": {
+          "initialized": true,
+          "tools": [],
+          "server": {
+            "name": "configured",
+            "version": "unknown"
+          }
+        },
+        "requests": [
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                  "protocolVersion": "2024-11-05",
+                  "capabilities": {
+                    "roots": {
+                      "listChanged": false
+                    }
+                  },
+                  "clientInfo": {
+                    "name": "agent-sdk",
+                    "version": "1.0.0"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "method": "notify",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "result": {
+          "content": [],
+          "isError": false
+        },
+        "state": {
+          "initialized": true,
+          "tools": [],
+          "server": {
+            "name": "configured",
+            "version": "unknown"
+          }
+        },
+        "requests": [
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                  "protocolVersion": "2024-11-05",
+                  "capabilities": {
+                    "roots": {
+                      "listChanged": false
+                    }
+                  },
+                  "clientInfo": {
+                    "name": "agent-sdk",
+                    "version": "1.0.0"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "method": "notify",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+              }
+            ]
+          },
+          {
+            "method": "send",
+            "args": [
+              {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                  "name": "tool"
+                }
+              },
+              {
+                "nativeSignal": true
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

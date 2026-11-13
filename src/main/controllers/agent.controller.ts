@@ -193,7 +193,7 @@ export function answerQuestion(
   try {
     const resolved = resolveQuestion(id, answers)
     if (!resolved) {
-      return { success: false, error: `No pending question found for id: ${id}` }
+      return { success: false, error: 'Question is no longer pending or answers are invalid' }
     }
     return { success: true }
   } catch (error: unknown) {

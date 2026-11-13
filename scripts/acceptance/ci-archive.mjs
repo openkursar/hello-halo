@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { verifyEvidenceSource, verifyFrozenEvidence } from './lib/ci-evidence.mjs'
+import { isTransientClusterProfile, verifyEvidenceSource, verifyFrozenEvidence } from './lib/ci-evidence.mjs'
 
 const rootMarker = '.acceptance-archive-root.json'
 const lockName = '.archive.lock'
@@ -184,6 +184,7 @@ function inventory(directory) {
     for (const name of fs.readdirSync(folder).sort()) {
       const location = relative ? `${relative}/${name}` : name
       if (!validRelative(location)) fail(`Unsupported evidence filename: ${JSON.stringify(location)}`)
+      if (isTransientClusterProfile(location)) continue
       const file = path.join(folder, name)
       const value = stat(file)
       if (value?.isSymbolicLink()) fail(`Evidence links are not followed: ${JSON.stringify(location)}`)

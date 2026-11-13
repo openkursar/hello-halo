@@ -39,6 +39,7 @@ export interface SystemPromptConfig {
   /** Model identifier */
   model: string;
   promptProfile?: PromptProfileSelection;
+  ultraEffort?: boolean;
   /**
    * Pre-loaded memory content (raw concatenation, no path headers), injected
    * inside a `<memory>` block. For the path-annotated format use
@@ -114,7 +115,7 @@ function assemblePreset(config: SystemPromptConfig, environment: string): string
 
   const parts: string[] = [
     identitySection(),
-    howYouWorkSection(),
+    howYouWorkSection(config.ultraEffort),
     computerSafetySection(),
     runtimeSection(),
     toolUseSection(config.tools),

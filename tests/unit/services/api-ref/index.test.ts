@@ -16,7 +16,7 @@
 import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
-  tool: (name: string, _desc: string, _schema: unknown, handler: unknown) => ({ name, handler }),
+  tool: (name: string, description: string, _schema: unknown, handler: unknown) => ({ name, description, handler }),
   createSdkMcpServer: (opts: { tools: Array<{ name: string; handler: Function }> }) => opts,
 }))
 
@@ -28,7 +28,7 @@ vi.mock('../../../../src/main/services/api-ref/resource-path', () => ({
   readApiRefFile: (...args: unknown[]) => mockReadApiRefFile(...args),
 }))
 
-import { createApiRefMcpServer } from '../../../../src/main/services/api-ref'
+import { createApiRefMcpServer, HALO_API_DESCRIPTION, HALO_API_USAGE_GUIDE } from '../../../../src/main/services/api-ref'
 
 type Tool = { name: string; handler: (args: any) => Promise<{ content: { type: string; text: string }[]; isError?: boolean }> }
 
@@ -38,6 +38,21 @@ function buildTool() {
 }
 
 describe('halo_api_ref', () => {
+  it('keeps capability selection concise and puts execution rules before the returned contract', async () => {
+    mockReadApiRefFile.mockReturnValue('## workspace\nGET /api/spaces\nFull index: {{API_REF_INDEX_PATH}}/index.txt\n')
+    mockGetApiRefPath.mockReturnValue('/fixture/api-ref/index.txt')
+    const server = createApiRefMcpServer() as unknown as { description: string; tools: Array<Tool & { description: string }> }
+    expect(server.description).toBe(HALO_API_DESCRIPTION)
+    expect(HALO_API_USAGE_GUIDE.length).toBeLessThan(700)
+    expect(HALO_API_USAGE_GUIDE).toContain('never guess paths or bypass a permission denial')
+    expect(server.tools[0].description.length).toBeLessThan(400)
+    expect(HALO_API_USAGE_GUIDE).not.toContain('HTTP 200')
+    const response = await server.tools[0].handler({ group: 'workspace' })
+    const text = response.content[0].text
+    expect(text.indexOf('## Execution rules')).toBeLessThan(text.indexOf('GET /api/spaces'))
+    for (const marker of ['HTTP 200 alone is not success', "body's success value", 'HTTP 403', 'never bypass a denial', '$HALO_API_TOKEN', 'never print their values', 'started job is not completion', 'credential-write route', 'read_halo_doc', '/fixture/api-ref/index.txt']) expect(text).toContain(marker)
+  })
+
   it('substitutes the index-path template with the real resolved directory', async () => {
     mockReadApiRefFile.mockReturnValue('## digital-human\nFull index: {{API_REF_INDEX_PATH}}/index.txt   (grep it)\n')
     mockGetApiRefPath.mockReturnValue('/Users/x/Halo.app/Contents/Resources/api-ref/index.txt')

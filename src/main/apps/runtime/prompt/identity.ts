@@ -1,41 +1,20 @@
-/**
- * apps/runtime/prompt -- Identity Layer Builder
- *
- * The "who am I" layer of the App chat system prompt:
- *   - Base Agent prompt (identity, tools, coding guidelines, env)
- *   - App-specific instructions (from spec — the digital human's "soul")
- *   - Memory access instructions
- *   - User configuration values
- *
- * Channel-agnostic. Does not know about IM, native UI, or any entry
- * point. Outputs an ordered list of ready-to-join fragments.
- */
+/** Shared digital-human context, independent of its current channel or team. */
 
 import type { AppSpec } from '../../spec'
 import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../../services/agent'
-import type { EngineId } from '../../../../shared/types/engine'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../../../services/ai-browser'
-import { AI_TERMINAL_SYSTEM_PROMPT } from '../../../services/ai-terminal'
 import { HALO_API_USAGE_GUIDE } from '../../../services/api-ref'
 import { getKBReferencesForApp } from '../../../services/tlon'
 
 export interface IdentityFragmentsInput {
-  engineId?: EngineId
   appId: string
   appSpec: AppSpec
   memoryInstructions: string
   userConfig?: Record<string, unknown>
   usesAIBrowser?: boolean
-  usesTerminal?: boolean
   usesHaloApi?: boolean
   workDir: string
   modelInfo?: string
-  /**
-   * The turn mounts no digital-human management tools (a disposable team
-   * member), so the prompt must not say Halo can manage digital humans. Unset:
-   * the user's digital-humans setting decides.
-   */
-  withholdDigitalHumans?: boolean
   /**
    * Pre-rendered "disabled capabilities" guidance (buildDisabledCapabilitiesGuidance).
    * Present only when the user has turned a toggleable capability off; the caller
@@ -56,20 +35,15 @@ export function buildIdentityFragments(input: IdentityFragmentsInput): string[] 
   const fragments: string[] = []
 
   const promptCtx = {
-    engineId: input.engineId,
     workDir: input.workDir,
     modelInfo: input.modelInfo,
     knowledgeBases: getKBReferencesForApp(input.appId),
-    ...(input.withholdDigitalHumans ? { digitalHumansEnabled: false } : {}),
     // Who it is comes from its App Instructions, not Halo's introduction.
-    ownIdentity: input.appSpec.type === 'automation' && !!input.appSpec.system_prompt,
+    ownIdentity: input.appSpec.type === 'automation' && input.appSpec.system_prompt ? 'app-instructions' as const : 'runtime' as const,
   }
   let base = input.usesAIBrowser
     ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)
     : buildSystemPrompt(promptCtx)
-  if (input.usesTerminal) {
-    base += '\n\n' + AI_TERMINAL_SYSTEM_PROMPT.trim()
-  }
   if (input.usesHaloApi) {
     base += '\n\n' + HALO_API_USAGE_GUIDE.trim()
   }

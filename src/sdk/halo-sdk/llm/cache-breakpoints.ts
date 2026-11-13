@@ -1,8 +1,9 @@
 /**
  * @module llm/cache-breakpoints
- * SDK cache-marker placement for Anthropic requests: reserve one of the API's
- * four breakpoints for message history and up to three for system blocks.
- * Placement is an SDK policy; cache hits and savings depend on the request.
+ * SDK cache-marker placement for Anthropic requests: mark message history,
+ * system blocks and tools, then cap the assembled request to the API's four
+ * breakpoints. Placement is an SDK policy; cache hits and savings depend on
+ * the request.
  * @license MIT
  */
 
@@ -140,6 +141,47 @@ function applyBreakpointToMessage(msg: MessageLike, cacheControl: CacheControl):
   return { ...msg, content: newContent };
 }
 
+interface CacheMarkedBlock {
+  cache_control?: unknown;
+}
+
+/** Cap only marker metadata, preserving caller-owned content and prefix ordering. */
+export function limitCacheBreakpoints(request: Record<string, unknown>): void {
+  const toolBlocks = (request.tools ?? []) as CacheMarkedBlock[];
+  const systemBlocks = Array.isArray(request.system) ? request.system as CacheMarkedBlock[] : [];
+  const messageList = request.messages as Array<Record<string, unknown>>;
+  const tools = toolBlocks.filter(block => block.cache_control);
+  const system = systemBlocks.filter(block => block.cache_control);
+  const messages: CacheMarkedBlock[] = [];
+  for (const message of messageList) {
+    if (Array.isArray(message.content)) {
+      for (const block of message.content as CacheMarkedBlock[]) {
+        if (block.cache_control) messages.push(block);
+      }
+    }
+  }
+  if (tools.length + system.length + messages.length <= 4) return;
+
+  // Keep each cache tier useful; newer message prefixes take remaining slots first.
+  const keep = new Set<CacheMarkedBlock>();
+  for (const group of [tools, system, messages]) {
+    if (group.length) keep.add(group[group.length - 1]);
+  }
+  for (const group of [messages, system, tools]) {
+    for (let index = group.length - 2; index >= 0 && keep.size < 4; index--) keep.add(group[index]);
+  }
+  const withoutExcessMarker = <T extends CacheMarkedBlock>(block: T): T => {
+    if (!block.cache_control || keep.has(block)) return block;
+    const copy = { ...block };
+    delete copy.cache_control;
+    return copy;
+  };
+  if (request.tools) request.tools = toolBlocks.map(withoutExcessMarker);
+  if (Array.isArray(request.system)) request.system = systemBlocks.map(withoutExcessMarker);
+  request.messages = messageList.map(message => Array.isArray(message.content)
+    ? { ...message, content: message.content.map(withoutExcessMarker) } : message);
+}
+
 // ---------------------------------------------------------------------------
 // System prompt cache breakpoints
 // ---------------------------------------------------------------------------
@@ -155,7 +197,8 @@ function applyBreakpointToMessage(msg: MessageLike, cacheControl: CacheControl):
  * is left unmarked since it changes every turn and caching it would waste
  * a breakpoint slot.
  *
- * Reserve one of the API's four cache breakpoints for message history.
+ * These candidates share the request's four slots with tools and messages;
+ * limitCacheBreakpoints enforces that budget after serialization.
  * Cache hits depend on provider support and an unchanged request prefix.
  *
  * @param systemPrompt  String or array of `{ type: 'text', text: string }` blocks.
@@ -179,11 +222,7 @@ export function addSystemPromptCacheBreakpoint(
     return [{ ...systemPrompt[0], cache_control: cacheControl }];
   }
 
-  // Multiple blocks: mark at most the 3 stable blocks closest to the tail
-  // (excluding the last block, which carries dynamic per-turn content —
-  // caching it would invalidate on the next turn). The API allows 4
-  // breakpoints per request; capping system breakpoints at 3 reserves the
-  // fourth for the message-level marker.
+  // Leave the dynamic tail unmarked; the complete request shares four slots.
   const lastIdx = systemPrompt.length - 1;
   const firstMarkable = Math.max(0, lastIdx - 3);
   return systemPrompt.map((block, i) => {

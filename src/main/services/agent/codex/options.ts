@@ -100,6 +100,11 @@ export async function resolveCodexOptions(sdkOptions: Record<string, any>): Prom
       cwd,
       sandbox: resolveSandboxMode(sdkOptions),
       approvalPolicy: resolveApprovalPolicy(sdkOptions),
+      ...(typeof sdkOptions.systemPrompt === 'string'
+        ? { baseInstructions: sdkOptions.systemPrompt }
+        : sdkOptions.systemPrompt?.type === 'preset' && sdkOptions.systemPrompt.preset === 'default'
+          ? { developerInstructions: sdkOptions.systemPrompt.append }
+          : {}),
       config,
     }
 

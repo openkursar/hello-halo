@@ -1,0 +1,26 @@
+[
+  {
+    "name": "commit",
+    "description": {
+      "$harness": "tools.skill.builtins.commit.description"
+    },
+    "argumentHint": {
+      "$harness": "tools.skill.builtins.commit.argument_hint"
+    },
+    "instructions": {
+      "$harness": "tools.skill.builtins.commit.instructions"
+    }
+  },
+  {
+    "name": "pull-request",
+    "description": {
+      "$harness": "tools.skill.builtins.pull_request.description"
+    },
+    "argumentHint": {
+      "$harness": "tools.skill.builtins.pull_request.argument_hint"
+    },
+    "instructions": {
+      "$harness": "tools.skill.builtins.pull_request.instructions"
+    }
+  }
+]

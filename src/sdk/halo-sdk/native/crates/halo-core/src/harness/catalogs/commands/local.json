@@ -1,0 +1,124 @@
+{
+  "commands.local.cleared": {
+    "text": "Conversation history cleared.",
+    "slots": []
+  },
+  "commands.local.compact_instructions": {
+    "text": "Compaction started with instructions: _{instructions}_",
+    "slots": [
+      "instructions"
+    ]
+  },
+  "commands.local.compact_started": {
+    "text": "Compaction started.",
+    "slots": []
+  },
+  "commands.local.current_model": {
+    "text": "**Current model:** `{model}`\n\nPass a model id to switch — e.g. `/model deepseek-chat`.",
+    "slots": [
+      "model"
+    ]
+  },
+  "commands.local.model_switched": {
+    "text": "Model switched: `{model}` → `{target}`",
+    "slots": [
+      "model",
+      "target"
+    ]
+  },
+  "commands.local.help_heading": {
+    "text": "## Available commands\n\n",
+    "slots": []
+  },
+  "commands.local.help_empty": {
+    "text": "_No commands registered._\n",
+    "slots": []
+  },
+  "commands.local.help_entry": {
+    "text": "- `/{name}{hint}` — {description}\n",
+    "slots": [
+      "name",
+      "hint",
+      "description"
+    ]
+  },
+  "commands.local.context": {
+    "text": "## Context Usage\n\n**Model:** {model}  \n**Messages:** {messages}  \n**Approx. characters:** {characters}  \n**Approx. tokens:** {tokens} _(rough estimate, 4 chars/token)_\n\n_Exact token usage is unavailable in this view._\n",
+    "slots": [
+      "model",
+      "messages",
+      "characters",
+      "tokens"
+    ]
+  },
+  "commands.local.status": {
+    "text": "## Status\n\n**Session:** `{session}`  \n**Model:** `{model}`  \n**Working directory:** `{cwd}`  \n**Messages in history:** {messages}\n\n### MCP servers\n\n{servers}",
+    "slots": [
+      "session",
+      "model",
+      "cwd",
+      "messages",
+      "servers"
+    ]
+  },
+  "commands.local.mcp_status_empty": {
+    "text": "_No MCP servers configured._\n",
+    "slots": []
+  },
+  "commands.local.mcp_empty": {
+    "text": "No MCP servers configured.",
+    "slots": []
+  },
+  "commands.local.mcp_heading": {
+    "text": "## MCP servers\n\n",
+    "slots": []
+  },
+  "commands.local.mcp_columns": {
+    "text": "| Name | Status |\n|------|--------|\n",
+    "slots": []
+  },
+  "commands.local.token_columns": {
+    "text": "| Bucket | Count |\n|--------|------:|\n",
+    "slots": []
+  },
+  "commands.local.quota_unavailable": {
+    "text": "\n_Subscription-tier limits and reset windows are not surfaced by the SDK — refer to your provider dashboard for quota state._\n",
+    "slots": []
+  },
+  "commands.local.inflight_unavailable": {
+    "text": "\n_The current in-flight turn is not yet aggregated — totals will update once it completes._\n",
+    "slots": []
+  },
+  "commands.local.usage": {
+    "text": "## Session usage\n\n**Turns:** {turns}  \n**Total tokens:** {tokens}\n\n",
+    "slots": [
+      "turns",
+      "tokens"
+    ]
+  },
+  "commands.local.cost": {
+    "text": "## Session cost\n\n**Total cost:** ${cost}  \n**Duration (wall):** {wall_duration}  \n**Duration (API):** {api_duration}  \n**Turns counted:** {turns}\n\n### Tokens\n\n",
+    "slots": [
+      "cost",
+      "wall_duration",
+      "api_duration",
+      "turns"
+    ]
+  },
+  "commands.local.token_input": {
+    "text": "Input",
+    "slots": []
+  },
+  "commands.local.token_output": {
+    "text": "Output",
+    "slots": []
+  },
+  "commands.local.token_cache_create": {
+    "text": "Cache create",
+    "slots": []
+  },
+  "commands.local.token_cache_read": {
+    "text": "Cache read",
+    "slots": []
+  }
+}

@@ -132,6 +132,7 @@ function resolveProviderFiles() {
  */
 function resolveAsarUnpack(base) {
   return [...new Set([...(base.asarUnpack || []), runtimeAsarUnpackGlob(),
+    'node_modules/@hello-halo/agent-sdk/dist/native/*.node',
     'node_modules/@hello-halo/agent-sdk/dist/worker/entry.js*', 'out/main/worker/halo-setup.cjs'])]
 }
 

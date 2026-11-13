@@ -9,6 +9,11 @@ and automation. It provides tool execution, streaming responses, persistent
 sessions, context management, and collaborators, with a focus on sustained task
 execution and host resource costs.
 
+The JavaScript/TypeScript API loads an in-process Rust core through Node-API.
+The core owns the model loop, tools, history and context management; JavaScript
+retains host callbacks and public objects. Direct and Worker execution use the
+same core and shared native execution resources.
+
 ## Why a lighter agent runtime?
 
 Applications may need dozens or eventually hundreds of independent agent
@@ -19,11 +24,10 @@ costs.
 
 **Reducing the local cost of concurrent agents is a core design goal.**
 
-Halo can run its agent loop directly in-process or place sessions on shared
-Workers. Sessions keep separate conversation histories while reusing execution
-resources. Worker execution moves the agent loop off the host's JavaScript
-thread. Published performance measurements currently cover up to 64 concurrent
-sessions.
+The native loop runs outside the host's JavaScript thread. Optional shared Workers
+also isolate the JavaScript facade and worker-side callbacks. Sessions keep
+separate conversation histories while reusing execution resources. The historical
+measurements below cover up to 64 concurrent sessions.
 
 ## Core capabilities
 
@@ -44,6 +48,10 @@ model requests and are configurable. Stable instructions and changing task state
 are organized separately to support prefix reuse where the provider offers it.
 
 ## Performance and evaluations
+
+The results below describe the earlier SDK snapshots identified in their reports.
+They do not establish performance or task-completion results for the current
+Rust core; measurements of a different implementation must be reported separately.
 
 ### Runtime overhead
 
@@ -124,12 +132,22 @@ the runtime benchmark above did not enable it.
 
 ## Quick start
 
-Requires Node.js 20 or later. From a source checkout:
+Requires Node.js 20 or later. Building from source also requires a rustup-managed
+Rust 1.90.0 toolchain and a C compiler/linker for the target platform. The toolchain
+is pinned in `native/rust-toolchain.toml`. Run these commands from the SDK directory
+(`src/sdk/halo-sdk` in the Halo repository):
 
 ```sh
+rustup toolchain install 1.90.0 --profile minimal
 npm ci
 npm run build
 ```
+
+The build generates the JavaScript facade, Worker bundle and native library for
+the current OS and CPU. A built distribution needs the matching `.node` library
+and `dist/native/build-info.json`; consumers do not need Rust when those artifacts
+are already included. Loading errors are explicit, with no fallback
+runtime. See [native runtime and build requirements](docs/guide.md#native-runtime-and-build).
 
 Set `MODEL_ID`, `MODEL_BASE_URL`, and `MODEL_API_KEY` for your OpenAI-compatible
 endpoint. Save the following as `example.mjs` in the checkout and run
@@ -236,5 +254,5 @@ through lifecycle hooks, and validate changes with reproducible evaluations.
 
 ## License
 
-[MIT](LICENSE). The bundled Worker ships with third-party license and copyright
-notices in `dist/worker/THIRD-PARTY-NOTICES.txt`.
+[MIT](LICENSE). Third-party license and copyright notices ship in
+`dist/worker/THIRD-PARTY-NOTICES.txt` and `dist/native/THIRD-PARTY-NOTICES.txt`.

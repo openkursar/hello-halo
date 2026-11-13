@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSession } from './session.js';
+import { createSession } from '../index.js';
 import type { SDKSession } from './session.js';
 import type { SDKMessage } from './query-types.js';
 import type {
@@ -81,8 +81,9 @@ function makeMockProvider(responses: string[]): LlmProvider {
 async function makeSession(
   provider: LlmProvider,
   overrides: Record<string, unknown> = {},
+  create = createSession,
 ): Promise<SDKSession> {
-  return createSession({
+  return create({
     provider,
     model: 'test-model',
     maxTurns: 5,
@@ -143,7 +144,7 @@ describe('createSession — basic send/stream flow', () => {
     }
   });
 
-  it('reports unsupported manual compaction without invoking the provider', async () => {
+  it('keeps empty history unchanged when manual compaction has nothing to summarize', async () => {
     const provider = makeMockProvider(['unused']);
     const stream = vi.spyOn(provider, 'createMessageStream');
     const session = await makeSession(provider, { persistSession: false });
@@ -151,11 +152,13 @@ describe('createSession — basic send/stream flow', () => {
       await session.send('/compact');
       const messages = await drainTurn(session);
       expect(findFirst(messages, 'result')).toMatchObject({
-        is_error: true,
-        subtype: 'error_during_execution',
-        result: expect.stringContaining('not supported'),
+        is_error: false,
+        subtype: 'success',
+        num_turns: 0,
+        result: expect.stringContaining('kept unchanged'),
       });
       expect(stream).not.toHaveBeenCalled();
+      expect(messages.some(message => message.type === 'system' && message.subtype === 'compact_boundary')).toBe(false);
     } finally {
       session.close();
     }
@@ -1194,21 +1197,21 @@ describe('createSession — goal', () => {
     }
   });
 
-  it('does not overwrite the goal of a resumed session', async () => {
+  it('does not overwrite the persisted goal of a resumed session', async () => {
     const sessionId = randomUUID();
-    const first = await makeSession(makeMockProvider(['ok']), { sessionId, persistSession: false });
+    const first = await makeSession(makeMockProvider(['ok']), { sessionId, persistSession: true });
     first.setGoal({ objective: 'Edited by the user' });
-    first.close();
+    await first.close();
 
     const resumed = await makeSession(makeMockProvider(['ok']), {
       sessionId,
-      persistSession: false,
+      persistSession: true,
       goal: { objective: 'Initial goal' },
     });
     try {
       expect(resumed.getGoal()?.objective).toBe('Edited by the user');
     } finally {
-      resumed.close();
+      await resumed.close();
     }
   });
 

@@ -1,12 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { queryLoop } from './query-loop.js';
+import { queryLoop, TokenBudget, fullCompact, microCompact } from '../index.js';
 import { resolveQueryConfig } from './context.js';
-import { fullCompact, microCompact } from './compact.js';
 import { estimateMessageTokens } from '../utils/tokens.js';
 import { AnthropicProvider } from '../llm/anthropic.js';
 import { ModelFallbackError, ProviderError } from '../utils/errors.js';
 import * as retry from '../utils/retry.js';
-import { TokenBudget } from './token-budget.js';
 import type { LlmProvider, Message, ProviderRequest, ProviderResponse, StreamEvent, UsageInfo } from '../types/provider.js';
 import type { SDKMessage } from './query-types.js';
 import type { Tool } from '../types/tool.js';
@@ -606,7 +604,7 @@ describe('summary request prefix', () => {
       maxTokens: 4000, targetInputTokens: 3000, maxInputTokens: 36_000, estimateInputTokens: estimateMessageTokens,
     });
     expect(result.messages).toContainEqual({ role: 'user', content: 'Report only. Do not edit files or run commands.' });
-    expect(createMessage.mock.calls[0][0].messages).toContain(source.at(-1));
+    expect(createMessage.mock.calls[0][0].messages).toContainEqual(source.at(-1));
     expect(result.tokensFreed).toBeGreaterThan(0);
   });
 

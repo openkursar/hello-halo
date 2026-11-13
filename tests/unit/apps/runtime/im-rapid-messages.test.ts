@@ -205,12 +205,14 @@ vi.mock('../../../../src/main/services/analytics/types', () => ({
 vi.mock('../../../../src/main/services/ai-browser', () => ({
   createAIBrowserMcpServer: vi.fn(() => ({ _isMcpServer: true, name: 'ai-browser' })),
   createScopedBrowserContext: vi.fn(() => ({ destroy: vi.fn(), ownedViewCount: 0, hasRevealedView: () => false })),
+  AI_BROWSER_DESCRIPTION: 'Browse websites',
   AI_BROWSER_SYSTEM_PROMPT: 'AI browser instructions',
 }))
 vi.mock('../../../../src/main/services/ai-terminal', () => ({
   createTerminalMcpServer: vi.fn(),
   getGlobalTerminalContext: vi.fn(),
   isTerminalAvailable: () => false,
+  AI_TERMINAL_DESCRIPTION: 'Run interactive terminals',
   AI_TERMINAL_SYSTEM_PROMPT: 'AI terminal instructions',
 }))
 vi.mock('../../../../src/main/services/web-search', () => ({
@@ -219,6 +221,7 @@ vi.mock('../../../../src/main/services/web-search', () => ({
 vi.mock('../../../../src/main/services/ocr', () => ({ createOcrMcpServer: () => ({ _isMcpServer: true, name: 'ocr' }) }))
 vi.mock('../../../../src/main/services/api-ref', () => ({
   createApiRefMcpServer: () => ({ _isMcpServer: true, name: 'halo-api-ref' }),
+  HALO_API_DESCRIPTION: 'Operate Halo',
   HALO_API_USAGE_GUIDE: 'Halo API usage',
   HALO_API_TOOLSET_ID: 'halo-api-ref',
 }))
@@ -364,6 +367,7 @@ vi.mock('../../../../src/main/apps/runtime/im-channels/owner-claim', () => ({ ma
 const relays = vi.hoisted(() => ({
   pending: false,
   openQuestion: false,
+  preparing: false,
   preparation: null as Promise<void> | null,
   release: () => {},
   commit: vi.fn(),
@@ -383,6 +387,7 @@ vi.mock('../../../../src/main/apps/runtime/relay-actions', async importOriginal 
     hasOpenImQuestion: () => relays.openQuestion,
     prepareRelayActions: async (_events: unknown[], isAuthorized: () => boolean) => {
       if (!isAuthorized()) throw new actual.RelayActionUnauthorizedError()
+      relays.preparing = true
       if (relays.preparation) await relays.preparation
       if (!isAuthorized()) throw new actual.RelayActionUnauthorizedError()
       return new Map([['question', 'Submit the actual owner answer with the limited grant.']])
@@ -453,6 +458,7 @@ beforeEach(() => {
   buildUserSessionSdkOptions.mockClear()
   relays.pending = false
   relays.openQuestion = false
+  relays.preparing = false
   relays.preparation = null
   relays.commit.mockClear()
 })
@@ -503,7 +509,7 @@ describe('a second IM message arriving while the first is still starting', () =>
     void dispatchInboundMessage(message('summarize the file'), second, 'app-1', 'inst-1')
     await settle()
 
-    expect(channel.pushed.some((text) => text.includes('已收到补充'))).toBe(true)
+    await vi.waitFor(() => expect(channel.pushed.some((text) => text.includes('已收到补充'))).toBe(true))
     expect(engine.state.answered).toHaveLength(0)
 
     engine.state.releaseColdStart()
@@ -718,10 +724,11 @@ describe('a relay action whose listener is still starting', () => {
     const second = directReply()
     void dispatchInboundMessage(directMessage('华东吧'), first, 'app-1', 'inst-1')
     await settle()
+    await vi.waitFor(() => expect(relays.preparing).toBe(true))
     expect(isAppChatConversationGenerating(DIRECT_CHAT)).toBe(true)
     void dispatchInboundMessage(directMessage('按刚才说的继续'), second, 'app-1', 'inst-1')
     await settle()
-    expect(channel.pushed.some(text => text.includes('已收到补充'))).toBe(true)
+    await vi.waitFor(() => expect(channel.pushed.some(text => text.includes('已收到补充'))).toBe(true))
     expect(engine.state.answered).toEqual([])
     relays.release()
     await vi.waitFor(() => expect(first.sent.some(isAnswer)).toBe(true))
@@ -740,8 +747,9 @@ describe('a relay action whose listener is still starting', () => {
     const control = directReply()
     const dispatch = dispatchInboundMessage(directMessage('华东吧'), first, 'app-1', 'inst-1')
     await settle()
+    await vi.waitFor(() => expect(relays.preparing).toBe(true))
     expect(isAppChatConversationGenerating(DIRECT_CHAT)).toBe(true)
-    expect(getImStreamHandle(DIRECT_CHAT)).toBe(first.streaming)
+    await vi.waitFor(() => expect(getImStreamHandle(DIRECT_CHAT)).toBe(first.streaming))
 
     await dispatchInboundMessage(directMessage(command), control, 'app-1', 'inst-1')
     expect(control.sent).toContain(confirmation)
@@ -769,6 +777,7 @@ describe('a relay action whose listener is still starting', () => {
     const dispatch = dispatchInboundMessage(directMessage('华东吧'), first, 'app-1', 'inst-1')
     relays.release()
     await settle()
+    await vi.waitFor(() => expect(relays.preparing).toBe(true))
     expect(isAppChatConversationGenerating(DIRECT_CHAT)).toBe(true)
     expect(engine.state.answered).toEqual([])
     relays.openQuestion = false

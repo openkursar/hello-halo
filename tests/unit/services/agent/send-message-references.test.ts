@@ -11,12 +11,13 @@ const m = vi.hoisted(() => ({
   acquireV2Session: vi.fn(),
   prepareNonVisionImageFallback: vi.fn(() => null as null | { contextBlock: string; filePaths: string[] }),
   memoryEnabled: true,
+  engineId: 'halo',
   buildMemorySnapshot: vi.fn(),
   ensureMemoryFile: vi.fn(async () => false),
 }))
 
 vi.mock('../../../../src/main/services/agent/engine-routing', () => ({
-  resolveConversationEngine: async () => 'halo',
+  resolveConversationEngine: async () => m.engineId,
   prepareConversationContinuation: (_spaceId: string, _conversationId: string, conversation: { sessionId?: string }, _engine: unknown, options?: { legacySessionId?: string }) => ({ engineId: 'halo', engineState: {}, resumeSessionId: options?.legacySessionId ?? conversation?.sessionId }),
 }))
 vi.mock('../../../../src/main/foundation/config.service', () => ({ getConfig: () => ({ agent: {} }) }))
@@ -111,6 +112,7 @@ beforeEach(() => {
   m.acquireV2Session.mockResolvedValue({ session, isCurrent: true, send: session.send, close: vi.fn(), release: vi.fn() })
   m.getConversation.mockReturnValue({ id: 'conv-1', sessionId: undefined })
   m.memoryEnabled = true
+  m.engineId = 'halo'
   m.buildMemorySnapshot.mockResolvedValue({
     layout: memoryLayout, exists: true, blank: true, totalLines: 5, sizeBytes: 27, nowBytes: 14,
     firstSection: null, fullContent: '# now\n\n## State\n\n# History\n', headers: [],
@@ -223,3 +225,16 @@ describe('space memory session context', () => {
     expect(session.send.mock.calls[0][0]).not.toMatch(/## Memory|Your History author tag|Running right now|No other instance/)
   })
 })
+
+
+describe('Rust engine slash command admission', () => {
+  it.each(['halo', 'cc'])('preserves a leading command on %s without changing other engine input', async engine => {
+    m.engineId = engine;
+    m.memoryEnabled = false;
+    await sendMessage({ spaceId: 's', conversationId: 'conv-1', message: '/compact preserve the latest constraint' });
+    const sent = session.send.mock.calls[0][0];
+    if (engine === 'halo') expect(sent).toBe('/compact preserve the latest constraint');
+    else expect(sent).toBe('<halo_canvas>c</halo_canvas>\n\n/compact preserve the latest constraint');
+    expect(m.addMessage.mock.calls[0][2].content).toBe('/compact preserve the latest constraint');
+  });
+});

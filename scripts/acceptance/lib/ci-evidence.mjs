@@ -13,6 +13,12 @@ const now = () => new Date().toISOString()
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right)
 const within = (parent, child) => { const part = path.relative(parent, child); return part === '' || (!path.isAbsolute(part) && part !== '..' && !part.startsWith('..' + path.sep)) }
 const posix = value => value.split(path.sep).join('/')
+const transientClusterProfile = /^run\/cluster\/[^/]+\/profiles(?:\.prev)?(?:\/|$)/
+
+// Cluster profiles are disposable application state, not test evidence; interrupted runs can leave symlinks there.
+export function isTransientClusterProfile(value) {
+  return transientClusterProfile.test(value)
+}
 
 function fail(message, code = 'EVIDENCE_UNSETTLED') { throw Object.assign(new Error(message), { code }) }
 
@@ -270,7 +276,7 @@ function inventory(directory) {
   function visit(folder) {
     for (const entry of fs.readdirSync(folder, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const file = path.join(folder, entry.name), name = posix(path.relative(root, file))
-      if (name === freezeFilename) continue
+      if (name === freezeFilename || isTransientClusterProfile(name)) continue
       const before = fs.lstatSync(file)
       if (before.isSymbolicLink()) fail('Evidence payload links cannot be frozen', 'EVIDENCE_CHANGED')
       if (before.isDirectory()) { directories.push(name); visit(file); continue }

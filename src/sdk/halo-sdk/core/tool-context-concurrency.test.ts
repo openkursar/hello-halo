@@ -3,10 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate as tick } from 'node:timers/promises';
-import { queryLoop } from './query-loop.js';
-import { resolveQueryConfig } from './context.js';
-import { createSdkMcpServer, tool } from '../tools/mcp/sdk-server.js';
-import { extractSdkMcpTools } from '../tools/mcp/bridge.js';
+import { queryLoop, resolveQueryConfig, createSdkMcpServer, tool, extractSdkMcpTools } from '../index.js';
 import type { Tool } from '../types/tool.js';
 import type { Options } from '../types/config.js';
 import type { LlmProvider, ProviderRequest, StreamEvent } from '../types/provider.js';
@@ -149,7 +146,12 @@ describe('wrapped calls use the real tool scheduler', () => {
   it('uses permission-adjusted input for concurrency while preserving original wrapper arguments', async () => {
     const first = gate(); const second = gate(); const finishFirst = gate(); const finishSecond = gate();
     const order: string[] = [];
-    const check = vi.fn((input: Record<string, unknown>) => input.mode === 'read');
+    let checkedSecond!: () => void;
+    const secondChecked = new Promise<void>(resolve => { checkedSecond = resolve; });
+    const check = vi.fn((input: Record<string, unknown>) => {
+      if (input.label === 'two' && input.mode === 'write') checkedSecond();
+      return input.mode === 'read';
+    });
     const pool = tools(async input => {
       order.push(`${input.label}:${input.mode}`);
       (input.label === 'one' ? first : second).release();
@@ -158,8 +160,9 @@ describe('wrapped calls use the real tool scheduler', () => {
     const current = await harness(pool, async function* () { yield* wrapped(0, 'one', 'one'); yield* wrapped(1, 'two', 'two'); }, {
       canUseTool: async (name, input) => ({ behavior: 'allow', updatedInput: name === real() && input.label === 'two' ? { mode: 'write' } : {} }),
     });
-    await reached(first.promise); await tick();
+    await reached(first.promise);
     expect(order).toEqual(['one:read']);
+    await reached(secondChecked);
     expect(check.mock.calls.some(([input]) => input.label === 'two' && input.mode === 'write')).toBe(true);
     finishFirst.release(); await reached(second.promise); finishSecond.release();
     expect((await current.task).at(-1)).toMatchObject({ is_error: false });

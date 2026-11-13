@@ -1,0 +1,54 @@
+{
+  "tools.ask.missing_questions": {
+    "text": "Missing required parameter: questions (must be a non-empty array)",
+    "slots": []
+  },
+  "tools.ask.missing_question": {
+    "text": "Each question must have a \"question\" string field",
+    "slots": []
+  },
+  "tools.ask.missing_options": {
+    "text": "Question \"{question}\" must have at least 2 options",
+    "slots": [
+      "question"
+    ]
+  },
+  "tools.ask.duplicate": {
+    "text": "Use distinct question text for each answer-map key and distinct option labels within each question.",
+    "slots": []
+  },
+  "tools.ask.decisions": {
+    "text": "The user supplied these decisions:",
+    "slots": []
+  },
+  "tools.ask.question": {
+    "text": "Question: {question}",
+    "slots": [
+      "question"
+    ]
+  },
+  "tools.ask.answer": {
+    "text": "Answer: {answer}",
+    "slots": [
+      "answer"
+    ]
+  },
+  "tools.ask.feedback": {
+    "text": "Additional feedback: {notes}",
+    "slots": [
+      "notes"
+    ]
+  },
+  "tools.ask.preview": {
+    "text": "Chosen preview:\n{preview}",
+    "slots": [
+      "preview"
+    ]
+  },
+  "tools.ask.waiting": {
+    "text": "Waiting for user response to: {questions}",
+    "slots": [
+      "questions"
+    ]
+  }
+}

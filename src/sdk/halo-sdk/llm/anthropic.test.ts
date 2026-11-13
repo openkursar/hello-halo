@@ -570,6 +570,129 @@ describe('buildRequestBody', () => {
   });
 });
 
+describe('final request cache budget', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const events = textSseEvents('Cache response', 'claude-test', 17, 9);
+    fetchMock.mockImplementation(() => Promise.resolve(makeAnthropicSseResponse([
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg-001', model: 'claude-test', content: [],
+          usage: { input_tokens: 17, output_tokens: 1, cache_creation_input_tokens: 23, cache_read_input_tokens: 31 },
+        },
+      },
+      ...events.slice(1),
+    ])));
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  const cases = [1, 4, 6].flatMap(systemBlocks =>
+    [false, true].flatMap(tools =>
+      [false, true].flatMap(hostPrefix =>
+        [false, true].map(skipCacheWrite => ({ systemBlocks, tools, hostPrefix, skipCacheWrite })),
+      ),
+    ),
+  );
+
+  async function checkRequest(
+    { systemBlocks, tools, hostPrefix, skipCacheWrite }: typeof cases[number],
+    { enableCaching = true, carriedMarkers = false } = {},
+  ) {
+    const marker = { type: 'ephemeral' as const };
+    const systemPrompt = Array.from({ length: systemBlocks }, (_, index) => ({
+      type: 'text' as const, text: `System ${index}`,
+    }));
+    const messages: Message[] = Array.from({ length: 5 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: [
+        { type: 'text' as const, text: `Message ${index}`, ...(carriedMarkers ? { cache_control: marker } : {}) },
+        ...(index % 2 === 1 ? [{ type: 'thinking' as const, thinking: `Thought ${index}`, signature: `signature-${index}` }] : []),
+      ],
+    }));
+    const prefix = { type: 'text' as const, text: 'Host prefix', cache_control: marker };
+    const request = baseRequest({
+      systemPrompt,
+      messages,
+      tools: tools ? [
+        { name: 'lookup', description: 'Look up a record', input_schema: { type: 'object', properties: {} } },
+        { name: 'read_file', description: 'Read a file', input_schema: { type: 'object', properties: {} } },
+      ] : [],
+      providerOptions: { enableCaching, skipCacheWrite },
+    });
+    const original = structuredClone({ request, prefix });
+    const result = await makeProvider({
+      ...(hostPrefix ? { requestIdentity: { systemPrefix: () => prefix } } : {}),
+    }).createMessage(request);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(options.body as string);
+    const markedPaths: string[] = [];
+    function withoutMarkers(value: unknown, path = ''): unknown {
+      if (Array.isArray(value)) return value.map((item, index) => withoutMarkers(item, `${path}[${index}]`));
+      if (value === null || typeof value !== 'object') return value;
+      return Object.fromEntries(Object.entries(value).flatMap(([key, item]) => {
+        if (key === 'cache_control') {
+          markedPaths.push(path);
+          expect(item).toEqual(marker);
+          return [];
+        }
+        return [[key, withoutMarkers(item, path ? `${path}.${key}` : key)]];
+      }));
+    }
+    const content = withoutMarkers(body);
+    expect(markedPaths.length).toBeLessThanOrEqual(4);
+    expect(content).toEqual({
+      model: 'claude-test', max_tokens: 1024, stream: true, temperature: 1,
+      system: [...(hostPrefix ? [{ type: 'text', text: prefix.text }] : []), ...systemPrompt],
+      messages: messages.map(message => ({
+        ...message,
+        content: (message.content as ContentBlock[]).map(block => {
+          const { cache_control: omitted, ...rest } = block as ContentBlock & { cache_control?: unknown };
+          void omitted;
+          return rest;
+        }),
+      })),
+      ...(tools ? { tools: request.tools } : {}),
+    });
+    if (enableCaching) {
+      const systemIndex = (hostPrefix ? 1 : 0) + (systemBlocks === 1 ? 0 : systemBlocks - 2);
+      expect(markedPaths).toContain(`system[${systemIndex}]`);
+      if (systemBlocks > 1) expect(body.system.at(-1)).not.toHaveProperty('cache_control');
+      if (tools) expect(markedPaths).toContain('tools[1]');
+      expect(markedPaths).toContain(`messages[${skipCacheWrite ? 3 : 4}].content[0]`);
+      if (skipCacheWrite && !carriedMarkers) expect(body.messages[4].content[0]).not.toHaveProperty('cache_control');
+      expect(body.messages[3].content[1]).not.toHaveProperty('cache_control');
+    } else {
+      expect(markedPaths).toEqual([]);
+    }
+    expect({ request, prefix }).toEqual(original);
+    expect(result.content).toEqual([{ type: 'text', text: 'Cache response' }]);
+    expect(result.stopReason).toBe('end_turn');
+    expect(result.usage).toEqual({
+      input_tokens: 17, output_tokens: 9, cache_creation_input_tokens: 23, cache_read_input_tokens: 31,
+    });
+  }
+
+  it.each(cases)(
+    'caps the wire body with $systemBlocks system blocks, tools=$tools, hostPrefix=$hostPrefix, skipCacheWrite=$skipCacheWrite',
+    async testCase => checkRequest(testCase),
+  );
+
+  it.each([false, true])('budgets carried history markers with skipCacheWrite=%s', async skipCacheWrite => {
+    await checkRequest({ systemBlocks: 6, tools: true, hostPrefix: true, skipCacheWrite }, { carriedMarkers: true });
+  });
+
+  it('does not add markers when caching is disabled', async () => {
+    await checkRequest({ systemBlocks: 6, tools: true, hostPrefix: false, skipCacheWrite: false }, { enableCaching: false });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // normalizeMessages (tested via request body inspection)
 // ---------------------------------------------------------------------------

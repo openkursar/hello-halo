@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { queryLoop } from './query-loop.js';
-import { resolveQueryConfig } from './context.js';
+import { queryLoop, resolveQueryConfig } from '../index.js';
 import type { SDKMessage } from './query-types.js';
 import type { LlmProvider, ProviderRequest, StreamEvent, ToolResultBlock } from '../types/provider.js';
 import type { Tool } from '../types/tool.js';

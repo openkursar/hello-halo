@@ -1,0 +1,6 @@
+{
+  "tools.code_search.unavailable": {
+    "text": "Code search is unavailable. Use Grep for exact searches.",
+    "slots": []
+  }
+}

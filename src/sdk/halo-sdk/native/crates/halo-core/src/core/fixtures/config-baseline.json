@@ -1,0 +1,628 @@
+{
+  "node": "v22.18.0",
+  "cases": [
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "systemPrompt": ""
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":\"\",\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": null
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        }
+      },
+      "error": {
+        "name": "Error",
+        "message": "Options.model is required; the SDK does not pick a model on its own."
+      }
+    },
+    {
+      "options": {
+        "model": null,
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        }
+      },
+      "error": {
+        "name": "Error",
+        "message": "Options.model is required; the SDK does not pick a model on its own."
+      }
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "thinking": {
+          "type": "enabled",
+          "budgetTokens": 4096
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"enabled\",\"budgetTokens\":4096},\"thinkingExplicit\":true,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxThinkingTokens": 20
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"enabled\",\"budgetTokens\":20},\"thinkingExplicit\":true,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxThinkingTokens": 20,
+        "adaptiveThinking": true
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"adaptive\"},\"thinkingExplicit\":true,\"adaptiveThinking\":true,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxThinkingTokens": null
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":true,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "thinking": null,
+        "maxThinkingTokens": 0
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":true,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "effort": "low"
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"low\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "turnEndChecks": {
+          "completion": true
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":true}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "turnEndChecks": null
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "conventions": {
+          "agentDirs": [
+            ".custom"
+          ],
+          "configDirEnv": "CUSTOM_CONFIG"
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".custom\"],\"configDirEnv\":\"CUSTOM_CONFIG\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "conventions": {
+          "memoryFiles": {
+            "__haloSdkNativeUndefined": true
+          }
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "skillCatalog": []
+      },
+      "expected": "{\"skillCatalog\":[],\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "skillCatalog": null
+      },
+      "error": {
+        "name": "TypeError",
+        "message": "Invalid skillCatalog entry -1: expected an array"
+      }
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "skillCatalog": [
+          {
+            "name": "commit.md",
+            "description": "Explicit",
+            "source": {
+              "kind": "builtin",
+              "name": "commit"
+            }
+          }
+        ]
+      },
+      "expected": "{\"skillCatalog\":[{\"name\":\"commit\",\"description\":\"Explicit\",\"source\":{\"kind\":\"builtin\",\"name\":\"commit\"}}],\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "toolDiscovery": {
+          "services": {
+            "local": {
+              "identity": "Fixture",
+              "loading": "deferred",
+              "summary": {
+                "__haloSdkNativeUndefined": true
+              },
+              "usageGuide": {
+                "__haloSdkNativeUndefined": true
+              },
+              "toolOverrides": {
+                "__haloSdkNativeUndefined": true
+              }
+            }
+          }
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"toolDiscovery\":{\"services\":{\"local\":{\"identity\":\"Fixture\",\"loading\":\"deferred\"}}},\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "toolDiscovery": {
+          "services": {
+            "local": {
+              "identity": "",
+              "loading": "eager"
+            }
+          }
+        }
+      },
+      "error": {
+        "name": "TypeError",
+        "message": "Invalid tool discovery service policy"
+      }
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "toolDiscovery": null
+      },
+      "error": {
+        "name": "TypeError",
+        "message": "toolDiscovery requires a services object"
+      }
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "disallowedTools": [
+          "Read(./private/**)",
+          "Read(../secret.txt)",
+          "Bash"
+        ]
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"disallowedTools\":[\"Read(./private/**)\",\"Read(../secret.txt)\",\"Bash\"],\"readDenyRoots\":[\"/fixture/project/private\",\"/fixture/secret.txt\"],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "codeSearch": {
+          "cachePath": "relative"
+        }
+      },
+      "error": {
+        "name": "TypeError",
+        "message": "CodeSearch cachePath must be an absolute path to a dedicated cache directory"
+      }
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "codeSearch": {
+          "cachePath": "/fixture/project/cache"
+        }
+      },
+      "error": {
+        "name": "TypeError",
+        "message": "CodeSearch cachePath must be a dedicated directory outside the workspace, not a home or shared temporary directory"
+      }
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "codeSearch": {
+          "cachePath": "/tmp"
+        }
+      },
+      "error": {
+        "name": "TypeError",
+        "message": "CodeSearch cachePath must be a dedicated directory outside the workspace, not a home or shared temporary directory"
+      }
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "codeSearch": {
+          "cachePath": "/fixture/cache"
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[\"/fixture/cache\"],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "contextWindow": 0
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxOutputTokens": 0
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxBudgetUsd": 0
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":0,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "contextWindow": -1
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxOutputTokens": -1
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxBudgetUsd": -1
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":-1,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "contextWindow": 1
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":1,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxOutputTokens": 1
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":1,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxBudgetUsd": 1
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":1,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "contextWindow": {
+          "__haloSdkNativeNumber": "NaN"
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxOutputTokens": {
+          "__haloSdkNativeNumber": "NaN"
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxBudgetUsd": {
+          "__haloSdkNativeNumber": "NaN"
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "contextWindow": {
+          "__haloSdkNativeNumber": "Infinity"
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":null,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxOutputTokens": {
+          "__haloSdkNativeNumber": "Infinity"
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":null,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxBudgetUsd": {
+          "__haloSdkNativeNumber": "Infinity"
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "contextWindow": {
+          "__haloSdkNativeNumber": "-Infinity"
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxOutputTokens": {
+          "__haloSdkNativeNumber": "-Infinity"
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    },
+    {
+      "options": {
+        "model": "fixture",
+        "cwd": "/fixture/project",
+        "env": {
+          "HOME": "/fixture/home",
+          "CLAUDE_CONFIG_DIR": "/fixture/state"
+        },
+        "maxBudgetUsd": {
+          "__haloSdkNativeNumber": "-Infinity"
+        }
+      },
+      "expected": "{\"model\":\"fixture\",\"maxTokens\":16384,\"contextWindow\":200000,\"maxTurns\":100,\"maxBudgetUsd\":null,\"modelPricing\":{},\"cwd\":\"/fixture/project\",\"env\":{\"HOME\":\"/fixture/home\",\"CLAUDE_CONFIG_DIR\":\"/fixture/state\"},\"systemPrompt\":{\"type\":\"preset\",\"preset\":\"default\"},\"thinking\":{\"type\":\"disabled\"},\"thinkingExplicit\":false,\"adaptiveThinking\":false,\"effort\":\"high\",\"toolResultBudget\":50000,\"includePartialMessages\":false,\"permissionMode\":\"default\",\"readDenyRoots\":[],\"conventions\":{\"memoryFiles\":[\"AGENTS.md\",\"CLAUDE.md\"],\"memorySubdirs\":[\"\",\".agents\",\".claude\"],\"agentDirs\":[\".agents\",\".claude\"],\"configDirEnv\":\"CLAUDE_CONFIG_DIR\",\"userConfigDirName\":\".claude\"},\"toolCallingMode\":\"native\",\"turnEndChecks\":{\"openWork\":true,\"completion\":false}}"
+    }
+  ]
+}

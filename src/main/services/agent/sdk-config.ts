@@ -606,6 +606,7 @@ export function computeSessionInputsFingerprint(sdkOptions: Record<string, any>)
     ? String(sdkOptions.extraArgs['dangerously-skip-permissions'] ?? '')
     : ''
   const inputs = [mcpKeys, prompt, permissionMode, disallowed, allowed, skipPermissions]
+  if (sdkOptions.systemPromptSnapshot === false) inputs.push('systemPromptSnapshot:false')
   const discovery = toolDiscoveryFingerprint(sdkOptions)
   if (discovery) inputs.push(discovery)
   const material = inputs.join('\u0000')
@@ -944,8 +945,8 @@ const unpricedModelsLogged = new Set<string>()
  * SDK options for a session the user is running: space chat, digital-human
  * chat, an automation run, a team member's turn.
  *
- * The user's global AI settings (`maxTurns`, `disabledTools`, `promptProfile`,
- * `digitalHumansEnabled`) are read here, never passed in — see
+ * The user's global AI settings (`maxTurns`, `disabledTools`)
+ * are read here, never passed in — see
  * user-agent-settings.ts. Callers add their own MCP servers, hooks and prompt
  * on the returned options.
  *
@@ -960,7 +961,7 @@ export async function buildUserSessionSdkOptions(
 /**
  * SDK options for a background task the user did not ask for by name (memory
  * consolidation, team member proposals). It gets the built-in defaults, not
- * the user's tool restrictions, turn cap or prompt style: those describe how
+ * the user's tool restrictions or turn cap: those describe how
  * the user wants THEIR sessions to behave, and the caller of an internal task
  * sets whatever it needs on top.
  */
@@ -990,7 +991,7 @@ async function assembleSdkOptions(
   } = params
 
   console.log(`[SDK Config] assembleSdkOptions: workDir="${workDir}", spaceId="${spaceId}"`)
-  console.debug(`[SDK Config] assembleSdkOptions details: model=${credentials.sdkModel}, displayModel=${credentials.displayModel}, maxTurns=${settings.maxTurns}, promptProfile=${settings.promptProfile}, disabledTools=[${(settings.disabledTools || []).join(', ')}]`)
+  console.debug(`[SDK Config] assembleSdkOptions details: model=${credentials.sdkModel}, displayModel=${credentials.displayModel}, maxTurns=${settings.maxTurns}, disabledTools=[${(settings.disabledTools || []).join(', ')}]`)
 
   // Best-effort: a session still works without Halo's self-API if the loopback
   // listener fails to start (e.g. no port available), just without that capability.
@@ -1034,21 +1035,11 @@ async function assembleSdkOptions(
     stderr: stderrHandler || ((data: string) => {
       console.error(`[Agent][${conversationId}] CLI stderr:`, data)
     }),
-    // Halo's custom system prompt, or on the halo engine Halo's context appended
-    // to the engine's own default (see system-prompt.ts). The capability index
-    // advertises optional toolsets (agent/toolsets) the AI can ask the user to
-    // enable; full tool schemas enter context only once the
-    // toolset is enabled and the session is rebuilt. AI Browser is one such
-    // on-demand toolset here, so no aiBrowserEnabled branch. The Knowledge
-    // section is appended at actual session creation (getOrCreateV2Session's
-    // resolveKnowledgeBases) so a reused session never pays the index reads.
+    // Resolve knowledge at session creation, not while building base options.
     systemPrompt: toEngineSystemPrompt(buildSystemPrompt({
       engineId,
       workDir,
       modelInfo: credentials.displayModel,
-      // Stated, never left open: an open value makes the prompt builder read config again.
-      promptProfile: settings.promptProfile ?? 'halo',
-      digitalHumansEnabled: settings.digitalHumansEnabled,
       toolsetIndex: params.toolsetIndex
     }) + (params.memoryInstructions ? `\n\n${params.memoryInstructions}` : ''), engineId),
     maxTurns: settings.maxTurns ?? DEFAULT_MAX_TURNS,

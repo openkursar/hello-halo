@@ -17,6 +17,29 @@ import { createSdkMcpServer, tool } from '../../../../../src/main/services/agent
 import { SdkMcpBridge } from '../../../../../src/main/services/agent/mcp/sdk-bridge'
 
 describe('createSdkMcpServer', () => {
+  it('preserves service metadata on the descriptor and executable instance', () => {
+    const metadata = {
+      description: 'Read and update session memory',
+      instructions: 'Read existing facts before storing a new fact.\nKeep facts concise.',
+    }
+    const server = createSdkMcpServer({ name: 'memory', version: '2.0.0', ...metadata })
+
+    expect(server).toMatchObject({ type: 'sdk', name: 'memory', ...metadata })
+    expect(server.instance).toMatchObject({ name: 'memory', version: '2.0.0', ...metadata })
+    expect(server.instance.listTools()).toEqual([])
+  })
+
+  it('keeps metadata optional and preserves default version and empty tools', () => {
+    const server = createSdkMcpServer({ name: 'memory' })
+
+    expect(server.description).toBeUndefined()
+    expect(server.instructions).toBeUndefined()
+    expect(server.instance.description).toBeUndefined()
+    expect(server.instance.instructions).toBeUndefined()
+    expect(server.instance.version).toBe('1.0.0')
+    expect(server.instance.listTools()).toEqual([])
+  })
+
   it('runs the handler the tool was declared with', async () => {
     const handler = vi.fn(async () => ({ content: [{ type: 'text', text: 'ran' }] }))
     const server = createSdkMcpServer({

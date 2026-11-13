@@ -19,10 +19,74 @@ promises:
   core-api:
     en: Operate Halo is a core capability. Its API guide and scoped runtime credentials are available from the first turn without a human enablement step.
     zh: 操作 Halo 是核心能力；API 指南与限定作用域的运行凭据从第一轮即可使用，无需人工启用。
+  on-demand-context:
+    en: Ordinary native conversations carry only a concise browser and terminal directory. Requested operations receive complete definitions and service guidance through discovery before execution without changing the fixed tool declaration prefix.
+    zh: 普通原生对话只携带简短浏览器和终端目录；请求操作时，执行前通过发现获得完整工具定义与服务指引，固定工具声明前缀不变。
   compatibility:
     en: Core capabilities remain available in legacy and other-engine conversations; explicit tool restrictions and caller policies remain effective.
     zh: 旧会话及其他引擎会话同样可使用核心能力；明确的工具禁用和调用者策略继续生效。
 scenarios:
+  - id: chat.capabilities.ordinary-context
+    title:
+      en: Keep ordinary conversation free of unused browser and terminal definitions
+      zh: 普通对话不加载无关浏览器与终端定义
+    verifies: [on-demand-context, core-api, automatic]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - An isolated native conversation uses the local scripted model.
+    steps:
+      - Send an ordinary arithmetic question and inspect the actual provider request.
+    expected:
+      - Browser and terminal service names remain discoverable without their full schemas or long workflow chapters.
+      - No discovery or enablement call is added for the ordinary task.
+      - Documentation, Halo API and collaboration tools remain eagerly advertised.
+    notes: Binding prepared for actual app execution; discovery alone is not runtime evidence. The scripted arithmetic response does not establish live-model tool selection quality.
+  - id: chat.capabilities.browser-discovery
+    title:
+      en: Discover browser guidance before navigating and repeatedly editing a local page
+      zh: 导航前发现浏览器指引并反复编辑本地页面
+    verifies: [on-demand-context, automatic]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - A fresh isolated app uses a controlled loopback page and local scripted model.
+    steps:
+      - Discover navigation, open the page before taking a snapshot, fill Draft, resnapshot, replace Draft and resnapshot again.
+    expected:
+      - Actual model requests receive complete discovered definitions and full service guidance before execution.
+      - Both edited values appear in the real page snapshots.
+      - Tool declarations and the system prefix remain fixed, and service guidance is not duplicated by later discoveries.
+      - No capability switch or enablement request is needed.
+    notes: Native ordinary-chat scope only; no external engine, digital-human browser journey or live-model selection claim. Prepared binding is not runtime proof until executed.
+  - id: chat.capabilities.terminal-discovery
+    title:
+      en: Discover terminal guidance and finish an isolated pty lifecycle
+      zh: 发现终端指引并完成独立终端生命周期
+    verifies: [on-demand-context, automatic]
+    platforms: [darwin]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - A fresh isolated app uses the local scripted model and a POSIX shell.
+    steps:
+      - Discover tools, create an owned terminal, print a marker, read the screen, kill that session and inspect remaining sessions.
+    expected:
+      - Complete definitions and service guidance reach the actual model request before terminal operations.
+      - The real terminal write and screen read both contain the marker, and the created terminal is removed after termination.
+      - Fixed declarations are reused without duplicate service guidance or an enablement request.
+    notes: macOS POSIX native ordinary-chat lifecycle only; Linux terminal support, Windows shell syntax and live-model quality are outside this binding. Isolated profile contains no production terminals, credentials or recipients. Prepared binding is not runtime proof until executed.
   - id: chat.capabilities.automatic
     title:
       en: Create a collaborator without a capability enablement request

@@ -1,89 +1,36 @@
-/**
- * An engine whose runtime writes its own tool guidance (dsh) gets Halo's
- * layers only — identity, behavior, environment. Sending it Claude Code's
- * template would tell the model it is "built with Claude Code" and point it at
- * TodoWrite, AskUserQuestion and Task, names its runtime never registered.
- *
- * Claude Code, Codex and the halo engine are covered by
- * system-prompt-engine.test.ts and must not change.
- */
-
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-const engine = vi.hoisted(() => ({ id: 'dsh' as string | null }))
-
-vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
-  getDefaultEngine: () => engine.id, resolveDefaultEngine: async () => engine.id,
-}))
-
+import { describe, expect, it } from 'vitest'
 import { buildSystemPrompt } from '../../../../src/main/services/agent/system-prompt'
 
-const baseCtx = { workDir: '/tmp/w', modelInfo: 'test-model', promptProfile: 'halo' as const }
+const engines = ['anthropic', 'halo', 'codex', 'dsh'] as const
+const baseCtx = { workDir: '/tmp/w' }
 
-/** What only Halo can tell the model, whichever runtime answers. */
-const IDENTITY_MARKERS = [
-  'You are Halo',
-  "inform them of Halo's capabilities",
-  '# Tone and style',
-  '# Professional objectivity',
-  '# Output efficiency',
-  '# Halo Directory Structure',
-  'Working directory: /tmp/w',
-]
-
-/** Tool names that belong to Claude Code's registrations, not to every engine. */
-const CC_TOOL_MARKERS = ['TodoWrite', 'AskUserQuestion', 'Give each collaborator the context']
-
-describe('buildSystemPrompt on an engine with its own agent guidance', () => {
-  beforeEach(() => {
-    engine.id = 'dsh'
-  })
-
-  it('withholds Claude Code tool guidance', () => {
-    const prompt = buildSystemPrompt(baseCtx)
-    for (const marker of CC_TOOL_MARKERS) {
-      expect(prompt, `leaked "${marker}"`).not.toContain(marker)
+describe('shared Halo product layer', () => {
+  it.each(engines)('keeps native behavior and tool manuals out of host context on %s', engineId => {
+    const prompt = buildSystemPrompt({ ...baseCtx, engineId, today: '2026-01-02', modelInfo: 'test-model' })
+    for (const marker of ['Claude Code', 'TodoWrite', 'AskUserQuestion', 'WebFetch', '<env>', 'Working directory:', 'test-model', '2026-01-02', '# Tone and style', 'without requiring user approval', '# Web research', 'If the user asks for help', 'General Assistance:', 'Halo Digital Humans:']) {
+      expect(prompt).not.toContain(marker)
     }
-    expect(prompt).not.toContain('without requiring user approval')
+    expect(prompt).toContain('Use `read_halo_doc` for Halo product guidance')
+    expect(prompt).toContain('Current tools and permissions determine what you can do')
+    expect(prompt).not.toMatch(/\{\{[A-Z_]+\}\}/)
+    expect(prompt.length).toBeLessThan(1400)
   })
 
-  it('keeps identity and environment', () => {
-    const prompt = buildSystemPrompt(baseCtx)
-    for (const marker of IDENTITY_MARKERS) {
-      expect(prompt, `missing "${marker}"`).toContain(marker)
-    }
-  })
-
-  it('never tells the model it is Claude Code', () => {
-    expect(buildSystemPrompt(baseCtx)).not.toContain('Claude Code')
-  })
-
-  it('carries the session bindings', () => {
-    // Knowledge bases and optional toolsets are Halo's alone to declare; no
-    // runtime can discover them, so they must survive the narrower layering.
-    const prompt = buildSystemPrompt({
-      ...baseCtx,
-      toolsetIndex: '## AI Terminal\nterminal guide',
+  it('uses exactly the same host text across engines with identical bindings', () => {
+    const prompts = engines.map(engineId => buildSystemPrompt({ ...baseCtx, engineId,
+      ownIdentity: 'app-instructions',
+      toolsetIndex: '## Available capability\nfixture guide',
       knowledgeBases: [{ id: 'kb-1', name: 'PCB Survey', indexContent: '## docs' }],
-    })
-    expect(prompt).toContain('## AI Terminal')
-    expect(prompt).toContain('# Knowledge')
-    expect(prompt).toContain('## PCB Survey')
+    }))
+    expect(new Set(prompts).size).toBe(1)
+    expect(prompts[0]).toContain('## Available capability')
+    expect(prompts[0]).toContain('## PCB Survey')
   })
 
-  it('applies the profile choice', () => {
-    expect(buildSystemPrompt(baseCtx)).toContain('# Web Research')
-    expect(buildSystemPrompt({ ...baseCtx, promptProfile: 'official' })).not.toContain('# Web Research')
-  })
-
-  it('leaves no placeholder unresolved', () => {
-    expect(buildSystemPrompt(baseCtx)).not.toMatch(/\{\{[A-Z_]+\}\}/)
-  })
-
-  it('preserves the Claude Code tool policy while removing native delegation guidance', () => {
-    engine.id = 'anthropic'
+  it('does not assume that a product feature is mounted or give a normal chat App Instructions', () => {
     const prompt = buildSystemPrompt(baseCtx)
-    expect(prompt.startsWith('You are Halo, an AI assistant built with Claude Code.')).toBe(true)
-    for (const marker of CC_TOOL_MARKERS) expect(prompt).toContain(marker)
+    expect(prompt).not.toContain('Halo Digital Humans:')
+    expect(prompt).not.toContain('App Instructions')
+    expect(prompt).toContain("You are Halo, the AI assistant in Halo's chat.")
   })
 })

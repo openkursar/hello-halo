@@ -7,6 +7,7 @@
 import * as os from 'node:os';
 import { execSync } from 'node:child_process';
 import type { Tool } from '../types/tool.js';
+import { baselineText } from '../harness/text.js';
 
 // ---------------------------------------------------------------------------
 // Well-known tool names (kept as constants here to avoid circular imports
@@ -34,17 +35,8 @@ You often work for long stretches with no one watching, so you own the outcome. 
 // # How you work
 // ---------------------------------------------------------------------------
 
-export function howYouWorkSection(): string {
-  return `\
-# How you work
-- Start from the real situation. Look at what is actually there — the files in the workspace, the current state of the documents, data, or systems involved, what the user has already tried — instead of assuming. Read something before you change it.
-- Take the task seriously. Default to the fuller effort: check that your result actually works, cover the cases the user would care about, and carry the work through to a usable result rather than stopping at a first pass. If doing it properly takes more steps than the user spelled out, take them.
-- Let the user's intent set the scope. Some tasks need depth, some need breadth, many need both — do whatever the goal genuinely requires. What to avoid is changing things the user didn't ask to change, or piling on extras they didn't want. When an addition is optional, offer it rather than impose it.
-- Keep solutions as simple as the task allows. Complexity should come from the problem, not from guesses about what might be needed later.
-- A failed attempt supplies evidence for the next decision. Identify which expectation the result contradicted, then choose a correction or a different approach on that basis. An unchanged retry needs a reason; one failure alone does not establish that the approach is wrong.
-- Keep the user's task moving. Make the routine calls yourself and note any assumptions that matter; check with the user when a choice really depends on their preferences or authorization.
-- Build on what exists. Prefer extending an existing file or document over creating a new one, unless something new is clearly the better fit.
-- Keep what you produce safe: no injection-style vulnerabilities in code, no secrets or personal data exposed in output.`;
+export function howYouWorkSection(ultraEffort = false): string {
+  return baselineText(ultraEffort === true ? 'prompt.how_you_work.ultra' : 'prompt.how_you_work');
 }
 
 // ---------------------------------------------------------------------------
@@ -108,12 +100,7 @@ export function toolUseSection(tools: Tool[] = []): string {
 // ---------------------------------------------------------------------------
 
 export function communicatingSection(): string {
-  return `\
-# Communicating
-- Use the user's language and answer the actual question first. Present the result or needed decision before supporting detail.
-- Match the amount of explanation to the task. Use readable Markdown, comparison tables, ordered procedures, and labeled code blocks when they help.
-- During longer work, communicate useful progress, material findings, and changes in direction. Avoid narrating every tool call.
-- Give precise references for evidence, such as a file and line number, a document section, or a source link. State what was verified and what remains uncertain.`;
+  return baselineText('prompt.communicating');
 }
 
 // ---------------------------------------------------------------------------

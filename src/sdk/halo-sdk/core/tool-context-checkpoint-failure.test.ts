@@ -3,12 +3,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate as tick } from 'node:timers/promises';
-import { queryLoop } from './query-loop.js';
+import { queryLoop } from '../index.js';
 import { resolveQueryConfig } from './context.js';
 import { AssistantHistoryRecorder } from './assistant-history.js';
 import { createSdkMcpServer, tool } from '../tools/mcp/sdk-server.js';
 import { extractSdkMcpTools } from '../tools/mcp/bridge.js';
-import { readToolContextSnapshot } from './tool-context/index.js';
 import type { ContentBlock, Message, LlmProvider, StreamEvent } from '../types/provider.js';
 import type { SDKAssistantMessage, SDKMessage } from './query-types.js';
 import type { Tool } from '../types/tool.js';
@@ -22,6 +21,8 @@ function* call(index: number, id: string, name: string, input: Record<string, un
   yield { type: 'content_block_stop', index };
 }
 
+// The checkpoint failure is injected through the host recorder callback. A failing journal write
+// is covered by core::engine::persistence_tests::checkpoint_write_failure_preserves_live_and_persisted_history.
 describe('partial tool-context checkpoint failure', () => {
   it.each(['wrapped', 'rejected-wrapper', 'eager'] as const)('retains only committed IDs when a later %s checkpoint fails', async failure => {
     const cwd = await mkdtemp(join(tmpdir(), 'partial-tool-context-')); directories.push(cwd);
@@ -85,8 +86,9 @@ describe('partial tool-context checkpoint failure', () => {
     expect(retained.toolContext?.calls?.map(call => call.id)).toEqual(['committed']);
     expect(retained.toolContext?.directCalls ?? []).toEqual([]);
     expect(retained.toolContext?.rejectedCalls ?? []).toEqual([]);
-    expect(() => readToolContextSnapshot(ownerHistory)).not.toThrow();
-    expect(readToolContextSnapshot(ownerHistory)?.definitions.map(item => item.definition.name)).toEqual([target]);
+    const definitions = ownerHistory.flatMap(message => message.toolContext?.discoveries ?? [])
+      .flatMap(discovery => discovery.definitions).map(item => item.definition.name);
+    expect(definitions).toEqual([target]);
     expect(ownerHistory.flatMap(message => Array.isArray(message.content) ? message.content : []))
       .toContainEqual(expect.objectContaining({ type: 'tool_result', tool_use_id: 'committed', content: 'Saved once.' }));
   });

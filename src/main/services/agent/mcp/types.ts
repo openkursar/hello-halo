@@ -33,6 +33,8 @@ export interface SdkMcpToolDefinition {
 export interface SdkMcpServerInstance {
   readonly name?: string
   readonly version?: string
+  readonly description?: string
+  readonly instructions?: string
   listTools(): SdkMcpToolDescriptor[]
   callTool(name: string, args: Record<string, unknown>, extra?: { signal?: AbortSignal }): Promise<unknown>
 }
@@ -41,6 +43,8 @@ export interface SdkMcpServerInstance {
 export interface SdkMcpServerConfig {
   type: 'sdk'
   name: string
+  description?: string
+  instructions?: string
   instance: SdkMcpServerInstance
 }
 

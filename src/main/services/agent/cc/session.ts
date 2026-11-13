@@ -154,6 +154,7 @@ export class CcSession {
     const result = await this.request({
       subtype: 'initialize', hooks,
       systemPrompt, appendSystemPrompt,
+      ...(this.options.systemPromptSnapshot === false ? { systemPromptSnapshot: false } : {}),
       jsonSchema: this.options.outputFormat?.schema,
     })
     delete result.agents

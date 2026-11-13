@@ -1,0 +1,10 @@
+{
+  "context.images.empty": {
+    "text": "[Image unavailable: its base64 data was empty or missing. No image was delivered. Do not claim to have viewed it; use a valid image file or request another copy.]",
+    "slots": []
+  },
+  "context.images.unavailable": {
+    "text": "[Image unavailable: this model or provider cannot accept the image input. No image was delivered. Do not claim visual inspection; use an available text/OCR tool or request a supported image or vision model.]",
+    "slots": []
+  }
+}

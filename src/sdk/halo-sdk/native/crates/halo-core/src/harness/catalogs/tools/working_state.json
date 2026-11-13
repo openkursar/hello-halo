@@ -1,0 +1,72 @@
+{
+  "tools.goal.invalid_objective": {
+    "text": "Goal objective must be a non-empty string.",
+    "slots": []
+  },
+  "tools.goal.set_requires_objective": {
+    "text": "set requires a non-empty objective.",
+    "slots": []
+  },
+  "tools.goal.no_active_update": {
+    "text": "There is no active goal to update. Use set to create one.",
+    "slots": []
+  },
+  "tools.goal.no_active_complete": {
+    "text": "There is no active goal to complete.",
+    "slots": []
+  },
+  "tools.goal.no_active_abandon": {
+    "text": "There is no active goal to abandon.",
+    "slots": []
+  },
+  "tools.goal.invalid_action": {
+    "text": "action must be one of: set, update, complete, abandon.",
+    "slots": []
+  },
+  "tools.goal.set": {
+    "text": "Goal set.",
+    "slots": []
+  },
+  "tools.goal.updated": {
+    "text": "Goal updated.",
+    "slots": []
+  },
+  "tools.goal.completed": {
+    "text": "Goal marked complete.",
+    "slots": []
+  },
+  "tools.goal.abandoned": {
+    "text": "Goal abandoned.",
+    "slots": []
+  },
+  "tools.goal.replaced": {
+    "text": "\nReplaced the previous goal: {objective}",
+    "slots": [
+      "objective"
+    ]
+  },
+  "tools.todos.missing": {
+    "text": "Missing required parameter: todos (must be an array)",
+    "slots": []
+  },
+  "tools.todos.missing_fields": {
+    "text": "Each todo must have content and status fields.",
+    "slots": []
+  },
+  "tools.todos.invalid_status": {
+    "text": "Invalid status \"{status}\": must be one of \"pending\", \"in_progress\", or \"completed\".",
+    "slots": [
+      "status"
+    ]
+  },
+  "tools.todos.completed": {
+    "text": "All todos completed — list cleared.",
+    "slots": []
+  },
+  "tools.todos.updated": {
+    "text": "Todo list updated:\n{list}\n\nContinue to keep this list current as work progresses.",
+    "slots": [
+      "list"
+    ]
+  }
+}

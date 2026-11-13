@@ -1,0 +1,326 @@
+{
+  "tools.mcp.connection_closed": {
+    "text": "MCP connection closed",
+    "slots": []
+  },
+  "tools.mcp.bridge_required": {
+    "text": "Host MCP requires the callback bridge",
+    "slots": []
+  },
+  "tools.mcp.cancelled": {
+    "text": "MCP tool request cancelled",
+    "slots": []
+  },
+  "tools.mcp.transport_closed": {
+    "text": "Transport closed",
+    "slots": []
+  },
+  "tools.mcp.missing_command": {
+    "text": "MCP stdio server requires a command",
+    "slots": []
+  },
+  "tools.mcp.unknown_mcp_tool": {
+    "text": "Unknown MCP tool",
+    "slots": []
+  },
+  "tools.mcp.not_connected": {
+    "text": "MCP server is not connected",
+    "slots": []
+  },
+  "tools.mcp.timeout": {
+    "text": "MCP request timeout: {method} (id={id})",
+    "slots": [
+      "method",
+      "id"
+    ]
+  },
+  "tools.mcp.http_error": {
+    "text": "HTTP MCP request failed: {status} {reason}",
+    "slots": [
+      "status",
+      "reason"
+    ]
+  },
+  "tools.mcp.identity_collision": {
+    "text": "MCP tool identity collision: {name}",
+    "slots": [
+      "name"
+    ]
+  },
+  "tools.mcp.request_failed": {
+    "text": "MCP request failed",
+    "slots": []
+  },
+  "tools.mcp.description_truncated": {
+    "text": "{description}... [truncated]",
+    "slots": [
+      "description"
+    ]
+  },
+  "tools.mcp.tool_not_found": {
+    "text": "MCP tool \"{tool}\" not found on server \"{server}\".",
+    "slots": [
+      "tool",
+      "server"
+    ]
+  },
+  "tools.mcp.image_missing_data": {
+    "text": "[Image dropped: invalid or missing image data ({mime})]",
+    "slots": [
+      "mime"
+    ]
+  },
+  "tools.mcp.image_invalid_mime": {
+    "text": "[Image dropped: unsupported or missing MIME type {mime}]",
+    "slots": [
+      "mime"
+    ]
+  },
+  "tools.mcp.image_limit": {
+    "text": "[Image dropped: {mime} image exceeds 5 MB of decoded data]",
+    "slots": [
+      "mime"
+    ]
+  },
+  "tools.mcp.image_invalid_base64": {
+    "text": "[Image dropped: invalid base64 image data ({mime})]",
+    "slots": [
+      "mime"
+    ]
+  },
+  "tools.mcp.image_count": {
+    "text": "[Image dropped: more than 5 images in one result]",
+    "slots": []
+  },
+  "tools.mcp.image": {
+    "text": "[Image: {mime}]",
+    "slots": [
+      "mime"
+    ]
+  },
+  "tools.mcp.sse_limit": {
+    "text": "MCP SSE event exceeded the receive limit",
+    "slots": []
+  },
+  "tools.mcp.sse_closed": {
+    "text": "MCP SSE connection closed",
+    "slots": []
+  },
+  "tools.mcp.sse_no_endpoint": {
+    "text": "SSE connection closed before announcing its endpoint",
+    "slots": []
+  },
+  "tools.mcp.sse_endpoint_timeout": {
+    "text": "SSE endpoint timed out",
+    "slots": []
+  },
+  "tools.mcp.missing_id": {
+    "text": "MCP request has no id",
+    "slots": []
+  },
+  "tools.mcp.missing_result": {
+    "text": "MCP response did not contain a matching result",
+    "slots": []
+  },
+  "tools.mcp.sse_post_error": {
+    "text": "MCP SSE POST failed: HTTP {status}",
+    "slots": [
+      "status"
+    ]
+  },
+  "tools.mcp.sse_http_error": {
+    "text": "SSE connection failed: HTTP {status}",
+    "slots": [
+      "status"
+    ]
+  },
+  "tools.mcp.disposed": {
+    "text": "MCP connection manager is disposed",
+    "slots": []
+  },
+  "tools.mcp.invalid_configuration": {
+    "text": "MCP server configuration must be an object",
+    "slots": []
+  },
+  "tools.mcp.unsupported_transport": {
+    "text": "unsupported transport type",
+    "slots": []
+  },
+  "tools.mcp.unknown_server": {
+    "text": "Unknown MCP server: {name}",
+    "slots": [
+      "name"
+    ]
+  },
+  "tools.mcp.superseded": {
+    "text": "MCP connection \"{name}\" was superseded",
+    "slots": [
+      "name"
+    ]
+  },
+  "tools.mcp.unregistered": {
+    "text": "MCP server \"{name}\" is not registered",
+    "slots": [
+      "name"
+    ]
+  },
+  "tools.mcp.unknown_tool": {
+    "text": "Unknown tool: {name}",
+    "slots": [
+      "name"
+    ]
+  },
+  "tools.mcp.server_not_connected": {
+    "text": "MCP server \"{server}\" is not connected.",
+    "slots": [
+      "server"
+    ]
+  },
+  "tools.mcp.tool_error": {
+    "text": "MCP tool error ({server}/{tool}): {error}",
+    "slots": [
+      "server",
+      "tool",
+      "error"
+    ]
+  },
+  "tools.mcp.not_replayed": {
+    "text": "{result}\nThe connection was restored. This operation was not replayed; check its effects before retrying.",
+    "slots": [
+      "result"
+    ]
+  },
+  "tools.mcp.stale_attempted": {
+    "text": "The call was not retried under the new definition. Check whether the earlier attempt took effect before repeating it.",
+    "slots": []
+  },
+  "tools.mcp.stale_not_executed": {
+    "text": "The stale call was not executed.",
+    "slots": []
+  },
+  "tools.mcp.stale": {
+    "text": "MCP tool \"{tool}\" changed or is no longer available on \"{server}\". Refresh its definition before retrying. {guidance}",
+    "slots": [
+      "tool",
+      "server",
+      "guidance"
+    ]
+  },
+  "tools.mcp.empty_result": {
+    "text": "MCP tool \"{tool}\" returned no result.",
+    "slots": [
+      "tool"
+    ]
+  },
+  "tools.mcp.handler_failed": {
+    "text": "MCP tool \"{tool}\" failed: {error}",
+    "slots": [
+      "tool",
+      "error"
+    ]
+  },
+  "tools.mcp.initialize_failed": {
+    "text": "MCP initialize failed for \"{server}\": {error}",
+    "slots": [
+      "server",
+      "error"
+    ]
+  },
+  "tools.mcp.not_initialized": {
+    "text": "MCP server \"{server}\" not initialized",
+    "slots": [
+      "server"
+    ]
+  },
+  "tools.mcp.client_tool_error": {
+    "text": "MCP tool error ({server}/{tool}): {error}",
+    "slots": [
+      "server",
+      "tool",
+      "error"
+    ]
+  },
+  "tools.mcp.tool_request_cancelled": {
+    "text": "MCP tool request cancelled",
+    "slots": []
+  },
+  "tools.mcp.stdio_not_connected": {
+    "text": "Stdio transport not connected",
+    "slots": []
+  },
+  "tools.mcp.sse_not_connected": {
+    "text": "SSE transport not connected",
+    "slots": []
+  },
+  "tools.mcp.http_not_connected": {
+    "text": "HTTP transport not connected",
+    "slots": []
+  },
+  "tools.mcp.connection_cancelled": {
+    "text": "MCP {transport} connection was cancelled",
+    "slots": [
+      "transport"
+    ]
+  },
+  "tools.mcp.connection_lost": {
+    "text": "connection lost",
+    "slots": []
+  },
+  "tools.mcp.http_timed_out": {
+    "text": "MCP HTTP request timed out",
+    "slots": []
+  },
+  "tools.mcp.http_transport_closed": {
+    "text": "MCP transport is closed",
+    "slots": []
+  },
+  "tools.mcp.http_notification_failed": {
+    "text": "MCP notification failed: {status}",
+    "slots": [
+      "status"
+    ]
+  },
+  "tools.mcp.sse_notification_failed": {
+    "text": "SSE notification failed: {status}",
+    "slots": [
+      "status"
+    ]
+  },
+  "tools.mcp.sse_connect_error": {
+    "text": "SSE connection failed: {status} {reason}",
+    "slots": [
+      "status",
+      "reason"
+    ]
+  },
+  "tools.mcp.sse_connect_timeout": {
+    "text": "SSE connection timed out",
+    "slots": []
+  },
+  "tools.mcp.sse_request_post_failed": {
+    "text": "SSE POST failed: SSE POST failed: {status}",
+    "slots": [
+      "status"
+    ]
+  },
+  "tools.mcp.response_post_failed": {
+    "text": "MCP response POST failed: {status}",
+    "slots": [
+      "status"
+    ]
+  },
+  "tools.mcp.closed_during_connection": {
+    "text": "MCP transport closed during connection",
+    "slots": []
+  },
+  "tools.mcp.sse_connection_aborted": {
+    "text": "The operation was aborted",
+    "slots": []
+  },
+  "tools.mcp.named_connection_cancelled": {
+    "text": "MCP connection \"{name}\" was cancelled",
+    "slots": [
+      "name"
+    ]
+  }
+}

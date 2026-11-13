@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import path from 'path'
+import { createHash } from 'node:crypto'
 
 const runtime = vi.hoisted(() => ({ launch: null as any, config: {} as any, resolve: vi.fn() }))
 vi.mock('../../../../src/main/foundation/config.service', () => ({ getConfig: () => runtime.config }))
@@ -26,15 +27,23 @@ function writePackage(
   packageId: string,
   manifest: Record<string, unknown>,
   entries: Record<string, string> = {},
-  includeWorker = true,
+  includeNative = true,
 ): void {
   const pkgDir = path.join(appNodeModules(), ...packageId.split('/'))
   fs.mkdirSync(pkgDir, { recursive: true })
-  fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify(manifest))
-  if (packageId === HALO_PACKAGE && includeWorker && Object.keys(entries).length) {
-    entries = { ...entries, 'dist/worker/index.js': 'export const createWorkerRuntime = () => {}',
-      'dist/worker/entry.js': Object.values(entries).join('\n') }
+  if (packageId === HALO_PACKAGE && includeNative && Object.keys(entries).length) {
+    const source = Object.values(entries).join('\n')
+    const buildId = createHash('sha256').update(source).digest('hex')
+    const platform = `${process.platform}-${process.arch}`
+    const filename = `halo-sdk.${platform}.node`
+    manifest = { ...manifest, exports: { ...(manifest.exports as Record<string, unknown> | undefined),
+      './native': { import: './dist/native/index.js' } } }
+    entries = { ...entries, 'dist/native/index.js': 'export const createNativeRuntime = () => {}',
+      'dist/native/binding.js': '', [`dist/native/${filename}`]: source,
+      'dist/native/build-info.json': JSON.stringify({ implementation: 'rust', abiVersion: 1, buildId,
+        artifacts: [{ platform, filename, sha256: buildId }] }) }
   }
+  fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify(manifest))
   for (const [relPath, content] of Object.entries(entries)) {
     const target = path.join(pkgDir, relPath)
     fs.mkdirSync(path.dirname(target), { recursive: true })
@@ -113,7 +122,7 @@ describe('engine availability', () => {
     expect(result.version).toBe('')
   })
 
-  it('rejects a package whose execution worker was omitted', async () => {
+  it('rejects a package whose native execution runtime was omitted', async () => {
     writePackage(HALO_PACKAGE, { main: 'dist/index.js' }, { 'dist/index.js': 'export const query = () => {}' }, false)
     expect((await probe('halo')).available).toBe(false)
   })
@@ -135,7 +144,7 @@ describe('engine availability', () => {
     expect(result.version).toBe('1.0.0')
   })
 
-  it('fingerprints entry content, so a static version still identifies the build', async () => {
+  it('uses native build identity, so a static version still identifies the build', async () => {
     // `@hello-halo/agent-sdk` ships version 1.0.0 on every rebuild; without a
     // content hash two different SDK builds are indistinguishable in a log.
     writePackage(
@@ -154,6 +163,20 @@ describe('engine availability', () => {
 
     expect(first.version).toBe(second.version)
     expect(first.fingerprint).not.toBe(second.fingerprint)
+  })
+
+  it('rejects a native manifest without the current platform library', async () => {
+    writePackage(HALO_PACKAGE, { main: 'dist/index.js' }, { 'dist/index.js': 'entry' })
+    fs.unlinkSync(path.join(appNodeModules(), HALO_PACKAGE, 'dist/native', `halo-sdk.${process.platform}-${process.arch}.node`))
+    expect((await probe('halo')).available).toBe(false)
+  })
+
+  it('rejects an incompatible native ABI before loading the implementation', async () => {
+    writePackage(HALO_PACKAGE, { main: 'dist/index.js' }, { 'dist/index.js': 'entry' })
+    const file = path.join(appNodeModules(), HALO_PACKAGE, 'dist/native/build-info.json')
+    const build = JSON.parse(fs.readFileSync(file, 'utf8')); build.abiVersion = 999
+    fs.writeFileSync(file, JSON.stringify(build))
+    expect((await probe('halo')).available).toBe(false)
   })
 
   it('caches the probe so repeated reads do not re-stat the package tree', async () => {

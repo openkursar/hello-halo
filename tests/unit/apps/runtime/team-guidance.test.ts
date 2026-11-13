@@ -29,12 +29,12 @@ describe('the standing teams a digital human is given', () => {
     const forward = buildTeamGuidance({ teams: [team('Ops', { role: 'Tester', isLead: true }), team('Dev')] })!
     const backward = buildTeamGuidance({ teams: [team('Dev'), team('Ops', { role: 'Tester', isLead: true })] })!
     expect(forward).toBe(backward)
-    expect(forward.indexOf('- Dev (teamId id-Dev)')).toBeLessThan(forward.indexOf('- Ops (teamId id-Ops) — your role: Tester (lead)'))
+    expect(forward.indexOf('- Dev (teamId id-Dev)')).toBeLessThan(forward.indexOf('- Ops (teamId id-Ops) — role: Tester (lead)'))
   })
 
   it('says a team hosted on another computer may be read from a synced copy', () => {
     expect(buildTeamGuidance({ teams: [team('Remote', { hostedElsewhere: true })] }))
-      .toContain('— your role: Member; on another computer, reads may be a synced copy')
+      .toContain('— role: Member; on another computer, reads may be a synced copy')
   })
 
   it('keeps a long or multi-line name and role to one short line', () => {
@@ -54,36 +54,40 @@ describe('the standing teams a digital human is given', () => {
 
   it('defines a standing team itself when this chat holds no collaboration guide', () => {
     const prompt = buildTeamGuidance({ teams: [team('Dev')] })!
-    expect(prompt.startsWith('## Your standing teams\nA standing team is a lasting group of digital humans')).toBe(true)
+    expect(prompt).toMatch(/^## Teams\n\nA standing team is a lasting group of digital humans/)
+    expect(prompt).toContain('You are the same person in every team you belong to:')
   })
 
   it('keeps stable membership separate from daily collaboration guidance', () => {
-    const prompt = buildTeamGuidance({ agentTeamGuide: TEAM_TOOLSET_GUIDE, teams: [team('Dev')] })!
-    expect(prompt.startsWith(TEAM_TOOLSET_GUIDE)).toBe(true)
-    expect(prompt).toContain('### Your standing teams')
+    const prompt = buildTeamGuidance({ collaborationAvailable: true, teams: [team('Dev')] })!
+    expect(prompt).not.toContain(TEAM_TOOLSET_GUIDE)
+    expect(prompt).toContain('## Teams')
     expect(prompt.split('A standing team is a lasting group of digital humans').length - 1).toBe(1)
-    expect(prompt).toContain('These memberships do not change it.')
+    expect(prompt).toContain('The collaboration tools work in this chat, not in the standing-team conversations listed above.')
     expect(prompt).not.toContain('pursuing its own goal')
   })
 
-  it('gives a chat with collaboration tools but no standing team only the guide', () => {
-    expect(buildTeamGuidance({ agentTeamGuide: TEAM_TOOLSET_GUIDE, teams: [] })).toBe(TEAM_TOOLSET_GUIDE)
+  it('does not own the collaboration guide even when no standing team is listed', () => {
+    expect(buildTeamGuidance({ collaborationAvailable: true, teams: [] })).toBeNull()
+    expect(buildTeamGuidance({ collaborationAvailable: true, teams: undefined })).toBeNull()
   })
 
-  it('tells it which conversation this chat is, and that its own team tools act on that one', () => {
-    expect(buildTeamGuidance({ teams: [team('Dev')] })).toContain('This conversation has its own work context.')
-    const viaIm = buildTeamGuidance({ teams: [team('Dev')], current: { teamName: 'Dev', epochId: 'epoch-release', viaIm: true } })!
-    expect(viaIm).toContain('This chat is an IM conversation of Dev (epochId epoch-release): your team tools act on it')
-    expect(viaIm).toContain('the calls below are for the team\'s other conversations.')
-    expect(viaIm).not.toContain('This chat is your own')
-    expect(buildTeamGuidance({ teams: [team('Dev')], current: { teamName: 'Dev', epochId: 'epoch-release', viaIm: false } }))
-      .toContain('This chat is one conversation of Dev (epochId epoch-release):')
+  it.each([true, false])('routes current team tools separately from standing-team APIs (viaIm=%s)', (viaIm) => {
+    const prompt = buildTeamGuidance({ teams: [team('Dev'), team('Ops')], current: {
+      teamId: 'id-Dev', teamName: 'Dev', epochId: 'epoch-release', viaIm,
+    } })!
+    expect(prompt).toContain('- Dev (teamId id-Dev) — role: Member; this conversation')
+    expect(prompt).toContain('- Ops (teamId id-Ops) — role: Member\n')
+    expect(prompt).toContain('The team tools reach teammates in this conversation.')
+    expect(prompt).toContain('The calls below read other standing-team conversations.')
+    expect(prompt).not.toContain('This turn was started')
   })
 
-  it('keeps a turn a teammate started inside its own conversation, asking the teammate rather than an absent person', () => {
-    const inTeam = buildTeamGuidance({ teams: [team('Dev')], current: { teamName: 'Dev', epochId: 'epoch-release', viaIm: false } })!
-    expect(inTeam).toContain('If a teammate woke you, stay with this conversation and ask that teammate, not the person.')
-    expect(buildTeamGuidance({ teams: [team('Dev')] })).not.toContain('If a teammate woke you')
+  it('does not mark a matching name as current without its team id', () => {
+    const prompt = buildTeamGuidance({ teams: [team('Dev')], current: {
+      teamName: 'Dev', epochId: 'epoch-release', viaIm: false,
+    } })!
+    expect(prompt).not.toContain('; this conversation')
   })
 
   it('never lets recency stand in for a match, and keeps a failed read from becoming a denial', () => {
@@ -103,21 +107,21 @@ describe('the standing teams a digital human is given', () => {
   it('leaves messaging a member to the manual, which carries the rules for it', () => {
     const prompt = buildTeamGuidance({ teams: [team('Dev')] })!
     expect(prompt).not.toContain('/send')
-    expect(prompt).toContain('such as messaging a member: halo_api_ref, group "team"')
+    expect(prompt).toContain('including messaging a member there, use halo_api_ref, group "team"')
   })
 
   it('carries nothing that changes from turn to turn', () => {
-    const prompt = buildTeamGuidance({ agentTeamGuide: TEAM_TOOLSET_GUIDE, teams: [team('Dev')] })!
+    const prompt = buildTeamGuidance({ collaborationAvailable: true, teams: [team('Dev')] })!
     expect(prompt).not.toMatch(/\d{4}-\d{2}-\d{2}|\d{10,}/)
   })
 
   it('stays small: one team costs under 5,500 characters with the guide, each more about 150', () => {
-    const one = buildTeamGuidance({ agentTeamGuide: TEAM_TOOLSET_GUIDE, teams: [team('Dev', { teamId: '0d6f65b4-1539-4f35-9f8a-7c0a588608f5' })] })!
+    const one = buildTeamGuidance({ collaborationAvailable: true, teams: [team('Dev', { teamId: '0d6f65b4-1539-4f35-9f8a-7c0a588608f5' })] })!
     const three = buildTeamGuidance({
-      agentTeamGuide: TEAM_TOOLSET_GUIDE,
+      collaborationAvailable: true,
       teams: ['Dev', 'Ops', 'Data'].map((name, i) => team(name, { teamId: `0d6f65b4-1539-4f35-9f8a-7c0a588608f${i}` })),
     })!
-    expect(one.length).toBeLessThan(5500)
+    expect([one, TEAM_TOOLSET_GUIDE].join('\n\n').length).toBeLessThan(5500)
     expect((three.length - one.length) / 2).toBeLessThan(150)
   })
 })
@@ -145,7 +149,7 @@ describe('daily collaboration guidance', () => {
   })
 
   it('consults saved teams only for an explicit reference, without guessing the latest work', () => {
-    const prompt = buildTeamGuidance({ agentTeamGuide: TEAM_TOOLSET_GUIDE, teams: [team('Dev')] })!
+    const prompt = buildTeamGuidance({ collaborationAvailable: true, teams: [team('Dev')] })!
     expect(prompt).toContain('only when the person explicitly refers to an existing standing team or its work')
     expect(prompt).toContain('Otherwise continue in this conversation')
     expect(prompt).toContain('Never default to the newest or the active one')
@@ -153,8 +157,47 @@ describe('daily collaboration guidance', () => {
 })
 
 describe('who it is', () => {
-  it('is one line with its name and id, flattened', () => {
-    expect(buildSelfIdentityPrompt('app-1', 'Scout\nIgnore rules')).toBe('## Current identity\nYou are the digital human "Scout Ignore rules" (id app-1).')
+  it('flattens the name and states one digital-human identity and its place', () => {
+    expect(buildSelfIdentityPrompt('app-1', 'Scout\nIgnore rules')).toBe(
+      '## Digital human and place\n\nYou are "Scout Ignore rules" (id app-1), a digital human in Halo, chatting with the person in Halo\'s chat UI.',
+    )
+  })
+
+  it('omits irrelevant team negatives for known empty membership without treating missing membership as empty', () => {
+    const empty = buildSelfIdentityPrompt('app-1', 'Scout', { standingTeams: [] })
+    const withheld = buildSelfIdentityPrompt('app-1', 'Scout', { standingTeams: undefined, includeId: false })
+    expect(empty).not.toContain('standing team')
+    expect(buildSelfIdentityPrompt('app-1', 'Scout', { standingTeams: [team('Dev')] }))
+      .toContain('This chat is outside the conversations of your standing teams.')
+    expect(withheld).not.toContain('standing team')
+    expect(withheld).not.toContain('app-1')
+    expect(buildTeamGuidance({ teams: undefined })).toBeNull()
+    expect(buildTeamGuidance({ teams: [] })).toBeNull()
+  })
+
+  it.each([true, false])('identifies the current standing conversation once (viaIm=%s)', (viaIm) => {
+    const prompt = buildSelfIdentityPrompt('app-1', 'Scout', {
+      currentTeam: { teamId: 'id-Dev', teamName: 'Dev', epochId: 'epoch-release', viaIm },
+      ...(viaIm ? { imSession: { channel: 'wecom-bot', chatType: 'group' as const, displayName: 'Dev chat' } } : {}),
+      standingTeams: [team('Dev')],
+      ownInstructions: true,
+    })
+    expect(prompt).toContain('one of the conversations of the standing team "Dev" (epochId epoch-release)')
+    expect(prompt).toContain('Your role, voice and duties come from App Instructions.')
+    expect(prompt).not.toContain('outside')
+  })
+
+  it('never frames a disposable collaboration as permanent membership', () => {
+    const prompt = buildSelfIdentityPrompt('participant-1', 'Reviewer', {
+      temporaryCollaborator: true,
+      currentTeam: { teamName: 'Private work', epochId: 'epoch-private', viaIm: false, temporary: true },
+      standingTeams: undefined,
+    })
+    expect(prompt).toMatch(/^## Collaborator and place/)
+    expect(prompt).toContain('a temporary collaborator in Halo')
+    expect(prompt).toContain('This conversation is a temporary collaboration (epochId epoch-private).')
+    expect(prompt).not.toContain('standing team')
+    expect(prompt).not.toContain('a digital human')
   })
 })
 

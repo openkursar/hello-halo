@@ -13,6 +13,11 @@ export function readDenyFloor(options: Options): readonly string[] {
   return inheritedRoots.get(options) ?? [];
 }
 
+export function inheritReadDenyFloor(target: Options, source: Options): void {
+  const roots = inheritedRoots.get(source);
+  if (roots) inheritedRoots.set(target, [...new Set([...roots, ...readDenyFloor(target)])]);
+}
+
 export function codeSearchCacheRoot(options: Options): string | undefined {
   if (!options.codeSearch) return undefined;
   const configured = options.codeSearch.cachePath;

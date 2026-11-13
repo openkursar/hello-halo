@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createSession, query } from '../../index.js';
 import { TEAM_LEAD_ADDRESS } from '../addressing.js';
-import { captureSessionCheckpoint } from '../../core/session-checkpoint.js';
+import type { SessionCheckpoint } from '../../core/session-checkpoint.js';
 import type { Options, LlmProvider, ProviderRequest, StreamEvent, SDKMessage } from '../../index.js';
 
 let directory: string;
@@ -124,7 +124,7 @@ describe('SDK collaboration through real sessions and file tools', () => {
         await session.send('Delegate the investigation.');
         for await (const frame of session.stream()) frames.push(frame);
         const result = frames.find((frame): frame is Extract<SDKMessage, { type: 'result' }> => frame.type === 'result')!;
-        const costs = captureSessionCheckpoint(session).costs;
+        const costs = (await (session as unknown as { command(name: string): Promise<SessionCheckpoint> }).command('captureCheckpoint')).costs;
         expect(costs.totalCostUsd).toBeCloseTo(result.total_cost_usd, 8);
         expect(costs.tokens.input).toBe(result.usage.input_tokens);
         expect(costs.tokens.output).toBe(result.usage.output_tokens);

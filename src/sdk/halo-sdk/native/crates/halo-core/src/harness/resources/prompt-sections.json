@@ -1,0 +1,82 @@
+{
+  "identitySection": {
+    "$harness": "prompt.identity"
+  },
+  "howYouWorkSection": {
+    "$harness": "prompt.how_you_work"
+  },
+  "howYouWorkUltraSection": {
+    "$harness": "prompt.how_you_work.ultra"
+  },
+  "computerSafetySection": {
+    "$harness": "prompt.computer_safety"
+  },
+  "runtimeSection": {
+    "$harness": "prompt.runtime"
+  },
+  "communicatingSection": {
+    "$harness": "prompt.communicating"
+  },
+  "windowsShellSection": {
+    "$harness": "prompt.windows_shell"
+  },
+  "toolUse0": {
+    "$harness": "prompt.tool_use.standard"
+  },
+  "toolUse1": {
+    "$harness": "prompt.tool_use.with_goal"
+  },
+  "toolUse2": {
+    "$harness": "prompt.tool_use.with_todos"
+  },
+  "toolUse3": {
+    "$harness": "prompt.tool_use.with_goal_and_todos"
+  },
+  "sessionGuidance": {
+    "$harness": "prompt.session_guidance"
+  },
+  "profiles": {
+    "default": {
+      "id": "default",
+      "version": 1,
+      "conversationGuidance": {
+        "$harness": "prompt.profiles.default.conversation_guidance"
+      },
+      "summaryGuidance": {
+        "$harness": "prompt.profiles.default.summary_guidance"
+      }
+    },
+    "explicit": {
+      "id": "explicit",
+      "version": 1,
+      "conversationGuidance": {
+        "$harness": "prompt.profiles.explicit.conversation_guidance"
+      },
+      "summaryGuidance": {
+        "$harness": "prompt.profiles.explicit.summary_guidance"
+      }
+    }
+  },
+  "constants": {
+    "DEFAULT_MAX_RESULT_SIZE_CHARS": 50000,
+    "PROMPT_CACHE_BOUNDARY": "__HALO_PROMPT_CACHE_BOUNDARY__",
+    "DEFAULT_MAX_TOKENS": 16384,
+    "DEFAULT_TOOL_RESULT_BUDGET": 50000,
+    "AUTO_COMPACT_THRESHOLD": 0.9,
+    "MAX_INPUT_TOKENS": 180000,
+    "TARGET_INPUT_TOKENS": 40000,
+    "API_COMPACT_THRESHOLD_PCT": 0.9,
+    "API_COMPACT_TARGET_PCT": 0.2,
+    "KEEP_RECENT_MESSAGES": 10,
+    "MAX_CONSECUTIVE_COMPACT_FAILURES": 3,
+    "DEFAULT_TIMEOUT_MS": 120000,
+    "MAX_TIMEOUT_MS": 600000,
+    "DEFAULT_CONTEXT_WINDOW": 200000,
+    "MAX_TOKENS_RECOVERY_LIMIT": 3,
+    "UNREADABLE_TOOL_CALL_RETRY_LIMIT": 2,
+    "MAX_TOKENS_RECOVERY_MSG": {
+      "$harness": "context.recovery.max_tokens"
+    },
+    "GOAL_RECITATION_INTERVAL": 25
+  }
+}

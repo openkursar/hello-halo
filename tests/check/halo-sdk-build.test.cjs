@@ -6,7 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { spawnSync } = require('node:child_process');
 const { buildHaloSdk } = require('../../scripts/lib/halo-sdk-build.cjs');
-const { ENGINE_RUNTIMES } = require('../../scripts/engine-runtimes.cjs');
+const { ENGINE_RUNTIMES, nativeRuntimeFile } = require('../../scripts/engine-runtimes.cjs');
 
 function fixture({ sdk = true, sdkModules = true, link = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-sdk-build-'));
@@ -30,9 +30,17 @@ function emitDist(sdkDir) {
     fs.mkdirSync(path.dirname(path.join(sdkDir, file)), { recursive: true });
     fs.writeFileSync(path.join(sdkDir, file), 'export {}\n');
   }
+  const bytes = Buffer.from('native fixture');
+  fs.writeFileSync(path.join(sdkDir, nativeRuntimeFile()), bytes);
+  fs.writeFileSync(path.join(sdkDir, 'dist/native/build-info.json'), JSON.stringify({
+    implementation: 'rust', abiVersion: 1, buildId: 'fixture', artifacts: [{
+      platform: `${process.platform}-${process.arch}`, filename: path.basename(nativeRuntimeFile()),
+      sha256: require('node:crypto').createHash('sha256').update(bytes).digest('hex'),
+    }],
+  }));
 }
 
-test('runs the SDK build inside the SDK checkout and accepts its compiled worker', () => {
+test('runs the SDK build inside the SDK checkout and accepts its native library and bridge', () => {
   const { root, sdkDir, cleanup } = fixture();
   try {
     const calls = [];
@@ -122,7 +130,7 @@ test('rejects an installed SDK copy that a rebuild of the checkout would not rea
   }
 });
 
-test('a failed SDK build or one without its worker entry fails the package', () => {
+test('a failed SDK build or one without its execution entry fails the package', () => {
   const { root, cleanup } = fixture();
   try {
     assert.throws(() => buildHaloSdk(root, { execFile: () => { throw new Error('Command failed: npm run build'); } }), /Command failed/);
@@ -228,4 +236,26 @@ test('a Halo SDK that cannot be built stops the signed build before anything els
   const { status, lines } = runSignedBuild({ sdkExit: 1 });
   assert.notEqual(status, 0);
   assert.deepEqual(lines, ['node scripts/lib/halo-sdk-build.cjs']);
+});
+
+test('rejects a native binary changed after the recorded build', () => {
+  const { root, sdkDir, cleanup } = fixture();
+  try {
+    assert.throws(() => buildHaloSdk(root, { execFile: file => {
+      if (file !== 'npm') return '';
+      emitDist(sdkDir);
+      fs.appendFileSync(path.join(sdkDir, nativeRuntimeFile()), 'changed');
+    } }), /differs from its build identity/);
+  } finally { cleanup(); }
+});
+
+test('requires the requested native architecture instead of accepting the build host library', () => {
+  const { root, sdkDir, cleanup } = fixture();
+  try {
+    const target = process.arch === 'arm64' ? 'darwin-x64' : 'darwin-arm64';
+    assert.throws(() => buildHaloSdk(root, { env: { HALO_SDK_NATIVE_TARGETS: target }, execFile: file => {
+      if (file !== 'npm') return '';
+      emitDist(sdkDir);
+    } }), /Native SDK build lacks/);
+  } finally { cleanup(); }
 });

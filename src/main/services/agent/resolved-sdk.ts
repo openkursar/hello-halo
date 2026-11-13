@@ -8,7 +8,7 @@ import { getEngineAvailability } from './engine-availability'
 import { defaultCapabilitiesFor, type EngineCapabilities } from './capabilities'
 import { tool as defineTool, createSdkMcpServer as defineMcpServer } from './mcp/sdk-server'
 import { withClaudeCodeSkills } from './skill-availability'
-import type { ReadSessionToolContextModeOptions, SessionToolContextMode } from '@hello-halo/agent-sdk/worker'
+import type { ReadSessionToolContextModeOptions, SessionToolContextMode } from '@hello-halo/agent-sdk/native'
 
 export interface SessionPreparation {
   signal: AbortSignal
@@ -68,7 +68,7 @@ function entryFor(engineId: EngineId): EngineEntry {
 async function loadEngine(engineId: EngineId): Promise<SdkModule> {
   if (engineId === 'halo') {
     // @ts-ignore: The separately packaged SDK is resolved at runtime.
-    const sdk = await import(/* @vite-ignore */ '@hello-halo/agent-sdk/worker')
+    const sdk = await import(/* @vite-ignore */ '@hello-halo/agent-sdk/native')
     const { createHaloSdkModule } = await import('./halo')
     const module = createHaloSdkModule(sdk) as unknown as SdkModule
     if (module.setLogger) installSdkLogger(module.setLogger)

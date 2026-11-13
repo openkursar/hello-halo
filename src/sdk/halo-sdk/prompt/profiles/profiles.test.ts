@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolvePromptProfile } from './index.js';
+import { resolvePromptProfile } from '../../index.js';
 import type { PromptProfileSelection } from '../../types/config.js';
 
 describe('prompt profile selection', () => {

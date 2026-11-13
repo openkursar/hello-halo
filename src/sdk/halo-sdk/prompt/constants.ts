@@ -7,6 +7,7 @@
 // Canonical 50k cap lives in utils/truncate.ts (lowest tier; core and tools
 // both import from it). Re-exported here for prompt-layer consumers.
 import { DEFAULT_MAX_RESULT_SIZE_CHARS } from '../utils/truncate.js';
+import { baselineText } from '../harness/text.js';
 export { DEFAULT_MAX_RESULT_SIZE_CHARS };
 
 // ---------------------------------------------------------------------------
@@ -77,10 +78,7 @@ export const MAX_TOKENS_RECOVERY_LIMIT = 3;
  * will not produce it on the third attempt either, and each retry costs a turn.
  */
 export const UNREADABLE_TOOL_CALL_RETRY_LIMIT = 2;
-export const MAX_TOKENS_RECOVERY_MSG =
-  'The previous response exhausted its generation budget. Continue the unfinished task ' +
-  'from the recorded state without repeating completed work. Use shorter responses or ' +
-  'smaller tool operations so each next step can finish within the limit.';
+export const MAX_TOKENS_RECOVERY_MSG = baselineText('context.recovery.max_tokens');
 
 // ---------------------------------------------------------------------------
 // Goal

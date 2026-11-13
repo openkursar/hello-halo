@@ -253,8 +253,8 @@ function createMcpServerForInstance(
   beginCall: () => () => void,
 ): Server {
   const server = new Server(
-    { name, version: instance.version || '1.0.0' },
-    { capabilities: { tools: { listChanged: false } } },
+    { name, version: instance.version || '1.0.0', description: instance.description },
+    { capabilities: { tools: { listChanged: false } }, instructions: instance.instructions },
   )
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {

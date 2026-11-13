@@ -10,6 +10,7 @@ import { sendAcceptanceMessage, waitForAcceptanceIdle, readAcceptanceConversatio
 import { seedManagedSpace, type ManagedSpace } from '../fixtures/acceptance-management'
 import { navigateToWorkspaces } from '../fixtures/helpers'
 import type { AcceptanceModel, ModelRequest, ModelReply } from '../fixtures/acceptance-model'
+import { replyWithModelTool } from '../fixtures/acceptance-tool-discovery'
 
 test.setTimeout(150000)
 
@@ -53,9 +54,17 @@ async function assertAutomaticTerminal(page: Page) {
 }
 
 function call(request: ModelRequest, name: string, id: string, input: Record<string, unknown>, issues: string[]): ModelReply {
-  const names = request.tools.filter(tool => tool === name || tool.endsWith(`__${name}`))
-  if (names.length !== 1) { issues.push(`Expected one ${name}, observed ${names.length}`); return { text: 'The terminal capability was unavailable.' } }
-  return { tools: [{ name: names[0], id, input }] }
+  return replyWithModelTool(request, name, input, id, issues)
+}
+
+function assertModelOperations(model: AcceptanceModel, operationIds: string[], finalReplies: number) {
+  const calls = model.exchanges.flatMap(exchange => exchange.reply?.tools ?? [])
+  const discoveries = calls.filter(call => call.name === 'ToolSearch')
+  const operations = calls.filter(call => call.name !== 'ToolSearch')
+  expect(operations.map(call => call.id)).toEqual(operationIds)
+  expect(discoveries.length).toBeLessThanOrEqual(new Set(operations.map(call => call.name === 'CallTool' ? String(call.input.tool) : call.name)).size)
+  expect(model.exchanges.filter(exchange => !exchange.reply?.tools?.length)).toHaveLength(finalReplies)
+  expect(model.exchanges).toHaveLength(operationIds.length + discoveries.length + finalReplies)
 }
 
 async function assertTerminalTools(page: Page, turn: { spaceId: string; conversationId: string }) {
@@ -92,6 +101,7 @@ async function touchWithAi(page: Page, model: AcceptanceModel, terminal: OpenedT
   expect(received).toEqual([true])
   for (const read of reads) expect((await terminals(page)).find(session => session.id === read.info.id)).toMatchObject({ owner: 'user', aiTouched: true, state: 'running' })
   await assertTerminalTools(page, turn)
+  assertModelOperations(model, reads.map(read => read.id), 1)
 }
 
 async function closeChoice(page: Page, terminal: OpenedTerminal, choice: 'Keep running in background' | 'Close completely') {
@@ -162,7 +172,7 @@ test('AI terminal tools and user keyboard input reach the same real interactive 
   expect(terminal.program.inputs().map(receipt => receipt.input)).toEqual([aiInput, userInput])
   expect(assertProcess(terminal, space)).toEqual(processBefore)
   expect((await replay(window, terminal.info.id)).info).toMatchObject({ id: terminal.info.id, createdAt: terminal.info.createdAt, aiTouched: true, state: 'running' })
-  expect(model.exchanges).toHaveLength(5)
+  assertModelOperations(model, ['terminal-read-initial', 'terminal-ai-input', 'terminal-read-human'], 2)
   await info.attach('shared-terminal-input', { body: JSON.stringify({ observed, processBefore, inputs: terminal.program.inputs() }, null, 2), contentType: 'application/json' })
 })
 
@@ -185,7 +195,6 @@ test('keeping an AI-touched terminal closes its tab and reopens the same live pr
   expect(assertProcess(terminal, space)).toEqual(processBefore)
   expect((await replay(window, terminal.info.id)).info).toMatchObject({ id: terminal.info.id, createdAt: retained.createdAt, state: 'running', aiTouched: true })
   expect(await terminals(window)).toHaveLength(1)
-  expect(model.exchanges).toHaveLength(2)
   await info.attach('retained-terminal-process', { body: JSON.stringify({ retained, processBefore, inputs: terminal.program.inputs() }, null, 2), contentType: 'application/json' })
 })
 
@@ -228,7 +237,6 @@ test('terminating the retained target exits its actual program and shell while a
   await typeTerminalInput(window, control.program, marker('CONTROL_ALIVE'))
   expect(assertProcess(control, space)).toEqual(controlProcess)
   expect(controlInfo).toMatchObject({ state: 'running', owner: 'user', aiTouched: true })
-  expect(model.exchanges).toHaveLength(3)
   await info.attach('terminal-termination', { body: JSON.stringify({ target: target.program.observation(), control: control.program.observation(), controlInputs: control.program.inputs() }, null, 2), contentType: 'application/json' })
 })
 

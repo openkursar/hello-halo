@@ -12,6 +12,13 @@ used for grouping because providers may reuse them. Execution checkpoints reject
 on append failure. Completed tool results are recorded independently of public
 iterator consumption, including cancellation cleanup.
 
+A failed append cannot advance the parent UUID. If a tool-result write fails,
+the live session and public stream retain the known business results, and the
+turn ends with an explicit storage error. These results have no durable resume
+anchor. Uncommitted search results become errors and grant no new tool access.
+Restoration can only report the recorded call's unknown outcome; it cannot infer
+an external effect whose result was never saved.
+
 Streamed `assistant` records contain block content but omit `message.usage`.
 Finalization appends one `assistant_metadata` record with the same `responseUuid`
 and the final response ID, model, usage, stop reason and stop sequence. This record
@@ -31,7 +38,9 @@ last block does not inherit that response's usage.
 
 ## Compaction checkpoints
 
-Main-session result records reuse their emitted user-frame UUID. Forking at a
+Main-session results are recorded once per batch. The public stream emits one
+result per user frame, all sharing the durable batch UUID; individual results
+are identified by `tool_use_id`. That UUID anchors the whole committed batch. Forking at a
 completed search result therefore includes its committed discovery; the preceding
 assistant-call checkpoint does not. A fork or explicit resume boundary saves its
 inherited history in a strict checkpoint before new work, so reopening the branch
@@ -61,11 +70,19 @@ complete definitions and guides actually delivered by a successful search,
 including an explicit re-display that creates no new discovery. They never grant
 tool access. A direct-call marker preserves an eager call's original form if a
 later configuration makes that tool deferred. Once a writer enters this mode, its JSONL records
-start with `toolContextVersion: 1`; `toolContextRecord` distinguishes records
+start with `toolContextVersion: 1` for the legacy representation or `2` for
+object-argument calls and format recovery receipts; `toolContextRecord` distinguishes records
 that require private metadata from ordinary work messages. A resumed owner marks
 the writer before appending, without rereading the file. This keeps the mode
 detectable in a bounded tail even when the original baseline is no longer there,
 and losing a required private field cannot resemble a legacy record.
+The reader accepts both record versions. Version 2 call origins retain the original
+argument envelope and, when local format recovery was used, its raw input and
+normalization steps. Restoration decodes that receipt through the same bounded
+admission decoder and checks it against the recorded target and execution input.
+Version 1 origins keep their strict legacy JSON-string contract. Existing files
+are not rewritten; older SDKs that do not recognize version 2 must refuse these
+records rather than treating them as legacy history.
 Reader grouping merges private fields alongside completed blocks and tool
 results, respecting each public message UUID. Public transcript pages omit the
 private fields and internal directory notices. Final response-accounting records

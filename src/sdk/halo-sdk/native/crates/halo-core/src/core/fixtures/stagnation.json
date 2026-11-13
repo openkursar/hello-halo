@@ -1,0 +1,400 @@
+{
+  "digests": [
+    {
+      "text": "abc",
+      "expected": "3:abc"
+    },
+    {
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "expected": "500:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "expected": "202:😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    },
+    {
+      "text": "一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一",
+      "expected": "250:一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一"
+    }
+  ],
+  "sequences": [
+    {
+      "name": "repeat",
+      "options": {},
+      "actions": [
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        }
+      ],
+      "expected": [
+        null,
+        null,
+        "The Bash tool was called 3 times with identical input within the last 3 tool calls, each returning an identical result. This may be intentional; consider whether to continue or adjust your approach.",
+        null,
+        null
+      ]
+    },
+    {
+      "name": "changing-result",
+      "options": {},
+      "actions": [
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "pending"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "working"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "done"
+        }
+      ],
+      "expected": [
+        null,
+        null,
+        "The Bash tool was called 3 times with identical input within the last 3 tool calls. This may be intentional; consider whether to continue or adjust your approach."
+      ]
+    },
+    {
+      "name": "same-errors",
+      "options": {},
+      "actions": [
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": true,
+          "errorType": "exit_1",
+          "resultDigest": "bad"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": true,
+          "errorType": "exit_1",
+          "resultDigest": "bad"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": true,
+          "errorType": "exit_1",
+          "resultDigest": "bad"
+        }
+      ],
+      "expected": [
+        null,
+        null,
+        "The Bash tool was called 3 times with identical input within the last 3 tool calls, each returning an error. This may be intentional; consider whether to continue or adjust your approach."
+      ]
+    },
+    {
+      "name": "different-input-errors",
+      "options": {},
+      "actions": [
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": true,
+          "errorType": "not_found",
+          "resultDigest": "bad"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "b",
+          "isError": true,
+          "errorType": "not_found",
+          "resultDigest": "bad"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "c",
+          "isError": true,
+          "errorType": "not_found",
+          "resultDigest": "bad"
+        }
+      ],
+      "expected": [
+        null,
+        null,
+        "The Bash tool failed with the same error type (not_found) 3 times within the last 3 tool calls. This may be intentional; consider whether to continue or adjust your approach."
+      ]
+    },
+    {
+      "name": "rearm",
+      "options": {
+        "windowSize": 3
+      },
+      "actions": [
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Read",
+          "inputDigest": "other",
+          "isError": false,
+          "resultDigest": "ok"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "fresh",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "fresh",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "fresh",
+          "isError": false,
+          "resultDigest": "same"
+        }
+      ],
+      "expected": [
+        null,
+        null,
+        "The Bash tool was called 3 times with identical input within the last 3 tool calls, each returning an identical result. This may be intentional; consider whether to continue or adjust your approach.",
+        null,
+        null,
+        null,
+        "The Bash tool was called 3 times with identical input within the last 4 tool calls, each returning an identical result. This may be intentional; consider whether to continue or adjust your approach."
+      ]
+    },
+    {
+      "name": "eviction",
+      "options": {
+        "windowSize": 3
+      },
+      "actions": [
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "p",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "q",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "r",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        }
+      ],
+      "expected": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "name": "reset",
+      "options": {},
+      "actions": [
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        "reset",
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        }
+      ],
+      "expected": [
+        null,
+        null,
+        "The Bash tool was called 3 times with identical input within the last 3 tool calls, each returning an identical result. This may be intentional; consider whether to continue or adjust your approach.",
+        null,
+        null,
+        null,
+        "The Bash tool was called 3 times with identical input within the last 3 tool calls, each returning an identical result. This may be intentional; consider whether to continue or adjust your approach."
+      ]
+    },
+    {
+      "name": "custom-threshold",
+      "options": {
+        "repeatThreshold": 1
+      },
+      "actions": [
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        }
+      ],
+      "expected": [
+        null,
+        "The Bash tool was called 2 times with identical input within the last 2 tool calls, each returning an identical result. This may be intentional; consider whether to continue or adjust your approach."
+      ]
+    },
+    {
+      "name": "zero-window",
+      "options": {
+        "windowSize": 0
+      },
+      "actions": [
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        }
+      ],
+      "expected": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "name": "fractional-window",
+      "options": {
+        "windowSize": 1.5
+      },
+      "actions": [
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        },
+        {
+          "toolName": "Bash",
+          "inputDigest": "a",
+          "isError": false,
+          "resultDigest": "same"
+        }
+      ],
+      "expected": [
+        null,
+        null,
+        "The Bash tool was called 3 times with identical input within the last 3 tool calls, each returning an identical result. This may be intentional; consider whether to continue or adjust your approach."
+      ]
+    }
+  ]
+}

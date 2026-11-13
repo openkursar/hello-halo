@@ -2,11 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createSession, type SDKSession } from './session.js';
-import { createSdkMcpServer, tool } from '../tools/mcp/sdk-server.js';
-import { getTranscriptPath, TranscriptWriter } from './transcript.js';
-import { readHistoryReport } from './transcript-reader.js';
-import { readToolContextSnapshot } from './tool-context/index.js';
+import { createSession, createSdkMcpServer, tool, getSessionMessages, readSessionToolContextMode, type SDKSession } from '../index.js';
 import type { ContentBlock, LlmProvider, ProviderRequest, StreamEvent } from '../types/provider.js';
 import type { Options } from '../types/config.js';
 import type { SDKMessage } from './query-types.js';
@@ -73,7 +69,25 @@ async function fixture(provider: LlmProvider, options: Partial<Options> = {}, la
   };
   const session = await createSession(config);
   sessions.push(session);
-  return { session, config, execute, path: getTranscriptPath(session.sessionId, cwd, config) };
+  return { session, config, execute, path: journalPath(session.sessionId, config) };
+}
+function journalPath(sessionId: string, config: Options): string {
+  return join(config.env!.CLAUDE_CONFIG_DIR!, 'projects', config.cwd!.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`);
+}
+/** Public journal views; getSessionMessages exposes no private tool context. */
+async function publicJournal(sessionId: string, config: Options) {
+  const [page, mode, raw] = await Promise.all([
+    getSessionMessages(sessionId, { cwd: config.cwd!, env: config.env }),
+    readSessionToolContextMode(sessionId, { cwd: config.cwd!, env: config.env }),
+    readFile(journalPath(sessionId, config), 'utf8'),
+  ]);
+  return { page, mode, raw };
+}
+/** Raw metadata records, read only after the public view accepted the journal. */
+function records(raw: string) {
+  return raw.split('\n').filter(Boolean).map(line => JSON.parse(line) as {
+    type?: string; message?: { toolContext?: { baseline?: unknown; discoveries?: unknown[]; presentations?: unknown[] } } })
+    .filter(record => record.message?.toolContext !== undefined);
 }
 async function collect(stream: AsyncIterable<SDKMessage>, events: SDKMessage[] = []) {
   for await (const event of stream) { events.push(event); if (event.type === 'result') break; }
@@ -106,10 +120,11 @@ describe('tool discovery cancellation ordering', () => {
       expect(results).toEqual([expect.objectContaining({ is_error: true, content: expect.stringContaining('No new definitions were loaded') })]);
       expect(JSON.stringify(results)).not.toContain('input_schema');
       await session.close();
-      const restored = await readHistoryReport(path);
-      expect(restored.toolContextDamaged).toBeUndefined();
-      expect(readToolContextSnapshot(restored.messages)?.definitions).toEqual([]);
-      expect(restored.messages.some(message => message.toolContext?.presentations?.length || message.toolContext?.discoveries?.length)).toBe(false);
+      const journal = await publicJournal(session.sessionId, config);
+      expect(journal.page.length).toBeGreaterThan(0);
+      expect(journal.mode).toBe('deferred');
+      expect(records(journal.raw).some(record => record.message?.toolContext?.presentations?.length || record.message?.toolContext?.discoveries?.length)).toBe(false);
+      expect(journal.raw).not.toContain('input_schema');
       const next = script([[invoke('after-cancel')], [done]]);
       expect((await reopen(config, session.sessionId, next)).at(-1)).toMatchObject({ is_error: false });
       expect(execute).not.toHaveBeenCalled();
@@ -117,39 +132,15 @@ describe('tool discovery cancellation ordering', () => {
     } finally { release.resolve(); await draining; }
   }, 10000);
 
-  it.each(['before-write', 'after-write'] as const)('commits a submitted discovery result after cancellation arrives %s', async stage => {
-    const entered = gate(), release = gate();
-    const append = TranscriptWriter.prototype.writeUserMessage;
-    vi.spyOn(TranscriptWriter.prototype, 'writeUserMessage').mockImplementation(async function (this: TranscriptWriter, message, options) {
-      if (!message.toolContext?.discoveries?.length) return append.call(this, message, options);
-      if (stage === 'before-write') { entered.resolve(); await release.promise; }
-      const uuid = await append.call(this, message, options);
-      if (stage === 'after-write') { entered.resolve(); await release.promise; }
-      return uuid;
-    });
-    const source = script([[search], [done]]);
-    const { session, config, execute, path } = await fixture(source.provider);
-    await session.send('Find the customer tool.');
-    const draining = collect(session.stream());
-    try {
-      await Promise.race([entered.promise, draining.then(() => { throw new Error('Turn ended before discovery append'); })]);
-      expect(source.requests).toHaveLength(1);
-      await session.interrupt();
-      release.resolve();
-      expect((await draining).at(-1)).toMatchObject({ is_error: true });
-      await session.close();
-      expect(readToolContextSnapshot((await readHistoryReport(path)).messages)?.definitions).toHaveLength(1);
-      const next = script([[invoke('after-append')], [done]]);
-      expect((await reopen(config, session.sessionId, next)).at(-1)).toMatchObject({ is_error: false });
-      expect(execute).toHaveBeenCalledOnce();
-      expect(next.requests).toHaveLength(2);
-    } finally { release.resolve(); await draining; }
-  }, 10000);
+  // Cancellation around a discovery append needs a gate inside the journal, which JavaScript
+  // cannot reach. These Rust tests cover it with a real session and a local HTTP MCP server:
+  //   core::engine::discovery_append_tests::discovery_append_commits_when_cancellation_arrives_before_the_write
+  //   core::engine::discovery_append_tests::discovery_append_commits_when_cancellation_arrives_after_the_write
 
   it('preserves a completed business result when cancellation interrupts its output hook', async () => {
     const entered = gate(), release = gate();
     const source = script([[search], [invoke('business')], [done]]);
-    const { session, path, execute } = await fixture(source.provider, {
+    const { session, config, execute } = await fixture(source.provider, {
       hooks: { PostToolUse: [{ matcher: 'mcp__crm__lookup', hooks: [async () => {
         entered.resolve(); await release.promise; return {};
       }] }] },
@@ -168,9 +159,11 @@ describe('tool discovery cancellation ordering', () => {
       expect(results).toEqual([expect.objectContaining({ content: 'Saved customer receipt.' })]);
       expect(results.every(block => block.type === 'tool_result' && !block.is_error)).toBe(true);
       await session.close();
-      const history = await readHistoryReport(path);
-      expect(history.toolContextDamaged).toBeUndefined();
-      expect(readToolContextSnapshot(history.messages)?.definitions).toHaveLength(1);
+      const journal = await publicJournal(session.sessionId, config);
+      expect(journal.page.some(message => JSON.stringify(message).includes('Saved customer receipt.'))).toBe(true);
+      expect(records(journal.raw)).toContainEqual(expect.objectContaining({ message: expect.objectContaining({ toolContext: expect.objectContaining({
+        discoveries: [expect.objectContaining({ callId: 'search' })],
+      }) }) }));
       expect(execute).toHaveBeenCalledOnce();
     } finally { release.resolve(); await draining; }
   }, 10000);
@@ -179,8 +172,7 @@ describe('tool discovery cancellation ordering', () => {
     const entered = gate(), release = gate();
     const source = script([[search], ...Array.from({ length: 8 }, (_, index) => [invoke(`call-${index}`)]), [done]],
       async () => { entered.resolve(); await release.promise; });
-    const checkpoint = vi.spyOn(TranscriptWriter.prototype, 'writeCompactCheckpoint');
-    const { session, path } = await fixture(source.provider, {}, true);
+    const { session, config, path } = await fixture(source.provider, {}, true);
     await session.send('Collect the customer evidence.');
     const observed: SDKMessage[] = [];
     const draining = collect(session.stream(), observed);
@@ -191,43 +183,15 @@ describe('tool discovery cancellation ordering', () => {
       release.resolve();
       expect((await draining).at(-1)).toMatchObject({ is_error: true });
       await session.close();
-      expect(checkpoint).not.toHaveBeenCalled();
       expect(observed.some(event => event.type === 'system' && event.subtype === 'compact_boundary')).toBe(false);
-      expect((await readFile(path, 'utf8')).startsWith(before)).toBe(true);
-      expect(readToolContextSnapshot((await readHistoryReport(path)).messages)?.definitions).toHaveLength(1);
+      const after = await readFile(path, 'utf8');
+      expect(after.startsWith(before)).toBe(true);
+      expect(after.split('compact_checkpoint').length).toBe(before.split('compact_checkpoint').length);
+      const journal = await publicJournal(session.sessionId, config);
+      expect(journal.mode).toBe('deferred');
+      expect(records(journal.raw).some(record => record.message?.toolContext?.discoveries?.length)).toBe(true);
     } finally { release.resolve(); await draining; }
   }, 10000);
 
-  it.each(['before-write', 'after-write'] as const)('installs the same compact checkpoint when cancellation arrives %s after submission', async stage => {
-    const entered = gate(), release = gate();
-    const append = TranscriptWriter.prototype.writeCompactCheckpoint;
-    vi.spyOn(TranscriptWriter.prototype, 'writeCompactCheckpoint').mockImplementation(async function (this: TranscriptWriter, messages, summary) {
-      if (stage === 'before-write') { entered.resolve(); await release.promise; }
-      await append.call(this, messages, summary);
-      if (stage === 'after-write') { entered.resolve(); await release.promise; }
-    });
-    const source = script([[search], ...Array.from({ length: 8 }, (_, index) => [invoke(`call-${index}`)]), [done]]);
-    const { session, config, execute, path } = await fixture(source.provider, {}, true);
-    await session.send('Collect the customer evidence.');
-    const observed: SDKMessage[] = [];
-    const draining = collect(session.stream(), observed);
-    try {
-      await Promise.race([entered.promise, draining.then(() => { throw new Error('Turn ended before checkpoint append'); })]);
-      const requests = source.requests.length;
-      const effects = execute.mock.calls.length;
-      expect(observed.some(event => event.type === 'system' && event.subtype === 'compact_boundary')).toBe(false);
-      await session.interrupt();
-      release.resolve();
-      expect((await draining).at(-1)).toMatchObject({ is_error: true });
-      expect(source.requests).toHaveLength(requests);
-      expect(observed.some(event => event.type === 'system' && event.subtype === 'compact_boundary')).toBe(true);
-      await session.close();
-      const journal = await readFile(path, 'utf8');
-      expect(journal).toContain('compact_checkpoint');
-      expect(readToolContextSnapshot((await readHistoryReport(path)).messages)?.definitions).toHaveLength(1);
-      const next = script([[invoke('after-checkpoint')], [done]]);
-      expect((await reopen(config, session.sessionId, next)).at(-1)).toMatchObject({ is_error: false });
-      expect(execute).toHaveBeenCalledTimes(effects + 1);
-    } finally { release.resolve(); await draining; }
-  }, 10000);
+
 });

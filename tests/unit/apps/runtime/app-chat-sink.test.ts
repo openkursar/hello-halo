@@ -124,6 +124,34 @@ describe('digital human engine binding writes', () => {
     expect(onTurnComplete).toHaveBeenCalledTimes(2)
   })
 
+  it('retains reload intent for an acknowledged CC continuation and not for a different engine', () => {
+    const expected = { sessionId: 'legacy-native', useCurrentInstructions: true as const }
+    const cc = bindAppChatEngine({ onTurnComplete: vi.fn() }, { spacePath: '/space', appId: 'person', runId: 'chat', engineId: 'anthropic', expected })
+    cc.onTurnComplete(makeResult({ engineId: 'anthropic', capturedSessionId: 'legacy-native' }))
+    expect(saveChatEngineBinding).toHaveBeenLastCalledWith('/space', 'person', 'chat',
+      { version: 1, engineId: 'anthropic', sessionId: 'legacy-native', useCurrentInstructions: true }, expected)
+    saveChatEngineBinding.mockClear()
+    const halo = bindAppChatEngine({ onTurnComplete: vi.fn() }, { spacePath: '/space', appId: 'person', runId: 'chat', engineId: 'halo', expected })
+    halo.onTurnComplete(makeResult({ engineId: 'halo', capturedSessionId: 'new-halo-native' }))
+    expect(saveChatEngineBinding).toHaveBeenLastCalledWith('/space', 'person', 'chat',
+      { version: 1, engineId: 'halo', sessionId: 'new-halo-native' }, expected)
+  })
+
+  it('binds a new fork identity while keeping its inherited reload intent', () => {
+    const expected = { sessionId: 'source-native', useCurrentInstructions: true as const }
+    const onTurnComplete = vi.fn()
+    const sink = bindAppChatEngine({ onTurnComplete }, {
+      spacePath: '/space', appId: 'person', runId: 'chat-local-direct-fork', engineId: 'anthropic', expected,
+    })
+    sink.onTurnComplete(makeResult({ engineId: 'anthropic', capturedSessionId: 'destination-native' }))
+    const binding = { version: 1, engineId: 'anthropic', sessionId: 'destination-native', useCurrentInstructions: true }
+    expect(saveChatEngineBinding).toHaveBeenCalledWith('/space', 'person', 'chat-local-direct-fork', binding, expected)
+    sink.onTurnComplete(makeResult({ engineId: 'anthropic', capturedSessionId: 'destination-native' }))
+    expect(saveChatEngineBinding).toHaveBeenCalledTimes(1)
+    expect(onTurnComplete).toHaveBeenCalledTimes(2)
+    expect(expected).toEqual({ sessionId: 'source-native', useCurrentInstructions: true })
+  })
+
   it('does not fall back to the legacy writer after a late binding was refused', () => {
     saveChatEngineBinding.mockReturnValue(false)
     const actual = makeSink('app-chat:binding-rejected')

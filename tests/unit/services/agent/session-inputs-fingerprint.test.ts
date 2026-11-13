@@ -91,6 +91,14 @@ describe('computeSessionInputsFingerprint', () => {
     expect(computeSessionInputsFingerprint(before)).not.toBe(computeSessionInputsFingerprint(after))
   })
 
+  it('keeps ordinary fingerprints unchanged and rebuilds only for an explicit snapshot bypass', () => {
+    const options = { systemPrompt: 'p', mcpServers: {} }
+    const ordinary = computeSessionInputsFingerprint(options)
+    expect(computeSessionInputsFingerprint({ ...options, systemPromptSnapshot: undefined })).toBe(ordinary)
+    expect(computeSessionInputsFingerprint({ ...options, systemPromptSnapshot: true })).toBe(ordinary)
+    expect(computeSessionInputsFingerprint({ ...options, systemPromptSnapshot: false })).not.toBe(ordinary)
+  })
+
   it('changes when the appended context of a preset prompt changes (halo engine)', () => {
     const preset = (append: string) => ({ systemPrompt: { type: 'preset', preset: 'default', append } })
     expect(computeSessionInputsFingerprint(preset('You are Ada.')))

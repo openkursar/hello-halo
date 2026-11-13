@@ -1,0 +1,33 @@
+{
+  "context.skills.catalog_wrapper": {
+    "text": "<system-reminder>\n{catalog}\n</system-reminder>",
+    "slots": [
+      "catalog"
+    ]
+  },
+  "context.skills.heading": {
+    "text": "# skills",
+    "slots": []
+  },
+  "context.skills.catalog_guidance": {
+    "text": "Available workflows. Load a matching entry with Skill before using its instructions.",
+    "slots": []
+  },
+  "context.skills.catalog_entry": {
+    "text": "- {name}: {description}",
+    "slots": [
+      "name",
+      "description"
+    ]
+  },
+  "context.skills.catalog_omitted": {
+    "text": "{count} more skills are available through Skill with skill=\"list\".",
+    "slots": [
+      "count"
+    ]
+  },
+  "context.skills.reload_guidance": {
+    "text": "These skills were loaded earlier. If their instructions were removed from view and still apply to the current request, reload them with Skill before continuing. Use the retained request for arguments. This reminder does not authorize new actions.",
+    "slots": []
+  }
+}

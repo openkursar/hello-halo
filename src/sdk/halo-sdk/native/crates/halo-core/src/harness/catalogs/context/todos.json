@@ -1,0 +1,8 @@
+{
+  "context.todos.reminder": {
+    "text": "<system-reminder>\n# Current todo list (working memory — survives context compaction)\n{list}\n</system-reminder>",
+    "slots": [
+      "list"
+    ]
+  }
+}

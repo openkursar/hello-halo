@@ -1,0 +1,962 @@
+{
+  "node": "v22.18.0",
+  "v8": "12.4.254.21-node.27",
+  "cases": [
+    {
+      "source": "",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": " ",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{",
+      "error": "Expected property name or '}' in JSON at position 1 (line 1 column 2)"
+    },
+    {
+      "source": "[",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "[1,]",
+      "error": "Unexpected token ']', \"[1,]\" is not valid JSON"
+    },
+    {
+      "source": "{\"a\":}",
+      "error": "Unexpected token '}', \"{\"a\":}\" is not valid JSON"
+    },
+    {
+      "source": "{foo:1}",
+      "error": "Expected property name or '}' in JSON at position 1 (line 1 column 2)"
+    },
+    {
+      "source": "{\"a\" 1}",
+      "error": "Expected ':' after property name in JSON at position 5 (line 1 column 6)"
+    },
+    {
+      "source": "{\"a\":1,}",
+      "error": "Expected double-quoted property name in JSON at position 7 (line 1 column 8)"
+    },
+    {
+      "source": "{\"a\":1 2}",
+      "error": "Expected ',' or '}' after property value in JSON at position 7 (line 1 column 8)"
+    },
+    {
+      "source": "[1 2]",
+      "error": "Expected ',' or ']' after array element in JSON at position 3 (line 1 column 4)"
+    },
+    {
+      "source": "{\n\"a\":\n}",
+      "error": "Unexpected token '}', \"{\n\"a\":\n}\" is not valid JSON"
+    },
+    {
+      "source": "falsex",
+      "error": "Unexpected non-whitespace character after JSON at position 5 (line 1 column 6)"
+    },
+    {
+      "source": "undefined",
+      "error": "\"undefined\" is not valid JSON"
+    },
+    {
+      "source": "NaN",
+      "error": "\"NaN\" is not valid JSON"
+    },
+    {
+      "source": "Infinity",
+      "error": "\"Infinity\" is not valid JSON"
+    },
+    {
+      "source": "foo",
+      "error": "Unexpected token 'o', \"foo\" is not valid JSON"
+    },
+    {
+      "source": "\"x",
+      "error": "Unterminated string in JSON at position 2 (line 1 column 3)"
+    },
+    {
+      "source": "\"a\nx\"",
+      "error": "Bad control character in string literal in JSON at position 2 (line 1 column 3)"
+    },
+    {
+      "source": "\"\\q\"",
+      "error": "Bad escaped character in JSON at position 2 (line 1 column 3)"
+    },
+    {
+      "source": "\"\\uXX12\"",
+      "error": "Bad Unicode escape in JSON at position 3 (line 1 column 4)"
+    },
+    {
+      "source": "-",
+      "error": "No number after minus sign in JSON at position 1 (line 1 column 2)"
+    },
+    {
+      "source": "01",
+      "error": "Unexpected number in JSON at position 1 (line 1 column 2)"
+    },
+    {
+      "source": "1.",
+      "error": "Unterminated fractional number in JSON at position 2 (line 1 column 3)"
+    },
+    {
+      "source": "1e",
+      "error": "Exponent part is missing a number in JSON at position 2 (line 1 column 3)"
+    },
+    {
+      "source": "1e+",
+      "error": "Exponent part is missing a number in JSON at position 3 (line 1 column 4)"
+    },
+    {
+      "source": "[tru]",
+      "error": "Unexpected token ']', \"[tru]\" is not valid JSON"
+    },
+    {
+      "source": "nul",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "[false,true]z",
+      "error": "Unexpected non-whitespace character after JSON at position 12 (line 1 column 13)"
+    },
+    {
+      "source": "{} x",
+      "error": "Unexpected non-whitespace character after JSON at position 3 (line 1 column 4)"
+    },
+    {
+      "source": "\"a\\",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "\"\\u1",
+      "error": "Bad Unicode escape in JSON at position 4 (line 1 column 5)"
+    },
+    {
+      "source": "\"\\u12z\"",
+      "error": "Bad Unicode escape in JSON at position 5 (line 1 column 6)"
+    },
+    {
+      "source": "[01]",
+      "error": "Unexpected number in JSON at position 2 (line 1 column 3)"
+    },
+    {
+      "source": "[-x]",
+      "error": "No number after minus sign in JSON at position 2 (line 1 column 3)"
+    },
+    {
+      "source": "[1.e2]",
+      "error": "Unterminated fractional number in JSON at position 3 (line 1 column 4)"
+    },
+    {
+      "source": "[1eX]",
+      "error": "Exponent part is missing a number in JSON at position 3 (line 1 column 4)"
+    },
+    {
+      "source": "[true\n,false\r\n,\t?]",
+      "error": "Unexpected token '?', \"[true\n,false\r\n,\t?]\" is not valid JSON"
+    },
+    {
+      "source": "true ",
+      "error": "Unexpected non-whitespace character after JSON at position 4 (line 1 column 5)"
+    },
+    {
+      "source": "{\"a\":1\n x}",
+      "error": "Expected ',' or '}' after property value in JSON at position 8 (line 2 column 2)"
+    },
+    {
+      "source": "{\"a\":1\r\n x}",
+      "error": "Expected ',' or '}' after property value in JSON at position 9 (line 2 column 2)"
+    },
+    {
+      "source": "{\"a\":1\r x}",
+      "error": "Expected ',' or '}' after property value in JSON at position 8 (line 2 column 2)"
+    },
+    {
+      "source": "[\r\n1\n2]",
+      "error": "Expected ',' or ']' after array element in JSON at position 5 (line 3 column 1)"
+    },
+    {
+      "source": "[object Object]",
+      "error": "\"[object Object]\" is not valid JSON"
+    },
+    {
+      "source": "nullx",
+      "error": "Unexpected non-whitespace character after JSON at position 4 (line 1 column 5)"
+    },
+    {
+      "source": "truX",
+      "error": "Unexpected token 'X', \"truX\" is not valid JSON"
+    },
+    {
+      "source": "-Infinity",
+      "error": "No number after minus sign in JSON at position 1 (line 1 column 2)"
+    },
+    {
+      "source": "+1",
+      "error": "Unexpected token '+', \"+1\" is not valid JSON"
+    },
+    {
+      "source": "[null, false,",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\":",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\"",
+      "error": "Expected ':' after property name in JSON at position 4 (line 1 column 5)"
+    },
+    {
+      "source": "{\"a\":1,",
+      "error": "Expected double-quoted property name in JSON at position 7 (line 1 column 8)"
+    },
+    {
+      "source": "{\"a\":1",
+      "error": "Expected ',' or '}' after property value in JSON at position 6 (line 1 column 7)"
+    },
+    {
+      "source": "[\"x\"",
+      "error": "Expected ',' or ']' after array element in JSON at position 4 (line 1 column 5)"
+    },
+    {
+      "source": "﻿{}",
+      "error": "Unexpected token '﻿', \"﻿{}\" is not valid JSON"
+    },
+    {
+      "source": "null",
+      "result": "null"
+    },
+    {
+      "source": "true",
+      "result": "true"
+    },
+    {
+      "source": "false",
+      "result": "false"
+    },
+    {
+      "source": "0",
+      "result": "0"
+    },
+    {
+      "source": "-0",
+      "result": "0"
+    },
+    {
+      "source": "1e400",
+      "result": "null"
+    },
+    {
+      "source": "-1e400",
+      "result": "null"
+    },
+    {
+      "source": "1e-400",
+      "result": "0"
+    },
+    {
+      "source": "9007199254740993",
+      "result": "9007199254740992"
+    },
+    {
+      "source": "{\"2\":2,\"1\":1,\"__proto__\":{},\"a\":1,\"a\":2}",
+      "result": "{\"1\":1,\"2\":2,\"__proto__\":{},\"a\":2}"
+    },
+    {
+      "source": "\"\\ud83d\\ude00\"",
+      "result": "\"😀\""
+    },
+    {
+      "source": "x                  ",
+      "error": "Unexpected token 'x', \"x                  \" is not valid JSON"
+    },
+    {
+      "source": "        x          ",
+      "error": "Unexpected token 'x', \"        x          \" is not valid JSON"
+    },
+    {
+      "source": "         x         ",
+      "error": "Unexpected token 'x', \"         x         \" is not valid JSON"
+    },
+    {
+      "source": "          x        ",
+      "error": "Unexpected token 'x', \"          x        \" is not valid JSON"
+    },
+    {
+      "source": "           x       ",
+      "error": "Unexpected token 'x', \"           x       \" is not valid JSON"
+    },
+    {
+      "source": "               x   ",
+      "error": "Unexpected token 'x', \"               x   \" is not valid JSON"
+    },
+    {
+      "source": "x                   ",
+      "error": "Unexpected token 'x', \"x                   \" is not valid JSON"
+    },
+    {
+      "source": "        x           ",
+      "error": "Unexpected token 'x', \"        x           \" is not valid JSON"
+    },
+    {
+      "source": "         x          ",
+      "error": "Unexpected token 'x', \"         x          \" is not valid JSON"
+    },
+    {
+      "source": "          x         ",
+      "error": "Unexpected token 'x', \"          x         \" is not valid JSON"
+    },
+    {
+      "source": "           x        ",
+      "error": "Unexpected token 'x', \"           x        \" is not valid JSON"
+    },
+    {
+      "source": "               x    ",
+      "error": "Unexpected token 'x', \"               x    \" is not valid JSON"
+    },
+    {
+      "source": "x                    ",
+      "error": "Unexpected token 'x', \"x         \"... is not valid JSON"
+    },
+    {
+      "source": "        x            ",
+      "error": "Unexpected token 'x', \"        x         \"... is not valid JSON"
+    },
+    {
+      "source": "         x           ",
+      "error": "Unexpected token 'x', \"         x         \"... is not valid JSON"
+    },
+    {
+      "source": "          x          ",
+      "error": "Unexpected token 'x', ...\"          x         \"... is not valid JSON"
+    },
+    {
+      "source": "           x         ",
+      "error": "Unexpected token 'x', ...\"          x         \" is not valid JSON"
+    },
+    {
+      "source": "               x     ",
+      "error": "Unexpected token 'x', ...\"          x     \" is not valid JSON"
+    },
+    {
+      "source": "x                     ",
+      "error": "Unexpected token 'x', \"x         \"... is not valid JSON"
+    },
+    {
+      "source": "        x             ",
+      "error": "Unexpected token 'x', \"        x         \"... is not valid JSON"
+    },
+    {
+      "source": "         x            ",
+      "error": "Unexpected token 'x', \"         x         \"... is not valid JSON"
+    },
+    {
+      "source": "          x           ",
+      "error": "Unexpected token 'x', ...\"          x         \"... is not valid JSON"
+    },
+    {
+      "source": "           x          ",
+      "error": "Unexpected token 'x', ...\"          x         \"... is not valid JSON"
+    },
+    {
+      "source": "               x      ",
+      "error": "Unexpected token 'x', ...\"          x      \" is not valid JSON"
+    },
+    {
+      "source": "x                             ",
+      "error": "Unexpected token 'x', \"x         \"... is not valid JSON"
+    },
+    {
+      "source": "        x                     ",
+      "error": "Unexpected token 'x', \"        x         \"... is not valid JSON"
+    },
+    {
+      "source": "         x                    ",
+      "error": "Unexpected token 'x', \"         x         \"... is not valid JSON"
+    },
+    {
+      "source": "          x                   ",
+      "error": "Unexpected token 'x', ...\"          x         \"... is not valid JSON"
+    },
+    {
+      "source": "           x                  ",
+      "error": "Unexpected token 'x', ...\"          x         \"... is not valid JSON"
+    },
+    {
+      "source": "               x              ",
+      "error": "Unexpected token 'x', ...\"          x         \"... is not valid JSON"
+    },
+    {
+      "source": "?\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Unexpected token '?', \"?\"a\":[1,tr\"... is not valid JSON"
+    },
+    {
+      "source": "{?a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Expected property name or '}' in JSON at position 1 (line 1 column 2)"
+    },
+    {
+      "source": "{\"",
+      "error": "Unterminated string in JSON at position 2 (line 1 column 3)"
+    },
+    {
+      "source": "{\"?\":[1,true,null,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "result": "{\"?\":[1,true,null,\"x\"],\"b\":{\"k\":1300000000000}}"
+    },
+    {
+      "source": "{\"a",
+      "error": "Unterminated string in JSON at position 3 (line 1 column 4)"
+    },
+    {
+      "source": "{\"a?:[1,true,null,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Expected ':' after property name in JSON at position 19 (line 1 column 20)"
+    },
+    {
+      "source": "{\"a\"?[1,true,null,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Expected ':' after property name in JSON at position 4 (line 1 column 5)"
+    },
+    {
+      "source": "{\"a\":?1,true,null,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Unexpected token '?', \"{\"a\":?1,true,nu\"... is not valid JSON"
+    },
+    {
+      "source": "{\"a\":[",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\":[?,true,null,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Unexpected token '?', \"{\"a\":[?,true,nul\"... is not valid JSON"
+    },
+    {
+      "source": "{\"a\":[1",
+      "error": "Expected ',' or ']' after array element in JSON at position 7 (line 1 column 8)"
+    },
+    {
+      "source": "{\"a\":[1?true,null,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Expected ',' or ']' after array element in JSON at position 7 (line 1 column 8)"
+    },
+    {
+      "source": "{\"a\":[1,",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\":[1,?rue,null,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Unexpected token '?', \"{\"a\":[1,?rue,null,\"... is not valid JSON"
+    },
+    {
+      "source": "{\"a\":[1,t",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\":[1,t?ue,null,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Unexpected token '?', \"{\"a\":[1,t?ue,null,\"\"... is not valid JSON"
+    },
+    {
+      "source": "{\"a\":[1,tr",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\":[1,tr?e,null,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Unexpected token '?', ...\"{\"a\":[1,tr?e,null,\"x\"... is not valid JSON"
+    },
+    {
+      "source": "{\"a\":[1,tru",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\":[1,tru?,null,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Unexpected token '?', ...\"\"a\":[1,tru?,null,\"x\"\"... is not valid JSON"
+    },
+    {
+      "source": "{\"a\":[1,true",
+      "error": "Expected ',' or ']' after array element in JSON at position 12 (line 1 column 13)"
+    },
+    {
+      "source": "{\"a\":[1,true?null,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Expected ',' or ']' after array element in JSON at position 12 (line 1 column 13)"
+    },
+    {
+      "source": "{\"a\":[1,true,",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\":[1,true,?ull,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Unexpected token '?', ...\"\":[1,true,?ull,\"x\"],\"... is not valid JSON"
+    },
+    {
+      "source": "{\"a\":[1,true,n",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\":[1,true,n?ll,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Unexpected token '?', ...\":[1,true,n?ll,\"x\"],\"\"... is not valid JSON"
+    },
+    {
+      "source": "{\"a\":[1,true,nu",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\":[1,true,nu?l,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Unexpected token '?', ...\"[1,true,nu?l,\"x\"],\"b\"... is not valid JSON"
+    },
+    {
+      "source": "{\"a\":[1,true,nul",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\":[1,true,nul?,\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Unexpected token '?', ...\"1,true,nul?,\"x\"],\"b\"\"... is not valid JSON"
+    },
+    {
+      "source": "{\"a\":[1,true,null",
+      "error": "Expected ',' or ']' after array element in JSON at position 17 (line 1 column 18)"
+    },
+    {
+      "source": "{\"a\":[1,true,null?\"x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Expected ',' or ']' after array element in JSON at position 17 (line 1 column 18)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\":[1,true,null,?x\"],\"b\":{\"k\":1.3e+12}}",
+      "error": "Unexpected token '?', ...\"true,null,?x\"],\"b\":{\"... is not valid JSON"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"",
+      "error": "Unterminated string in JSON at position 19 (line 1 column 20)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"?\"],\"b\":{\"k\":1.3e+12}}",
+      "result": "{\"a\":[1,true,null,\"?\"],\"b\":{\"k\":1300000000000}}"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x",
+      "error": "Unterminated string in JSON at position 20 (line 1 column 21)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x?],\"b\":{\"k\":1.3e+12}}",
+      "error": "Expected ',' or ']' after array element in JSON at position 24 (line 1 column 25)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"",
+      "error": "Expected ',' or ']' after array element in JSON at position 21 (line 1 column 22)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"?,\"b\":{\"k\":1.3e+12}}",
+      "error": "Expected ',' or ']' after array element in JSON at position 21 (line 1 column 22)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"]",
+      "error": "Expected ',' or '}' after property value in JSON at position 22 (line 1 column 23)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"]?\"b\":{\"k\":1.3e+12}}",
+      "error": "Expected ',' or '}' after property value in JSON at position 22 (line 1 column 23)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],",
+      "error": "Expected double-quoted property name in JSON at position 23 (line 1 column 24)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],?b\":{\"k\":1.3e+12}}",
+      "error": "Expected double-quoted property name in JSON at position 23 (line 1 column 24)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"",
+      "error": "Unterminated string in JSON at position 24 (line 1 column 25)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"?\":{\"k\":1.3e+12}}",
+      "result": "{\"a\":[1,true,null,\"x\"],\"?\":{\"k\":1300000000000}}"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b",
+      "error": "Unterminated string in JSON at position 25 (line 1 column 26)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b?:{\"k\":1.3e+12}}",
+      "error": "Expected ':' after property name in JSON at position 29 (line 1 column 30)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\"",
+      "error": "Expected ':' after property name in JSON at position 26 (line 1 column 27)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\"?{\"k\":1.3e+12}}",
+      "error": "Expected ':' after property name in JSON at position 26 (line 1 column 27)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":?\"k\":1.3e+12}}",
+      "error": "Unexpected token '?', ...\",\"x\"],\"b\":?\"k\":1.3e+\"... is not valid JSON"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{",
+      "error": "Expected property name or '}' in JSON at position 28 (line 1 column 29)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{?k\":1.3e+12}}",
+      "error": "Expected property name or '}' in JSON at position 28 (line 1 column 29)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"",
+      "error": "Unterminated string in JSON at position 29 (line 1 column 30)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"?\":1.3e+12}}",
+      "result": "{\"a\":[1,true,null,\"x\"],\"b\":{\"?\":1300000000000}}"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k",
+      "error": "Unterminated string in JSON at position 30 (line 1 column 31)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k?:1.3e+12}}",
+      "error": "Unterminated string in JSON at position 41 (line 1 column 42)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\"",
+      "error": "Expected ':' after property name in JSON at position 31 (line 1 column 32)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\"?1.3e+12}}",
+      "error": "Expected ':' after property name in JSON at position 31 (line 1 column 32)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":?.3e+12}}",
+      "error": "Unexpected token '?', ...\",\"b\":{\"k\":?.3e+12}}\" is not valid JSON"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1",
+      "error": "Expected ',' or '}' after property value in JSON at position 33 (line 1 column 34)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1?3e+12}}",
+      "error": "Expected ',' or '}' after property value in JSON at position 33 (line 1 column 34)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.",
+      "error": "Unterminated fractional number in JSON at position 34 (line 1 column 35)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.?e+12}}",
+      "error": "Unterminated fractional number in JSON at position 34 (line 1 column 35)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3",
+      "error": "Expected ',' or '}' after property value in JSON at position 35 (line 1 column 36)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3?+12}}",
+      "error": "Expected ',' or '}' after property value in JSON at position 35 (line 1 column 36)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3e",
+      "error": "Exponent part is missing a number in JSON at position 36 (line 1 column 37)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3e?12}}",
+      "error": "Exponent part is missing a number in JSON at position 36 (line 1 column 37)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3e+",
+      "error": "Exponent part is missing a number in JSON at position 37 (line 1 column 38)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3e+?2}}",
+      "error": "Exponent part is missing a number in JSON at position 37 (line 1 column 38)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3e+1",
+      "error": "Expected ',' or '}' after property value in JSON at position 38 (line 1 column 39)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3e+1?}}",
+      "error": "Expected ',' or '}' after property value in JSON at position 38 (line 1 column 39)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3e+12",
+      "error": "Expected ',' or '}' after property value in JSON at position 39 (line 1 column 40)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3e+12?}",
+      "error": "Expected ',' or '}' after property value in JSON at position 39 (line 1 column 40)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3e+12}",
+      "error": "Expected ',' or '}' after property value in JSON at position 40 (line 1 column 41)"
+    },
+    {
+      "source": "{\"a\":[1,true,null,\"x\"],\"b\":{\"k\":1.3e+12}?",
+      "error": "Expected ',' or '}' after property value in JSON at position 40 (line 1 column 41)"
+    },
+    {
+      "source": "?\"\\u1234\\n\",123,false,{\"x\":-3.2}]",
+      "error": "Unexpected token '?', \"?\"\\u1234\\n\"... is not valid JSON"
+    },
+    {
+      "source": "[?\\u1234\\n\",123,false,{\"x\":-3.2}]",
+      "error": "Unexpected token '?', \"[?\\u1234\\n\"\"... is not valid JSON"
+    },
+    {
+      "source": "[\"",
+      "error": "Unterminated string in JSON at position 2 (line 1 column 3)"
+    },
+    {
+      "source": "[\"?u1234\\n\",123,false,{\"x\":-3.2}]",
+      "result": "[\"?u1234\\n\",123,false,{\"x\":-3.2}]"
+    },
+    {
+      "source": "[\"\\",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "[\"\\?1234\\n\",123,false,{\"x\":-3.2}]",
+      "error": "Bad escaped character in JSON at position 3 (line 1 column 4)"
+    },
+    {
+      "source": "[\"\\u",
+      "error": "Bad Unicode escape in JSON at position 4 (line 1 column 5)"
+    },
+    {
+      "source": "[\"\\u?234\\n\",123,false,{\"x\":-3.2}]",
+      "error": "Bad Unicode escape in JSON at position 4 (line 1 column 5)"
+    },
+    {
+      "source": "[\"\\u1",
+      "error": "Bad Unicode escape in JSON at position 5 (line 1 column 6)"
+    },
+    {
+      "source": "[\"\\u1?34\\n\",123,false,{\"x\":-3.2}]",
+      "error": "Bad Unicode escape in JSON at position 5 (line 1 column 6)"
+    },
+    {
+      "source": "[\"\\u12",
+      "error": "Bad Unicode escape in JSON at position 6 (line 1 column 7)"
+    },
+    {
+      "source": "[\"\\u12?4\\n\",123,false,{\"x\":-3.2}]",
+      "error": "Bad Unicode escape in JSON at position 6 (line 1 column 7)"
+    },
+    {
+      "source": "[\"\\u123",
+      "error": "Bad Unicode escape in JSON at position 7 (line 1 column 8)"
+    },
+    {
+      "source": "[\"\\u123?\\n\",123,false,{\"x\":-3.2}]",
+      "error": "Bad Unicode escape in JSON at position 7 (line 1 column 8)"
+    },
+    {
+      "source": "[\"\\u1234",
+      "error": "Unterminated string in JSON at position 8 (line 1 column 9)"
+    },
+    {
+      "source": "[\"\\u1234?n\",123,false,{\"x\":-3.2}]",
+      "result": "[\"ሴ?n\",123,false,{\"x\":-3.2}]"
+    },
+    {
+      "source": "[\"\\u1234\\",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "[\"\\u1234\\?\",123,false,{\"x\":-3.2}]",
+      "error": "Bad escaped character in JSON at position 9 (line 1 column 10)"
+    },
+    {
+      "source": "[\"\\u1234\\n",
+      "error": "Unterminated string in JSON at position 10 (line 1 column 11)"
+    },
+    {
+      "source": "[\"\\u1234\\n?,123,false,{\"x\":-3.2}]",
+      "error": "Expected ',' or ']' after array element in JSON at position 24 (line 1 column 25)"
+    },
+    {
+      "source": "[\"\\u1234\\n\"",
+      "error": "Expected ',' or ']' after array element in JSON at position 11 (line 1 column 12)"
+    },
+    {
+      "source": "[\"\\u1234\\n\"?123,false,{\"x\":-3.2}]",
+      "error": "Expected ',' or ']' after array element in JSON at position 11 (line 1 column 12)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "[\"\\u1234\\n\",?23,false,{\"x\":-3.2}]",
+      "error": "Unexpected token '?', ...\"\\u1234\\n\",?23,false,\"... is not valid JSON"
+    },
+    {
+      "source": "[\"\\u1234\\n\",1",
+      "error": "Expected ',' or ']' after array element in JSON at position 13 (line 1 column 14)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",1?3,false,{\"x\":-3.2}]",
+      "error": "Expected ',' or ']' after array element in JSON at position 13 (line 1 column 14)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",12",
+      "error": "Expected ',' or ']' after array element in JSON at position 14 (line 1 column 15)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",12?,false,{\"x\":-3.2}]",
+      "error": "Expected ',' or ']' after array element in JSON at position 14 (line 1 column 15)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123",
+      "error": "Expected ',' or ']' after array element in JSON at position 15 (line 1 column 16)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123?false,{\"x\":-3.2}]",
+      "error": "Expected ',' or ']' after array element in JSON at position 15 (line 1 column 16)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,?alse,{\"x\":-3.2}]",
+      "error": "Unexpected token '?', ...\"34\\n\",123,?alse,{\"x\"\"... is not valid JSON"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,f",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,f?lse,{\"x\":-3.2}]",
+      "error": "Unexpected token '?', ...\"4\\n\",123,f?lse,{\"x\":\"... is not valid JSON"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,fa",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,fa?se,{\"x\":-3.2}]",
+      "error": "Unexpected token '?', ...\"\\n\",123,fa?se,{\"x\":-\"... is not valid JSON"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,fal",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,fal?e,{\"x\":-3.2}]",
+      "error": "Unexpected token '?', ...\"n\",123,fal?e,{\"x\":-3\"... is not valid JSON"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,fals",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,fals?,{\"x\":-3.2}]",
+      "error": "Unexpected token '?', ...\"\",123,fals?,{\"x\":-3.\"... is not valid JSON"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false",
+      "error": "Expected ',' or ']' after array element in JSON at position 21 (line 1 column 22)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false?{\"x\":-3.2}]",
+      "error": "Expected ',' or ']' after array element in JSON at position 21 (line 1 column 22)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,?\"x\":-3.2}]",
+      "error": "Unexpected token '?', ...\"123,false,?\"x\":-3.2}\"... is not valid JSON"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{",
+      "error": "Expected property name or '}' in JSON at position 23 (line 1 column 24)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{?x\":-3.2}]",
+      "error": "Expected property name or '}' in JSON at position 23 (line 1 column 24)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"",
+      "error": "Unterminated string in JSON at position 24 (line 1 column 25)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"?\":-3.2}]",
+      "result": "[\"ሴ\\n\",123,false,{\"?\":-3.2}]"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x",
+      "error": "Unterminated string in JSON at position 25 (line 1 column 26)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x?:-3.2}]",
+      "error": "Unterminated string in JSON at position 33 (line 1 column 34)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\"",
+      "error": "Expected ':' after property name in JSON at position 26 (line 1 column 27)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\"?-3.2}]",
+      "error": "Expected ':' after property name in JSON at position 26 (line 1 column 27)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\":",
+      "error": "Unexpected end of JSON input"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\":?3.2}]",
+      "error": "Unexpected token '?', ...\"alse,{\"x\":?3.2}]\" is not valid JSON"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\":-",
+      "error": "No number after minus sign in JSON at position 28 (line 1 column 29)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\":-?.2}]",
+      "error": "No number after minus sign in JSON at position 28 (line 1 column 29)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\":-3",
+      "error": "Expected ',' or '}' after property value in JSON at position 29 (line 1 column 30)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\":-3?2}]",
+      "error": "Expected ',' or '}' after property value in JSON at position 29 (line 1 column 30)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\":-3.",
+      "error": "Unterminated fractional number in JSON at position 30 (line 1 column 31)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\":-3.?}]",
+      "error": "Unterminated fractional number in JSON at position 30 (line 1 column 31)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\":-3.2",
+      "error": "Expected ',' or '}' after property value in JSON at position 31 (line 1 column 32)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\":-3.2?]",
+      "error": "Expected ',' or '}' after property value in JSON at position 31 (line 1 column 32)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\":-3.2}",
+      "error": "Expected ',' or ']' after array element in JSON at position 32 (line 1 column 33)"
+    },
+    {
+      "source": "[\"\\u1234\\n\",123,false,{\"x\":-3.2}?",
+      "error": "Expected ',' or ']' after array element in JSON at position 32 (line 1 column 33)"
+    },
+    {
+      "source": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+      "result": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"
+    }
+  ]
+}

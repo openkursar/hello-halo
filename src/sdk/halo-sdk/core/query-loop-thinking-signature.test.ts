@@ -6,7 +6,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { queryLoop } from './query-loop.js';
+import { queryLoop } from '../index.js';
 import type { SDKMessage } from './query-types.js';
 import type { LlmProvider, Message, ProviderRequest, StreamEvent } from '../types/provider.js';
 import type { Tool } from '../types/tool.js';

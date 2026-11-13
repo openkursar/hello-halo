@@ -50,8 +50,10 @@ source only, with a 1 MiB limit, removes frontmatter and expands arguments in on
 pass. Execution directives such as `context: fork` are not interpreted by the
 SDK loader; it returns instructions to the existing caller and starts no alternate
 executor. A missing or unreadable selected source fails rather than switching to a
-different workflow. Bundled bodies are TypeScript constants so both the package
-build and the worker bundle contain them without access to a source checkout.
+different workflow. Bundled definitions come from the Rust Harness catalogs and
+resources; the build also emits JavaScript baseline assets for synchronous
+constants. Direct and Worker invocation use the same native definitions without
+requiring a source checkout.
 
 The prompt catalog has a fixed text budget and points to `Skill(list)` if entries
 do not fit. Large lists are bounded too; `args` filters list entries by name.

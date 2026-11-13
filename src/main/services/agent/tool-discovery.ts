@@ -6,6 +6,7 @@ type ServiceContext = ToolDiscoveryOptions['services'][string]
 // Transport records are also consumed by external engines; host policy stays out of them.
 const installedContexts = new WeakMap<object, { appId: string; policy: ServiceContext }>()
 
+const deferredCapabilities = new Set(['ai-browser', 'ai-terminal'])
 const deferredBuiltins = new Map([
   ['halo-apps', 'Create and manage digital humans, their settings and installed capabilities.'],
   ['halo-email', 'Read, search and send email through the configured email account.'],
@@ -51,9 +52,10 @@ export function buildToolDiscoveryOptions(
       services[name] = { ...installed.policy }
       continue
     }
+    if ((server as { type?: unknown }).type !== 'sdk') continue
     const summary = deferredBuiltins.get(name)
-    if (summary && (server as { type?: unknown }).type === 'sdk') {
-      services[name] = { identity: `builtin:${name}`, loading: 'deferred', summary }
+    if (summary || deferredCapabilities.has(name)) {
+      services[name] = { identity: `builtin:${name}`, loading: 'deferred', ...(summary ? { summary } : {}) }
     }
   }
   // Unclassified servers retain the SDK's eager default.

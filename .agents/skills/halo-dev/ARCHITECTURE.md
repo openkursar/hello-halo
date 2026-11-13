@@ -1006,7 +1006,7 @@ Halo SDK (`src/sdk/halo-sdk/`) is a host-independent general-purpose Agent runti
 and npm package; its development entry is `src/sdk/halo-sdk/AGENTS.md`. It must not
 import Halo application code or Electron. Halo consumes its public package entries;
 host policy and UI stay in the application, connected through explicit SDK contracts.
-The adapter uses the public Worker API; its contract is in
+The adapter uses the public native runtime API and a same-process Rust library; its contract is in
 `src/main/services/agent/DESIGN.md`. Package ownership does not imply public npm
 publication or an independent repository.
 

@@ -126,6 +126,7 @@ describe('session tool-context refresh at MCP boundaries', () => {
       [{ type: 'tool_use', id: 'refresh', name: 'RefreshFixture', input: {} }, direct('issued-old', { customer: '42' })],
       [direct('fresh-next-step', { customer: '42' })], [done],
     ], async () => {}, {
+      systemPrompt: { type: 'preset', preset: 'default' },
       toolDiscovery: { services: { crm: { identity: 'installed-crm', loading: 'eager' } } },
       customTools: [{ name: 'RefreshFixture', description: 'Reconnect the fixture.', inputSchema: { type: 'object' }, permissionLevel: 'none',
         async execute() {
@@ -155,6 +156,10 @@ describe('session tool-context refresh at MCP boundaries', () => {
       description: 'Order lookup definition version 2.', input_schema: { properties: { customer: { minLength: 2 } } },
     });
     expect(current.requests[2].tools).toEqual(current.requests[1].tools);
+    expect(JSON.stringify(current.requests[0].systemPrompt)).toContain('Order guide version 1.');
+    expect(JSON.stringify(current.requests[1].systemPrompt)).toContain('Order guide version 2.');
+    expect(JSON.stringify(current.requests[1].systemPrompt)).not.toContain('Order guide version 1.');
+    expect(current.requests[2].systemPrompt).toEqual(current.requests[1].systemPrompt);
   });
 
   it('refuses a stale prepared call, discovers the replacement schema and resumes the same task', async () => {
@@ -177,10 +182,10 @@ describe('session tool-context refresh at MCP boundaries', () => {
     expect(String(results.find(result => result.tool_use_id === 'prepared-old')?.content)).toContain('stale call was not executed');
     expect(results.find(result => result.tool_use_id === 'undiscovered-new')).toMatchObject({ is_error: true });
     expect(results.find(result => result.tool_use_id === 'direct-new')).toMatchObject({ is_error: true });
-    const old = JSON.parse(String(results.find(result => result.tool_use_id === 'find-old')?.content)).tools[0];
-    const replacement = JSON.parse(String(results.find(result => result.tool_use_id === 'find-new')?.content)).tools[0];
-    expect(old.input_schema.required).toEqual(['customer']);
-    expect(replacement.input_schema.required).toEqual(['orderId']);
+    const old = JSON.parse(String(results.find(result => result.tool_use_id === 'find-old')?.content)).targets[0];
+    const replacement = JSON.parse(String(results.find(result => result.tool_use_id === 'find-new')?.content)).targets[0];
+    expect(old.arguments_schema.required).toEqual(['customer']);
+    expect(replacement.arguments_schema.required).toEqual(['orderId']);
     expect(replacement.version).not.toBe(old.version);
     assertFixedTools(current.requests);
     expect(current.requests[1].messages.slice(0, current.requests[0].messages.length)).toEqual(current.requests[0].messages);

@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { ENGINE_RUNTIMES } = require('../engine-runtimes.cjs');
+const { ENGINE_RUNTIMES, validateNativeRuntime } = require('../engine-runtimes.cjs');
 
 const SDK_DIR = path.join('src', 'sdk', 'halo-sdk');
 
@@ -33,6 +33,10 @@ function buildHaloSdk(root, { env = process.env, execFile = execFileSync } = {})
   execFile('npm', ['run', 'build'], { cwd: sdk, env, stdio: 'inherit' });
   const missing = requiredFiles.filter(file => !fs.existsSync(path.join(sdk, file)));
   if (missing.length) throw new Error(`Halo SDK build did not produce ${missing.join(', ')}.`);
+  for (const target of (env.HALO_SDK_NATIVE_TARGETS || `${process.platform}-${process.arch}`).split(',')) {
+    const [platform, arch] = target.split('-');
+    validateNativeRuntime(ENGINE_RUNTIMES.halo, file => fs.readFileSync(path.join(sdk, file)), platform, arch);
+  }
 }
 
 /** The checkout a package is built from, so uncommitted SDK work is visible in the build log. */

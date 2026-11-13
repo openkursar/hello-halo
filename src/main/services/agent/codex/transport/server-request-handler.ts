@@ -54,7 +54,7 @@ export interface AskQuestionPayload {
   }>
 }
 
-/** Result of an ask — keys map to question.header by convention. */
+/** Result of an ask — keys are the full question text. */
 export type AskQuestionAnswers = Record<string, string>
 
 export interface ServerRequestHandlerDeps {
@@ -129,7 +129,13 @@ export function registerServerRequestHandlers(
         const params = ctx.params as ToolRequestUserInputParams | undefined
         const payload = elicitationToAskQuestion(params)
         const answers = await deps.askQuestion(payload)
-        return normalizeElicitationAnswers(answers, params)
+        const question = payload.questions[0].question
+        if (typeof answers[question] !== 'string') {
+          console.warn('[Codex][elicitation] Tool input answer missing; returning an empty value', {
+            conversationId: deps.conversationId,
+          })
+        }
+        return normalizeElicitationAnswers(answers, question, params)
       },
     ),
     client.onServerRequest(
@@ -148,7 +154,13 @@ export function registerServerRequestHandlers(
           }],
         }
         const answers = await deps.askQuestion(payload)
-        const decision = (answers['MCP request'] || '').toLowerCase().startsWith('approve')
+        const question = payload.questions[0].question
+        if (typeof answers[question] !== 'string') {
+          console.warn('[Codex][elicitation] MCP answer missing; rejecting the request', {
+            conversationId: deps.conversationId,
+          })
+        }
+        const decision = (answers[question] || '').toLowerCase().startsWith('approve')
         return { action: decision ? 'accept' : 'reject' }
       },
     ),
@@ -211,9 +223,10 @@ function elicitationToAskQuestion(params: ToolRequestUserInputParams | undefined
 
 function normalizeElicitationAnswers(
   answers: AskQuestionAnswers,
+  question: string,
   params: ToolRequestUserInputParams | undefined,
 ): unknown {
-  const choice = answers['Tool input']
+  const choice = answers[question]
   // If the original options were enumerated, return the chosen value with
   // the same label the server provided. Otherwise return the free-text choice.
   if (Array.isArray(params?.options) && params!.options!.length > 0) {

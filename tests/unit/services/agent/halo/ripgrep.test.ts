@@ -20,7 +20,7 @@ function plant(root: string): string {
 function fakeSdk() {
   const runtime = { initialize: vi.fn(), close: vi.fn(), diagnostics: vi.fn(),
     createSession: vi.fn(async (_options: Record<string, unknown>, _placement?: unknown) => ({})), query: vi.fn() }
-  return { runtime, sdk: { createWorkerRuntime: () => runtime, getWorkerEntryUrl: () => new URL('file:///sdk/dist/worker/entry.js'),
+  return { runtime, sdk: { createNativeRuntime: () => runtime,
     tool: vi.fn(), createSdkMcpServer: vi.fn(), setLogger: vi.fn(),
     isResumeHistoryError: (error: unknown) => error instanceof Error && (error as { code?: unknown }).code === 'RESUME_HISTORY_UNAVAILABLE' } }
 }

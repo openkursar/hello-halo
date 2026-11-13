@@ -1,0 +1,36 @@
+{
+  "tools.code_search.bridge.close_failed": {
+    "text": "The search engine could not close cleanly.",
+    "slots": []
+  },
+  "tools.code_search.bridge.node_version": {
+    "text": "The optional code search backend requires a Node 22 or newer executable.",
+    "slots": []
+  },
+  "tools.code_search.bridge.missing_factory": {
+    "text": "The configured module does not expose createZvecGrep.",
+    "slots": []
+  },
+  "tools.code_search.bridge.invalid_method": {
+    "text": "The search backend received an invalid method.",
+    "slots": []
+  },
+  "tools.code_search.bridge.launch_failed": {
+    "text": "The code search backend could not be launched.",
+    "slots": []
+  },
+  "tools.code_search.bridge.worker_exited": {
+    "text": "The code search worker exited before completing its request ({status}).",
+    "slots": [
+      "status"
+    ]
+  },
+  "tools.code_search.bridge.invalid_request": {
+    "text": "Unexpected code search request.",
+    "slots": []
+  },
+  "tools.code_search.bridge.ipc_closed": {
+    "text": "The code search backend IPC channel closed.",
+    "slots": []
+  }
+}

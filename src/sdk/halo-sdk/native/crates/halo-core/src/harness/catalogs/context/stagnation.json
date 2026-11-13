@@ -1,0 +1,34 @@
+{
+  "context.stagnation.identical_input": {
+    "text": "The {tool} tool was called {occurrences} times with identical input within the last {considered} tool calls{detail}. This may be intentional; consider whether to continue or adjust your approach.",
+    "slots": [
+      "tool",
+      "occurrences",
+      "considered",
+      "detail"
+    ]
+  },
+  "context.stagnation.all_errors": {
+    "text": ", each returning an error",
+    "slots": []
+  },
+  "context.stagnation.identical_result": {
+    "text": ", each returning an identical result",
+    "slots": []
+  },
+  "context.stagnation.error_type": {
+    "text": " ({error_type})",
+    "slots": [
+      "error_type"
+    ]
+  },
+  "context.stagnation.same_error": {
+    "text": "The {tool} tool failed with the same error type{error_type} {occurrences} times within the last {considered} tool calls. This may be intentional; consider whether to continue or adjust your approach.",
+    "slots": [
+      "tool",
+      "error_type",
+      "occurrences",
+      "considered"
+    ]
+  }
+}

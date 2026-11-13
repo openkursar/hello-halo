@@ -1,4 +1,5 @@
 node_modules/
+/harness/generated/
 dist/
 *.tsbuildinfo
 .DS_Store
@@ -18,3 +19,6 @@ coverage/
 PROVENANCE-AUDIT.md
 PROVENANCE-DISPOSITIONS.md
 PROMPT-REVIEW.md
+
+# Rust build output
+native/target/

@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CollaborationRuntime, MemoryScopeStore, type CollaborationExecutor, type MemberExecutionRequest, type TurnCompletion } from './index.js';
+import { setTimeout as delay } from 'node:timers/promises';
+import { CollaborationRuntime, MemoryScopeStore, type CollaborationExecutor, type MemberExecutionRequest, type TurnCompletion } from '../native/collaboration.js';
 
 const hosts: CollaborationRuntime[] = [];
 afterEach(async () => {
   await Promise.all(hosts.splice(0).map(host => host.close()));
-  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -36,7 +36,8 @@ function fixture(options: { maxConcurrentTurns?: number; maxMembers?: number; id
 }
 
 async function until(condition: () => boolean): Promise<void> {
-  for (let i = 0; i < 100 && !condition(); i++) await Promise.resolve();
+  const deadline = performance.now() + 2_000;
+  while (!condition() && performance.now() < deadline) await delay(2);
   expect(condition()).toBe(true);
 }
 
@@ -179,15 +180,14 @@ describe('collaboration execution', () => {
   });
 
   it('releases only idle execution resources and preserves reusable identity', async () => {
-    vi.useFakeTimers();
     const f = fixture({ idleTimeoutMs: 100 });
     await f.host.spawn(f.host.coordinatorId, { name: 'reader', prompt: 'work' });
     await until(() => f.calls.length === 1);
-    await vi.advanceTimersByTimeAsync(1000);
+    await delay(1000);
     expect(f.executor.release).not.toHaveBeenCalled();
     f.finishes.get('reader')!({ kind: 'result', content: 'result' });
     await until(() => f.host.activeCount === 0);
-    await vi.advanceTimersByTimeAsync(100);
+    await until(() => vi.mocked(f.executor.release).mock.calls.length === 1);
     expect(f.executor.release).toHaveBeenCalledTimes(1);
     expect(f.store.members()).toHaveLength(1);
     await f.host.send(f.host.coordinatorId, 'reader', 'continue');
@@ -196,7 +196,6 @@ describe('collaboration execution', () => {
   });
 
   it('waits for an idle resource release already in progress before closing the host', async () => {
-    vi.useFakeTimers();
     const f = fixture({ idleTimeoutMs: 10 });
     let released!: () => void;
     const release = new Promise<void>(resolve => { released = resolve; });
@@ -205,11 +204,11 @@ describe('collaboration execution', () => {
     await until(() => f.calls.length === 1);
     f.finishes.get('worker')!({ kind: 'result', content: 'finished' });
     await until(() => f.host.activeCount === 0);
-    await vi.advanceTimersByTimeAsync(11);
+    await until(() => vi.mocked(f.executor.release).mock.calls.length === 1);
     expect(f.executor.release).toHaveBeenCalledOnce();
     let closed = false;
     const closing = f.host.close().then(() => { closed = true; });
-    await Promise.resolve();
+    await delay(20);
     expect(closed).toBe(false);
     released();
     await closing;
@@ -263,7 +262,7 @@ describe('collaboration execution', () => {
     let release!: () => void;
     vi.mocked(f.executor.validateArtifact).mockImplementation(() => new Promise(resolve => { release = () => resolve('report.md'); }));
     const late = f.calls[0].server.instance.callTool('team_post_finding', { ref: 'report.md' });
-    await Promise.resolve();
+    await until(() => vi.mocked(f.executor.validateArtifact).mock.calls.length === 1);
     await f.host.stop(f.host.coordinatorId, 'reader');
     await until(() => f.host.activeCount === 0);
     await f.host.send(f.host.coordinatorId, 'reader', 'new work');

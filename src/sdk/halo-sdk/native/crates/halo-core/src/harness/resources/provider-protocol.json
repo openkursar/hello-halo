@@ -1,0 +1,21 @@
+{
+  "xml": {
+    "open": "<{name}>",
+    "close": "</{name}>",
+    "parameter": "<param name=\"{name}\" type=\"{type}\" required=\"{required}\">{value}</param>",
+    "historyParameter": "<param name=\"{name}\">{value}</param>",
+    "types": {
+      "string": "string",
+      "integer": "integer",
+      "number": "float",
+      "boolean": "boolean",
+      "array": "array",
+      "object": "dict"
+    }
+  },
+  "json": {
+    "fenceOpen": "```json",
+    "fenceClose": "```"
+  },
+  "separator": "---"
+}

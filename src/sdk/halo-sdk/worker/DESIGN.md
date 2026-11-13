@@ -5,6 +5,9 @@ it starts nothing and does not load the agent loop. `createWorkerRuntime()` owns
 a reusable pool; `initialize()` warms one worker by default. A ready worker has
 loaded the SDK, not merely emitted Node's `online` event. Concurrent initialization
 and acquisition share that startup. The ordinary SDK entry remains in-process.
+Both entries execute the Rust core. Worker placement determines which JavaScript
+environment owns callbacks and public objects; native execution and owned
+resources still follow the session lifecycle.
 
 The runtime owns placement, RPC, callback cancellation, stream backpressure,
 health, retirement and shutdown. Core sessions own the loop, tools, history and
@@ -41,9 +44,9 @@ the optional message anchor and returns the recorded `deferred` or `full` format
 independently of currently configured services. Missing, corrupt or unlocatable
 anchored history raises the existing resume error. Importing the Worker entry
 does not read a transcript or load its reader; inspection starts only on a call.
-The standalone helper parses and validates on its calling thread. UI hosts use
-`runtime.readSessionToolContextMode` to run the same validation in the existing
-pool: a temporary reservation owns cancellation and cleanup, without creating an
+The standalone helper parses and validates on the native asynchronous runtime.
+`runtime.readSessionToolContextMode` uses the existing worker placement and a
+temporary reservation that owns cancellation and cleanup, without creating an
 agent session, connecting tools or invoking a model. Reads honor caller and
 shutdown cancellation, and release the reservation on both success and failure.
 
@@ -76,6 +79,11 @@ control; a slow reader backpressures execution without losing final messages.
 Closing a session first rejects new work, aborts pending callbacks and execution,
 then drains hooks, streams, MCP and persistence. A new session resuming the same
 transcript waits for retirement. Interrupt never terminates a shared worker.
+Native process owners remain opaque to the host. After logical session disposal,
+the execution entry awaits their termination and reaping before acknowledging
+close. Native child counts are reported at creation, result and close boundaries
+and in the existing heartbeat, independently of JavaScript child-process records.
+Diagnostics add the two counts; the host never adds native PIDs to its kill list.
 An unresponsive worker has a bounded deadline and retires all its sessions;
 replacements are demand-driven with a crash circuit breaker. Workers cannot
 isolate native crashes or process-wide exhaustion.

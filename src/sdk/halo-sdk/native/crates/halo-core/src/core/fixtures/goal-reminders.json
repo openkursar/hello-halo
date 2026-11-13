@@ -1,0 +1,201 @@
+{
+  "completion": "Before you finish, look back at what was asked in this turn. If something is still missing or unverified, continue. If everything is done, end without adding anything.",
+  "cases": [
+    {
+      "name": "absent",
+      "previous": null,
+      "goal": null,
+      "todos": [],
+      "change": "The user removed the goal. It no longer applies.",
+      "check": null,
+      "key": "{\"goal\":null,\"todos\":[]}"
+    },
+    {
+      "name": "new",
+      "previous": null,
+      "goal": {
+        "objective": "Finish the selected task",
+        "doneWhen": [
+          "Result exists",
+          "Evidence checked"
+        ],
+        "status": "active"
+      },
+      "todos": [],
+      "render": "Objective: Finish the selected task\nDone when:\n- Result exists\n- Evidence checked\nStatus: active",
+      "recitation": "Current goal:\nObjective: Finish the selected task\nDone when:\n- Result exists\n- Evidence checked\nStatus: active",
+      "change": "The user set a goal for this work.\nObjective: Finish the selected task\nDone when:\n- Result exists\n- Evidence checked\nStatus: active",
+      "check": "You ended your turn with work still open: the goal \"Finish the selected task\" is not marked complete.\nThis is a check, not an instruction to continue. If you stopped on purpose — the user asked you to stop here, you're waiting for their input, you're blocked, or the remaining items no longer apply — say so in a sentence and update the goal or todo if they are out of date. If you stopped unintentionally, pick up where you left off.",
+      "key": "{\"goal\":[\"Finish the selected task\",[\"Result exists\",\"Evidence checked\"]],\"todos\":[]}"
+    },
+    {
+      "name": "same",
+      "previous": {
+        "objective": "Finish the selected task",
+        "doneWhen": [
+          "Result exists",
+          "Evidence checked"
+        ],
+        "status": "active"
+      },
+      "goal": {
+        "objective": "Finish the selected task",
+        "doneWhen": [
+          "Result exists",
+          "Evidence checked"
+        ],
+        "status": "active"
+      },
+      "todos": [
+        {
+          "content": "already checked",
+          "status": "completed"
+        },
+        {
+          "content": "current step",
+          "status": "in_progress"
+        },
+        {
+          "content": "last step",
+          "status": "pending"
+        }
+      ],
+      "render": "Objective: Finish the selected task\nDone when:\n- Result exists\n- Evidence checked\nStatus: active",
+      "recitation": "Current goal:\nObjective: Finish the selected task\nDone when:\n- Result exists\n- Evidence checked\nStatus: active\nTodo: 1 of 3 completed; in progress: \"current step\".",
+      "change": "The user updated the goal.\nObjective: Finish the selected task\nDone when:\n- Result exists\n- Evidence checked\nStatus: active",
+      "check": "You ended your turn with work still open: the goal \"Finish the selected task\" is not marked complete, and 2 of 3 todo items are unfinished (next: \"current step\").\nThis is a check, not an instruction to continue. If you stopped on purpose — the user asked you to stop here, you're waiting for their input, you're blocked, or the remaining items no longer apply — say so in a sentence and update the goal or todo if they are out of date. If you stopped unintentionally, pick up where you left off.",
+      "key": "{\"goal\":[\"Finish the selected task\",[\"Result exists\",\"Evidence checked\"]],\"todos\":[[\"already checked\",\"completed\"],[\"current step\",\"in_progress\"],[\"last step\",\"pending\"]]}"
+    },
+    {
+      "name": "changed",
+      "previous": {
+        "objective": "Earlier task",
+        "doneWhen": [
+          "Result exists",
+          "Evidence checked"
+        ],
+        "status": "active"
+      },
+      "goal": {
+        "objective": "Finish the selected task",
+        "doneWhen": [
+          "Result exists",
+          "Evidence checked"
+        ],
+        "status": "active"
+      },
+      "todos": [
+        {
+          "content": "already checked",
+          "status": "completed"
+        },
+        {
+          "content": "current step",
+          "status": "in_progress"
+        },
+        {
+          "content": "last step",
+          "status": "pending"
+        }
+      ],
+      "render": "Objective: Finish the selected task\nDone when:\n- Result exists\n- Evidence checked\nStatus: active",
+      "recitation": "Current goal:\nObjective: Finish the selected task\nDone when:\n- Result exists\n- Evidence checked\nStatus: active\nTodo: 1 of 3 completed; in progress: \"current step\".",
+      "change": "The user updated the goal.\nObjective: Finish the selected task\nDone when:\n- Result exists\n- Evidence checked\nStatus: active\nPrevious objective: Earlier task",
+      "check": "You ended your turn with work still open: the goal \"Finish the selected task\" is not marked complete, and 2 of 3 todo items are unfinished (next: \"current step\").\nThis is a check, not an instruction to continue. If you stopped on purpose — the user asked you to stop here, you're waiting for their input, you're blocked, or the remaining items no longer apply — say so in a sentence and update the goal or todo if they are out of date. If you stopped unintentionally, pick up where you left off.",
+      "key": "{\"goal\":[\"Finish the selected task\",[\"Result exists\",\"Evidence checked\"]],\"todos\":[[\"already checked\",\"completed\"],[\"current step\",\"in_progress\"],[\"last step\",\"pending\"]]}"
+    },
+    {
+      "name": "removed",
+      "previous": {
+        "objective": "Finish the selected task",
+        "doneWhen": [
+          "Result exists",
+          "Evidence checked"
+        ],
+        "status": "active"
+      },
+      "goal": null,
+      "todos": [
+        {
+          "content": "already checked",
+          "status": "completed"
+        },
+        {
+          "content": "current step",
+          "status": "in_progress"
+        },
+        {
+          "content": "last step",
+          "status": "pending"
+        }
+      ],
+      "change": "The user removed the goal \"Finish the selected task\". It no longer applies.",
+      "check": "You ended your turn with work still open: 2 of 3 todo items are unfinished (next: \"current step\").\nThis is a check, not an instruction to continue. If you stopped on purpose — the user asked you to stop here, you're waiting for their input, you're blocked, or the remaining items no longer apply — say so in a sentence and update the goal or todo if they are out of date. If you stopped unintentionally, pick up where you left off.",
+      "key": "{\"goal\":null,\"todos\":[[\"already checked\",\"completed\"],[\"current step\",\"in_progress\"],[\"last step\",\"pending\"]]}"
+    },
+    {
+      "name": "finished",
+      "previous": {
+        "objective": "Finish the selected task",
+        "doneWhen": [
+          "Result exists",
+          "Evidence checked"
+        ],
+        "status": "active"
+      },
+      "goal": {
+        "objective": "Finish the selected task",
+        "doneWhen": [
+          "Result exists",
+          "Evidence checked"
+        ],
+        "status": "complete"
+      },
+      "todos": [
+        {
+          "content": "done",
+          "status": "completed"
+        }
+      ],
+      "render": "Objective: Finish the selected task\nDone when:\n- Result exists\n- Evidence checked\nStatus: complete",
+      "recitation": "Current goal:\nObjective: Finish the selected task\nDone when:\n- Result exists\n- Evidence checked\nStatus: complete\nTodo: 1 of 1 completed.",
+      "change": "The user updated the goal.\nObjective: Finish the selected task\nDone when:\n- Result exists\n- Evidence checked\nStatus: complete",
+      "check": null,
+      "key": "{\"goal\":null,\"todos\":[[\"done\",\"completed\"]]}"
+    },
+    {
+      "name": "only-todos",
+      "previous": null,
+      "goal": null,
+      "todos": [
+        {
+          "content": "next",
+          "status": "pending"
+        }
+      ],
+      "change": "The user removed the goal. It no longer applies.",
+      "check": "You ended your turn with work still open: 1 of 1 todo items are unfinished (next: \"next\").\nThis is a check, not an instruction to continue. If you stopped on purpose — the user asked you to stop here, you're waiting for their input, you're blocked, or the remaining items no longer apply — say so in a sentence and update the goal or todo if they are out of date. If you stopped unintentionally, pick up where you left off.",
+      "key": "{\"goal\":null,\"todos\":[[\"next\",\"pending\"]]}"
+    },
+    {
+      "name": "criteria-values",
+      "previous": null,
+      "goal": {
+        "objective": "Exact λ",
+        "doneWhen": [
+          1,
+          {
+            "x": 2
+          }
+        ],
+        "status": "active"
+      },
+      "todos": [],
+      "render": "Objective: Exact λ\nDone when:\n- 1\n- [object Object]\nStatus: active",
+      "recitation": "Current goal:\nObjective: Exact λ\nDone when:\n- 1\n- [object Object]\nStatus: active",
+      "change": "The user set a goal for this work.\nObjective: Exact λ\nDone when:\n- 1\n- [object Object]\nStatus: active",
+      "check": "You ended your turn with work still open: the goal \"Exact λ\" is not marked complete.\nThis is a check, not an instruction to continue. If you stopped on purpose — the user asked you to stop here, you're waiting for their input, you're blocked, or the remaining items no longer apply — say so in a sentence and update the goal or todo if they are out of date. If you stopped unintentionally, pick up where you left off.",
+      "key": "{\"goal\":[\"Exact λ\",[1,{\"x\":2}]],\"todos\":[]}"
+    }
+  ]
+}

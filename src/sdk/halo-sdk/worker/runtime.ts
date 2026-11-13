@@ -1,3 +1,5 @@
+import { reserveTranscript } from '../utils/runtime-ownership.js';
+import { nativeBinaryPath } from '../native/binding.js';
 import { Worker, type ResourceLimits } from 'node:worker_threads';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -69,6 +71,7 @@ interface Slot {
   residents: Map<string, Resident>;
   locks: Map<string, { scope: string; release(): void }>;
   children: Map<string, { pid: number; context?: ProcessTreeContext }>;
+  nativeChildren: number;
   active: number;
   collaborators: number;
   lastHeartbeat: number;
@@ -77,7 +80,6 @@ interface Slot {
   exited: Promise<void>;
 }
 
-const transcriptOwners = new Map<string, { owner: string; resident: Resident }>();
 
 function positive(value: number | undefined, fallback: number, name: string, zero = false): number {
   const result = value ?? fallback;
@@ -253,6 +255,7 @@ export class WorkerRuntime {
     const worker = new Worker(this.options.workerUrl ?? getWorkerEntryUrl(), {
       execArgv: [], resourceLimits: this.options.resourceLimits,
       workerData: {
+        haloSdkNativeLibraryPath: nativeBinaryPath(),
         protocolVersion: WORKER_PROTOCOL_VERSION, logLevel: this.logLevel(), heartbeatIntervalMs: this.config.heartbeatIntervalMs,
         cleanupHookTimeoutMs: Math.max(1, Math.floor(this.config.closeTimeoutMs / 2)),
       },
@@ -266,7 +269,7 @@ export class WorkerRuntime {
     const exited = new Promise<void>(resolve => { resolveExit = resolve; });
     const slot: Slot = {
       id: randomUUID(), worker, peer, state: 'starting', ready, resolveReady, rejectReady,
-      residents: new Map(), locks: new Map(), children: new Map(), active: 0, collaborators: 0,
+      residents: new Map(), locks: new Map(), children: new Map(), nativeChildren: 0, active: 0, collaborators: 0,
       lastHeartbeat: Date.now(), idleSince: Date.now(), exited,
       startupTimer: setTimeout(() => this.fail(slot, new Error('Worker initialization timed out')), this.config.startupTimeoutMs),
     };
@@ -278,12 +281,8 @@ export class WorkerRuntime {
       if (method === 'lock' || method === 'lease') {
         const owner = `${slot.id}:${scope}`;
         const key = process.platform === 'win32' || process.platform === 'darwin' ? value.key.toLowerCase() : value.key;
-        const keys = method === 'lease' ? [`session:${value.sessionId}`, `path:${key}`] : [key];
-        if (method === 'lease') for (const key of keys) {
-          const existing = transcriptOwners.get(key);
-          if (existing && !existing.resident.closing) throw new Error('Transcript is already owned by another live session');
-        }
-        if (method === 'lease') for (const key of keys) transcriptOwners.set(key, { owner, resident });
+        const reservation = method === 'lease' ? reserveTranscript(owner, key, value.sessionId, () => resident.closing) : undefined;
+        const keys = reservation?.keys ?? [key];
         const lockId = value.lockId as string;
         const controller = new AbortController();
         const cancel = () => controller.abort();
@@ -292,7 +291,7 @@ export class WorkerRuntime {
         slot.locks.set(lockId, { scope, release: cancel });
         const releases: Array<() => void> = [];
         const releaseAll = () => {
-          for (const key of keys) if (transcriptOwners.get(key)?.owner === owner) transcriptOwners.delete(key);
+          reservation?.release();
           for (const release of releases.splice(0).reverse()) release();
         };
         try {
@@ -316,11 +315,13 @@ export class WorkerRuntime {
         getLogger('Worker').info('Worker ready', { threadId: worker.threadId });
       } else if (event === 'heartbeat') {
         slot.lastHeartbeat = Date.now(); slot.active = value.active; slot.collaborators = value.collaborators;
+        slot.nativeChildren = value.nativeChildren ?? slot.nativeChildren;
       } else if (event === 'stream') slot.residents.get(value.scope)?.session?.acceptBatch(value);
       else if (event === 'consumed' || event === 'withdrawn') slot.residents.get(value.scope)?.session?.receipt(value.id, event === 'withdrawn');
       else if (event === 'unlock') { slot.locks.get(value.lockId)?.release(); slot.locks.delete(value.lockId); }
       else if (event === 'child') slot.children.set(value.id, { pid: value.pid, context: value.context });
       else if (event === 'childExit') slot.children.delete(value.id);
+      else if (event === 'nativeChildren') slot.nativeChildren = value.count;
       else if (event === 'log') {
         const logger = getRootLogger().child(value.component || 'Worker');
         const level = value.level as 'debug' | 'info' | 'warn' | 'error';
@@ -342,6 +343,7 @@ export class WorkerRuntime {
         ...[...slot.residents.values()].map(resident => resident.codeSearch?.dispose()),
       ]);
       slot.children.clear();
+      slot.nativeChildren = 0;
       for (const lock of slot.locks.values()) lock.release();
       slot.locks.clear();
       fileLocks.releaseOwner(slot.id); transcriptLocks.releaseOwner(slot.id);
@@ -417,7 +419,7 @@ export class WorkerRuntime {
       closed: this.closed, workers: [...this.slots].map(slot => ({
         threadId: slot.worker.threadId, state: slot.state, sessions: slot.residents.size,
         active: slot.active, collaborators: slot.collaborators, pendingRpc: slot.peer.pendingCount,
-        callbacks: slot.peer.incomingCount, children: slot.children.size,
+        callbacks: slot.peer.incomingCount, children: slot.children.size + slot.nativeChildren,
         ...[...slot.residents.values()].reduce((total, resident) => {
           const state = resident.session?.diagnostics();
           if (state) { total.pendingInputs += state.pendingInputs; total.pendingInputBytes += state.pendingInputBytes; total.bufferedEvents += state.bufferedEvents; }

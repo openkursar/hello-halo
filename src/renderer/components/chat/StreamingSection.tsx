@@ -218,6 +218,7 @@ export function StreamingSection({
         {/* AskUserQuestion card — shown when AI needs user input */}
         {pendingQuestion && onAnswerQuestion && (
           <AskUserQuestionCard
+            key={pendingQuestion.id}
             pendingQuestion={pendingQuestion}
             onAnswer={onAnswerQuestion}
           />

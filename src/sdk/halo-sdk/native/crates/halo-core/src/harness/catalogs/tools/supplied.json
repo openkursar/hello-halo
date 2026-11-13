@@ -1,0 +1,16 @@
+{
+  "tools.supplied.name_required": {
+    "text": "Supplied tools require a string name",
+    "slots": []
+  },
+  "tools.supplied.array_required": {
+    "text": "Supplied tools must be an array",
+    "slots": []
+  },
+  "tools.supplied.unknown_implementation": {
+    "text": "Unknown native tool implementation: {name}",
+    "slots": [
+      "name"
+    ]
+  }
+}

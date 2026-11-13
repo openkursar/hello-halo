@@ -14,6 +14,7 @@ import { StreamWriter } from './stream.js';
 import { WORKER_PROTOCOL_VERSION } from './protocol.js';
 import { bindCodeSearchBridge, codeSearchBridge, includesCodeSearch } from '../core/code-search.js';
 import { bindReadDenyFloor, readDenyFloor } from '../core/read-policy.js';
+import { inheritProcessOwner, ownedProcessCount, reapOwnedProcesses } from '../native/process-owner.js';
 
 if (!parentPort) throw new Error('SDK worker entry requires a parent port');
 if (workerData.protocolVersion !== WORKER_PROTOCOL_VERSION) throw new Error('SDK worker protocol version mismatch');
@@ -100,6 +101,25 @@ interface RecordState {
 const sessions = new Map<string, RecordState>();
 const inspections = new Map<string, { abort: AbortController; task: Promise<unknown> }>();
 const sdk = await import('../index.js');
+let reportedNativeChildren = 0;
+
+function nativeChildCount(): number {
+  let count = 0;
+  for (const record of sessions.values()) if (record.session) count += ownedProcessCount(record.session);
+  return count;
+}
+
+function reportNativeChildren(): void {
+  try {
+    const count = nativeChildCount();
+    if (count !== reportedNativeChildren) {
+      reportedNativeChildren = count;
+      peer.notify('nativeChildren', { count });
+    }
+  } catch (error) {
+    logger('Worker').warn('Native child state sampling failed', { threadId, error: serializeError(error) });
+  }
+}
 
 async function prepareWithSignal<T>(prepare: () => T | Promise<T>, signal: AbortSignal): Promise<T> {
   signal.throwIfAborted();
@@ -161,8 +181,10 @@ async function create(scope: string, value: { encoded: EncodedOptions; setup?: W
         getRuntimeStats: () => query.getRuntimeStats(),
         flush: async () => { await query.return(undefined); }, query,
       };
+      inheritProcessOwner(session, query);
     } else session = await sdk.createSession(options) as SDKSession as unknown as Execution;
     record.session = session;
+    reportNativeChildren();
     if (record.abort.signal.aborted) { session.close({ signal: record.cleanup.signal }); await session.flush(); throw aborted(); }
     return session;
   });
@@ -193,16 +215,19 @@ async function close(scope: string): Promise<void> {
       }
     }, workerData.cleanupHookTimeoutMs);
     try {
+      record.session?.close({ signal: record.cleanup.signal });
       record.abort.abort();
       peer.cancelScope(scope, undefined, false);
       record.stream?.writer.stop();
-      const session = await record.created.catch(() => undefined);
+      const session = await record.created.catch(() => record.session);
       if (session) {
         session.close({ signal: record.cleanup.signal });
         stage = 'stream';
         await record.stream?.task;
         stage = 'session-resources';
         await session.flush();
+        stage = 'native-processes';
+        await reapOwnedProcesses(session);
       }
       record.lifetime.abort();
       peer.cancelScope(scope, undefined, false);
@@ -211,6 +236,7 @@ async function close(scope: string): Promise<void> {
       for (const { child } of owned) if (child.pid) killTree(child.pid, 'SIGKILL');
       await Promise.all(owned.map(child => child.exited));
       sessions.delete(scope);
+      reportNativeChildren();
     } finally { clearTimeout(cleanupDeadline); }
   })();
   return record.closing;
@@ -226,7 +252,11 @@ function startStream(scope: string, streamId: string): void {
     try {
       for await (const message of iterator) {
         if (message.type === 'system' && message.subtype === 'init') record.active = true;
-        if (message.type === 'result') { record.active = false; if (record.stream) record.stream.terminal = true; }
+        if (message.type === 'result') {
+          record.active = false;
+          if (record.stream) record.stream.terminal = true;
+          reportNativeChildren();
+        }
         await writer.push(message);
       }
       await writer.finish();
@@ -311,11 +341,15 @@ process.on('unhandledRejection', error => {
   process.exit(1);
 });
 const heartbeat = setInterval(() => {
-  void Promise.all([...sessions.values()].map(record => record.session?.getRuntimeStats())).then(stats => peer.notify('heartbeat', {
-    active: [...sessions.values()].filter(record => record.active).length,
-    collaborators: stats.reduce((count, state) => count + (state?.activeCollaborators ?? 0), 0),
-    sessions: sessions.size, pending: peer.pendingCount, children: children.size,
-  })).catch(error => logger('Worker').warn('Worker state sampling failed', { error: serializeError(error) }));
+  void Promise.all([...sessions.values()].map(record => record.closing ? undefined : record.session?.getRuntimeStats())).then(stats => {
+    const nativeChildren = nativeChildCount();
+    reportedNativeChildren = nativeChildren;
+    peer.notify('heartbeat', {
+      active: [...sessions.values()].filter(record => record.active).length,
+      collaborators: stats.reduce((count, state) => count + (state?.activeCollaborators ?? 0), 0),
+      sessions: sessions.size, pending: peer.pendingCount, children: children.size, nativeChildren,
+    });
+  }).catch(error => logger('Worker').warn('Worker state sampling failed', { error: serializeError(error) }));
 }, workerData.heartbeatIntervalMs);
 heartbeat.unref();
 peer.notify('ready', { threadId, protocolVersion: WORKER_PROTOCOL_VERSION });

@@ -28,6 +28,8 @@ export function createEngineCollaborationScript(options: { restartBeforeFollowup
   const restoredSourceRequests: number[] = []
   const restoredMemberRequests: number[] = []
   const errors: string[] = []
+  const sourceRequests: ModelRequest[] = []
+  const memberRequests: ModelRequest[] = []
   function tool(request: ModelRequest, name: string, input: Record<string, unknown>, id: string): ModelReply {
     const discoveryId = `discover-${name}`
     const advertised = request.tools.filter(tool => tool === name || tool.endsWith(`__${name}`))
@@ -49,6 +51,7 @@ export function createEngineCollaborationScript(options: { restartBeforeFollowup
     catch (error) { errors.push(String(error)); return { text: 'The original collaboration context is unavailable.' } }
     const initial = input.text
     if (initial.includes(engineSourceQuestion)) {
+      sourceRequests.push(request)
       const result = request.toolResults.find(result => result.id === 'engine-spawn')
       if (result) {
         try { created = collaboratorReceipt(result) }
@@ -68,6 +71,7 @@ export function createEngineCollaborationScript(options: { restartBeforeFollowup
       return { text: request.text.includes(engineMemberResult) ? engineSourceAnswer : 'The collaborator is answering the follow-up.' }
     }
     if (/^(?:\[Team message from [^\]]+\]\s*)?ENGINE_MEMBER_ASSIGNMENT:/.test(initial)) {
+      memberRequests.push(request)
       if (request.text.includes(engineFollowup)) {
         if (restarted && (!input.restored || !request.text.includes(engineMemberAssignment))) {
           errors.push('The member lost its private assignment during recovery.')
@@ -84,7 +88,7 @@ export function createEngineCollaborationScript(options: { restartBeforeFollowup
     return { text: 'No matching collaboration fixture work.' }
   }
   return {
-    reply, errors, restoredSourceRequests, restoredMemberRequests,
+    reply, errors, sourceRequests, memberRequests, restoredSourceRequests, restoredMemberRequests,
     resumeAfterRestart() { if (!created) throw new Error('The original member must exist before restart'); restarted = true },
     get created() { return created }, get followedUp() { return followedUp },
   }

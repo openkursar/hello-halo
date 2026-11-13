@@ -80,6 +80,7 @@ export function buildRequestIdentity(params: IdentityParams): RequestIdentity {
       'x-stainless-retry-count': String(attempt),
     }),
 
+    systemPrefixMessages: 'first-user-text',
     systemPrefix: (messages) => ({
       type: 'text',
       text: buildAttributionLine(extractFirstUserMessageText(messages)),

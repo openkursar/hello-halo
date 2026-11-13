@@ -21,7 +21,7 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { ENGINE_RUNTIMES, VALID_ENGINES, entryCandidates, engineArtifactPaths } = require('./engine-runtimes.cjs');
+const { ENGINE_RUNTIMES, VALID_ENGINES, entryCandidates, engineArtifactPaths, validateNativeRuntime } = require('./engine-runtimes.cjs');
 const {
   RUNTIME_DIR,
   RUNTIME_ENTRY,
@@ -737,7 +737,7 @@ function getRequiredEngines() {
   return [...new Set([...defaults, ...requested])];
 }
 
-function validateEngineRuntimes(pkg) {
+function validateEngineRuntimes(pkg, context) {
   for (const packageId of ['@anthropic-ai/claude-code', '@anthropic-ai/claude-agent-sdk']) {
     if (pkg.exists(`node_modules/${packageId}/package.json`)) {
       throw new Error(`[afterPack] Optional Claude Code runtime must not be bundled: ${packageId}`);
@@ -764,7 +764,11 @@ function validateEngineRuntimes(pkg) {
       } else if ((engine.requiredFiles ?? []).some(file => !pkg.exists(path.join(pkgDir, file)))) {
         reason = 'present but execution runtime files were excluded';
       } else {
-        console.log(`[afterPack] Engine bundled: ${name} v${manifest.version ?? 'unknown'}`);
+        try {
+          validateNativeRuntime(engine, file => pkg.read(path.join(pkgDir, file)),
+            context.electronPlatformName, ARCH_NAMES[context.arch] || String(context.arch));
+          console.log(`[afterPack] Engine bundled: ${name} v${manifest.version ?? 'unknown'}`);
+        } catch (error) { reason = error.message; }
       }
     }
 
@@ -931,7 +935,7 @@ function validateOfficeRuntime(context) {
 function validatePackagedArtifact(context) {
   console.log('[afterPack] Validating packaged artifact...');
   const pkg = createPackageReader(context);
-  validateEngineRuntimes(pkg);
+  validateEngineRuntimes(pkg, context);
   validateOfficeRuntime(context);
   const product = validateProductConfig(pkg);
   validateUpdaterConfig(context, product);

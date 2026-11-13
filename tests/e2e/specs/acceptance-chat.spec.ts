@@ -47,11 +47,12 @@ test('space messages survive an application restart and remain available to the 
   expect(receivedContext, 'The model must receive the original reference both before and after restart').toEqual([true, true])
 })
 
-test('a supplement sent while a real tool is running reaches the next model step', acceptance('chat.messages.live-input'), async ({ acceptanceApp, model, window }) => {
+test('supplements sent while a real tool is running reach the next model step', acceptance('chat.messages.live-input'), async ({ acceptanceApp, model, window }) => {
   const ready = join(acceptanceApp.profile, 'command-ready')
   const released = join(acceptanceApp.profile, 'command-released')
   const script = join(acceptanceApp.profile, 'wait-for-supplement.cjs')
   const supplement = `Include this late instruction: ${randomUUID()}`
+  const secondSupplement = `Also preserve this second instruction: ${randomUUID()}`
   writeFileSync(script, [
     'const fs = require("node:fs")',
     `fs.writeFileSync(${JSON.stringify(ready)}, 'ready')`,
@@ -66,8 +67,10 @@ test('a supplement sent while a real tool is running reaches the next model step
       expect(result.error).toBe(false)
       expect(result.text).toContain('ACCEPTANCE_COMMAND_FINISHED')
       expect(request.text).toContain(supplement)
+      expect(request.text).toContain(secondSupplement)
+      expect(request.text.indexOf(supplement)).toBeLessThan(request.text.indexOf(secondSupplement))
       sawSupplement = true
-      return { text: `Completed with the late instruction. ${supplement}` }
+      return { text: `Completed with the late instructions. ${supplement}\n${secondSupplement}` }
     }
     if (request.lastUserText.includes('Begin the work and wait for my supplement.')) return { tools: [modelTool(request, 'Bash', { command, timeout: 30000, run_in_background: false }, 'acceptance-wait-tool')] }
     throw new Error(`Unexpected live-input request ${request.sequence}`)
@@ -80,12 +83,17 @@ test('a supplement sent while a real tool is running reaches the next model step
     await window.locator('textarea').first().fill(supplement)
     await window.locator('[data-onboarding="send-button"]').click()
     await expect(window.locator('textarea').first()).toHaveValue('')
+    await window.locator('textarea').first().fill(secondSupplement)
+    await window.locator('[data-onboarding="send-button"]').click()
+    await expect(window.locator('textarea').first()).toHaveValue('')
     writeFileSync(released, 'continue')
     await expect(window.locator('.message-assistant').last()).toContainText(supplement, { timeout: 30000 })
+    await expect(window.locator('.message-assistant').last()).toContainText(secondSupplement)
     await waitForAcceptanceIdle(window, turn.conversationId)
     expect(sawSupplement).toBe(true)
     const history = await readAcceptanceConversation(window, turn.spaceId, turn.conversationId)
     expect(history.messages.filter(message => message.role === 'user').some(message => message.content.includes(supplement))).toBe(true)
+    expect(history.messages.filter(message => message.role === 'user').some(message => message.content.includes(secondSupplement))).toBe(true)
   } finally {
     writeFileSync(released, 'cleanup')
   }
@@ -116,6 +124,35 @@ test('an image selected in the composer reaches the model and remains in message
   expect(imageCount).toBe(1)
   await window.getByRole('button', { name: 'Conversation', exact: true }).first().click()
   await expect(window.locator('.message-user img').first()).toBeVisible()
+})
+
+test('reading an empty image leaves the conversation usable for a follow-up', acceptance('chat.attachments.empty-tool-image'), async ({ acceptanceApp, model, window }) => {
+  const image = join(acceptanceApp.profile, '.halo/temp/artifacts', 'empty-image.png')
+  writeFileSync(image, '')
+  model.respond(request => {
+    if (request.lastUserText.includes('Continue after the unavailable image.')) return { text: 'The follow-up completed.' }
+    const result = request.toolResults.find(item => item.id === 'read-empty-image')
+    if (result) return { text: 'The image file is empty; no image was attached.' }
+    return { tools: [modelTool(request, 'Read', { file_path: image }, 'read-empty-image')] }
+  })
+  await navigateToChat(window)
+  const first = await sendAcceptanceMessage(window, `Read the image at ${image}.`)
+  await expect(window.locator('.message-assistant').last()).toContainText('The image file is empty; no image was attached.')
+  await waitForAcceptanceIdle(window, first.conversationId)
+  const next = await sendAcceptanceMessage(window, 'Continue after the unavailable image.')
+  expect(next.conversationId).toBe(first.conversationId)
+  await expect(window.locator('.message-assistant').last()).toContainText('The follow-up completed.')
+  await waitForAcceptanceIdle(window, next.conversationId)
+  expect(model.exchanges).toHaveLength(3)
+  expect(model.exchanges[1].request.toolResults.find(item => item.id === 'read-empty-image')?.text).toContain('No image was attached.')
+  for (const exchange of model.exchanges) {
+    const messages = JSON.stringify(exchange.request.messages)
+    expect(messages).not.toContain('"type":"image"')
+    expect(messages).not.toContain('"type":"image_url"')
+  }
+  const history = await readAcceptanceConversation(window, next.spaceId, next.conversationId)
+  expect(history.messages.filter(message => message.role === 'user')).toHaveLength(2)
+  expect(history.messages.at(-1)?.content).toContain('The follow-up completed.')
 })
 
 test('stopping a streaming answer cancels its request and permits another turn', acceptance('chat.execution.stop-resume'), async ({ model, window }) => {

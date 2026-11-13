@@ -14,9 +14,11 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 }))
 
 vi.mock('../../../../src/main/services/ai-browser', () => ({
+  AI_BROWSER_DESCRIPTION: 'Browse websites',
   createAIBrowserMcpServer: vi.fn(), getInteractiveBrowserContext: vi.fn(), AI_BROWSER_SYSTEM_PROMPT: '',
 }))
 vi.mock('../../../../src/main/services/ai-terminal', () => ({
+  AI_TERMINAL_DESCRIPTION: 'Run interactive terminals',
   createTerminalMcpServer: vi.fn(), getGlobalTerminalContext: vi.fn(), isTerminalAvailable: () => false, AI_TERMINAL_SYSTEM_PROMPT: '',
 }))
 vi.mock('../../../../src/main/services/ocr', () => ({ createOcrMcpServer: vi.fn() }))

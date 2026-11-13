@@ -1,0 +1,16 @@
+{
+  "context.error.compact": {
+    "text": "Context compaction failed",
+    "slots": []
+  },
+  "context.history.unavailable": {
+    "text": "Stored session history cannot be restored as recorded ({reason})",
+    "slots": [
+      "reason"
+    ]
+  },
+  "context.error.missing_result": {
+    "text": "Stream completed without a result message",
+    "slots": []
+  }
+}

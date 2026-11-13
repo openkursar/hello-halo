@@ -1,0 +1,616 @@
+{
+  "configs": {
+    "skip": {
+      "type": "sdk"
+    },
+    "nil": null,
+    "number": 3,
+    "first": {
+      "type": "unsupported"
+    },
+    "second": {
+      "type": "stdio"
+    }
+  },
+  "steps": [
+    {
+      "method": "snapshot"
+    },
+    {
+      "method": "addServer",
+      "name": "first",
+      "config": {
+        "type": "other"
+      }
+    },
+    {
+      "method": "connectAll"
+    },
+    {
+      "method": "toggle",
+      "name": "first",
+      "enabled": false
+    },
+    {
+      "method": "removeServer",
+      "name": "first"
+    },
+    {
+      "method": "addServer",
+      "name": "first",
+      "config": {
+        "type": "http"
+      }
+    },
+    {
+      "method": "setServers",
+      "configs": {
+        "first": {
+          "type": "http"
+        },
+        "third": {
+          "type": "sse"
+        }
+      }
+    },
+    {
+      "method": "disconnectAll"
+    },
+    {
+      "method": "addServer",
+      "name": "after",
+      "config": {}
+    },
+    {
+      "method": "connectAll"
+    },
+    {
+      "method": "restart",
+      "name": "absent"
+    },
+    {
+      "method": "setServers",
+      "configs": {}
+    }
+  ],
+  "expected": [
+    {
+      "state": {
+        "names": [
+          "first",
+          "second"
+        ],
+        "statuses": [
+          {
+            "name": "first",
+            "status": "failed"
+          },
+          {
+            "name": "second",
+            "status": "failed"
+          }
+        ],
+        "live": [
+          [
+            "first",
+            {
+              "state": "disconnected"
+            }
+          ],
+          [
+            "second",
+            {
+              "state": "disconnected"
+            }
+          ]
+        ],
+        "revision": 0,
+        "connected": [
+          [
+            "first",
+            false
+          ],
+          [
+            "second",
+            false
+          ]
+        ],
+        "tools": []
+      }
+    },
+    {
+      "state": {
+        "names": [
+          "first",
+          "second"
+        ],
+        "statuses": [
+          {
+            "name": "first",
+            "status": "failed"
+          },
+          {
+            "name": "second",
+            "status": "failed"
+          }
+        ],
+        "live": [
+          [
+            "first",
+            {
+              "state": "disconnected"
+            }
+          ],
+          [
+            "second",
+            {
+              "state": "disconnected"
+            }
+          ]
+        ],
+        "revision": 0,
+        "connected": [
+          [
+            "first",
+            false
+          ],
+          [
+            "second",
+            false
+          ]
+        ],
+        "tools": []
+      }
+    },
+    {
+      "state": {
+        "names": [
+          "first",
+          "second"
+        ],
+        "statuses": [
+          {
+            "name": "first",
+            "status": "failed",
+            "error": "unsupported transport type"
+          },
+          {
+            "name": "second",
+            "status": "failed",
+            "error": "unsupported transport type"
+          }
+        ],
+        "live": [
+          [
+            "first",
+            {
+              "state": "disconnected",
+              "lastError": "unsupported transport type"
+            }
+          ],
+          [
+            "second",
+            {
+              "state": "disconnected",
+              "lastError": "unsupported transport type"
+            }
+          ]
+        ],
+        "revision": 0,
+        "connected": [
+          [
+            "first",
+            false
+          ],
+          [
+            "second",
+            false
+          ]
+        ],
+        "tools": []
+      }
+    },
+    {
+      "state": {
+        "names": [
+          "first",
+          "second"
+        ],
+        "statuses": [
+          {
+            "name": "first",
+            "status": "failed"
+          },
+          {
+            "name": "second",
+            "status": "failed",
+            "error": "unsupported transport type"
+          }
+        ],
+        "live": [
+          [
+            "first",
+            {
+              "state": "disconnected"
+            }
+          ],
+          [
+            "second",
+            {
+              "state": "disconnected",
+              "lastError": "unsupported transport type"
+            }
+          ]
+        ],
+        "revision": 0,
+        "connected": [
+          [
+            "first",
+            false
+          ],
+          [
+            "second",
+            false
+          ]
+        ],
+        "tools": []
+      }
+    },
+    {
+      "state": {
+        "names": [
+          "second"
+        ],
+        "statuses": [
+          {
+            "name": "second",
+            "status": "failed",
+            "error": "unsupported transport type"
+          }
+        ],
+        "live": [
+          [
+            "second",
+            {
+              "state": "disconnected",
+              "lastError": "unsupported transport type"
+            }
+          ]
+        ],
+        "revision": 0,
+        "connected": [
+          [
+            "second",
+            false
+          ]
+        ],
+        "tools": []
+      }
+    },
+    {
+      "state": {
+        "names": [
+          "second",
+          "first"
+        ],
+        "statuses": [
+          {
+            "name": "second",
+            "status": "failed",
+            "error": "unsupported transport type"
+          },
+          {
+            "name": "first",
+            "status": "failed"
+          }
+        ],
+        "live": [
+          [
+            "second",
+            {
+              "state": "disconnected",
+              "lastError": "unsupported transport type"
+            }
+          ],
+          [
+            "first",
+            {
+              "state": "disconnected"
+            }
+          ]
+        ],
+        "revision": 0,
+        "connected": [
+          [
+            "second",
+            false
+          ],
+          [
+            "first",
+            false
+          ]
+        ],
+        "tools": []
+      }
+    },
+    {
+      "result": {
+        "added": [
+          "third"
+        ],
+        "removed": [
+          "second"
+        ],
+        "errors": {}
+      },
+      "state": {
+        "names": [
+          "first",
+          "third"
+        ],
+        "statuses": [
+          {
+            "name": "first",
+            "status": "failed"
+          },
+          {
+            "name": "third",
+            "status": "failed",
+            "error": "unsupported transport type"
+          }
+        ],
+        "live": [
+          [
+            "first",
+            {
+              "state": "disconnected"
+            }
+          ],
+          [
+            "third",
+            {
+              "state": "disconnected",
+              "lastError": "unsupported transport type"
+            }
+          ]
+        ],
+        "revision": 0,
+        "connected": [
+          [
+            "first",
+            false
+          ],
+          [
+            "third",
+            false
+          ]
+        ],
+        "tools": []
+      }
+    },
+    {
+      "state": {
+        "names": [
+          "first",
+          "third"
+        ],
+        "statuses": [
+          {
+            "name": "first",
+            "status": "failed"
+          },
+          {
+            "name": "third",
+            "status": "failed"
+          }
+        ],
+        "live": [
+          [
+            "first",
+            {
+              "state": "disconnected"
+            }
+          ],
+          [
+            "third",
+            {
+              "state": "disconnected"
+            }
+          ]
+        ],
+        "revision": 0,
+        "connected": [
+          [
+            "first",
+            false
+          ],
+          [
+            "third",
+            false
+          ]
+        ],
+        "tools": []
+      }
+    },
+    {
+      "error": "MCP connection manager is disposed",
+      "state": {
+        "names": [
+          "first",
+          "third"
+        ],
+        "statuses": [
+          {
+            "name": "first",
+            "status": "failed"
+          },
+          {
+            "name": "third",
+            "status": "failed"
+          }
+        ],
+        "live": [
+          [
+            "first",
+            {
+              "state": "disconnected"
+            }
+          ],
+          [
+            "third",
+            {
+              "state": "disconnected"
+            }
+          ]
+        ],
+        "revision": 0,
+        "connected": [
+          [
+            "first",
+            false
+          ],
+          [
+            "third",
+            false
+          ]
+        ],
+        "tools": []
+      }
+    },
+    {
+      "error": "MCP connection manager is disposed",
+      "state": {
+        "names": [
+          "first",
+          "third"
+        ],
+        "statuses": [
+          {
+            "name": "first",
+            "status": "failed"
+          },
+          {
+            "name": "third",
+            "status": "failed"
+          }
+        ],
+        "live": [
+          [
+            "first",
+            {
+              "state": "disconnected"
+            }
+          ],
+          [
+            "third",
+            {
+              "state": "disconnected"
+            }
+          ]
+        ],
+        "revision": 0,
+        "connected": [
+          [
+            "first",
+            false
+          ],
+          [
+            "third",
+            false
+          ]
+        ],
+        "tools": []
+      }
+    },
+    {
+      "error": "MCP connection manager is disposed",
+      "state": {
+        "names": [
+          "first",
+          "third"
+        ],
+        "statuses": [
+          {
+            "name": "first",
+            "status": "failed"
+          },
+          {
+            "name": "third",
+            "status": "failed"
+          }
+        ],
+        "live": [
+          [
+            "first",
+            {
+              "state": "disconnected"
+            }
+          ],
+          [
+            "third",
+            {
+              "state": "disconnected"
+            }
+          ]
+        ],
+        "revision": 0,
+        "connected": [
+          [
+            "first",
+            false
+          ],
+          [
+            "third",
+            false
+          ]
+        ],
+        "tools": []
+      }
+    },
+    {
+      "error": "MCP connection manager is disposed",
+      "state": {
+        "names": [
+          "first",
+          "third"
+        ],
+        "statuses": [
+          {
+            "name": "first",
+            "status": "failed"
+          },
+          {
+            "name": "third",
+            "status": "failed"
+          }
+        ],
+        "live": [
+          [
+            "first",
+            {
+              "state": "disconnected"
+            }
+          ],
+          [
+            "third",
+            {
+              "state": "disconnected"
+            }
+          ]
+        ],
+        "revision": 0,
+        "connected": [
+          [
+            "first",
+            false
+          ],
+          [
+            "third",
+            false
+          ]
+        ],
+        "tools": []
+      }
+    }
+  ]
+}

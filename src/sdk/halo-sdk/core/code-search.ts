@@ -1,7 +1,6 @@
 import type { Options } from '../types/config.js';
 import type { Tool } from '../types/tool.js';
-import { createCodeSearchService, type CodeSearchService } from '../search/index.js';
-import { createCodeSearchTool } from '../tools/code-search/index.js';
+import { createCodeSearchService, createCodeSearchTool, type CodeSearchService } from '../native/search.js';
 import { codeSearchCacheRoot, resolveSessionReadDenyRoots } from './read-policy.js';
 
 const bridges = new WeakMap<Options, CodeSearchService>();

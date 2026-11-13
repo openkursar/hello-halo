@@ -26,7 +26,33 @@ promises:
   remove:
     en: Removing a pending attachment prevents it from being sent.
     zh: 发送前移除附件后，该附件不会发送。
+  unusable-tool-image:
+    en: Reading an empty image reports that no image was attached and leaves the same conversation usable.
+    zh: 读取空图片时会说明没有附上图片，并且同一对话可以继续使用。
 scenarios:
+  - id: chat.attachments.empty-tool-image
+    title:
+      en: Continue after reading an empty image
+      zh: 读取空图片后继续对话
+    verifies: [unusable-tool-image]
+    platforms: [darwin, win32, linux]
+    profiles: [regression]
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements: [halo-sdk]
+    preconditions:
+      - en: Prepare an empty PNG in an isolated profile and use a local scripted model endpoint.
+        zh: 在隔离配置目录中准备空 PNG，并使用本地脚本模型端点。
+    steps:
+      - en: Ask the AI to read that image, wait for its reply and send another message in the same conversation.
+        zh: 让 AI 读取该图片，等待回复后在同一对话继续发送消息。
+    expected:
+      - en: Read returns an explicit unavailable-image result without raw image data. The reply and follow-up complete, and both user messages and the final answer remain in history.
+        zh: Read 明确返回图片不可用且不附上原始图片数据；本轮与后续消息均完成，两条用户消息及最终回复保留在历史中。
+    notes:
+      en: Covers the application Read path and subsequent conversation. Legacy-history repair and provider image rejection have separate compiled-SDK checks.
+      zh: 覆盖应用中的 Read 路径和后续对话；旧历史修复与模型端点拒绝图片另有编译后 SDK 检查。
   - id: chat.attachments.deepseek-flash
     title:
       en: Deliver images through DeepSeek Flash aliases

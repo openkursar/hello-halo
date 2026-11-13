@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { createSession } from './session.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createSession, type SDKSession } from '../index.js';
 import type { LlmProvider } from '../types/provider.js';
 
 describe('retained session history', () => {
   it.each([false, true])('carries a compaction summary into the next user turn (cached=%s)', async cached => {
+    const directory = await mkdtemp(join(tmpdir(), 'sdk-history-resource-'));
     let calls = 0;
     let summaries = 0;
     let afterCompaction = '';
@@ -28,10 +32,11 @@ describe('retained session history', () => {
         yield { type: 'message_stop' };
       },
     };
-    const session = await createSession({ provider, model: 'test', contextWindow: 10_000, maxOutputTokens: 1000, persistSession: false,
-      tools: [], systemPrompt: 'Test', cwd: '/tmp', settingSources: [], env: { HOME: '/tmp/halo-history-fixture' },
-      thinking: { type: 'disabled' }, turnEndChecks: { openWork: false, completion: false } });
+    let session: SDKSession | undefined;
     try {
+      session = await createSession({ provider, model: 'test', contextWindow: 10_000, maxOutputTokens: 1000, persistSession: false,
+        tools: [], systemPrompt: 'Test', cwd: directory, settingSources: [], env: { HOME: directory },
+        thinking: { type: 'disabled' }, turnEndChecks: { openWork: false, completion: false } });
       for (let turn = 0; turn < 9; turn++) {
         await session.send(`input-${turn}: ${'evidence '.repeat(600)}`);
         for await (const message of session.stream()) if (message.type === 'result') {
@@ -41,6 +46,6 @@ describe('retained session history', () => {
       }
       expect(summaries).toBeGreaterThan(0);
       expect(afterCompaction).toContain('SUMMARY_SENTINEL');
-    } finally { session.close(); await session.flush(); }
+    } finally { session?.close(); await session?.flush(); await rm(directory, { recursive: true, force: true }); }
   });
 });
