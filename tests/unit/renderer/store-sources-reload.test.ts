@@ -15,6 +15,7 @@ vi.mock('../../../src/renderer/api', () => ({
   api: {
     storeQuery: (query: unknown) => storeQuery(query),
     trackEvent: vi.fn(),
+    onBrowserTabOpened: () => () => {},
     onBrowserPageGone: () => () => {}, onBrowserStateChange: () => () => {},
     onArtifactChangedBatch: () => () => {},
     onMemoryPressure: () => () => {},

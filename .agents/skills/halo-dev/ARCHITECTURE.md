@@ -196,6 +196,7 @@ src/
 │                                      #     server→client push that is not version-coupled),
 │                                      #   protocol, api-validator, model-capabilities,
 │                                      #   secure-storage, browser-view, browser-policy,
+│                                      #   browser-popup, browser-compatibility,
 │                                      #   watcher-host
 │                                      #   (+ utilities: browser-login-pages, proxy-fetch,
 │                                      #    proxy-policy — the one place proxy and NO_PROXY
@@ -658,7 +659,7 @@ thing the cap exists to prevent.
 ## 10) AI Browser Module
 
 AI-controlled embedded browser for web automation. Uses Electron webview guests + main-process CDP. The browser manager owns policy,
-identity and page state; `services/browser-host` owns fixed guest attachment.
+identity, page state and ordinary website-child tab creation; `services/browser-host` owns fixed guest attachment. `services/browser-compatibility` supplies bounded, best-effort page-world Chrome API compatibility before website scripts and coordinates descendant targets; `services/browser-popup` preserves native POST/opener/sandbox relationships and delegates only proven independent ordinary GETs to Canvas. AI page owners propagate access and lifecycle to child tabs, while Canvas only borrows their presentation.
 Interactive and watchable AI pages share a permanent main-renderer host; pure
 automation and search use a minimal hidden host. Viewers only borrow presentation
 and may unmount without destroying pages. See `services/browser-host/DESIGN.md`.

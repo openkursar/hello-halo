@@ -5,11 +5,13 @@
  * Connects the renderer to browser page operations; attachment has its own transport.
  */
 
-import { ipcMain, BrowserWindow, Menu, clipboard, nativeImage, shell, nativeTheme, MenuItemConstructorOptions } from 'electron'
+import { ipcMain, BrowserWindow, Menu, clipboard, nativeImage, shell, nativeTheme, session, MenuItemConstructorOptions } from 'electron'
 import { clearBrowserData, browserViewManager, type BrowserViewBounds, type DeviceMode } from '../services/browser-view.service'
 import { browserRpc } from '../../shared/rpc/contracts/browser.contract'
 import { registerRpcHandlers } from './rpc'
-import { resolveUserAgent } from '../services/user-agent-resolver'
+import { configureBrowserSession, resolveUserAgent } from '../services/user-agent-resolver'
+import { configureBrowserPopups } from '../services/browser-popup'
+import { ensureBrowserCompatibility } from '../services/browser-compatibility'
 import { getConfig } from '../foundation/config.service'
 import { getDefaultBrowserHomepage } from '../services/browser-policy.service'
 import { buildLoginLoadingPage, buildLoginErrorPage, loginPageBg } from '../services/browser-login-pages'
@@ -476,6 +478,8 @@ export function registerBrowserHandlers(mainWindow: BrowserWindow | null) {
 
         const isDark = nativeTheme.shouldUseDarkColors
         const displayTitle = title ?? 'Login'
+        const customUserAgent = getConfig().browser?.userAgent
+        configureBrowserSession(session.fromPartition('persist:browser'), customUserAgent)
 
         const loginWindow = new BrowserWindow({
           width: 1024,
@@ -492,12 +496,8 @@ export function registerBrowserHandlers(mainWindow: BrowserWindow | null) {
           },
         })
 
-        // Issue #124: apply custom UA so login flows see the same UA as the
-        // main browser views — sites that gate auth by UA otherwise reject
-        // the login request (session/cookie tied to the UA at first request).
-        loginWindow.webContents.setUserAgent(
-          resolveUserAgent(getConfig().browser?.userAgent, 'pc')
-        )
+        loginWindow.webContents.setUserAgent(resolveUserAgent(customUserAgent, 'pc'))
+        configureBrowserPopups(loginWindow.webContents)
 
         // The inline loading page (data: URL) renders near-instantly, so
         // ready-to-show fires within milliseconds. Once visible, we navigate
@@ -508,10 +508,13 @@ export function registerBrowserHandlers(mainWindow: BrowserWindow | null) {
           loginWindow.show()
           loginWindow.focus()
 
-          // Navigate to the real target URL
-          loginWindow.loadURL(url).catch((err: Error) => {
+          // Rejects only for a closed window; setup failures are logged by the compatibility layer.
+          void ensureBrowserCompatibility(loginWindow.webContents).catch(() => {}).then(() => {
             if (loginWindow.isDestroyed()) return
-            console.error('[Browser IPC] Login window target load error:', err.message)
+            return loginWindow.loadURL(url).catch((err: Error) => {
+              if (loginWindow.isDestroyed()) return
+              console.error('[Browser IPC] Login window target load error:', err.message)
+            })
           })
         })
 

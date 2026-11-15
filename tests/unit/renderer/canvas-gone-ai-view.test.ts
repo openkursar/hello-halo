@@ -10,6 +10,7 @@ const hide = vi.fn(async () => ({ success: true }))
 const destroy = vi.fn(async () => ({ success: true }))
 vi.mock('../../../src/renderer/api', () => ({
   api: {
+    onBrowserTabOpened: () => () => {},
     onBrowserPageGone: () => () => {}, onBrowserStateChange: () => () => {},
     onArtifactChangedBatch: () => () => {},
     onMemoryPressure: () => () => {},

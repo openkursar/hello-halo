@@ -48,7 +48,9 @@ function fakeContents(id: number) {
 
 vi.mock('../../../../src/main/services/browser-view.service', () => ({
   browserViewManager: {
-    create: async (viewId: string, url: string, options?: { offscreen?: boolean }) => {
+    releaseOwner: () => {},
+    create: async (viewId: string, url: string, options?: { offscreen?: boolean; owner?: { reserve: (id: string, background: boolean) => void; ready: (id: string) => void } }) => {
+      options?.owner?.reserve(viewId, options.offscreen ?? false)
       created.push({ viewId, offscreen: options?.offscreen })
       if (!options?.offscreen && mainHostFailure) {
         // The real manager closes a page it failed to create, which reaches every context.
@@ -58,6 +60,7 @@ vi.mock('../../../../src/main/services/browser-view.service', () => ({
       const state = { id: viewId, url, title: `Title ${viewId}`, isLoading: false, deviceMode: 'pc' as const }
       states.set(viewId, state)
       if (withContents) contents.set(viewId, fakeContents(contents.size + 1))
+      options?.owner?.ready(viewId)
       return state
     },
     getAllStates: () => [...states.values()],

@@ -32,6 +32,7 @@ function holdDestroys(): () => void {
 
 vi.mock('../../../../src/renderer/api', () => ({
   api: {
+    onBrowserTabOpened: () => () => {},
     onBrowserPageGone: () => () => {}, onBrowserStateChange: () => () => {},
     onArtifactChangedBatch: () => () => {},
     onMemoryPressure: (cb: typeof emitPressure) => { emitPressure = cb; return () => {} },

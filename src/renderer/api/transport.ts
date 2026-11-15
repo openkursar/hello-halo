@@ -485,6 +485,7 @@ export function onEvent<T = unknown>(channel: string, callback: (data: T) => voi
       'ai-sources:group-route': 'onAIGroupRoute',
       'browser:state-change': 'onBrowserStateChange',
       'browser:page-gone': 'onBrowserPageGone',
+      'browser:tab-opened': 'onBrowserTabOpened',
       'browser:zoom-changed': 'onBrowserZoomChanged',
       'canvas:tab-action': 'onCanvasTabAction',
       'ai-browser:active-view-changed': 'onAIBrowserActiveViewChanged',

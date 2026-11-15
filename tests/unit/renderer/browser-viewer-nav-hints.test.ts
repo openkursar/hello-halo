@@ -28,8 +28,26 @@ vi.mock('../../../src/renderer/utils/browser-homepage', () => ({ getBrowserHomep
 vi.mock('../../../src/renderer/browser-host', () => ({ bindBrowserSurface: vi.fn(), focusBrowserPage: vi.fn() }))
 
 import { BrowserViewer } from '../../../src/renderer/components/canvas/viewers/BrowserViewer'
+import * as canvasHooks from '../../../src/renderer/hooks/useCanvasLifecycle'
 
 describe('built-in browser toolbar', () => {
+  it('renders popup policy feedback inline without a blocked-page overlay or modal', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.spyOn(canvasHooks, 'useBrowserState').mockReturnValueOnce({
+      canGoBack: true, canGoForward: false, isLoading: false,
+      blockedPopupHost: 'denied.test', blockedPopupSequence: 1,
+    })
+    const tab = { id: 'tab-1', type: 'browser', url: 'https://example.com', title: 'Example', browserViewId: 'view-1' }
+    const html = renderToStaticMarkup(createElement(BrowserViewer, { tab } as never))
+    expect(html).toContain('role="status"')
+    expect(html).toContain('Opening {{host}} was blocked by browser policy')
+    expect(html).toContain('Dismiss')
+    expect(html).toContain('min-w-0 flex-1 break-words')
+    expect(html).not.toContain('Access Restricted')
+    expect(html).not.toContain('aria-modal')
+    expect(html).not.toContain('autofocus')
+  })
+
   it('labels back and forward without a shortcut nothing handles', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const tab = { id: 'tab-1', type: 'browser', url: 'https://example.com', title: 'Example', browserViewId: 'view-1' }

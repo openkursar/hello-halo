@@ -305,6 +305,37 @@ scenarios:
     notes:
       en: Real browser/MCP production modules run in a dedicated Electron fixture; the full Halo conversation and model path are outside this evidence.
       zh: 真实浏览器及 MCP 生产模块运行于专用 Electron 测试壳；本证据不包含完整 Halo 对话及模型链路。
+  - id: browser.work.tab-follow
+    title:
+      en: Keep ordinary AI-opened pages in their owning context
+      zh: 让 AI 打开的普通页面留在所属上下文
+    verifies:
+      - context
+      - identity
+    platforms: *a2
+    profiles:
+      - regression
+    evidence: app-e2e
+    mode: scripted
+    automation: automated
+    requirements:
+      - halo-sdk
+    preconditions:
+      - en: A real browser conversation owns a controlled local page containing a target-blank link.
+        zh: 一段真实浏览对话拥有包含 target-blank 链接的受控本地网页。
+    steps:
+      - en: Let the AI click the ordinary link, list the resulting page and select it.
+        zh: 让 AI 点击普通链接、列出新页面并选择它。
+      - en: Ask the AI to read the selected child page.
+        zh: 让 AI 读取已选择的子页面。
+    expected:
+      - en: The child remains owned by the same AI context, keeps the caller's hidden or visible mode, and can be read after selection.
+        zh: 子页面仍归同一 AI 上下文，继承隐藏或可见模式，并可在选择后继续读取。
+      - en: The original page and native authentication relationships are unchanged.
+        zh: 原网页及原生认证关系保持不变。
+    notes:
+      en: This covers ordinary independent GET links only; POST, opener-bearing, named and HTML-sandboxed requests remain native. The scripted model uses a local fixture and no personal credentials.
+      zh: 本场景只覆盖普通独立 GET 链接；POST、带 opener、命名窗口及 HTML sandbox 请求仍走原生路径。脚本模型使用本地网页，不涉及个人凭据。
   - id: browser.work.tab-ownership
     title:
       en: Keep unattended tabs out of unrelated tab lists

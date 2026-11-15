@@ -58,6 +58,47 @@ got (`queued` before the host renderer received it, `sent`, `will-attach`,
 `did-attach` with the guest's process id and whether it is alive) and whether
 its window was visible or minimized.
 
+## Browser identity and website popups
+
+`services/user-agent-resolver` derives the desktop identity from the running
+Chromium, retaining its native version and platform. `foundation/chromium-user-agent`
+removes embedding-product tokens and initializes the application fallback on first
+browser use. Native popup first requests bypass session and page overrides, so the
+fallback must retain the same native Chromium identity. The daemon browser shares
+this foundation helper without importing a service. The browser session default
+is set before navigation so worker requests use the same identity. Explicit custom
+and H5 identities remain browser-only overrides; they never replace the application
+fallback. Native popup first requests use that fallback, not custom page overrides.
+Native client hints are not replaced with fabricated metadata. Session identity
+is explicitly initialized before creating the first page even if its fallback
+getter already looks correct, because renderers cache it for native popup scripts.
+A shared, on-demand WebContents creation listener applies the real opener's
+identity before a native popup's first script; the last opener removes it.
+
+`services/browser-popup` owns website open requests. A displayed page delegates
+ordinary HTTP(S) GET tab requests to the page manager and Canvas. An existing
+native guest is transferred only when Chromium's preceding `Page.windowOpen`
+event explicitly reports `noopener` for the exact URL. POST, named windows,
+explicit popup windows and inherited HTML sandbox restrictions retain native
+windows and their original relationships. Missing native evidence falls back to
+a native window, never to a guessed authentication rule.
+
+An independent native guest is held in a short-lived WebContentsView, with its
+initial navigation synchronously cancelled before any network request. The final
+GET uses the native referrer policy in the existing DOM guest host. The inert
+contents closes when attachment settles; pending handoffs share the six-popup
+admission limit. Final tabs follow the existing Canvas budgets and outlive their
+original tab. No opener or POST is rebuilt, and no privileged click bridge or
+website patch is installed. Native descendants retain their opener's session,
+identity and navigation guards and close with their opener. Unattended pages do
+not show child windows. The host still owns only attachment, not login flow.
+
+`services/browser-compatibility` installs the missing Chrome hosted-app and legacy
+timing APIs before website code runs, including cross-process child frames. It
+retains the Page debugger domain while a page exists; AI monitoring releases only
+its own domains and listeners. The host still strips privileged preloads and Node
+access. See that module's design for lifecycle and compatibility limits.
+
 ## Transport and recovery
 
 BrowserHostBridge is desktop-only. The hidden host has a dedicated minimal preload

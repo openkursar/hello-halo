@@ -133,7 +133,7 @@ export default defineConfig({
     },
     {
       name: 'browser-view-frame',
-      testMatch: ['**/browser-view-frame.spec.ts', '**/browser-view-reveal.spec.ts', '**/browser-carrier-server.spec.ts'],
+      testMatch: ['**/browser-view-frame.spec.ts', '**/browser-view-reveal.spec.ts', '**/browser-carrier-server.spec.ts', '**/browser-login.spec.ts', '**/browser-popup-policy.spec.ts'],
       use: {
         actionTimeout: 10000
       }

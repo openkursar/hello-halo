@@ -5,6 +5,7 @@ const navigateBrowserView = vi.fn(async (_id: string, _url: string) => ({ succes
 const destroyBrowserView = vi.fn(async (_id: string) => ({ success: true }))
 
 vi.mock('../../../../src/renderer/api', () => ({ api: {
+  onBrowserTabOpened: () => () => {},
   onBrowserStateChange: () => () => {}, onBrowserPageGone: () => () => {},
   onArtifactChangedBatch: () => () => {}, onMemoryPressure: () => () => {},
   getMemoryPressure: async () => 'normal', isRemoteMode: () => false,

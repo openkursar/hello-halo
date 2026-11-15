@@ -1,9 +1,13 @@
 /** Browser page state and policy, independent of the guest's DOM host. */
 
 import { BrowserWindow, screen, session, webContents as electronWebContents, type Session, type WebContents } from 'electron'
-import { browserHostManager, captureBrowserPage } from './browser-host'
+import { browserHostManager, captureBrowserPage, MainHostAttachError } from './browser-host'
 import { isUrlAllowedByPolicy } from './browser-policy.service'
-import { resolveUserAgent } from './user-agent-resolver'
+import { configureBrowserSession, resolveUserAgent } from './user-agent-resolver'
+import { randomUUID } from 'node:crypto'
+import { configureBrowserPopups, type BrowserTabRequest } from './browser-popup'
+import type { BrowserTabOpened } from '../../shared/types/browser-host'
+import { ensureBrowserCompatibility } from './browser-compatibility'
 import { TouchPointerController } from './browser-touch-pointer'
 import { getConfig, onBrowserConfigChange } from '../foundation/config.service'
 
@@ -32,6 +36,8 @@ export interface BrowserViewState {
    *  redirect block keeps the pre-redirect URL), so the overlay's
    *  "allow and retry" action needs the real target. */
   blockedUrl?: string
+  blockedPopupHost?: string
+  blockedPopupSequence?: number
 }
 
 export interface BrowserViewBounds {
@@ -41,19 +47,29 @@ export interface BrowserViewBounds {
   height: number
 }
 
+export interface BrowserPageOwner {
+  isActive(): boolean
+  reserve(viewId: string, background: boolean): void
+  ready(viewId: string): void
+  release(viewId: string): void
+}
+
 export interface BrowserViewCreateOptions {
   /** Background-only pages cannot be displayed or transferred to the main host. */
   offscreen?: boolean
   /** Initial device emulation mode. Defaults to 'pc'. */
   deviceMode?: DeviceMode
+  /** Child documents inherit the caller's access and lifetime, not Canvas ownership. */
+  owner?: BrowserPageOwner
+  /** Referrer policy supplied by a native target-blank GET handoff. */
+  referrer?: Electron.Referrer
 }
 
 // ============================================
 // Constants
 // ============================================
 
-// Re-exported for backward compatibility with existing importers.
-export { CHROME_USER_AGENT, H5_USER_AGENT } from './user-agent-resolver'
+export { H5_USER_AGENT } from './user-agent-resolver'
 
 /**
  * Logical viewport width for H5 mode (iPhone 16 Pro Max points).
@@ -105,25 +121,6 @@ function buildBlockedMessage(url: string): string {
   }
 }
 
-function schemeOf(url: string): string {
-  try {
-    return new URL(url).protocol
-  } catch {
-    return ''
-  }
-}
-
-/**
- * What a page may open in its own view: a web address from any page, a local
- * file only from a local page — the rule browsers apply. A popup is loaded by
- * the main process, which the renderer's own check never sees.
- */
-export function popupTargetAllowed(target: string, opener: string): boolean {
-  const scheme = schemeOf(target)
-  if (scheme === 'http:' || scheme === 'https:' || target === 'about:blank') return true
-  return scheme === 'file:' && schemeOf(opener) === 'file:'
-}
-
 function wasNavigationCancelled(error: unknown): boolean {
   const failure = error as { code?: string; errno?: number }
   return failure?.code === 'ERR_ABORTED' || failure?.errno === -3
@@ -142,6 +139,7 @@ function navigationFailureDetails(error: unknown): unknown {
 class BrowserPageManager {
   private views = new Map<string, { webContents: WebContents }>()
   private pendingCreates = new Map<string, Promise<BrowserViewState>>()
+  private pageOwners = new Map<string, BrowserPageOwner>()
   private states: Map<string, BrowserViewState> = new Map()
   private mainWindow: BrowserWindow | null = null
   private activeViewId: string | null = null
@@ -240,20 +238,21 @@ class BrowserPageManager {
    * `setDeviceMode()`, which also reloads after changing the UA.
    */
   applyUserAgentToAll(customUserAgent: string | undefined): void {
+    const browserSession = session.fromPartition('persist:browser')
+    configureBrowserSession(browserSession, customUserAgent)
+    const modes = new Map<number, DeviceMode>()
     for (const [viewId, view] of this.views) {
       const state = this.states.get(viewId)
-      if (!state || view.webContents.isDestroyed()) continue
+      if (state && !view.webContents.isDestroyed()) modes.set(view.webContents.id, state.deviceMode)
+    }
+    for (const contents of electronWebContents.getAllWebContents()) {
+      if (contents.isDestroyed() || contents.session !== browserSession) continue
       try {
-        view.webContents.setUserAgent(
-          resolveUserAgent(customUserAgent, state.deviceMode)
-        )
-        // Reload: setUserAgent() updates HTTP headers but navigator.userAgent
-        // is cached at page-init (see method JSDoc).
-        if (state.url && state.url !== 'about:blank') {
-          view.webContents.reload()
-        }
-      } catch (e) {
-        console.error(`[Browser] Failed to apply UA to view ${viewId}:`, e)
+        contents.setUserAgent(resolveUserAgent(customUserAgent, modes.get(contents.id) ?? 'pc'))
+        const url = contents.getURL()
+        if (url && url !== 'about:blank' && !url.startsWith('data:')) contents.reload()
+      } catch (error) {
+        console.error('[Browser] Failed to apply browser identity', { webContentsId: contents.id }, navigationFailureDetails(error))
       }
     }
   }
@@ -282,11 +281,18 @@ class BrowserPageManager {
       isDevToolsOpen: false,
       deviceMode,
     }
+    if (options?.owner && !options.owner.isActive()) throw new Error('Browser page owner was released')
     this.states.set(viewId, state)
+    if (options?.owner) {
+      this.pageOwners.set(viewId, options.owner)
+      options.owner.reserve(viewId, options.offscreen ?? false)
+    }
     let promise!: Promise<BrowserViewState>
     promise = Promise.resolve().then(async () => {
       try {
         if (this.states.get(viewId) !== state) throw new Error('Browser page closed before creation')
+        const customUserAgent = getConfig().browser?.userAgent
+        configureBrowserSession(session.fromPartition('persist:browser'), customUserAgent)
         const webContents = await browserHostManager.create(viewId, options?.offscreen ?? false)
         if (this.states.get(viewId) !== state || webContents.isDestroyed()) {
           throw new Error('Browser page closed during creation')
@@ -296,11 +302,30 @@ class BrowserPageManager {
         webContents.once('destroyed', () => {
           if (this.views.get(viewId) === view) this.cleanupStaleView(viewId)
         })
-        webContents.setUserAgent(resolveUserAgent(getConfig().browser?.userAgent, deviceMode))
+        configureBrowserSession(webContents.session, customUserAgent)
+        webContents.setUserAgent(resolveUserAgent(customUserAgent, deviceMode))
         webContents.setZoomFactor(state.zoomLevel)
         this.bindEvents(viewId, view)
+        configureBrowserPopups(webContents, {
+          visible: !options?.offscreen,
+          canOpenTab: () => this.pageOwners.get(viewId)?.isActive() ?? browserHostManager.isVisible(viewId),
+          openTab: request => this.openWebsiteTab(viewId, request, options?.offscreen ?? false),
+          onBlocked: target => this.reportBlockedPopup(viewId, target),
+        })
+        try {
+          await ensureBrowserCompatibility(webContents)
+        } catch (error) {
+          console.warn('[Browser] Compatibility setup failed; continuing without optional APIs', { viewId, errorType: error instanceof Error ? error.name : typeof error })
+        }
+        if (webContents.isDestroyed() || this.states.get(viewId) !== state || options?.owner?.isActive() === false) throw new Error('Browser page closed during compatibility setup')
+        try {
+          options?.owner?.ready(viewId)
+        } catch (error) {
+          this.pageOwners.delete(viewId)
+          throw error
+        }
         if (url) {
-          void webContents.loadURL(url).catch(error => {
+          void webContents.loadURL(url, options?.referrer ? { httpReferrer: options.referrer } : undefined).catch(error => {
             if (webContents.isDestroyed() || this.states.get(viewId) !== state || wasNavigationCancelled(error)) return
             console.warn('[Browser] Initial navigation failed', { viewId }, navigationFailureDetails(error))
           })
@@ -309,6 +334,7 @@ class BrowserPageManager {
         return state
       } catch (error) {
         if (this.states.get(viewId) === state) this.destroy(viewId)
+        else this.pageOwners.delete(viewId)
         console.warn('[Browser] Page creation failed', { viewId }, error)
         throw error
       } finally {
@@ -317,6 +343,49 @@ class BrowserPageManager {
     })
     this.pendingCreates.set(viewId, promise)
     return promise
+  }
+
+  private async openWebsiteTab(openerViewId: string, request: BrowserTabRequest, offscreen: boolean): Promise<void> {
+    const opener = this.views.get(openerViewId)
+    if (!opener || opener.webContents.isDestroyed()) throw new Error('Browser opener is unavailable')
+    const owner = this.pageOwners.get(openerViewId)
+    if (owner?.isActive() === false) throw new Error('Browser page owner was released')
+    const viewId = `browser-${randomUUID()}`
+    const deviceMode = this.states.get(openerViewId)?.deviceMode
+    if (!isUrlAllowedByPolicy(request.url)) {
+      this.reportBlockedPopup(openerViewId, request.url)
+      throw new Error('Browser tab refused by navigation policy')
+    }
+    let childOffscreen = offscreen
+    let state: BrowserViewState
+    try {
+      state = await this.create(viewId, request.url, { offscreen: childOffscreen, deviceMode, owner, referrer: request.referrer })
+    } catch (error) {
+      if (offscreen || !(error instanceof MainHostAttachError) || owner?.isActive() === false) throw error
+      childOffscreen = true
+      state = await this.create(viewId, request.url, { offscreen: true, deviceMode, owner, referrer: request.referrer })
+    }
+    if (this.views.get(openerViewId) !== opener || owner?.isActive() === false) {
+      this.destroy(viewId)
+      throw new Error('Browser opener closed during tab creation')
+    }
+    const contents = this.getWebContents(viewId)
+    if (!contents) throw new Error('Browser tab closed during creation')
+    this.updateState(viewId, { url: request.url, isLoading: true })
+    if (!childOffscreen && this.mainWindow && !this.mainWindow.isDestroyed() && !this.mainWindow.webContents.isDestroyed()) {
+      const opened: BrowserTabOpened = { viewId, openerViewId, url: request.url, title: state.title, background: request.background, borrowed: !!owner }
+      this.mainWindow.webContents.send('browser:tab-opened', opened)
+    }
+  }
+
+  private reportBlockedPopup(viewId: string, target: string): void {
+    const state = this.states.get(viewId)
+    if (!state || !browserHostManager.isVisible(viewId)) return
+    let hostname: string
+    try { hostname = new URL(target).hostname } catch { return }
+    if (!hostname) return
+    this.updateState(viewId, { blockedPopupHost: hostname, blockedPopupSequence: (state.blockedPopupSequence ?? 0) + 1 })
+    this.emitStateChangeImmediate(viewId)
   }
 
   show(viewId: string, bounds: BrowserViewBounds): boolean {
@@ -348,6 +417,10 @@ class BrowserPageManager {
   /** A visible AI page can be selected by an interactive context without changing hosts. */
   isRevealed(viewId: string): boolean {
     return browserHostManager.isVisible(viewId)
+  }
+
+  releaseOwner(viewId: string, owner: BrowserPageOwner): void {
+    if (this.pageOwners.get(viewId) === owner) this.pageOwners.delete(viewId)
   }
 
   /** Subscribe to view destruction, whichever path destroyed it. Returns an unsubscribe. */
@@ -415,6 +488,12 @@ class BrowserPageManager {
     }
 
     try {
+      try {
+        await ensureBrowserCompatibility(view.webContents)
+      } catch (error) {
+        console.warn('[Browser] Compatibility setup failed; continuing navigation without optional APIs', { viewId, errorType: error instanceof Error ? error.name : typeof error })
+      }
+      if (this.views.get(viewId) !== view || view.webContents.isDestroyed()) return false
       await view.webContents.loadURL(url)
 
       return true
@@ -601,6 +680,8 @@ class BrowserPageManager {
     this.states.delete(viewId)
     this.lastBounds.delete(viewId)
     this.pendingCreates.delete(viewId)
+    const owner = this.pageOwners.get(viewId)
+    this.pageOwners.delete(viewId)
     browserHostManager.destroy(viewId)
 
     if (this.activeViewId === viewId) {
@@ -610,6 +691,7 @@ class BrowserPageManager {
     this.touchPointer.sync()
 
     this.emitViewDestroyed(viewId, view?.webContents.id)
+    owner?.release(viewId)
   }
 
   /**
@@ -668,6 +750,7 @@ class BrowserPageManager {
         error: undefined,
         blockedByPolicy: false,
         blockedUrl: undefined,
+        blockedPopupHost: undefined,
       })
       // Use immediate emit for navigation start - user needs to see loading indicator
       this.emitStateChangeImmediate(viewId)
@@ -740,28 +823,6 @@ class BrowserPageManager {
         canGoForward: wc.navigationHistory.canGoForward(),
       })
       this.emitStateChange(viewId) // debounced
-    })
-
-    // Handle new window requests - open in same view (with policy check)
-    wc.setWindowOpenHandler(({ url }) => {
-      if (!isCurrent()) return { action: 'deny' }
-      if (!popupTargetAllowed(url, wc.getURL())) {
-        console.warn('[Browser] Popup to a local address refused', { viewId, scheme: schemeOf(url) })
-        return { action: 'deny' }
-      }
-      if (isUrlAllowedByPolicy(url)) {
-        void wc.loadURL(url).catch(error => {
-          if (!isCurrent()) return
-          if (wasNavigationCancelled(error)) return
-          console.warn('[Browser] Popup navigation failed', { viewId }, navigationFailureDetails(error))
-          this.updateState(viewId, { error: (error as Error).message, isLoading: false })
-          this.emitStateChangeImmediate(viewId)
-        })
-      } else {
-        this.updateState(viewId, { error: buildBlockedMessage(url), blockedByPolicy: true, blockedUrl: url })
-        this.emitStateChangeImmediate(viewId)
-      }
-      return { action: 'deny' }
     })
 
     // Handle external protocol links & browser policy
@@ -926,6 +987,8 @@ class BrowserPageManager {
     }
     if (!this.states.has(viewId)) return
     const contentsId = this.views.get(viewId)?.webContents.id
+    const owner = this.pageOwners.get(viewId)
+    this.pageOwners.delete(viewId)
     this.pendingCreates.delete(viewId)
     this.views.delete(viewId)
     this.states.delete(viewId)
@@ -936,6 +999,7 @@ class BrowserPageManager {
     if (this.displayedViewId === viewId) this.displayedViewId = null
     this.touchPointer.sync()
     this.emitViewDestroyed(viewId, contentsId, 'lost')
+    owner?.release(viewId)
   }
 
   // ============================================

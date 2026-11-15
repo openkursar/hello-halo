@@ -19,9 +19,10 @@ import { nativeImage, app } from 'electron'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { browserViewManager } from '../browser-view.service'
+import { retainsBrowserDebugger } from '../browser-compatibility'
 import { browserHostManager, captureBrowserPage, MainHostAttachError, withBrowserFrames } from '../browser-host'
 import { BROWSER_INPUT_METHODS, BrowserInputOperation, type BrowserInputCommandSender } from '../browser-input'
-import type { BrowserViewState, DeviceMode } from '../browser-view.service'
+import type { BrowserPageOwner, BrowserViewState, DeviceMode } from '../browser-view.service'
 import {
   createAccessibilitySnapshot,
   getElementBoundingBox,
@@ -91,11 +92,12 @@ const backgroundOnlyViewIds = new Set<string>()
 export function notifyViewDestroyed(viewId: string, webContentsId?: number): void {
   if (webContentsId !== undefined) unregisterWebContentsForDownload(webContentsId)
   automationOwnedViewIds.delete(viewId)
-  const wasAnnounced = !backgroundOnlyViewIds.delete(viewId)
+  const reservedContexts = new Set([...liveContexts].filter(ctx => ctx.hasReservedView(viewId)))
+  const wasAnnounced = !backgroundOnlyViewIds.delete(viewId) && reservedContexts.size === 0
   let announce = false
   for (const ctx of liveContexts) {
     const held = ctx.handleViewDestroyed(viewId)
-    if (held && ctx.hasUi && wasAnnounced) announce = true
+    if (held && ctx.hasUi && wasAnnounced && !reservedContexts.has(ctx)) announce = true
   }
   if (announce) {
     emitBrowserViewGone({ viewId })
@@ -271,6 +273,27 @@ export class BrowserContext implements BrowserContextInterface {
   // The views this context opened. Both an access boundary (see
   // `visibleViewStates`) and the cleanup list `destroy()` walks.
   private ownedViewIds: Set<string> = new Set()
+  private trackedViewIds = new Set<string>()
+  private reservedViewIds = new Set<string>()
+  private readonly pageOwner: BrowserPageOwner = {
+    isActive: () => !this.released,
+    reserve: (viewId, background) => {
+      this.ownedViewIds.add(viewId)
+      this.reservedViewIds.add(viewId)
+      if (this._isScoped) automationOwnedViewIds.add(viewId)
+      if (background) backgroundOnlyViewIds.add(viewId)
+    },
+    ready: viewId => {
+      if (this.released) throw new Error('Browser context was released')
+      this.reservedViewIds.delete(viewId)
+      this.trackView(viewId)
+    },
+    release: viewId => {
+      this.reservedViewIds.delete(viewId)
+      this.ownedViewIds.delete(viewId)
+      this.trackedViewIds.delete(viewId)
+    },
+  }
 
   // Whether this is a scoped context (used for automation isolation).
   private _isScoped: boolean = false
@@ -322,6 +345,10 @@ export class BrowserContext implements BrowserContextInterface {
   /** Whether this context opened the view itself. */
   ownsView(viewId: string): boolean {
     return this.ownedViewIds.has(viewId)
+  }
+
+  hasReservedView(viewId: string): boolean {
+    return this.reservedViewIds.has(viewId)
   }
 
   /** Whether the user is watching one of this context's tabs on the main window right now. */
@@ -404,12 +431,12 @@ export class BrowserContext implements BrowserContextInterface {
     let fellBack = this._hasUi && browserHostManager.isMainHostStalled()
     if (fellBack) console.log('[BrowserContext] Main host stalled; opening a watchable page in the hidden host', { viewId, conversationId: this.conversationId })
     try {
-      await browserViewManager.create(viewId, url, { offscreen: !this._hasUi || fellBack, deviceMode })
+      await browserViewManager.create(viewId, url, { offscreen: !this._hasUi || fellBack, deviceMode, owner: this.pageOwner })
     } catch (error) {
       if (fellBack || !this._hasUi || this.released || !(error instanceof MainHostAttachError)) throw error
       fellBack = true
       console.warn('[BrowserContext] Main host could not attach a watchable page; opening it in the hidden host', { viewId, conversationId: this.conversationId, reason: error.message })
-      await browserViewManager.create(viewId, url, { offscreen: true, deviceMode })
+      await browserViewManager.create(viewId, url, { offscreen: true, deviceMode, owner: this.pageOwner })
     }
     if (fellBack) backgroundOnlyViewIds.add(viewId)
     // A context released while its page was being created would never close it.
@@ -487,6 +514,8 @@ export class BrowserContext implements BrowserContextInterface {
       if (target.viewId === viewId) controller.abort(new Error('Browser page was destroyed during operation'))
     }
     const owned = this.ownedViewIds.delete(viewId)
+    this.reservedViewIds.delete(viewId)
+    this.trackedViewIds.delete(viewId)
     if (this.activeViewId !== viewId) return owned
 
     this.disableMonitoring()
@@ -2062,7 +2091,7 @@ export class BrowserContext implements BrowserContextInterface {
         if (this.consoleEnabled) {
           webContents.debugger.sendCommand('Runtime.disable').catch(() => {})
         }
-        if (this.pageEnabled) {
+        if (this.pageEnabled && !retainsBrowserDebugger(webContents)) {
           webContents.debugger.sendCommand('Page.disable').catch(() => {})
         }
       } catch (_e) {
@@ -2070,7 +2099,7 @@ export class BrowserContext implements BrowserContextInterface {
       }
 
       try {
-        webContents.debugger.detach()
+        if (!retainsBrowserDebugger(webContents)) webContents.debugger.detach()
       } catch (_e) {
         // Already detached or not attached
       }
@@ -2103,7 +2132,9 @@ export class BrowserContext implements BrowserContextInterface {
    *   2. Audio layer    — setAudioMuted(true) silences any audio that slips through
    */
   trackView(viewId: string): void {
-    this.ownedViewIds.add(viewId)
+    if (this.trackedViewIds.has(viewId)) return
+    this.trackedViewIds.add(viewId)
+    if (!this.ownedViewIds.has(viewId)) this.ownedViewIds.add(viewId)
     // Claim it app-wide too, so the user's own browser can tell this tab is an
     // automation's and leave it alone.
     if (this._isScoped) automationOwnedViewIds.add(viewId)
@@ -2189,7 +2220,8 @@ export class BrowserContext implements BrowserContextInterface {
     // WebContents, so a tab left registered to a released context keeps sending
     // the USER's own downloads to the AI's download folder — silently, on a tab
     // that outlives the conversation and looks like any other.
-    for (const viewId of this.ownedViewIds) {
+    for (const viewId of new Set([...this.ownedViewIds, ...this.reservedViewIds])) {
+      browserViewManager.releaseOwner(viewId, this.pageOwner)
       const wc = browserViewManager.getWebContents(viewId)
       if (wc && !wc.isDestroyed()) {
         unregisterWebContentsForDownload(wc.id)
@@ -2205,7 +2237,11 @@ export class BrowserContext implements BrowserContextInterface {
     }
     this.pendingDownloadResolvers = []
     this.downloads.clear()
+    for (const viewId of this.ownedViewIds) automationOwnedViewIds.delete(viewId)
+    for (const viewId of this.reservedViewIds) automationOwnedViewIds.delete(viewId)
     this.ownedViewIds.clear()
+    this.reservedViewIds.clear()
+    this.trackedViewIds.clear()
     this.activeViewId = null
     this.lastSnapshot = null
     this.snapshotContents = null
@@ -2272,7 +2308,11 @@ export class BrowserContext implements BrowserContextInterface {
         // View may already be destroyed
       }
     }
+    for (const viewId of this.ownedViewIds) automationOwnedViewIds.delete(viewId)
+    for (const viewId of this.reservedViewIds) automationOwnedViewIds.delete(viewId)
     this.ownedViewIds.clear()
+    this.reservedViewIds.clear()
+    this.trackedViewIds.clear()
 
     this.activeViewId = null
     this.lastSnapshot = null

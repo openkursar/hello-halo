@@ -249,6 +249,21 @@ Address-bar and Home navigation belong to the tab lifecycle. A request made
 before guest attachment waits for that tab's creation, survives switching away,
 and is cancelled if the tab closes before the guest becomes ready.
 
+Website new-tab events attach an already-created managed page only while its
+opener belongs to the shown space. The event's `borrowed` flag retains context
+ownership: Canvas never destroys or budget-evicts that page. Without it, the
+tab is Canvas-owned. Ordinary links preserve
+their referrer policy and do not replace the original document. Background opens
+retain selection and never expand a collapsed Canvas. A new independent tab
+outlives the opener and participates in the same live-page and tab budgets;
+native authentication windows keep their own opener relationship.
+
+A denied popup on the visible page uses `blockedPopupHost` and
+`blockedPopupSequence` in its normal browser-state event. The viewer shows a
+compact dismissible status above the guest, without focus transfer or the
+blocked-navigation overlay. A later navigation clears it; a new sequence shows
+another denial even for the same host. Background pages produce no new UI.
+
 Canvas-owned pages are destroyed on tab close, released by the existing
 budgets, and released (url kept) while their space is parked. AI-owned pages
 only lose their presentation on tab close or a space switch: their owner keeps

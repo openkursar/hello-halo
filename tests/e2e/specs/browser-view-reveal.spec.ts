@@ -813,7 +813,11 @@ test.describe('production browser policy', () => {
           const redirect = `${browserSite.origin}/redirect?target=${encodeURIComponent(blocked)}`
           await window.evaluate(async ({ viewId, url }) => (window as unknown as { halo: HaloAPI }).halo.navigateBrowserView(viewId, url), { viewId, url: redirect })
         }
-        await expect.poll(readState).toMatchObject({ blockedByPolicy: true, blockedUrl: blocked })
+        if (kind === 'popup') {
+          await expect.poll(readState).toMatchObject({ url: allowed, blockedByPolicy: false })
+        } else {
+          await expect.poll(readState).toMatchObject({ blockedByPolicy: true, blockedUrl: blocked })
+        }
         expect(await electronApp.evaluate(({ webContents }, id) => !!webContents.fromId(id), id)).toBe(true)
         expect(await electronApp.evaluate(({ webContents }, blocked) => webContents.getAllWebContents().some(contents => contents.getURL() === blocked), blocked)).toBe(false)
       })

@@ -26,6 +26,15 @@ export interface BrowserHostFailure {
   error: string
 }
 
+export interface BrowserTabOpened {
+  viewId: string
+  openerViewId: string
+  url: string
+  title: string
+  background: boolean
+  borrowed?: boolean
+}
+
 export interface BrowserPageGone {
   viewId: string
   reason: 'closed' | 'lost'

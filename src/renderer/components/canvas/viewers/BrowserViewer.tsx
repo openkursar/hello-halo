@@ -99,6 +99,9 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
 
   // Get browser state from lifecycle manager via hook
   const browserState = useBrowserState(tab.id)
+  const [dismissedPopupSequence, setDismissedPopupSequence] = useState<number | undefined>()
+  const showBlockedPopup = !!browserState.blockedPopupHost
+    && browserState.blockedPopupSequence !== dismissedPopupSequence
 
   // Blocked-page "allow and retry" — only offered when the build lets users
   // extend the browser allowlist (browserPolicy.userExtensible).
@@ -483,6 +486,21 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
               <MoreVertical className="w-4 h-4 text-muted-foreground" />
             </button>
           </div>
+        </div>
+      )}
+
+      {showBlockedPopup && (
+        <div role="status" className="flex shrink-0 items-start gap-2 border-b border-border bg-muted px-3 py-2 text-xs text-muted-foreground">
+          <span className="min-w-0 flex-1 break-words">
+            {t('Opening {{host}} was blocked by browser policy', { host: browserState.blockedPopupHost })}
+          </span>
+          <button
+            type="button"
+            onClick={() => setDismissedPopupSequence(browserState.blockedPopupSequence)}
+            className="shrink-0 rounded px-2 py-1 text-foreground hover:bg-secondary focus-visible:outline focus-visible:outline-primary"
+          >
+            {t('Dismiss')}
+          </button>
         </div>
       )}
 

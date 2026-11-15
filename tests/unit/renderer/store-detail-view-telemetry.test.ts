@@ -16,6 +16,7 @@ vi.mock('../../../src/renderer/api', () => ({
   api: {
     trackEvent,
     storeGetAppDetail: (slug: string) => storeGetAppDetail(slug),
+    onBrowserTabOpened: () => () => {},
     onBrowserPageGone: () => () => {}, onBrowserStateChange: () => () => {},
     onArtifactChangedBatch: () => () => {},
     onMemoryPressure: () => () => {},

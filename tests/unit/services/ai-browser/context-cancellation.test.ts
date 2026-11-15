@@ -19,6 +19,7 @@ vi.mock('../../../../src/main/services/browser-host/manager', () => ({
 }))
 vi.mock('../../../../src/main/services/browser-view.service', () => ({
   browserViewManager: {
+    releaseOwner: () => {},
     getAllStates: () => [...pages.keys()].map(id => ({ id, url: `https://example.test/${id}`, title: id })),
     getState: (id: string) => pages.has(id) ? { id, url: `https://example.test/${id}`, title: id } : null,
     getWebContents: (id: string) => pages.get(id) ?? null,

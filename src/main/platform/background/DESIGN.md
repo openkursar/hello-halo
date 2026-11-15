@@ -136,6 +136,9 @@ Implementation:
 - Callers MUST call `releaseDaemonBrowserWindow()` when done.
 - A safety timeout (default 5 minutes) auto-releases if the caller hangs.
 - The window is lazily created on first request and destroyed during shutdown.
+- Its session user agent comes from the running Chromium through
+  `foundation/chromium-user-agent`, preserving the native platform/version rather
+  than fixing a browser version in this module.
 
 ### 2.4 Domain-Level Partition Extraction
 

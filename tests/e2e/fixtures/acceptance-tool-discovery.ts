@@ -31,18 +31,31 @@ export function planModelTool(request: ModelRequest, name: string, input: Record
   const latest = new Map<string, Record<string, unknown>>()
   for (const receipt of request.toolResults) {
     if (!searchCalls.has(receipt.id) || receipt.error) continue
-    let payload: { tools?: unknown[] }
+    let payload: { tools?: unknown[]; targets?: unknown[] }
     try { payload = JSON.parse(receipt.text) } catch {
       if (receipt === current) return { error: `ToolSearch did not return JSON definitions for ${name}` }
       continue
     }
-    if (!Array.isArray(payload?.tools)) {
+    const entries = Array.isArray(payload?.tools)
+      ? payload.tools
+      : Array.isArray(payload?.targets)
+        ? payload.targets.map(entry => {
+          if (!entry || typeof entry !== 'object') return entry
+          const target = entry as Record<string, unknown>
+          return {
+            ...target,
+            name: target.name ?? target.tool,
+            input_schema: target.input_schema ?? target.arguments_schema,
+          }
+        })
+        : undefined
+    if (!entries) {
       if (receipt === current) return { error: `ToolSearch did not return definitions for ${name}` }
       continue
     }
-    const matching = payload.tools.filter(entry => entry && typeof entry === 'object' && typeof (entry as { name?: unknown }).name === 'string' && matches((entry as { name: string }).name, name))
+    const matching = entries.filter(entry => entry && typeof entry === 'object' && typeof (entry as { name?: unknown }).name === 'string' && matches((entry as { name: string }).name, name))
     if (receipt === current && matching.length === 0) return { error: `Expected one discovered ${name}; received 0` }
-    for (const entry of payload.tools) {
+    for (const entry of entries) {
       if (!entry || typeof entry !== 'object') continue
       const tool = entry as Record<string, unknown>
       if (typeof tool.name !== 'string' || !matches(tool.name, name)) continue
