@@ -8,7 +8,10 @@
 import { useCallback, useId, useMemo, useState, type ReactNode } from 'react'
 import { AlertCircle, Check, ChevronDown, ChevronRight, Copy } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import { api } from '../../api'
+import { openProxySettings } from '../../utils/proxy-navigation'
 import { copyToClipboard } from '../../utils/clipboard'
+import { parseProxyRequired } from '../../../shared/constants/proxy-required'
 import { describeAgentError, formatAgentErrorDetail } from './agent-error-text'
 
 interface TurnErrorBubbleProps {
@@ -26,6 +29,8 @@ export function TurnErrorBubble({ error, inline = false, children }: TurnErrorBu
   const detailId = useId()
 
   const summary = useMemo(() => describeAgentError(error, t), [error, t])
+  // Proxy settings exist on the desktop only; a remote client has nowhere to send the person.
+  const proxyRequired = useMemo(() => parseProxyRequired(error) !== null && !api.isRemoteMode(), [error])
   // Only an opened card pays for indenting the payload.
   const detail = useMemo(() => (expanded ? formatAgentErrorDetail(error) : ''), [expanded, error])
 
@@ -49,6 +54,16 @@ export function TurnErrorBubble({ error, inline = false, children }: TurnErrorBu
       </div>
       <p className="mt-1.5 text-sm text-destructive/80 whitespace-pre-wrap [overflow-wrap:anywhere]">{summary.text}</p>
       {children}
+
+      {proxyRequired && (
+        <button
+          type="button"
+          onClick={() => void openProxySettings()}
+          className="mt-2 min-h-7 rounded-md border border-destructive/30 px-2.5 text-xs text-destructive transition-colors hover:bg-destructive/10"
+        >
+          {t('Open proxy settings')}
+        </button>
+      )}
 
       {summary.expandable && (
         <div className="mt-1.5 flex items-center gap-1 text-xs">

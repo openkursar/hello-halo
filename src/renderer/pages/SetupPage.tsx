@@ -12,6 +12,7 @@ import { SetupProviderConfig } from '../components/setup/SetupProviderConfig'
 import { PreferencesStep } from '../components/setup/PreferencesStep'
 import { OAuthRedirectLogin } from '../components/ai-config/OAuthRedirectLogin'
 import { useOAuthLogin } from '../hooks/useOAuthLogin'
+import { proxyRequiredText } from '../utils/proxy-required-text'
 import { useTranslation } from '../i18n'
 import { Loader2 } from 'lucide-react'
 import type { HaloConfig } from '../types'
@@ -201,7 +202,7 @@ export function SetupPage() {
         />
         {error && (
           <div role="alert" className="fixed bottom-8 left-4 right-4 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:max-w-md p-4 bg-destructive/10 border border-destructive/20 rounded-lg z-50 break-words">
-            <p className="text-sm text-destructive">{error}</p>
+            <p className="text-sm text-destructive">{proxyRequiredText(error, t) ?? error}</p>
           </div>
         )}
       </>

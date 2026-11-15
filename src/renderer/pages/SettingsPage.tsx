@@ -37,12 +37,13 @@ export function SettingsPage() {
 
   // Active navigation section (click-only, no scroll spy - standard settings page behavior)
   const settingsFocus = useAppStore(state => state.settingsFocus)
-  const [activeSection, setActiveSection] = useState(settingsFocus === 'claude-code' && !isRemoteMode ? 'advanced' : 'ai-model')
+  const focusSection = settingsFocus === 'proxy' ? 'system' : 'advanced'
+  const [activeSection, setActiveSection] = useState(settingsFocus && !isRemoteMode ? focusSection : 'ai-model')
   useEffect(() => {
     if (!settingsFocus) return
-    if (!isRemoteMode) scrollToSection('advanced')
+    if (!isRemoteMode) scrollToSection(focusSection)
     useAppStore.getState().clearSettingsFocus()
-  }, [settingsFocus, isRemoteMode])
+  }, [settingsFocus, focusSection, isRemoteMode])
 
   // Handle navigation click
   const handleNavClick = useCallback((sectionId: string) => {
@@ -100,7 +101,7 @@ export function SettingsPage() {
 
               {/* System Section - Desktop only */}
               {!isRemoteMode && (
-                <SystemSection config={config} setConfig={setConfig} />
+                <SystemSection config={config} setConfig={setConfig} proxyFocused={settingsFocus === 'proxy'} />
               )}
 
               {/* Advanced Section - Desktop only */}

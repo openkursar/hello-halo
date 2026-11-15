@@ -79,6 +79,13 @@ export interface OAuthProvider {
   cancelLogin?(): Promise<ProviderResult<void>> | void
 
   /**
+   * Proxy the sign-in window's session must use, as a URL; null when the window
+   * follows the system's. Rejects when a proxy is required and none is usable,
+   * with a reason a person can act on.
+   */
+  loginProxy?(): Promise<string | null>
+
+  /**
    * Refresh the access token if expired
    */
   refreshToken(): Promise<ProviderResult<void>>

@@ -11,7 +11,7 @@
 import { createHash } from 'node:crypto'
 
 /** Fixed version; adjust as needed. */
-export const CLAUDE_CODE_VERSION = '2.1.280'
+export const CLAUDE_CODE_VERSION = '2.1.290'
 
 export const CLAUDE_CODE_USER_AGENT = `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`
 

@@ -378,6 +378,7 @@ export function createBalancer(options: BalancerOptions = {}): Balancer {
       if (this.dropStale(attempt, record, 'failure')) return { rest: null, blame: 'member' }
 
       const judgment = judgeFailure(evidence, now)
+      if (judgment.blame === 'none') return { rest: null, blame: 'none' }
       if (judgment.blame === 'request') {
         this.provisional.set(attempt, record)
         pending.set(record, attempt.member)

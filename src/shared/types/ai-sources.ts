@@ -185,18 +185,8 @@ export const AVAILABLE_MODELS: ModelOption[] = [
     description: 'Best combination of speed and intelligence, suitable for most tasks'
   },
   {
-    id: 'claude-sonnet-5',
-    name: 'Claude Sonnet 5',
-    description: 'Best combination of speed and intelligence, suitable for most tasks'
-  },
-  {
-    id: 'claude-fable-5',
-    name: 'Claude Fable 5',
-    description: 'Frontier model with native 1M context, strongest coding and agentic performance'
-  },
-  {
-    id: 'claude-fable-5-1',
-    name: 'Claude Fable 5.1',
+    id: 'claude-fable-5-2',
+    name: 'Claude Fable 5.2',
     description: 'Frontier model with native 1M context, strongest coding and agentic performance'
   },
   {
@@ -205,23 +195,18 @@ export const AVAILABLE_MODELS: ModelOption[] = [
     description: 'Most capable model for long-running agentic coding and knowledge work'
   },
   {
-    id: 'claude-opus-5',
-    name: 'Claude Opus 5',
-    description: 'Most capable model for complex agentic coding and enterprise work'
-  },
-  {
     id: 'claude-opus-4-6',
     name: 'Claude Opus 4.6',
     description: 'Powerful model, great for complex reasoning and architecture decisions'
   },
   {
-    id: 'claude-haiku-4-5-20251001',
-    name: 'Claude Haiku 4.5',
+    id: 'claude-haiku-5-5',
+    name: 'Claude Haiku 5.5',
     description: 'Fast and lightweight, ideal for simple tasks'
   }
 ]
 
-export const DEFAULT_MODEL = 'claude-sonnet-5'
+export const DEFAULT_MODEL = 'claude-sonnet-5-5'
 
 /** Model ids retired upstream — requests with them are rejected by the API. */
 const RETIRED_MODEL_IDS = new Set(['claude-mythos-preview'])
@@ -549,6 +534,12 @@ export interface BackendRequestConfig {
    * forward the subprocess's own Authorization header untouched.
    */
   delegatedAuth?: boolean
+  /**
+   * The account must not connect directly when Settings requires a proxy
+   * (Claude and ChatGPT accounts). Whether it is required is read from
+   * Settings on every request, so toggling it needs no session rebuild.
+   */
+  proxyGuard?: boolean
 }
 
 // ============================================================================

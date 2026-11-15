@@ -31,7 +31,7 @@ import http from 'http'
 import { readFileSync } from 'fs'
 import { createHash, randomBytes } from 'crypto'
 import open from 'open'
-import { proxyFetch } from '../../proxy-fetch'
+import { isProxyRequiredError, proxyFetch, resolveGuardedProxyUrl } from '../../proxy-fetch'
 import type {
   OAuthAISourceProvider,
   ProviderResult
@@ -63,6 +63,9 @@ import {
 const ISSUER = 'https://auth.openai.com'
 const AUTHORIZE_URL = `${ISSUER}/oauth/authorize`
 const TOKEN_URL = `${ISSUER}/oauth/token`
+
+/** ChatGPT requests never go direct while Settings requires a proxy. */
+const guardedFetch = (url: string, init: RequestInit): Promise<Response> => proxyFetch(url, init, { guarded: true })
 const REVOKE_URL = `${ISSUER}/oauth/revoke`
 
 /** Public client id of the Codex CLI. `codex-rs/login/src/auth/manager.rs` CLIENT_ID. */
@@ -534,7 +537,8 @@ class ChatGPTProvider implements OAuthAISourceProvider {
       // The Codex backend only serves streamed responses.
       forceStream: true,
       adapterId: CODEX_ADAPTER_ID,
-      headers: { ...this.backendHeaders(c.accessToken, this.routingAccountId(c)), 'Accept': 'text/event-stream' }
+      headers: { ...this.backendHeaders(c.accessToken, this.routingAccountId(c)), 'Accept': 'text/event-stream' },
+      proxyGuard: true
     }
   }
 
@@ -591,7 +595,7 @@ class ChatGPTProvider implements OAuthAISourceProvider {
   private async fetchCatalog(accessToken: string, accountId: string): Promise<CatalogModel[]> {
     // Bounded because this also runs inside completeLogin: an unresponsive
     // backend must not hold the login flow open indefinitely.
-    const response = await proxyFetch(`${MODELS_URL}?client_version=${CODEX_CLI_VERSION}`, {
+    const response = await guardedFetch(`${MODELS_URL}?client_version=${CODEX_CLI_VERSION}`, {
       method: 'GET',
       headers: this.backendHeaders(accessToken, accountId),
       signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS)
@@ -680,6 +684,7 @@ class ChatGPTProvider implements OAuthAISourceProvider {
    */
   async startLogin(): Promise<ProviderResult<OAuthStartResult>> {
     try {
+      await resolveGuardedProxyUrl(TOKEN_URL)
       this.cleanupPending()
 
       const pkce = createPkce()
@@ -740,6 +745,10 @@ class ChatGPTProvider implements OAuthAISourceProvider {
 
       return { success: true, data: { loginUrl, state } }
     } catch (error) {
+      if (isProxyRequiredError(error)) {
+        console.warn(`[ChatGPT] Login not started: ${error.reason}`)
+        return { success: false, error: error.message }
+      }
       console.error('[ChatGPT] Start login error:', error)
       this.cleanupPending()
       return {
@@ -880,7 +889,7 @@ class ChatGPTProvider implements OAuthAISourceProvider {
     try {
       console.log('[ChatGPT] Refreshing OAuth token')
 
-      const response = await proxyFetch(TOKEN_URL, {
+      const response = await guardedFetch(TOKEN_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -936,7 +945,7 @@ class ChatGPTProvider implements OAuthAISourceProvider {
     const refreshToken = config ? this.conf(config)?.refreshToken : undefined
     if (refreshToken) {
       try {
-        const response = await proxyFetch(REVOKE_URL, {
+        const response = await guardedFetch(REVOKE_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1061,7 +1070,7 @@ class ChatGPTProvider implements OAuthAISourceProvider {
       code_verifier: pending.verifier
     })
 
-    const response = await proxyFetch(TOKEN_URL, {
+    const response = await guardedFetch(TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),

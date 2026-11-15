@@ -16,15 +16,17 @@ import { Switch, switchRowHover } from '../ui/Switch'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { useSecurityPolicy } from '../../hooks/useSecurityPolicy'
 import { BrowserAllowlistCard } from './BrowserAllowlistCard'
-import { ProxyBypassField } from './ProxyBypassField'
+import { ProxySettings } from './ProxySettings'
 import { ChildLocalConnectionRow } from './ChildLocalConnectionRow'
 
 interface SystemSectionProps {
   config: HaloConfig | null
   setConfig: (config: HaloConfig) => void
+  /** Settings was opened on the proxy block. */
+  proxyFocused?: boolean
 }
 
-export function SystemSection({ config, setConfig }: SystemSectionProps) {
+export function SystemSection({ config, setConfig, proxyFocused = false }: SystemSectionProps) {
   const { t } = useTranslation()
   const { showConfirm, DialogComponent: RestartDialogComponent } = useConfirmDialog()
 
@@ -66,17 +68,6 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
   // System settings state
   const [autoLaunch, setAutoLaunch] = useState(config?.system?.autoLaunch || false)
   const [taskCompleteNotify, setTaskCompleteNotify] = useState(config?.notifications?.taskComplete || false)
-
-  // Proxy settings state
-  const [proxyInput, setProxyInput] = useState(config?.network?.proxy || '')
-  const [browserUseProxy, setBrowserUseProxy] = useState(config?.network?.browserUseProxy ?? false)
-  const [imUseProxy, setImUseProxy] = useState(config?.network?.imUseProxy !== false)
-  // Message Channels can also turn this off ("Connect directly").
-  useEffect(() => {
-    setImUseProxy(config?.network?.imUseProxy !== false)
-  }, [config?.network?.imUseProxy])
-  const [proxyError, setProxyError] = useState<string | null>(null)
-  const [proxySaved, setProxySaved] = useState(false)
 
   // Custom User-Agent state (issue #124)
   const [userAgentInput, setUserAgentInput] = useState(config?.browser?.userAgent || '')
@@ -219,67 +210,6 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
       }
     } catch (error) {
       console.error('[SystemSection] Failed to export report:', error)
-    }
-  }
-
-  // Handle proxy save
-  const handleProxySave = async () => {
-    const value = proxyInput.trim()
-
-    // Validate URL format if non-empty
-    if (value) {
-      try {
-        const u = new URL(value)
-        const supported = ['http:', 'https:']
-        if (!supported.includes(u.protocol)) {
-          setProxyError(t('Unsupported protocol. Use http://, https://'))
-          return
-        }
-      } catch {
-        setProxyError(t('Invalid proxy URL. Example: http://127.0.0.1:1087'))
-        return
-      }
-    }
-
-    setProxyError(null)
-    try {
-      const updatedNetwork = { ...config?.network, proxy: value || undefined }
-      const updatedConfig = { ...config, network: updatedNetwork } as HaloConfig
-      await api.setConfig({ network: updatedNetwork })
-      setConfig(updatedConfig)
-      setProxySaved(true)
-      setTimeout(() => setProxySaved(false), 2000)
-    } catch (error) {
-      console.error('[SystemSection] Failed to save proxy:', error)
-      setProxyError(t('Failed to save'))
-    }
-  }
-
-  // Handle browser proxy toggle
-  const handleBrowserUseProxyChange = async (enabled: boolean) => {
-    setBrowserUseProxy(enabled)
-    try {
-      const updatedNetwork = { ...config?.network, browserUseProxy: enabled }
-      const updatedConfig = { ...config, network: updatedNetwork } as HaloConfig
-      await api.setConfig({ network: updatedNetwork })
-      setConfig(updatedConfig)
-    } catch (error) {
-      console.error('[SystemSection] Failed to update browserUseProxy:', error)
-      setBrowserUseProxy(!enabled) // Revert on error
-    }
-  }
-
-  // Message channels' route; every bot redials on the new route once saved
-  const handleImUseProxyChange = async (enabled: boolean) => {
-    setImUseProxy(enabled)
-    try {
-      const updatedNetwork = { ...config?.network, imUseProxy: enabled }
-      const updatedConfig = { ...config, network: updatedNetwork } as HaloConfig
-      await api.setConfig({ network: updatedNetwork })
-      setConfig(updatedConfig)
-    } catch (error) {
-      console.error('[SystemSection] Failed to update imUseProxy:', error)
-      setImUseProxy(!enabled) // Revert on error
     }
   }
 
@@ -433,83 +363,7 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
             </div>
           </div>
 
-          {/* Proxy */}
-          <div className="pt-4 border-t border-border">
-            <div className="flex-1 mb-3">
-              <p className="font-medium">{t('Proxy')}</p>
-              <p className="text-sm text-muted-foreground">
-                {t('Override system proxy. Leave empty to auto-detect from system settings.')}
-              </p>
-            </div>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                type="text"
-                value={proxyInput}
-                onChange={(e) => {
-                  setProxyInput(e.target.value)
-                  setProxyError(null)
-                }}
-                onKeyDown={(e) => e.key === 'Enter' && handleProxySave()}
-                placeholder="http://127.0.0.1:1087"
-                className="flex-1 px-3 py-1.5 text-sm bg-secondary border border-transparent rounded-lg focus:outline-none focus:border-primary/50 font-mono"
-              />
-              <button
-                onClick={handleProxySave}
-                className="flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm bg-primary/10 text-primary hover:bg-primary/20 rounded-lg transition-colors shrink-0"
-              >
-                {proxySaved ? (
-                  <CheckCircle className="w-3.5 h-3.5" />
-                ) : (
-                  <Save className="w-3.5 h-3.5" />
-                )}
-                {proxySaved ? t('Saved') : t('Save')}
-              </button>
-            </div>
-            {proxyError && (
-              <p className="mt-1.5 text-xs text-destructive">{proxyError}</p>
-            )}
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              {t('Supports http://, https://')}
-            </p>
-
-            <ProxyBypassField config={config} setConfig={setConfig} />
-
-            {/* Browser proxy toggle — only visible when a proxy is configured */}
-            {proxyInput.trim() && (
-              <div className="mt-3 pt-3 border-t border-border-faint">
-                <div className={`flex items-center justify-between py-1.5 ${switchRowHover}`}>
-                  <div className="flex-1 min-w-0 mr-3">
-                    <p className="text-sm font-medium">{t('Also apply to AI Browser')}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {t('By default, AI Browser uses system proxy instead of the proxy above')}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={browserUseProxy}
-                    onCheckedChange={handleBrowserUseProxyChange}
-                    size="sm"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Message channels follow the proxy above, or the system's when it is empty */}
-            <div className="mt-3 pt-3 border-t border-border-faint">
-              <div className={`flex items-center justify-between py-1.5 ${switchRowHover}`}>
-                <div className="flex-1 min-w-0 mr-3">
-                  <p className="text-sm font-medium">{t('Message channels use the proxy')}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {t('WeCom, Feishu and WeChat bots connect through this proxy (or the system proxy when it is empty). Turn off if the proxy is only meant for AI requests.')}
-                  </p>
-                </div>
-                <Switch
-                  checked={imUseProxy}
-                  onCheckedChange={handleImUseProxyChange}
-                  size="sm"
-                />
-              </div>
-            </div>
-          </div>
+          <ProxySettings config={config} setConfig={setConfig} openAdvanced={proxyFocused} />
 
           {/* Custom User-Agent — issue #124 */}
           <div className="pt-4 border-t border-border">

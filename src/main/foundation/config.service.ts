@@ -682,6 +682,7 @@ export interface NetworkConfigPayload {
   browserUseProxy: boolean
   imUseProxy: boolean
   noProxy: string | undefined
+  requireProxyForOAuth: boolean
 }
 
 type NetworkConfigChangeHandler = (network: NetworkConfigPayload) => void
@@ -952,6 +953,7 @@ interface HaloConfig {
     browserUseProxy?: boolean  // When true, AI Browser also uses the Settings proxy. Default false = system proxy.
     imUseProxy?: boolean  // When false, IM channels (WeCom, Feishu, WeChat) connect directly. Default true = same route as other requests.
     noProxy?: string  // Hosts reached directly, NO_PROXY style ("a.com, .b.com"); local addresses always are.
+    requireProxyForOAuth?: boolean  // When true, Claude and ChatGPT accounts never connect directly: without a usable proxy their requests are refused. Default false.
   }
   // Browser configuration
   browser?: {
@@ -1607,6 +1609,7 @@ export function saveConfig(config: HaloConfigPatch): HaloConfig {
         browserUseProxy: newConfig.network?.browserUseProxy === true,
         imUseProxy: newConfig.network?.imUseProxy !== false,
         noProxy: newConfig.network?.noProxy,
+        requireProxyForOAuth: newConfig.network?.requireProxyForOAuth === true,
       }
       networkConfigChangeHandlers.forEach(handler => {
         try { handler(payload) } catch (e) {

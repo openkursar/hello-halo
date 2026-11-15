@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AISourcesConfig, OAuthCompleteResult, OAuthSourceConfig } from '../../../../src/shared/types'
 
 const proxyFetch = vi.hoisted(() => vi.fn())
-vi.mock('../../../../src/main/services/proxy-fetch', () => ({ proxyFetch }))
+const guard = vi.hoisted(() => ({ resolve: vi.fn(async (_url: string): Promise<string | null> => null) }))
+vi.mock('../../../../src/main/services/proxy-fetch', () => ({
+  proxyFetch,
+  resolveGuardedProxyUrl: guard.resolve,
+  isProxyRequiredError: (error: unknown) => (error as { name?: string })?.name === 'ProxyRequiredError',
+}))
 
 import { getClaudeProvider } from '../../../../src/main/services/ai-sources/providers/claude.provider'
 
@@ -199,5 +204,42 @@ describe('ClaudeProvider account isolation', () => {
       expect(result).toMatchObject({ success: false, error: 'Invalid token response' })
       expect(result.data).toBeUndefined()
     }
+  })
+})
+
+describe('ClaudeProvider proxy requirement', () => {
+  const provider = getClaudeProvider()
+  const refusal = Object.assign(new Error('A proxy is required for this account, but none is configured. [proxy-required:none]'), { name: 'ProxyRequiredError' })
+
+  beforeEach(async () => {
+    await provider.cancelLogin()
+    proxyFetch.mockReset()
+    guard.resolve.mockReset()
+    guard.resolve.mockResolvedValue(null)
+  })
+
+  afterEach(async () => { await provider.cancelLogin() })
+
+  it('marks its backend config as one that must not connect directly', () => {
+    expect(provider.getBackendConfig(configWith())?.proxyGuard).toBe(true)
+  })
+
+  it('sends its own requests as guarded ones', async () => {
+    proxyFetch.mockResolvedValue(tokenResponse())
+    await provider.refreshTokenWithConfig(configWith())
+    expect(proxyFetch.mock.calls[0][2]).toEqual({ guarded: true })
+  })
+
+  it('opens no login while a required proxy is missing, and says why', async () => {
+    guard.resolve.mockRejectedValue(refusal)
+    const result = await provider.startLogin()
+    expect(result).toEqual({ success: false, error: refusal.message })
+  })
+
+  it('names the proxy its sign-in window must use', async () => {
+    guard.resolve.mockResolvedValue('http://127.0.0.1:7890')
+    await expect(provider.loginProxy()).resolves.toBe('http://127.0.0.1:7890')
+    guard.resolve.mockRejectedValue(refusal)
+    await expect(provider.loginProxy()).rejects.toBe(refusal)
   })
 })

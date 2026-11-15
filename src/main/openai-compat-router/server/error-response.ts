@@ -8,10 +8,12 @@
  * waits that long in silence. So no error reply carries a backend's retry
  * hints, and the router adds no wait of its own. It keeps the upstream's
  * status, so a 429 stays a 429, and makes one judgment itself: a spent quota
- * or an unpaid account is not retried at all.
+ * or an unpaid account is not retried at all. So is a refusal for want of a
+ * proxy the user's Settings require: nothing changes until they act.
  */
 
 import type { Response as ExpressResponse } from 'express'
+import { parseProxyRequired } from '../../../shared/constants/proxy-required'
 
 /** Anthropic error type → HTTP status. */
 const ERROR_STATUS_MAP: Record<string, number> = {
@@ -37,6 +39,9 @@ const STATUS_ERROR_MAP: Record<number, string> = {
   500: 'api_error',
   529: 'overloaded_error'
 }
+
+/** The status of a refusal for want of a required proxy: the service is unavailable until the user acts. */
+const PROXY_REQUIRED_STATUS = 503
 
 /** Response headers through which a backend steers when, or whether, its client retries. */
 const BACKEND_RETRY_HINTS = ['retry-after', 'retry-after-ms', 'x-should-retry']
@@ -150,13 +155,13 @@ export function sendError(
   options?: { refuseRetry?: boolean; status?: number }
 ): void {
   if (upstream?.headers && isEvidenceSink(res)) res.noteUpstreamHeaders(upstream.headers)
-  const status = options?.status ?? resolveStatus(errorType, upstream?.status)
+  const status = options?.status ?? (parseProxyRequired(message) ? PROXY_REQUIRED_STATUS : resolveStatus(errorType, upstream?.status))
   console.log(`[RequestHandler] Sending error: HTTP ${status} ${errorType} - ${message.slice(0, 100)}`)
 
   res.status(status)
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('request-id', `req_${Date.now()}`)
-  applyRetryPolicy(res, status, errorType, message, options?.refuseRetry)
+  applyRetryPolicy(res, status, errorType, message, options?.refuseRetry || parseProxyRequired(message) !== null)
   res.json({
     type: 'error',
     error: { type: errorType, message }

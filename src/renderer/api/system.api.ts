@@ -10,6 +10,7 @@ import type {
   ApiResponse,
 } from './_shared'
 import type { PickedLocalEntry } from '../../shared/attached-paths'
+import type { ProxyRouteInfo } from '../../shared/rpc/contracts/system.contract'
 
 export const systemApi = {
   // ===== Onboarding =====
@@ -48,6 +49,13 @@ export const systemApi = {
       return { success: false, error: 'Only available in desktop app' }
     }
     return window.halo.setAutoLaunch(enabled)
+  },
+
+  getProxyRoute: async (): Promise<ApiResponse<ProxyRouteInfo>> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.getProxyRoute()
   },
 
   openLogFolder: async (): Promise<ApiResponse> => {

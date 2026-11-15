@@ -23,7 +23,7 @@
  */
 
 import { randomBytes, createHash, randomUUID } from 'crypto'
-import { proxyFetch } from '../../proxy-fetch'
+import { isProxyRequiredError, proxyFetch, resolveGuardedProxyUrl } from '../../proxy-fetch'
 import type {
   OAuthAISourceProvider,
   ProviderResult
@@ -50,6 +50,9 @@ const CLAUDE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 /** OAuth endpoints (canonical platform.claude.com / claude.com hosts). */
 const CLAUDE_AUTHORIZE_URL = 'https://claude.com/cai/oauth/authorize'
 const CLAUDE_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
+/** Claude requests never go direct while Settings requires a proxy. */
+const guardedFetch = (url: string, init: RequestInit): Promise<Response> => proxyFetch(url, init, { guarded: true })
+
 const CLAUDE_REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback'
 
 /**
@@ -248,7 +251,8 @@ class ClaudeProvider implements OAuthAISourceProvider {
       key: c.accessToken,
       model,
       headers,
-      apiType: 'anthropic_passthrough'
+      apiType: 'anthropic_passthrough',
+      proxyGuard: true
     }
   }
 
@@ -286,6 +290,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
    */
   async startLogin(): Promise<ProviderResult<OAuthStartResult>> {
     try {
+      await resolveGuardedProxyUrl(CLAUDE_AUTHORIZE_URL)
       console.log('[Claude] Starting OAuth PKCE flow')
 
       const pkce = generatePKCE()
@@ -322,12 +327,21 @@ class ClaudeProvider implements OAuthAISourceProvider {
         }
       }
     } catch (error) {
+      if (isProxyRequiredError(error)) {
+        console.warn(`[Claude] Login not started: ${error.reason}`)
+        return { success: false, error: error.message }
+      }
       console.error('[Claude] Start login error:', error)
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to start login'
       }
     }
+  }
+
+  /** The proxy the sign-in window must use: null unless Settings requires one; throws when required and none is usable. */
+  loginProxy(): Promise<string | null> {
+    return resolveGuardedProxyUrl(CLAUDE_AUTHORIZE_URL)
   }
 
   /**
@@ -355,7 +369,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
     }
 
     try {
-      const response = await proxyFetch(CLAUDE_TOKEN_URL, {
+      const response = await guardedFetch(CLAUDE_TOKEN_URL, {
         method: 'POST',
         signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
         headers: {
@@ -452,7 +466,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
 
   private async fetchProfile(accessToken: string): Promise<ClaudeProfile | null> {
     try {
-      const response = await proxyFetch(CLAUDE_PROFILE_URL, {
+      const response = await guardedFetch(CLAUDE_PROFILE_URL, {
         method: 'GET',
         signal: AbortSignal.timeout(PROFILE_TIMEOUT_MS),
         headers: {
@@ -532,7 +546,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
     }
 
     try {
-      const response = await proxyFetch(CLAUDE_TOKEN_URL, {
+      const response = await guardedFetch(CLAUDE_TOKEN_URL, {
         method: 'POST',
         signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
         headers: {

@@ -35,6 +35,9 @@ import { GroupEditor } from '../ai-groups/GroupEditor'
 import { GroupCards } from '../ai-groups/GroupCards'
 import { GroupCreateMenu } from '../ai-groups/GroupCreateMenu'
 import { useOAuthLogin } from '../../hooks/useOAuthLogin'
+import { openProxySettings } from '../../utils/proxy-navigation'
+import { proxyRequiredText } from '../../utils/proxy-required-text'
+import { parseProxyRequired } from '../../../shared/constants/proxy-required'
 import { useGroupEditRequest } from '../../stores/ai-group-ui.store'
 import type { AIGroupChange } from '../../../shared/rpc/contracts/ai-groups.contract'
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
@@ -493,6 +496,11 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           <Loader2 size={20} className="animate-spin text-primary" />
           <span className="text-foreground">{status}</span>
         </div>
+        {config?.network?.requireProxyForOAuth && oauth.login.provider === 'chatgpt' && !userCode && (
+          <p className="text-xs text-muted-foreground">
+            {t('The login page opens in your browser. Make sure that browser also goes through your proxy.')}
+          </p>
+        )}
         {userCode && (
           <div className="p-3 bg-secondary rounded-md text-center">
             <p className="text-sm text-muted-foreground mb-2">{t('Your code')}:</p>
@@ -520,7 +528,16 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
     <div className="space-y-4">
       {error && (
         <div role="alert" className="p-3 bg-destructive/10 border border-destructive/20 rounded-md">
-          <p className="text-sm text-destructive break-words">{error}</p>
+          <p className="text-sm text-destructive break-words">{proxyRequiredText(error, t) ?? error}</p>
+          {parseProxyRequired(error) && (
+            <button
+              type="button"
+              onClick={() => void openProxySettings()}
+              className="mt-2 min-h-7 rounded-md border border-destructive/30 px-2.5 text-xs text-destructive transition-colors hover:bg-destructive/10"
+            >
+              {t('Open proxy settings')}
+            </button>
+          )}
         </div>
       )}
       {/* Sources List — load-balancing groups sit in it like any other provider */}

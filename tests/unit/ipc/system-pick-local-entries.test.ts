@@ -8,6 +8,7 @@ import { beforeEach, expect, it, vi } from 'vitest'
 const env = vi.hoisted(() => ({
   handlers: {} as Record<string, (...args: any[]) => Promise<any>>,
   showOpenDialog: vi.fn(),
+  describeProxyRoute: vi.fn(),
   files: new Map<string, { dir?: boolean; size: number; bytes?: Buffer }>(),
 }))
 
@@ -25,6 +26,7 @@ vi.mock('../../../src/main/foundation/config.service', () => ({ setAutoLaunch: v
 vi.mock('../../../src/main/foundation/window.service', () => ({ getMainWindow: () => null, onMainWindowChange: vi.fn() }))
 vi.mock('../../../src/main/foundation/logging', () => ({ logFatal: vi.fn() }))
 vi.mock('../../../src/main/services/lifecycle', () => ({ relaunchApp: vi.fn() }))
+vi.mock('../../../src/main/services/proxy-fetch', () => ({ describeProxyRoute: env.describeProxyRoute }))
 vi.mock('../../../src/main/services/perf', () => ({ countPendingCrashDumps: () => 0 }))
 vi.mock('../../../src/main/ipc/rpc', () => ({ registerRawRpcHandlers: (_c: unknown, impl: any) => { env.handlers = impl } }))
 
@@ -89,4 +91,13 @@ it('a dialog failure is reported, not thrown', async () => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
   env.showOpenDialog.mockRejectedValue(new Error('no window'))
   expect(await pick()).toEqual({ success: false, error: 'no window' })
+})
+
+it('reports how requests to Claude and ChatGPT leave now', async () => {
+  env.describeProxyRoute.mockResolvedValueOnce({ kind: 'proxy', via: 'settings', address: '127.0.0.1:7890' })
+  expect(await env.handlers.getProxyRoute()).toEqual({ success: true, data: { kind: 'proxy', via: 'settings', address: '127.0.0.1:7890' } })
+  expect(env.describeProxyRoute).toHaveBeenCalledWith('https://api.anthropic.com')
+
+  env.describeProxyRoute.mockRejectedValueOnce(new Error('lookup failed'))
+  expect(await env.handlers.getProxyRoute()).toEqual({ success: false, error: 'lookup failed' })
 })

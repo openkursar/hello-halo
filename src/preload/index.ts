@@ -22,6 +22,7 @@ import type { AIBrowserActiveView, AIBrowserConversationReleased, AIBrowserLiveP
 import type { MemorySettings, MemoryStatus } from '../shared/types/memory'
 import type { ModelCatalogChangedEvent } from '../shared/types/ai-sources'
 import type { PickedLocalEntry } from '../shared/attached-paths'
+import type { ProxyRouteInfo } from '../shared/rpc/contracts/system.contract'
 import type { ImChannelInstanceConfig, ImChannelInstancePatch } from '../shared/types/im-channel'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
 import { ccRuntimeRpc } from '../shared/rpc/contracts/cc-runtime.contract'
@@ -368,6 +369,7 @@ export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRp
   // System Settings
   getAutoLaunch: () => Promise<IpcResponse>
   setAutoLaunch: (enabled: boolean) => Promise<IpcResponse>
+  getProxyRoute: () => Promise<IpcResponse<ProxyRouteInfo>>
   openLogFolder: () => Promise<IpcResponse>
   openCrashReportsFolder: () => Promise<IpcResponse<{ path: string; pending: number }>>
   relaunch: () => Promise<IpcResponse>

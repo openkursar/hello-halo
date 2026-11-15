@@ -13,7 +13,12 @@ vi.mock('http', async () => {
   } } }
 })
 vi.mock('open', () => ({ default: vi.fn(async () => undefined) }))
-vi.mock('../../../../src/main/services/proxy-fetch', () => ({ proxyFetch }))
+const guard = vi.hoisted(() => ({ resolve: vi.fn(async (_url: string): Promise<string | null> => null) }))
+vi.mock('../../../../src/main/services/proxy-fetch', () => ({
+  proxyFetch,
+  resolveGuardedProxyUrl: guard.resolve,
+  isProxyRequiredError: (error: unknown) => (error as { name?: string })?.name === 'ProxyRequiredError',
+}))
 
 import { ChatGPTProvider } from '../../../../src/main/services/ai-sources/providers/chatgpt.provider'
 
@@ -127,5 +132,23 @@ describe('ChatGPT authorization ownership', () => {
     expect((await completion).success).toBe(false)
     expect(proxyFetch).toHaveBeenCalledTimes(1)
     expect(servers[0].close).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ChatGPT proxy requirement', () => {
+  it('binds no callback and opens no browser while a required proxy is missing', async () => {
+    const refusal = Object.assign(new Error('A proxy is required for this account, but none is configured. [proxy-required:none]'), { name: 'ProxyRequiredError' })
+    guard.resolve.mockRejectedValueOnce(refusal)
+    const result = await new ChatGPTProvider().startLogin()
+    expect(result).toEqual({ success: false, error: refusal.message })
+    expect(servers).toHaveLength(0)
+  })
+
+  it('marks its backend config as one that must not connect directly', () => {
+    const provider = new ChatGPTProvider()
+    const backend = provider.getBackendConfig({
+      chatgpt: { sourceId: 'a', loggedIn: true, accessToken: jwt({ exp: 9999999999 }), model: 'gpt-5' }
+    } as never)
+    expect(backend?.proxyGuard).toBe(true)
   })
 })

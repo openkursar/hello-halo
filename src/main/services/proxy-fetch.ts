@@ -34,6 +34,8 @@ import { ProxyAgent } from 'proxy-agent'
 import { getConfig, onNetworkConfigChange } from '../foundation/config.service'
 import { isHttpLoggingEnabled, logHttpRequest, logHttpResponse, logHttpResponseBody } from '../foundation/logging'
 import { chromiumBypassRules, compileBypassList, proxyBypassList, type ProxySettings } from './proxy-policy'
+import { proxyRequiredMessage, type ProxyRequiredReason } from '../../shared/constants/proxy-required'
+import type { ProxyRouteInfo } from '../../shared/rpc/contracts/system.contract'
 
 // ============================================================================
 // Baseline transports
@@ -171,6 +173,8 @@ interface ProxyState {
   proxy: string | null
   bypass: string[]
   goesDirect: (url: string) => boolean
+  /** Guarded requests (see ProxyFetchOptions) are refused instead of going direct. */
+  requireProxyForOAuth: boolean
 }
 
 /**
@@ -179,9 +183,14 @@ interface ProxyState {
  */
 let _proxyState: ProxyState | undefined
 
-function proxyStateFrom(network: ProxySettings | undefined): ProxyState {
+function proxyStateFrom(network: (ProxySettings & { requireProxyForOAuth?: boolean }) | undefined): ProxyState {
   const bypass = proxyBypassList(network, [process.env.NO_PROXY, process.env.no_proxy])
-  return { proxy: network?.proxy?.trim() || null, bypass, goesDirect: compileBypassList(bypass) }
+  return {
+    proxy: network?.proxy?.trim() || null,
+    bypass,
+    goesDirect: compileBypassList(bypass),
+    requireProxyForOAuth: network?.requireProxyForOAuth === true,
+  }
 }
 
 // ============================================================================
@@ -234,8 +243,8 @@ function applyProxyToBrowserSession(proxy: string | null, bypass: string[]): voi
   }
 }
 
-onNetworkConfigChange(({ proxy, browserUseProxy, noProxy }) => {
-  _proxyState = proxyStateFrom({ proxy, noProxy })
+onNetworkConfigChange(({ proxy, browserUseProxy, noProxy, requireProxyForOAuth }) => {
+  _proxyState = proxyStateFrom({ proxy, noProxy, requireProxyForOAuth })
   // AI Browser only follows Settings proxy when explicitly opted-in;
   // otherwise it uses the system proxy (Electron default behavior).
   applyProxyToBrowserSession(browserUseProxy ? _proxyState.proxy : null, _proxyState.bypass)
@@ -261,6 +270,76 @@ async function resolveProxyUrl(url: string): Promise<string | null> {
   const { proxy, goesDirect } = getProxyState()
   if (goesDirect(url)) return null
   return proxy ?? await resolveSystemProxy(url)
+}
+
+// ============================================================================
+// Guarded requests
+//
+// An account the user asked to keep off direct routes (Settings > System >
+// Proxy). Its requests take the same route as any other, but where that route
+// would be direct, they are refused instead: no proxy configured, a system
+// answer of DIRECT or a failed lookup, or a host on the bypass list.
+// ============================================================================
+
+/** A guarded request found no usable proxy while Settings requires one. */
+export class ProxyRequiredError extends Error {
+  constructor(readonly reason: ProxyRequiredReason, detail?: string) {
+    super(proxyRequiredMessage(reason, detail))
+    this.name = 'ProxyRequiredError'
+  }
+}
+
+export function isProxyRequiredError(error: unknown): error is ProxyRequiredError {
+  return error instanceof ProxyRequiredError
+}
+
+export interface ProxyFetchOptions {
+  /** The request belongs to an account that must not connect directly when Settings requires a proxy. */
+  guarded?: boolean
+}
+
+/** The proxy a guarded request takes, or throws; null when Settings does not require one. */
+async function resolveGuardedProxyUrlFor(url: string, guarded: boolean): Promise<string | null> {
+  const state = getProxyState()
+  if (!guarded || !state.requireProxyForOAuth) return resolveProxyUrl(url)
+  const proxyUrl = await resolveProxyUrl(url)
+  if (!proxyUrl) {
+    const reason = state.goesDirect(url) ? 'bypassed' : 'none'
+    console.warn(`[ProxyFetch] Guarded request refused: reason=${reason} host=${URL.canParse(url) ? new URL(url).host : ''}`)
+    throw new ProxyRequiredError(reason)
+  }
+  return proxyUrl
+}
+
+/**
+ * Whether a guarded request to `url` may go out now. Returns the proxy it
+ * would take (null when Settings does not require one, so any route is fine);
+ * throws ProxyRequiredError when one is required and none is usable. For
+ * checks before an interactive step, such as opening a sign-in page.
+ */
+export async function resolveGuardedProxyUrl(url: string): Promise<string | null> {
+  const state = getProxyState()
+  if (!state.requireProxyForOAuth) return null
+  return resolveGuardedProxyUrlFor(url, true)
+}
+
+const PROXY_DIAL_ERROR_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNRESET'])
+
+/** The proxy's `host:port` when `error` is a failure to reach it, as opposed to a failure of the upstream behind it. */
+function unreachableProxy(error: unknown, proxyUrl: string): string | null {
+  const { code, port, hostname, message } = (error ?? {}) as { code?: string; port?: number; hostname?: string; message?: string }
+  // A SOCKS dial failure carries neither field, only the message ("connect ECONNREFUSED host:port").
+  const dialCode = code ?? /^connect ([A-Z]+) /.exec(message ?? '')?.[1]
+  if (!dialCode || !PROXY_DIAL_ERROR_CODES.has(dialCode)) return null
+  try {
+    const proxy = new URL(proxyUrl)
+    const proxyPort = Number(proxy.port) || (proxy.protocol === 'https:' ? 443 : proxy.protocol.startsWith('socks') ? 1080 : 80)
+    const named = !code && (message ?? '').endsWith(`${proxy.hostname}:${proxyPort}`)
+    if (port === proxyPort || hostname === proxy.hostname || named) return `${proxy.hostname}:${proxyPort}`
+  } catch {
+    return null
+  }
+  return null
 }
 
 // ============================================================================
@@ -480,13 +559,19 @@ async function logResponsePreview(response: Response, method: string, url: strin
  * Supports HTTP, HTTPS, SOCKS4, SOCKS5 proxies.
  * Local addresses and the hosts in the bypass list (proxy-policy) go direct
  * regardless of either proxy.
+ *
+ * A `guarded` request is never direct while Settings requires a proxy: it
+ * throws ProxyRequiredError where the route above would have been direct, and
+ * when the proxy itself cannot be reached.
  */
 export async function proxyFetch(
   url: string | URL,
-  init?: RequestInit
+  init?: RequestInit,
+  options?: ProxyFetchOptions
 ): Promise<Response> {
   const urlStr = typeof url === 'string' ? url : url.toString()
-  const proxyUrl = await resolveProxyUrl(urlStr)
+  const guarded = options?.guarded === true
+  const proxyUrl = await resolveGuardedProxyUrlFor(urlStr, guarded)
 
   const method = (init?.method || 'GET').toUpperCase()
   const logging = isHttpLoggingEnabled()
@@ -514,7 +599,13 @@ export async function proxyFetch(
   } else {
     console.debug(`[ProxyFetch] VIA ${proxyUrl} → ${method} ${urlStr}`)
     const agent = getOrCreateAgent(proxyUrl)
-    response = await makeRequest(urlStr, init, agent)
+    try {
+      response = await makeRequest(urlStr, init, agent)
+    } catch (error) {
+      const unreachable = guarded && getProxyState().requireProxyForOAuth ? unreachableProxy(error, proxyUrl) : null
+      if (unreachable) throw new ProxyRequiredError('unreachable', unreachable)
+      throw error
+    }
   }
 
   // Log response summary (status, duration)
@@ -579,6 +670,24 @@ export async function resolveProxyDialAgent(url: string, signal: AbortSignal): P
     maxFreeSockets: 2,
     signal,
   })
+}
+
+/**
+ * How a request to `url` would leave now, for showing the user. The address
+ * is host and port only; proxy credentials never leave this module.
+ */
+export async function describeProxyRoute(url: string): Promise<ProxyRouteInfo> {
+  const { proxy, goesDirect } = getProxyState()
+  if (goesDirect(url)) return { kind: 'direct', listed: true }
+  const via = proxy ? 'settings' : 'system'
+  const proxyUrl = proxy ?? await resolveSystemProxy(url)
+  if (!proxyUrl) return { kind: 'direct', listed: false }
+  try {
+    const { host } = new URL(proxyUrl)
+    return { kind: 'proxy', via, address: host }
+  } catch {
+    return { kind: 'direct', listed: false }
+  }
 }
 
 /**

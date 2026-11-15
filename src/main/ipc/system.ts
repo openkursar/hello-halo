@@ -14,6 +14,7 @@ import { setAutoLaunch, getAutoLaunch } from '../foundation/config.service'
 import { getMainWindow, onMainWindowChange } from '../foundation/window.service'
 import { logFatal } from '../foundation/logging'
 import { relaunchApp } from '../services/lifecycle'
+import { describeProxyRoute } from '../services/proxy-fetch'
 import { countPendingCrashDumps } from '../services/perf'
 import { systemRpc } from '../../shared/rpc/contracts/system.contract'
 import { registerRawRpcHandlers } from './rpc'
@@ -66,6 +67,15 @@ export function registerSystemHandlers(): void {
         const err = error as Error
         console.error('[Settings] system:get-auto-launch - Failed:', err.message)
         return { success: false, error: err.message }
+      }
+    },
+
+    getProxyRoute: async () => {
+      try {
+        return { success: true, data: await describeProxyRoute('https://api.anthropic.com') }
+      } catch (error) {
+        console.error('[Settings] system:get-proxy-route - Failed:', (error as Error).message)
+        return { success: false, error: (error as Error).message }
       }
     },
 
