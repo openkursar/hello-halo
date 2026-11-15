@@ -78,7 +78,9 @@ export function assertMigratedData(before: MigrationData, after: MigrationData, 
   expect(JSON.parse(currentContent as string)).toMatchObject(JSON.parse(oldContent as string))
   expect(JSON.parse(currentContent as string).source).toMatchObject({ kind: 'automation', appId: records.appIds[0], runId: records.runId, sessionKey: records.sessionKey })
   expect(after.activityForeignKeys.some(key => key.from === 'run_id')).toBe(false)
-  expect(after.activityForeignKeys.some(key => key.from === 'app_id' && key.table === 'installed_apps')).toBe(true)
+  // Activity belongs to an execution actor; the actor in turn belongs to the installed App.
+  expect(after.activityForeignKeys.some(key => key.from === 'app_id' && key.table === 'runtime_execution_actors')).toBe(true)
+  expect(after.runtimeActorForeignKeys.some(key => key.from === 'installed_app_id' && key.table === 'installed_apps' && key.on_delete === 'CASCADE')).toBe(true)
   expect(after.foreignKeyViolations).toEqual([])
   expect(after.integrity).toBe('ok')
 }

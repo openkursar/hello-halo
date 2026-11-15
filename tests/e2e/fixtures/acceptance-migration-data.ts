@@ -40,6 +40,7 @@ export interface MigrationData {
   run: Row | undefined
   entries: Row[]
   activityForeignKeys: Row[]
+  runtimeActorForeignKeys: Row[]
   foreignKeyViolations: Row[]
   integrity: string
 }
@@ -64,6 +65,7 @@ function snapshot(db: Database.Database, records: MigrationRecords): MigrationDa
     run: db.prepare('SELECT run_id, app_id, session_key, status, trigger_type, started_at, finished_at, duration_ms, tokens_used, error_message, session_id FROM automation_runs WHERE run_id = ?').get(records.runId) as Row | undefined,
     entries: db.prepare('SELECT id, app_id, run_id, type, ts, session_key, content_json, user_response_json FROM activity_entries WHERE id IN (?, ?) ORDER BY id').all(records.entryId, records.orphanId) as Row[],
     activityForeignKeys: db.pragma('foreign_key_list(activity_entries)') as Row[],
+    runtimeActorForeignKeys: db.pragma('foreign_key_list(runtime_execution_actors)') as Row[],
     foreignKeyViolations: db.pragma('foreign_key_check') as Row[],
     integrity: db.pragma('integrity_check', { simple: true }) as string,
   }
