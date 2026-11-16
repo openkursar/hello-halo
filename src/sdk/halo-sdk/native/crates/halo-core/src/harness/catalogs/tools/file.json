@@ -1,10 +1,10 @@
 {
   "tools.file.changed": {
-    "text": "The file no longer matches its recorded read. Inspect the current contents before attempting a write.",
+    "text": "The file changed after your last Read. This includes changes made through Bash. Nothing was written. Call Read again, then retry.",
     "slots": []
   },
-  "tools.file.complete_read": {
-    "text": "Write requires a complete Read of the existing file. Read its full contents before replacing it; use Edit for a targeted change based on a partial view.",
+  "tools.file.queued_change": {
+    "text": "The file changed while this write was waiting. Nothing was written by this call. Check the current file before retrying.",
     "slots": []
   },
   "tools.file.edit_read": {
@@ -12,7 +12,7 @@
     "slots": []
   },
   "tools.file.write_limit": {
-    "text": "File exceeds the {limit} byte limit. Use a streaming command to process larger files.",
+    "text": "File exceeds the {limit} byte limit. Use Bash to process larger files with a program that streams them.",
     "slots": [
       "limit"
     ]
@@ -28,7 +28,7 @@
     "slots": []
   },
   "tools.file.read_limit": {
-    "text": "File exceeds the {limit} byte read limit. Use a streaming command to select a smaller portion.",
+    "text": "File exceeds the {limit} byte read limit. Use Grep to search it, or Bash (for example tail or sed -n) to print a part of it.",
     "slots": [
       "limit"
     ]
@@ -102,7 +102,7 @@
     ]
   },
   "tools.file.directory": {
-    "text": "{path} is a directory, not a file. Use Bash with `ls` to list directory contents.",
+    "text": "{path} is a directory, not a file. Use Glob with this path to list its files (pattern \"*\", or \"**/*\" to include subfolders).",
     "slots": [
       "path"
     ]
@@ -189,7 +189,9 @@
   },
   "tools.file.image_invalid": {
     "text": "Cannot attach image {path}: the file is empty, invalid, or incomplete. No image was attached. Use a valid PNG, JPEG, GIF, or WebP file.",
-    "slots": ["path"]
+    "slots": [
+      "path"
+    ]
   },
   "tools.file.image_limit": {
     "text": "Image file is too large ({megabytes} MB). Maximum supported size is 5 MB. Consider resizing or compressing the image before reading.",

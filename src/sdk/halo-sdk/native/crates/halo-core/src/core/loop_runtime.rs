@@ -27,6 +27,7 @@ pub(crate) struct LoopContext {
     pub(crate) model: String,
     pub(crate) thinking: Value,
     pub(crate) image_input: super::image_input::ImageInputState,
+    pub(crate) turn_end: super::turn_end::CheckMemory,
 }
 
 pub(crate) fn select_model(
@@ -143,6 +144,9 @@ pub(crate) async fn turn(
     let recitation_interval=crate::prompt::constants()["GOAL_RECITATION_INTERVAL"].as_u64().unwrap_or(25);
     let mut turns_since_goal=recitation_interval;
     let mut open_checked:Option<String>=None;
+    let mut run_worked=false;
+    let mut todo_watch=super::turn_end::TodoWatch::default();
+    let todo_interval=crate::prompt::constants()["TODO_REMINDER_INTERVAL"].as_u64().unwrap_or(15) as u32;
     let mut completion_checked=false;
     let mut answer_before_check=String::new();
     let mut max_tokens_recovery=0u64;
@@ -181,7 +185,9 @@ pub(crate) async fn turn(
             Some(super::goal_reminders::goal_change_notice_text_with_harness(&change["previous"],&change["current"],&context.harness))
         }else if goal["status"]=="active"&&turns_since_goal>=recitation_interval{Some(super::goal_reminders::goal_recitation_text_with_harness(&goal,todos.as_array().map(Vec::as_slice).unwrap_or(&[]),&context.harness))}else{None};
         if goal_notice.is_some(){turns_since_goal=0;}else if goal["status"]=="active"{turns_since_goal+=1;}
-        if let Some(notice)=super::loop_notices::build_notice_message_with_harness(&[json!({"label":context.harness.text(crate::harness::TextId::ContextNoticesBackgroundUpdates),"items":pending}),json!({"text":goal_notice})],&context.harness){push_transient(messages,&mut transient,notice);}
+        let todo_list=todos.as_array().map(Vec::as_slice).unwrap_or(&[]);
+        let todo_reminder=todo_watch.observe(todo_list,todo_interval).map(|quiet|super::goal_reminders::todo_reminder_text_with_harness(todo_list,quiet,&context.harness));
+        if let Some(notice)=super::loop_notices::build_notice_message_with_harness(&[json!({"label":context.harness.text(crate::harness::TextId::ContextNoticesBackgroundUpdates),"items":pending}),json!({"text":goal_notice}),json!({"text":todo_reminder})],&context.harness){push_transient(messages,&mut transient,notice);}
         let (definitions, eager) = match discovery {
             Some(state) => {
                 let state = state.lock().unwrap();
@@ -389,6 +395,9 @@ pub(crate) async fn turn(
             .filter(|block| block["type"] == "tool_use")
             .cloned()
             .collect();
+        if calls.iter().any(|call| !matches!(call["name"].as_str(), Some("TodoWrite" | "Goal"))) {
+            run_worked = true;
+        }
         let mut results = match finished {
             Ok(results) => results,
             Err(_) => calls.iter().map(|call| execution.completed.lock().unwrap().get(call["id"].as_str().unwrap_or("")).cloned().unwrap_or_else(|| json!({"toolUseId":call["id"],"isError":true,"content":context.harness.text(if cancellation.is_cancelled(){TextId::ContextToolsInterruptedUser}else{TextId::ContextToolsInterruptedStream})}))).collect(),
@@ -575,7 +584,9 @@ pub(crate) async fn turn(
             if options["turnEndChecks"]["openWork"]!=false{
                 let goal=session.owner.goal(tools).await?;let todos=session.owner.todos(tools).await?;let todos=todos.as_array().map(Vec::as_slice).unwrap_or(&[]);
                 let text=super::goal_reminders::open_work_check_text_with_harness(&goal,todos,&context.harness);let key=super::goal_reminders::open_work_state_key(&goal,todos);
-                if text.is_some()&&open_checked.as_ref()!=Some(&key){open_checked=Some(key);check=text;}
+                if text.is_none(){context.turn_end.asked=None;}
+                // The same unfinished state is asked about once; a turn without work on it (a plain question) does not ask again.
+                else if open_checked.as_ref()!=Some(&key)&&(run_worked||context.turn_end.asked.as_ref()!=Some(&key)){open_checked=Some(key.clone());context.turn_end.asked=Some(key);check=text;}
             }
             if check.is_none()&&options["turnEndChecks"]["completion"]==true&&!completion_checked{completion_checked=true;check=Some(super::goal_reminders::completion_check_text(&context.harness).into());}
             if let Some(check)=check{
@@ -587,6 +598,9 @@ pub(crate) async fn turn(
                 session.emit(json!({"type":"system","subtype":"goal_updated","goal":change["current"],"source":"user","session_id":session.session_id,"uuid":id()})).await?;turns_since_goal=0;continue;
             }
             if drain_input(session,options,messages).await?{max_tokens_recovery=0;continue;}
+            if stop.as_deref() == Some("max_tokens") {
+                tracing::warn!(session_id=%session.session_id,model,recoveries=max_tokens_recovery,"Output continuation exhausted; returning truncated output with its stop reason");
+            }
             return Ok(Some((if crate::js::trim_js(&text).is_empty(){answer_before_check}else{text},turn_index,stop,session.api_time_ms.load(std::sync::atomic::Ordering::Relaxed))));
         }
         max_tokens_recovery=0;

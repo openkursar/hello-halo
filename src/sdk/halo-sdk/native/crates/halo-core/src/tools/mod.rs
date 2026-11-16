@@ -55,6 +55,16 @@ fn builtin_permission(name: &str) -> &'static str {
 fn builtin_concurrency_safe(name: &str) -> bool {
     ["Read", "Glob", "Grep", "WebFetch", "Skill", "CodeSearch"].contains(&name)
 }
+/// Removes the input fields a host fills in once the user has answered; a model-written value is no user decision.
+pub fn drop_host_owned_input(name: &str, input: &mut Value) {
+    if name != "AskUserQuestion" {
+        return;
+    }
+    if let Some(fields) = input.as_object_mut() {
+        fields.shift_remove("answers");
+        fields.shift_remove("annotations");
+    }
+}
 pub fn builtin_descriptors() -> Vec<Value> {
     let definitions = crate::harness::baseline().resource(ResourceId::ToolDefinitions);
     BUILTIN_NAMES.iter().map(|name| {

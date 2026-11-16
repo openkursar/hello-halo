@@ -78,52 +78,6 @@
               "options"
             ]
           }
-        },
-        "answers": {
-          "type": "object",
-          "description": {
-            "$harness": "tools.ask_user_question.input_schema.fields.answers.description"
-          },
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "annotations": {
-          "type": "object",
-          "description": {
-            "$harness": "tools.ask_user_question.input_schema.fields.annotations.description"
-          },
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "preview": {
-                "type": "string",
-                "description": {
-                  "$harness": "tools.ask_user_question.input_schema.fields.annotations.additional_properties.fields.preview.description"
-                }
-              },
-              "notes": {
-                "type": "string",
-                "description": {
-                  "$harness": "tools.ask_user_question.input_schema.fields.annotations.additional_properties.fields.notes.description"
-                }
-              }
-            }
-          }
-        },
-        "metadata": {
-          "type": "object",
-          "description": {
-            "$harness": "tools.ask_user_question.input_schema.fields.metadata.description"
-          },
-          "properties": {
-            "source": {
-              "type": "string",
-              "description": {
-                "$harness": "tools.ask_user_question.input_schema.fields.metadata.fields.source.description"
-              }
-            }
-          }
         }
       },
       "required": [

@@ -213,17 +213,30 @@ describe('assembleSystemPrompt', () => {
   const failure = "- A failed attempt supplies evidence for the next decision. Identify which expectation the result contradicted, then choose a correction or a different approach on that basis. Avoid repetitive attempts or scope expansion, and invest additional effort only when the user's needs call for it. If progress remains blocked, report the key obstacle and your recommended next step.";
   const ultraFailure = "- A failed attempt supplies evidence for the next decision. Identify which expectation the result contradicted, then choose a correction or a different approach on that basis. An unchanged retry needs a reason; one failure alone does not establish that the approach is wrong. Before giving up, try materially different approaches or combinations of methods, using each result to guide the next attempt. Report a genuine blocker rather than repeat work without progress.";
 
-  it.each([false, true])('matches the section assets except the task, failure and communication guidance (%s)', ultraEffort => {
+  const toolUse = [
+    '# Using tools',
+    '- Use Read, Glob and Grep to read and search files.',
+    '- Use Edit to apply text you write yourself, or Write for new files and full rewrites, not a shell script. The user sees each Edit and Write as a diff.',
+    '- Use Bash for programs, builds, tests and git. Also use it for changes a program produces, such as formatting or a rename across many files, and for work the file tools cannot do.',
+    "- Follow the user's explicit tool preference; never switch tools to bypass a permission refusal.",
+    '- Run independent tool calls in parallel by issuing them in the same response, including Edits to different parts of one file. When one call needs an earlier result, wait for and inspect that result first. Serialize other operations that can modify the same state.',
+    "- Goal records the intended outcome and checkable completion criteria for work that spans many steps. Keep both aligned with the user's request and use those criteria to determine whether the work is finished.",
+    '- TodoWrite shows the user your plan and progress. Mark each item in_progress when you start it and completed as soon as it is done. Revise the list when the plan changes.',
+  ].join('\n');
+
+  it.each([false, true])('matches the section assets except the task, failure, tool and communication guidance (%s)', ultraEffort => {
     const work = sectionAssets.howYouWorkSection.split('\n');
     work[2] = ultraEffort ? ultraTask : task;
     work[5] = ultraEffort ? ultraFailure : failure;
     const communicating = sectionAssets.communicatingSection.replace('# Communicating\n', `# Communicating\n${communication}\n\n`);
     const expected = [sectionAssets.identitySection, work.join('\n'), sectionAssets.computerSafetySection,
-      sectionAssets.runtimeSection, sectionAssets.toolUse3, communicating].join('\n\n');
+      sectionAssets.runtimeSection, toolUse, communicating].join('\n\n');
     const options = { ...baseConfig, tools: toolsNamed('Goal', 'TodoWrite', 'Skill'), ultraEffort };
     const [stable, dynamic] = splitAtBoundary(assembleSystemPrompt(options));
     expect(stable).toBe(expected);
-    expect(splitAtBoundary(createSystemPromptBuilder(options)(baseConfig.model))[0]).toBe(expected);
+    const reference = [sectionAssets.identitySection, work.join('\n'), sectionAssets.computerSafetySection,
+      sectionAssets.runtimeSection, sectionAssets.toolUse3, communicating].join('\n\n');
+    expect(splitAtBoundary(createSystemPromptBuilder(options)(baseConfig.model))[0]).toBe(reference);
     expect(dynamic).toContain(sectionAssets.sessionGuidance);
     expect(stable).not.toContain('# Work approach');
     expect(stable).not.toContain('# Talking with people');
@@ -276,6 +289,12 @@ describe('assembleSystemPrompt', () => {
     const withTools = assembleSystemPrompt({ ...baseConfig, tools: toolsNamed('Goal', 'TodoWrite') });
     expect(withTools).toContain('Goal records');
     expect(withTools).toContain('TodoWrite shows');
+  });
+
+  it.each([[], ['Goal'], ['TodoWrite'], ['Goal', 'TodoWrite']])('does not promise unseen-change protection for whole-file Write (%j)', (...names: string[]) => {
+    const [stable] = splitAtBoundary(assembleSystemPrompt({ ...baseConfig, tools: toolsNamed(...names) }));
+    expect(stable).toContain('The user sees each Edit and Write as a diff.');
+    expect(stable).not.toContain('neither overwrites changes you have not seen');
   });
 
   it('adds skill guidance without teaching sub-agent delegation', () => {

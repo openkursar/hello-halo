@@ -101,7 +101,7 @@ export interface TeamDeliveryHooks {
  * `result` content survives only for the completion receipt and the failure record.
  */
 export type TurnCompletion =
-  | { kind: 'result'; content: string; taskId?: string }
+  | { kind: 'result'; content: string; taskId?: string; stopReason?: string }
   | { kind: 'escalation'; content: string }
   | { kind: 'error'; message: string }
   | { kind: 'timeout' }

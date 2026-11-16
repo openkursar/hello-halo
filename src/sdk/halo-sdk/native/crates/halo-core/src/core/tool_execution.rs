@@ -150,6 +150,7 @@ impl Execution {
             ));
             return Ok(());
         }
+        crate::tools::drop_host_owned_input(&name, &mut prepared.call["input"]);
         let original = crate::js::data::stringify(&prepared.call["input"]);
         prepared.pre = hooks::pre_tool_with_harness(
             &self.options,

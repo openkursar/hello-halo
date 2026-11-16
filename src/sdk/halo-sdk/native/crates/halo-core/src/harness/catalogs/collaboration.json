@@ -425,6 +425,10 @@
       "workspace"
     ]
   },
+  "collaboration.delivery.output_truncated": {
+    "text": "The collaborator's output reached its token limit and was truncated. The following text is the last segment of output, not the full report. Use team_read_member to retrieve earlier output. This does not determine whether the assigned work is finished.",
+    "slots": []
+  },
   "collaboration.delivery.workspace": {
     "text": "\nWorkspace: {workspace}",
     "slots": [

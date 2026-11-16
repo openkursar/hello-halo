@@ -85,7 +85,7 @@
     "slots": []
   },
   "tools.shell.timed_out": {
-    "text": "Command timed out after {timeout}ms and was terminated.\n{output}\n\nThe command may have completed some work before termination. Inspect its output and saved files before repeating it.",
+    "text": "Command timed out after {timeout}ms and was terminated.\n{output}\n\nThe command may have completed some work before termination. Inspect its output and saved files before repeating it. If it needs more time, repeat it with a larger timeout (up to 600000 ms) or with run_in_background.",
     "slots": [
       "timeout",
       "output"

@@ -93,7 +93,6 @@ impl AnthropicProvider {
             response_started: false,
             delay_ms: None,
             body,
-            non_streaming_body: None,
         })
     }
 }
@@ -112,7 +111,6 @@ pub struct AnthropicStream {
     response_started: bool,
     delay_ms: Option<f64>,
     body: Value,
-    non_streaming_body: Option<Value>,
 }
 
 impl AnthropicStream {
@@ -209,29 +207,7 @@ impl AnthropicStream {
         )
         .await?;
         let streaming = self.streaming_failures < 1;
-        let mut body = if streaming {
-            self.body.clone()
-        } else if let Some(body) = &self.non_streaming_body {
-            body.clone()
-        } else {
-            let mut body = build_body(
-                &self.request,
-                config,
-                self.provider.bridge.as_ref(),
-                &self.cancellation,
-            )
-            .await?;
-            body["max_tokens"] = json!(body["max_tokens"].as_f64().unwrap_or(16384.0).min(64000.0));
-            if body["thinking"]["type"] == "enabled"
-                && body["thinking"]["budget_tokens"].as_f64().unwrap_or(0.0)
-                    >= body["max_tokens"].as_f64().unwrap()
-            {
-                body["thinking"]["budget_tokens"] =
-                    json!(body["max_tokens"].as_f64().unwrap() - 1.0);
-            }
-            self.non_streaming_body = Some(body.clone());
-            body
-        };
+        let mut body = self.body.clone();
         body["stream"] = json!(streaming);
         let client = self.provider.http.client(&self.cancellation).await?;
         let mut request = client.post(url).body(super::transport::serialize_model_request(&body));
@@ -655,6 +631,153 @@ fn non_streaming_events(response: &Value, request: &Value) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct NoCallbacks;
+
+    #[async_trait::async_trait]
+    impl HostBridge for NoCallbacks {
+        async fn call(
+            &self,
+            _method: &str,
+            _params: Value,
+            _cancellation: &CancellationToken,
+        ) -> Result<Value> {
+            Err(Error::new("UNEXPECTED_CALLBACK", "Unexpected test callback"))
+        }
+    }
+
+    async fn request_body(socket: &mut tokio::net::TcpStream) -> Value {
+        use tokio::io::AsyncReadExt;
+        let mut bytes = Vec::new();
+        let mut buffer = [0u8; 4096];
+        let header_end = loop {
+            let read = socket.read(&mut buffer).await.unwrap();
+            assert!(read > 0);
+            bytes.extend_from_slice(&buffer[..read]);
+            if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break end + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&bytes[..header_end]);
+        let length: usize = headers
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .map(|(_, value)| value.trim().parse().unwrap())
+            .unwrap();
+        while bytes.len() < header_end + length {
+            let read = socket.read(&mut buffer).await.unwrap();
+            assert!(read > 0);
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+        serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap()
+    }
+
+    #[tokio::test]
+    async fn nonstreaming_fallback_preserves_output_thinking_and_request_body() {
+        use tokio::io::AsyncWriteExt;
+        for failed_body in ["", "data: not-json\n\n"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let mut requests = Vec::new();
+                for attempt in 0..2 {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    requests.push(request_body(&mut socket).await);
+                    let (content_type, body) = if attempt == 0 {
+                        ("text/event-stream", failed_body.to_owned())
+                    } else {
+                        ("application/json", stringify(&json!({
+                            "id":"response", "model":"fixture", "stop_reason":"end_turn",
+                            "content":[{"type":"text","text":"answer"}],
+                            "usage":{"input_tokens":20,"output_tokens":4}
+                        })))
+                    };
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                }
+                requests
+            });
+            let provider = AnthropicProvider::new(
+                json!({"apiKey":"fixture", "baseUrl":format!("http://{address}")}),
+                Arc::new(NoCallbacks),
+                reqwest::Client::new(),
+            );
+            let mut stream = provider.stream(json!({
+                "model":"fixture", "maxTokens":128000,
+                "thinking":{"type":"enabled","budgetTokens":96000},
+                "systemPrompt":"Keep this instruction",
+                "messages":[{"role":"user","content":"hello"}],
+                "tools":[{"name":"Read","description":"Read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}}}}],
+                "providerOptions":{"effort":"high"}
+            }), CancellationToken::new()).await.unwrap();
+            let expected: Value = serde_json::from_str(
+                &super::super::transport::serialize_model_request(&stream.body),
+            ).unwrap();
+            let events = tokio::time::timeout(Duration::from_secs(15), async {
+                let mut events = Vec::new();
+                while let Some(event) = stream.next().await.unwrap() {
+                    events.push(event);
+                }
+                events
+            }).await.unwrap();
+            assert_eq!(events[0]["type"], "retry");
+            assert_eq!(events[0]["attempt"], 1);
+            assert_eq!(events.last().unwrap()["type"], "message_stop");
+            assert!(events.iter().any(|event| event["text"] == "answer"));
+            assert!(events.iter().any(|event| event["usage"]["output_tokens"] == 4.0));
+            let requests = server.await.unwrap();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0], expected);
+            assert_eq!(requests[0]["stream"], true);
+            assert_eq!(requests[1]["stream"], false);
+            assert_eq!(requests[1]["max_tokens"].as_f64(), Some(128000.0));
+            assert_eq!(requests[1]["thinking"]["budget_tokens"].as_f64(), Some(96000.0));
+            let mut fallback = requests[1].clone();
+            fallback["stream"] = json!(true);
+            assert_eq!(requests[0], fallback);
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_fallback_does_not_open_another_request() {
+        let cancellation = CancellationToken::new();
+        let provider = AnthropicProvider::new(
+            json!({"apiKey":"fixture","baseUrl":"http://127.0.0.1:1"}),
+            Arc::new(NoCallbacks),
+            reqwest::Client::new(),
+        );
+        let mut stream = provider.stream(
+            json!({"model":"fixture","messages":[],"maxTokens":128000}),
+            cancellation.clone(),
+        ).await.unwrap();
+        stream.streaming_failures = 1;
+        cancellation.cancel();
+        assert_eq!(stream.next().await.unwrap_err().code, "ABORTED");
+        assert_eq!(stream.attempt, 0);
+        assert!(stream.response.is_none());
+    }
+
+    #[test]
+    fn nonretryable_error_and_retry_limit_remain_terminal() {
+        let provider = AnthropicProvider::new(
+            json!({}), Arc::new(NoCallbacks), reqwest::Client::new(),
+        );
+        let mut stream = AnthropicStream {
+            provider, request: json!({}), cancellation: CancellationToken::new(),
+            response: None, decoder: Default::default(), events: VecDeque::new(),
+            done: false, attempt: 0, consecutive_overloads: 0, streaming_failures: 1,
+            response_started: false, delay_ms: None, body: json!({}),
+        };
+        let error = stream.retry(provider_error("invalid", Some(400), false, true), None).unwrap_err();
+        assert_eq!(error.details.unwrap()["statusCode"], 400);
+        assert_eq!(stream.attempt, 0);
+        assert!(stream.events.is_empty());
+        stream.attempt = 10;
+        let error = stream.retry(provider_error("unavailable", Some(500), true, false), None).unwrap_err();
+        assert_eq!(error.details.unwrap()["retriesExhausted"], true);
+        assert_eq!(stream.attempt, 10);
+        assert!(stream.events.is_empty());
+    }
+
     #[test]
     fn mapped_events_and_nonstreaming_fallback_match_baseline() {
         let fixtures: Value =

@@ -159,6 +159,7 @@ export interface TeamSendAsyncResult {
 export interface TeamSendSyncResult {
   from: string
   message: string
+  stopReason?: string
   /**
    * Delivery truth, so a non-delivery is never mistaken for a real (empty) reply:
    *   - 'ok'          the turn ran and reported back (message may still be empty).

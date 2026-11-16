@@ -9,7 +9,7 @@ The default execution implementation is in `native/crates/halo-core/src/core`.
 `engine.rs` composes a session owner with the shared `loop_runtime.rs`;
 `public_loop.rs` supplies the low-level generator's external owner through
 `loop_owner.rs`. JavaScript capability ownership and public types remain at the
-Node boundary. The TypeScript loop files in this directory are not executed.
+Node boundary. The TypeScript loop files in this directory are deprecated and pending removal.
 The implementation names below describe their corresponding
 Rust modules unless a `.ts` file is named explicitly.
 
@@ -65,6 +65,34 @@ before asynchronous dispatch. Write and Edit retain the caller's read record
 at admission, so an earlier operation cannot grant a queued call a newer read.
 Independent paths can overlap; model-loop scheduling remains a separate boundary.
 
+Whole-file Write does not require a prior or complete Read. Reading is a task
+choice, not write authorization. Existing read records still detect changed files;
+permission checks, canonical-path coordination and pre-write snapshot checks remain
+in effect. A queued Write also rejects changes made by another SDK write while it
+waited, even without a read record; a later independently admitted Write remains
+allowed. Edit retains its read-before-edit requirement. Read applies its effective
+tool-result budget before recording delivery completeness, including external read
+maps; a budget-truncated view never records a complete delivery.
+
+## End-of-turn reminders
+
+End-of-turn checks append transient reminders to the same model loop. Responses
+before and after a check follow the ordinary stream, checkpoint, history and
+owner-callback paths, including text-only continuations. The final result uses
+the last response's nonempty text, with the existing pre-check answer fallback
+when that response is empty; it does not combine or rank responses.
+
+Goal and TodoWrite use ordinary tool execution and result feedback. Their state
+or invocation count does not create an additional termination path. Normal
+completion still runs Stop hooks and checks incoming input and user goal changes.
+
+`turn_end.rs` holds the last checked state in `LoopContext` and counts quiet
+requests for todo reminders. Check memory lasts for that execution context; it
+is not persisted in the transcript. Unchanged state is not checked again in the
+same turn or a later plain question. A later turn that calls a tool other than
+Goal or TodoWrite can check it again. A changed unfinished state is eligible
+independently. Todo reminders apply with or without a Goal.
+
 ## Failure and cancellation
 
 Completed end-turn responses containing only whitespace or thinking retry the
@@ -108,7 +136,9 @@ values are serialized without dropping fields. Identity changes, name changes
 after announcement and conflicting structured/string argument fragments fail the
 attempt before admission rather than changing the selected action.
 
-Provider retry/fallback remains available before a tool checkpoint. After
+Provider retry/fallback remains available before a tool checkpoint. Switching an
+Anthropic request from streaming to non-streaming preserves its request body,
+including output and thinking budgets; only the transport mode changes. After
 admission, the attempt is never automatically replayed: tools may already have
 changed external state. Stop queued work, cancel active operations, retain known
 results and report a terminal error. Missing results explicitly describe an
@@ -196,11 +226,13 @@ is 90%, with a preferred size of 55%. This target allocates summary output and
 recent-history space; it never rejects a useful handover solely for missing that size.
 
 A summary reuses the effective model, system, tools, history and thinking mode,
-then appends a handover instruction. No tool executor is attached. Maintenance has
-its own bounded output allowance, independent of the work ceiling: up to 20000
-text tokens or one quarter of the window, with explicit thinking added only to the
-request allowance, never the handover text target. Available context can lower
-the allowance without lowering effective thinking. A recovery
+then appends a handover instruction. No tool executor is attached. Session summaries
+use the configured work output ceiling, including thinking, subject to available
+context and explicit provider limits. The preferred handover size guides the
+prompt and recent-history retention; it is not an API output ceiling. The low-level
+compaction helpers retain their 20000-token default only when no explicit budget
+is supplied. Available context can lower the allowance without lowering effective
+thinking. A recovery
 envelope already beyond the local working window is submitted to the provider;
 only an actual input rejection starts ordered segmentation. Transient failures
 retry the affected summary segment through the ordinary backoff budget, respecting

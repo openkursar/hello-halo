@@ -78,6 +78,14 @@
       "path"
     ]
   },
+  "tools.grep.no_matches_filtered": {
+    "text": "No matches found for pattern \"{pattern}\" in {path} with {filters}. Check the pattern syntax (ripgrep regex), broaden the pattern or the filters, or search a different path. A glob is matched against paths relative to the search path.",
+    "slots": [
+      "pattern",
+      "path",
+      "filters"
+    ]
+  },
   "tools.grep.pagination": {
     "text": "\n\n[Showing lines {first}-{last} of {lower_bound}{total} matching lines. Use offset={last} to continue, or narrow the search with a more specific pattern, glob, type, or path.]",
     "slots": [

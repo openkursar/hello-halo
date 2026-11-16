@@ -470,6 +470,10 @@ mod tests {
                 json!(["same-operation", "builtin.execute"]),
             )
             .unwrap();
+        original.shared_read_state().context_call(
+            "readFileState.set",
+            &json!([path, {"content":"earlier version","timestamp":0}]),
+        ).unwrap();
         let payload = json!({"operationId":"same-operation","args":["Write",{"file_path":path,"content":"replaced"},{"cwd":directory.0,"sessionId":"original","toolUseId":"same-tool","env":{}}]});
         let admitted = bridge
             .prepare_file_call("same-tool", "builtin.execute", &payload)

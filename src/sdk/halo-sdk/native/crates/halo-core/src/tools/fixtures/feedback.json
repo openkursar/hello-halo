@@ -55,7 +55,7 @@
           "file_path": "."
         },
         "expected": {
-          "content": "<root> is a directory, not a file. Use Bash with `ls` to list directory contents.",
+          "content": "<root> is a directory, not a file. Use Glob with this path to list its files (pattern \"*\", or \"**/*\" to include subfolders).",
           "isError": true
         }
       },
@@ -159,11 +159,17 @@
         "tool": "Write",
         "input": {
           "file_path": "file.txt",
-          "content": "new"
+          "content": "first\nsecond\nthird\n"
         },
         "expected": {
-          "content": "Write requires a complete Read of the existing file. Read its full contents before replacing it; use Edit for a targeted change based on a partial view.",
-          "isError": true
+          "content": "Wrote <root>/file.txt (4 lines, 19 bytes)",
+          "isError": false,
+          "metadata": {
+            "file_path": "<root>/file.txt",
+            "is_new": false,
+            "lines": 4,
+            "bytes": 19
+          }
         }
       },
       {

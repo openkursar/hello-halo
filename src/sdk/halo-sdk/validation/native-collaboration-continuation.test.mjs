@@ -9,6 +9,95 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const compiled = process.env.SDK_BEHAVIOR_TEST_ROOT ?? fileURLToPath(new URL('../dist', import.meta.url));
 const { createSession, createSdkMcpServer, query, tool } = await import(pathToFileURL(join(compiled, process.env.SDK_COLLABORATION_ENTRY ?? 'native/index.js')).href);
 
+for (const persistSession of [false, true]) {
+  for (const recovered of [false, true]) {
+    test(`collaborator truncation preserves its record and source decision (persist=${persistSession}, recovered=${recovered})`, { timeout: 20_000 }, async context => {
+      const cwd = await mkdtemp(join(tmpdir(), 'halo-collaborator-truncation-'));
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      context.signal.addEventListener('abort', abort, { once: true });
+      let releaseChild;
+      const childGate = new Promise(resolve => { releaseChild = resolve; });
+      const requests = [];
+      const frames = [];
+      let childCalls = 0;
+      let parentCalls = 0;
+      let sequence = 0;
+      let session;
+      const segments = Array.from({ length: 4 }, (_, index) => `Retained child segment ${index + 1}.`);
+      const provider = {
+        id: 'truncated-collaborator', name: 'Scripted truncated collaborator',
+        capabilities: () => ({ streaming: true, toolCalling: true, thinking: false, imageInput: false,
+          pdfInput: false, audioInput: false, videoInput: false, caching: false, systemPromptStyle: 'top_level' }),
+        async createMessage() { throw new Error('Unexpected summary'); },
+        async *createMessageStream(request) {
+          const child = JSON.stringify(request.systemPrompt).includes('You are collaborator');
+          let call;
+          let text;
+          let stopReason;
+          if (child) {
+            await childGate;
+            const index = childCalls++;
+            assert.ok(index < 4, 'truncation recovery must be bounded');
+            text = segments[index];
+            stopReason = recovered && index === 3 ? 'end_turn' : 'max_tokens';
+          } else {
+            requests.push(structuredClone(request));
+            const step = parentCalls++;
+            assert.ok(step < 4, 'source must retain control of completion');
+            if (step === 0) call = { name: 'mcp__halo-team__spawn_agent', input: { name: 'reader', prompt: 'Report all four segments.' } };
+            else if (step === 2) call = { name: 'mcp__halo-team__team_read_member', input: { member: 'reader' } };
+            text = 'Source chooses to finish.';
+            stopReason = call ? 'tool_use' : 'end_turn';
+          }
+          const id = `truncation-${++sequence}`;
+          yield { type: 'message_start', id, model: request.model, usage: { input_tokens: 10, output_tokens: 10 } };
+          yield { type: 'content_block_start', index: 0, content_block: call
+            ? { type: 'tool_use', id, name: call.name, input: call.input }
+            : { type: 'text', text } };
+          yield { type: 'content_block_stop', index: 0 };
+          yield { type: 'message_delta', stopReason };
+          yield { type: 'message_stop' };
+        },
+      };
+      try {
+        session = await createSession({
+          cwd, env: { HOME: cwd, CLAUDE_CONFIG_DIR: join(cwd, 'config') }, provider, model: 'fixture',
+          tools: [], settingSources: [], persistSession, permissionMode: 'bypassPermissions', maxTurns: 12,
+          abortController: controller, turnEndChecks: { completion: false, openWork: false },
+          systemPrompt: 'You are the source assistant.', collaboration: { mode: 'local' },
+          hooks: { Stop: [{ hooks: [async () => { releaseChild(); return {}; }] }] },
+        });
+        await session.send('Delegate, inspect the child record, then decide whether to finish.');
+        for await (const frame of session.stream()) frames.push(frame);
+        assert.equal(childCalls, 4);
+        assert.equal(parentCalls, 4);
+        const notice = JSON.stringify(requests[2].messages);
+        assert.ok(notice.includes('Retained child segment 4.'));
+        if (recovered) {
+          assert.ok(!notice.includes('last segment'));
+        } else {
+          assert.match(notice, /token limit/i);
+          assert.match(notice, /last segment/i);
+          assert.ok(notice.includes('team_read_member'));
+          assert.ok(notice.toLowerCase().indexOf('token limit') < notice.indexOf('Retained child segment 4.'));
+        }
+        const readback = JSON.stringify(requests[3].messages);
+        for (const segment of segments) assert.ok(readback.includes(segment), `missing record: ${segment}`);
+        const results = frames.filter(frame => frame.type === 'result');
+        assert.equal(results.length, 1);
+        assert.equal(results[0].subtype, 'success');
+        assert.equal(results[0].result, 'Source chooses to finish.');
+      } finally {
+        releaseChild();
+        context.signal.removeEventListener('abort', abort);
+        if (session) { session.close(); await session.flush(); }
+        await rm(cwd, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
 for (const mode of ['query', 'session']) {
   for (const [loading, changeDirectory] of [['deferred', false], ['eager', false], ['deferred', true]]) {
     test(`${mode} preserves ${loading} tools and ordered service context after collaboration${changeDirectory ? ' and a directory change' : ''}`, { timeout: 15_000 }, async context => {

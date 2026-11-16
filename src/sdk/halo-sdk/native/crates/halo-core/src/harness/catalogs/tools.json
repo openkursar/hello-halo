@@ -35,32 +35,8 @@
     "text": "Allow several selections when the choices can apply together. Otherwise the user selects one.",
     "slots": []
   },
-  "tools.ask_user_question.input_schema.fields.answers.description": {
-    "text": "Host-supplied answers keyed by the exact question text; the permission callback adds them through updatedInput after the user replies.",
-    "slots": []
-  },
-  "tools.ask_user_question.input_schema.fields.annotations.description": {
-    "text": "Notes and preview selections accompanying an answer, indexed by the exact question text.",
-    "slots": []
-  },
-  "tools.ask_user_question.input_schema.fields.annotations.additional_properties.fields.preview.description": {
-    "text": "Preview shown with the option the user selected.",
-    "slots": []
-  },
-  "tools.ask_user_question.input_schema.fields.annotations.additional_properties.fields.notes.description": {
-    "text": "Additional text supplied alongside the selected answer.",
-    "slots": []
-  },
-  "tools.ask_user_question.input_schema.fields.metadata.description": {
-    "text": "Optional workflow attributes for the host, separate from the questions shown to the user.",
-    "slots": []
-  },
-  "tools.ask_user_question.input_schema.fields.metadata.fields.source.description": {
-    "text": "Caller-defined tag identifying the workflow that requested these questions.",
-    "slots": []
-  },
   "tools.bash.description": {
-    "text": "Run a shell command and receive its exit status and captured output.\n\nCommands share the session's working directory and exported environment variables. Shell functions, aliases and background jobs are not carried between calls. Quote paths and arguments for the shell you are using, and distinguish data from executable syntax.\n\nPrefer available file tools for reading, searching and editing: they track file access and constrain returned content. Use Bash for programs, builds, tests and operations those tools do not cover, or when the user specifically requests a shell command. A permission refusal is a boundary, not an invitation to try the same action through another tool.\n\nThe default foreground timeout is 120000 milliseconds. An explicit timeout sets the execution deadline in either mode, capped at 600000 milliseconds. Choose run_in_background for session-owned work whose result is not needed immediately. Without an explicit timeout, background work runs until it exits or the session closes or is interrupted. The response supplies a task ID, output path and deadline. TaskOutput waits for completion and TaskStop cancels the task; Read can inspect its output file. A TaskOutput wait timeout does not stop the command or change its execution deadline. If the final answer depends on that work, collect its completed result before finishing. Completion notices appear at the next active turn.\n\nBackground tasks are owned by this session, not persistent service deployments. Session close or interruption stops them, and nonpersistent sessions remove their output files on close. When the user requires a service to outlive this session, use an appropriate service manager or independent process lifecycle and verify that requirement separately.\n\nIndependent observations may run together. A command that depends on another command's effects must wait for it and check the outcome. Diagnose a failure before repeating it. Avoid repeatedly checking background tasks that already send completion notices; if the next step needs a result, wait through TaskOutput. Use an external service's own wait or status operation for work it owns.\n\nRepository changes still follow the user's scope and local workflow. Do not turn a request to edit code into permission to commit, publish, discard work or rewrite history. Preserve hooks, signing and repository configuration unless changing them is explicitly part of the authorized task. Use an available matching skill for a specialized commit or review-request workflow.",
+    "text": "Run a shell command and receive its exit status and captured output.\n\nCommands share the session's working directory and exported environment variables. Shell functions, aliases and background jobs are not carried between calls. Quote paths and arguments for the shell you are using, and distinguish data from executable syntax.\n\nUse the file tools to read, search and edit files. A change made through Bash is not shown to the user as a diff, and Edit needs a fresh Read of the file afterwards. Use Bash for programs, builds, tests and operations those tools do not cover, or when the user specifically requests a shell command. A permission refusal is a boundary, not an invitation to try the same action through another tool.\n\nThe default foreground timeout is 120000 milliseconds. An explicit timeout sets the execution deadline in either mode, capped at 600000 milliseconds. Run commands that take minutes, or whose result is not needed yet, with run_in_background; do not use & or nohup. Wait for the result with TaskOutput, not with sleep. Without an explicit timeout, background work runs until it exits or the session closes or is interrupted. The response supplies a task ID, output path and deadline. TaskOutput waits for completion and TaskStop cancels the task; Read can inspect its output file. A TaskOutput wait timeout does not stop the command or change its execution deadline. If the final answer depends on that work, collect its completed result before finishing. Completion notices appear at the next active turn.\n\nBackground tasks are owned by this session, not persistent service deployments. Session close or interruption stops them, and nonpersistent sessions remove their output files on close. When the user requires a service to outlive this session, use an appropriate service manager or independent process lifecycle and verify that requirement separately.\n\nIndependent observations may run together. A command that depends on another command's effects must wait for it and check the outcome. Diagnose a failure before repeating it. Avoid repeatedly checking background tasks that already send completion notices; if the next step needs a result, wait through TaskOutput. Use an external service's own wait or status operation for work it owns.\n\nRepository changes still follow the user's scope and local workflow. Do not turn a request to edit code into permission to commit, publish, discard work or rewrite history. Preserve hooks, signing and repository configuration unless changing them is explicitly part of the authorized task. Use an available matching skill for a specialized commit or review-request workflow.",
     "slots": []
   },
   "tools.bash.input_schema.fields.command.description": {
@@ -80,7 +56,7 @@
     "slots": []
   },
   "tools.edit.description": {
-    "text": "Change an existing text file by substituting new_string for old_string.\n\nRead the target before editing so the change is grounded in its current contents. A stale read can be rejected if another writer changed the file; read again and reconsider the edit in that case. Preserve the source's whitespace in old_string and omit Read's line-number annotations.\n\nAn ordinary edit requires exactly one occurrence of a nonempty old_string. Add surrounding source text to disambiguate repeated passages. Set replace_all only when every occurrence should change. new_string may be empty to delete the matched text, but it cannot equal old_string. For a new file or a deliberate full replacement, use Write.",
+    "text": "Change an existing text file by substituting new_string for old_string.\n\nRead the target before editing so the change is grounded in its current contents. If the file changed after your last Read, including through Bash, the edit is rejected. Call Read again and retry. Preserve the source's whitespace in old_string and omit Read's line-number annotations.\n\nAn ordinary edit requires exactly one occurrence of a nonempty old_string. Add surrounding source text to disambiguate repeated passages. Set replace_all only when every occurrence should change. new_string may be empty to delete the matched text, but it cannot equal old_string. For a new file or a deliberate full replacement, use Write.",
     "slots": []
   },
   "tools.edit.input_schema.fields.file_path.description": {
@@ -276,7 +252,7 @@
     "slots": []
   },
   "tools.write.description": {
-    "text": "Save content as the complete text of a local file. A new path creates a file; an existing path loses its previous contents after a successful write.\n\nRead an existing target in full first and preserve anything the task does not ask to replace. A partial or truncated view does not authorize whole-file replacement; use Edit for a targeted change when a complete Read is unavailable. If the file changes after that read, inspect the new version before trying again. Use Edit for a small change so unrelated contents need not be resubmitted. Create only files needed for the user's requested outcome.",
+    "text": "Save content as the complete text of a local file. A new path creates a file; an existing path loses its previous contents after a successful write.\n\nRead as needed. Write replaces the entire file; any existing content omitted from the replacement is deleted.",
     "slots": []
   },
   "tools.write.input_schema.fields.file_path.description": {

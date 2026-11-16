@@ -1090,6 +1090,7 @@ impl SdkCollaboration {
             Ok(TurnCompletion::Result {
                 content: result["result"].as_str().unwrap_or("").into(),
                 task_id: None,
+                stop_reason: result["stop_reason"].as_str().map(str::to_owned),
             })
         }
         .await;

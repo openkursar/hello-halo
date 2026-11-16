@@ -940,15 +940,15 @@ async fn file_read_edit_and_stale_write_preserve_effects() {
     let r = runtime(&f).await;
     let path = f.path.join("file.txt");
     std::fs::write(&path, "first\nsecond\n").unwrap();
-    let refused = r
+    let written = r
         .execute(
             "Write",
-            json!({"file_path":"file.txt","content":"lost"}),
+            json!({"file_path":"file.txt","content":"first\nsecond\n"}),
             f.context(),
         )
         .await
         .unwrap();
-    assert_eq!(refused["isError"], true);
+    assert_eq!(written["isError"], false);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "first\nsecond\n");
     let read = r
         .execute("Read", json!({"file_path":"file.txt"}), f.context())
@@ -977,6 +977,278 @@ async fn file_read_edit_and_stale_write_preserve_effects() {
     assert_eq!(write["isError"], true);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "external writer");
     r.close().await.unwrap();
+}
+#[tokio::test]
+async fn admitted_unread_writes_have_one_winner_and_allow_a_later_unread_replacement() {
+    for existing in [false, true] {
+        let fixture = Fixture::new();
+        let first = runtime(&fixture).await;
+        let second = runtime(&fixture).await;
+        let path = fixture.path.join("file.txt");
+        if existing {
+            std::fs::write(&path, "original").unwrap();
+        }
+        let first_admission = FileAdmission::admit(&path);
+        let second_admission = FileAdmission::admit(&path);
+        let written = first.files.execute_admitted(
+            "Write",
+            &json!({"file_path":path,"content":"first"}),
+            &fixture.context(),
+            Some(first_admission),
+        ).await.unwrap();
+        assert_eq!(written["isError"], false);
+        let refused = second.files.execute_admitted(
+            "Write",
+            &json!({"file_path":path,"content":"second"}),
+            &fixture.context(),
+            Some(second_admission),
+        ).await.unwrap();
+        assert_eq!(refused["isError"], true);
+        assert_eq!(refused["content"], crate::harness::baseline().text(TextId::ToolsFileQueuedChange));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
+        let later = runtime(&fixture).await;
+        let later_admission = FileAdmission::admit(&path);
+        let replacement = later.files.execute_admitted(
+            "Write",
+            &json!({"file_path":path,"content":"later"}),
+            &fixture.context(),
+            Some(later_admission),
+        ).await.unwrap();
+        assert_eq!(replacement["isError"], false);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "later");
+        first.close().await.unwrap();
+        second.close().await.unwrap();
+        later.close().await.unwrap();
+    }
+}
+#[tokio::test]
+async fn queued_unread_write_survives_a_read_or_an_unmatched_edit() {
+    for operation in ["Read", "Edit"] {
+        let fixture = Fixture::new();
+        let first = runtime(&fixture).await;
+        let second = runtime(&fixture).await;
+        let path = fixture.path.join("file.txt");
+        std::fs::write(&path, "original").unwrap();
+        if operation == "Edit" {
+            let read = first.execute("Read", json!({"file_path":path}), fixture.context()).await.unwrap();
+            assert_eq!(read["isError"], false);
+        }
+        let first_admission = FileAdmission::admit(&path);
+        let second_admission = FileAdmission::admit(&path);
+        let input = if operation == "Edit" {
+            json!({"file_path":path,"old_string":"absent","new_string":"changed"})
+        } else {
+            json!({"file_path":path})
+        };
+        let previous = first.files.execute_admitted(operation, &input, &fixture.context(), Some(first_admission)).await.unwrap();
+        assert_eq!(previous["isError"], operation == "Edit");
+        if operation == "Edit" {
+            assert!(previous["content"].as_str().unwrap().contains("no literal match"));
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+        let written = second.files.execute_admitted(
+            "Write",
+            &json!({"file_path":path,"content":"replacement"}),
+            &fixture.context(),
+            Some(second_admission),
+        ).await.unwrap();
+        assert_eq!(written["isError"], false);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "replacement");
+        first.close().await.unwrap();
+        second.close().await.unwrap();
+    }
+}
+#[tokio::test]
+async fn whole_file_write_accepts_unread_and_partial_views_but_rejects_changed_files() {
+    for external in [false, true] {
+        let fixture = Fixture::new();
+        let bridge = Arc::new(ExternalReads::default());
+        let mut options = fixture.options();
+        options["nativeOwner"] = json!({"externalReadFileState":external});
+        let mut runtime = ToolRuntime::new(options, bridge, Arc::new(NoHost));
+        runtime.initialize(&CancellationToken::new()).await.unwrap();
+        let path = fixture.path.join("file");
+        std::fs::write(&path, "unread contents").unwrap();
+        let written = runtime
+            .execute("Write", json!({"file_path":path,"content":"first\nsecond"}), fixture.context())
+            .await.unwrap();
+        assert_eq!(written["isError"], false);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first\nsecond");
+        runtime.execute("Read", json!({"file_path":path,"limit":1}), fixture.context()).await.unwrap();
+        let written = runtime
+            .execute("Write", json!({"file_path":path,"content":"replacement\nsecond"}), fixture.context())
+            .await.unwrap();
+        assert_eq!(written["isError"], false);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "replacement\nsecond");
+        runtime.execute("Read", json!({"file_path":path,"limit":1}), fixture.context()).await.unwrap();
+        std::fs::write(&path, "external change").unwrap();
+        let refused = runtime
+            .execute("Write", json!({"file_path":path,"content":"lost"}), fixture.context())
+            .await.unwrap();
+        assert_eq!(refused["isError"], true);
+        assert_eq!(refused["content"], crate::harness::baseline().text(TextId::ToolsFileChanged));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "external change");
+        runtime.close().await.unwrap();
+    }
+}
+#[tokio::test]
+async fn read_delivery_budget_marks_local_and_external_state_partial() {
+    for (external, content, budget) in [
+        (false, "a single long line", 8),
+        (true, "first\nsecond\nthird", 12),
+        (false, "hidden", 0),
+    ] {
+        let fixture = Fixture::new();
+        let bridge = Arc::new(ExternalReads::default());
+        let mut options = fixture.options();
+        options["nativeOwner"] = json!({"externalReadFileState":external});
+        options["toolResultBudget"] = json!(budget);
+        let mut runtime = ToolRuntime::new(options, bridge.clone(), Arc::new(NoHost));
+        runtime.initialize(&CancellationToken::new()).await.unwrap();
+        let path = fixture.path.join("file");
+        std::fs::write(&path, content).unwrap();
+        let input = json!({"file_path":path});
+        let output = runtime.execute("Read", input, fixture.context()).await.unwrap();
+        assert!(output["content"].as_str().unwrap().encode_utf16().count() <= budget);
+        let after = runtime.shared_read_state().context_call("readFileState.get", &json!([path])).unwrap();
+        assert_eq!(after["isPartialView"], true);
+        assert!(!after["contentHash"].as_str().unwrap().is_empty());
+        assert!(crate::js::is_undefined(&after["content"]));
+        if external {
+            assert_eq!(bridge.values.lock().unwrap()[path.to_str().unwrap()], after);
+        }
+        let written = runtime.execute("Write", json!({"file_path":path,"content":"replacement"}), fixture.context()).await.unwrap();
+        assert_eq!(written["isError"], false);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "replacement");
+        runtime.close().await.unwrap();
+    }
+}
+#[tokio::test]
+async fn large_read_budget_preserves_edges_and_conflict_checks_with_full_read_control() {
+    use sha2::{Digest, Sha256};
+
+    let content = format!("HEAD{}TAIL", "x".repeat(29_992));
+    let expected_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+    for external in [false, true] {
+        for budget in [None, Some(10_000)] {
+            let fixture = Fixture::new();
+            let bridge = Arc::new(ExternalReads::default());
+            let mut options = fixture.options();
+            options["nativeOwner"] = json!({"externalReadFileState":external});
+            if let Some(budget) = budget {
+                options["toolResultBudget"] = json!(budget);
+            }
+            let mut runtime = ToolRuntime::new(options, bridge.clone(), Arc::new(NoHost));
+            runtime.initialize(&CancellationToken::new()).await.unwrap();
+            let path = fixture.path.join("large.txt");
+            std::fs::write(&path, &content).unwrap();
+            let read = runtime.execute("Read", json!({"file_path":path}), fixture.context()).await.unwrap();
+            let text = read["content"].as_str().unwrap();
+            assert!(text.starts_with("1\tHEAD"));
+            assert!(text.ends_with("TAIL\n"));
+            let state = runtime.shared_read_state().context_call("readFileState.get", &json!([path])).unwrap();
+            assert_eq!(state["contentHash"], expected_hash);
+            assert_eq!(state["isPartialView"] == true, budget.is_some());
+            if let Some(budget) = budget {
+                assert!(text.contains("chars omitted from the middle"));
+                assert!(text.encode_utf16().count() <= budget);
+                assert!(crate::js::is_undefined(&state["content"]));
+            } else {
+                assert_eq!(text, format!("1\t{content}\n"));
+            }
+            if external {
+                assert_eq!(bridge.values.lock().unwrap()[path.to_str().unwrap()], state);
+            }
+            std::fs::write(&path, "external change after large Read").unwrap();
+            let stale = runtime.execute("Write", json!({"file_path":path,"content":"lost"}), fixture.context()).await.unwrap();
+            assert_eq!(stale["isError"], true);
+            assert_eq!(stale["content"], crate::harness::baseline().text(TextId::ToolsFileChanged));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "external change after large Read");
+            std::fs::write(&path, &content).unwrap();
+            runtime.execute("Read", json!({"file_path":path}), fixture.context()).await.unwrap();
+            let written = runtime.execute("Write", json!({"file_path":path,"content":"replacement"}), fixture.context()).await.unwrap();
+            assert_eq!(written["isError"], false);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "replacement");
+            runtime.execute("Read", json!({"file_path":path}), fixture.context()).await.unwrap();
+            std::fs::write(&path, "external change").unwrap();
+            let refused = runtime.execute("Write", json!({"file_path":path,"content":"lost"}), fixture.context()).await.unwrap();
+            assert_eq!(refused["isError"], true);
+            assert_eq!(refused["content"], crate::harness::baseline().text(TextId::ToolsFileChanged));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "external change");
+            runtime.close().await.unwrap();
+        }
+    }
+}
+#[tokio::test]
+async fn read_of_a_deleted_file_lets_write_recreate_it() {
+    let f = Fixture::new();
+    let r = runtime(&f).await;
+    let path = f.path.join("file.txt");
+    let write = json!({"file_path":"file.txt","content":"second"});
+    let created = r
+        .execute(
+            "Write",
+            json!({"file_path":"file.txt","content":"first"}),
+            f.context(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created["isError"], false);
+    std::fs::remove_file(&path).unwrap();
+    let refused = r.execute("Write", write.clone(), f.context()).await.unwrap();
+    assert_eq!(refused["isError"], true);
+    assert_eq!(
+        refused["content"],
+        crate::harness::baseline().text(TextId::ToolsFileChanged)
+    );
+    assert!(!path.exists());
+    let missing = r
+        .execute("Read", json!({"file_path":"file.txt"}), f.context())
+        .await
+        .unwrap();
+    assert_eq!(missing["isError"], true);
+    let recreated = r.execute("Write", write, f.context()).await.unwrap();
+    assert_eq!(recreated["isError"], false);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
+    r.close().await.unwrap();
+}
+#[tokio::test]
+async fn read_of_a_deleted_file_clears_external_read_state() {
+    let fixture = Fixture::new();
+    let bridge = Arc::new(ExternalReads::default());
+    let mut options = fixture.options();
+    options["nativeOwner"] = json!({"externalReadFileState":true,"recordFileChange":{"__haloSdkNativeCallback":"record"}});
+    let mut runtime = ToolRuntime::new(options, bridge.clone(), Arc::new(NoHost));
+    runtime.initialize(&CancellationToken::new()).await.unwrap();
+    let path = fixture.path.join("file");
+    let write = json!({"file_path":path,"content":"written"});
+    let created = runtime
+        .execute("Write", write.clone(), fixture.context())
+        .await
+        .unwrap();
+    assert_eq!(created["isError"], false);
+    std::fs::remove_file(&path).unwrap();
+    let refused = runtime
+        .execute("Write", write.clone(), fixture.context())
+        .await
+        .unwrap();
+    assert_eq!(refused["isError"], true);
+    runtime
+        .execute("Read", json!({ "file_path": path }), fixture.context())
+        .await
+        .unwrap();
+    assert!(!bridge
+        .values
+        .lock()
+        .unwrap()
+        .contains_key(path.to_str().unwrap()));
+    let recreated = runtime
+        .execute("Write", write, fixture.context())
+        .await
+        .unwrap();
+    assert_eq!(recreated["isError"], false);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "written");
+    runtime.close().await.unwrap();
 }
 #[tokio::test]
 async fn low_level_file_change_callback_observes_effects_and_revokes_changed_edit_state() {
@@ -1077,7 +1349,7 @@ async fn shared_working_state_is_authoritative_before_tool_initialization_and_di
     );
 }
 #[tokio::test]
-async fn partial_read_allows_targeted_edit_but_not_replacement() {
+async fn partial_read_allows_targeted_edit_and_whole_file_replacement() {
     let f = Fixture::new();
     let r = runtime(&f).await;
     std::fs::write(f.path.join("file.txt"), "one\ntwo\nthree").unwrap();
@@ -1103,13 +1375,14 @@ async fn partial_read_allows_targeted_edit_but_not_replacement() {
     assert_eq!(
         r.execute(
             "Write",
-            json!({"file_path":"file.txt","content":"bad"}),
+            json!({"file_path":"file.txt","content":"replacement"}),
             f.context()
         )
         .await
         .unwrap()["isError"],
-        true
+        false
     );
+    assert_eq!(std::fs::read_to_string(f.path.join("file.txt")).unwrap(), "replacement");
     r.close().await.unwrap();
 }
 #[tokio::test]
@@ -1153,7 +1426,7 @@ async fn file_pagination_and_bounded_reads_match_javascript_numbers() {
         .execute("Read", json!({"file_path":"large"}), fixture.context())
         .await
         .unwrap();
-    assert_eq!(output["content"], format!("Failed to read file {}: File exceeds the 8388608 byte read limit. Use a streaming command to select a smaller portion.", large.display()));
+    assert_eq!(output["content"], format!("Failed to read file {}: File exceeds the 8388608 byte read limit. Use Grep to search it, or Bash (for example tail or sed -n) to print a part of it.", large.display()));
     std::fs::write(fixture.path.join("empty"), "").unwrap();
     runtime
         .execute(
@@ -2251,4 +2524,25 @@ fn custom_read_state_map_preserves_value_identity_and_live_iteration() {
         .tool_context_call("readFileState.next", json!([next["sequence"]]))
         .unwrap();
     assert_eq!(next["key"], "one");
+}
+#[test]
+fn model_written_answers_to_a_question_are_dropped_and_other_input_is_kept() {
+    let mut input = json!({"questions":[{"question":"Which?"}],"answers":{"Which?":"A"},"annotations":{"Which?":{"notes":"n"}},"metadata":{"source":"x"}});
+    drop_host_owned_input("AskUserQuestion", &mut input);
+    assert_eq!(input, json!({"questions":[{"question":"Which?"}],"metadata":{"source":"x"}}));
+    let mut other = json!({"answers":{"a":"b"}});
+    drop_host_owned_input("Bash", &mut other);
+    assert_eq!(other, json!({"answers":{"a":"b"}}));
+    let definitions = crate::harness::baseline().resource(ResourceId::ToolDefinitions);
+    let ask = definitions.as_array().unwrap().iter().find(|tool| tool["name"] == "AskUserQuestion").unwrap();
+    let fields: Vec<_> = ask["input_schema"]["properties"].as_object().unwrap().keys().collect();
+    assert_eq!(fields, ["questions"], "the model is shown only the fields it writes");
+}
+#[test]
+fn the_todo_reminder_lists_every_item_with_its_state() {
+    let todos = [json!({"content":"write","status":"completed"}), json!({"content":"test","status":"in_progress"}), json!({"content":"ship","status":"pending"})];
+    let text = crate::core::goal_reminders::todo_reminder_text_with_harness(&todos, 15, &crate::harness::baseline());
+    assert!(text.contains("Todo reminder — unchanged for 15 steps:"));
+    assert!(text.contains("[x] write\n[~] test\n[ ] ship"));
+    assert!(text.contains("Update it only if it no longer reflects your progress; otherwise continue."));
 }

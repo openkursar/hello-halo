@@ -151,6 +151,21 @@ pub fn open_work_check_text_with_harness(
         )],
     ))
 }
+pub fn todo_reminder_text_with_harness(todos: &[Value], quiet: u32, harness: &ResolvedHarness) -> String {
+    let list = todos
+        .iter()
+        .map(|todo| {
+            let marker = match todo["status"].as_str().unwrap_or("") {
+                "completed" => "[x]",
+                "in_progress" => "[~]",
+                _ => "[ ]",
+            };
+            format!("{marker} {}", crate::js::to_string(&todo["content"]))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    harness.render(TextId::ContextTodosStale, &[("count", &quiet.to_string()), ("list", &list)])
+}
 pub fn open_work_state_key(goal: &Value, todos: &[Value]) -> String {
     crate::js::stringify(
         &json!({"goal":if goal["status"]=="active"{json!([goal["objective"],goal["doneWhen"]])}else{Value::Null},"todos":todos.iter().map(|todo|json!([todo["content"],todo["status"]])).collect::<Vec<_>>()}),

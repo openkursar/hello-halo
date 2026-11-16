@@ -56,7 +56,7 @@
     "slots": []
   },
   "context.summary.budget": {
-    "text": "The complete response must fit within {max_tokens} output tokens. Prioritize current requirements and working state over historical detail.",
+    "text": "Aim for a concise handover of about {max_tokens} tokens. Prioritize current requirements and working state over historical detail.",
     "slots": [
       "max_tokens"
     ]

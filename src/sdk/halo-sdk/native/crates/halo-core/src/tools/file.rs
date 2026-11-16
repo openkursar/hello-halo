@@ -13,7 +13,7 @@ use std::{
     future::Future,
     path::{Component, Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex as StdMutex, OnceLock, Weak},
+    sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex as StdMutex, OnceLock, Weak},
     task::{Context, Poll},
 };
 use tokio::{
@@ -23,7 +23,11 @@ use tokio::{
 };
 
 const MAX_BYTES: usize = 8 * 1024 * 1024;
-type Locks = StdMutex<HashMap<String, Weak<Mutex<()>>>>;
+struct FileLock {
+    mutex: Arc<Mutex<()>>,
+    revision: AtomicU64,
+}
+type Locks = StdMutex<HashMap<String, Weak<FileLock>>>;
 static FILE_LOCKS: OnceLock<Locks> = OnceLock::new();
 
 pub fn resolve(cwd: &str, value: &str) -> PathBuf {
@@ -77,7 +81,7 @@ fn folded(path: &Path) -> String {
 }
 struct FileLockEntry {
     key: String,
-    identity: Weak<Mutex<()>>,
+    identity: Weak<FileLock>,
 }
 impl Drop for FileLockEntry {
     fn drop(&mut self) {
@@ -94,14 +98,26 @@ impl Drop for FileLockEntry {
 }
 struct FileGuard {
     guard: Option<OwnedMutexGuard<()>>,
+    owner: Option<Arc<FileLock>>,
+    revision: u64,
+    writing: bool,
     _entry: FileLockEntry,
+}
+impl FileGuard {
+    fn changed(&self) -> bool {
+        self.owner.as_ref().unwrap().revision.load(Ordering::Acquire) != self.revision
+    }
 }
 impl Drop for FileGuard {
     fn drop(&mut self) {
+        if self.writing {
+            self.owner.as_ref().unwrap().revision.fetch_add(1, Ordering::AcqRel);
+        }
         drop(self.guard.take());
+        drop(self.owner.take());
     }
 }
-fn file_lock(path: &Path) -> (Arc<Mutex<()>>, FileLockEntry) {
+fn file_lock(path: &Path) -> (Arc<FileLock>, FileLockEntry) {
     let key = folded(&real_path(path));
     let lock = {
         let mut map = FILE_LOCKS
@@ -111,7 +127,10 @@ fn file_lock(path: &Path) -> (Arc<Mutex<()>>, FileLockEntry) {
         match map.get(&key).and_then(Weak::upgrade) {
             Some(v) => v,
             None => {
-                let v = Arc::new(Mutex::new(()));
+                let v = Arc::new(FileLock {
+                    mutex: Arc::new(Mutex::new(())),
+                    revision: AtomicU64::new(0),
+                });
                 map.insert(key.clone(), Arc::downgrade(&v));
                 v
             }
@@ -124,12 +143,7 @@ fn file_lock(path: &Path) -> (Arc<Mutex<()>>, FileLockEntry) {
     (lock, entry)
 }
 async fn lock(path: &Path) -> FileGuard {
-    let (lock, entry) = file_lock(path);
-    let guard = lock.lock_owned().await;
-    FileGuard {
-        guard: Some(guard),
-        _entry: entry,
-    }
+    FileReservation::new(path).acquire().await
 }
 
 enum ReservationState {
@@ -138,27 +152,36 @@ enum ReservationState {
 }
 struct FileReservation {
     state: Option<ReservationState>,
+    owner: Option<Arc<FileLock>>,
+    revision: u64,
     entry: Option<FileLockEntry>,
 }
 impl Drop for FileReservation {
     fn drop(&mut self) {
         drop(self.state.take());
+        drop(self.owner.take());
     }
 }
 impl FileReservation {
     fn new(path: &Path) -> Self {
         let (lock, entry) = file_lock(path);
-        let mut pending = Box::pin(lock.lock_owned());
+        let mut revision = lock.revision.load(Ordering::Acquire);
+        let mut pending = Box::pin(lock.mutex.clone().lock_owned());
         let mut context = Context::from_waker(futures::task::noop_waker_ref());
         // Enqueue before returning to JavaScript; a later task poll installs its own waker.
         let admitted =
             Pin::new(&mut tokio::task::unconstrained(pending.as_mut())).poll(&mut context);
         let state = match admitted {
-            Poll::Ready(guard) => ReservationState::Ready(Some(guard)),
+            Poll::Ready(guard) => {
+                revision = lock.revision.load(Ordering::Acquire);
+                ReservationState::Ready(Some(guard))
+            },
             Poll::Pending => ReservationState::Waiting(pending),
         };
         Self {
             state: Some(state),
+            owner: Some(lock),
+            revision,
             entry: Some(entry),
         }
     }
@@ -169,6 +192,9 @@ impl FileReservation {
         };
         FileGuard {
             guard: Some(guard),
+            owner: self.owner.take(),
+            revision: self.revision,
+            writing: false,
             _entry: self.entry.take().unwrap(),
         }
     }
@@ -524,6 +550,7 @@ impl FileReadStateStore {
 pub struct FileTools {
     reads: Arc<FileReadStateStore>,
     track_reads: bool,
+    result_budget: usize,
     pub deny: Vec<PathBuf>,
     record_change: Option<(Arc<dyn crate::bridge::HostBridge>, String)>,
     external_reads: Option<Arc<dyn crate::bridge::HostBridge>>,
@@ -605,6 +632,7 @@ async fn write_snapshot(
     path: &Path,
     bytes: &[u8],
     previous: Option<&Snapshot>,
+    guard: &mut FileGuard,
 ) -> Result<std::fs::Metadata> {
     if bytes.len() > MAX_BYTES {
         return Err(size_error());
@@ -622,6 +650,9 @@ async fn write_snapshot(
         opts.create_new(true);
     }
     let mut file = opts.open(path).await.map_err(Error::from)?;
+    if previous.is_none() {
+        guard.writing = true;
+    }
     if let Some(expected) = previous {
         let current = file.metadata().await.map_err(Error::from)?;
         let at_path = File::open(path)
@@ -657,6 +688,7 @@ async fn write_snapshot(
                 .map_err(Error::from)?;
         }
     }
+    guard.writing = true;
     file.write_all(bytes).await.map_err(Error::from)?;
     file.set_len(bytes.len() as u64)
         .await
@@ -668,6 +700,7 @@ impl FileTools {
         Self {
             reads: Arc::new(FileReadStateStore::default()),
             track_reads: options["nativeOwner"]["readFileStatePresent"] != false,
+            result_budget: options["toolResultBudget"].as_u64().unwrap_or(50_000) as usize,
             deny: deny_roots(options),
             record_change: options["nativeOwner"]["recordFileChange"]["__haloSdkNativeCallback"]
                 .as_str()
@@ -727,21 +760,25 @@ impl FileTools {
         } else {
             None
         };
-        let _guard = match admitted {
+        let mut guard = match admitted {
             Some(admitted) => admitted.reservation.acquire().await,
             None => lock(&path).await,
         };
         if ctx.cancellation.is_cancelled() {
             return Ok(failure(harness.text(TextId::ToolsFileCancelled)));
         }
+        if name == "Write" && guard.changed() {
+            tracing::warn!(session_id=%ctx.session_id,tool_use_id=%ctx.tool_use_id,"Queued file replacement refused because another write ran while it waited");
+            return Ok(failure(harness.text(TextId::ToolsFileQueuedChange)));
+        }
         let mut exported = ReadExport {
             version: self.read_version(&path),
             invalidated: false,
         };
         let result = match name {
-            "Read" => Ok(self.read(&path, input, harness).await),
-            "Write" => self.write(&path, input, ctx, captured, &mut exported).await,
-            "Edit" => self.edit(&path, input, ctx, captured, &mut exported).await,
+            "Read" => Ok(self.read(&path, input, harness, &mut exported).await),
+            "Write" => self.write(&path, input, ctx, captured, &mut exported, &mut guard).await,
+            "Edit" => self.edit(&path, input, ctx, captured, &mut exported, &mut guard).await,
             _ => unreachable!(),
         };
         self.export_read_state(&path, &mut exported).await?;
@@ -880,7 +917,13 @@ impl FileTools {
     pub fn shared_read_state(&self) -> Arc<FileReadStateStore> {
         self.reads.clone()
     }
-    async fn read(&self, path: &Path, input: &Value, harness: &ResolvedHarness) -> Value {
+    async fn read(
+        &self,
+        path: &Path,
+        input: &Value,
+        harness: &ResolvedHarness,
+        exported: &mut ReadExport,
+    ) -> Value {
         for key in ["offset", "limit"] {
             if let Some(v) = input
                 .get(key)
@@ -907,11 +950,15 @@ impl FileTools {
         }
         let stat = match fs::metadata(path).await {
             Ok(m) => m,
-            Err(_) => {
+            Err(error) => {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    // Seeing the file missing replaces any earlier record; otherwise Write could not recreate it.
+                    self.forget(path, exported);
+                }
                 return failure(harness.render(
                     TextId::ToolsFileNotFound,
                     &[("path", &path.to_string_lossy())],
-                ))
+                ));
             }
         };
         if stat.is_dir() {
@@ -1019,8 +1066,19 @@ impl FileTools {
                 ],
             ));
         }
-        let partial = truncated || fitted < total || start > 0;
-        let retained = if truncated {
+        let delivered_characters = output.encode_utf16().count();
+        let budget_truncated = delivered_characters > self.result_budget;
+        if budget_truncated {
+            tracing::warn!(characters=delivered_characters,budget=self.result_budget,"Read output truncated to the tool-result budget; recording a partial view");
+            output = crate::core::truncate::truncate_content_with_harness(
+                &output,
+                self.result_budget,
+                crate::core::truncate::recovery_hint(harness),
+                harness,
+            );
+        }
+        let partial = truncated || budget_truncated || fitted < total || start > 0;
+        let retained = if truncated || budget_truncated {
             crate::js::undefined()
         } else if partial {
             json!(lines[start..fitted].join("\n"))
@@ -1037,6 +1095,7 @@ impl FileTools {
         ctx: &ToolContext,
         captured: Option<Option<ReadValidation>>,
         exported: &mut ReadExport,
+        guard: &mut FileGuard,
     ) -> crate::error::Result<Value> {
         let harness = &ctx.harness;
         let Some(content) = input["content"].as_str() else {
@@ -1054,9 +1113,6 @@ impl FileTools {
                 .map(ReadState::validation)
         });
         let exists = fs::try_exists(path).await.unwrap_or(false);
-        if self.track_reads && exists && state.as_ref().map(|s| s.partial).unwrap_or(true) {
-            return Ok(failure(harness.text(TextId::ToolsFileCompleteRead)));
-        }
         let old = if exists {
             match snapshot(path).await {
                 Ok(s) => Some(s),
@@ -1080,7 +1136,7 @@ impl FileTools {
                 return Ok(failure(harness.text(TextId::ToolsFileChanged)));
             }
         }
-        let stat = match write_snapshot(path, content.as_bytes(), old.as_ref()).await {
+        let stat = match write_snapshot(path, content.as_bytes(), old.as_ref(), guard).await {
             Ok(s) => s,
             Err(e) => {
                 self.forget(path, exported);
@@ -1133,6 +1189,7 @@ impl FileTools {
         ctx: &ToolContext,
         captured: Option<Option<ReadValidation>>,
         exported: &mut ReadExport,
+        guard: &mut FileGuard,
     ) -> crate::error::Result<Value> {
         let harness = &ctx.harness;
         let Some(old) = input["old_string"].as_str().filter(|s| !s.is_empty()) else {
@@ -1193,7 +1250,7 @@ impl FileTools {
         if content.len() > MAX_BYTES {
             return Ok(failure(size_error().render_for(harness)));
         }
-        match write_snapshot(path, content.as_bytes(), Some(&snap)).await {
+        match write_snapshot(path, content.as_bytes(), Some(&snap), guard).await {
             Ok(_) => {}
             Err(e) => {
                 self.forget(path, exported);

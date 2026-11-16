@@ -9,6 +9,8 @@ Repository-wide architecture, security and human-authorization rules still apply
 SDK-only work follows this entry instead of the desktop UI, IPC and renderer i18n
 guides. Read only the affected module docs below. Paths here are SDK-relative.
 
+The legacy TypeScript runtime is deprecated and pending removal; use the Rust runtime in `native/crates/halo-core/src/`.
+
 ## Boundaries
 
 - No imports from Halo application code, Electron, or the host's shared types,
@@ -25,7 +27,7 @@ guides. Read only the affected module docs below. Paths here are SDK-relative.
 
 | Work | Read first |
 |---|---|
-| Harness: prompts, loop, context, tools, budgets, retries | [core/DESIGN.md](core/DESIGN.md); inspect `prompt/sections.ts`, `prompt/summary.ts` and `llm/cache-breakpoints.ts` when affected |
+| Harness: prompts, loop, context, tools, budgets, retries | [native/DESIGN.md](native/DESIGN.md), [core/DESIGN.md](core/DESIGN.md); inspect the affected Rust modules under `native/crates/halo-core/src/` and Harness catalogs |
 | History, persistence and resume | [core/TRANSCRIPT.md](core/TRANSCRIPT.md) |
 | Worker execution and lifecycle | [worker/DESIGN.md](worker/DESIGN.md) |
 | Collaboration and delivery | [collaboration/DESIGN.md](collaboration/DESIGN.md) |

@@ -33,6 +33,8 @@ pub enum TurnCompletion {
         content: String,
         #[serde(rename = "taskId", skip_serializing_if = "Option::is_none")]
         task_id: Option<String>,
+        #[serde(default, rename = "stopReason", skip_serializing_if = "Option::is_none")]
+        stop_reason: Option<String>,
     },
     Escalation {
         content: String,
@@ -71,7 +73,7 @@ mod tests {
                     request.deliveries,
                 ))
                 .unwrap();
-            tokio::select! {_=request.cancellation.cancelled()=>Ok(TurnCompletion::Error{message:"Execution was stopped.".into()}),_=self.release.notified()=>Ok(TurnCompletion::Result{content:"actual fixture result".into(),task_id:None})}
+            tokio::select! {_=request.cancellation.cancelled()=>Ok(TurnCompletion::Error{message:"Execution was stopped.".into()}),_=self.release.notified()=>Ok(TurnCompletion::Result{content:"actual fixture result".into(),task_id:None,stop_reason:None})}
         }
         fn inject(&self, _id: &str, deliveries: &[TeamDelivery]) -> bool {
             if !self.accepts.load(std::sync::atomic::Ordering::SeqCst) {
@@ -351,6 +353,20 @@ impl TurnCompletion {
             Self::Timeout => "timeout",
             Self::Undelivered { .. } => "undelivered",
         }
+    }
+    pub(crate) fn result_text(&self, harness: &ResolvedHarness, preview: Option<usize>) -> Option<String> {
+        let Self::Result { content, stop_reason, .. } = self else {
+            return None;
+        };
+        let content = match preview {
+            Some(limit) => crate::js::utf16_prefix(content, limit),
+            None => content.clone(),
+        };
+        Some(if stop_reason.as_deref() == Some("max_tokens") {
+            format!("{}\n\n{content}", harness.text(TextId::CollaborationDeliveryOutputTruncated))
+        } else {
+            content
+        })
     }
 }
 
@@ -1080,10 +1096,8 @@ impl CollaborationRuntime {
                     if let Some(value) = placement.get("worktreePath") { workspace["worktree"] = value.clone(); }
                     let workspace = if workspace.as_object().unwrap().is_empty() { String::new() }
                         else { harness.render(TextId::CollaborationDeliveryWorkspace, &[("workspace", &crate::js::stringify(&workspace))]) };
-                    let detail = match &outcome {
-                        TurnCompletion::Result { content, .. } => String::from_utf16_lossy(&content.encode_utf16().take(4000).collect::<Vec<_>>()),
-                        _ => outcome.kind().into(),
-                    };
+                    let detail = outcome.result_text(&harness, Some(4000))
+                        .unwrap_or_else(|| outcome.kind().into());
                     let body = harness.render(TextId::CollaborationDeliveryTurnEnd, &[("name",member["name"].as_str().unwrap_or("")), ("kind",outcome.kind()), ("detail",&detail), ("workspace",&workspace)]);
                     let envelope = json!({"id":protocol::id(),"teamId":self.store.team_id(),"epochId":self.store.epoch_id(),"fromAppId":null,"toAppId":self.coordinator_id,"correlationId":trigger["correlationId"],"createdAt":protocol::now(),"body":body});
                     let mut notice = trigger.clone();

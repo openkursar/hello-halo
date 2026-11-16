@@ -347,21 +347,23 @@ describe('output allowances', () => {
       expect(cfg.maxTokens).toBe(320_000);
     });
 
-  it('does not starve internal summaries with a small work-response ceiling', async () => {
+  it('retains history instead of raising a small user ceiling to complete a summary', async () => {
     const cfg = config({ maxOutputTokens: 300 });
     const { provider, summaries, requests } = fixture({ summary: async request => ({ ...response(),
       stopReason: request.maxTokens < 1000 ? 'max_tokens' : 'end_turn' }) });
-    const events = await collect(queryLoop(cfg, provider, [], history()));
-    expect(events.at(-1)).toMatchObject({ is_error: false });
-    expect(summaries).toHaveLength(1);
-    expect(summaries[0].maxTokens).toBeGreaterThanOrEqual(1000);
-    expect(summaries[0].maxTokens).toBeLessThanOrEqual(10_000);
-    expect(requests).toHaveLength(1);
-    expect(requests[0].maxTokens).toBe(300);
+    const source = history();
+    const before = structuredClone(source);
+    const compacted = vi.fn();
+    const events = await collect(queryLoop(cfg, provider, [], source, { onCompact: compacted }));
+    expect(events.at(-1)).toMatchObject({ is_error: true, usage: { output_tokens: 34 } });
+    expect(summaries.map(request => request.maxTokens)).toEqual([300, 300]);
+    expect(requests).toHaveLength(0);
+    expect(compacted).not.toHaveBeenCalled();
+    expect(source).toEqual(before);
     expect(cfg.maxTokens).toBe(300);
   });
 
-  it('keeps a large explicit thinking budget while maintenance uses its own allowance', async () => {
+  it('preserves thinking for provider validation when estimated remaining context is too small', async () => {
     const cfg = config({ contextWindow: 150_000, maxOutputTokens: 320_000,
       thinking: { type: 'enabled', budgetTokens: 32_000 } });
     const source = history().map(message => ({ ...message, content: String(message.content).repeat(3) }));
@@ -370,13 +372,15 @@ describe('output allowances', () => {
     expect(events.at(-1)).toMatchObject({ is_error: false });
     expect(summaries).toHaveLength(1);
     expect(summaries[0].maxTokens).toBeGreaterThan(32_000);
-    expect(summaries[0].maxTokens).toBeLessThanOrEqual(52_000);
+    const input = new TokenBudget(cfg.contextWindow).estimateRequest(summaries[0]);
+    expect(cfg.contextWindow - input).toBeLessThan(32_000 + 1024);
+    expect(summaries[0].maxTokens).toBe(cfg.maxTokens);
     expect(summaries[0].thinking).toEqual(requests[0].thinking);
     expect(requests[0].thinking).toEqual({ type: 'enabled', budgetTokens: 32_000 });
   });
 
-  it('does not count explicit thinking toward the handover text target', async () => {
-    const cfg = config({ contextWindow: 400_000, maxOutputTokens: 640_000,
+  it('keeps the soft handover target independent of the context-limited API allowance', async () => {
+    const cfg = config({ contextWindow: 440_000, maxOutputTokens: 640_000,
       thinking: { type: 'enabled', budgetTokens: 32_000 } });
     const source = history().map(message => ({ ...message, content: String(message.content).repeat(8) }));
     const { provider, summaries, requests } = fixture();
@@ -384,8 +388,14 @@ describe('output allowances', () => {
     expect(events.at(-1)).toMatchObject({ is_error: false });
     expect(summaries).toHaveLength(1);
     const instruction = String(summaries[0].messages.at(-1)?.content);
-    expect(instruction).toContain('The complete response must fit within 20000 output tokens.');
-    expect(summaries[0].maxTokens).toBe(52_000);
+    const target = instruction.match(/Aim for a concise handover of about (\d+) tokens\./);
+    expect(target).not.toBeNull();
+    const input = new TokenBudget(cfg.contextWindow).estimateRequest(summaries[0]);
+    expect(summaries[0].maxTokens).toBe(Math.floor(cfg.contextWindow - input));
+    expect(summaries[0].maxTokens).toBeGreaterThan(32_000 + 1024);
+    expect(Number(target![1])).toBeGreaterThan(summaries[0].maxTokens);
+    expect(Number(target![1])).toBeLessThan(cfg.maxTokens);
+    expect(instruction).not.toContain('The complete response must fit within');
     expect(summaries[0].thinking).toEqual({ type: 'enabled', budgetTokens: 32_000 });
     expect(requests).toHaveLength(1);
     expect(cfg.maxTokens).toBe(640_000);
@@ -431,7 +441,7 @@ describe('output allowances', () => {
   });
 
   it('corrects a summary output rejection without letting repair exceed the learned allowance', async () => {
-    const cfg = config({ maxOutputTokens: 300 });
+    const cfg = config({ maxOutputTokens: 4000 });
     let accepted = 0;
     const { provider, summaries, requests } = fixture({ summary: async request => {
       if (request.maxTokens > 2048) throw ProviderError.fromHttpResponse('Fixture', 400, JSON.stringify({ error: { message: 'max_tokens must be between 1 and 2048' } }));
@@ -440,16 +450,17 @@ describe('output allowances', () => {
     const events = await collect(queryLoop(cfg, provider, [], history()));
     expect(events.at(-1)).toMatchObject({ is_error: false });
     expect(summaries).toHaveLength(3);
-    expect(summaries[0].maxTokens).toBeGreaterThan(2048);
+    expect(summaries[0].maxTokens).toBe(4000);
     expect(summaries.slice(1).map(request => request.maxTokens)).toEqual([2048, 2048]);
-    expect(requests[0].maxTokens).toBe(300);
+    expect(requests[0].maxTokens).toBe(2048);
+    expect(cfg.maxTokens).toBe(4000);
     expect(events.at(-1)).toMatchObject({ usage: { output_tokens: 34 } });
   });
 
   it.each(['remaining-context', 'provider-limit'] as const)('validates summaries against the actual %s allowance', async limitSource => {
     const source = history();
     const estimated = new TokenBudget(150_000).estimateRequest({ messages: source, systemPrompt: 'Retain the user constraints.', tools: [] });
-    const cfg = config({ contextWindow: limitSource === 'remaining-context' ? estimated + 5000 : 40_000, maxOutputTokens: 300 });
+    const cfg = config({ contextWindow: limitSource === 'remaining-context' ? estimated + 5000 : 40_000, maxOutputTokens: 8000 });
     const sent: number[] = [];
     const { provider, requests } = fixture({ summary: async request => {
       sent.push(request.maxTokens);
@@ -460,11 +471,18 @@ describe('output allowances', () => {
     } });
     const checkpoint = vi.fn();
     const events = await collect(queryLoop(cfg, provider, [], source, { onCompact: checkpoint }));
-    expect(events.at(-1)).toMatchObject({ is_error: limitSource === 'provider-limit' });
+    expect(events.at(-1)).toMatchObject({ is_error: true });
     expect(checkpoint).not.toHaveBeenCalled();
-    expect(requests).toHaveLength(limitSource === 'provider-limit' ? 0 : 1);
+    expect(requests).toHaveLength(0);
     expect(sent).toHaveLength(limitSource === 'provider-limit' ? 3 : 2);
-    if (limitSource === 'remaining-context') expect(sent[0]).toBeLessThan(10_000);
+    if (limitSource === 'remaining-context') {
+      expect(sent[0]).toBeGreaterThan(0);
+      expect(sent[0]).toBeLessThan(5000);
+      expect(sent[1]).toBeLessThanOrEqual(sent[0]);
+    } else {
+      expect(sent).toEqual([8000, 2048, 2048]);
+    }
+    expect(events.at(-1)).toMatchObject({ usage: { output_tokens: sent.slice(limitSource === 'provider-limit' ? 1 : 0).reduce((total, maximum) => total + maximum + 1, 0) } });
     expect(source).toEqual(history());
   });
 
@@ -543,7 +561,7 @@ describe('summary request prefix', () => {
   });
 
   it.each([undefined, { type: 'enabled' as const, budgetTokens: 10_000 }])(
-    'preserves the effective wire thinking budget with a smaller output reservation: %j', async thinking => {
+    'preserves effective wire thinking without exceeding the user output ceiling: %j', async thinking => {
       const provider = new AnthropicProvider({ apiKey: 'fixture-not-a-key' });
       const body = (request: ProviderRequest) => (provider as unknown as {
         buildRequestBody(request: ProviderRequest): Promise<Record<string, unknown>>;
@@ -563,7 +581,8 @@ describe('summary request prefix', () => {
       expect(requests).toHaveLength(1);
       expect(serialized[0].thinking).toEqual(expected.thinking);
       expect(serialized[0].thinking).toEqual({ type: 'enabled', budget_tokens: 8191 });
-      expect(serialized[0].max_tokens).toBeGreaterThan(8192);
+      expect(serialized[0].max_tokens).toBe(8192);
+      expect(summaries[0].maxTokens).toBe(8192);
       expect(requests[0].maxTokens).toBe(8192);
     });
 

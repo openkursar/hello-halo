@@ -46,7 +46,7 @@ async fn clear_installs_neither_live_nor_durable_state_until_checkpoint_finishes
         let mut budget = TokenBudget::new(200000.0,4096.0);
         let mut context = LoopContext { environment: json!({}), memory: Default::default(), skill_context: None,
             compaction: Default::default(), tool_revision: 0, harness: harness.clone(), model: "fixture".into(),
-            thinking: Value::Null, image_input: Default::default() };
+            thinking: Value::Null, image_input: Default::default(), turn_end: Default::default() };
         let mut actor = ActorState { options:&options, tools:&owner_tools, journal:&journal, messages:&mut messages,
             discovery:&discovery, budget:&mut budget, context:&mut context, manual:None, compacted:None };
         actor.clear(&CancellationToken::new()).await.unwrap();

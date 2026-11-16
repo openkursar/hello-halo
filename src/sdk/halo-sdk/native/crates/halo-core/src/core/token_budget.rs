@@ -14,17 +14,6 @@ pub fn effective_thinking(thinking: &Value, max_tokens: f64) -> Value {
     thinking
 }
 
-pub fn maintenance_output_budget(window: f64, thinking: &Value) -> f64 {
-    let text = 20_000.0_f64.min((window / 4.0).floor().max(1.0));
-    (window - 1.0).min(
-        text + if thinking["type"] == "enabled" {
-            thinking["budgetTokens"].as_f64().unwrap_or(0.0)
-        } else {
-            0.0
-        },
-    )
-}
-
 fn token_count(value: &Value) -> Option<f64> {
     value.as_f64().filter(|n| n.is_finite() && *n >= 0.0)
 }
@@ -313,13 +302,10 @@ mod tests {
         );
     }
     #[test]
-    fn reserves_work_and_maintenance_independently() {
+    fn output_reservation_does_not_limit_request_ceiling() {
         let budget = TokenBudget::new(200_000.0, 64_000.0);
         assert_eq!(budget.output_reservation_tokens(), 20_000.0);
         assert_eq!(budget.request_max_tokens(160_000.0, None), 40_000.0);
-        assert_eq!(
-            maintenance_output_budget(200_000.0, &json!({"type":"enabled","budgetTokens":10_000})),
-            30_000.0
-        );
+        assert_eq!(budget.request_max_tokens(10_000.0, Some(128_000.0)), 128_000.0);
     }
 }

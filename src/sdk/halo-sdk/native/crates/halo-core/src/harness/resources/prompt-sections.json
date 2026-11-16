@@ -77,6 +77,7 @@
     "MAX_TOKENS_RECOVERY_MSG": {
       "$harness": "context.recovery.max_tokens"
     },
-    "GOAL_RECITATION_INTERVAL": 25
+    "GOAL_RECITATION_INTERVAL": 25,
+    "TODO_REMINDER_INTERVAL": 15
   }
 }

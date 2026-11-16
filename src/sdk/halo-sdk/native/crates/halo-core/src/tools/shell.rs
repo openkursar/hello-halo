@@ -183,6 +183,11 @@ fn shell_path(env: &Value) -> Result<String, Error> {
         &[],
     ))
 }
+fn is_zsh(shell: &str) -> bool {
+    Path::new(shell)
+        .file_stem()
+        .is_some_and(|name| name.to_string_lossy().contains("zsh"))
+}
 fn filtered(key: &str) -> bool {
     [
         "_",
@@ -317,6 +322,7 @@ async fn create_output_directory(path: &Path) -> std::io::Result<()> {
 }
 fn wrapper(
     command: &str,
+    shell: &str,
     state: &ShellState,
     file: Option<&Path>,
     harness: &ResolvedHarness,
@@ -345,7 +351,12 @@ fn wrapper(
     if !restored.is_empty() {
         exports.push_str(&format!("unset {}", restored.join(" ")));
     }
-    let mut script = vec![
+    let mut script = Vec::new();
+    if is_zsh(shell) {
+        // zsh aborts a command whose glob matches nothing; bash passes the pattern on, as commands written for bash expect.
+        script.push("setopt NO_NOMATCH".to_owned());
+    }
+    script.extend([
         format!(
             "cd {} 2>/dev/null || {{ printf '%s\\n' {} >&2; exit 127; }}",
             quote(&windows_posix(&state.cwd)),
@@ -354,7 +365,7 @@ fn wrapper(
         exports,
         command.into(),
         "__agent_ec=$?".into(),
-    ];
+    ]);
     if let Some(file) = file {
         let pwd = if cfg!(windows) { "pwd -P -W" } else { "pwd -P" };
         script.push(format!(
@@ -410,6 +421,16 @@ async fn read_state(file: &Path) -> Option<ShellState> {
 mod restore_tests {
     use super::*;
 
+    #[test]
+    fn only_zsh_gets_the_option_that_lets_unmatched_globs_through() {
+        let state = ShellState { cwd: "/".into(), env: HashMap::new() };
+        let script = |shell: &str| wrapper("echo x", shell, &state, None, &crate::harness::baseline(), &mut HashMap::new());
+        assert!(script("/bin/zsh").starts_with("setopt NO_NOMATCH\n"));
+        assert!(script("/usr/local/bin/zsh-5.9").starts_with("setopt NO_NOMATCH\n"));
+        assert!(!script("/bin/bash").contains("setopt"));
+        assert!(!script("/usr/bin/bash").contains("NO_NOMATCH"));
+    }
+
     #[tokio::test]
     async fn state_file_is_private_and_cleanup_survives_early_return() {
         use std::os::unix::fs::PermissionsExt;
@@ -460,6 +481,7 @@ mod restore_tests {
         let file = root.join("state");
         let script = wrapper(
             "if read -r received; then exit 9; fi; printf '%s' \"$RESTORED\"",
+            "/bin/bash",
             &state,
             Some(&file),
             &crate::harness::baseline(),
@@ -649,6 +671,7 @@ async fn run(
     };
     let script = wrapper(
         command,
+        &shell,
         &state,
         state_file.as_ref().map(|file| file.path.as_path()),
         &ctx.harness,

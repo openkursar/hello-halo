@@ -101,8 +101,11 @@ try {
   ownership of one transcript is refused.
 - Read/Edit/Write coordinate canonical file paths across runtime instances in the
   same host module. This does not lock unrelated applications, Bash commands, or
-  another host process. Streaming uses bounded acknowledged batches, without a
-  host-side history mirror or shared memory.
+  another host process. Write replaces the whole file and permits unread or partial
+  views; existing read records still reject conflicting changes. Read completeness
+  reflects the delivered result budget, not only the bytes read from disk. Edit
+  still requires a read record. Streaming uses bounded acknowledged batches,
+  without a host-side history mirror or shared memory.
 - Worker startup, close and heartbeat deadlines default to 30 seconds. Session
   preparation has a separate 120-second deadline for external MCP handshakes and
   custom setup (`sessionStartupTimeoutMs`). A host can separately set
@@ -317,7 +320,7 @@ The harness exposes model and endpoint adaptations that hosts can evaluate for t
 - **Tool-call formats** — native function calling is the default. Explicit XML or JSON adapters are available for endpoints that need a prompt-based tool protocol; select them based on the actual endpoint and evaluation results.
 - **Stagnation detection** — code-level analysis of recent tool calls detects repeated identical calls or errors and injects a factual notice, steering the model away from loops (critical for models with lower tool-use compliance)
 - **Goal** — for long, complex work the model records the objective and checkable done-when criteria; the goal lives outside message history, survives compaction, and is recited at the start of each run and whenever it has been out of view for a while
-- **End-of-turn checks** — when the model stops while the goal is open or todo items are unfinished, the harness states what is still open once per distinct state and leaves the decision to the model; an optional completion check asks it to confirm nothing requested is missing
+- **End-of-turn checks** — when the model stops while the goal is open or todo items are unfinished, the harness states what is still open once per distinct state and leaves the decision to the model; responses continue through the ordinary output and tool-execution paths. An optional completion check asks the model to confirm nothing requested is missing
 - **Steering-quality tool returns** — every truncation, error, and denial message is engineered to tell the model what happened, what was lost, and what to do next
 
 ## Architecture
@@ -333,7 +336,8 @@ are not executed. Rust paths below are relative to `native/crates/halo-core/src/
 | Tool ingress | `core/tool_execution.rs` | Bound each new result before it enters history; never repeatedly rewrite old results |
 | Summary | `core/compact/` | Structured handover using the effective request's cacheable prefix |
 | Recitation | `tools/working_state.rs` | Working memory persisted outside message history, re-injected on change and after compaction |
-| Reminders | `core/goal_reminders.rs` | Goal recitation, user-edit notices and end-of-turn checks |
+| Reminders | `core/goal_reminders.rs` | Goal recitation, user-edit notices, end-of-turn checks and todo reminders |
+| Reminder state | `core/turn_end.rs` | Remembers the last checked unfinished state; counts requests since the todo list last changed |
 | Stagnation | `core/stagnation.rs` | Fact-based loop detection appended to tool results |
 | Hooks | `core/hooks.rs` | Pre/post tool-use lifecycle with deterministic input threading |
 | Caching | `llm/cache.rs` | Prefix-cache-safe message ordering (stable content first, volatile last) |
@@ -369,7 +373,10 @@ indivisible exchange that cannot fit, exhausted recovery, unavailable providers,
 and checkpoint storage failures preserve state and report the failure.
 
 The summary keeps the current model, system, tools and thinking configuration,
-with its instruction appended to the history. It never executes tools. Cache
+with its instruction appended to the history. It never executes tools. Its output
+ceiling follows `maxOutputTokens`, remaining context and explicit provider limits;
+the preferred summary size is guidance, not a separate hard ceiling. Switching
+Anthropic retries to non-streaming does not reduce output or thinking budgets. Cache
 hits still depend on provider support, expiry and request identity. Summary
 usage is included when supplied; absent usage or prices do not establish a
 complete bill. The explicit `microCompact` and `apiCompact` utility exports
@@ -422,6 +429,27 @@ session.setGoal(null);                               // remove it
 `Options.goal` is ignored when a resumed session already has a goal.
 `turnEndChecks.completion` adds one model call per turn; enable it only where
 the extra check is worth the cost.
+
+End-of-turn checks append a reminder to the same loop. Responses before and
+after the reminder use the ordinary stream, history and callback paths; the SDK
+does not filter text based on whether it accompanies a tool call. The final
+`result` uses the last response's nonempty text, falling back to the preceding
+pre-check answer when that response is empty. Applications decide how to present
+these responses; the SDK does not concatenate or rank them.
+
+`Goal` and `TodoWrite` follow the same tool-result feedback cycle as other tools.
+A completed list or repeated list updates do not end the loop themselves. Normal
+completion still passes through the Stop hook and pending-input checks.
+
+The same unfinished state is not checked again within the turn. Across turns,
+an unchanged state is checked again only after a tool other than `Goal` or
+`TodoWrite` was called, so a plain follow-up question does not repeat the check.
+A changed unfinished state remains eligible for a new check.
+
+While a todo list has unfinished items, the harness reminds the model of it after
+15 model requests without a change to the list, whether or not a goal is set. The
+reminder repeats after each further quiet stretch and is part of the run's
+context only.
 
 ## Workflows and Prompt Profiles
 
@@ -712,6 +740,10 @@ tool name such as `Bash` preapproves that tool. Conditional strings such as
 shell permission-rule parser. Without that callback, a conditional rule does
 not authorize the tool, unless the session explicitly uses `bypassPermissions`
 or also contains a bare approval. Interactive tools still use the host callback.
+`AskUserQuestion` takes its answers only from that callback (or a `PreToolUse`
+hook) through `updatedInput.answers`. The model's tool definition does not show
+`answers`, `annotations` or `metadata`, and an `answers` or `annotations` value
+the model writes anyway is dropped before any hook or callback runs.
 
 ## API Limits
 

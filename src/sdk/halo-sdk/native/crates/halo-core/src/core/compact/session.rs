@@ -7,7 +7,7 @@ use crate::{
     core::loop_owner::LoopExecution,
     core::{
         hooks,
-        token_budget::{maintenance_output_budget, TokenBudget},
+        token_budget::TokenBudget,
     },
     error::{Error, Result},
     llm::provider::Provider,
@@ -292,9 +292,9 @@ pub async fn compact_request(
     check_cancel(cancel)?;
     let started = Instant::now();
     let mut envelope = request.clone();
-    envelope["maxTokens"] = json!(maintenance_output_budget(window, &request["thinking"])
-        .min(allowance.lock().unwrap().limit.unwrap_or(f64::INFINITY)));
-    let compact_options = json!({"maxTokens":maintenance_output_budget(window,&Value::Null),"promptProfile":options["promptProfile"],"request":envelope,"injectedMessages":injected,"targetInputTokens":if trigger.reduce_target(){budget.target_input_tokens().min((pre_tokens/2.0).floor())}else{budget.target_input_tokens()},"maxInputTokens":budget.available_input_tokens()});
+    let ceiling = output.min(allowance.lock().unwrap().limit.unwrap_or(f64::INFINITY));
+    envelope["maxTokens"] = json!(ceiling);
+    let compact_options = json!({"maxTokens":ceiling,"promptProfile":options["promptProfile"],"request":envelope,"injectedMessages":injected,"targetInputTokens":if trigger.reduce_target(){budget.target_input_tokens().min((pre_tokens/2.0).floor())}else{budget.target_input_tokens()},"maxInputTokens":budget.available_input_tokens()});
     let mut estimator = TokenBudget::new(window, output);
     estimator.configure_output(request["thinking"].clone(), allowance.lock().unwrap().limit);
     let summary_provider = Summary {

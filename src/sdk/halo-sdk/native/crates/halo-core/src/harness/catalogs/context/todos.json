@@ -4,5 +4,12 @@
     "slots": [
       "list"
     ]
+  },
+  "context.todos.stale": {
+    "text": "Todo reminder — unchanged for {count} steps:\n{list}\nUpdate it only if it no longer reflects your progress; otherwise continue.",
+    "slots": [
+      "count",
+      "list"
+    ]
   }
 }

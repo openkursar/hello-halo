@@ -289,7 +289,7 @@ describe('session scenarios — read-state across sends', () => {
     }
   });
 
-  it('clearing conversation history revokes Read authorization until another Read', async () => {
+  it('clearing conversation history permits unread Write and records fresh conflict state', async () => {
     const dir = tempDir();
     const filePath = join(dir, 'clear.txt');
     writeFileSync(filePath, 'before\n');
@@ -297,7 +297,7 @@ describe('session scenarios — read-state across sends', () => {
       { events: toolUseStream('Read', { file_path: filePath }), stop: 'tool_use' },
       { events: textStream('read') },
       { events: toolUseStream('Write', { file_path: filePath, content: 'blind write\n' }), stop: 'tool_use' },
-      { events: textStream('write rejected') },
+      { events: textStream('written') },
       { events: toolUseStream('Read', { file_path: filePath }), stop: 'tool_use' },
       { events: textStream('read again') },
       { events: toolUseStream('Write', { file_path: filePath, content: 'authorized write\n' }), stop: 'tool_use' },
@@ -310,9 +310,9 @@ describe('session scenarios — read-state across sends', () => {
       await session.send('/clear');
       await driveTurn(session);
       await session.send('overwrite without another read');
-      const denied = await driveTurn(session);
-      expect(resultText(denied.toolResults[0])).toContain('Write requires a complete Read');
-      expect(readFileSync(filePath, 'utf-8')).toBe('before\n');
+      const written = await driveTurn(session);
+      expect(resultText(written.toolResults[0])).toContain(`Wrote ${filePath}`);
+      expect(readFileSync(filePath, 'utf-8')).toBe('blind write\n');
 
       await session.send('read the file again');
       await driveTurn(session);
@@ -327,7 +327,7 @@ describe('session scenarios — read-state across sends', () => {
     }
   });
 
-  it('partial Read does not authorize whole-file Write across sends but permits precise Edit', async () => {
+  it('partial Read permits whole-file Write across sends and a subsequent precise Edit', async () => {
     const dir = tempDir();
     const filePath = join(dir, 'partial-write.txt');
     writeFileSync(filePath, 'seen\nunseen important text\n');
@@ -335,8 +335,8 @@ describe('session scenarios — read-state across sends', () => {
       { events: toolUseStream('Read', { file_path: filePath, limit: 1 }), stop: 'tool_use' },
       { events: textStream('read first line') },
       { events: toolUseStream('Write', { file_path: filePath, content: 'replacement\n' }), stop: 'tool_use' },
-      { events: textStream('write rejected') },
-      { events: toolUseStream('Edit', { file_path: filePath, old_string: 'seen\n', new_string: 'SEEN\n' }), stop: 'tool_use' },
+      { events: textStream('written') },
+      { events: toolUseStream('Edit', { file_path: filePath, old_string: 'replacement\n', new_string: 'REPLACEMENT\n' }), stop: 'tool_use' },
       { events: textStream('edited') },
     ]);
     const session = await makeSession(provider, dir);
@@ -344,14 +344,14 @@ describe('session scenarios — read-state across sends', () => {
       await session.send('read the first line');
       await driveTurn(session);
       await session.send('replace the whole file');
-      const denied = await driveTurn(session);
-      expect(resultText(denied.toolResults[0])).toContain('Write requires a complete Read');
-      expect(readFileSync(filePath, 'utf-8')).toBe('seen\nunseen important text\n');
+      const written = await driveTurn(session);
+      expect(resultText(written.toolResults[0])).toContain(`Wrote ${filePath}`);
+      expect(readFileSync(filePath, 'utf-8')).toBe('replacement\n');
 
       await session.send('edit just the seen text');
       const allowed = await driveTurn(session);
       expect(resultText(allowed.toolResults[0])).toContain('Successfully edited');
-      expect(readFileSync(filePath, 'utf-8')).toBe('SEEN\nunseen important text\n');
+      expect(readFileSync(filePath, 'utf-8')).toBe('REPLACEMENT\n');
     } finally {
       session.close();
       await session.flush();
@@ -386,7 +386,7 @@ describe('session scenarios — read-state across sends', () => {
 
       const editResult = turn2.toolResults[0];
       expect(editResult, 'Edit tool_result must be present').toBeDefined();
-      expect(resultText(editResult)).toContain('The file no longer matches its recorded read');
+      expect(resultText(editResult)).toContain('The file changed after your last Read');
       expect(readFileSync(filePath, 'utf-8')).toBe('tampered content\n');
     } finally {
       session.close();

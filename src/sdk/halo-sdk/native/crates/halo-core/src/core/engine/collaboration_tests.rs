@@ -230,6 +230,126 @@ async fn run(native_query: bool, deferred: bool, change_directory: bool) -> Evid
     evidence
 }
 
+async fn run_truncated_child(persist: bool) -> Evidence {
+    let directory = std::env::temp_dir().join(format!("halo-child-truncation-{}", uuid::Uuid::new_v4()));
+    tokio::fs::create_dir_all(&directory).await.unwrap();
+    let session = NativeSession::new(json!({
+        "provider":{"id":"fixture","name":"Fixture","__haloSdkNativeProvider":true,"capabilities":{"streaming":true,"toolCalling":true,"thinking":false,"imageInput":false,"pdfInput":false,"audioInput":false,"videoInput":false,"caching":false,"systemPromptStyle":"top_level"}},
+        "model":"fixture","cwd":directory,"env":{"HOME":directory,"CLAUDE_CONFIG_DIR":directory.join("config")},
+        "tools":[],"settingSources":[],"persistSession":persist,"permissionMode":"bypassPermissions","maxTurns":12,
+        "turnEndChecks":{"completion":false,"openWork":false},"systemPrompt":"You are the source assistant.",
+        "collaboration":{"mode":"local"}
+    })).unwrap();
+    let (sender, mut iterations) = mpsc::unbounded_channel();
+    *session.iteration_observer.lock().unwrap() = Some(sender);
+    let mut evidence = Evidence { requests: Vec::new(), histories: Vec::new(), calls: Vec::new(), results: Vec::new() };
+    let mut streams = HashMap::<String, VecDeque<Value>>::new();
+    let mut pending_child: Option<(String, String)> = None;
+    let mut released = false;
+    let mut sequence = 0;
+    let mut child_calls = 0;
+    let operation = async {
+        loop {
+            let envelope = tokio::select! {
+                history = iterations.recv() => {
+                    evidence.histories.push(history.unwrap());
+                    released = true;
+                    if let Some((callback, stream)) = pending_child.take() {
+                        session.callback_response(&callback, json!(stream), None).unwrap();
+                    }
+                    continue;
+                },
+                envelope = session.next() => envelope.unwrap().expect("source closed before result"),
+            };
+            match envelope["kind"].as_str().unwrap() {
+                "ready" => {
+                    session.send(json!("Delegate and inspect the child record."), "source-input".into(), false).unwrap();
+                    session.start_stream().unwrap();
+                }
+                "callback" => {
+                    let callback = envelope["id"].as_str().unwrap();
+                    let input = &envelope["params"];
+                    let value = match envelope["method"].as_str().unwrap() {
+                        "provider.start" => {
+                            let child = input["systemPrompt"].to_string().contains("You are collaborator");
+                            let stream = format!("truncated-{}", sequence); sequence += 1;
+                            let mut events = if child {
+                                child_calls += 1;
+                                assert!(child_calls <= 4, "recovery exceeded its bound");
+                                let mut events = response(&stream, None, true);
+                                events[1]["content_block"]["text"] = json!(format!("Retained child segment {child_calls}."));
+                                events[3]["stopReason"] = json!("max_tokens");
+                                events
+                            } else {
+                                let step = evidence.requests.len();
+                                assert!(step < 4, "source did not retain completion control");
+                                evidence.requests.push(input.clone());
+                                let call = match step {
+                                    0 => Some(json!({"name":"mcp__halo-team__spawn_agent","input":{"name":"reader","prompt":"Report all four segments."}})),
+                                    2 => Some(json!({"name":"mcp__halo-team__team_read_member","input":{"member":"reader"}})),
+                                    _ => None,
+                                };
+                                response(&stream, call, false)
+                            };
+                            streams.insert(stream.clone(), std::mem::take(&mut events));
+                            if child && !released {
+                                assert!(pending_child.replace((callback.to_owned(), stream)).is_none());
+                                continue;
+                            }
+                            json!(stream)
+                        }
+                        "provider.next" => match streams.get_mut(input["streamId"].as_str().unwrap()).unwrap().pop_front() {
+                            Some(event) => json!({"done":false,"value":event}),
+                            None => json!({"done":true}),
+                        },
+                        "provider.return" => Value::Null,
+                        method => panic!("unexpected callback {method}: {input}"),
+                    };
+                    session.callback_response(callback, value, None).unwrap();
+                }
+                "event" => {
+                    if let Some(id) = envelope["eventId"].as_str() { session.event_consumed(id, None); }
+                    if envelope["event"]["type"] == "result" {
+                        evidence.results.push(envelope["event"].clone());
+                        break;
+                    }
+                }
+                "log" | "inputConsumed" | "callbackCancelled" => {},
+                kind => panic!("unexpected envelope {kind}: {envelope}"),
+            }
+        }
+    };
+    let outcome = tokio::time::timeout(Duration::from_secs(15), operation).await;
+    session.close();
+    while let Some(envelope) = session.next().await.unwrap() {
+        if let Some(id) = envelope["eventId"].as_str() { session.event_consumed(id, None); }
+    }
+    session.output_consumed();
+    session.wait_closed().await.unwrap();
+    tokio::fs::remove_dir_all(directory).await.unwrap();
+    outcome.expect("truncated child did not return control");
+    assert_eq!(child_calls, 4);
+    evidence
+}
+
+#[tokio::test]
+async fn source_observes_truncation_and_reads_all_child_segments() {
+    for persist in [false, true] {
+        let evidence = run_truncated_child(persist).await;
+        assert_eq!(evidence.requests.len(), 4);
+        let notice = evidence.requests[2]["messages"].to_string();
+        let lower = notice.to_ascii_lowercase();
+        assert!(lower.contains("token limit"));
+        assert!(lower.contains("last segment"));
+        assert!(notice.contains("team_read_member"));
+        assert!(lower.find("token limit").unwrap() < notice.find("Retained child segment 4.").unwrap());
+        let readback = evidence.requests[3]["messages"].to_string();
+        for index in 1..=4 { assert!(readback.contains(&format!("Retained child segment {index}."))); }
+        assert_eq!(evidence.results.len(), 1);
+        assert_eq!(evidence.results[0]["subtype"], "success");
+    }
+}
+
 fn assert_definitions(evidence: &Evidence) {
     assert_eq!(evidence.histories.len(), 2);
     assert_eq!(evidence.calls, vec![json!("continued")]);

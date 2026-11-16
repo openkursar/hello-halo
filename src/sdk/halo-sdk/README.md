@@ -14,6 +14,8 @@ The core owns the model loop, tools, history and context management; JavaScript
 retains host callbacks and public objects. Direct and Worker execution use the
 same core and shared native execution resources.
 
+> The legacy TypeScript runtime is deprecated and pending removal; use the Rust runtime in `native/crates/halo-core/src/`.
+
 ## Why a lighter agent runtime?
 
 Applications may need dozens or eventually hundreds of independent agent

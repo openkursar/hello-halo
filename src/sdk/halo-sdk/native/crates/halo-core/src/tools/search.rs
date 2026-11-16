@@ -219,7 +219,6 @@ pub async fn grep(
         cmd.args(["--glob", glob]);
     }
     let root = file::real_path(&path);
-    let mut excludes = false;
     for denied in denials.iter().filter(|_| root.is_dir()) {
         if let Ok(relative) = denied.strip_prefix(&root) {
             if !relative.as_os_str().is_empty() {
@@ -238,15 +237,14 @@ pub async fn grep(
                     })
                     .collect();
                 cmd.args(["--glob", &format!("!/{escaped}")]);
-                excludes = true;
             }
         }
     }
-    cmd.arg("--")
-        .arg(pattern)
-        .arg(if excludes { &root } else { &path });
-    if excludes {
-        cmd.current_dir(&root);
+    // rg reads globs relative to its working directory: start it where the search starts.
+    let scope = SearchScope::new(&path);
+    cmd.arg("--").arg(pattern).arg(scope.argument());
+    if let Some(directory) = scope.directory() {
+        cmd.current_dir(directory);
     }
     cmd.env_clear().envs(&env).stdin(Stdio::null());
     cmd.stdout(Stdio::piped())
@@ -342,14 +340,25 @@ pub async fn grep(
         ));
     }
     if crate::js::trim_js(&output).is_empty() {
+        let shown = path.to_string_lossy();
+        let filters = [("glob", &input["glob"]), ("type", &input["type"])]
+            .iter()
+            .filter_map(|(name, value)| value.as_str().filter(|value| !value.is_empty()).map(|value| format!("{name} \"{value}\"")))
+            .collect::<Vec<_>>()
+            .join(" and ");
         return success(
-            harness.render(
-                TextId::ToolsGrepNoMatches,
-                &[("pattern", pattern), ("path", &path.to_string_lossy())],
-            ),
+            if filters.is_empty() {
+                harness.render(TextId::ToolsGrepNoMatches, &[("pattern", pattern), ("path", &shown)])
+            } else {
+                harness.render(
+                    TextId::ToolsGrepNoMatchesFiltered,
+                    &[("pattern", pattern), ("path", &shown), ("filters", &filters)],
+                )
+            },
             None,
         );
     }
+    let output = scope.display(&output);
     let lines: Vec<_> = output
         .strip_suffix('\n')
         .unwrap_or(&output)
@@ -399,6 +408,40 @@ pub async fn grep(
     )
 }
 
+/// A directory search runs inside the directory, so a glob is read relative to it; rg then prints
+/// paths relative to it, and they are shown under the path the caller gave. Any other path is searched as given.
+struct SearchScope<'a> {
+    shown: &'a std::path::Path,
+    inside: bool,
+}
+impl<'a> SearchScope<'a> {
+    fn new(shown: &'a std::path::Path) -> Self {
+        Self { shown, inside: shown.is_dir() }
+    }
+    fn argument(&self) -> &std::ffi::OsStr {
+        if self.inside { std::ffi::OsStr::new(".") } else { self.shown.as_os_str() }
+    }
+    fn directory(&self) -> Option<&std::path::Path> {
+        self.inside.then_some(self.shown)
+    }
+    fn display(&self, output: &str) -> String {
+        if !self.inside {
+            return output.to_owned();
+        }
+        let separator = std::path::MAIN_SEPARATOR;
+        let shown = self.shown.to_string_lossy();
+        let shown = shown.trim_end_matches(separator);
+        let prefix = format!(".{separator}");
+        output
+            .split_inclusive('\n')
+            .map(|line| match line.strip_prefix(&prefix) {
+                Some(rest) => format!("{shown}{separator}{rest}"),
+                None => line.to_owned(),
+            })
+            .collect()
+    }
+}
+
 fn status_signal(status: &std::process::ExitStatus) -> Option<&'static str> {
     #[cfg(unix)]
     {
@@ -417,5 +460,34 @@ fn status_signal(status: &std::process::ExitStatus) -> Option<&'static str> {
     {
         let _ = status;
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_directory_search_starts_in_the_directory_and_restores_the_shown_path() {
+        let root = std::env::temp_dir();
+        let scope = SearchScope::new(&root);
+        assert_eq!(scope.argument(), ".");
+        assert_eq!(scope.directory(), Some(root.as_path()));
+        let sep = std::path::MAIN_SEPARATOR;
+        let shown = root.to_string_lossy();
+        let shown = shown.trim_end_matches(sep);
+        let rg = format!(".{sep}src{sep}a.ts:3:needle\n.{sep}b.ts\n--\n.{sep}b.ts-4-context\nplain text\n");
+        assert_eq!(scope.display(&rg), format!("{shown}{sep}src{sep}a.ts:3:needle\n{shown}{sep}b.ts\n--\n{shown}{sep}b.ts-4-context\nplain text\n"));
+    }
+
+    #[test]
+    fn a_file_or_missing_path_is_searched_as_given() {
+        for path in [std::env::current_exe().unwrap(), std::env::temp_dir().join("halo-grep-missing-path-for-test/nowhere")] {
+            let scope = SearchScope::new(&path);
+            assert!(scope.directory().is_none());
+            assert_eq!(scope.argument(), path.as_os_str());
+            assert_eq!(scope.display("2:./not-a-path-prefix\n"), "2:./not-a-path-prefix\n");
+            assert_eq!(scope.display("./looks-like-content\n"), "./looks-like-content\n");
+        }
     }
 }

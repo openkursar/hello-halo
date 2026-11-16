@@ -39,12 +39,12 @@ test('direct native file tools use the caller read map and direct shell calls re
   const execute = (name, input, supplied = context) => sdk.findToolByName(tools, name).execute(input, supplied);
   try {
     await writeFile(path, 'original\n');
-    const denied = await execute('Write', { file_path: path, content: 'unread' }); assert.equal(denied.isError, true);
-    assert.equal(await readFile(path, 'utf8'), 'original\n');
+    const replacement = await execute('Write', { file_path: path, content: 'unread' }); assert.equal(replacement.isError, false);
+    assert.equal(await readFile(path, 'utf8'), 'unread');
     assert.equal((await execute('Read', { file_path: path })).isError, false); assert.ok(state.has(path));
     const written = await execute('Write', { file_path: path, content: 'changed\n' });
     assert.equal(written.isError, false, written.content);
-    assert.equal(await readFile(path, 'utf8'), 'changed\n'); assert.equal(observed.length, 1); assert.equal(observed[0].content, 'changed\n');
+    assert.equal(await readFile(path, 'utf8'), 'changed\n'); assert.equal(observed.length, 2); assert.equal(observed[1].content, 'changed\n');
     const aborted = new AbortController(); aborted.abort();
     assert.equal((await execute('Read', { file_path: path }, { ...context, abortSignal: aborted.signal })).isError, false);
     const first = await execute('Bash', { command: 'export FIXTURE_VALUE=retained' }); assert.equal(first.isError, false);
@@ -165,4 +165,87 @@ test('SDK tool contexts share state within a run and retain the previous cost af
     assert.equal(contexts.length, 4); assert.notEqual(contexts[2].costTracker, contexts[0].costTracker);
     assert.equal(contexts[2].readFileState, contexts[0].readFileState); assert.equal(contexts[0].costTracker.totalTokens, cost);
   } finally { await session[Symbol.asyncDispose](); await rm(root, { recursive: true, force: true }); }
+});
+
+test('public sessions preserve budgeted Read state, Write permissions and stale protection', { timeout: 30_000 }, async () => {
+  for (const denyWrite of [false, true]) {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'halo-budgeted-read-')));
+    const path = join(root, 'large.txt');
+    const original = `HEAD${'x'.repeat(29_992)}TAIL`;
+    await writeFile(path, original);
+    const states = [], requests = [], frames = [], permissions = [];
+    const inspect = { name: 'InspectReadState', description: 'Inspect the retained read state.',
+      inputSchema: { type: 'object', properties: {} }, permissionLevel: 'readonly',
+      async execute(_input, context) {
+        const state = context.readFileState.get(path);
+        states.push(state && { ...state });
+        return { content: 'Read state inspected.', isError: false };
+      } };
+    let step = 0;
+    const provider = { id: 'budgeted-read', name: 'Budgeted Read fixture',
+      capabilities: () => ({ streaming: true, toolCalling: true, imageInput: false, thinking: false,
+        pdfInput: false, audioInput: false, videoInput: false, caching: false, systemPromptStyle: 'top_level' }),
+      async createMessage() { throw new Error('Unexpected summary'); },
+      async *createMessageStream(request) {
+        requests.push(structuredClone(request));
+        const current = step++;
+        assert.ok(current < 6);
+        if (current === 4) await writeFile(path, 'external change');
+        const calls = [
+          { name: 'Read', input: { file_path: path } },
+          { name: 'InspectReadState', input: {} },
+          { name: 'Write', input: { file_path: path, content: 'replacement' } },
+          { name: 'Read', input: { file_path: path } },
+          { name: 'Write', input: { file_path: path, content: 'must not overwrite external change' } },
+        ];
+        const call = calls[current], id = `budgeted-${current}`;
+        yield { type: 'message_start', id, model: request.model, usage: { input_tokens: 10, output_tokens: 0 } };
+        yield { type: 'content_block_start', index: 0, content_block: call
+          ? { type: 'tool_use', id, name: call.name, input: call.input }
+          : { type: 'text', text: 'Checks complete.' } };
+        yield { type: 'content_block_stop', index: 0 };
+        yield { type: 'message_delta', stopReason: call ? 'tool_use' : 'end_turn', usage: { output_tokens: 1 } };
+        yield { type: 'message_stop' };
+      } };
+    const session = await sdk.createSession({ model: 'fixture', provider, cwd: root, env: { HOME: root },
+      tools: ['Read', 'Write'], customTools: [inspect], settingSources: [], collaboration: false,
+      persistSession: false, systemPrompt: 'Fixture.', permissionMode: 'default', toolResultBudget: 10_000,
+      turnEndChecks: { completion: false, openWork: false }, thinking: { type: 'disabled' },
+      canUseTool: async (name, input) => {
+        permissions.push(name);
+        return denyWrite && name === 'Write'
+          ? { behavior: 'deny', message: 'Write denied by the owner.' }
+          : { behavior: 'allow', updatedInput: input };
+      } });
+    try {
+      await session.send('Read, inspect, replace if authorized, and verify stale protection.');
+      for await (const frame of session.stream()) frames.push(frame);
+      assert.equal(step, 6);
+      assert.equal(states.length, 1);
+      assert.equal(states[0].isPartialView, true);
+      assert.equal(states[0].content, undefined);
+      assert.equal(states[0].contentHash, createHash('sha256').update(original).digest('hex'));
+      assert.ok(Number.isFinite(states[0].timestamp));
+      const results = index => requests[index].messages.flatMap(message => Array.isArray(message.content) ? message.content : [])
+        .filter(block => block.type === 'tool_result');
+      const read = results(1).find(block => block.tool_use_id === 'budgeted-0');
+      const readText = typeof read.content === 'string' ? read.content : JSON.stringify(read.content);
+      assert.ok(readText.includes('HEAD'));
+      assert.ok(readText.includes('TAIL'));
+      assert.match(readText, /chars omitted from the middle/);
+      const written = results(3).find(block => block.tool_use_id === 'budgeted-2');
+      assert.equal(Boolean(written.is_error), denyWrite);
+      const secondRead = results(4).find(block => block.tool_use_id === 'budgeted-3');
+      assert.ok(JSON.stringify(secondRead.content).includes(denyWrite ? 'HEAD' : 'replacement'));
+      const stale = results(5).find(block => block.tool_use_id === 'budgeted-4');
+      assert.equal(stale.is_error, true);
+      assert.match(JSON.stringify(stale.content), denyWrite ? /Write denied by the owner/ : /changed after your last Read/);
+      assert.equal(permissions.filter(name => name === 'Write').length, 2);
+      assert.equal(await readFile(path, 'utf8'), 'external change');
+      assert.equal(frames.filter(frame => frame.type === 'result').at(-1).subtype, 'success');
+    } finally {
+      await session[Symbol.asyncDispose]();
+      await rm(root, { recursive: true, force: true });
+    }
+  }
 });

@@ -8,6 +8,8 @@ Halo Agent SDK 是一个可嵌入服务端、桌面应用和自动化系统的 A
 
 JavaScript／TypeScript API 通过 Node-API 加载同进程 Rust 内核。模型循环、工具、历史和上下文管理由 Rust 负责，JavaScript 保留宿主回调和公开对象。直接调用与 Worker 入口使用同一内核，并共享原生执行资源。
 
+> 旧 TypeScript 运行时已废弃、待删除，当前使用 `native/crates/halo-core/src/` 中的 Rust 实现。
+
 ## 为什么需要更轻的 Agent 运行时
 
 应用对 Agent 的需求，可能从单个助手扩展到数十乃至数百个独立会话。

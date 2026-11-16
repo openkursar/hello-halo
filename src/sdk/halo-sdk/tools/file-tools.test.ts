@@ -854,7 +854,7 @@ describe('Read-before-write — WriteTool', () => {
   const read = getTool('Read');
   const write = getTool('Write');
 
-  it('rejects overwrite of an existing file that has not been read', async () => {
+  it('allows whole-file replacement of an existing file that has not been read', async () => {
     const filePath = path.join(tmpDir, 'existing.txt');
     await fs.writeFile(filePath, 'old\n', 'utf-8');
 
@@ -864,11 +864,8 @@ describe('Read-before-write — WriteTool', () => {
       ctx,
     );
 
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain('Write requires a complete Read of the existing file');
-    expect(result.content).toContain('use Edit for a targeted change');
-    // File should be untouched
-    expect(await fs.readFile(filePath, 'utf-8')).toBe('old\n');
+    expect(result.isError).toBe(false);
+    expect(await fs.readFile(filePath, 'utf-8')).toBe('new\n');
   });
 
   it('allows creating a brand-new file without a prior Read (ENOENT path)', async () => {
@@ -916,11 +913,11 @@ describe('Read-before-write — WriteTool', () => {
     );
 
     expect(result.isError).toBe(true);
-    expect(result.content).toMatch(/no longer matches its recorded read.*current contents/i);
+    expect(result.content).toMatch(/changed after your last Read.*Nothing was written.*Call Read again/s);
     expect(await fs.readFile(filePath, 'utf-8')).toBe('v1\n');
   });
 
-  it('rejects overwrite when the read was a partial view (offset/limit truncated)', async () => {
+  it('allows whole-file replacement after a partial view (offset/limit truncated)', async () => {
     const filePath = path.join(tmpDir, 'big.txt');
     const lines = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join('\n');
     await fs.writeFile(filePath, lines, 'utf-8');
@@ -935,9 +932,8 @@ describe('Read-before-write — WriteTool', () => {
       ctx,
     );
 
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain('Write requires a complete Read of the existing file');
-    expect(result.content).toContain('use Edit for a targeted change');
+    expect(result.isError).toBe(false);
+    expect(await fs.readFile(filePath, 'utf-8')).toBe('replacement\n');
   });
 
   it('refreshes readFileState after a successful write so a follow-up Write succeeds', async () => {
@@ -1014,7 +1010,7 @@ describe('Read-before-write — EditTool', () => {
     );
 
     expect(result.isError).toBe(true);
-    expect(result.content).toMatch(/no longer matches its recorded read.*current contents/i);
+    expect(result.content).toMatch(/changed after your last Read.*Nothing was written.*Call Read again/s);
   });
 
   it('allows edit when mtime advanced but on-disk content matches cached full-read content', async () => {
@@ -1065,7 +1061,7 @@ describe('Read-before-write — EditTool', () => {
       ctx,
     );
     expect(stale.isError).toBe(true);
-    expect(stale.content).toMatch(/no longer matches its recorded read.*current contents/i);
+    expect(stale.content).toMatch(/changed after your last Read.*Nothing was written.*Call Read again/s);
   });
 
   it('refreshes readFileState after a successful edit so a follow-up Edit succeeds', async () => {
@@ -1248,7 +1244,7 @@ describe('File tools — freshness and concurrency', () => {
       ? await write.execute({ file_path: filePath, content: 'replacement' }, ctx)
       : await edit.execute({ file_path: filePath, old_string: 'alpha', new_string: 'changed' }, ctx);
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('no longer matches its recorded read');
+    expect(result.content).toContain('changed after your last Read');
     expect(await fs.readFile(filePath, 'utf-8')).toBe('alpha zeta\n');
   });
 
@@ -1293,7 +1289,7 @@ describe('File tools — freshness and concurrency', () => {
       : edit.execute({ file_path: filePath, old_string: 'alpha', new_string: value }, ctx);
     const results = await Promise.all([invoke(left, first, 'first'), invoke(right, second, 'second')]);
     expect(results.filter((result) => !result.isError)).toHaveLength(1);
-    expect(results.filter((result) => result.isError)[0].content).toContain('no longer matches its recorded read');
+    expect(results.filter((result) => result.isError)[0].content).toMatch(/changed (?:after your last Read|while this write was waiting)/);
     const actual = await fs.readFile(filePath, 'utf-8');
     expect(actual).toBe(left === 'write' ? 'first' : 'first beta\n');
   });
@@ -1318,6 +1314,7 @@ describe('File tools — freshness and concurrency', () => {
       write.execute({ file_path: filePath, content: 'second' }, makeStrictCtx(tmpDir)),
     ]);
     expect(results.map((result) => result.isError)).toEqual([false, true]);
+    expect(results[1].content).toContain('changed while this write was waiting');
     expect(await fs.readFile(filePath, 'utf-8')).toBe('first');
   });
 
@@ -1365,7 +1362,7 @@ describe('File tools — bounded read state', () => {
   const write = getTool('Write');
   const edit = getTool('Edit');
 
-  it('does not upgrade a partial Read through Edit to whole-file Write authority', async () => {
+  it('keeps partial read state through Edit and permits whole-file replacement', async () => {
     const filePath = path.join(tmpDir, 'partial-chain.txt');
     await fs.writeFile(filePath, 'visible\nhidden\n');
     const ctx = makeStrictCtx(tmpDir);
@@ -1374,9 +1371,9 @@ describe('File tools — bounded read state', () => {
     expect(edited.isError).toBe(false);
     expect(ctx.readFileState.get(filePath)?.isPartialView).toBe(true);
     const written = await write.execute({ file_path: filePath, content: 'overwrite' }, ctx);
-    expect(written.isError).toBe(true);
-    expect(await fs.readFile(filePath, 'utf-8')).toBe('changed\nhidden\n');
-    const again = await edit.execute({ file_path: filePath, old_string: 'changed', new_string: 'changed again' }, ctx);
+    expect(written.isError).toBe(false);
+    expect(await fs.readFile(filePath, 'utf-8')).toBe('overwrite');
+    const again = await edit.execute({ file_path: filePath, old_string: 'overwrite', new_string: 'changed again' }, ctx);
     expect(again.isError).toBe(false);
   });
 
@@ -1398,7 +1395,7 @@ describe('File tools — bounded read state', () => {
     expect(ctx.readFileState.get(filePath)?.content).toBeUndefined();
   });
 
-  it('retains full-read authorization after text is omitted from the cache', async () => {
+  it('retains full-read hash state after text is omitted from the cache', async () => {
     const filePath = path.join(tmpDir, 'large-full.txt');
     const content = 'x'.repeat(10_000);
     await fs.writeFile(filePath, content);
@@ -1436,7 +1433,8 @@ describe('File tools — bounded read state', () => {
     expect(result.content).toContain('line 1 was truncated');
     expect(ctx.readFileState.get(filePath)?.isPartialView).toBe(true);
     expect(ctx.readFileState.get(filePath)?.content).toBeUndefined();
-    expect((await write.execute({ file_path: filePath, content: 'overwrite' }, ctx)).isError).toBe(true);
+    expect((await write.execute({ file_path: filePath, content: 'overwrite' }, ctx)).isError).toBe(false);
+    expect(await fs.readFile(filePath, 'utf-8')).toBe('overwrite');
   });
 
   it('does not treat rendered notebook cells as a full raw-file read', async () => {
@@ -1448,7 +1446,8 @@ describe('File tools — bounded read state', () => {
     expect(ctx.readFileState.get(filePath)?.isPartialView).toBe(true);
     const edited = await edit.execute({ file_path: filePath, old_string: 'print(1)', new_string: 'print(2)' }, ctx);
     expect(edited.isError).toBe(false);
-    expect((await write.execute({ file_path: filePath, content: '{}' }, ctx)).isError).toBe(true);
+    expect((await write.execute({ file_path: filePath, content: '{}' }, ctx)).isError).toBe(false);
+    expect(await fs.readFile(filePath, 'utf-8')).toBe('{}');
   });
 });
 

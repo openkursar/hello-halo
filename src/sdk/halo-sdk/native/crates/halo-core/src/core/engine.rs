@@ -196,6 +196,7 @@ pub async fn run(session: Arc<NativeSession>) -> Result<()> {
         },
         compaction: Default::default(),
         image_input: Default::default(),
+        turn_end: Default::default(),
         tool_revision: initial_tool_revision,
         harness: resolved_harness,
         model: model.clone(),

@@ -950,11 +950,14 @@ impl MessageBus {
                 harness.render(TextId::CollaborationReceiptFailed, &[("message", message)]),
                 "ok",
             ),
-            TurnCompletion::Result { content, .. } | TurnCompletion::Escalation { content } => {
-                (content.clone(), "ok")
-            }
+            TurnCompletion::Result { .. } => (outcome.result_text(harness, None).unwrap(), "ok"),
+            TurnCompletion::Escalation { content } => (content.clone(), "ok"),
         };
-        json!({"from":name,"message":message,"status":status})
+        let mut receipt = json!({"from":name,"message":message,"status":status});
+        if let TurnCompletion::Result { stop_reason: Some(reason), .. } = outcome {
+            receipt["stopReason"] = json!(reason);
+        }
+        receipt
     }
     pub fn resolve_pending(&self, correlation: &str, outcome: TurnCompletion) -> bool {
         let pending = self.state.lock().unwrap().pending.remove(correlation);
@@ -996,8 +999,9 @@ impl MessageBus {
         harness: &ResolvedHarness,
     ) -> String {
         match outcome {
-            TurnCompletion::Result { content, .. } => {
-                let content = crate::js::trim_js(content);
+            TurnCompletion::Result { .. } => {
+                let text = outcome.result_text(harness, None).unwrap();
+                let content = crate::js::trim_js(&text);
                 if content.is_empty() {
                     harness
                         .text(TextId::CollaborationActivityEmptyResult)
@@ -1507,6 +1511,7 @@ mod tests {
             TurnCompletion::Result {
                 content: "actual response".into(),
                 task_id: None,
+                stop_reason: None,
             },
             false,
         );
@@ -1517,6 +1522,29 @@ mod tests {
         assert!(records.lock().unwrap().is_empty());
         assert!(hooks.coordinator.lock().unwrap().is_empty());
         bus.reset_epoch("work");
+    }
+    #[test]
+    fn truncated_result_retains_its_reason_without_becoming_a_task_failure() {
+        let outcome = TurnCompletion::Result {
+            content: "last segment".into(),
+            task_id: None,
+            stop_reason: Some("max_tokens".into()),
+        };
+        let receipt = MessageBus::receipt("worker", &outcome, false, &baseline());
+        assert_eq!(receipt["status"], "ok");
+        assert_eq!(receipt["stopReason"], "max_tokens");
+        assert!(receipt["message"].as_str().unwrap().contains("token limit"));
+        assert!(receipt["message"].as_str().unwrap().ends_with("last segment"));
+        assert!(!MessageBus::recordable(&outcome));
+        let legacy: TurnCompletion = serde_json::from_value(
+            json!({"kind":"result","content":"ordinary result"}),
+        ).unwrap();
+        assert_eq!(MessageBus::receipt("worker", &legacy, false, &baseline()),
+            json!({"from":"worker","message":"ordinary result","status":"ok"}));
+        let preview = outcome.result_text(&baseline(), Some(4)).unwrap();
+        assert!(preview.starts_with("The collaborator's output"));
+        assert!(preview.ends_with("last"));
+        assert!(preview.contains("team_read_member"));
     }
     #[tokio::test]
     async fn receipt_deadline_survives_an_unresolved_wake() {

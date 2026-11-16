@@ -275,6 +275,7 @@ impl PublicLoop {
             },
             tool_revision: initial_tool_revision,
             image_input: Default::default(),
+            turn_end: Default::default(),
             harness: resolved,
             model: config["model"].as_str().unwrap_or("").into(),
             thinking: loop_runtime::thinking(&config),

@@ -43,8 +43,8 @@ Source tests that enter the native facade require a current `dist/native` build.
 The source loader compares the native source fingerprint with that build's
 manifest and refuses a stale library; rebuild after changing native inputs.
 Default-runtime behavioral tests should import the package's public entry. Tests
-that import the TypeScript loop or session modules directly do not exercise the Rust
-runtime, so a full source-suite pass does not by itself establish its coverage.
+that import the deprecated TypeScript loop or session (pending removal) do not exercise
+the Rust runtime, so a full source-suite pass does not by itself establish its coverage.
 Checkpoint write failures and cancellation ordering are checked against the Rust
 journal. These tests run a real session with a per-journal checkpoint gate and
 filesystem failure; they cover failed writes, cancellation during a committed

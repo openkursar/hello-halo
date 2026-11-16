@@ -85,6 +85,13 @@ and the effective result budget follow the source; they grant no additional tool
 Idle retirement preserves discovery metadata through the ordinary session journal
 or in-memory checkpoint, rather than a separate collaborator transcript format.
 
+The SDK adapter retains the final provider stop reason as optional `stopReason`
+on result completions and synchronous receipts. A final `max_tokens` result is
+not a task failure or completion claim: turn-end notices identify its text as a
+truncated last segment and direct the source to `team_read_member` for earlier
+output. The notice is added outside the bounded text preview. Continuation stays
+bounded; the source decides whether the existing work needs another turn.
+
 `sdk/store.ts` journals committed scope changes with exclusive ownership and
 bounded record parsing. A damaged final append is preserved before recovery;
 corruption in the middle of the journal is an error. Session transcripts remain

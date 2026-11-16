@@ -437,7 +437,8 @@ pub async fn full_compact_with_harness(
                     blocks.iter().any(|block| block["type"] == "tool_result")
                 }))
     });
-    let mut max_tokens = summary_budget(options)?;
+    let output_ceiling = summary_budget(options)?;
+    let mut max_tokens = output_ceiling;
     let mut keep_from = total.saturating_sub(KEEP_RECENT);
     if targeted {
         let mut fixed = CompactCandidate::created(vec![notice(
@@ -523,12 +524,14 @@ pub async fn full_compact_with_harness(
             ],
         )
     };
-    let mut request = if let Some(envelope) = envelope {
+    let request = if let Some(envelope) = envelope {
         let mut request = envelope.clone();
         let mut messages = request["messages"].as_array().cloned().unwrap_or_default();
         messages.push(json!({"role":"user","content":instruction}));
         request["messages"] = json!(messages);
-        request["maxTokens"] = json!(max_tokens);
+        request["maxTokens"] = json!(output_ceiling.min(
+            envelope["maxTokens"].as_f64().unwrap_or(output_ceiling),
+        ));
         if !request["providerOptions"].is_object() {
             request["providerOptions"] = json!({});
         }
@@ -536,21 +539,12 @@ pub async fn full_compact_with_harness(
         request["stream"] = json!(false);
         request
     } else {
-        let mut request = json!({"model":model,"messages":[{"role":"user","content":instruction}],"systemPrompt":crate::prompt::summary::system_prompt(&harness),"tools":[],"maxTokens":max_tokens,"providerOptions":request_options(options),"stream":false});
+        let mut request = json!({"model":model,"messages":[{"role":"user","content":instruction}],"systemPrompt":crate::prompt::summary::system_prompt(&harness),"tools":[],"maxTokens":output_ceiling,"providerOptions":request_options(options),"stream":false});
         if let Some(thinking) = options.get("thinking") {
             request["thinking"] = thinking.clone();
         }
         request
     };
-    if request["thinking"]["type"] == "adaptive" {
-        request["maxTokens"] = json!(summary_budget(options)?);
-    }
-    if request["thinking"]["type"] == "enabled" {
-        request["maxTokens"] = json!(envelope
-            .and_then(|envelope| envelope["maxTokens"].as_f64())
-            .unwrap_or(summary_budget(options)?)
-            .min(max_tokens + request["thinking"]["budgetTokens"].as_f64().unwrap_or(0.0)));
-    }
     let prefix_length = envelope
         .map(|envelope| {
             envelope["messages"].as_array().map(Vec::len).unwrap_or(0) as isize
@@ -763,7 +757,7 @@ pub async fn partial_compact_with_harness(
     check_cancel(cancel)?;
     let summary = summary_text(
         &response,
-        max_tokens,
+        request["maxTokens"].as_f64().unwrap_or(max_tokens),
         TextId::ContextCompactionPartialEmpty,
         &harness,
     )?;
