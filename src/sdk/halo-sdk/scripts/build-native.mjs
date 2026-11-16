@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const sdk = fileURLToPath(new URL('..', import.meta.url));
-const workspace = join(sdk, 'native');
+const workspace = sdk;
 const targets = {
   'darwin-arm64': ['aarch64-apple-darwin', 'libhalo_node.dylib'],
   'darwin-x64': ['x86_64-apple-darwin', 'libhalo_node.dylib'],
@@ -17,7 +17,7 @@ const targets = {
   'linux-arm64': ['aarch64-unknown-linux-gnu', 'libhalo_node.so'],
 };
 
-const { sourceIdentity } = createRequire(import.meta.url)('../native/source-identity.cjs');
+const { sourceIdentity } = createRequire(import.meta.url)('./source-identity.cjs');
 
 function cargo(args, options = {}) {
   const result = spawnSync(process.env.CARGO || 'cargo', args, { cwd: workspace, stdio: 'inherit', ...options });

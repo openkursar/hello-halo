@@ -15,10 +15,7 @@ import { mkdtempSync, rmSync, mkdirSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-// Import SDK from parent — tsx resolves .ts imports directly
-import { query } from '../../index.ts'
-import { createWellKnownProvider, createProvider } from '../../llm/provider.ts'
-import type { SDKMessage } from '../../core/query-types.ts'
+import { query, createWellKnownProvider, createProvider, type SDKMessage } from '@hello-halo/agent-sdk'
 import type { SWEBenchInstance, RunConfig, InstanceResult } from './types.ts'
 
 // ---------------------------------------------------------------------------

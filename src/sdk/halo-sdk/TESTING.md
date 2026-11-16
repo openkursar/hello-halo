@@ -8,7 +8,7 @@ parallel validation system. Tests must use isolated files, state and processes.
 
 - **Documentation only:** verify links, commands, scope and `git diff --check`.
   Do not rebuild the runtime just to validate prose.
-- **SDK code:** typecheck, affected tests, full offline Vitest suite and build.
+- **SDK code:** typecheck, affected tests, the full offline Rust and Node suites, and build.
   Add deterministic regressions for changed behavior, including failure/recovery.
 - **Harness, sessions or lifecycle:** also run the applicable compiled-SDK
   behavioral, resource and Worker checks below. A fixture that still targets a
@@ -28,7 +28,10 @@ missing prerequisites remain unverified and need an explicit disposition.
 
 Live Vitest cases activate when provider settings are present. For offline runs,
 clear `SDK_TEST_API_KEY`, `SDK_TEST_API_URL` and `SDK_TEST_MODEL` in the command's
-environment, for example:
+environment. The default Vitest scope also includes the evaluation CLI's isolated
+unit tests; install its separate locked dependencies with
+`npm ci --prefix swe-bench-eval --ignore-scripts` before the full run. Those tests
+mock database construction and do not run inference or Docker. For example:
 
 ```sh
 npm run typecheck
@@ -36,22 +39,43 @@ npm run build
 SDK_TEST_API_KEY= SDK_TEST_API_URL= SDK_TEST_MODEL= npm test
 ```
 
+Without a path filter, `npm test` runs both layers: locked `halo-core` Cargo tests
+with one test thread, followed by Node Vitest even if Rust failed. The combined
+command still fails when either layer fails. Use `npm run test:rust` for the Rust
+owner suite and `npm run test:node` for Node alone. Passing a test-path filter to
+`npm test -- <test-path>` selects only Vitest; it does not establish Rust coverage.
+`npm run test:watch` watches only Node tests; run `test:rust` explicitly after
+changing core behavior. Node source regressions live in
+`bindings/node/tests/<module>/`; build-script tests remain under `scripts/` and
+Worker setup fixtures remain under `bindings/node/worker/fixtures/`.
+
+The repository workflows `.github/workflows/sdk-worker-validation.yml` and
+`.github/workflows/sdk-resource-validation.yml` run from this SDK directory with
+its lockfile and pinned Rust toolchain. Their configured platform matrix is not
+passing evidence until those jobs have actually run.
+
+A passing Node suite is not a full-suite pass. Known baseline Rust failures must
+remain visible and be reported separately from regressions; neither skipping them
+nor historical passing subsets establishes current completion. Compiled
+`validation/*.test.mjs` checks are separate and must still be selected below.
+
 `npm run build` and npm's `prepack` rebuild `dist/`; coordinate shared outputs with
 other work. Test against a fixed source revision or recorded dirty snapshot.
 Do not reuse an old build after changing its inputs.
 Source tests that enter the native facade require a current `dist/native` build.
 The source loader compares the native source fingerprint with that build's
 manifest and refuses a stale library; rebuild after changing native inputs.
-Default-runtime behavioral tests should import the package's public entry. Tests
-that import the deprecated TypeScript loop or session (pending removal) do not exercise
-the Rust runtime, so a full source-suite pass does not by itself establish its coverage.
+Default-runtime behavioral tests should import the package's public Node entry.
+Rust owner tests live with their modules under `crates/halo-core/src/`; JavaScript
+tests cover public objects, callbacks, streams and other Node boundaries. There is
+no alternate TypeScript execution engine.
 Checkpoint write failures and cancellation ordering are checked against the Rust
 journal. These tests run a real session with a per-journal checkpoint gate and
 filesystem failure; they cover failed writes, cancellation during a committed
 write, and cancellation before checkpoint submission:
 
 ```sh
-cargo +1.90.0 test --manifest-path native/Cargo.toml -p halo-core core::engine::persistence_tests
+cargo +1.90.0 test --manifest-path Cargo.toml -p halo-core core::engine::persistence_tests
 ```
 
 Bounded transcript reading and strict resume are checked in `history::tests` with
@@ -59,7 +83,7 @@ real JSONL files and session initialization, covering checkpoint limits, tail
 recovery, pagination, damaged records and strict refusal:
 
 ```sh
-cargo +1.90.0 test --manifest-path native/Cargo.toml -p halo-core history::tests:: -- --test-threads=1
+cargo +1.90.0 test --manifest-path Cargo.toml -p halo-core history::tests:: -- --test-threads=1
 ```
 
 The package build and resource validator use `scripts/build.mjs`, including the
@@ -83,7 +107,7 @@ transcript version.
 | Validation-runner tests | `npm run test:resource-harness`; compiled behavior cases require `SDK_BEHAVIOR_TEST_ROOT` |
 | Compiled fixed-task simulation | After build: `SDK_BEHAVIOR_TEST_ROOT="$PWD/dist" node --test validation/behavior.test.mjs`; [scenario contract](validation/BEHAVIOR.md) |
 | Isolated lifecycle, resource and recovery | `npm run test:resources`; builds a temporary source snapshot, not checkout `dist/`; [runner](validation/README.md) |
-| Worker and bundled dependencies | `npm test -- worker scripts/build-worker.test.ts` with offline environment; [Worker evidence and limits](worker/VALIDATION.md) |
+| Worker and bundled dependencies | `npm test -- bindings/node/tests/worker scripts/build-worker.test.ts` with offline environment; [Worker evidence and limits](bindings/node/worker/VALIDATION.md) |
 | Local execution overhead | After build: `npm run benchmark:workers -- --sessions=10`; cold/warm, CPU, RSS and event-loop measurements, not a task score |
 | Streaming and tool overlap | After build: `node validation/streaming.mjs`; [assertions and timing limits](validation/STREAMING.md) |
 
@@ -109,14 +133,15 @@ behavior from environment-exit guarantees absent in an older implementation.
 Use scripted providers or a local protocol-valid model endpoint with the real
 loop, tools, history and callbacks. Assert requests, tool effects, checkpoints,
 latest-input delivery and terminal state, not a canned final answer. Existing
-examples include `core/query-loop-compaction.test.ts`,
-`core/query-loop-provider-streaming.test.ts`, `core/session.test.ts` and
-`collaboration/runtime.test.ts`; extend the affected fixture.
+examples include `bindings/node/tests/core/query-loop-compaction.test.ts`,
+`bindings/node/tests/core/query-loop-provider-streaming.test.ts` and
+`bindings/node/tests/core/session.test.ts`; extend the affected fixture and its
+Rust owner checks rather than recreating private JavaScript execution helpers.
 
 Source collaboration continuations require both Rust-owner and compiled-SDK
-checks. `collaboration/sdk/tool-context.test.ts` covers the three member discovery
+checks. `bindings/node/tests/collaboration/sdk/tool-context.test.ts` covers the three member discovery
 and result-budget cases. Source-loop release and retained history are checked in
-[`native/crates/halo-core/src/core/engine/collaboration_tests.rs`](native/crates/halo-core/src/core/engine/collaboration_tests.rs),
+[`crates/halo-core/src/core/engine/collaboration_tests.rs`](crates/halo-core/src/core/engine/collaboration_tests.rs),
 where a per-session test observer releases the child only after the actual source
 loop has concluded. The public counterpart is
 [`validation/native-collaboration-continuation.test.mjs`](validation/native-collaboration-continuation.test.mjs).
@@ -124,10 +149,10 @@ Both exercise ordinary sessions and one-shot queries.
 
 For changes to these continuation paths, the following commands are mandatory
 after a fresh SDK build; `npm test` alone does not run this coverage. Use the
-toolchain pinned in `native/rust-toolchain.toml`:
+toolchain pinned in `rust-toolchain.toml`:
 
 ```sh
-cargo +1.90.0 test --manifest-path native/Cargo.toml -p halo-core core::engine::collaboration_tests
+cargo +1.90.0 test --manifest-path Cargo.toml -p halo-core core::engine::collaboration_tests
 SDK_BEHAVIOR_TEST_ROOT="$PWD/dist" node --test validation/native-collaboration-continuation.test.mjs
 ```
 
@@ -143,7 +168,7 @@ and final turn accounting. Its Stop hook is not evidence that a source loop has
 exited; that boundary and the private baseline metadata are asserted by the
 Rust-owner checks.
 
-Durable clearing also spans two boundaries. `core/tool-context-clear.test.ts`
+Durable clearing also spans two boundaries. `bindings/node/tests/core/tool-context-clear.test.ts`
 uses an actual failing transcript path to check refusal and subsequent recovery.
 The pending-write invariant is exercised with the Rust journal's per-instance,
 test-only checkpoint gate: neither the live definitions nor the stored history
@@ -151,12 +176,16 @@ may change before its checkpoint completes. Run this check when changing clear
 or checkpoint installation; a JavaScript writer spy cannot intercept Rust I/O:
 
 ```sh
-cargo +1.90.0 test --manifest-path native/Cargo.toml -p halo-core clear_installs_neither_live_nor_durable_state_until_checkpoint_finishes
+cargo +1.90.0 test --manifest-path Cargo.toml -p halo-core clear_installs_neither_live_nor_durable_state_until_checkpoint_finishes
 ```
 
 For cache or usage changes, inspect requests and accounting with
-`llm/anthropic.test.ts`, `llm/openai-compat.test.ts`,
-`llm/provider-retry.test.ts`, `core/token-budget.test.ts` and `core/cost.test.ts`.
+`bindings/node/tests/llm/anthropic.test.ts`,
+`bindings/node/tests/llm/openai-compat.test.ts`,
+`bindings/node/tests/llm/provider-retry-native.test.ts`,
+`bindings/node/tests/core/token-budget.test.ts` and
+`bindings/node/tests/core/cost.test.ts`, together with `halo-core`'s `llm` and
+accounting owner tests.
 Check stable instructions/tools, cache markers, intended invalidation, and usage
 from every returned work/summary/retry response exactly once. Synthetic usage
 verifies arithmetic, not actual cache hits, charges or model quality.

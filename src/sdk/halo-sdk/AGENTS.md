@@ -9,7 +9,9 @@ Repository-wide architecture, security and human-authorization rules still apply
 SDK-only work follows this entry instead of the desktop UI, IPC and renderer i18n
 guides. Read only the affected module docs below. Paths here are SDK-relative.
 
-The legacy TypeScript runtime is deprecated and pending removal; use the Rust runtime in `native/crates/halo-core/src/`.
+Rust in `crates/halo-core/src/` is the only execution implementation. Node-API,
+JavaScript callbacks, public types and Worker integration live in `bindings/node/`.
+The SDK root owns the Cargo workspace and pinned `rust-toolchain.toml`.
 
 ## Boundaries
 
@@ -27,12 +29,12 @@ The legacy TypeScript runtime is deprecated and pending removal; use the Rust ru
 
 | Work | Read first |
 |---|---|
-| Harness: prompts, loop, context, tools, budgets, retries | [native/DESIGN.md](native/DESIGN.md), [core/DESIGN.md](core/DESIGN.md); inspect the affected Rust modules under `native/crates/halo-core/src/` and Harness catalogs |
-| History, persistence and resume | [core/TRANSCRIPT.md](core/TRANSCRIPT.md) |
-| Worker execution and lifecycle | [worker/DESIGN.md](worker/DESIGN.md) |
-| Collaboration and delivery | [collaboration/DESIGN.md](collaboration/DESIGN.md) |
-| Skills | [skills/DESIGN.md](skills/DESIGN.md) |
-| Optional search | [search/DESIGN.md](search/DESIGN.md), [search/VALIDATION.md](search/VALIDATION.md) |
+| Harness: prompts, loop, context, tools, budgets, retries | [DESIGN.md](DESIGN.md), [core execution](crates/halo-core/src/core/DESIGN.md); inspect the affected Rust modules and Harness catalogs under `crates/halo-core/src/` |
+| History, persistence and resume | [journal contract](crates/halo-core/src/core/TRANSCRIPT.md) |
+| Worker execution and lifecycle | [Worker design](bindings/node/worker/DESIGN.md) |
+| Collaboration and delivery | [collaboration design](bindings/node/collaboration/DESIGN.md) |
+| Skills | [skill resolution](crates/halo-core/src/skills/DESIGN.md) |
+| Optional search | [search design](bindings/node/search/DESIGN.md), [search validation](bindings/node/search/VALIDATION.md) |
 | Checks, simulation, performance and package evidence | [TESTING.md](TESTING.md) |
 | Halo adapter or application outcome | Repository `src/main/services/agent/DESIGN.md` and `.agents/skills/acceptance-testing/SKILL.md`; verify both sides |
 

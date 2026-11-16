@@ -57,7 +57,7 @@ function guardedFileImport(node, argument) {
 }
 
 function allowedDynamic(file, node, kind, argument) {
-  const canonical = file.replace(/^dist\//, '').replace(/\.js$/, '.ts');
+  const canonical = file.replace(/^(?:dist|bindings\/node)\//, '').replace(/\.js$/, '.ts');
   const owner = namedFunction(node);
   const name = owner?.name?.getText();
   if (kind === 'require' && canonical === 'native/binding.ts') {
@@ -65,7 +65,7 @@ function allowedDynamic(file, node, kind, argument) {
       ts.isVariableDeclaration(candidate) && candidate.name.getText() === 'path' && expression(candidate.initializer) === 'nativeBinaryPath()')) {
       return 'platform native library declared by native/build-info.json';
     }
-    if (name === 'nativeBinaryPath' && argument === 'join(directory,"source-identity.cjs")') {
+    if (name === 'nativeBinaryPath' && argument === 'join(workspace,"scripts","source-identity.cjs")') {
       for (let current = node.parent; current && current !== owner; current = current.parent) {
         if (ts.isIfStatement(current) && expression(current.expression) === 'modulePath.endsWith(".ts")') {
           return 'source-module validation only; compiled JavaScript does not enter this branch';
@@ -242,5 +242,8 @@ export async function pruneRuntime(sdkDirectory) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const sdk = fileURLToPath(new URL('..', import.meta.url));
   const report = process.argv.includes('--check') ? await analyzeRuntime(sdk) : await pruneRuntime(sdk);
-  if (process.argv.includes('--check')) console.log(JSON.stringify({ runtimeFiles: report.runtime.length, removableFiles: report.removed.length, removableBytes: report.removedBytes }));
+  if (process.argv.includes('--check')) {
+    console.log(JSON.stringify({ runtimeFiles: report.runtime.length, removableFiles: report.removed.length, removableBytes: report.removedBytes }));
+    if (report.removed.length) process.exitCode = 1;
+  }
 }

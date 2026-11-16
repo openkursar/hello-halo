@@ -91,6 +91,29 @@ test('SDK source and compiled distribution are separate identities even without 
   await assert.rejects(verifyBuild(root), /SDK source, revision or compiled/)
 })
 
+test('SDK Rust compiler output is excluded without hiding core or binding source changes', async context => {
+  const { root, write, build } = await fixture(context)
+  const sdk = 'node_modules/@hello-halo/agent-sdk'
+  await write(`${sdk}/package.json`, JSON.stringify({ name: '@hello-halo/agent-sdk', version: '1.0.0' }))
+  await write(`${sdk}/Cargo.toml`, '[workspace]\n')
+  await write(`${sdk}/crates/halo-core/src/lib.rs`, 'pub fn execute() {}\n')
+  await write(`${sdk}/bindings/node/crate/src/lib.rs`, 'pub fn bind() {}\n')
+  await write(`${sdk}/dist/index.js`, 'compiled')
+  await write(`${sdk}/target/debug/current`, 'old compiler output')
+  await write('build.cjs', build + `fs.writeFileSync('${sdk}/target/debug/current','rebuilt compiler output');`)
+  const record = await buildApplication(root)
+  assert.equal((await verifyBuild(root)).id, record.id)
+  await write(`${sdk}/target/debug/current`, 'another compiler output')
+  assert.equal((await verifyBuild(root)).id, record.id)
+  for (const file of ['crates/halo-core/src/lib.rs', 'bindings/node/crate/src/lib.rs', 'Cargo.toml']) {
+    const original = await fs.readFile(path.join(root, sdk, file))
+    await write(`${sdk}/${file}`, 'changed source')
+    await assert.rejects(verifyBuild(root), /SDK source, revision or compiled/)
+    await write(`${sdk}/${file}`, original)
+  }
+  assert.equal((await verifyBuild(root)).id, record.id)
+})
+
 test('build tooling follows actual imports without parsing generated program strings as dependencies', async context => {
   const { root, write, build } = await fixture(context)
   await write('build.cjs', build + '\nconst generated = "import value from \'./generated-only.mjs\'";\n')

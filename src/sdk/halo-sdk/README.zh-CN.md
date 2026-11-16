@@ -8,7 +8,7 @@ Halo Agent SDK 是一个可嵌入服务端、桌面应用和自动化系统的 A
 
 JavaScript／TypeScript API 通过 Node-API 加载同进程 Rust 内核。模型循环、工具、历史和上下文管理由 Rust 负责，JavaScript 保留宿主回调和公开对象。直接调用与 Worker 入口使用同一内核，并共享原生执行资源。
 
-> 旧 TypeScript 运行时已废弃、待删除，当前使用 `native/crates/halo-core/src/` 中的 Rust 实现。
+> `crates/halo-core/src/` 中的 Rust 内核是唯一执行实现，Node 接入集中在 `bindings/node/`；npm 公开入口保持不变。
 
 ## 为什么需要更轻的 Agent 运行时
 
@@ -92,7 +92,7 @@ Grep 提供关键词、正则、过滤、计数和分页搜索。可选的 CodeS
 
 ## 快速开始
 
-需要 Node.js 20 或更新版本。源码构建还需要通过 rustup 管理的 Rust 1.90.0 工具链，以及目标平台的 C 编译器和链接器；工具链版本固定在 `native/rust-toolchain.toml` 中。请在 SDK 目录内运行以下命令（Halo 仓库中为 `src/sdk/halo-sdk`）：
+需要 Node.js 20 或更新版本。源码构建还需要通过 rustup 管理的 Rust 1.90.0 工具链，以及目标平台的 C 编译器和链接器；工具链版本固定在 `rust-toolchain.toml` 中。请在 SDK 目录内运行以下命令（Halo 仓库中为 `src/sdk/halo-sdk`）：
 
 ```sh
 rustup toolchain install 1.90.0 --profile minimal
@@ -182,13 +182,14 @@ Halo 吸收了 Claude Code 公开的工具与会话接口协议，以及开源 C
 ## 文档
 
 - [接入与配置指南](docs/guide.md)
-- [核心执行约定](core/DESIGN.md)
-- [Worker 运行时](worker/DESIGN.md)
-- [技能与渐进加载](skills/DESIGN.md)
+- [运行时架构与绑定边界](DESIGN.md)
+- [核心执行约定](crates/halo-core/src/core/DESIGN.md)
+- [Worker 运行时](bindings/node/worker/DESIGN.md)
+- [技能与渐进加载](crates/halo-core/src/skills/DESIGN.md)
 - [资源与生命周期验证](validation/README.md)
 - [行为验证](validation/BEHAVIOR.md)
 - [SWE-bench 评测工具](swe-bench-eval/README.md)
-- [语义检索测量与限制](search/VALIDATION.md)
+- [语义检索测量与限制](bindings/node/search/VALIDATION.md)
 
 ## 许可证
 

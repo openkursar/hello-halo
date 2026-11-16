@@ -13,7 +13,7 @@ binding owns JavaScript callbacks and public object references. Native loading
 has no fallback runtime.
 
 Source builds need Node.js 20 or later, the rustup-managed Rust 1.90.0 toolchain
-pinned in `native/rust-toolchain.toml`, and the target platform's C compiler and
+pinned in `rust-toolchain.toml`, and the target platform's C compiler and
 linker. `npm run build` generates the JavaScript facade, bundles the Worker,
 compiles the native library, and removes executable output outside the runtime
 dependency closure. `npm run dev` watches TypeScript only; rebuild native inputs
@@ -144,7 +144,7 @@ Select `provider` or `providerConfig` explicitly; the older `apiKey` /
 `anthropicBaseUrl` convenience path still selects Anthropic rather than inferring
 a protocol from an arbitrary URL.
 
-Anthropic-specific beta selection lives in `llm/anthropic-betas.ts`. Ordinary
+Anthropic-specific beta selection lives in `crates/halo-core/src/llm/anthropic_request.rs`. Ordinary
 caching and `output_config.effort` use stable request fields without an automatic
 beta header. Adaptive thinking also does not add the legacy interleaved-thinking
 header. Explicit budgeted thinking retains that opt-in; context management, an
@@ -185,12 +185,12 @@ files must place the SDK package and their setup modules outside the archive,
 and can supply `workerUrl` using
 `getWorkerEntryUrl()` to resolve the relocated execution entry.
 
-Run `npm test -- worker` for real-thread failure and lifecycle regressions.
+Run `npm test -- bindings/node/tests/worker` for real-thread failure and lifecycle regressions. This filtered command runs Node tests only; `npm run test:rust` checks the execution owner.
 `npm run benchmark:workers -- --sessions=10` compares direct and worker execution
 in fresh processes against a local mock model. It records cold readiness, warm
 creation, restore, first-request arrival, main-loop delay, process RSS and CPU.
 Run it on the target Windows hardware; synthetic Mac numbers are not a Windows
-acceptance threshold. See [runtime design](../worker/DESIGN.md).
+acceptance threshold. See [runtime design](../bindings/node/worker/DESIGN.md).
 
 ## Filesystem Conventions
 
@@ -227,7 +227,7 @@ query({
 });
 ```
 
-Omitting a field keeps its default; supplying an array replaces that array wholesale. See `core/conventions.ts` for the full shape.
+Omitting a field keeps its default; supplying an array replaces that array wholesale. See `bindings/node/contracts/core/conventions.ts` for the public shape and `crates/halo-core/src/core/conventions.rs` for resolution.
 
 ### Resuming stored sessions
 
@@ -326,9 +326,11 @@ The harness exposes model and endpoint adaptations that hosts can evaluate for t
 ## Architecture
 
 The Rust session owner and low-level generator share one ReAct loop in
-`native/crates/halo-core/src/core/loop_runtime.rs`. JavaScript public signatures
-remain in the SDK's TypeScript facade and declarations; the TypeScript loop files
-are not executed. Rust paths below are relative to `native/crates/halo-core/src/` in the source checkout:
+`crates/halo-core/src/core/loop_runtime.rs`. JavaScript public signatures
+remain in `bindings/node/`'s facade, types and contracts; there is no separate
+TypeScript execution loop. The root `Cargo.toml` owns the workspace, with the
+Node-API crate under `bindings/node/crate`. Public npm exports and the `dist`
+layout are unchanged. Rust paths below are relative to `crates/halo-core/src/`:
 
 | Layer | File | Purpose |
 |-------|------|---------|
@@ -382,7 +384,7 @@ usage is included when supplied; absent usage or prices do not establish a
 complete bill. The explicit `microCompact` and `apiCompact` utility exports
 remain available, but the automatic loop does not call them.
 
-See [the core execution contract](../core/DESIGN.md) for retry, cancellation and history ownership.
+See [the core execution contract](../crates/halo-core/src/core/DESIGN.md) for retry, cancellation and history ownership.
 
 ## Declaring the Context Window
 
@@ -678,7 +680,7 @@ This backend is experimental and opt-in. It adds ranked code candidates while
 Grep retains exact keyword, regular-expression and enumeration behavior. The
 current native dependency tree and memory cost are substantial, and the default
 model has limited Chinese-to-English retrieval in the measured fixture. See
-[backend measurements and limits](../search/VALIDATION.md) before enabling it.
+[backend measurements and limits](../bindings/node/search/VALIDATION.md) before enabling it.
 
 `Options.codeSearch` enables the `CodeSearch` built-in for `query`, sessions, and
 worker sessions. It is absent by default. Supply absolute paths to a separately

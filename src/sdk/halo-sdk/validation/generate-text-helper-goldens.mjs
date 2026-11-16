@@ -8,7 +8,7 @@ if (!root) throw new Error('Pass the compiled reference SDK directory.');
 const reference = await import(pathToFileURL(resolve(root, 'index.js')).href);
 const { splitAtBoundary } = await import(pathToFileURL(resolve(root, 'prompt/system-prompt.js')).href);
 const { PROMPT_CACHE_BOUNDARY: boundary } = await import(pathToFileURL(resolve(root, 'prompt/constants.js')).href);
-const output = process.argv[3] ?? fileURLToPath(new URL('../native/crates/halo-core/src/core/fixtures/text-helpers.json', import.meta.url));
+const output = process.argv[3] ?? fileURLToPath(new URL('../crates/halo-core/src/core/fixtures/text-helpers.json', import.meta.url));
 const units = text => Array.from({ length: text.length }, (_, index) => text.charCodeAt(index));
 const texts = ['', '\0', 'tail\0', 'ASCII text', '中文かな한글', '😀', '\ud800', '\udfff', 'A\ud800中\udfffZ',
   '\ud800\ud800\udfff\udfff', '\0😀\0\ud800\0', 'x'.repeat(999), '😀'.repeat(500), '\ud800x\udfff中😀'.repeat(150)];

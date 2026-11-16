@@ -1,5 +1,6 @@
 node_modules/
-/harness/generated/
+/bindings/node/harness/generated/
+/bindings/node/native/generated/
 dist/
 *.tsbuildinfo
 .DS_Store
@@ -21,4 +22,4 @@ PROVENANCE-DISPOSITIONS.md
 PROMPT-REVIEW.md
 
 # Rust build output
-native/target/
+target/

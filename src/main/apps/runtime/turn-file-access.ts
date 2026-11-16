@@ -417,9 +417,14 @@ function noMatches(toolName: string, input: Record<string, unknown>, cwd: string
   const pattern = String(input.pattern ?? '')
   const raw = typeof input.path === 'string' && input.path ? input.path : null
   const root = raw ? (isAbsolute(raw) ? raw : resolve(cwd, raw)) : cwd
-  return toolName === 'Grep'
-    ? `No matches found for pattern "${pattern}" in ${root}. Check the pattern syntax (ripgrep regex), broaden the pattern, or search a different path.`
-    : `No files matched pattern "${pattern}" in ${root}`
+  if (toolName !== 'Grep') return `No files matched pattern "${pattern}" in ${root}`
+  const filters = ['glob', 'type']
+    .filter(name => typeof input[name] === 'string' && input[name] !== '')
+    .map(name => `${name} "${input[name]}"`)
+    .join(' and ')
+  return filters
+    ? `No matches found for pattern "${pattern}" in ${root} with ${filters}. Check the pattern syntax (ripgrep regex), broaden the pattern or the filters, or search a different path. A glob is matched against paths relative to the search path.`
+    : `No matches found for pattern "${pattern}" in ${root}. Check the pattern syntax (ripgrep regex), broaden the pattern, or search a different path.`
 }
 
 /**

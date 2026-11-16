@@ -7,7 +7,7 @@ const wirePath = process.argv[3];
 if (!referencePath || !wirePath) throw new Error('Pass the compiled reference redaction module and compiled wire module.');
 const reference = await import(pathToFileURL(resolve(referencePath)).href);
 const { encodeWire } = await import(pathToFileURL(resolve(wirePath)).href);
-const output = process.argv[4] ?? fileURLToPath(new URL('../native/crates/halo-core/src/redaction/fixtures/golden.json', import.meta.url));
+const output = process.argv[4] ?? fileURLToPath(new URL('../crates/halo-core/src/redaction/fixtures/golden.json', import.meta.url));
 const cases = [];
 function add(method, name, input) {
   const expected = method === 'headers' ? reference.redactHeaders(input)

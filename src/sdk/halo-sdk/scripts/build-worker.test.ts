@@ -50,7 +50,7 @@ describe('bundled dependency notices', () => {
     const directory = await temporaryDirectory();
     const entry = join(directory, 'worker.mjs');
     await build({
-      absWorkingDir: projectDirectory, entryPoints: ['worker/index.ts'], outfile: entry,
+      absWorkingDir: projectDirectory, entryPoints: ['bindings/node/worker/index.ts'], outfile: entry,
       bundle: true, platform: 'node', format: 'esm',
     });
     await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
@@ -65,7 +65,7 @@ describe('bundled dependency notices', () => {
     const directory = await temporaryDirectory();
     const project = join(directory, 'project');
     await put(project, 'package.json', JSON.stringify({ name: 'worker-cli-fixture', type: 'module' }));
-    await put(project, 'worker/entry.ts', 'export const ready = true;');
+    await put(project, 'bindings/node/worker/entry.ts', 'export const ready = true;');
     await mkdir(join(project, 'scripts'), { recursive: true });
     for (const name of ['build-worker.mjs', 'bundled-licenses.mjs']) {
       await copyFile(join(projectDirectory, 'scripts', name), join(project, 'scripts', name));

@@ -259,3 +259,42 @@ test('requires the requested native architecture instead of accepting the build 
     } }), /Native SDK build lacks/);
   } finally { cleanup(); }
 });
+
+test('packaging excludes Rust sources and compiler output while retaining the SDK runtime', async () => {
+  const { getNodeModuleFileMatcher, excludedExts } = require('app-builder-lib/out/fileMatcher.js');
+  const { NodeModuleCopyHelper } = require('app-builder-lib/out/util/NodeModuleCopyHelper.js');
+  const config = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf8')).build;
+  const { root, sdkDir, cleanup } = fixture();
+  try {
+    const retained = [
+      'package.json', 'dist/index.js', ...ENGINE_RUNTIMES.halo.requiredFiles,
+      'dist/worker/entry.js', 'dist/native/THIRD-PARTY-NOTICES.txt',
+      'dist/worker/THIRD-PARTY-NOTICES.txt', nativeRuntimeFile(),
+    ];
+    const excluded = [
+      'target/release/deps/libhalo_core.rlib', 'target/release/libhalo_node.dylib',
+      'target/release/halo_node.dll', 'target/debug/.fingerprint/halo-core/build.json',
+      'native/target/release/deps/libhalo_core.rlib',
+      'crates/halo-core/src/lib.rs', 'bindings/node/crate/src/lib.rs',
+      'bindings/node/native/index.ts', 'scripts/build.mjs',
+    ];
+    for (const file of [...retained, ...excluded]) {
+      const destination = path.join(sdkDir, file);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, file);
+    }
+    const packager = {
+      config, appInfo: { type: 'module' }, getWorkspaceRoot: async () => root,
+      debugLogger: { isEnabled: false },
+    };
+    const matcher = getNodeModuleFileMatcher(root, path.join(root, 'app'), value => value, {}, packager);
+    const copier = new NodeModuleCopyHelper(matcher, packager);
+    const files = await copier.collectNodeModules(
+      { name: '@hello-halo/agent-sdk', dir: sdkDir },
+      excludedExts.split(',').map(extension => `.${extension}`),
+      'node_modules/@hello-halo/agent-sdk',
+    );
+    const collected = files.map(file => path.relative(sdkDir, file).split(path.sep).join('/'));
+    assert.deepEqual(collected.sort(), retained.sort());
+  } finally { cleanup(); }
+});

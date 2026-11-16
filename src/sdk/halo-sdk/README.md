@@ -14,7 +14,7 @@ The core owns the model loop, tools, history and context management; JavaScript
 retains host callbacks and public objects. Direct and Worker execution use the
 same core and shared native execution resources.
 
-> The legacy TypeScript runtime is deprecated and pending removal; use the Rust runtime in `native/crates/halo-core/src/`.
+> Rust in `crates/halo-core/src/` is the only execution implementation. Node integration lives in `bindings/node/`; public npm entry points are unchanged.
 
 ## Why a lighter agent runtime?
 
@@ -136,7 +136,7 @@ the runtime benchmark above did not enable it.
 
 Requires Node.js 20 or later. Building from source also requires a rustup-managed
 Rust 1.90.0 toolchain and a C compiler/linker for the target platform. The toolchain
-is pinned in `native/rust-toolchain.toml`. Run these commands from the SDK directory
+is pinned in `rust-toolchain.toml`. Run these commands from the SDK directory
 (`src/sdk/halo-sdk` in the Halo repository):
 
 ```sh
@@ -246,13 +246,14 @@ through lifecycle hooks, and validate changes with reproducible evaluations.
 ## Documentation
 
 - [Integration and configuration guide](docs/guide.md)
-- [Core execution contract](core/DESIGN.md)
-- [Worker runtime](worker/DESIGN.md)
-- [Skills and progressive disclosure](skills/DESIGN.md)
+- [Runtime architecture and binding boundary](DESIGN.md)
+- [Core execution contract](crates/halo-core/src/core/DESIGN.md)
+- [Worker runtime](bindings/node/worker/DESIGN.md)
+- [Skills and progressive disclosure](crates/halo-core/src/skills/DESIGN.md)
 - [Resource and lifecycle validation](validation/README.md)
 - [Behavioral validation](validation/BEHAVIOR.md)
 - [SWE-bench evaluation harness](swe-bench-eval/README.md)
-- [Semantic search measurements and limits](search/VALIDATION.md)
+- [Semantic search measurements and limits](bindings/node/search/VALIDATION.md)
 
 ## License
 

@@ -13,7 +13,7 @@ export function executionEnvironment(environment = process.env) {
 export async function buildSdk(snapshot, source, logPath, controls = {}) {
   controls.signal?.throwIfAborted();
   const environment = executionEnvironment();
-  environment.CARGO_TARGET_DIR = resolve(source, 'native', environment.CARGO_TARGET_DIR || 'target');
+  environment.CARGO_TARGET_DIR = resolve(source, environment.CARGO_TARGET_DIR || 'target');
   const child = spawn(process.execPath, [join(snapshot, 'scripts/build.mjs')], {
     cwd: snapshot, env: environment, detached: process.platform !== 'win32',
     windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],

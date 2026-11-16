@@ -156,7 +156,7 @@ async function buildSnapshot() {
   const { stdout } = await exec('git', ['ls-files', '-c', '-o', '--exclude-standard', '-z'], { cwd: source, maxBuffer: 4 * 1024 * 1024 });
   const files = [...new Set(stdout.split('\0').filter(Boolean))].filter(file =>
     !file.startsWith('validation/results/') && !file.startsWith('node_modules/') && !file.startsWith('dist/') &&
-    !file.startsWith('swe-bench-eval/') && !file.startsWith('native/target/') &&
+    !file.startsWith('swe-bench-eval/') && !file.startsWith('target/') &&
     !file.split('/').some(part => part.startsWith('.env')));
   const hash = createHash('sha256');
   let copiedFiles = 0;
