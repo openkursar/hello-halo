@@ -12,6 +12,7 @@ class EngineUnavailableError extends Error {
 describe('engine setup failures', () => {
   it('marks a missing Claude Code and a Claude Code login account for the chat notice', () => {
     expect(engineErrorDetail(new EngineUnavailableError('anthropic'))).toEqual({ errorType: 'engine_unavailable' })
+    expect(engineErrorDetail(new EngineUnavailableError('codex'))).toEqual({ errorType: 'engine_unavailable' })
     expect(engineErrorDetail(new EngineSourceCompatibilityError('halo', 'delegated-requires-cc', 'This account requires Claude Code.'))).toEqual({ errorType: 'engine_unavailable' })
   })
 

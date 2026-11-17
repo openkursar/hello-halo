@@ -7,7 +7,10 @@ import { fingerprintFile, manifestFromFiles, atomicJson } from '../../../tests/p
 import { verifyBuild } from './build.mjs'
 import { execute } from './process.mjs'
 import { verifyLocalNativeSignature } from './native-signature.mjs'
+import distributionPolicy from '../../lib/distribution-policy.cjs'
+import distributionScan from '../../lib/distribution-scan.cjs'
 
+const { stripSourceMapComments } = distributionPolicy
 const stampName = 'out/.acceptance-package.json'
 const sdkPrefix = 'node_modules/@hello-halo/agent-sdk/'
 const posix = value => value.split(path.sep).join('/')
@@ -291,7 +294,14 @@ async function packageReader(root, resources) {
     }
     return { files: [...new Set(files)], read: async name => {
       const physical = relativeFile(unpacked, name)
-      return await exists(physical) ? fs.readFile(physical) : asar.extractFile(archive, name.split('/').join(path.sep))
+      const stat = asar.statFile(archive, name.split('/').join(path.sep), false)
+      if (stat.unpacked) {
+        const actual = await fs.lstat(physical).catch(error => { if (error.code === 'ENOENT') return null; throw error })
+        if (!actual?.isFile()) throw new Error(`The packaged unpacked member is missing: ${name}`)
+        return fs.readFile(physical)
+      }
+      if (await exists(physical)) throw new Error(`An unpacked file shadows a packed member: ${name}`)
+      return asar.extractFile(archive, name.split('/').join(path.sep))
     } }
   }
   const application = path.join(resources, 'app')
@@ -301,6 +311,13 @@ async function packageReader(root, resources) {
 }
 
 const runtimeFile = name => !/\.(?:ts|map)$|\.(?:test|spec)\.|(?:^|\/)(?:DESIGN|VALIDATION)\.md$/.test(name)
+
+function distributionBytes(file, bytes) {
+  if (!/\.(?:[cm]?js|css)$/.test(file)) return bytes
+  const source = bytes.toString('utf8')
+  if (!source.includes('sourceMappingURL')) return bytes
+  return Buffer.from(stripSourceMapComments(source, path.extname(file)))
+}
 
 async function packagedIdentity(root, build, application) {
   const reader = await packageReader(root, application.resources)
@@ -332,18 +349,24 @@ async function packagedIdentity(root, build, application) {
     if (!runtime.length || distribution.some(file => file.role.endsWith(':link'))) throw new Error('The controlled SDK has no complete regular-file runtime distribution')
     const packagedPaths = sdkFiles.filter(file => file.startsWith(sdkPrefix + 'dist/')).map(file => file.slice(sdkPrefix.length)).sort()
     if (runtime.some(file => !packagedPaths.includes(file.path)) || packagedPaths.some(file => !distribution.some(source => source.path === file))) throw new Error('The packaged SDK runtime file set differs from the controlled dependency')
-    const packagedRuntime = [], codeSigning = []
+    const packagedRuntime = [], codeSigning = [], sourceMapTransforms = []
     for (const file of distribution.filter(file => packagedPaths.includes(file.path))) {
       const bytes = await reader.read(sdkPrefix + file.path)
       if (bytes.length !== file.bytes || hash(bytes) !== file.sha256) {
-        const signature = await verifyLocalNativeSignature(path.join(directory, file.path), bytes, path.join(root, 'resources/entitlements.mac.plist'))
-        if (!signature) throw new Error(`The packaged SDK runtime differs from the controlled dependency: ${file.path}`)
-        codeSigning.push({ path: file.path, ...signature })
+        const source = await fs.readFile(path.join(directory, file.path))
+        const transformed = distributionBytes(file.path, source)
+        if (!transformed.equals(source) && bytes.equals(transformed)) {
+          sourceMapTransforms.push({ path: file.path, sourceSha256: file.sha256, packagedSha256: hash(bytes) })
+        } else {
+          const signature = await verifyLocalNativeSignature(path.join(directory, file.path), bytes, path.join(root, 'resources/entitlements.mac.plist'))
+          if (!signature) throw new Error(`The packaged SDK runtime differs from the controlled dependency: ${file.path}`)
+          codeSigning.push({ path: file.path, ...signature })
+        }
       }
       packagedRuntime.push({ path: file.path, role: 'packaged-sdk-runtime', bytes: bytes.length, sha256: hash(bytes) })
     }
     sdk = { state: 'present', version: packaged.version, sourceRevision: build.sdk.revision, sourceDirty: build.sdk.dirty, sourceDist: build.sdk.dist,
-      packagedRuntime: compactManifest(packagedRuntime), ...(codeSigning.length ? { codeSigning } : {}) }
+      packagedRuntime: compactManifest(packagedRuntime), ...(codeSigning.length ? { codeSigning } : {}), ...(sourceMapTransforms.length ? { sourceMapTransforms } : {}) }
   } else if (sdkFiles.length) throw new Error('The package contains an SDK absent from the controlled build')
   return { name: packagedDescriptor.name, version: packagedDescriptor.version, main: packagedDescriptor.main, sdk }
 }
@@ -384,10 +407,11 @@ export async function packageApplication(root, { timeoutMs = 1800000 } = {}) {
     if (!same(staged.content, compactManifest(await tree(staged.dist, staged.dist, 'electron-input')))) throw new Error('The staged Electron runtime changed during packaging')
     if (!same(buildIdentity(build), buildIdentity(await verifyBuild(root))) || !same(before, await packagingInputs(root, tool))) throw new Error('Build or packaging inputs changed during packaging; no package provenance was recorded')
     const application = await locateApplication(root, output)
+    const distribution = distributionScan.assertDistribution(application.resources)
     const content = compactManifest(await tree(application.directory, application.directory, 'package-content'))
     const identity = await packagedIdentity(root, build, application)
     if (!same(buildIdentity(build), buildIdentity(await verifyBuild(root))) || !same(before, await packagingInputs(root, tool))) throw new Error('Build or packaging inputs changed while recording the package')
-    const record = { version: 2, id, packagedAt: new Date().toISOString(), platform: process.platform, architecture: process.arch, command: ['electron-builder', ...args.slice(1)], signing: process.platform === 'darwin' ? 'local-adhoc' : 'unsigned', electronRuntime: observed, build: buildIdentity(build), inputs: before, directory: posix(path.relative(root, application.directory)), executable: posix(path.relative(root, application.executable)), resources: posix(path.relative(root, application.resources)), content, application: identity, coverage: 'Directory package provenance: controlled application/SDK byte identity and the complete emitted bundle fingerprint. Other dependency behavior, installer flows, operating-system consent, distribution signing and notarization require separate execution checks.' }
+    const record = { version: 2, id, packagedAt: new Date().toISOString(), platform: process.platform, architecture: process.arch, command: ['electron-builder', ...args.slice(1)], signing: process.platform === 'darwin' ? 'local-adhoc' : 'unsigned', electronRuntime: observed, build: buildIdentity(build), inputs: before, directory: posix(path.relative(root, application.directory)), executable: posix(path.relative(root, application.executable)), resources: posix(path.relative(root, application.resources)), content, distribution, application: identity, coverage: 'Directory package provenance: controlled application/SDK byte identity and the complete emitted bundle fingerprint. Other dependency behavior, installer flows, operating-system consent, distribution signing and notarization require separate execution checks.' }
     atomicJson(stamp, record)
     return record
   } catch (error) { failure = error; throw error }
@@ -415,6 +439,7 @@ export async function verifyPackagedApplication(root, executablePath) {
   const build = await verifyBuild(root)
   if (!same(record.build, buildIdentity(build))) throw new Error('The package belongs to a different controlled build')
   if (!same(record.inputs, await packagingInputs(root, builder(root)))) throw new Error('Packaging inputs changed after the controlled package was created')
+  distributionScan.assertDistribution(resources)
   const content = compactManifest(await tree(directory, directory, 'package-content'))
   if (!same(content, record.content)) throw new Error('Packaged application content changed after controlled packaging')
   if (!same(record.application, await packagedIdentity(root, build, { directory, executable, resources }))) throw new Error('Packaged application or SDK identity changed after controlled packaging')

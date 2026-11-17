@@ -9,7 +9,8 @@ import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type { EngineAvailabilityReport, EngineId, HaloConfig } from '../../types'
 import { CLIConfigSection } from './CLIConfigSection'
-import { CcRuntimeSection } from './CcRuntimeSection'
+import { RuntimeSection } from './external-runtime/RuntimeSection'
+import type { RuntimeId } from '../../../shared/types/external-runtime'
 import { Switch, switchRowHover } from '../ui/Switch'
 import { useEngineStore } from '../../stores/engine.store'
 import { useAppStore } from '../../stores/app.store'
@@ -160,10 +161,14 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   )
   const [capsPanelOpen, setCapsPanelOpen] = useState(false)
   const [engineAvailability, setEngineAvailability] = useState<EngineAvailabilityReport | null>(null)
-  const [ccOpen, setCcOpen] = useState(configuredEngine === 'anthropic' || useAppStore.getState().settingsFocus === 'claude-code')
+  const [runtimeOpen, setRuntimeOpen] = useState<RuntimeId | null>(() => {
+    const focus = useAppStore.getState().settingsFocus
+    return focus === 'codex' ? 'codex' : focus === 'claude-code' ? 'anthropic'
+      : configuredEngine === 'anthropic' || configuredEngine === 'codex' ? configuredEngine : null
+  })
   const engineChoice = useRef(0)
-  const ccPanelId = useId()
-  const ccDisclosure = useRef<HTMLButtonElement>(null)
+  const runtimePanelId = useId()
+  const runtimeDisclosure = useRef<Partial<Record<RuntimeId, HTMLButtonElement | null>>>({})
   const [engineError, setEngineError] = useState<string | null>(null)
 
   // Engines absent from this build must not be selectable — picking one used to
@@ -202,8 +207,8 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
       description: t('The default Halo agent engine. Ready to use without installing Claude Code.'),
     },
     codex: {
-      title: t('Codex SDK'),
-      description: t('Powered by the official OpenAI Codex SDK. Better suited for GPT-family models. Experimental.'),
+      title: t('Codex'),
+      description: t('Optional. Connect your own Codex installation or download a compatible version. Better suited for GPT-family models. Experimental.'),
     },
     dsh: {
       title: t('DeepSeek dsh'),
@@ -230,9 +235,19 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
 
   const handleSdkEngineChange = async (engine: EngineId) => {
     setEngineError(null)
-    setCcOpen(engine === 'anthropic')
+    const external = engine === 'anthropic' || engine === 'codex'
+    setRuntimeOpen(external ? engine : null)
     const choice = ++engineChoice.current
-    if (engine === 'anthropic') {
+    if (external) {
+      try {
+        const result = await api.recordExternalRuntimeIntent(engine)
+        if (!result.success) throw new Error('Engine intent could not be recorded')
+        if (choice !== engineChoice.current) return
+      } catch (error) {
+        console.warn('[AdvancedSection] Engine intent could not be saved', { engine, name: error instanceof Error ? error.name : 'UnknownError' })
+        if (choice === engineChoice.current) setEngineError(t('The engine selection could not be saved. Please try again.'))
+        return
+      }
       let availability = engineAvailability
       if (!availability) {
         try {
@@ -247,7 +262,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
           return
         }
       }
-      if (!availability.engines.find(item => item.engineId === 'anthropic')?.available) return
+      if (!availability.engines.find(item => item.engineId === engine)?.available) return
     }
     setSdkEngineState(engine)
     try {
@@ -272,7 +287,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
     }
   }
 
-  const handleCcReady = async () => {
+  const handleRuntimeReady = async (runtimeId: RuntimeId) => {
     const choice = engineChoice.current
     const availability = await api.getEngineAvailability()
     const settings = await api.getConfig({ snapshot: true })
@@ -284,7 +299,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
     }
     if (choice === engineChoice.current && availability.success && availability.data) setEngineAvailability(availability.data as EngineAvailabilityReport)
     await useEngineStore.getState().reload()
-    return choice === engineChoice.current && updated.agent?.sdkEngine === 'anthropic'
+    return choice === engineChoice.current && updated.agent?.sdkEngine === runtimeId
   }
 
   const handleMaxTurnsChange = async (value: number) => {
@@ -437,13 +452,14 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
               const copy = ENGINE_COPY[engineId]
               // The active engine stays selectable even if its runtime went
               // missing, so the user is never locked out of their own setting.
-              const available = engineId === 'anthropic' || isEngineAvailable(engineId) || sdkEngine === engineId
+              const external = engineId === 'anthropic' || engineId === 'codex'
+              const available = external || isEngineAvailable(engineId) || sdkEngine === engineId
               return (
                 <div
                   key={engineId}
                   role="group"
                   aria-label={copy.title}
-                  className={`min-w-0 overflow-hidden rounded-lg border transition-colors ${sdkEngine === engineId || (engineId === 'anthropic' && ccOpen) ? 'border-primary bg-primary/5' : 'border-border'}`}
+                  className={`min-w-0 overflow-hidden rounded-lg border transition-colors ${sdkEngine === engineId || (external && runtimeOpen === engineId) ? 'border-primary bg-primary/5' : 'border-border'}`}
                 >
                   <div className="flex items-start">
                     <label className={`flex min-w-0 flex-1 items-start gap-3 p-3 ${available ? 'cursor-pointer hover:bg-muted/50' : 'cursor-not-allowed opacity-60'}`}>
@@ -467,11 +483,11 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
                         {!available && engineUnavailableReason(engineId) && <p className="mt-1 text-xs text-muted-foreground">{engineUnavailableReason(engineId)}</p>}
                       </div>
                     </label>
-                    {engineId === 'anthropic' && <button ref={ccDisclosure} type="button" aria-label={t('Set up Claude Code')} aria-expanded={ccOpen} aria-controls={ccPanelId} onClick={() => setCcOpen(open => !open)} className="m-2 shrink-0 rounded p-2 text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
-                      {ccOpen ? <ChevronDown aria-hidden="true" className="h-4 w-4" /> : <ChevronRight aria-hidden="true" className="h-4 w-4" />}
+                    {external && <button ref={element => { runtimeDisclosure.current[engineId] = element }} type="button" aria-label={engineId === 'codex' ? t('Set up Codex') : t('Set up Claude Code')} aria-expanded={runtimeOpen === engineId} aria-controls={`${runtimePanelId}-${engineId}`} onClick={() => setRuntimeOpen(open => open === engineId ? null : engineId)} className="m-2 shrink-0 rounded p-2 text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+                      {runtimeOpen === engineId ? <ChevronDown aria-hidden="true" className="h-4 w-4" /> : <ChevronRight aria-hidden="true" className="h-4 w-4" />}
                     </button>}
                   </div>
-                  {engineId === 'anthropic' && ccOpen && <CcRuntimeSection id={ccPanelId} onUse={handleCcReady} onClose={() => { setCcOpen(false); ccDisclosure.current?.focus() }} configured={isEngineAvailable('anthropic')} />}
+                  {external && runtimeOpen === engineId && <RuntimeSection key={engineId} runtimeId={engineId} id={`${runtimePanelId}-${engineId}`} onUse={() => handleRuntimeReady(engineId)} onClose={() => { setRuntimeOpen(null); runtimeDisclosure.current[engineId]?.focus() }} configured={isEngineAvailable(engineId)} />}
                 </div>
               )
             })}

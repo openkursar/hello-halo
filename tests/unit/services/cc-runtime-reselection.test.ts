@@ -7,20 +7,24 @@ import type { AISourcesConfig } from '../../../src/shared/types/ai-sources'
 
 const state = vi.hoisted(() => ({
   config: { agent: { sdkEngine: 'halo', ccRuntime: {} as CcRuntimeConfig }, aiSources: undefined as AISourcesConfig | undefined },
-  check: vi.fn(), launch: vi.fn(),
+  check: vi.fn(), launch: vi.fn(), revision: 0,
 }))
 vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfig: () => state.config,
   getHaloDir: () => join(globalThis.__HALO_TEST_DIR__, '.halo'),
   saveConfig: (patch: typeof state.config) => { state.config = { ...state.config, ...patch } },
-  getAgentEngineChoiceRevision: () => 0,
+  recordAgentEngineChoice: () => { state.revision++ },
+  getAgentEngineChoiceRevision: () => state.revision,
   onAgentConfigChange: () => () => {},
 }))
-vi.mock('../../../src/main/foundation/product-config', () => ({ getClaudeCodeDownloadSource: () => undefined }))
+vi.mock('../../../src/main/foundation/product-config', () => ({ getClaudeCodeDownloadSource: () => undefined, getCodexDownloadSource: () => undefined }))
 vi.mock('../../../src/main/services/agent', () => ({ getDefaultEngine: () => 'halo' }))
 vi.mock('../../../src/main/services/proxy-fetch', () => ({ proxyFetch: vi.fn() }))
-vi.mock('../../../src/main/services/cc-runtime/probe', () => ({
-  checkInstallation: state.check, launchForInstallation: state.launch, readKnownInstallation: () => null,
+vi.mock('../../../src/main/services/external-runtime/probe', () => ({
+  createRuntimeProbe: () => ({
+    checkInstallation: state.check, launchForInstallation: state.launch, readKnownInstallation: () => null,
+    shutdownProbes: async () => {},
+  }),
 }))
 vi.mock('../../../src/renderer/i18n', () => ({ useTranslation: () => ({ t: (text: string) => text }) }))
 vi.mock('../../../src/renderer/api', () => ({ api: {} }))

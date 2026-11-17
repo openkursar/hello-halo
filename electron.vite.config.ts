@@ -5,6 +5,7 @@ import type { Plugin } from 'vite'
 import { build as buildEsbuild } from 'esbuild'
 import react from '@vitejs/plugin-react'
 import { bootSplashScript } from './vite.boot-script'
+import { productionDistribution } from './vite.distribution-policy'
 
 /**
  * pdf.js keeps its CJK CMaps, base-14 standard fonts, image-codec wasm and ICC
@@ -117,14 +118,15 @@ export default defineConfig({
       // for CJS-ESM interop. node-pty and better-sqlite3 stay external (native addons).
       externalizeDepsPlugin({ exclude: ['@xterm/headless', '@electron-toolkit/utils', 'uuid', 'open', 'proxy-agent', '@hello-halo/agent-sdk'] }),
       haloWorkerSetup(),
+      productionDistribution(),
     ],
     build: {
-      sourcemap: true,
+      sourcemap: false,
       rollupOptions: {
         // Native entries retain their package location so the binding can resolve its adjacent library.
         external: ['@hello-halo/agent-sdk', '@hello-halo/agent-sdk/native', '@hello-halo/agent-sdk/worker',
           '@hello-halo/agent-sdk/collaboration', '@hello-halo/agent-sdk/collaboration/turn-gate',
-          '@hello-halo/agent-sdk/collaboration/sdk', '@hello-halo/agent-sdk/collaboration/workspaces', '@openai/codex-sdk'],
+          '@hello-halo/agent-sdk/collaboration/sdk', '@hello-halo/agent-sdk/collaboration/workspaces'],
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
           // File watcher worker — runs in a separate child process
@@ -141,8 +143,9 @@ export default defineConfig({
   },
   preload: {
     // The shared collaboration protocol is pure code; sandboxed preload cannot require the package.
-    plugins: [externalizeDepsPlugin({ exclude: ['@hello-halo/agent-sdk'] }), sandboxedPreloads()],
+    plugins: [externalizeDepsPlugin({ exclude: ['@hello-halo/agent-sdk'] }), sandboxedPreloads(), productionDistribution()],
     build: {
+      sourcemap: false,
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/preload/index.ts')
@@ -166,6 +169,7 @@ export default defineConfig({
       strictPort: true
     },
     build: {
+      sourcemap: false,
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/renderer/index.html'),
@@ -191,7 +195,7 @@ export default defineConfig({
       entries: ['src/renderer/index.html', 'src/renderer/pages/*.tsx']
     },
     define: buildMetaDefine,
-    plugins: [react(), pdfjsAssets(), bootSplashScript(resolve(__dirname, 'src/renderer'))],
+    plugins: [react(), pdfjsAssets(), bootSplashScript(resolve(__dirname, 'src/renderer')), productionDistribution()],
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src/renderer')

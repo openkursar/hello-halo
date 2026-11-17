@@ -32,6 +32,7 @@ import { canvasApi } from './canvas.api'
 import { gitApi } from './git.api'
 import { codeReviewApi } from './code-review.api'
 import { ccRuntimeApi } from './cc-runtime.api'
+import { externalRuntimeApi } from './external-runtime.api'
 import { skillsApi } from './skills.api'
 
 /**
@@ -64,6 +65,7 @@ export const api = {
   ...gitApi,
   ...codeReviewApi,
   ...ccRuntimeApi,
+  ...externalRuntimeApi,
   ...skillsApi,
 }
 

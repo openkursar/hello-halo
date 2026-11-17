@@ -137,15 +137,20 @@ function resolveAsarUnpack(base) {
 }
 
 const base = loadBaseConfig()
+const { prepareDistributionStaging } = require('./scripts/lib/distribution-staging.cjs')
+const declaredResourceDirectories = product.content.trayIconDir ? [product.content.trayIconDir.replace(/^\.\//, '').replace(/\/$/, '')] : []
+const distributionStage = prepareDistributionStaging(ROOT, resolveProviderFiles(), declaredResourceDirectories)
+process.once('exit', () => fs.rmSync(distributionStage, { recursive: true, force: true }))
 
 module.exports = {
   ...base,
+  directories: { ...base.directories, app: distributionStage },
   asarUnpack: resolveAsarUnpack(base),
   productName: field('name'),
   protocols: [{ name: field('name'), schemes: [product.content.deepLinkScheme || 'halo'] }],
   ...(experimental ? { extraMetadata: { version: field('version') } } : {}),
   appId: field('appId'),
   publish: resolvePublish(),
-  files: [...(base.files ?? []), ...resolveProviderFiles()],
+  files: [...(base.files ?? []), ...resolveProviderFiles(), ...declaredResourceDirectories.map(dir => `${dir}/**/*`)],
   afterAllArtifactBuild: createStagedArtifactsHook(product.content)
 }

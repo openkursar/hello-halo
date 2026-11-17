@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import type { CcInstallation } from '../../../src/shared/types/cc-runtime'
 
 vi.mock('../../../src/main/foundation/config.service', () => ({
-  getHaloDir: () => join(globalThis.__HALO_TEST_DIR__, '.halo'), getConfig: () => ({ agent: {} })
+  getHaloDir: () => join(globalThis.__HALO_TEST_DIR__, '.halo'), getConfig: () => ({ agent: {} }),
+  onAgentConfigChange: () => () => {}, onNetworkConfigChange: () => () => {}
 }))
 
 function record(path: string, version: string, managed = false): CcInstallation {

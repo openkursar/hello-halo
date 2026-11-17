@@ -9,7 +9,7 @@
  *
  * Usage:
  *   node tests/check/binaries.mjs [--platform mac-arm64|mac-x64|win|linux|all]
- *                                 [--require-engines halo,codex]
+ *                                 [--require-engines halo,dsh]
  *
  * Platforms:
  *   mac-arm64 - Mac Apple Silicon (M1/M2/M3/M4)
@@ -19,7 +19,7 @@
  *   all       - All platforms (default)
  *
  * Halo SDK is required in every build. --require-engines additionally requires
- * optional engines such as Codex or DeepSeek Harness.
+ * optional bundled engines such as DeepSeek Harness. Codex is external.
  *
  * Exit codes:
  *   0 - All checks passed

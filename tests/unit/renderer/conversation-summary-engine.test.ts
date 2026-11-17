@@ -99,6 +99,13 @@ describe('conversation summary cold engine identity', () => {
     const { summary, engine } = renderColdNotice()
     expect(summary.resolvedEngineId).toBe('halo')
     expect(engine).toBe('codex')
+    expect(state.availability).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not request runtime status for a resident Halo session', () => {
+    state.sessionInitInfo.set('c', { engineId: 'halo' })
+    const { engine } = renderColdNotice()
+    expect(engine).toBe('halo')
     expect(state.availability).not.toHaveBeenCalled()
   })
 

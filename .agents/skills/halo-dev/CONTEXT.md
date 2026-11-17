@@ -9,8 +9,9 @@
 
 > A local-first AI companion with a complete default experience and optional execution engines
 
-Halo uses Halo SDK by default. Claude Code is an optional external installation,
-discovered locally or downloaded explicitly; it does not ship inside the app.
+Halo uses Halo SDK by default. Claude Code and Codex are optional external
+installations, discovered locally or downloaded explicitly; neither ships inside
+the app. Their settings and runtime lifecycle share one implementation.
 Each session owns its engine. The global setting is a default for new sessions;
 digital humans may override it in Advanced settings. Existing sessions retain
 their engine until an explicit safe transition, without restarting the app.

@@ -22,6 +22,8 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { execFileSync, execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import distributionPolicy from '../../scripts/lib/distribution-policy.cjs'
+import pinnedBuildAsset from '../../scripts/lib/pinned-build-asset.cjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..')
@@ -98,7 +100,9 @@ function walk(dir, onEntry) {
 
 function lockfileHash() {
   const lock = fs.readFileSync(path.join(STAGING_DIR, 'package-lock.json'))
-  return createHash('sha256').update(lock).digest('hex')
+  return createHash('sha256').update(lock)
+    .update(fs.readFileSync(fileURLToPath(import.meta.url)))
+    .update(fs.readFileSync(path.join(PROJECT_ROOT, 'scripts/lib/distribution-policy.cjs'))).digest('hex')
 }
 
 function isUpToDate() {
@@ -208,10 +212,6 @@ function smokeTest(outModules) {
   log(`Smoke test passed: ${names.join(', ')}`)
 }
 
-function sha256File(file) {
-  return createHash('sha256').update(fs.readFileSync(file)).digest('hex')
-}
-
 /**
  * Download each pinned font unless it is already present with the right hash.
  * Independent of the npm lockfile stamp, so it runs on every invocation and
@@ -220,24 +220,16 @@ function sha256File(file) {
 async function ensureFonts() {
   fs.mkdirSync(FONTS_DIR, { recursive: true })
   for (const { file, url, sha256 } of FONT_ASSETS) {
-    const dest = path.join(FONTS_DIR, file)
-    if (fs.existsSync(dest) && sha256File(dest) === sha256) continue
-
-    log(`Downloading font asset ${file}...`)
-    let res
     try {
-      res = await fetch(url)
-    } catch (err) {
-      fail(`Font download failed for ${url}: ${err?.cause?.code ?? err.message}`)
+      pinnedBuildAsset.materializePinnedAsset({
+        destination: path.join(FONTS_DIR, file),
+        cacheDirectory: path.join(PROJECT_ROOT, '.halo', 'cache', 'office-fonts'),
+        sha256,
+        url,
+      })
+    } catch (error) {
+      fail(`Font materialization failed for ${file}: ${error.message}`)
     }
-    if (!res.ok) fail(`Font download failed (${res.status}) for ${url}`)
-    const bytes = Buffer.from(await res.arrayBuffer())
-    const actual = createHash('sha256').update(bytes).digest('hex')
-    if (actual !== sha256) {
-      fail(`Font checksum mismatch for ${file}:\n  expected ${sha256}\n  got      ${actual}`)
-    }
-    fs.writeFileSync(dest, bytes)
-    log(`Fetched ${file} (${(bytes.length / 1024 / 1024).toFixed(1)} MB)`)
   }
 }
 
@@ -290,6 +282,9 @@ async function main() {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true })
   fs.cpSync(stagedModules, outModules, { recursive: true })
 
+  const cleanup = distributionPolicy.sanitizeStaging(outModules)
+  log(`Distribution cleanup: removed=${cleanup.removed}, transformed=${cleanup.transformed}`)
+  distributionPolicy.assertTree(outModules)
   smokeTest(outModules)
   writeManifest()
   fs.writeFileSync(STAMP_FILE, lockfileHash())

@@ -16,7 +16,7 @@ const env = vi.hoisted(() => ({
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({ getDefaultEngine: () => env.engine , resolveDefaultEngine: async () => env.engine }))
 vi.mock('../../../../src/main/services/agent/helpers', () => ({ getHeadlessElectronPath: () => env.headless }))
 vi.mock('../../../../src/main/services/agent/codex/transport/connection', () => ({
-  resolveBundledCodexBinary: () => env.codex,
+  getCodexConnectionProgram: () => env.codex ? (env.codex.isJsShim ? env.headless : env.codex.binaryPath) : undefined,
 }))
 
 import {

@@ -6,10 +6,10 @@ const mocks = vi.hoisted(() => ({
   check: vi.fn(),
   existsWait: undefined as ((path: string) => Promise<boolean>) | undefined
 }))
-vi.mock('../../../src/main/services/cc-runtime/probe', () => ({ checkInstallation: mocks.check }))
-vi.mock('../../../src/main/services/cc-runtime/paths', async importOriginal => {
-  const actual = await importOriginal<typeof import('../../../src/main/services/cc-runtime/paths')>()
-  return { ...actual, fileExists: (path: string) => mocks.existsWait ? mocks.existsWait(path) : path.startsWith(globalThis.__HALO_TEST_DIR__) ? actual.fileExists(path) : Promise.resolve(false) }
+vi.mock('../../../src/main/services/external-runtime/probe', () => ({ createRuntimeProbe: () => ({ checkInstallation: mocks.check }) }))
+vi.mock('../../../src/main/services/external-runtime/paths', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../src/main/services/external-runtime/paths')>()
+  return { ...actual, candidateExists: (path: string) => mocks.existsWait ? mocks.existsWait(path) : path.startsWith(globalThis.__HALO_TEST_DIR__) ? actual.candidateExists(path) : Promise.resolve(false) }
 })
 
 import { discoverInstallations } from '../../../src/main/services/cc-runtime/discovery'

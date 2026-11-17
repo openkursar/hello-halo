@@ -26,6 +26,7 @@ import type { ProxyRouteInfo } from '../shared/rpc/contracts/system.contract'
 import type { ImChannelInstanceConfig, ImChannelInstancePatch } from '../shared/types/im-channel'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
 import { ccRuntimeRpc } from '../shared/rpc/contracts/cc-runtime.contract'
+import { externalRuntimeRpc } from '../shared/rpc/contracts/external-runtime.contract'
 import { onboardingRpc } from '../shared/rpc/contracts/onboarding.contract'
 import { securityRpc } from '../shared/rpc/contracts/security.contract'
 import { perfRpc } from '../shared/rpc/contracts/perf.contract'
@@ -119,7 +120,7 @@ type SkillsRpcClient = RpcClient<typeof skillsRpc>
 }
 
 // Type definitions for exposed API
-export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRpc> {
+export interface HaloAPI extends BrowserHostBridge, RpcClient<typeof ccRuntimeRpc>, RpcClient<typeof externalRuntimeRpc> {
   // Generic Auth (provider-agnostic)
   authGetProviders: () => Promise<IpcResponse>
   authGetBuiltinProviders: () => Promise<IpcResponse>
@@ -921,6 +922,7 @@ const api: HaloAPI = {
   // argument shapes come from the contract — no manual sync needed.
   ...bindRpc(modelCapabilitiesRpc),
   ...bindRpc(ccRuntimeRpc),
+  ...bindRpc(externalRuntimeRpc),
 
   // Generic Auth (provider-agnostic)
   ...bindRpc(authRpc),

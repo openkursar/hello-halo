@@ -56,7 +56,7 @@ trap restore_product EXIT
 cp server.product.json product.json
 
 # 1) Ensure linux native binaries are present (better-sqlite3 N-API prebuild,
-#    @parcel/watcher-linux, codex-linux, cloudflared-linux).
+#    @parcel/watcher-linux, cloudflared-linux).
 log "preparing linux native binaries..."
 node scripts/prepare-binaries.mjs --platform linux
 
@@ -74,7 +74,7 @@ has_app_entry || die "build produced no out/main/index.{cjs,mjs}"
 # 3) Cross-build the linux-x64 unpacked app (afterPack swaps in linux natives).
 log "packaging linux-x64 (electron-builder)..."
 rm -rf dist/linux-unpacked
-node_modules/.bin/electron-builder --linux dir --x64
+node_modules/.bin/electron-builder --linux dir --x64 --config electron-builder.cjs
 [ -x dist/linux-unpacked/halo ] || die "electron-builder produced no dist/linux-unpacked/halo"
 
 # 4) Compress + split into the repo's bundle/.

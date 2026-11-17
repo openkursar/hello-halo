@@ -13,17 +13,12 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
-import { existsSync } from 'fs'
-import path from 'path'
+import type { RuntimeLaunch } from '../../../external-runtime'
 import type { Readable, Writable } from 'stream'
-import { getHeadlessElectronPath } from '../../helpers'
 import { updateEnvPath } from '../../../child-env'
 
 export interface CodexConnectionOptions {
-  /** Absolute path to the `codex` binary. */
-  binaryPath: string
-  /** True when binaryPath points at @openai/codex's Node.js shim. */
-  isJsShim?: boolean
+  launch: RuntimeLaunch
   /** Extra directories prepended to PATH for the child process. */
   pathDirs?: string[]
   /** Environment variables for the child. Halo always sets CODEX_HOME here. */
@@ -47,91 +42,13 @@ export interface CodexConnection {
   readonly pid: number | null
 }
 
-export interface ResolvedCodexBinary {
-  /** Executable or JS shim path passed to the connection. */
-  binaryPath: string
-  /** Whether binaryPath is the @openai/codex JS shim. */
-  isJsShim: boolean
-  /** Directories that must be available on PATH for Codex helper tools. */
-  pathDirs: string[]
-}
-
-/**
- * Resolve the bundled `codex` binary path inside this Electron build. Codex
- * publishes its CLI as `@openai/codex` (which depends on a platform-specific
- * subpackage `@openai/codex-{platform}-{arch}` that contains the actual
- * native binary). In production we resolve the native binary directly instead
- * of executing `bin/codex.js` through Electron-as-Node: the shim is ESM and
- * Electron's Node entrypoint can parse it as CommonJS when launched from the
- * app bundle, causing an immediate SyntaxError before app-server starts.
- *
- * We deliberately reuse `@openai/codex-sdk`'s installation as the carrier
- * for the binary even though we no longer use its TypeScript surface. This
- * matches the user-confirmed packaging strategy (reuse the binary already
- * bundled by @openai/codex-sdk) — zero install changes, zero new
- * supply-chain audit.
- */
-export function resolveBundledCodexBinary(): ResolvedCodexBinary | null {
-  for (const root of getCodexPackageRoots()) {
-    const native = resolveNativeCodexBinary(root)
-    if (native) return native
-  }
-
-  for (const root of getCodexPackageRoots()) {
-    const shim = path.join(root, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
-    if (existsSync(shim)) {
-      return { binaryPath: shim, isJsShim: true, pathDirs: [] }
-    }
-  }
-  return null
-}
-
-function getCodexPackageRoots(): string[] {
-  const roots = [
-    process.resourcesPath ? path.join(process.resourcesPath, 'app.asar.unpacked') : '',
-    process.resourcesPath ? path.join(process.resourcesPath, 'app.asar') : '',
-    process.cwd(),
-  ]
-  return [...new Set(roots.filter(Boolean))]
-}
-
-function resolveNativeCodexBinary(root: string): ResolvedCodexBinary | null {
-  const target = getCodexNativeTarget()
-  if (!target) return null
-
-  const packageRoot = path.join(root, 'node_modules', '@openai', target.packageName)
-  const archRoot = path.join(packageRoot, 'vendor', target.targetTriple)
-  const binaryPath = path.join(archRoot, 'codex', target.binaryName)
-  if (!existsSync(binaryPath)) return null
-
-  const pathDir = path.join(archRoot, 'path')
-  return {
-    binaryPath,
-    isJsShim: false,
-    pathDirs: existsSync(pathDir) ? [pathDir] : [],
-  }
-}
-
-function getCodexNativeTarget(): { packageName: string; targetTriple: string; binaryName: string } | null {
-  const binaryName = process.platform === 'win32' ? 'codex.exe' : 'codex'
-  if (process.platform === 'darwin') {
-    if (process.arch === 'arm64') return { packageName: 'codex-darwin-arm64', targetTriple: 'aarch64-apple-darwin', binaryName }
-    if (process.arch === 'x64') return { packageName: 'codex-darwin-x64', targetTriple: 'x86_64-apple-darwin', binaryName }
-  }
-  if (process.platform === 'linux') {
-    if (process.arch === 'arm64') return { packageName: 'codex-linux-arm64', targetTriple: 'aarch64-unknown-linux-musl', binaryName }
-    if (process.arch === 'x64') return { packageName: 'codex-linux-x64', targetTriple: 'x86_64-unknown-linux-musl', binaryName }
-  }
-  if (process.platform === 'win32') {
-    if (process.arch === 'arm64') return { packageName: 'codex-win32-arm64', targetTriple: 'aarch64-pc-windows-msvc', binaryName }
-    if (process.arch === 'x64') return { packageName: 'codex-win32-x64', targetTriple: 'x86_64-pc-windows-msvc', binaryName }
-  }
-  return null
-}
-
 /**
  * Default export: a connection backed by a real OS child process.
  */
+let launchedProgram: string | undefined
+
+export function getCodexConnectionProgram(): string | undefined { return launchedProgram }
+
 export function createCodexConnection(options: CodexConnectionOptions): CodexConnection {
   return new ChildProcessConnection(options)
 }
@@ -170,30 +87,14 @@ class ChildProcessConnection implements CodexConnection {
   async start(): Promise<void> {
     if (this.child) throw new Error('[Codex] Connection already started')
 
-    const { binaryPath, env, cwd } = this.options
+    const { launch, env, cwd } = this.options
     const args = this.options.args ?? ['app-server']
-
-    const isJsShim = this.options.isJsShim ?? binaryPath.endsWith('.js')
-
-    // For the JS shim path, run the shim through Electron's Helper binary
-    // (with ELECTRON_RUN_AS_NODE) instead of process.execPath. The main
-    // app binary triggers a macOS Dock icon per child process; the Helper
-    // bundle has LSUIElement=true and avoids that. See helpers.ts for the
-    // full rationale and fallback behavior.
-    const nodePath = isJsShim ? getHeadlessElectronPath() : process.execPath
-
-    const command = isJsShim ? nodePath : binaryPath
-    const finalArgs = isJsShim ? [binaryPath, ...args] : args
-
-    const childEnv: NodeJS.ProcessEnv = { ...env }
-    const { pathDirs } = this.options
+    const command = launch.command
+    const finalArgs = [...launch.argsPrefix, ...args]
+    const childEnv: NodeJS.ProcessEnv = { ...env, ...launch.env }
+    const pathDirs = launch.pathDirs
     if (pathDirs?.length) {
       updateEnvPath(childEnv, current => prependPathDirs(pathDirs, current))
-    }
-    if (isJsShim) {
-      // Required so the Electron binary behaves like vanilla Node and runs
-      // the shim's main module instead of initializing Chromium.
-      childEnv.ELECTRON_RUN_AS_NODE = '1'
     }
 
     console.log(
@@ -209,6 +110,7 @@ class ChildProcessConnection implements CodexConnection {
     })
 
     this.child = child
+    launchedProgram = command
 
     // Codex emits diagnostics on stderr. Aggregate by line and forward.
     child.stderr.setEncoding('utf-8')

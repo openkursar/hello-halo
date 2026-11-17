@@ -30,15 +30,12 @@ export interface EngineAvailability {
  *
  * Codex is absent here on purpose: its adapter (`./codex`) is bundled into the
  * main bundle and always imports successfully, so package presence says nothing
- * about whether the engine can run. Its real requirement is the platform-native
- * `codex` binary, probed separately via `resolveBundledCodexBinary()`.
+ * about whether the engine can run. Its real requirement is a selected external
+ * installation checked through the runtime service's stamped cache.
  */
 const ENGINE_PACKAGES: Record<Exclude<EngineId, 'codex' | 'dsh' | 'anthropic'>, string> = {
   halo: '@hello-halo/agent-sdk',
 }
-
-/** Package that carries the Codex version metadata (binary lives in its platform subpackage). */
-const CODEX_VERSION_PACKAGE = '@openai/codex-sdk'
 
 export const ALL_ENGINE_IDS: readonly EngineId[] = ENGINE_IDS
 
@@ -52,8 +49,9 @@ export async function getEngineAvailability(
   engineIds: readonly EngineId[] = ALL_ENGINE_IDS
 ): Promise<EngineAvailability[]> {
   // External installations can change while running; cc-runtime owns its stamped cache.
-  const fresh = engineIds.filter(id => id === 'anthropic' || !probes.has(id))
-  for (const engineId of fresh) probes.set(engineId, probeEngine(engineId))
+  const fresh = engineIds.filter(id => id === 'anthropic' || id === 'codex' || !probes.has(id))
+  for (const engineId of fresh) probes.set(engineId,
+    (engineId === 'codex' || engineId === 'anthropic') && engineIds.length > 1 ? readExternalStatus(engineId) : probeEngine(engineId))
 
   const results = await Promise.all(engineIds.map(id => probes.get(id)!))
 
@@ -143,17 +141,33 @@ async function probeCc(): Promise<EngineAvailability> {
   }
 }
 
-async function probeCodex(): Promise<EngineAvailability> {
-  const pkgDir = findPackageDir(CODEX_VERSION_PACKAGE)
-  const version = (pkgDir && (readManifest(pkgDir)?.version as string)) || ''
+async function readExternalStatus(engineId: 'anthropic' | 'codex'): Promise<EngineAvailability> {
+  const config = getConfig()
+  if (engineId === 'anthropic' && !hasExplicitCcSelection(config.agent?.ccRuntime, config.aiSources)) {
+    return probeCc()
+  }
+  if (engineId === 'codex' && !config.agent?.codexRuntime?.selectedPath) return { engineId, available: false, version: '', fingerprint: '', reason: 'No compatible Codex installation is selected' }
+  const { getExternalRuntimeStatus } = await import('../external-runtime')
+  const { selected } = await getExternalRuntimeStatus(engineId)
+  return {
+    engineId,
+    available: selected?.compatibility === 'compatible' || selected?.compatibility === 'verified',
+    version: selected?.version ?? '',
+    fingerprint: '',
+    ...(!selected ? { reason: engineId === 'codex' ? 'No compatible Codex installation is selected' : 'No compatible Claude Code installation is selected' } : {}),
+  }
+}
 
+async function probeCodex(): Promise<EngineAvailability> {
+  const absent: EngineAvailability = { engineId: 'codex', available: false, version: '', fingerprint: '', reason: 'No compatible Codex installation is selected' }
+  if (!getConfig().agent?.codexRuntime?.selectedPath) return absent
   try {
-    const { resolveBundledCodexBinary } = await import('./codex/transport/connection')
-    const binary = resolveBundledCodexBinary()
-    return { engineId: 'codex', available: binary !== null, version, fingerprint: '' }
+    const { resolveExternalRuntimeLaunch } = await import('../external-runtime')
+    const launch = await resolveExternalRuntimeLaunch('codex')
+    return launch ? { engineId: 'codex', available: true, version: launch.version, fingerprint: '' } : absent
   } catch (error) {
-    console.warn('[SDK] Codex availability probe failed:', (error as Error).message)
-    return { engineId: 'codex', available: false, version, fingerprint: '' }
+    console.warn('[SDK] Selected Codex installation probe failed:', (error as Error).message)
+    return absent
   }
 }
 

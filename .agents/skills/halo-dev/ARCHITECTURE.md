@@ -1011,13 +1011,22 @@ The adapter uses the public native runtime API and a same-process Rust library; 
 `src/main/services/agent/DESIGN.md`. Package ownership does not imply public npm
 publication or an independent repository.
 
-### External Claude Code and experimental distribution
+### External runtimes and experimental distribution
 
-`services/cc-runtime` owns bounded discovery, interface checks, source preferences
-and explicit installation of external Claude Code. It never imports the agent
-engine. `services/agent/cc` implements the stream-json adapter; the app bundles
-neither the upstream Claude Agent SDK nor the Claude Code executable. Halo SDK
-is a required dependency and the default when no user preference exists.
+`services/external-runtime` owns one bounded management workflow for Claude Code
+and Codex: catalogs, discovery, protocol checks, explicit downloads, immutable
+installation and selection. Vendor providers own layouts, metadata and protocol
+messages; the manager never imports the agent engine. `services/agent/cc` and
+`services/agent/codex` consume captured public launch descriptors. The app bundles
+neither external executable nor their SDK carriers. Halo SDK remains required and
+the default when no user preference exists. The legacy `services/cc-runtime`
+entry points delegate to the same manager; they own no second lifecycle.
+
+Claude Code keeps its existing configuration and data directory. Codex records
+its explicit installation separately and retains Halo's isolated Codex data and
+account routing. A missing selected external runtime preserves its preference,
+history and bindings and enters the shared recovery flow, never another engine.
+Codex's former bundled default does not inherit the historical CC migration rule.
 
 Startup never discovers CC. A recorded user runtime selection checks only its saved
 installation; old defaults and automatically selected paths do not prove intent and
@@ -1030,11 +1039,19 @@ fails without switching engines or overwriting the user's preference. CC-only de
 receive a recovery notice; the app never silently selects a different account.
 CC and Halo saved transcripts are reconciled through `agent/stored-session`.
 
-The desktop-only `cc-runtime:*` typed RPC contract exposes management operations.
-Remote clients cannot install or select a host executable. Settings reads known
-state and initiates scans only on user action; installation polling exists only
-while the visible panel observes an active install. Bootstrap cancels runtime
-downloads and probes on shutdown. See `services/cc-runtime/DESIGN.md`.
+The desktop-only `external-runtime:*` typed RPC contract exposes management
+operations; `cc-runtime:*` remains a thin compatibility facade. Remote clients
+cannot install or select a host executable. One Settings component/hook serves
+both providers. Settings reads known state and initiates scans only on user
+action; polling exists only while a visible panel observes an active install.
+Bootstrap cancels runtime downloads and probes on shutdown. See
+`services/external-runtime/DESIGN.md`.
+
+Production builds and distribution staging reject source maps and development
+artifacts. Packaging collects a declared runtime dependency closure in an owned
+staging directory, strips only parsed source-map comments, and scans actual ASAR,
+unpacked and extra-resource bytes before signing. This never edits shared
+`node_modules` or changes the independent SDK's development build policy.
 
 Experimental products use their own appId, productName, dataFolderName and
 deepLinkScheme. Development data lives in `.<dataFolderName>-dev`; packaged data

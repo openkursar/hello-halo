@@ -193,6 +193,16 @@
       "additionalProperties": false,
       "examples": [{ "name": "Intranet mirror", "baseUrl": "http://mirror.example.com/claude-code-releases" }]
     },
+    "codexDownloadSource": {
+      "type": "object",
+      "description": "Default npm-compatible registry for explicitly installing Codex from Settings. Offered beside the official registry and preselected; a source the user chooses still wins. Metadata and tarball URLs must be reachable on the intended network. No fallback to another registry occurs.",
+      "properties": {
+        "name": { "type": "string", "description": "Name shown in the source list." },
+        "baseUrl": { "type": "string", "description": "HTTP or HTTPS npm registry base URL with an optional path prefix, without credentials, query or fragment." }
+      },
+      "required": ["baseUrl"],
+      "additionalProperties": false
+    },
     "officialContent": {
       "type": "object",
       "description": "Where the official AI guides (agent-facing raw markdown, read by the read_halo_doc tool) are published. Omit to use the built-in public docs host; enterprise builds point this at their own mirror.",

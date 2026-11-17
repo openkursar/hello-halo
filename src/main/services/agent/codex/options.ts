@@ -7,8 +7,7 @@
  *   - massage `RUST_LOG` for stderr capture (the long-running app-server
  *     emits its own diagnostics on stderr, which the connection layer
  *     forwards to Halo's logger)
- *   - resolve a Codex executable override (handled in
- *     transport/connection.ts with `resolveBundledCodexBinary`)
+ *   - select an executable (captured by the session from external-runtime)
  *
  * What we DO produce:
  *   - process env: CODEX_HOME isolation, ANTHROPIC_* stripped, proxy policy

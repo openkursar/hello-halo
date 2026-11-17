@@ -28,7 +28,7 @@ vi.mock('../../../src/renderer/hooks/useActiveModelTarget', () => ({
   useActiveModelTarget: () => ({ kind: 'digital-human', appId: 'test-app', modelSourceId: env.selectedSourceId }),
 }))
 vi.mock('../../../src/renderer/hooks/useEngineAvailability', () => ({
-  useEngineAvailability: () => ({ engines: [{ engineId: 'anthropic', available: false }] }),
+  useEngineAvailability: () => ({ engines: [{ engineId: 'anthropic', available: false }, { engineId: 'codex', available: false }] }),
 }))
 vi.mock('../../../src/renderer/hooks/useConversationEngine', () => ({ saveConversationEngineOverride: vi.fn() }))
 vi.mock('../../../src/renderer/utils/people-navigation', () => ({ openPersonModelSettings: vi.fn() }))
@@ -72,6 +72,26 @@ describe('the recovery message shown in the conversation', () => {
     expect(html).not.toContain('Select a Claude Code installation once')
   })
 
+  it('keeps an unavailable Codex conversation and offers the same in-place recovery', () => {
+    env.engine = 'codex'
+    env.requested = 'codex'
+    const html = renderToStaticMarkup(createElement(EngineRecoveryNotice))
+    expect(html).toContain('This conversation runs on Codex')
+    expect(html).toContain('Your history and engine choice are kept.')
+    expect(html).toContain('Install or connect Codex')
+    expect(html).toContain('Continue with Halo SDK')
+    expect(html).not.toContain('Select a Claude Code installation once')
+  })
+
+  it('directs missing Codex recovery to the host desktop in remote mode', () => {
+    env.engine = 'codex'
+    env.requested = 'codex'
+    env.remote = true
+    const html = renderToStaticMarkup(createElement(EngineRecoveryNotice))
+    expect(html).toContain('Halo desktop app on the host computer')
+    expect(html).not.toContain('>Install or connect Codex</button>')
+  })
+
   it('retains the separate explanation for a group on Codex', () => {
     env.engine = 'codex'
     env.selectedSourceId = 'group'
@@ -107,6 +127,13 @@ describe('why a conversation cannot run as configured', () => {
     expect(resolveEngineIssue({ engine: 'anthropic', delegated: false, accountCompatible: true, ccAvailable: false })).toBe('cc-missing')
     expect(resolveEngineIssue({ engine: 'anthropic', delegated: false, accountCompatible: true })).toBeNull()
     expect(resolveEngineIssue({ engine: 'halo', delegated: false, accountCompatible: true, ccAvailable: false })).toBeNull()
+  })
+
+  it('reports missing Codex only after availability is known', () => {
+    expect(resolveEngineIssue({ engine: 'codex', delegated: false, accountCompatible: true, codexAvailable: false })).toBe('codex-missing')
+    expect(resolveEngineIssue({ engine: 'codex', delegated: false, accountCompatible: true })).toBeNull()
+    expect(resolveEngineIssue({ engine: 'codex', delegated: false, accountCompatible: true, codexAvailable: true })).toBeNull()
+    expect(resolveEngineIssue({ engine: 'codex', delegated: true, accountCompatible: false, codexAvailable: false })).toBe('account-needs-cc')
   })
 
   it('keeps the Codex account explanation', () => {

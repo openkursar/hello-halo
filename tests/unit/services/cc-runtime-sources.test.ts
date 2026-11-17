@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const product = vi.hoisted(() => ({ source: undefined as { name?: string; baseUrl: string } | undefined }))
-vi.mock('../../../src/main/foundation/product-config', () => ({ getClaudeCodeDownloadSource: () => product.source }))
+vi.mock('../../../src/main/foundation/product-config', async importOriginal => ({
+  ...await importOriginal<typeof import('../../../src/main/foundation/product-config')>(),
+  getClaudeCodeDownloadSource: () => product.source
+}))
 
 import { getEffectiveSourceId, getSources, validatePreferences, validateSource } from '../../../src/main/services/cc-runtime/sources'
 

@@ -15,7 +15,7 @@ import { getDefaultEngine } from './resolved-sdk'
 import type { EngineId } from '../../../shared/types/engine'
 import { getConfig } from '../../foundation/config.service'
 import { getHeadlessElectronPath } from './helpers'
-import { resolveBundledCodexBinary } from './codex/transport/connection'
+import { getCodexConnectionProgram } from './codex/transport/connection'
 
 /**
  * A connect() to the router refused by the system, as engines report it:
@@ -40,8 +40,7 @@ export function localConnectionProgram(engineId: EngineId = getDefaultEngine()):
     case 'halo':
       return process.execPath
     case 'codex': {
-      const codex = resolveBundledCodexBinary()
-      return codex && !codex.isJsShim ? codex.binaryPath : getHeadlessElectronPath()
+      return getCodexConnectionProgram() || getConfig().agent?.codexRuntime?.selectedPath || getHeadlessElectronPath()
     }
     case 'anthropic': {
       const selectedPath = getConfig().agent?.ccRuntime?.selectedPath
